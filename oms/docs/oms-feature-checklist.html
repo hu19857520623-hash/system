@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>OMS 功能清单</title>
+  <style>
+    @page { size: A4; margin: 14mm 12mm; }
+    * { box-sizing: border-box; }
+    body {
+      font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans SC", sans-serif;
+      color: #1a1a1a;
+      font-size: 11px;
+      line-height: 1.45;
+      margin: 0;
+    }
+    h1 { font-size: 22px; margin: 0 0 6px; }
+    .sub { color: #666; margin-bottom: 14px; font-size: 12px; }
+    .meta { color: #888; font-size: 10px; margin-bottom: 16px; }
+    .stats {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+    .stat {
+      flex: 1;
+      border: 1px solid #e5e5e5;
+      border-radius: 6px;
+      padding: 10px 12px;
+      background: #fafafa;
+    }
+    .stat strong { display: block; font-size: 18px; }
+    .stat span { color: #666; font-size: 10px; }
+    .note {
+      background: #f0f7ff;
+      border: 1px solid #d0e4ff;
+      border-radius: 6px;
+      padding: 10px 12px;
+      margin-bottom: 16px;
+      color: #1e3a5f;
+    }
+    h2 { font-size: 14px; margin: 18px 0 8px; border-bottom: 1px solid #ddd; padding-bottom: 4px; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 8px;
+    }
+    th, td {
+      border: 1px solid #ddd;
+      padding: 5px 7px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      background: #f5f5f5;
+      font-weight: 600;
+      font-size: 10px;
+    }
+    td:nth-child(1) { width: 12%; white-space: nowrap; }
+    td:nth-child(3) { width: 10%; text-align: center; white-space: nowrap; }
+    .s-ok { color: #0a7a3e; font-weight: 600; }
+    .s-partial { color: #b36b00; font-weight: 600; }
+    .s-todo { color: #b42318; font-weight: 600; }
+    .s-plan { color: #555; font-weight: 600; }
+    ol { margin: 6px 0 0 18px; padding: 0; }
+    li { margin: 3px 0; }
+    .footer { margin-top: 16px; color: #999; font-size: 9px; }
+  </style>
+</head>
+<body>
+  <h1>OMS 功能清单</h1>
+  <p class="sub">Takealot 海外仓 OMS · 覆盖菜单模块、后端落库与南非仓 SOP 缺口</p>
+  <p class="meta">生成日期：2026-07-31 · 状态说明：已有 = 可演示可用；部分 = UI/字段不全或只读；待建 = 未做或仅规划</p>
+
+  <div class="stats">
+    <div class="stat"><strong>48</strong><span>清单条目</span></div>
+    <div class="stat"><strong>22</strong><span>已具备</span></div>
+    <div class="stat"><strong>14</strong><span>部分完成</span></div>
+    <div class="stat"><strong>12</strong><span>待建设</span></div>
+  </div>
+
+  <div class="note">
+    建议排期：客户侧履约（入库写库、出库送仓日/附件）优先；仓内 PDA/换标按 SOP 分阶段推进。
+  </div>
+
+  <h2>明细清单</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>模块</th>
+        <th>功能点</th>
+        <th>状态</th>
+        <th>说明</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td>首页看板</td><td>欢迎横幅 / 余额 / 今日订单 / 异常数</td><td class="s-ok">已有</td><td>快捷入口+待办</td></tr>
+      <tr><td>首页看板</td><td>最近入库 / 最近出库</td><td class="s-ok">已有</td><td>已去掉重复「最近订单」</td></tr>
+      <tr><td>首页看板</td><td>系统公告</td><td class="s-partial">部分</td><td>只读 seed，无管理写接口</td></tr>
+
+      <tr><td>入库</td><td>预约入库（预报单）</td><td class="s-partial">部分</td><td>UI有；提交不落库</td></tr>
+      <tr><td>入库</td><td>入库记录状态跟踪</td><td class="s-partial">部分</td><td>bootstrap 只读</td></tr>
+      <tr><td>入库</td><td>质检报告</td><td class="s-partial">部分</td><td>展示层</td></tr>
+      <tr><td>入库</td><td>箱唛 / SKU 标签打印计费</td><td class="s-todo">待建</td><td>SOP：按打印张数计费</td></tr>
+      <tr><td>入库</td><td>PDA 按箱收货上架 + 首入测体积重</td><td class="s-todo">待建</td><td>SOP 仓内作业</td></tr>
+      <tr><td>入库</td><td>上架库位与操作日志导出</td><td class="s-todo">待建</td><td>替代手工抄写备份</td></tr>
+
+      <tr><td>出库</td><td>预约发货（电商/货盘/手工）</td><td class="s-partial">部分</td><td>头字段可落库</td></tr>
+      <tr><td>出库</td><td>订单与出库列表</td><td class="s-partial">部分</td><td>与订单模块合并展示</td></tr>
+      <tr><td>出库</td><td>预约送仓日期必填 + 按日筛选/导出</td><td class="s-todo">待建</td><td>SOP P0</td></tr>
+      <tr><td>出库</td><td>Takealot 附件（外箱标/标签/清单/预约单）</td><td class="s-partial">部分</td><td>UI占位，未持久化</td></tr>
+      <tr><td>出库</td><td>出库费用预扣试算</td><td class="s-ok">已有</td><td>套用价格模板</td></tr>
+      <tr><td>出库</td><td>PDA 拣货 + PDA/纸单双复核</td><td class="s-todo">待建</td><td>SOP P0</td></tr>
+      <tr><td>出库</td><td>扫旧条码一对一换标</td><td class="s-todo">待建</td><td>SOP 核心痛点</td></tr>
+      <tr><td>出库</td><td>问题件减量 / 装箱测量录入</td><td class="s-todo">待建</td><td>SOP P1</td></tr>
+      <tr><td>出库</td><td>异常订单区 + 原因备注 + 可转移</td><td class="s-todo">待建</td><td>仅有 exception 状态</td></tr>
+
+      <tr><td>发货回传</td><td>运单 / 轨迹列表</td><td class="s-partial">部分</td><td>可写物流记录</td></tr>
+      <tr><td>发货回传</td><td>POD 签收单回传</td><td class="s-partial">部分</td><td>有文件名；无文件本体/URL</td></tr>
+      <tr><td>发货回传</td><td>PDA 扫 POD → 已送达</td><td class="s-todo">待建</td><td>SOP：镜像上传待替换</td></tr>
+
+      <tr><td>库存</td><td>库存查询（自有/货盘分池）</td><td class="s-ok">已有</td><td>可读写</td></tr>
+      <tr><td>库存</td><td>库存预警</td><td class="s-ok">已有</td><td>低库存/断货</td></tr>
+      <tr><td>库存</td><td>库位管理（库区/货位）</td><td class="s-todo">待建</td><td>仅有仓码</td></tr>
+      <tr><td>库存</td><td>产品体积查询（仓容）</td><td class="s-plan">待建</td><td>规划中</td></tr>
+
+      <tr><td>退件</td><td>退件单列表与处理</td><td class="s-partial">部分</td><td>前端演示；落库弱</td></tr>
+      <tr><td>退件</td><td>批量导入 / 退件认领</td><td class="s-plan">待建</td><td>规划中</td></tr>
+
+      <tr><td>商品管理</td><td>我的商品（SKU 主数据）</td><td class="s-partial">部分</td><td>CRUD 可落库；证书等偏展示</td></tr>
+      <tr><td>商品管理</td><td>货盘选品 / 申购锁定</td><td class="s-ok">已有</td><td>可读写</td></tr>
+      <tr><td>商品管理</td><td>平台商品条码 ↔ 仓库 SKU 绑定</td><td class="s-ok">已有</td><td>已去掉 TSIN 必填</td></tr>
+      <tr><td>商品管理</td><td>辅助编码（客户码/箱唛）</td><td class="s-partial">部分</td><td>列表只读，无写 API</td></tr>
+      <tr><td>商品管理</td><td>同步 Takealot 商品</td><td class="s-partial">部分</td><td>模拟同步入口</td></tr>
+
+      <tr><td>店铺绑定</td><td>Takealot / Shopify 店铺列表</td><td class="s-partial">部分</td><td>bootstrap 只读</td></tr>
+      <tr><td>店铺绑定</td><td>订单/库存同步开关与授权</td><td class="s-partial">部分</td><td>UI有；真实 API 未接</td></tr>
+
+      <tr><td>费用管理</td><td>费用账单 / 余额展示</td><td class="s-ok">已有</td><td>流水可写</td></tr>
+      <tr><td>费用管理</td><td>账户充值（支付方式）</td><td class="s-ok">已有</td><td>支付方式可配置</td></tr>
+      <tr><td>费用管理</td><td>出库价格模板</td><td class="s-ok">已有</td><td>操作费+物流费</td></tr>
+      <tr><td>费用管理</td><td>仓租模板</td><td class="s-ok">已有</td><td>体积/件数日计费</td></tr>
+      <tr><td>费用管理</td><td>地区配送规则模板</td><td class="s-ok">已有</td><td>JHB/CPT/DBN</td></tr>
+      <tr><td>费用管理</td><td>报表中心（趋势/周转）</td><td class="s-plan">待建</td><td>规划中</td></tr>
+
+      <tr><td>系统管理</td><td>客户账号管理（电商/货盘/混合）</td><td class="s-ok">已有</td><td>权限模板+升级路径</td></tr>
+      <tr><td>系统管理</td><td>模块权限分配</td><td class="s-ok">已有</td><td>按角色/勾选</td></tr>
+      <tr><td>系统管理</td><td>系统消息</td><td class="s-partial">部分</td><td>只读</td></tr>
+
+      <tr><td>横向能力</td><td>多角色数据隔离（客户范围）</td><td class="s-ok">已有</td><td>dataScope</td></tr>
+      <tr><td>横向能力</td><td>列表搜索 / 导出 / 作业前比对</td><td class="s-partial">部分</td><td>SOP：比对核查待加强</td></tr>
+      <tr><td>横向能力</td><td>真实文件存储（标签/POD/附件）</td><td class="s-todo">待建</td><td>现多为文件名占位</td></tr>
+      <tr><td>横向能力</td><td>入库单写 API / 订单写 API</td><td class="s-todo">待建</td><td>库表有、接口缺</td></tr>
+    </tbody>
+  </table>
+
+  <h2>建议建设顺序</h2>
+  <ol>
+    <li>入库/订单写 API + 出库送仓日/明细/附件落库</li>
+    <li>异常原因工作台 + 列表导出比对</li>
+    <li>标签打印计费事件 + 扫码换标</li>
+    <li>PDA 拣货复核 / 收货上架 / POD 扫码</li>
+    <li>库位、文件存储、报表中心</li>
+  </ol>
+
+  <p class="footer">Source: Layout 菜单 · moduleGuide · Prisma/API 审计 · SOP.docx · OMS Feature Checklist</p>
+</body>
+</html>

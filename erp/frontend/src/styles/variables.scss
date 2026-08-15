@@ -1,0 +1,61 @@
+// Research-efficiency dark enterprise design tokens.
+
+// Canvas and surfaces
+$bg-deep: #050510;
+$bg-surface: #0a0919;
+$bg-elevated: #0f0e2a;
+$bg-card: rgba(15, 14, 42, 0.72);
+$glass: rgba(15, 14, 42, 0.72);
+$border: rgba(99, 102, 241, 0.16);
+$border-strong: rgba(99, 102, 241, 0.34);
+$text-primary: #f1f5f9;
+$text-secondary: #a5b4c8;
+$text-muted: #718096;
+
+// Accents and semantic color
+$copper: #6366f1;
+$copper-dim: #4f46e5;
+$teal: #06b6d4;
+$teal-dim: #0891b2;
+$rose: #ef4444;
+$amber: #f59e0b;
+$sky: #38bdf8;
+$tech: #6366f1;
+$tech-light: #818cf8;
+$tech-glow: rgba(99, 102, 241, 0.2);
+
+// Typography
+$font-display: 'Noto Sans SC', 'Inter', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+$font-body: 'Noto Sans SC', 'Inter', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+$font-mono: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+
+// Layout
+$sidebar-w: 264px;
+$sidebar-w-compact: 82px;
+$topbar-h: 72px;
+$radius: 12px;
+$radius-sm: 8px;
+$radius-lg: 18px;
+$ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+// Compatibility aliases retained for existing page styles
+$bg-deep-warm: $bg-deep;
+$bg-surface-warm: $bg-surface;
+$bg-card-warm: $bg-card;
+$border-warm: $border;
+$border-strong-warm: $border-strong;
+
+// Sidebar
+$sidebar-bg: rgba(8, 8, 24, 0.9);
+$sidebar-border: rgba(99, 102, 241, 0.16);
+$sidebar-text: #94a3b8;
+$sidebar-text-hover: #e2e8f0;
+$sidebar-text-active: #f8fafc;
+$sidebar-active-bg: rgba(99, 102, 241, 0.16);
+$sidebar-active-border: rgba(99, 102, 241, 0.3);
+$sidebar-active-accent: #818cf8;
+$sidebar-icon: #64748b;
+$sidebar-icon-hover: #67e8f9;
+$sidebar-icon-active: #a5b4fc;
+$sidebar-footer-bg: rgba(5, 5, 16, 0.58);
+$sidebar-footer-border: rgba(99, 102, 241, 0.14);

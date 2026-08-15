@@ -1,0 +1,52 @@
+# Full migration: all /api/** routes go through Java microservices.
+# Native Java: /api/auth/** (login, profile, password)
+# Legacy proxy: everything else forwarded to NestJS until ported.
+spring:
+  cloud:
+    gateway:
+      routes:
+        - id: auth-service
+          uri: lb://erp-auth-service
+          predicates:
+            - Path=/api/auth/**,/api/users,/api/users/**,/api/permissions,/api/permissions/**
+          filters:
+            - StripPrefix=1
+          order: 10
+
+        - id: crm-service
+          uri: lb://erp-crm-service
+          predicates:
+            - Path=/api/leads,/api/leads/**,/api/customers,/api/customers/**,/api/billing,/api/billing/**
+          filters:
+            - StripPrefix=1
+          order: 10
+
+        - id: scm-service
+          uri: lb://erp-scm-service
+          predicates:
+            - Path=/api/products,/api/products/**,/api/product-dev,/api/product-dev/**,/api/suppliers,/api/suppliers/**,/api/purchase-orders,/api/purchase-orders/**,/api/inbound,/api/inbound/**,/api/outbound,/api/outbound/**,/api/inventory,/api/inventory/**,/api/warehouses,/api/warehouses/**,/api/warehouse-zones,/api/warehouse-zones/**,/api/locations,/api/locations/**,/api/logistics-receipts,/api/logistics-receipts/**
+          filters:
+            - StripPrefix=1
+          order: 10
+
+        - id: finance-service
+          uri: lb://erp-finance-service
+          predicates:
+            - Path=/api/cost-ledger,/api/cost-ledger/**,/api/profit,/api/profit/**,/api/freight-bills,/api/freight-bills/**,/api/pricing,/api/pricing/**
+          filters:
+            - StripPrefix=1
+          order: 10
+
+        - id: integration-service
+          uri: lb://erp-integration-service
+          predicates:
+            - Path=/api/sync-logs,/api/sync-logs/**,/api/async-io,/api/async-io/**,/api/store-monitor,/api/store-monitor/**,/api/dashboard,/api/dashboard/**,/api/announcements,/api/announcements/**
+          filters:
+            - StripPrefix=1
+          order: 10
+
+        - id: legacy-backend
+          uri: ${LEGACY_BACKEND_URL:http://localhost:3000}
+          predicates:
+            - Path=/api/**
+          order: 100

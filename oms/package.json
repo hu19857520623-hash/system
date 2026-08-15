@@ -1,0 +1,62 @@
+{
+  "name": "takealot-oms-prototype",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k -n api,web -c cyan,magenta \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:web": "vite",
+    "dev:api": "tsx server/index.ts",
+    "build": "tsc && vite build",
+    "test:auth": "tsx --test server/auth.test.ts",
+    "verify:auth": "tsx scripts/verify-oms-auth.ts",
+    "build:single": "tsc && vite build --mode singlefile && node scripts/copy-single-html.mjs",
+    "preview": "vite preview",
+    "docs": "npx --yes serve docs -l 8080",
+    "open:docs": "start http://127.0.0.1:8080/系统方案设计图.html",
+    "open:flow": "start http://127.0.0.1:8080/客户流程与人员介入图.html",
+    "db:generate": "prisma generate",
+    "db:migrate": "node -e \"console.error('Shared DB: do not prisma migrate/db push. Run: npm run db:ensure-oms-tables'); process.exit(1)\"",
+    "db:ensure-oms-tables": "prisma db execute --file prisma/scripts/create_oms_tables.sql --schema prisma/schema.prisma",
+    "db:migrate:onboarding": "prisma db execute --file prisma/scripts/migrate_oms_portal_onboarding.sql --schema prisma/schema.prisma",
+    "db:seed": "tsx prisma/seed.ts",
+    "db:studio": "prisma studio --port 5556"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.19.3",
+    "bcryptjs": "^3.0.3",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "jsbarcode": "^3.12.3",
+    "jsonwebtoken": "^9.0.3",
+    "lucide-react": "^0.468.0",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^4.10.38",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.28.0"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^3.0.0",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/jsbarcode": "^3.11.4",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "concurrently": "^10.0.3",
+    "dotenv": "^17.4.2",
+    "postcss": "^8.4.49",
+    "prisma": "^6.19.3",
+    "tailwindcss": "^3.4.16",
+    "tsx": "^4.23.1",
+    "typescript": "^5.6.3",
+    "vite": "^6.0.3",
+    "vite-plugin-singlefile": "^2.3.3"
+  }
+}

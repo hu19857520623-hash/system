@@ -1,0 +1,44 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+.vite/
+*.tsbuildinfo
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Frontend generated
+frontend/src/auto-imports.d.ts
+frontend/src/components.d.ts
+
+# Uploads & local data
+backend/uploads/
+takealot-monitor/data/
+data/imports/
+frontend/docs/import-leads.sql
+frontend/docs/excel_dump.json
+
+# Docker volumes (local)
+backups/
+
+# Java / Maven
+.tools/
+services/**/target/
+services/.mvn/wrapper/maven-wrapper.jar

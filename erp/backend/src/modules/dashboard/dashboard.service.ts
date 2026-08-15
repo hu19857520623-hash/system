@@ -1,0 +1,134 @@
+import { Injectable } from '@nestjs/common'
+import { Prisma } from '@prisma/client'
+import { PrismaService } from '../../common/prisma/prisma.service'
+import { AnnouncementService } from '../announcement/announcement.service'
+import { dayRangeUtc, mergeTrendCounts } from './dashboard.utils'
+
+const SYNC_FAILED_WHERE: Prisma.SyncLogWhereInput = {
+  status: 'failed',
+  NOT: { syncType: { startsWith: 'test_' } },
+}
+
+@Injectable()
+export class DashboardService {
+  constructor(
+    private prisma: PrismaService,
+    private announcementService: AnnouncementService,
+  ) {}
+
+  async stats() {
+    const [products, suppliers, leads, pendingPo, pendingAudit, syncFailed] = await Promise.all([
+      this.prisma.product.count(),
+      this.prisma.supplier.count({ where: { status: 1 } }),
+      this.prisma.lead.count(),
+      this.prisma.purchaseOrder.count({ where: { status: { in: ['pending_po_audit', 'pending_finance'] } } }),
+      this.prisma.productDev.count({ where: { status: 'submitted' } }),
+      this.prisma.syncLog.count({ where: SYNC_FAILED_WHERE }),
+    ])
+    const invAgg = await this.prisma.inventory.aggregate({ _sum: { availableQty: true } })
+    return {
+      products,
+      suppliers,
+      leads,
+      pendingPo,
+      pendingAudit,
+      syncFailed,
+      inventoryAvailable: invAgg._sum.availableQty ?? 0,
+    }
+  }
+
+  announcements() {
+    return this.announcementService.listVisibleForErp(10)
+  }
+
+  async trends(days: number) {
+    const clamped = Math.min(30, Math.max(1, days))
+    const ranges = dayRangeUtc(clamped)
+    const receipts: number[] = []
+    const receivedQty: number[] = []
+    const damagedQty: number[] = []
+
+    for (const range of ranges) {
+      const where: Prisma.LogisticsReceiptWhereInput = {
+        receivedAt: { gte: range.start, lt: range.end },
+      }
+      const count = await this.prisma.logisticsReceipt.count({ where })
+      const agg = await this.prisma.logisticsReceiptItem.aggregate({
+        where: { receipt: where },
+        _sum: { actualQty: true, damagedQty: true },
+      })
+      receipts.push(count)
+      receivedQty.push(agg._sum.actualQty ?? 0)
+      damagedQty.push(agg._sum.damagedQty ?? 0)
+    }
+
+    return {
+      days: clamped,
+      series: mergeTrendCounts(ranges, receipts, receivedQty, damagedQty),
+    }
+  }
+
+  async notifications() {
+    const [
+      leadsFollow,
+      productAudit,
+      purchaseAudit,
+      logisticsPending,
+      inboundInTransit,
+      inboundArrived,
+      inboundReceiving,
+      inboundPendingPutaway,
+      inboundException,
+      outboundPending,
+      pricingTodo,
+      syncFailed,
+    ] = await Promise.all([
+      this.prisma.lead.count({ where: { status: 'following' } }),
+      this.prisma.productDev.count({ where: { status: 'submitted' } }),
+      this.prisma.purchaseOrder.count({ where: { status: { in: ['pending_po_audit', 'pending_finance'] } } }),
+      this.countPendingLogistics(),
+      this.prisma.inboundOrder.count({ where: { status: { in: ['pending_receipt', 'pushed', 'pending_push'] } } }),
+      this.prisma.inboundOrder.count({ where: { status: 'arrived' } }),
+      this.prisma.inboundOrder.count({ where: { status: 'receiving' } }),
+      this.prisma.inboundOrder.count({ where: { status: 'pending_putaway' } }),
+      this.prisma.inboundOrder.count({ where: { status: 'exception' } }),
+      this.prisma.outboundOrder.count({
+        where: {
+          status: { in: ['pending_pick', 'picking', 'picked', 'reviewing', 'pending_relabel', 'packed'] },
+        },
+      }),
+      this.prisma.productPricing.count({ where: { pricingStatus: { in: ['pending_pricing', 'priced'] } } }),
+      this.prisma.syncLog.count({ where: SYNC_FAILED_WHERE }),
+    ])
+
+    const inboundReceipt = inboundArrived + inboundReceiving
+
+    const items = [
+      { key: 'leads_follow', screenId: 'leads_follow', title: '?????', count: leadsFollow, route: '/leads/follow', tone: 'warn' as const },
+      { key: 'product_audit', screenId: 'product_audit', title: '???????', count: productAudit, route: '/product-audit', tone: 'warn' as const },
+      { key: 'purchase', screenId: 'purchase', title: '?????', count: purchaseAudit, route: '/purchase', tone: 'warn' as const },
+      { key: 'logistics_wh', screenId: 'logistics_wh', title: '??????', count: logisticsPending, route: '/logistics-wh', tone: 'warn' as const },
+      { key: 'inbound_in_transit', screenId: 'inbound_arrival', title: '???????', count: inboundInTransit, route: '/inbound/arrival-scan', tone: 'warn' as const },
+      { key: 'inbound_arrived', screenId: 'inbound', title: '??????', count: inboundArrived, route: '/inbound/receipt', tone: 'warn' as const },
+      ...(inboundReceiving > 0 ? [{ key: 'inbound_receiving', screenId: 'inbound', title: '??????', count: inboundReceiving, route: '/inbound/receipt', tone: 'warn' as const }] : []),
+      { key: 'inbound_putaway', screenId: 'inbound_putaway', title: '??????', count: inboundPendingPutaway, route: '/inbound/arrival-scan?step=putaway', tone: 'warn' as const },
+      { key: 'outbound', screenId: 'outbound', title: '?????', count: outboundPending, route: '/outbound', tone: 'warn' as const },
+      ...(inboundException > 0 ? [{ key: 'inbound_exception', screenId: 'inbound', title: '????', count: inboundException, route: '/inbound/receipt', tone: 'err' as const }] : []),
+      { key: 'pricing', screenId: 'pricing', title: '??????', count: pricingTodo, route: '/pricing', tone: 'warn' as const },
+      { key: 'sync', screenId: 'sync', title: '?????', count: syncFailed, route: '/sync', tone: 'err' as const },
+    ]
+
+    const total = items.reduce((sum, item) => sum + item.count, 0)
+    const badges = Object.fromEntries(items.map((item) => [item.key, item.count]))
+    badges.inbound_receipt = inboundReceipt
+    return { total, items, badges }
+  }
+
+  private async countPendingLogistics() {
+    const pos = await this.prisma.purchaseOrder.findMany({
+      where: { status: { in: ['finance_approved', 'at_logistics_wh', 'approved'] } },
+      select: { items: { select: { quantity: true, receivedQty: true } } },
+    })
+    return pos.filter((po) => po.items.some((i) => (i.receivedQty ?? 0) < i.quantity)).length
+  }
+}

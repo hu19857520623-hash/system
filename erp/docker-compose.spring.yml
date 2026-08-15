@@ -1,0 +1,145 @@
+# Spring Cloud overlay — run alongside the existing stack:
+#   docker compose -f docker-compose.yml -f docker-compose.spring.yml up -d --build
+#
+# Gateway listens on 9000 and proxies /api/** to NestJS by default.
+# Point frontend at gateway: change nginx proxy target to erp-gateway:9000 when ready.
+
+x-spring-build-args: &spring-build-args
+  DOCKER_REGISTRY: docker.m.daocloud.io/library/
+
+x-spring-env: &spring-env
+  EUREKA_URL: http://erp-registry:8761/eureka/
+  LEGACY_BACKEND_URL: http://backend:3000
+  TZ: Asia/Shanghai
+
+services:
+  erp-registry:
+    build:
+      context: ./services
+      dockerfile: Dockerfile
+      args:
+        <<: *spring-build-args
+        SERVICE_MODULE: erp-registry
+    container_name: erp-registry
+    restart: unless-stopped
+    environment:
+      <<: *spring-env
+    ports:
+      - "8761:8761"
+
+  erp-gateway:
+    build:
+      context: ./services
+      dockerfile: Dockerfile
+      args:
+        <<: *spring-build-args
+        SERVICE_MODULE: erp-gateway
+    container_name: erp-gateway
+    restart: unless-stopped
+    environment:
+      <<: *spring-env
+      LEGACY_BACKEND_URL: http://backend:3000
+      SPRING_PROFILES_ACTIVE: migration
+    ports:
+      - "9000:9000"
+    depends_on:
+      - erp-registry
+      - erp-auth-service
+      - erp-crm-service
+      - erp-scm-service
+      - erp-finance-service
+      - erp-integration-service
+      - backend
+
+  erp-auth-service:
+    build:
+      context: ./services
+      dockerfile: Dockerfile
+      args:
+        <<: *spring-build-args
+        SERVICE_MODULE: erp-auth-service
+    container_name: erp-auth-service
+    restart: unless-stopped
+    environment:
+      <<: *spring-env
+      DATABASE_URL: jdbc:mysql://mysql:3306/takealot_erp?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai
+      DATABASE_USERNAME: root
+      DATABASE_PASSWORD: ${ERP_MYSQL_ROOT_PASSWORD:?Set ERP_MYSQL_ROOT_PASSWORD in .env}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
+      JWT_EXPIRES_IN: 7d
+    ports:
+      - "9101:9101"
+    depends_on:
+      erp-registry:
+        condition: service_started
+      mysql:
+        condition: service_healthy
+
+  erp-crm-service:
+    build:
+      context: ./services
+      dockerfile: Dockerfile
+      args:
+        <<: *spring-build-args
+        SERVICE_MODULE: erp-crm-service
+    container_name: erp-crm-service
+    restart: unless-stopped
+    environment:
+      <<: *spring-env
+    ports:
+      - "9102:9102"
+    depends_on:
+      - erp-registry
+
+  erp-scm-service:
+    build:
+      context: ./services
+      dockerfile: Dockerfile
+      args:
+        <<: *spring-build-args
+        SERVICE_MODULE: erp-scm-service
+    container_name: erp-scm-service
+    restart: unless-stopped
+    environment:
+      <<: *spring-env
+    ports:
+      - "9103:9103"
+    depends_on:
+      - erp-registry
+
+  erp-finance-service:
+    build:
+      context: ./services
+      dockerfile: Dockerfile
+      args:
+        <<: *spring-build-args
+        SERVICE_MODULE: erp-finance-service
+    container_name: erp-finance-service
+    restart: unless-stopped
+    environment:
+      <<: *spring-env
+    ports:
+      - "9104:9104"
+    depends_on:
+      - erp-registry
+
+  erp-integration-service:
+    build:
+      context: ./services
+      dockerfile: Dockerfile
+      args:
+        <<: *spring-build-args
+        SERVICE_MODULE: erp-integration-service
+    container_name: erp-integration-service
+    restart: unless-stopped
+    environment:
+      <<: *spring-env
+    ports:
+      - "9105:9105"
+    depends_on:
+      - erp-registry
+
+  frontend:
+    depends_on:
+      - erp-gateway
+      - takealot-monitor

@@ -1,0 +1,130 @@
+@tailwind base;
+
+@tailwind components;
+
+@tailwind utilities;
+
+
+
+@layer base {
+  body {
+    @apply antialiased;
+    background-color: #F4F7FB;
+    color: #0F172A;
+    font-feature-settings: 'ss01', 'ss02', 'cv11';
+  }
+}
+
+
+
+@layer components {
+
+  .mono-code {
+
+    @apply font-mono text-[11px] font-medium text-primary-700 bg-primary-50 px-2 py-0.5 rounded-md;
+
+  }
+
+
+
+  .page-shell {
+
+    @apply mx-auto max-w-[1280px];
+
+  }
+
+
+
+  .table-head {
+
+    @apply border-b border-border-light bg-surface-muted/70 text-left text-[11px] font-semibold uppercase tracking-wide text-text-muted;
+
+  }
+
+
+
+  .table-head th {
+
+    @apply px-4 py-3 font-semibold;
+
+  }
+
+
+
+  .table-body {
+
+    @apply divide-y divide-border-light;
+
+  }
+
+
+
+  .table-row {
+
+    @apply transition-colors duration-100 hover:bg-primary-50/40;
+
+  }
+
+
+
+  .table-cell {
+
+    @apply px-4 py-3.5;
+
+  }
+
+
+
+  .status-tab {
+
+    @apply relative px-4 py-2.5 text-sm font-medium text-text-secondary transition-colors hover:text-text-primary;
+
+  }
+
+
+
+  .status-tab-active {
+
+    @apply text-primary-700;
+
+  }
+
+
+
+  .status-tab-active::after {
+
+    content: '';
+
+    @apply absolute inset-x-1 -bottom-px h-0.5 rounded-full bg-primary-600;
+
+  }
+
+
+
+  .content-bg {
+
+    background-color: #F4F7FB;
+
+    background-image: radial-gradient(circle at 1px 1px, rgba(148, 163, 184, 0.18) 1px, transparent 0);
+
+    background-size: 24px 24px;
+
+  }
+
+}
+
+
+
+@layer utilities {
+
+  .scrollbar-thin {
+
+    scrollbar-width: thin;
+
+    scrollbar-color: #CBD5E1 transparent;
+
+  }
+
+}
+
+

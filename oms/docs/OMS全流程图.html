@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OMS 全流程图 · Takealot 海外仓</title>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <script>
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        fontFamily: '"Microsoft YaHei", "PingFang SC", sans-serif',
+        fontSize: '13px',
+        primaryColor: '#e8f3fa',
+        primaryTextColor: '#1a4d75',
+        primaryBorderColor: '#4a94c9',
+        lineColor: '#4a94c9',
+        secondaryColor: '#fff8eb',
+        tertiaryColor: '#eef8f3',
+      },
+      flowchart: { curve: 'basis', padding: 14, htmlLabels: true },
+    });
+  </script>
+  <style>
+    :root {
+      --bg: #d4e4f4;
+      --surface: #fff;
+      --border: #7eb3d8;
+      --text: #1a4d75;
+      --muted: #6a8faa;
+      --eco: #3d85b8;
+      --cat: #2e9e6e;
+      --hybrid: #6a8ec4;
+      --admin: #d48806;
+      --fulfill: #2688be;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+    }
+    header {
+      background: linear-gradient(180deg, #6aacd6, #3a7aab);
+      color: #fff;
+      padding: 2rem 2.5rem;
+      border-bottom: 3px solid #2b6a96;
+    }
+    header h1 { font-size: 1.75rem; letter-spacing: 2px; margin-bottom: 0.5rem; }
+    header p { opacity: 0.92; max-width: 960px; font-size: 0.95rem; }
+    .meta { display: flex; gap: 0.75rem; margin-top: 1rem; flex-wrap: wrap; }
+    .meta span {
+      background: rgba(255,255,255,.15);
+      border: 1px solid rgba(255,255,255,.25);
+      padding: 0.25rem 0.75rem;
+      border-radius: 6px;
+      font-size: 0.82rem;
+    }
+    nav {
+      position: sticky; top: 0; z-index: 100;
+      background: rgba(255,255,255,.96);
+      backdrop-filter: blur(8px);
+      border-bottom: 1px solid var(--border);
+      padding: 0.65rem 1.5rem;
+      display: flex; gap: 0.4rem; flex-wrap: wrap;
+    }
+    nav a {
+      color: var(--muted);
+      text-decoration: none;
+      padding: 0.35rem 0.75rem;
+      border-radius: 6px;
+      font-size: 0.82rem;
+      border: 1px solid transparent;
+    }
+    nav a:hover { background: #eef5fb; color: var(--text); border-color: #c5d9ea; }
+    main { max-width: 1320px; margin: 0 auto; padding: 1.5rem; }
+    section {
+      background: var(--surface);
+      border: 2px solid var(--border);
+      border-radius: 10px;
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+      box-shadow: 0 4px 16px rgba(30,90,150,.1);
+    }
+    section h2 {
+      font-size: 1.15rem;
+      margin-bottom: 0.4rem;
+      padding-left: 10px;
+      border-left: 4px solid var(--fulfill);
+    }
+    .desc { color: var(--muted); font-size: 0.88rem; margin-bottom: 1rem; }
+    .diagram {
+      background: #fafcfe;
+      border: 1px solid #c5d9ea;
+      border-radius: 8px;
+      padding: 1rem;
+      overflow-x: auto;
+    }
+    .legend {
+      display: flex; gap: 1rem; flex-wrap: wrap;
+      margin-top: 0.75rem;
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+    .legend i {
+      display: inline-block;
+      width: 12px; height: 12px;
+      border-radius: 3px;
+      margin-right: 4px;
+      vertical-align: middle;
+    }
+    .leg-eco { background: #dbeafe; border: 1px solid var(--eco); }
+    .leg-cat { background: #d1fae5; border: 1px solid var(--cat); }
+    .leg-hyb { background: #e0e7ff; border: 1px solid var(--hybrid); }
+    .leg-adm { background: #fef3c7; border: 1px solid var(--admin); }
+    .leg-ful { background: #e0f2fe; border: 1px solid var(--fulfill); }
+    table.summary {
+      width: 100%; border-collapse: collapse;
+      font-size: 0.85rem; margin-top: 0.5rem;
+    }
+    table.summary th, table.summary td {
+      border: 1px solid #c5d9ea;
+      padding: 0.55rem 0.75rem;
+      text-align: left;
+    }
+    table.summary th { background: linear-gradient(180deg, #5a9fc9, #3d7fad); color: #fff; }
+    table.summary td { background: #f8fbfd; }
+    footer { text-align: center; padding: 1.5rem; color: var(--muted); font-size: 0.82rem; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>OMS 全流程图</h1>
+    <p>覆盖账号开通、三种客户业务模式（电商 / 货盘 / 混合）、业务升级、库存来源与发货来源、统一预约发货履约至结算的完整链路。独立 OMS 建设范围，不含 ERP / WMS 内部作业细节。</p>
+    <div class="meta">
+      <span>版本 2026-07-08</span>
+      <span>角色：系统管理员 · 电商客户 · 货盘客户 · 混合客户</span>
+      <span>核心动作：预约发货</span>
+      <span>双标识：发货来源 + 库存来源</span>
+    </div>
+  </header>
+
+  <nav>
+    <a href="#fig1">总览</a>
+    <a href="#fig2">账号权限</a>
+    <a href="#fig3">电商流程</a>
+    <a href="#fig4">货盘流程</a>
+    <a href="#fig5">混合流程</a>
+    <a href="#fig6">业务升级</a>
+    <a href="#fig7">预约发货</a>
+    <a href="#fig8">来源关系</a>
+    <a href="#table">对照表</a>
+  </nav>
+
+  <main>
+    <section id="fig1">
+      <h2>图1 · OMS 全流程总览（三类客户汇聚预约发货）</h2>
+      <p class="desc">所有客户最终在 OMS 执行<strong>预约发货</strong>；差异在于备货路径与发货/库存来源标识。</p>
+      <div class="diagram mermaid">
+flowchart TB
+    subgraph P0["阶段0 · 账号与权限"]
+        direction TB
+        AD0["系统管理员创建客户账号"]
+        AD1["选择类型：电商 / 货盘 / 混合"]
+        AD2["分配模块权限或套用模板"]
+        AD3["客户登录 OMS"]
+        AD0 --> AD1 --> AD2 --> AD3
+    end
+
+    subgraph P1A["路径A · 电商客户"]
+        direction TB
+        E1["店铺/API 授权"]
+        E2["商品建档 + 编码绑码"]
+        E3["创建入库单 · 自有库存"]
+        E4["平台订单同步"]
+        E5["预约发货<br/>来源=平台订单"]
+        E1 --> E2 --> E3 --> E4 --> E5
+    end
+
+    subgraph P1B["路径B · 货盘客户"]
+        direction TB
+        C1["货盘选品 / 购货"]
+        C2["创建入库单 · 货盘库存"]
+        C3["库存可用"]
+        C4["预约发货<br/>来源=货盘分销"]
+        C1 --> C2 --> C3 --> C4
+    end
+
+    subgraph P1C["路径C · 混合客户"]
+        direction TB
+        H1["电商路径 + 货盘路径并行"]
+        H2["自有库存池 + 货盘库存池"]
+        H3["预约发货<br/>来源=平台/货盘/手工"]
+        H1 --> H2 --> H3
+    end
+
+    subgraph P2["阶段2 · 统一履约（所有客户）"]
+        direction TB
+        F1["创建出库单"]
+        F2["标注发货来源"]
+        F3["匹配库存来源并锁定"]
+        F4["仓库拣货出库"]
+        F5["物流轨迹回传"]
+        F6["费用扣减 / 账单"]
+        F7["报表与对账"]
+        F1 --> F2 --> F3 --> F4 --> F5 --> F6 --> F7
+    end
+
+    AD3 --> E1
+    AD3 --> C1
+    AD3 --> H1
+    E5 --> F1
+    C4 --> F1
+    H3 --> F1
+
+    style P0 fill:#fff8eb,stroke:#d48806
+    style P1A fill:#eef5fb,stroke:#3d85b8
+    style P1B fill:#eef8f3,stroke:#2e9e6e
+    style P1C fill:#f0f4ff,stroke:#6a8ec4
+    style P2 fill:#e8f3fa,stroke:#2688be
+      </div>
+      <div class="legend">
+        <span><i class="leg-adm"></i>管理员/账号</span>
+        <span><i class="leg-eco"></i>电商路径</span>
+        <span><i class="leg-cat"></i>货盘路径</span>
+        <span><i class="leg-hyb"></i>混合路径</span>
+        <span><i class="leg-ful"></i>统一履约</span>
+      </div>
+    </section>
+
+    <section id="fig2">
+      <h2>图2 · 账号与权限全流程</h2>
+      <p class="desc">系统管理员统一管理；客户类型可随业务扩展升级，无需新建账号。</p>
+      <div class="diagram mermaid">
+flowchart LR
+    A1["创建账号"] --> A2{"客户类型"}
+    A2 -->|电商| T1["套用电商模板<br/>订单·店铺·自有库存"]
+    A2 -->|货盘| T2["套用货盘模板<br/>货盘·入库·预约发货"]
+    A2 -->|混合| T3["套用混合模板<br/>全模块"]
+    T1 --> A3["启用账号"]
+    T2 --> A3
+    T3 --> A3
+    A3 --> A4["客户登录<br/>菜单按权限显示"]
+    A4 --> A5{"业务变化?"}
+    A5 -->|货盘转混合| U1["改类型=混合<br/>套用混合模板"]
+    A5 -->|电商转混合| U2["改类型=混合<br/>追加货盘权限"]
+    A5 -->|无| A6["正常使用"]
+    U1 --> A6
+    U2 --> A6
+    A6 --> A7{"违规/欠费?"}
+    A7 -->|是| A8["禁用账号<br/>无法登录"]
+    A7 -->|否| A4
+      </div>
+    </section>
+
+    <section id="fig3">
+      <h2>图3 · 电商客户全流程</h2>
+      <p class="desc">平台订单驱动发货；库存来源均为<strong>自有库存</strong>。</p>
+      <div class="diagram mermaid">
+flowchart TB
+    S0["登录 OMS"] --> S1["绑定 Takealot / Shopify 店铺"]
+    S1 --> S2["创建/维护商品 SPU·SKU"]
+    S2 --> S3["990码 / 自定义编码绑定"]
+    S3 --> S4["创建入库单 → 仓库收货上架"]
+    S4 --> S5["库存查询 · 标记=自有库存"]
+    S5 --> S6["平台订单自动/手动同步"]
+    S6 --> S7{"订单审核/异常?"}
+    S7 -->|异常| S7A["处理地址/库存/同步异常"]
+    S7A --> S8
+    S7 -->|正常| S8["创建发货单 · 预约发货"]
+    S8 --> S9["发货来源 = 平台订单"]
+    S9 --> S10["锁定自有库存 → 出库"]
+    S10 --> S11["物流追踪 + 平台回写"]
+    S11 --> S12["费用账单 · 报表"]
+      </div>
+    </section>
+
+    <section id="fig4">
+      <h2>图4 · 货盘客户全流程</h2>
+      <p class="desc">货盘购货驱动备货；向分销商/下游客户发货，无平台店铺与订单同步。</p>
+      <div class="diagram mermaid">
+flowchart TB
+    P0["登录 OMS"] --> P1["浏览平台货盘"]
+    P1 --> P2["选品 / 下单购货"]
+    P2 --> P3["创建入库单 · 跟踪物流"]
+    P3 --> P4["仓库收货 → 货盘库存可用"]
+    P4 --> P5["库存查询 · 标记=货盘库存"]
+    P5 --> P6["创建发货单 · 预约发货"]
+    P6 --> P7["发货来源 = 货盘分销"]
+    P7 --> P8["锁定货盘库存 → 出库"]
+    P8 --> P9["物流追踪回传"]
+    P9 --> P10["仓储/操作/物流费账单"]
+      </div>
+    </section>
+
+    <section id="fig5">
+      <h2>图5 · 混合客户全流程</h2>
+      <p class="desc">电商与货盘双业务并行；库存分池管理，发货时按来源匹配。</p>
+      <div class="diagram mermaid">
+flowchart TB
+    M0["登录 OMS · 混合权限菜单"]
+
+    subgraph M_ECO["电商线"]
+        ME1["店铺授权"] --> ME2["自有商品入库"]
+        ME2 --> ME3["平台订单同步"]
+        ME3 --> ME4["预约发货<br/>来源=平台订单<br/>库存=自有"]
+    end
+
+    subgraph M_CAT["货盘线"]
+        MC1["货盘选品购货"] --> MC2["货盘入库"]
+        MC2 --> MC3["预约发货<br/>来源=货盘分销<br/>库存=货盘"]
+    end
+
+    M0 --> ME1
+    M0 --> MC1
+    ME4 --> MF["统一出库履约"]
+    MC3 --> MF
+    M0 --> MM["手工创建发货单<br/>来源=手工"]
+    MM --> MF
+    MF --> ML["物流 · 费用 · 报表"]
+      </div>
+    </section>
+
+    <section id="fig6">
+      <h2>图6 · 业务升级流程（货盘客户 → 混合客户）</h2>
+      <p class="desc">客户先做货盘、后做电商的典型升级路径；历史数据全部保留。</p>
+      <div class="diagram mermaid">
+sequenceDiagram
+    participant Admin as 系统管理员
+    participant OMS as OMS 后台
+    participant Cat as 货盘客户
+    participant WH as 仓库/WMS
+
+    Note over Cat: 阶段1 · 仅货盘
+    Cat->>OMS: 货盘选品 · 入库 · 预约发货
+    OMS->>WH: 出库指令（货盘库存）
+    WH-->>Cat: 物流回传
+
+    Admin->>OMS: 账号类型改为「混合客户」
+    Admin->>OMS: 套用混合模板 / 追加电商权限
+    Note over Cat,OMS: 历史货盘库存、入库单、账单保留
+
+    Note over Cat: 阶段2 · 货盘 + 电商
+    Cat->>OMS: 绑定店铺 · 同步平台订单
+    Cat->>OMS: 新建自有商品入库（自有库存）
+    Cat->>OMS: 预约发货（平台订单 → 自有库存）
+    Cat->>OMS: 仍可货盘选品发货（货盘分销 → 货盘库存）
+      </div>
+    </section>
+
+    <section id="fig7">
+      <h2>图7 · 统一预约发货履约流程</h2>
+      <p class="desc">三类客户共用同一出库履约链路；系统根据发货来源自动匹配库存池。</p>
+      <div class="diagram mermaid">
+flowchart TB
+    O0["触发预约发货"] --> O1{"发货来源"}
+    O1 -->|平台订单| O1A["关联订单号 ORD-xxx"]
+    O1 -->|货盘分销| O1B["关联选品单 CAT-xxx"]
+    O1 -->|手工| O1C["手工录入收件信息"]
+
+    O1A --> O2["选择 SKU 与数量"]
+    O1B --> O2
+    O1C --> O2
+
+    O2 --> O3{"库存来源校验"}
+    O3 -->|平台/手工电商| O3A["扣减自有库存"]
+    O3 -->|货盘分销| O3B["扣减货盘库存"]
+    O3 -->|混合| O3C["按 SKU 来源自动匹配"]
+
+    O3A --> O4{"库存充足?"}
+    O3B --> O4
+    O3C --> O4
+    O4 -->|否| O4E["异常：库存不足"]
+    O4 -->|是| O5["锁定库存 · 生成出库单"]
+    O5 --> O6["仓库拣货 / 复核 / 出库"]
+    O6 --> O7["运单号回传 OMS"]
+    O7 --> O8["订单/发货单状态更新"]
+    O8 --> O9["计费 · 账单明细"]
+      </div>
+    </section>
+
+    <section id="fig8">
+      <h2>图8 · 发货来源 × 库存来源 关系图</h2>
+      <p class="desc">出库单必须同时标注发货来源；系统只允许从对应库存池扣减。</p>
+      <div class="diagram mermaid">
+flowchart LR
+    subgraph SHIP["发货来源（出库单）"]
+        S1["平台订单"]
+        S2["货盘分销"]
+        S3["手工发货"]
+    end
+
+    subgraph STOCK["库存来源（SKU）"]
+        I1["自有库存"]
+        I2["货盘库存"]
+    end
+
+    S1 --> I1
+    S2 --> I2
+    S3 --> I1
+    S3 --> I2
+
+    I1 --> OUT["预约发货 · 出库履约"]
+    I2 --> OUT
+
+    OUT --> N1["混合客户两池并存 · 升级后历史不变"]
+      </div>
+    </section>
+
+    <section id="table">
+      <h2>附表 · 三种客户全流程对照</h2>
+      <table class="summary">
+        <thead>
+          <tr>
+            <th>阶段</th>
+            <th>电商客户</th>
+            <th>货盘客户</th>
+            <th>混合客户</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>账号类型</td><td>电商</td><td>货盘</td><td>混合（或由货盘/电商升级）</td></tr>
+          <tr><td>备货入口</td><td>自有商品入库</td><td>货盘选品购货入库</td><td>两条线并行</td></tr>
+          <tr><td>订单来源</td><td>Takealot / Shopify 同步</td><td>无平台订单</td><td>平台订单 + 货盘分销</td></tr>
+          <tr><td>库存来源</td><td>自有库存</td><td>货盘库存</td><td>自有 + 货盘分池</td></tr>
+          <tr><td>预约发货</td><td>✓ 来源=平台订单</td><td>✓ 来源=货盘分销</td><td>✓ 三种来源均可</td></tr>
+          <tr><td>统一履约</td><td colspan="3">出库 → 物流 → 费用 → 报表（共用）</td></tr>
+          <tr><td>业务升级</td><td>可升级混合（开通货盘）</td><td>可升级混合（开通电商）</td><td>—</td></tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+
+  <footer>Takealot 海外仓 OMS · 全流程图 · 2026-07-08</footer>
+</body>
+</html>

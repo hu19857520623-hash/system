@@ -1,0 +1,36 @@
+-- 采购进度表黄色字段：采购确认、尺寸/体积、样品及包装核对。
+-- 仅新增字段，不修改或删除既有采购数据。
+ALTER TABLE pre_purchase_order ADD COLUMN supplier_contact_name VARCHAR(50) NULL;
+ALTER TABLE pre_purchase_order ADD COLUMN supplier_contact_phone VARCHAR(30) NULL;
+ALTER TABLE pre_purchase_order ADD COLUMN supplier_address VARCHAR(500) NULL;
+ALTER TABLE pre_purchase_order ADD COLUMN product_link VARCHAR(500) NULL;
+ALTER TABLE pre_purchase_order ADD COLUMN accessories TEXT NULL;
+ALTER TABLE pre_purchase_order ADD COLUMN product_image_url VARCHAR(500) NULL;
+ALTER TABLE pre_purchase_order ADD COLUMN manual_url VARCHAR(500) NULL;
+ALTER TABLE pre_purchase_order ADD COLUMN moq INT NULL;
+ALTER TABLE pre_purchase_order ADD COLUMN lead_time_days INT NULL;
+ALTER TABLE pre_purchase_order ADD COLUMN tax_rate DECIMAL(5,2) NULL;
+ALTER TABLE pre_purchase_order ADD COLUMN invoice_tax_rate DECIMAL(5,2) NULL;
+ALTER TABLE pre_purchase_order ADD COLUMN unit_tax DECIMAL(12,2) NULL;
+ALTER TABLE pre_purchase_order ADD COLUMN unit_freight DECIMAL(12,2) NULL;
+ALTER TABLE pre_purchase_order ADD COLUMN product_length_cm DECIMAL(8,2) NULL;
+ALTER TABLE pre_purchase_order ADD COLUMN product_width_cm DECIMAL(8,2) NULL;
+ALTER TABLE pre_purchase_order ADD COLUMN product_height_cm DECIMAL(8,2) NULL;
+ALTER TABLE pre_purchase_order ADD COLUMN product_volume_cbm DECIMAL(10,6) NULL;
+ALTER TABLE pre_purchase_order ADD COLUMN package_weight_kg DECIMAL(8,3) NULL;
+ALTER TABLE pre_purchase_order ADD COLUMN package_length_cm DECIMAL(8,2) NULL;
+ALTER TABLE pre_purchase_order ADD COLUMN package_width_cm DECIMAL(8,2) NULL;
+ALTER TABLE pre_purchase_order ADD COLUMN package_height_cm DECIMAL(8,2) NULL;
+ALTER TABLE pre_purchase_order ADD COLUMN package_volume_cbm DECIMAL(10,6) NULL;
+ALTER TABLE pre_purchase_order ADD COLUMN volumetric_weight_kg DECIMAL(10,3) NULL;
+ALTER TABLE pre_purchase_order ADD COLUMN sample_status VARCHAR(100) NULL;
+ALTER TABLE pre_purchase_order ADD COLUMN sample_package_info TEXT NULL;
+ALTER TABLE pre_purchase_order ADD COLUMN sample_image_url VARCHAR(500) NULL;
+ALTER TABLE pre_purchase_order ADD COLUMN double_layer_carton TINYINT(1) NULL;
+ALTER TABLE pre_purchase_order ADD COLUMN not_purchase_reason TEXT NULL;
+ALTER TABLE pre_purchase_order ADD COLUMN logo_unit_fee DECIMAL(12,2) NULL;
+ALTER TABLE pre_purchase_order ADD COLUMN logo_total_fee DECIMAL(14,2) NULL;
+ALTER TABLE pre_purchase_order ADD COLUMN carton_total_price DECIMAL(14,2) NULL;
+ALTER TABLE pre_purchase_order ADD COLUMN spare_carton_unit_price DECIMAL(12,2) NULL;
+ALTER TABLE pre_purchase_order ADD COLUMN spare_carton_qty INT NULL;
+ALTER TABLE pre_purchase_order ADD COLUMN pieces_per_carton INT NULL;

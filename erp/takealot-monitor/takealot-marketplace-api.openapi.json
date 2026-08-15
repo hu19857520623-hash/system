@@ -1,0 +1,2162 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Takealot Marketplace API（卖家市场 API）",
+    "version": "1.0.0",
+    "description": "Takealot Marketplace API v1.0.0 — 卖家市场 REST 接口。\n\n## 鉴权\n- **大部分接口 必填**：Header `X-API-Key: <密钥>`（卖家后台 API Access 生成）\n- **无需鉴权**：GET /status\n- 若 403 且返回 HTML 页面，请添加浏览器 Header（User-Agent 等），见公共 Header\n\n## 参数标记说明\n- **[必填]**：必须提供，否则请求失败或无法定位资源\n- **[可选]**：可不传；不传时使用平台默认值或返回全部可匹配数据\n- **[建议]**：非强制，但强烈建议填写（如防 Cloudflare 拦截的 Header）\n\n## 重要限制\n- Shipments（发货）模块**只读**，无 POST 创建发货单接口\n- 带日期的列表接口单次查询跨度最多 **180 天**\n- 分页：使用响应中的 continuation_token；携带 token 时其它参数会被忽略\n- 创建报价 POST /offers 要求商品**已存在于 Takealot 目录**"
+  },
+  "servers": [
+    {
+      "url": "https://marketplace-api.takealot.com/v1",
+      "description": "生产环境"
+    }
+  ],
+  "security": [
+    {
+      "ApiKeyAuth": []
+    }
+  ],
+  "tags": [
+    {
+      "name": "General",
+      "description": "通用接口"
+    },
+    {
+      "name": "Offers",
+      "description": "商品报价"
+    },
+    {
+      "name": "Sales",
+      "description": "销售"
+    },
+    {
+      "name": "Transactions",
+      "description": "交易流水"
+    },
+    {
+      "name": "Shipments",
+      "description": "发货（只读）"
+    },
+    {
+      "name": "Returns",
+      "description": "退货"
+    },
+    {
+      "name": "Facilities",
+      "description": "仓储设施"
+    },
+    {
+      "name": "Seller",
+      "description": "卖家信息"
+    }
+  ],
+  "paths": {
+    "/status": {
+      "get": {
+        "tags": [
+          "General"
+        ],
+        "summary": "API 状态检查",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "API 可达",
+            "content": {
+              "application/json": {
+                "example": {
+                  "status": "ok"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/UserAgent"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptJson"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptLanguage"
+          }
+        ],
+        "description": "检查 API 是否在线。**无需鉴权**。所有查询参数均为可选；浏览器类 Header 建议填写以避免 Cloudflare 拦截。"
+      }
+    },
+    "/offers": {
+      "get": {
+        "tags": [
+          "Offers"
+        ],
+        "summary": "获取报价列表",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/UserAgent"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptJson"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptLanguage"
+          },
+          {
+            "name": "offer_id",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "example": 1234567890,
+            "description": "[可选] Takealot 报价 ID，integer ≥1。用于精确过滤单个报价。",
+            "required": false
+          },
+          {
+            "name": "offer_id__in",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "description": "[可选] 多个报价 ID 数组，只返回列表中的报价。",
+            "required": false
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "buyable",
+                "not_buyable",
+                "disabled_by_seller",
+                "disabled_by_takealot"
+              ]
+            },
+            "description": "[可选] 报价状态。枚举：buyable(可购买) | not_buyable(不可购买) | disabled_by_seller(卖家停用) | disabled_by_takealot(平台停用)。",
+            "required": false
+          },
+          {
+            "name": "offer_id__gt",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "description": "[可选] 只返回 offer_id 大于该值的报价。",
+            "required": false
+          },
+          {
+            "name": "offer_id__lt",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "description": "[可选] 只返回 offer_id 小于该值的报价。",
+            "required": false
+          },
+          {
+            "name": "sku",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "example": "SKU-ABC123",
+            "description": "[可选] 按商家 SKU 过滤。",
+            "required": false
+          },
+          {
+            "name": "barcode",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "example": "MPTALX12345678-9",
+            "description": "[可选] 按条形码过滤。",
+            "required": false
+          },
+          {
+            "name": "fields",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "description": "[可选] 仅返回指定字段，减小响应体积。Offers 可用：offer_id, tsin_id, sku, barcode, product_label, selling_price, rrp, minimum_leadtime_days, status, title, discount_percentage, storage_fee_eligible, created_at, updated_at, affected_by_vacation, disabled_by_seller, disabled_by_takealot, conversion_percentage_30_days, conversion_percentage_previous_30_days, page_views_30_days, quantity_returned_30_days, condition, image_url, productline_id, width_cm, length_cm, height_cm, weight_grams, is_conveyable, benchmark_price, total_wishlist, wishlist_30_days, listing_quality",
+            "required": false
+          },
+          {
+            "name": "expands",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "seller_warehouse_stock",
+                  "offer_charges",
+                  "takealot_warehouse_stock",
+                  "replenishment_blocks"
+                ]
+              }
+            },
+            "description": "[可选] 展开关联数据。Offers 可用：seller_warehouse_stock, offer_charges, takealot_warehouse_stock, replenishment_blocks。replenishment_blocks 仅在报价被完全补货封锁时才有数据。",
+            "required": false
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 100
+            },
+            "description": "[可选] 每页条数。Offers/Shipments 默认 100、最大 1000；Sales/Transactions 默认 20、最大 100；Returns 默认 10、最大 100。",
+            "required": false
+          },
+          {
+            "name": "continuation_token",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "[可选] 翻页令牌。从上一页响应获取；携带时其它查询参数会被忽略，且不返回 count。",
+            "required": false
+          },
+          {
+            "name": "order_by",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "offer_id",
+                "-offer_id"
+              ],
+              "default": "offer_id"
+            },
+            "description": "[可选] 排序字段。前缀 - 表示降序。Offers 默认 offer_id；Shipments 默认 -shipment_id；Returns 默认 -return_date。",
+            "required": false
+          },
+          {
+            "name": "include_count",
+            "in": "query",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "description": "[可选] 是否返回符合条件的总条数 count。默认 false；设为 true 可能影响性能。",
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "报价列表",
+            "content": {
+              "application/json": {
+                "example": {
+                  "items": [
+                    {
+                      "offer_id": 123456,
+                      "tsin_id": 23456789,
+                      "sku": "SKU-ABC123",
+                      "barcode": "MPTALX12345678-9",
+                      "selling_price": 345,
+                      "rrp": 399,
+                      "minimum_leadtime_days": 3,
+                      "status": "buyable",
+                      "title": "Apple iPhone 13 Pro Max (256GB) - Silver"
+                    }
+                  ],
+                  "count": 150,
+                  "limit": 100,
+                  "continuation_token": "eyJvZmZzZXQiOiAxMDB9"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "API key 缺失或无效"
+          }
+        },
+        "description": "分页查询当前卖家的报价列表。支持按 offer_id、sku、barcode、status 等过滤。**鉴权必填**：X-API-Key。所有 Query 参数均为可选；首次拉全量可不传任何过滤参数。"
+      },
+      "post": {
+        "tags": [
+          "Offers"
+        ],
+        "summary": "创建报价",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/UserAgent"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptJson"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptLanguage"
+          },
+          {
+            "name": "fields",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "required": false,
+            "description": "[可选] 仅返回指定字段，减小响应体积。Offers 可用：offer_id, tsin_id, sku, barcode, product_label, selling_price, rrp, minimum_leadtime_days, status, title, discount_percentage, storage_fee_eligible, created_at, updated_at, affected_by_vacation, disabled_by_seller, disabled_by_takealot, conversion_percentage_30_days, conversion_percentage_previous_30_days, page_views_30_days, quantity_returned_30_days, condition, image_url, productline_id, width_cm, length_cm, height_cm, weight_grams, is_conveyable, benchmark_price, total_wishlist, wishlist_30_days, listing_quality"
+          },
+          {
+            "name": "expands",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "seller_warehouse_stock",
+                  "offer_charges",
+                  "takealot_warehouse_stock",
+                  "replenishment_blocks"
+                ]
+              }
+            },
+            "required": false,
+            "description": "[可选] 展开关联数据。Offers 可用：seller_warehouse_stock, offer_charges, takealot_warehouse_stock, replenishment_blocks。replenishment_blocks 仅在报价被完全补货封锁时才有数据。"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateOfferRequest"
+              },
+              "example": {
+                "barcode": "MPTALX12345678-9",
+                "sku": "SKU-ABC123",
+                "minimum_leadtime_days": 5,
+                "selling_price": 345,
+                "rrp": 399,
+                "seller_warehouse_stock": [
+                  {
+                    "seller_warehouse_id": 1234,
+                    "quantity_available": 100
+                  }
+                ]
+              }
+            }
+          },
+          "description": "[必填] JSON 请求体。"
+        },
+        "responses": {
+          "201": {
+            "description": "创建成功"
+          },
+          "400": {
+            "description": "请求错误"
+          },
+          "403": {
+            "description": "API key 缺失或无效"
+          }
+        },
+        "description": "为 Takealot 目录中**已存在的商品**创建新报价。**鉴权必填**。请求体必填；body 内 barcode、sku 为必填，其余字段可选但建议填写完整价格与库存。"
+      }
+    },
+    "/offers/{offer_id}": {
+      "get": {
+        "tags": [
+          "Offers"
+        ],
+        "summary": "按 ID 获取报价",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/UserAgent"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptJson"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptLanguage"
+          },
+          {
+            "name": "offer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "example": 1234567890,
+            "description": "[必填] Takealot 报价 ID，integer ≥1。"
+          },
+          {
+            "name": "fields",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "required": false,
+            "description": "[可选] 仅返回指定字段，减小响应体积。Offers 可用：offer_id, tsin_id, sku, barcode, product_label, selling_price, rrp, minimum_leadtime_days, status, title, discount_percentage, storage_fee_eligible, created_at, updated_at, affected_by_vacation, disabled_by_seller, disabled_by_takealot, conversion_percentage_30_days, conversion_percentage_previous_30_days, page_views_30_days, quantity_returned_30_days, condition, image_url, productline_id, width_cm, length_cm, height_cm, weight_grams, is_conveyable, benchmark_price, total_wishlist, wishlist_30_days, listing_quality"
+          },
+          {
+            "name": "expands",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "seller_warehouse_stock",
+                  "offer_charges",
+                  "takealot_warehouse_stock",
+                  "replenishment_blocks"
+                ]
+              }
+            },
+            "required": false,
+            "description": "[可选] 展开关联数据。Offers 可用：seller_warehouse_stock, offer_charges, takealot_warehouse_stock, replenishment_blocks。replenishment_blocks 仅在报价被完全补货封锁时才有数据。"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "单个报价"
+          },
+          "403": {
+            "description": "API key 缺失或无效"
+          },
+          "404": {
+            "description": "未找到"
+          }
+        },
+        "description": "按 offer_id 获取单个报价详情。**鉴权必填**。路径 offer_id 必填；fields/expands 可选。"
+      },
+      "patch": {
+        "tags": [
+          "Offers"
+        ],
+        "summary": "按 ID 更新报价",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/UserAgent"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptJson"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptLanguage"
+          },
+          {
+            "name": "offer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "example": 1234567890,
+            "description": "[必填] Takealot 报价 ID，integer ≥1。"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "example": {
+                "sku": "SKU-ABC123",
+                "minimum_leadtime_days": 5,
+                "selling_price": 345,
+                "rrp": 399,
+                "seller_warehouse_stock": [
+                  {
+                    "seller_warehouse_id": 1234,
+                    "quantity_available": 100
+                  }
+                ]
+              },
+              "schema": {
+                "$ref": "#/components/schemas/UpdateOfferRequest"
+              }
+            }
+          },
+          "description": "[必填] JSON 请求体。"
+        },
+        "responses": {
+          "200": {
+            "description": "更新后的报价"
+          },
+          "403": {
+            "description": "API key 缺失或无效"
+          }
+        },
+        "description": "按 offer_id 部分更新报价（价格、SKU、备货天数、仓库库存等）。**鉴权必填**。路径 offer_id 必填；请求体必填但各字段均为可选，至少传一个要更新的字段。"
+      }
+    },
+    "/offers/by_sku/{sku}": {
+      "get": {
+        "tags": [
+          "Offers"
+        ],
+        "summary": "按 SKU 获取报价",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/UserAgent"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptJson"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptLanguage"
+          },
+          {
+            "name": "sku",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "SKU-ABC123",
+            "description": "[必填] 商家 SKU，非空字符串，1-255 字符，正则 ^[a-zA-Z0-9-_/.]+$。"
+          },
+          {
+            "name": "fields",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "required": false,
+            "description": "[可选] 仅返回指定字段，减小响应体积。Offers 可用：offer_id, tsin_id, sku, barcode, product_label, selling_price, rrp, minimum_leadtime_days, status, title, discount_percentage, storage_fee_eligible, created_at, updated_at, affected_by_vacation, disabled_by_seller, disabled_by_takealot, conversion_percentage_30_days, conversion_percentage_previous_30_days, page_views_30_days, quantity_returned_30_days, condition, image_url, productline_id, width_cm, length_cm, height_cm, weight_grams, is_conveyable, benchmark_price, total_wishlist, wishlist_30_days, listing_quality"
+          },
+          {
+            "name": "expands",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "seller_warehouse_stock",
+                  "offer_charges",
+                  "takealot_warehouse_stock",
+                  "replenishment_blocks"
+                ]
+              }
+            },
+            "required": false,
+            "description": "[可选] 展开关联数据。Offers 可用：seller_warehouse_stock, offer_charges, takealot_warehouse_stock, replenishment_blocks。replenishment_blocks 仅在报价被完全补货封锁时才有数据。"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "单个报价"
+          },
+          "403": {
+            "description": "API key 缺失或无效"
+          },
+          "404": {
+            "description": "未找到"
+          }
+        },
+        "description": "按 SKU 获取单个报价。**鉴权必填**。路径 sku 必填。"
+      },
+      "patch": {
+        "tags": [
+          "Offers"
+        ],
+        "summary": "按 SKU 更新报价",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/UserAgent"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptJson"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptLanguage"
+          },
+          {
+            "name": "sku",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "SKU-ABC123",
+            "description": "[必填] 商家 SKU，非空字符串，1-255 字符，正则 ^[a-zA-Z0-9-_/.]+$。"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "example": {
+                "sku": "SKU-ABC123",
+                "minimum_leadtime_days": 5,
+                "selling_price": 345,
+                "rrp": 399,
+                "seller_warehouse_stock": [
+                  {
+                    "seller_warehouse_id": 1234,
+                    "quantity_available": 100
+                  }
+                ]
+              },
+              "schema": {
+                "$ref": "#/components/schemas/UpdateOfferRequest"
+              }
+            }
+          },
+          "description": "[必填] JSON 请求体。"
+        },
+        "responses": {
+          "200": {
+            "description": "更新后的报价"
+          },
+          "403": {
+            "description": "API key 缺失或无效"
+          }
+        },
+        "description": "按 SKU 部分更新报价。**鉴权必填**。路径 sku 必填；body 字段均可选，至少传一个要更新的字段。"
+      }
+    },
+    "/offers/by_barcode/{barcode}": {
+      "get": {
+        "tags": [
+          "Offers"
+        ],
+        "summary": "按条形码获取报价",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/UserAgent"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptJson"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptLanguage"
+          },
+          {
+            "name": "barcode",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "MPTALX12345678-9",
+            "description": "[必填] 商品条形码（GTIN），非空字符串，由商家提供。"
+          },
+          {
+            "name": "fields",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "required": false,
+            "description": "[可选] 仅返回指定字段，减小响应体积。Offers 可用：offer_id, tsin_id, sku, barcode, product_label, selling_price, rrp, minimum_leadtime_days, status, title, discount_percentage, storage_fee_eligible, created_at, updated_at, affected_by_vacation, disabled_by_seller, disabled_by_takealot, conversion_percentage_30_days, conversion_percentage_previous_30_days, page_views_30_days, quantity_returned_30_days, condition, image_url, productline_id, width_cm, length_cm, height_cm, weight_grams, is_conveyable, benchmark_price, total_wishlist, wishlist_30_days, listing_quality"
+          },
+          {
+            "name": "expands",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "seller_warehouse_stock",
+                  "offer_charges",
+                  "takealot_warehouse_stock",
+                  "replenishment_blocks"
+                ]
+              }
+            },
+            "required": false,
+            "description": "[可选] 展开关联数据。Offers 可用：seller_warehouse_stock, offer_charges, takealot_warehouse_stock, replenishment_blocks。replenishment_blocks 仅在报价被完全补货封锁时才有数据。"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "单个报价"
+          },
+          "403": {
+            "description": "API key 缺失或无效"
+          },
+          "404": {
+            "description": "未找到"
+          }
+        },
+        "description": "按条形码获取单个报价。**鉴权必填**。路径 barcode 必填。"
+      },
+      "patch": {
+        "tags": [
+          "Offers"
+        ],
+        "summary": "按条形码更新报价",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/UserAgent"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptJson"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptLanguage"
+          },
+          {
+            "name": "barcode",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "MPTALX12345678-9",
+            "description": "[必填] 商品条形码（GTIN），非空字符串，由商家提供。"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "example": {
+                "sku": "SKU-ABC123",
+                "minimum_leadtime_days": 5,
+                "selling_price": 345,
+                "rrp": 399,
+                "seller_warehouse_stock": [
+                  {
+                    "seller_warehouse_id": 1234,
+                    "quantity_available": 100
+                  }
+                ]
+              },
+              "schema": {
+                "$ref": "#/components/schemas/UpdateOfferRequest"
+              }
+            }
+          },
+          "description": "[必填] JSON 请求体。"
+        },
+        "responses": {
+          "200": {
+            "description": "更新后的报价"
+          },
+          "403": {
+            "description": "API key 缺失或无效"
+          }
+        },
+        "description": "按条形码部分更新报价。**鉴权必填**。路径 barcode 必填；body 字段均可选。"
+      }
+    },
+    "/offers/batch": {
+      "post": {
+        "tags": [
+          "Offers"
+        ],
+        "summary": "批量创建报价",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchOfferRequest"
+              },
+              "example": {
+                "offers": [
+                  {
+                    "offer_id": 0,
+                    "sku": "SKU-ABC123",
+                    "barcode": "string",
+                    "selling_price": 345,
+                    "rrp": 399,
+                    "leadtime_days": 0,
+                    "leadtime_stock": [
+                      {
+                        "merchant_warehouse_id": 1234,
+                        "quantity": 100
+                      }
+                    ],
+                    "status_action": "Disable"
+                  }
+                ]
+              }
+            }
+          },
+          "description": "[必填] JSON 请求体。"
+        },
+        "responses": {
+          "201": {
+            "description": "批次创建成功",
+            "content": {
+              "application/json": {
+                "example": {
+                  "batch_id": 0,
+                  "status": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "API key 缺失或无效"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/UserAgent"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptJson"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptLanguage"
+          }
+        ],
+        "description": "批量创建/更新报价，单次最多 **10000** 条。**鉴权必填**。请求体 offers 数组必填；数组内各字段按批量接口规范填写。"
+      }
+    },
+    "/offers/batch/{batch_id}": {
+      "get": {
+        "tags": [
+          "Offers"
+        ],
+        "summary": "按 ID 获取报价批次",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/UserAgent"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptJson"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptLanguage"
+          },
+          {
+            "name": "batch_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "example": 98765,
+            "description": "[必填] 批量任务 ID，创建 batch 时返回的 batch_id。"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "报价批次",
+            "content": {
+              "application/json": {
+                "example": {
+                  "batch_id": 98765,
+                  "status": "completed",
+                  "results": []
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "API key 缺失或无效"
+          }
+        },
+        "description": "查询批量任务处理状态与结果。**鉴权必填**。路径 batch_id 必填。建议配合 Batch Completed Webhook，而非频繁轮询。"
+      }
+    },
+    "/sales": {
+      "get": {
+        "tags": [
+          "Sales"
+        ],
+        "summary": "获取销售列表",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/UserAgent"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptJson"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptLanguage"
+          },
+          {
+            "name": "order_id",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "example": 9876543,
+            "description": "[可选] 按 Takealot 客户订单 ID 过滤。integer ≥1。",
+            "required": false
+          },
+          {
+            "name": "order_date__gte",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "example": "2025-01-01",
+            "description": "[可选] 订单日期起始（含），SAST 时区。需与 order_date__lte 配对使用。",
+            "required": false
+          },
+          {
+            "name": "order_date__lte",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "example": "2025-12-31",
+            "description": "[可选] 订单日期截止（含），SAST 时区。需与 order_date__gte 配对使用。",
+            "required": false
+          },
+          {
+            "name": "stock_source_region",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "cpt",
+                "CPT",
+                "jhb",
+                "JHB",
+                "dbn",
+                "DBN"
+              ]
+            },
+            "description": "[可选] 库存来源区域。枚举：cpt/CPT | jhb/JHB | dbn/DBN。",
+            "required": false
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            },
+            "required": false,
+            "description": "[可选] 每页条数。Offers/Shipments 默认 100、最大 1000；Sales/Transactions 默认 20、最大 100；Returns 默认 10、最大 100。"
+          },
+          {
+            "name": "fields",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "required": false,
+            "description": "[可选] 仅返回指定字段，减小响应体积。Offers 可用：offer_id, tsin_id, sku, barcode, product_label, selling_price, rrp, minimum_leadtime_days, status, title, discount_percentage, storage_fee_eligible, created_at, updated_at, affected_by_vacation, disabled_by_seller, disabled_by_takealot, conversion_percentage_30_days, conversion_percentage_previous_30_days, page_views_30_days, quantity_returned_30_days, condition, image_url, productline_id, width_cm, length_cm, height_cm, weight_grams, is_conveyable, benchmark_price, total_wishlist, wishlist_30_days, listing_quality"
+          },
+          {
+            "name": "continuation_token",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "description": "[可选] 翻页令牌。从上一页响应获取；携带时其它查询参数会被忽略，且不返回 count。"
+          },
+          {
+            "name": "include_count",
+            "in": "query",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "required": false,
+            "description": "[可选] 是否返回符合条件的总条数 count。默认 false；设为 true 可能影响性能。"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "销售列表",
+            "content": {
+              "application/json": {
+                "example": {
+                  "items": [
+                    {
+                      "order_item_id": 12345678,
+                      "order_id": 9876543,
+                      "order_date": "2025-01-15T14:30:00+02:00",
+                      "sale_status": "Preparing for Customer",
+                      "offer_id": 123456,
+                      "sku": "SKU-ABC123",
+                      "selling_price": 345,
+                      "quantity": 3,
+                      "total_fees": 15.75,
+                      "sales_region": "JHB",
+                      "stock_source_region": "CPT"
+                    }
+                  ],
+                  "count": 150,
+                  "limit": 100,
+                  "continuation_token": "eyJvZmZzZXQiOiAxMDB9"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "API key 缺失或无效"
+          }
+        },
+        "description": "分页查询销售/订单明细。**鉴权必填**。所有 Query 均为可选；按日期查询时 order_date__gte 与 order_date__lte 建议成对使用，单次跨度不超过 180 天。"
+      }
+    },
+    "/transactions": {
+      "get": {
+        "tags": [
+          "Transactions"
+        ],
+        "summary": "获取交易列表",
+        "description": "分页查询账户交易流水，按 transaction_id 降序。**鉴权必填**。created_at__gte/lte 可选，默认最近 30 天；最大跨度 180 天。",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/UserAgent"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptJson"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptLanguage"
+          },
+          {
+            "name": "transaction_type__in",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "description": "[可选] 交易类型过滤，可多选。见官方文档 37 种 transaction_type 枚举。",
+            "required": false
+          },
+          {
+            "name": "created_at__gte",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "example": "2025-01-01T00:00:00+02:00",
+            "description": "[可选] 交易创建时间起始（含）。默认 now-30天，不能为未来时间。最大查询跨度 180 天。",
+            "required": false
+          },
+          {
+            "name": "created_at__lte",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "example": "2025-01-31T23:59:59+02:00",
+            "description": "[可选] 交易创建时间截止（含）。默认 now，不能为未来时间。",
+            "required": false
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            },
+            "required": false,
+            "description": "[可选] 每页条数。Offers/Shipments 默认 100、最大 1000；Sales/Transactions 默认 20、最大 100；Returns 默认 10、最大 100。"
+          },
+          {
+            "name": "fields",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "transaction_id",
+                  "transaction_type",
+                  "amount_incl_vat",
+                  "vat_multiplier",
+                  "created_at"
+                ]
+              }
+            },
+            "required": false,
+            "description": "[可选] 仅返回指定字段，减小响应体积。Offers 可用：offer_id, tsin_id, sku, barcode, product_label, selling_price, rrp, minimum_leadtime_days, status, title, discount_percentage, storage_fee_eligible, created_at, updated_at, affected_by_vacation, disabled_by_seller, disabled_by_takealot, conversion_percentage_30_days, conversion_percentage_previous_30_days, page_views_30_days, quantity_returned_30_days, condition, image_url, productline_id, width_cm, length_cm, height_cm, weight_grams, is_conveyable, benchmark_price, total_wishlist, wishlist_30_days, listing_quality"
+          },
+          {
+            "name": "expands",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "references"
+                ]
+              }
+            },
+            "required": false,
+            "description": "[可选] 展开关联数据。Offers 可用：seller_warehouse_stock, offer_charges, takealot_warehouse_stock, replenishment_blocks。replenishment_blocks 仅在报价被完全补货封锁时才有数据。"
+          },
+          {
+            "name": "continuation_token",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "description": "[可选] 翻页令牌。从上一页响应获取；携带时其它查询参数会被忽略，且不返回 count。"
+          },
+          {
+            "name": "include_count",
+            "in": "query",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "required": false,
+            "description": "[可选] 是否返回符合条件的总条数 count。默认 false；设为 true 可能影响性能。"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "交易列表",
+            "content": {
+              "application/json": {
+                "example": {
+                  "items": [
+                    {
+                      "transaction_id": 12345,
+                      "transaction_type": "charge-subscription-fee",
+                      "amount_incl_vat": 115,
+                      "vat_multiplier": 0.15,
+                      "created_at": "2024-01-15T12:34:56+02:00"
+                    }
+                  ],
+                  "count": 150,
+                  "limit": 100,
+                  "continuation_token": "eyJvZmZzZXQiOiAxMDB9"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "API key 缺失或无效"
+          }
+        }
+      }
+    },
+    "/balances": {
+      "get": {
+        "tags": [
+          "Transactions"
+        ],
+        "summary": "获取结算/可提现信息",
+        "responses": {
+          "200": {
+            "description": "结算余额",
+            "content": {
+              "application/json": {
+                "example": {
+                  "balances": {
+                    "current": 15000.5,
+                    "available": 12500,
+                    "held_back": 2500.5
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "API key 缺失或无效"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/UserAgent"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptJson"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptLanguage"
+          }
+        ],
+        "description": "获取卖家结算余额（current/available/held_back）。**鉴权必填**。无 Query 参数。"
+      }
+    },
+    "/shipments": {
+      "get": {
+        "tags": [
+          "Shipments"
+        ],
+        "summary": "获取发货列表（只读，无创建接口）",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/UserAgent"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptJson"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptLanguage"
+          },
+          {
+            "name": "shipment_id",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            },
+            "example": 12345,
+            "required": false,
+            "description": "[可选] 按发货 ID 精确过滤。"
+          },
+          {
+            "name": "shipment_id__lt",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            },
+            "required": false,
+            "description": "[可选] 发货 ID 小于该值。"
+          },
+          {
+            "name": "shipment_id__gt",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            },
+            "required": false,
+            "description": "[可选] 发货 ID 大于该值。"
+          },
+          {
+            "name": "shipment_id__in",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "integer"
+              }
+            },
+            "required": false,
+            "description": "[可选] 发货 ID 列表，只返回其中 ID。"
+          },
+          {
+            "name": "shipment_type__in",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "customer_order",
+                  "replenishment",
+                  "mixed"
+                ]
+              }
+            },
+            "description": "[可选] 发货类型。customer_order(客户订单) | replenishment(补货) | mixed(混合)。",
+            "required": false
+          },
+          {
+            "name": "shipped",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            },
+            "description": "[可选] 按是否已发货过滤。boolean。",
+            "required": false
+          },
+          {
+            "name": "cancelled",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            },
+            "description": "[可选] 按是否已取消过滤。boolean。",
+            "required": false
+          },
+          {
+            "name": "order_by",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "shipment_id",
+                "-shipment_id"
+              ],
+              "default": "-shipment_id"
+            },
+            "required": false,
+            "description": "[可选] 排序字段。前缀 - 表示降序。Offers 默认 offer_id；Shipments 默认 -shipment_id；Returns 默认 -return_date。"
+          },
+          {
+            "name": "fields",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "required": false,
+            "description": "[可选] 仅返回指定字段，减小响应体积。Offers 可用：offer_id, tsin_id, sku, barcode, product_label, selling_price, rrp, minimum_leadtime_days, status, title, discount_percentage, storage_fee_eligible, created_at, updated_at, affected_by_vacation, disabled_by_seller, disabled_by_takealot, conversion_percentage_30_days, conversion_percentage_previous_30_days, page_views_30_days, quantity_returned_30_days, condition, image_url, productline_id, width_cm, length_cm, height_cm, weight_grams, is_conveyable, benchmark_price, total_wishlist, wishlist_30_days, listing_quality"
+          },
+          {
+            "name": "expands",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "shipment_items"
+                ]
+              }
+            },
+            "required": false,
+            "description": "[可选] 展开关联数据。Offers 可用：seller_warehouse_stock, offer_charges, takealot_warehouse_stock, replenishment_blocks。replenishment_blocks 仅在报价被完全补货封锁时才有数据。"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 100
+            },
+            "required": false,
+            "description": "[可选] 每页条数。Offers/Shipments 默认 100、最大 1000；Sales/Transactions 默认 20、最大 100；Returns 默认 10、最大 100。"
+          },
+          {
+            "name": "include_count",
+            "in": "query",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "required": false,
+            "description": "[可选] 是否返回符合条件的总条数 count。默认 false；设为 true 可能影响性能。"
+          },
+          {
+            "name": "continuation_token",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "description": "[可选] 翻页令牌。从上一页响应获取；携带时其它查询参数会被忽略，且不返回 count。"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "发货列表",
+            "content": {
+              "application/json": {
+                "example": {
+                  "items": [
+                    {
+                      "shipment_id": 12345,
+                      "reference": "PO-2987543-07/12/2025-JHB-1",
+                      "destination_region": "JHB",
+                      "shipped": false,
+                      "archived": false,
+                      "purchase_order_number": 2987543,
+                      "cancelled": false,
+                      "due_date": "2025-07-15",
+                      "created_at": "2025-07-01T10:30:00+02:00",
+                      "destination_facility_id": 6,
+                      "shipment_type": "replenishment",
+                      "purchase_order_state": "shipped",
+                      "tracking_info": "Carrier: DHL, Tracking Number: 123456789",
+                      "shipment_items": [
+                        {
+                          "shipment_item_id": 34567,
+                          "offer_id": 123456,
+                          "cancelled": false,
+                          "shipment_item_type": "replenishment",
+                          "quantity_required": 100,
+                          "quantity_sending": 100,
+                          "purchase_order_quantity_received": 50,
+                          "purchase_order_quantity_damaged": 5
+                        }
+                      ]
+                    }
+                  ],
+                  "count": 150,
+                  "limit": 100,
+                  "continuation_token": "eyJvZmZzZXQiOiAxMDB9"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "API key 缺失或无效"
+          }
+        },
+        "description": "分页查询发货/采购单列表（**只读，无法通过 API 创建发货单**）。**鉴权必填**。所有 Query 均为可选；expands=shipment_items 可展开明细。"
+      }
+    },
+    "/shipments/{shipment_id}": {
+      "get": {
+        "tags": [
+          "Shipments"
+        ],
+        "summary": "获取单个发货",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/UserAgent"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptJson"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptLanguage"
+          },
+          {
+            "name": "shipment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "example": 12345,
+            "description": "[必填] 发货单 ID。"
+          },
+          {
+            "name": "fields",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "required": false,
+            "description": "[可选] 仅返回指定字段，减小响应体积。Offers 可用：offer_id, tsin_id, sku, barcode, product_label, selling_price, rrp, minimum_leadtime_days, status, title, discount_percentage, storage_fee_eligible, created_at, updated_at, affected_by_vacation, disabled_by_seller, disabled_by_takealot, conversion_percentage_30_days, conversion_percentage_previous_30_days, page_views_30_days, quantity_returned_30_days, condition, image_url, productline_id, width_cm, length_cm, height_cm, weight_grams, is_conveyable, benchmark_price, total_wishlist, wishlist_30_days, listing_quality"
+          },
+          {
+            "name": "expands",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "shipment_items"
+                ]
+              }
+            },
+            "required": false,
+            "description": "[可选] 展开关联数据。Offers 可用：seller_warehouse_stock, offer_charges, takealot_warehouse_stock, replenishment_blocks。replenishment_blocks 仅在报价被完全补货封锁时才有数据。"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "单个发货"
+          },
+          "403": {
+            "description": "API key 缺失或无效"
+          },
+          "404": {
+            "description": "未找到"
+          }
+        },
+        "description": "获取单个发货单详情。**鉴权必填**。路径 shipment_id 必填。"
+      }
+    },
+    "/returns": {
+      "get": {
+        "tags": [
+          "Returns"
+        ],
+        "summary": "获取退货列表",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/UserAgent"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptJson"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptLanguage"
+          },
+          {
+            "name": "fields",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "required": false,
+            "description": "[可选] 仅返回指定字段，减小响应体积。Offers 可用：offer_id, tsin_id, sku, barcode, product_label, selling_price, rrp, minimum_leadtime_days, status, title, discount_percentage, storage_fee_eligible, created_at, updated_at, affected_by_vacation, disabled_by_seller, disabled_by_takealot, conversion_percentage_30_days, conversion_percentage_previous_30_days, page_views_30_days, quantity_returned_30_days, condition, image_url, productline_id, width_cm, length_cm, height_cm, weight_grams, is_conveyable, benchmark_price, total_wishlist, wishlist_30_days, listing_quality"
+          },
+          {
+            "name": "expands",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "outcomes",
+                  "transactions"
+                ]
+              }
+            },
+            "required": false,
+            "description": "[可选] 展开关联数据。Offers 可用：seller_warehouse_stock, offer_charges, takealot_warehouse_stock, replenishment_blocks。replenishment_blocks 仅在报价被完全补货封锁时才有数据。"
+          },
+          {
+            "name": "return_reason__in",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "changed_my_mind",
+                  "customer_cancellation",
+                  "defective_or_damaged",
+                  "exception",
+                  "exchange_for_a_different_size_colour",
+                  "failed_delivery",
+                  "not_what_i_ordered"
+                ]
+              }
+            },
+            "required": false,
+            "description": "[可选] 退货原因。changed_my_mind | customer_cancellation | defective_or_damaged | exception | exchange_for_a_different_size_colour | failed_delivery | not_what_i_ordered"
+          },
+          {
+            "name": "outcome__in",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "pending_removal_order",
+                  "removal_order",
+                  "pending_sellable_stock",
+                  "sellable_stock"
+                ]
+              }
+            },
+            "required": false,
+            "description": "[可选] 退货处理结果。pending_removal_order | removal_order | pending_sellable_stock | sellable_stock"
+          },
+          {
+            "name": "return_region__in",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "CPT",
+                  "JHB",
+                  "DBN",
+                  "cpt",
+                  "jhb",
+                  "dbn"
+                ]
+              }
+            },
+            "required": false,
+            "description": "[可选] 退货处理区域。CPT/JHB/DBN（大小写均可）。"
+          },
+          {
+            "name": "return_date__gte",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "example": "2025-01-01",
+            "required": false,
+            "description": "[可选] 退货日期起始（含）。"
+          },
+          {
+            "name": "return_date__lte",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "example": "2025-12-31",
+            "required": false,
+            "description": "[可选] 退货日期截止（含）。"
+          },
+          {
+            "name": "order_id",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            },
+            "example": 9876543,
+            "required": false,
+            "description": "[可选] 按 Takealot 客户订单 ID 过滤。integer ≥1。"
+          },
+          {
+            "name": "return_reference_number",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "example": "RRN-QBYQ7-E67K",
+            "required": false,
+            "description": "[可选] 客户退货参考号 RRN，如 RRN-QBYQ7-E67K。"
+          },
+          {
+            "name": "sku",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "example": "SKU-ABC123",
+            "required": false,
+            "description": "[可选] 按商家 SKU 过滤。"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 10
+            },
+            "required": false,
+            "description": "[可选] 每页条数。Offers/Shipments 默认 100、最大 1000；Sales/Transactions 默认 20、最大 100；Returns 默认 10、最大 100。"
+          },
+          {
+            "name": "continuation_token",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "description": "[可选] 翻页令牌。从上一页响应获取；携带时其它查询参数会被忽略，且不返回 count。"
+          },
+          {
+            "name": "order_by",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "return_date",
+                "-return_date"
+              ],
+              "default": "-return_date"
+            },
+            "required": false,
+            "description": "[可选] 排序字段。前缀 - 表示降序。Offers 默认 offer_id；Shipments 默认 -shipment_id；Returns 默认 -return_date。"
+          },
+          {
+            "name": "include_count",
+            "in": "query",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "required": false,
+            "description": "[可选] 是否返回符合条件的总条数 count。默认 false；设为 true 可能影响性能。"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "退货列表",
+            "content": {
+              "application/json": {
+                "example": {
+                  "items": [
+                    {
+                      "seller_return_id": 12345,
+                      "order_id": 9876543,
+                      "offer_id": 123456,
+                      "return_reference_number": "RRN-QBYQ7-E67K",
+                      "sku": "SKU-ABC123",
+                      "return_region": "JHB",
+                      "quantity": 1,
+                      "return_date": "2024-05-15",
+                      "return_reason": "defective_or_damaged"
+                    }
+                  ],
+                  "count": 150,
+                  "limit": 100,
+                  "continuation_token": "eyJvZmZzZXQiOiAxMDB9"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "API key 缺失或无效"
+          }
+        },
+        "description": "分页查询卖家退货记录。**鉴权必填**。所有 Query 均为可选；expands=outcomes,transactions 可展开处理结果与关联交易。"
+      }
+    },
+    "/returns/{return_id}": {
+      "get": {
+        "tags": [
+          "Returns"
+        ],
+        "summary": "按 ID 获取退货",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/UserAgent"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptJson"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptLanguage"
+          },
+          {
+            "name": "return_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "example": 9876543,
+            "description": "[必填] 卖家退货 ID（seller_return_id）。"
+          },
+          {
+            "name": "fields",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "required": false,
+            "description": "[可选] 仅返回指定字段，减小响应体积。Offers 可用：offer_id, tsin_id, sku, barcode, product_label, selling_price, rrp, minimum_leadtime_days, status, title, discount_percentage, storage_fee_eligible, created_at, updated_at, affected_by_vacation, disabled_by_seller, disabled_by_takealot, conversion_percentage_30_days, conversion_percentage_previous_30_days, page_views_30_days, quantity_returned_30_days, condition, image_url, productline_id, width_cm, length_cm, height_cm, weight_grams, is_conveyable, benchmark_price, total_wishlist, wishlist_30_days, listing_quality"
+          },
+          {
+            "name": "expands",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "outcomes",
+                  "transactions"
+                ]
+              }
+            },
+            "required": false,
+            "description": "[可选] 展开关联数据。Offers 可用：seller_warehouse_stock, offer_charges, takealot_warehouse_stock, replenishment_blocks。replenishment_blocks 仅在报价被完全补货封锁时才有数据。"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "单个退货"
+          },
+          "403": {
+            "description": "API key 缺失或无效"
+          },
+          "404": {
+            "description": "未找到"
+          }
+        },
+        "description": "按 ID 获取单条退货详情。**鉴权必填**。路径 return_id 必填。"
+      }
+    },
+    "/facilities/get_enabled_regions": {
+      "get": {
+        "tags": [
+          "Facilities"
+        ],
+        "summary": "获取已启用的设施区域",
+        "responses": {
+          "200": {
+            "description": "启用区域",
+            "content": {
+              "application/json": {
+                "example": {
+                  "regions": [
+                    {
+                      "id": 1,
+                      "code": "CPT"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "API key 缺失或无效"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/UserAgent"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptJson"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptLanguage"
+          }
+        ],
+        "description": "获取已启用的 Takealot 仓储区域代码与 ID。**鉴权必填**。无 Query 参数。"
+      }
+    },
+    "/seller": {
+      "get": {
+        "tags": [
+          "Seller"
+        ],
+        "summary": "获取卖家信息",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/UserAgent"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptJson"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptLanguage"
+          },
+          {
+            "name": "fields",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "required": false,
+            "description": "[可选] 仅返回指定字段，减小响应体积。Offers 可用：offer_id, tsin_id, sku, barcode, product_label, selling_price, rrp, minimum_leadtime_days, status, title, discount_percentage, storage_fee_eligible, created_at, updated_at, affected_by_vacation, disabled_by_seller, disabled_by_takealot, conversion_percentage_30_days, conversion_percentage_previous_30_days, page_views_30_days, quantity_returned_30_days, condition, image_url, productline_id, width_cm, length_cm, height_cm, weight_grams, is_conveyable, benchmark_price, total_wishlist, wishlist_30_days, listing_quality"
+          },
+          {
+            "name": "expands",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "warehouses",
+                  "leadtime_details",
+                  "vacations",
+                  "countries"
+                ]
+              }
+            },
+            "required": false,
+            "description": "[可选] 展开关联数据。Offers 可用：seller_warehouse_stock, offer_charges, takealot_warehouse_stock, replenishment_blocks。replenishment_blocks 仅在报价被完全补货封锁时才有数据。"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "卖家信息",
+            "content": {
+              "application/json": {
+                "example": {
+                  "seller_id": 12345,
+                  "display_name": "Tech Gadgets Store",
+                  "legal_name": "Tech Gadgets (Pty) Ltd",
+                  "on_vacation": false,
+                  "is_vat_registered": true,
+                  "uuid": "123e4567-e89b-12d3-a456-426614174000",
+                  "countries": [
+                    "ZA"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "API key 缺失或无效"
+          }
+        },
+        "description": "获取当前 API Key 对应卖家账户信息。**鉴权必填**。fields/expands 可选；expands 可展开 warehouses、vacations、leadtime_details、countries。"
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "ApiKeyAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Key",
+        "description": "[必填] 卖家 API 密钥。在 Seller Portal → API Integrations → Authentication 生成。Header 名：X-API-Key。每个卖家账户同时仅 1 个有效 Key。若无效返回 403 JSON（非 HTML）。"
+      }
+    },
+    "parameters": {
+      "UserAgent": {
+        "name": "User-Agent",
+        "in": "header",
+        "required": false,
+        "description": "[建议] 模拟浏览器 User-Agent，避免 Cloudflare 返回 403 HTML 拦截页。Apifox/脚本调用时建议始终带上。",
+        "schema": {
+          "type": "string",
+          "default": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        },
+        "example": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+      },
+      "AcceptJson": {
+        "name": "Accept",
+        "in": "header",
+        "required": false,
+        "description": "[建议] 声明期望 JSON 响应，建议值为 application/json。",
+        "schema": {
+          "type": "string",
+          "default": "application/json"
+        },
+        "example": "application/json"
+      },
+      "AcceptLanguage": {
+        "name": "Accept-Language",
+        "in": "header",
+        "required": false,
+        "description": "[可选] 语言偏好，不影响 API 业务逻辑。",
+        "schema": {
+          "type": "string",
+          "default": "zh-CN,zh;q=0.9,en;q=0.8"
+        },
+        "example": "zh-CN,zh;q=0.9,en;q=0.8"
+      }
+    },
+    "schemas": {
+      "CreateOfferRequest": {
+        "type": "object",
+        "required": [
+          "barcode",
+          "sku"
+        ],
+        "description": "[必填] 创建报价请求体。barcode、sku 为必填；其余建议填写以便报价立即生效。",
+        "properties": {
+          "barcode": {
+            "type": "string",
+            "minLength": 1,
+            "description": "[必填] 商品条形码 GTIN（EAN-13/ISBN-13），商品须已存在于 Takealot 目录。"
+          },
+          "sku": {
+            "type": "string",
+            "maxLength": 255,
+            "pattern": "^[a-zA-Z0-9-_/.]+$",
+            "description": "[必填] 商家自定义 SKU，1-255 字符。"
+          },
+          "minimum_leadtime_days": {
+            "type": "integer",
+            "description": "[可选] 备货天数，从卖家仓发往 Takealot 所需天数。"
+          },
+          "selling_price": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "[可选] 售价 ZAR，integer ≥1。"
+          },
+          "rrp": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "[可选] 建议零售价 ZAR，integer ≥1。"
+          },
+          "seller_warehouse_stock": {
+            "type": "array",
+            "description": "[可选] 卖家各仓库 leadtime 库存。",
+            "items": {
+              "type": "object",
+              "properties": {
+                "seller_warehouse_id": {
+                  "type": "integer",
+                  "description": "[必填] 仓库 ID。"
+                },
+                "quantity_available": {
+                  "type": "integer",
+                  "description": "[必填] 可售数量。"
+                }
+              },
+              "required": [
+                "seller_warehouse_id",
+                "quantity_available"
+              ]
+            }
+          }
+        }
+      },
+      "UpdateOfferRequest": {
+        "type": "object",
+        "description": "[必填] 请求体。PATCH 为部分更新，以下 body 字段均为可选，至少提供一个要修改的字段。",
+        "properties": {
+          "sku": {
+            "type": "string",
+            "maxLength": 255,
+            "pattern": "^[a-zA-Z0-9-_/.]+$",
+            "description": "[可选] 新的 SKU。"
+          },
+          "minimum_leadtime_days": {
+            "type": "integer",
+            "description": "[可选] 从卖家仓库发往 Takealot 的备货天数。"
+          },
+          "selling_price": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "[可选] 售价，南非兰特 ZAR，integer ≥1。"
+          },
+          "rrp": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "[可选] 建议零售价 RRP，ZAR，integer ≥1。"
+          },
+          "seller_warehouse_stock": {
+            "type": "array",
+            "description": "[可选] 各卖家仓库库存列表。",
+            "items": {
+              "type": "object",
+              "properties": {
+                "seller_warehouse_id": {
+                  "type": "integer",
+                  "description": "[必填] 卖家仓库 ID（可通过 GET /seller?expands=warehouses 获取）。"
+                },
+                "quantity_available": {
+                  "type": "integer",
+                  "description": "[必填] 该仓库可售库存数量。"
+                }
+              },
+              "required": [
+                "seller_warehouse_id",
+                "quantity_available"
+              ]
+            }
+          }
+        }
+      },
+      "BatchOfferRequest": {
+        "type": "object",
+        "required": [
+          "offers"
+        ],
+        "description": "[必填] 批量报价请求体。offers 数组必填，最多 10000 条。",
+        "properties": {
+          "offers": {
+            "type": "array",
+            "maxItems": 10000,
+            "description": "[必填] 报价操作数组。",
+            "items": {
+              "type": "object",
+              "description": "单条批量报价项；按实际操作填写 identifier 与要更新的字段。",
+              "properties": {
+                "offer_id": {
+                  "type": "integer",
+                  "description": "[可选] 已有报价 ID；更新时建议提供。"
+                },
+                "sku": {
+                  "type": "string",
+                  "description": "[可选] SKU，可作为标识或更新字段。"
+                },
+                "barcode": {
+                  "type": "string",
+                  "description": "[可选] 条形码。"
+                },
+                "selling_price": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "description": "[可选] 售价 ZAR。"
+                },
+                "rrp": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "description": "[可选] 建议零售价。"
+                },
+                "leadtime_days": {
+                  "type": "integer",
+                  "description": "[可选] 备货天数（批量接口字段名）。"
+                },
+                "leadtime_stock": {
+                  "type": "array",
+                  "description": "[可选] 各仓库库存。",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "merchant_warehouse_id": {
+                        "type": "integer",
+                        "description": "[必填] 商家仓库 ID。"
+                      },
+                      "quantity": {
+                        "type": "integer",
+                        "description": "[必填] 库存数量。"
+                      }
+                    },
+                    "required": [
+                      "merchant_warehouse_id",
+                      "quantity"
+                    ]
+                  }
+                },
+                "status_action": {
+                  "type": "string",
+                  "enum": [
+                    "Disable",
+                    "Enable"
+                  ],
+                  "description": "[可选] 报价状态操作：Disable 停用 | Enable 启用。"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "x-apifox-common-parameters": {
+    "header": [
+      {
+        "name": "User-Agent",
+        "in": "header",
+        "required": false,
+        "description": "[建议] 模拟浏览器 User-Agent，避免 Cloudflare 返回 403 HTML 拦截页。Apifox/脚本调用时建议始终带上。",
+        "example": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "schema": {
+          "type": "string",
+          "default": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+      },
+      {
+        "name": "Accept",
+        "in": "header",
+        "required": false,
+        "description": "[建议] 声明期望 JSON 响应，建议值为 application/json。",
+        "example": "application/json",
+        "schema": {
+          "type": "string",
+          "default": "application/json"
+        }
+      },
+      {
+        "name": "Accept-Language",
+        "in": "header",
+        "required": false,
+        "description": "[可选] 语言偏好，不影响 API 业务逻辑。",
+        "example": "zh-CN,zh;q=0.9,en;q=0.8",
+        "schema": {
+          "type": "string",
+          "default": "zh-CN,zh;q=0.9,en;q=0.8"
+        }
+      }
+    ]
+  }
+}

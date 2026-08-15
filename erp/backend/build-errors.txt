@@ -1,0 +1,198 @@
+﻿
+> erp-backend@0.1.0 build
+> nest build && node scripts/postbuild.cjs
+
+node.exe : [96msrc/modules/dashboard/dashboard.controller.ts[0m:[93m16[0m:[93m25[0m - [91merror[0m[90m TS2339:
+ [0mProperty 'trends' does not exist on type 'DashboardService'.
+所在位置 行:1 字符: 1
++ & "D:\nodejs/node.exe" "D:\nodejs/node_modules/npm/bin/npm-cli.js" ru ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ([96msrc/module...hboardService'.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+[7m16[0m     return this.service.trends(Number.isFinite(parsed) ? parsed : 7)
+[7m  [0m [91m                        ~~~~~~[0m
+[96msrc/modules/inventory/inventory.service.ts[0m:[93m186[0m:[93m28[0m - [91merror[0m[90m TS2769: [0mNo overl
+oad matches this call.
+  Overload 1 of 4, '(iterable?: Iterable<readonly [unknown, unknown]> | null | undefined): Map<unknown, unknown>', gave
+ the following error.
+    Argument of type 'any[][]' is not assignable to parameter of type 'Iterable<readonly [unknown, unknown]>'.
+      The types returned by '[Symbol.iterator]().next(...)' are incompatible between these types.
+        Type 'IteratorResult<any[], any>' is not assignable to type 'IteratorResult<readonly [unknown, unknown], any>'.
+          Type 'IteratorYieldResult<any[]>' is not assignable to type 'IteratorResult<readonly [unknown, unknown], any>
+'.
+            Type 'IteratorYieldResult<any[]>' is not assignable to type 'IteratorYieldResult<readonly [unknown, unknown
+]>'.
+              Type 'any[]' is not assignable to type 'readonly [unknown, unknown]'.
+                Target requires 2 element(s) but source may have fewer.
+  Overload 2 of 4, '(entries?: readonly (readonly [unknown, unknown])[] | null | undefined): Map<unknown, unknown>', ga
+ve the following error.
+    Argument of type 'any[][]' is not assignable to parameter of type 'readonly (readonly [unknown, unknown])[]'.
+      Type 'any[]' is not assignable to type 'readonly [unknown, unknown]'.
+        Target requires 2 element(s) but source may have fewer.
+
+[7m186[0m     const supMap = new Map(suppliers.map((s) => [Number(s.id), s]))
+[7m   [0m [91m                           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+
+[96msrc/modules/inventory/inventory.service.ts[0m:[93m187[0m:[93m30[0m - [91merror[0m[90m TS2769: [0mNo overl
+oad matches this call.
+  Overload 1 of 4, '(iterable?: Iterable<readonly [unknown, unknown]> | null | undefined): Map<unknown, unknown>', gave
+ the following error.
+    Argument of type 'any[][]' is not assignable to parameter of type 'Iterable<readonly [unknown, unknown]>'.
+      The types returned by '[Symbol.iterator]().next(...)' are incompatible between these types.
+        Type 'IteratorResult<any[], any>' is not assignable to type 'IteratorResult<readonly [unknown, unknown], any>'.
+          Type 'IteratorYieldResult<any[]>' is not assignable to type 'IteratorResult<readonly [unknown, unknown], any>
+'.
+            Type 'IteratorYieldResult<any[]>' is not assignable to type 'IteratorYieldResult<readonly [unknown, unknown
+]>'.
+              Type 'any[]' is not assignable to type 'readonly [unknown, unknown]'.
+                Target requires 2 element(s) but source may have fewer.
+  Overload 2 of 4, '(entries?: readonly (readonly [unknown, unknown])[] | null | undefined): Map<unknown, unknown>', ga
+ve the following error.
+    Argument of type 'any[][]' is not assignable to parameter of type 'readonly (readonly [unknown, unknown])[]'.
+      Type 'any[]' is not assignable to type 'readonly [unknown, unknown]'.
+        Target requires 2 element(s) but source may have fewer.
+
+[7m187[0m     const priceMap = new Map(pricingRows.map((p) => [p.sku, p]))
+[7m   [0m [91m                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+
+[96msrc/modules/inventory/inventory.service.ts[0m:[93m208[0m:[93m33[0m - [91merror[0m[90m TS2339: [0mProperty
+ 'supplierCode' does not exist on type '{}'.
+
+[7m208[0m         customerCode: supplier?.supplierCode || '',
+[7m   [0m [91m                                ~~~~~~~~~~~~[0m
+[96msrc/modules/inventory/inventory.service.ts[0m:[93m209[0m:[93m33[0m - [91merror[0m[90m TS2339: [0mProperty
+ 'supplierName' does not exist on type '{}'.
+
+[7m209[0m         supplierName: supplier?.supplierName || '',
+[7m   [0m [91m                                ~~~~~~~~~~~~[0m
+[96msrc/modules/inventory/inventory.service.ts[0m:[93m231[0m:[93m30[0m - [91merror[0m[90m TS2339: [0mProperty
+ 'finalPrice' does not exist on type '{}'.
+
+[7m231[0m         finalPrice: pricing?.finalPrice != null ? Number(pricing.finalPrice) : null,
+[7m   [0m [91m                             ~~~~~~~~~~[0m
+[96msrc/modules/inventory/inventory.service.ts[0m:[93m231[0m:[93m66[0m - [91merror[0m[90m TS2339: [0mProperty
+ 'finalPrice' does not exist on type '{}'.
+
+[7m231[0m         finalPrice: pricing?.finalPrice != null ? Number(pricing.finalPrice) : null,
+[7m   [0m [91m                                                                 ~~~~~~~~~~[0m
+[96msrc/modules/inventory/inventory.service.ts[0m:[93m381[0m:[93m28[0m - [91merror[0m[90m TS2769: [0mNo overl
+oad matches this call.
+  Overload 1 of 4, '(iterable?: Iterable<readonly [unknown, unknown]> | null | undefined): Map<unknown, unknown>', gave
+ the following error.
+    Argument of type 'any[][]' is not assignable to parameter of type 'Iterable<readonly [unknown, unknown]>'.
+      The types returned by '[Symbol.iterator]().next(...)' are incompatible between these types.
+        Type 'IteratorResult<any[], any>' is not assignable to type 'IteratorResult<readonly [unknown, unknown], any>'.
+          Type 'IteratorYieldResult<any[]>' is not assignable to type 'IteratorResult<readonly [unknown, unknown], any>
+'.
+            Type 'IteratorYieldResult<any[]>' is not assignable to type 'IteratorYieldResult<readonly [unknown, unknown
+]>'.
+              Type 'any[]' is not assignable to type 'readonly [unknown, unknown]'.
+                Target requires 2 element(s) but source may have fewer.
+  Overload 2 of 4, '(entries?: readonly (readonly [unknown, unknown])[] | null | undefined): Map<unknown, unknown>', ga
+ve the following error.
+    Argument of type 'any[][]' is not assignable to parameter of type 'readonly (readonly [unknown, unknown])[]'.
+      Type 'any[]' is not assignable to type 'readonly [unknown, unknown]'.
+        Target requires 2 element(s) but source may have fewer.
+
+[7m381[0m     const supMap = new Map(suppliers.map((s) => [Number(s.id), s]))
+[7m   [0m [91m                           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+
+[96msrc/modules/inventory/inventory.service.ts[0m:[93m382[0m:[93m28[0m - [91merror[0m[90m TS2769: [0mNo overl
+oad matches this call.
+  Overload 1 of 4, '(iterable?: Iterable<readonly [unknown, unknown]> | null | undefined): Map<unknown, unknown>', gave
+ the following error.
+    Argument of type 'any[][]' is not assignable to parameter of type 'Iterable<readonly [unknown, unknown]>'.
+      The types returned by '[Symbol.iterator]().next(...)' are incompatible between these types.
+        Type 'IteratorResult<any[], any>' is not assignable to type 'IteratorResult<readonly [unknown, unknown], any>'.
+          Type 'IteratorYieldResult<any[]>' is not assignable to type 'IteratorResult<readonly [unknown, unknown], any>
+'.
+            Type 'IteratorYieldResult<any[]>' is not assignable to type 'IteratorYieldResult<readonly [unknown, unknown
+]>'.
+              Type 'any[]' is not assignable to type 'readonly [unknown, unknown]'.
+                Target requires 2 element(s) but source may have fewer.
+  Overload 2 of 4, '(entries?: readonly (readonly [unknown, unknown])[] | null | undefined): Map<unknown, unknown>', ga
+ve the following error.
+    Argument of type 'any[][]' is not assignable to parameter of type 'readonly (readonly [unknown, unknown])[]'.
+      Type 'any[]' is not assignable to type 'readonly [unknown, unknown]'.
+        Target requires 2 element(s) but source may have fewer.
+
+[7m382[0m     const devMap = new Map(developers.map((d) => [Number(d.id), d]))
+[7m   [0m [91m                           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+
+[96msrc/modules/inventory/inventory.service.ts[0m:[93m383[0m:[93m32[0m - [91merror[0m[90m TS2769: [0mNo overl
+oad matches this call.
+  Overload 1 of 4, '(iterable?: Iterable<readonly [unknown, unknown]> | null | undefined): Map<unknown, unknown>', gave
+ the following error.
+    Argument of type 'any[][]' is not assignable to parameter of type 'Iterable<readonly [unknown, unknown]>'.
+      The types returned by '[Symbol.iterator]().next(...)' are incompatible between these types.
+        Type 'IteratorResult<any[], any>' is not assignable to type 'IteratorResult<readonly [unknown, unknown], any>'.
+          Type 'IteratorYieldResult<any[]>' is not assignable to type 'IteratorResult<readonly [unknown, unknown], any>
+'.
+            Type 'IteratorYieldResult<any[]>' is not assignable to type 'IteratorYieldResult<readonly [unknown, unknown
+]>'.
+              Type 'any[]' is not assignable to type 'readonly [unknown, unknown]'.
+                Target requires 2 element(s) but source may have fewer.
+  Overload 2 of 4, '(entries?: readonly (readonly [unknown, unknown])[] | null | undefined): Map<unknown, unknown>', ga
+ve the following error.
+    Argument of type 'any[][]' is not assignable to parameter of type 'readonly (readonly [unknown, unknown])[]'.
+      Type 'any[]' is not assignable to type 'readonly [unknown, unknown]'.
+        Target requires 2 element(s) but source may have fewer.
+
+[7m383[0m     const pricingMap = new Map(pricingRows.map((p) => [p.sku, p]))
+[7m   [0m [91m                               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+
+[96msrc/modules/inventory/inventory.service.ts[0m:[93m404[0m:[93m20[0m - [91merror[0m[90m TS2339: [0mProperty
+ 'orderableOnOms' does not exist on type '{}'.
+
+[7m404[0m       if (pricing?.orderableOnOms) salesStatus = '鍏佽閿€鍞?
+[7m   [0m [91m                   ~~~~~~~~~~~~~~[0m
+[96msrc/modules/inventory/inventory.service.ts[0m:[93m405[0m:[93m25[0m - [91merror[0m[90m TS2339: [0mProperty
+ 'visibleOnOms' does not exist on type '{}'.
+
+[7m405[0m       else if (pricing?.visibleOnOms) salesStatus = '浠呭睍绀?
+[7m   [0m [91m                        ~~~~~~~~~~~~[0m
+[96msrc/modules/inventory/inventory.service.ts[0m:[93m426[0m:[93m33[0m - [91merror[0m[90m TS2339: [0mProperty
+ 'supplierCode' does not exist on type '{}'.
+
+[7m426[0m         customerCode: supplier?.supplierCode || developer?.username || '',
+[7m   [0m [91m                                ~~~~~~~~~~~~[0m
+[96msrc/modules/inventory/inventory.service.ts[0m:[93m426[0m:[93m60[0m - [91merror[0m[90m TS2339: [0mProperty
+ 'username' does not exist on type '{}'.
+
+[7m426[0m         customerCode: supplier?.supplierCode || developer?.username || '',
+[7m   [0m [91m                                                           ~~~~~~~~[0m
+[96msrc/modules/inventory/inventory.service.ts[0m:[93m427[0m:[93m33[0m - [91merror[0m[90m TS2339: [0mProperty
+ 'supplierName' does not exist on type '{}'.
+
+[7m427[0m         supplierName: supplier?.supplierName || '',
+[7m   [0m [91m                                ~~~~~~~~~~~~[0m
+[96msrc/modules/inventory/inventory.service.ts[0m:[93m428[0m:[93m35[0m - [91merror[0m[90m TS2339: [0mProperty
+ 'realName' does not exist on type '{}'.
+
+[7m428[0m         developerName: developer?.realName || '',
+[7m   [0m [91m                                  ~~~~~~~~[0m
+[96msrc/modules/inventory/inventory.service.ts[0m:[93m430[0m:[93m42[0m - [91merror[0m[90m TS2339: [0mProperty
+ 'orderableOnOms' does not exist on type '{}'.
+Found 20 error(s).
+
+
+[7m430[0m         orderableOnOms: Boolean(pricing?.orderableOnOms),
+[7m   [0m [91m                                         ~~~~~~~~~~~~~~[0m
+[96msrc/modules/inventory/inventory.service.ts[0m:[93m431[0m:[93m40[0m - [91merror[0m[90m TS2339: [0mProperty
+ 'visibleOnOms' does not exist on type '{}'.
+
+[7m431[0m         visibleOnOms: Boolean(pricing?.visibleOnOms),
+[7m   [0m [91m                                       ~~~~~~~~~~~~[0m
+[96msrc/modules/inventory/inventory.service.ts[0m:[93m432[0m:[93m30[0m - [91merror[0m[90m TS2339: [0mProperty
+ 'finalPrice' does not exist on type '{}'.
+
+[7m432[0m         finalPrice: pricing?.finalPrice != null ? Number(pricing.finalPrice) : null,
+[7m   [0m [91m                             ~~~~~~~~~~[0m
+[96msrc/modules/inventory/inventory.service.ts[0m:[93m432[0m:[93m66[0m - [91merror[0m[90m TS2339: [0mProperty
+ 'finalPrice' does not exist on type '{}'.
+
+[7m432[0m         finalPrice: pricing?.finalPrice != null ? Number(pricing.finalPrice) : null,
+[7m   [0m [91m                                                                 ~~~~~~~~~~[0m
+

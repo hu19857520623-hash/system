@@ -1,0 +1,14 @@
+{
+  "name": "takealot-erp-workspace",
+  "private": true,
+  "engines": {
+    "node": ">=24.17.0 <25"
+  },
+  "scripts": {
+    "build": "npm --prefix backend run build && npm --prefix frontend run build",
+    "typecheck": "npm --prefix frontend run type-check",
+    "test": "npm --prefix backend test && npm --prefix frontend test",
+    "lint": "npm --prefix backend run lint && npm --prefix frontend run lint",
+    "verify": "npm run lint && npm run typecheck && npm test && npm run build"
+  }
+}

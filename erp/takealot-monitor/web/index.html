@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Takealot 卖家数据中心</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@400;500&family=Syne:wght@600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/dashboard.css" />
+  <script>
+    if (new URLSearchParams(location.search).has('erp')) {
+      document.documentElement.classList.add('erp-embed');
+      document.addEventListener('DOMContentLoaded', () => {
+        const title = document.getElementById('brandTitle');
+        const sub = document.getElementById('brandSubtitle');
+        if (title) title.textContent = '店铺监控';
+        if (sub) sub.textContent = 'Takealot';
+      });
+    }
+  </script>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">T</div>
+        <div>
+          <strong id="brandTitle">Takealot</strong>
+          <span id="brandSubtitle">卖家数据中心</span>
+        </div>
+      </div>
+      <nav class="side-nav" id="sideNav">
+        <button type="button" class="nav-item active" data-view="overview"><span class="nav-icon">◉</span>数据概览</button>
+        <button type="button" class="nav-item" data-view="rankMonth"><span class="nav-icon">▲</span>月销售排名</button>
+        <button type="button" class="nav-item" data-view="rankYesterday"><span class="nav-icon">◷</span>昨日销售排名</button>
+        <button type="button" class="nav-item" data-view="offers"><span class="nav-icon">▣</span>商品报价</button>
+        <button type="button" class="nav-item" data-view="sales"><span class="nav-icon">◈</span>销售订单</button>
+        <button type="button" class="nav-item" data-view="transactions"><span class="nav-icon">◎</span>交易流水</button>
+        <button type="button" class="nav-item" data-view="shipments"><span class="nav-icon">▤</span>发货管理</button>
+        <button type="button" class="nav-item" data-view="returns"><span class="nav-icon">↩</span>退货管理</button>
+        <button type="button" class="nav-item" data-view="seller"><span class="nav-icon">◇</span>卖家信息</button>
+        <button type="button" class="nav-item" data-view="settings"><span class="nav-icon">⚙</span>系统设置</button>
+      </nav>
+      <div class="sidebar-foot">
+        <div class="api-pill" id="apiStatusPill"><span class="dot"></span><span>API 检测中</span></div>
+        <div class="version-tag">v1.1.1</div>
+      </div>
+    </aside>
+
+    <div class="main-wrap">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">运营 / 店铺监控</p>
+          <h1 id="pageTitle">数据概览</h1>
+        </div>
+        <div class="topbar-actions">
+          <div class="seller-switcher-wrap" id="sellerSwitcherWrap" hidden>
+            <label for="sellerSwitcher">当前卖家</label>
+            <select id="sellerSwitcher" class="seller-switcher" title="切换纳管卖家"></select>
+          </div>
+          <button type="button" class="btn btn-ghost" id="refreshBtn">刷新数据</button>
+          <button type="button" class="btn btn-primary" id="syncBtn">同步当前页</button>
+        </div>
+      </header>
+
+      <main class="content" id="mainContent">
+        <!-- 动态渲染 -->
+      </main>
+    </div>
+  </div>
+
+  <div class="toast-wrap" id="toastWrap"></div>
+
+  <script src="js/api.js"></script>
+  <script src="js/sellers.js"></script>
+  <script src="js/dashboard.js"></script>
+</body>
+</html>

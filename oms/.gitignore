@@ -1,0 +1,11 @@
+node_modules
+dist
+.env
+*.local
+Takealot-OMS-原型.html
+prisma/dev.db
+prisma/dev.db-journal
+prisma/*.db
+prisma/*.db-journal
+prisma/*.db
+prisma/*.db-journal

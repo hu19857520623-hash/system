@@ -1,0 +1,514 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+/// 客户账户（与 ERP 共用 takealot_erp，表前缀 oms_）
+model CustomerAccount {
+  id              String  @id @db.VarChar(50)
+  name            String  @db.VarChar(200)
+  companyName     String? @db.VarChar(200)
+  code            String  @unique @db.VarChar(50)
+  type            String  @db.VarChar(30)
+  contact         String  @db.VarChar(100)
+  contactPhone    String? @db.VarChar(30)
+  email           String  @db.VarChar(200)
+  status          String  @db.VarChar(30)
+  permissions     String  @db.Text // JSON string[]
+  warehouse       String  @db.VarChar(100)
+  createdAt       String  @db.VarChar(40)
+  lastLoginAt             String  @db.VarChar(40)
+  priceTemplateId         String? @db.VarChar(50)
+  priceTemplateByRegion   String? @db.Text // JSON { jhb, cpt, dbn }
+
+  stores              StoreAccount[]
+  products            Product[]
+  inventoryItems      InventoryItem[]
+  orders              Order[]
+  inboundOrders       InboundOrder[]
+  outboundOrders      OutboundOrder[]
+  returnOrders        ReturnOrder[]
+  platformSkuMappings PlatformSkuMapping[]
+  billingAccount      BillingAccount?
+  portalUser          PortalUser?
+  systemMessages      SystemMessage[]
+
+  @@map("oms_CustomerAccount")
+}
+
+model PortalUser {
+  id                 String           @id @db.VarChar(50)
+  customerId         String?          @unique @db.VarChar(50)
+  customerAccount    CustomerAccount? @relation(fields: [customerId], references: [id])
+  loginEmail         String           @unique @db.VarChar(200)
+  passwordHash       String           @db.VarChar(255)
+  role               String           @db.VarChar(30)
+  status             String           @db.VarChar(30)
+  mustChangePassword Boolean          @default(true)
+  createdAt          String           @db.VarChar(40)
+  updatedAt          String           @db.VarChar(40)
+  lastLoginAt        String?          @db.VarChar(40)
+
+  @@map("oms_PortalUser")
+}
+
+/// 客户账单余额（对应 mock CUSTOMER + feeRecords）
+model BillingAccount {
+  id            String          @id @db.VarChar(50)
+  customerId    String          @unique @db.VarChar(50)
+  customer      CustomerAccount @relation(fields: [customerId], references: [id])
+  name          String          @db.VarChar(200)
+  code          String          @db.VarChar(50)
+  contact       String          @db.VarChar(100)
+  warehouse     String          @db.VarChar(100)
+  creditBalance Float
+  monthlySpent  Float
+  pendingBill   Float
+  budgetUsed    Float
+
+  @@map("oms_BillingAccount")
+}
+
+model FeeRecord {
+  id                 String  @id @db.VarChar(50)
+  date               String  @db.VarChar(40)
+  type               String  @db.VarChar(50)
+  refNo              String  @db.VarChar(100)
+  desc               String  @db.Text
+  amount             Float
+  method             String? @db.VarChar(50)
+  customerCode       String? @db.VarChar(50)
+  rechargeNo         String? @db.VarChar(50)
+  /** 充值使用的支付方式 */
+  paymentMethodId    String? @db.VarChar(50)
+  paymentMethodTitle String? @db.VarChar(100)
+
+  @@map("oms_FeeRecord")
+}
+
+model StoreAccount {
+  id               String           @id @db.VarChar(50)
+  customerId       String?          @db.VarChar(50)
+  customer         CustomerAccount? @relation(fields: [customerId], references: [id])
+  platform         String           @db.VarChar(50)
+  name             String           @db.VarChar(200)
+  storeCode        String           @db.VarChar(50)
+  sellerId         String           @db.VarChar(100)
+  status           String           @db.VarChar(30)
+  orderSync        Boolean
+  inventorySync    Boolean
+  autoPullInterval String           @db.VarChar(30)
+  lastSyncAt       String           @db.VarChar(40)
+  todayOrders      Int
+  syncError        String?          @db.Text
+  apiKeyMasked     String           @db.VarChar(200)
+  webhookUrl       String           @db.Text
+  createdAt        String           @db.VarChar(40)
+
+  @@map("oms_StoreAccount")
+}
+
+/// SKU 主数据（sku_master）
+model Product {
+  id              String           @id @db.VarChar(50)
+  customerId      String?          @db.VarChar(50)
+  customer        CustomerAccount? @relation(fields: [customerId], references: [id])
+  internalSku     String           @db.VarChar(50)
+  /** 客户填写的 SKU（可见，可重复） */
+  customerSku     String?          @db.VarChar(50)
+  name            String           @db.VarChar(300)
+  spec            String           @db.VarChar(200)
+  image           String           @db.Text
+  price           Float
+  cost            Float
+  availableQty    Int
+  lockedQty       Int
+  customCode      String?          @db.VarChar(100)
+  category        String           @db.VarChar(100)
+  categoryPath    String           @db.VarChar(300)
+  weight          String           @db.VarChar(50)
+  weightKg        Float
+  lengthCm        Float
+  widthCm         Float
+  heightCm        Float
+  inCatalog       Boolean
+  productStatus   String           @db.VarChar(30)
+  hasBattery      Boolean
+  certUploaded    Boolean
+  hasBoxSpec      Boolean
+  outerBoxBarcode String?          @db.VarChar(100)
+  declaredNameEn  String           @db.VarChar(300)
+  declaredNameCn  String           @db.VarChar(300)
+  declaredValue   Float
+  unit            String           @db.VarChar(20)
+
+  @@index([internalSku])
+  @@index([customerSku])
+  @@map("oms_Product")
+}
+
+/// 库存（inventory_stock）
+model InventoryItem {
+  id              String           @id @db.VarChar(50)
+  customerId      String?          @db.VarChar(50)
+  customer        CustomerAccount? @relation(fields: [customerId], references: [id])
+  sku             String           @db.VarChar(50)
+  name            String           @db.VarChar(300)
+  image           String           @db.Text
+  available       Int
+  locked          Int
+  inTransit       Int
+  safetyStock     Int
+  spec            String           @db.VarChar(200)
+  customCode      String?          @db.VarChar(100)
+  ean             String?          @db.VarChar(50)
+  warehouse       String           @db.VarChar(100)
+  pendingShelving Int
+  pendingOutbound Int
+  defective       Int
+  shipped         Int
+  warningQty      Int
+  price           Float
+  declaredNameEn  String?          @db.VarChar(300)
+  categoryPath    String?          @db.VarChar(300)
+  stockSource     String           @db.VarChar(30)
+
+  @@index([sku])
+  @@index([warehouse])
+  @@map("oms_InventoryItem")
+}
+
+model Order {
+  id              String           @id @db.VarChar(50)
+  orderNo         String           @unique @db.VarChar(50)
+  customerId      String?          @db.VarChar(50)
+  customer        CustomerAccount? @relation(fields: [customerId], references: [id])
+  platform        String           @db.VarChar(50)
+  store           String           @db.VarChar(200)
+  country         String           @db.VarChar(100)
+  countryCode     String           @db.VarChar(10)
+  skuCount        Int
+  warehouse       String           @db.VarChar(100)
+  logistics       String           @db.VarChar(100)
+  status          String           @db.VarChar(30)
+  exception       String?          @db.VarChar(100)
+  exceptionReason String?          @db.Text
+  amount          Float
+  createdAt       String           @db.VarChar(40)
+  recipient       String           @db.VarChar(200)
+  address         String           @db.Text
+  items           String           @db.Text // JSON
+  tracking        String           @db.Text // JSON
+  fees            String           @db.Text // JSON
+  logs            String           @db.Text // JSON
+
+  @@map("oms_Order")
+}
+
+model InboundOrder {
+  id              String           @id @db.VarChar(50)
+  customerId      String?          @db.VarChar(50)
+  customer        CustomerAccount? @relation(fields: [customerId], references: [id])
+  inboundNo       String           @unique @db.VarChar(50)
+  source          String           @db.VarChar(50)
+  inboundType     String           @db.VarChar(50)
+  deliveryMethod  String           @db.VarChar(50)
+  stockSource     String           @db.VarChar(30)
+  boxCount        Int
+  skuCount        Int
+  totalQty        Int
+  receivedQty     Int
+  status          String           @db.VarChar(30)
+  createdAt       String           @db.VarChar(40)
+  eta             String?          @db.VarChar(40)
+  warehouse       String           @db.VarChar(100)
+  referenceNo     String?          @db.VarChar(100)
+  trackingNo      String?          @db.VarChar(100)
+  contact         String?          @db.VarChar(100)
+  contactPhone    String?          @db.VarChar(50)
+  skuHint         String?          @db.VarChar(200)
+  remark          String?          @db.Text
+  exceptionCode   String?          @db.VarChar(50)
+  exceptionReason String?          @db.Text
+  lineItems       String?          @db.Text // JSON
+  attachments     String?          @db.Text // JSON [{kind,fileName,url,uploadedAt}]
+
+  @@map("oms_InboundOrder")
+}
+
+model ReturnOrder {
+  id                String           @id @db.VarChar(50)
+  customerId        String?          @db.VarChar(50)
+  customer          CustomerAccount? @relation(fields: [customerId], references: [id])
+  returnNo          String           @unique @db.VarChar(50)
+  orderNo           String           @db.VarChar(50)
+  referenceNo       String?          @db.VarChar(100)
+  trackingNo        String?          @db.VarChar(100)
+  sellerStoreName   String?          @db.VarChar(200)
+  sellerTaxNo       String?          @db.VarChar(100)
+  returnWarehouse   String?          @db.VarChar(20)
+  expectedArrivalAt String?          @db.VarChar(40)
+  returnReason      String           @db.VarChar(200)
+  returnDescription String?          @db.Text
+  requestedProcess  String           @db.VarChar(30)
+  status            String           @db.VarChar(30)
+  processResult     String?          @db.VarChar(30)
+  processRemark     String?          @db.Text
+  receivedAt        String?          @db.VarChar(40)
+  processedAt       String?          @db.VarChar(40)
+  createdAt         String           @db.VarChar(40)
+  lineItems         String?          @db.Text
+  remark            String?          @db.Text
+  attachments       String?          @db.Text
+  estimatedFeeTotal String?          @map("estimated_fee_total") @db.VarChar(30)
+  totalVolumeCbm    String?          @map("total_volume_cbm") @db.VarChar(30)
+  inspectionResult  String?          @map("inspection_result") @db.VarChar(30)
+  inspectionRemark  String?          @map("inspection_remark") @db.Text
+  customerDecision  String?          @map("customer_decision") @db.VarChar(20)
+  customerDecidedAt String?          @map("customer_decided_at") @db.VarChar(40)
+  customerProcessChoice String?      @map("customer_process_choice") @db.VarChar(30)
+
+  @@map("oms_ReturnOrder")
+}
+
+model OutboundOrder {
+  id                    String           @id @db.VarChar(50)
+  customerId            String?          @db.VarChar(50)
+  customer              CustomerAccount? @relation(fields: [customerId], references: [id])
+  outboundNo            String           @unique @db.VarChar(50)
+  source                String           @db.VarChar(50)
+  stockSource           String           @db.VarChar(30)
+  refNo                 String?          @db.VarChar(100)
+  orderNo               String?          @db.VarChar(50)
+  type                  String           @db.VarChar(50)
+  warehouse             String           @db.VarChar(100)
+  items                 Int
+  totalQty              Int
+  status                String           @db.VarChar(30)
+  destination           String           @db.VarChar(200)
+  createdAt             String           @db.VarChar(40)
+  trackingNo            String?          @db.VarChar(100)
+  shippingMethod        String?          @db.VarChar(50)
+  preDeductFees         String?          @db.Text // JSON
+  destRegion            String?          @db.VarChar(50)
+  priceTemplateId       String?          @db.VarChar(50)
+  priceTemplateName     String?          @db.VarChar(200)
+  preDeductTotal        Float?
+  preDeductVolumeM3     Float?
+  preDeductWeightKg     Float?
+  preDeductSnapshot     String?          @db.Text // JSON
+  measureSnapshot       String?          @db.Text // JSON
+  actualFeesSnapshot    String?          @db.Text // JSON
+  recipient             String?          @db.Text // JSON
+  actualFeesTotal       Float?
+  settlementDelta       Float?
+  settlementStatus      String?          @db.VarChar(30)
+  measuredVolumeM3      Float?
+  measuredWeightKg      Float?
+  scheduledDeliveryDate String?          @db.VarChar(40)
+  sellerStoreName       String?          @db.VarChar(200)
+  takealotDestWarehouse String?          @db.VarChar(20)
+  takealotSellerId      String?          @db.VarChar(30)
+  takealotBookingRef    String?          @db.VarChar(50)
+  shipmentDueDate       String?          @db.VarChar(40)
+  remark                String?          @db.Text
+  exceptionCode         String?          @db.VarChar(50)
+  exceptionReason       String?          @db.Text
+  lineItems             String?          @db.Text // JSON
+  attachments           String?          @db.Text // JSON [{kind,fileName,url,uploadedAt}]
+
+  @@map("oms_OutboundOrder")
+}
+
+/// SKU 编码映射（sku_code_mapping）
+model CodeMapping {
+  id                String  @id @db.VarChar(50)
+  internalSku       String  @db.VarChar(50)
+  productName       String  @db.VarChar(300)
+  codeType          String  @db.VarChar(50)
+  codeValue         String  @db.VarChar(100)
+  status            String  @db.VarChar(30)
+  version           Int
+  hasInventory      Boolean
+  updatedAt         String  @db.VarChar(40)
+  platformMappingId String? @db.VarChar(50)
+
+  @@index([internalSku])
+  @@index([codeValue])
+  @@map("oms_CodeMapping")
+}
+
+model PlatformSkuMapping {
+  id                String           @id @db.VarChar(50)
+  customerId        String?          @db.VarChar(50)
+  customer          CustomerAccount? @relation(fields: [customerId], references: [id])
+  platform          String           @db.VarChar(50)
+  storeId           String           @db.VarChar(50)
+  storeName         String           @db.VarChar(200)
+  platformSkuId     String?          @db.VarChar(100)
+  platformBarcode   String           @db.VarChar(100)
+  platformTitle     String           @db.VarChar(300)
+  platformListingId String?          @db.VarChar(100)
+  lines             String           @db.Text // JSON
+  status            String           @db.VarChar(30)
+  stockSource       String           @db.VarChar(30)
+  syncSource        String           @db.VarChar(50)
+  version           Int
+  hasInventory      Boolean
+  lastSyncAt        String?          @db.VarChar(40)
+  updatedAt         String           @db.VarChar(40)
+
+  @@map("oms_PlatformSkuMapping")
+}
+
+model LogisticsRecord {
+  id              String  @id @db.VarChar(50)
+  refNo           String  @db.VarChar(100)
+  outboundNo      String  @db.VarChar(50)
+  carrier         String  @db.VarChar(100)
+  trackingNo      String  @db.VarChar(100)
+  status          String  @db.VarChar(30)
+  destination     String  @db.VarChar(200)
+  updatedAt       String  @db.VarChar(40)
+  podStatus       String  @db.VarChar(30)
+  podCode         String? @db.VarChar(80)
+  podFileName     String? @db.VarChar(255)
+  podFileUrl      String? @db.Text
+  podUploadedAt   String? @db.VarChar(40)
+  exceptionCode   String? @db.VarChar(50)
+  exceptionReason String? @db.Text
+
+  @@map("oms_LogisticsRecord")
+}
+
+model QcReport {
+  id          String @id @db.VarChar(50)
+  inboundNo   String @db.VarChar(50)
+  sku         String @db.VarChar(50)
+  productName String @db.VarChar(300)
+  sampleQty   Int
+  passQty     Int
+  failQty     Int
+  result      String @db.VarChar(30)
+  reportDate  String @db.VarChar(40)
+
+  @@map("oms_QcReport")
+}
+
+model SystemMessage {
+  id         String           @id @db.VarChar(50)
+  customerId String?          @db.VarChar(50)
+  customer   CustomerAccount? @relation(fields: [customerId], references: [id])
+  title      String           @db.VarChar(200)
+  content    String           @db.Text
+  type       String           @db.VarChar(30)
+  read       Boolean
+  createdAt  String           @db.VarChar(40)
+
+  @@index([customerId])
+  @@map("oms_SystemMessage")
+}
+
+model WebhookEvent {
+  eventId      String    @id @db.VarChar(80)
+  eventType    String    @db.VarChar(50)
+  customerCode String?   @db.VarChar(50)
+  payloadHash  String    @db.Char(64)
+  status       String    @default("pending") @db.VarChar(20)
+  receivedAt   DateTime  @default(now())
+  processedAt  DateTime?
+
+  @@index([status, receivedAt])
+  @@map("oms_WebhookEvent")
+}
+
+model Announcement {
+  id    String @id @db.VarChar(50)
+  title String @db.VarChar(200)
+  date  String @db.VarChar(40)
+  type  String @db.VarChar(30)
+
+  @@map("oms_Announcement")
+}
+
+/// 出库价格模板
+model PriceTemplate {
+  id               String @id @db.VarChar(50)
+  name             String @db.VarChar(200)
+  regionCode       String @default("jhb") @db.VarChar(50)
+  warehouseId      String @db.VarChar(50)
+  status           String @db.VarChar(30)
+  handling         String @db.Text // JSON
+  shippingByRegion String @db.Text // JSON
+  pickupByRegion   String @db.Text // JSON，应用层默认 "{}"
+  updatedAt        String @db.VarChar(40)
+
+  @@map("oms_PriceTemplate")
+}
+
+/// 仓租模板
+model StorageRentTemplate {
+  id                  String @id @db.VarChar(50)
+  name                String @db.VarChar(200)
+  warehouseId         String @db.VarChar(50)
+  status              String @db.VarChar(30)
+  billingUnit         String @db.VarChar(30)
+  pricePerCbmPerDay   Float
+  pricePerPiecePerDay Float
+  minChargePerDay     Float
+  freeStorageDays     Int
+  updatedAt           String @db.VarChar(40)
+
+  @@map("oms_StorageRentTemplate")
+}
+
+/// 地区配送规则
+model RegionDispatchRule {
+  id             String  @id @db.VarChar(50)
+  code           String  @db.VarChar(50)
+  label          String  @db.VarChar(100)
+  shippingMethod String  @db.VarChar(50)
+  enabled        Boolean
+  remark         String? @db.Text
+
+  @@map("oms_RegionDispatchRule")
+}
+
+/// 货盘申购记录
+model CatalogPurchase {
+  id          String @id @db.VarChar(50)
+  purchaseNo  String @db.VarChar(50)
+  customerId  String @db.VarChar(50)
+  sku         String @db.VarChar(50)
+  productName String @db.VarChar(300)
+  qty         Int
+  createdAt   String @db.VarChar(40)
+
+  @@index([customerId])
+  @@index([sku])
+  @@map("oms_CatalogPurchase")
+}
+
+/// 充值支付方式（对公转账 / 支付宝 / 微信等）
+model PaymentMethod {
+  id            String  @id @db.VarChar(50)
+  type          String  @db.VarChar(30) // bank_transfer | alipay | wechat
+  title         String  @db.VarChar(100)
+  enabled       Boolean @default(true)
+  sortOrder     Int     @default(0)
+  bankName      String? @db.VarChar(100)
+  accountName   String? @db.VarChar(100)
+  accountNumber String? @db.VarChar(100)
+  branch        String? @db.VarChar(200)
+  swiftCode     String? @db.VarChar(50)
+  qrCodeUrl     String? @db.Text
+  accountId     String? @db.VarChar(50)
+  customText    String  @default("") @db.VarChar(2000)
+  updatedAt     String  @db.VarChar(40)
+
+  @@map("oms_PaymentMethod")
+}

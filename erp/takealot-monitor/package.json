@@ -1,0 +1,14 @@
+{
+  "name": "takealot-seller-dashboard",
+  "version": "1.1.0",
+  "private": true,
+  "description": "Takealot 卖家数据中心 - 高保真 API 数据展示界面",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node server/index.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "puppeteer-core": "^24.2.0"
+  }
+}

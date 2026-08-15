@@ -1,0 +1,1188 @@
+// Takealot ERP · Prisma schema
+// 映射本地 MySQL 数据库 takealot_erp 已有表结构
+// 列名 snake_case 通过 @map 映射为代码内 camelCase
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ───────────── 用户与权限 ─────────────
+
+model SysUser {
+  id           BigInt    @id @default(autoincrement())
+  username     String    @unique @db.VarChar(50)
+  passwordHash String    @map("password_hash") @db.VarChar(255)
+  realName     String    @map("real_name") @db.VarChar(50)
+  phone        String?   @db.VarChar(20)
+  email        String?   @db.VarChar(100)
+  avatarUrl    String?   @map("avatar_url") @db.VarChar(500)
+  roleCode     String    @default("viewer") @map("role_code") @db.VarChar(30)
+  status       Int       @default(1) @db.TinyInt
+  lastLoginAt  DateTime? @map("last_login_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  @@map("sys_user")
+}
+
+model SysRole {
+  id          Int      @id @default(autoincrement())
+  roleCode    String   @unique @map("role_code") @db.VarChar(30)
+  roleName    String   @map("role_name") @db.VarChar(50)
+  description String?  @db.Text
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@map("sys_role")
+}
+
+model SysPermission {
+  id          Int     @id @default(autoincrement())
+  permCode    String  @unique @map("perm_code") @db.VarChar(60)
+  permName    String  @map("perm_name") @db.VarChar(80)
+  module      String  @db.VarChar(30)
+  description String? @db.Text
+
+  @@map("sys_permission")
+}
+
+model SysRolePermission {
+  roleCode String @map("role_code") @db.VarChar(30)
+  permCode String @map("perm_code") @db.VarChar(60)
+
+  @@id([roleCode, permCode])
+  @@map("sys_role_permission")
+}
+
+model SysUserPermission {
+  userId   BigInt @map("user_id")
+  permCode String @map("perm_code") @db.VarChar(60)
+
+  @@id([userId, permCode])
+  @@map("sys_user_permission")
+}
+
+// ───────────── 供应商 ─────────────
+
+model Supplier {
+  id           BigInt   @id @default(autoincrement())
+  supplierCode String   @unique @map("supplier_code") @db.VarChar(30)
+  supplierName String   @map("supplier_name") @db.VarChar(200)
+  contactName  String?  @map("contact_name") @db.VarChar(50)
+  contactPhone String?  @map("contact_phone") @db.VarChar(30)
+  email        String?  @db.VarChar(100)
+  address      String?  @db.VarChar(500)
+  city         String?  @db.VarChar(50)
+  country      String?  @default("China") @db.VarChar(50)
+  paymentTerms String?  @map("payment_terms") @db.VarChar(100)
+  leadTimeDays Int?     @map("lead_time_days")
+  rating       Int?     @default(3) @db.TinyInt
+  status       Int      @default(1) @db.TinyInt
+  remark       String?  @db.Text
+  createdBy    BigInt?  @map("created_by")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@map("supplier")
+}
+
+// ───────────── 商品主数据 ─────────────
+
+model Product {
+  id          BigInt   @id @default(autoincrement())
+  sku         String   @unique @db.VarChar(30)
+  spu         String?  @db.VarChar(30)
+  productName String   @map("product_name") @db.VarChar(300)
+  spec        String?  @db.VarChar(100)
+  category    String?  @db.VarChar(50)
+  brand       String?  @db.VarChar(50)
+  lengthCm    Decimal? @map("length_cm") @db.Decimal(8, 2)
+  widthCm     Decimal? @map("width_cm") @db.Decimal(8, 2)
+  heightCm    Decimal? @map("height_cm") @db.Decimal(8, 2)
+  measuredLengthCm Decimal? @map("measured_length_cm") @db.Decimal(8, 2)
+  measuredWidthCm  Decimal? @map("measured_width_cm") @db.Decimal(8, 2)
+  measuredHeightCm Decimal? @map("measured_height_cm") @db.Decimal(8, 2)
+  measuredAt       DateTime? @map("measured_at")
+  weightKg    Decimal? @map("weight_kg") @db.Decimal(8, 3)
+  costRmb            Decimal? @map("cost_rmb") @db.Decimal(12, 2)
+  seaFreightPerUnit  Decimal? @default(0) @map("sea_freight_per_unit") @db.Decimal(12, 2)
+  domesticFeePerUnit Decimal? @default(0) @map("domestic_fee_per_unit") @db.Decimal(12, 2)
+  barcode     String?  @db.VarChar(50)
+  imageUrl    String?  @map("image_url") @db.VarChar(500)
+  takealotUrl String?  @map("takealot_url") @db.VarChar(500)
+  developerId BigInt?  @map("developer_id")
+  purchaserId BigInt?  @map("purchaser_id")
+  supplierId  BigInt?  @map("supplier_id")
+  status      String   @default("active") @db.VarChar(20)
+  syncStatus  String?  @default("pending") @map("sync_status") @db.VarChar(30)
+  remark      String?  @db.Text
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  images ProductImage[]
+
+  @@index([supplierId], map: "idx_product_supplier")
+  @@index([status], map: "idx_product_status")
+  @@map("product")
+}
+
+model ProductImage {
+  id        BigInt   @id @default(autoincrement())
+  productId BigInt   @map("product_id")
+  imageUrl  String   @map("image_url") @db.VarChar(500)
+  sortOrder Int      @default(0) @map("sort_order")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId], map: "idx_product_image_product")
+  @@map("product_image")
+}
+
+// ───────────── 选品开发 ─────────────
+
+model ProductDev {
+  id                    BigInt    @id @default(autoincrement())
+  applyNo               String    @unique @map("apply_no") @db.VarChar(30)
+  sku                   String?   @unique @db.VarChar(30)
+  productName           String    @map("product_name") @db.VarChar(300)
+  takealotUrl           String?   @map("takealot_url") @db.VarChar(500)
+  takealotPriceImageUrl String?   @map("takealot_price_image_url") @db.VarChar(500)
+  amazonUrl             String?   @map("amazon_url") @db.VarChar(500)
+  alibaba1688Url        String?   @map("alibaba1688_url") @db.VarChar(500)
+  alibaba1688ImageUrl   String?   @map("alibaba1688_image_url") @db.VarChar(500)
+  spec                  String?   @db.VarChar(100)
+  productLengthCm       Decimal?  @map("product_length_cm") @db.Decimal(8, 2)
+  productWidthCm        Decimal?  @map("product_width_cm") @db.Decimal(8, 2)
+  productHeightCm       Decimal?  @map("product_height_cm") @db.Decimal(8, 2)
+  packageLengthCm       Decimal?  @map("package_length_cm") @db.Decimal(8, 2)
+  packageWidthCm        Decimal?  @map("package_width_cm") @db.Decimal(8, 2)
+  packageHeightCm       Decimal?  @map("package_height_cm") @db.Decimal(8, 2)
+  estimatedCost         Decimal?  @map("estimated_cost") @db.Decimal(12, 2)
+  marketPrice           Decimal?  @map("market_price") @db.Decimal(12, 2)
+  sellPriceRmb          Decimal?  @map("sell_price_rmb") @db.Decimal(12, 2)
+  maxSellPriceRmb       Decimal?  @map("max_sell_price_rmb") @db.Decimal(12, 2)
+  seaFreightChannel     String?   @map("sea_freight_channel") @db.VarChar(30)
+  volumetricWeightKg    Decimal?  @map("volumetric_weight_kg") @db.Decimal(10, 3)
+  cbm                   Decimal?  @db.Decimal(10, 6)
+  reason                String?   @db.Text
+  status                String    @default("draft") @db.VarChar(20)
+  applicantId           BigInt?   @map("applicant_id")
+  auditorId             BigInt?   @map("auditor_id")
+  auditRemark           String?   @map("audit_remark") @db.Text
+  auditedAt             DateTime? @map("audited_at")
+  purchaseQty           Int?      @map("purchase_qty")
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+
+  @@map("product_dev")
+}
+
+// ───────────── 采购订单 ─────────────
+
+model PurchaseOrder {
+  id              BigInt              @id @default(autoincrement())
+  poNo            String              @unique @map("po_no") @db.VarChar(30)
+  supplierId      BigInt              @map("supplier_id")
+  warehouseCode   String?             @map("warehouse_code") @db.VarChar(30)
+  totalAmount     Decimal             @default(0) @map("total_amount") @db.Decimal(14, 2)
+  domesticFreight Decimal?            @map("domestic_freight") @db.Decimal(12, 2)
+  currency        String              @default("RMB") @db.VarChar(10)
+  expectedArrival DateTime?           @map("expected_arrival") @db.Date
+  status          String              @default("draft") @db.VarChar(30)
+  remark          String?             @db.Text
+  purchaserId     BigInt?             @map("purchaser_id")
+  auditorId       BigInt?             @map("auditor_id")
+  auditedAt       DateTime?           @map("audited_at")
+  financeId       BigInt?             @map("finance_id")
+  financeAt       DateTime?           @map("finance_at")
+  poAuditRemark   String?             @map("po_audit_remark") @db.VarChar(500)
+  financeRemark   String?             @map("finance_remark") @db.VarChar(500)
+  prePoId         BigInt?             @map("pre_po_id")
+  createdAt       DateTime            @default(now()) @map("created_at")
+  updatedAt       DateTime            @updatedAt @map("updated_at")
+  items           PurchaseOrderItem[]
+
+  @@index([supplierId], map: "idx_po_supplier")
+  @@index([status], map: "idx_po_status")
+  @@map("purchase_order")
+}
+
+model PurchaseOrderItem {
+  id             BigInt        @id @default(autoincrement())
+  poId           BigInt        @map("po_id")
+  productId      BigInt        @map("product_id")
+  sku            String        @db.VarChar(30)
+  productName    String?       @map("product_name") @db.VarChar(300)
+  plannedQty     Int?          @map("planned_qty")
+  quantity       Int
+  unitPrice      Decimal       @map("unit_price") @db.Decimal(12, 2)
+  amount         Decimal       @db.Decimal(14, 2)
+  domesticFreight Decimal?     @map("domestic_freight") @db.Decimal(12, 2)
+  receivedQty    Int?          @default(0) @map("received_qty")
+  remark         String?       @db.VarChar(500)
+  createdAt      DateTime      @default(now()) @map("created_at")
+  order          PurchaseOrder @relation(fields: [poId], references: [id])
+
+  @@index([poId], map: "idx_poi_po")
+  @@map("purchase_order_item")
+}
+
+// ───────────── 预采购单（审核通过后生成，采购员确认后转正式 PO） ─────────────
+
+model PrePurchaseOrder {
+  id                   BigInt    @id @default(autoincrement())
+  prePoNo              String    @unique @map("pre_po_no") @db.VarChar(30)
+  devId                BigInt    @map("dev_id")
+  applyNo              String    @map("apply_no") @db.VarChar(30)
+  sku                  String    @db.VarChar(30)
+  productName          String    @map("product_name") @db.VarChar(300)
+  spec                 String?   @db.VarChar(100)
+  plannedQty           Int       @map("planned_qty")
+  unitPrice            Decimal?  @map("unit_price") @db.Decimal(12, 2)
+  supplierId           BigInt?   @map("supplier_id")
+  supplierContactName  String?   @map("supplier_contact_name") @db.VarChar(50)
+  supplierContactPhone String?   @map("supplier_contact_phone") @db.VarChar(30)
+  supplierAddress      String?   @map("supplier_address") @db.VarChar(500)
+  productLink          String?   @map("product_link") @db.VarChar(500)
+  accessories          String?   @db.Text
+  productImageUrl      String?   @map("product_image_url") @db.VarChar(500)
+  manualUrl            String?   @map("manual_url") @db.VarChar(500)
+  moq                  Int?
+  leadTimeDays         Int?      @map("lead_time_days")
+  taxRate              Decimal?  @map("tax_rate") @db.Decimal(5, 2)
+  invoiceTaxRate       Decimal?  @map("invoice_tax_rate") @db.Decimal(5, 2)
+  unitTax              Decimal?  @map("unit_tax") @db.Decimal(12, 2)
+  unitFreight          Decimal?  @map("unit_freight") @db.Decimal(12, 2)
+  productLengthCm      Decimal?  @map("product_length_cm") @db.Decimal(8, 2)
+  productWidthCm       Decimal?  @map("product_width_cm") @db.Decimal(8, 2)
+  productHeightCm      Decimal?  @map("product_height_cm") @db.Decimal(8, 2)
+  productVolumeCbm     Decimal?  @map("product_volume_cbm") @db.Decimal(10, 6)
+  packageWeightKg      Decimal?  @map("package_weight_kg") @db.Decimal(8, 3)
+  packageLengthCm      Decimal?  @map("package_length_cm") @db.Decimal(8, 2)
+  packageWidthCm       Decimal?  @map("package_width_cm") @db.Decimal(8, 2)
+  packageHeightCm      Decimal?  @map("package_height_cm") @db.Decimal(8, 2)
+  packageVolumeCbm     Decimal?  @map("package_volume_cbm") @db.Decimal(10, 6)
+  volumetricWeightKg   Decimal?  @map("volumetric_weight_kg") @db.Decimal(10, 3)
+  sampleStatus         String?   @map("sample_status") @db.VarChar(100)
+  samplePackageInfo    String?   @map("sample_package_info") @db.Text
+  sampleImageUrl       String?   @map("sample_image_url") @db.VarChar(500)
+  doubleLayerCarton    Boolean?  @map("double_layer_carton")
+  notPurchaseReason    String?   @map("not_purchase_reason") @db.Text
+  logoUnitFee          Decimal?  @map("logo_unit_fee") @db.Decimal(12, 2)
+  logoTotalFee         Decimal?  @map("logo_total_fee") @db.Decimal(14, 2)
+  cartonTotalPrice     Decimal?  @map("carton_total_price") @db.Decimal(14, 2)
+  spareCartonUnitPrice Decimal?  @map("spare_carton_unit_price") @db.Decimal(12, 2)
+  spareCartonQty       Int?      @map("spare_carton_qty")
+  piecesPerCarton      Int?      @map("pieces_per_carton")
+  domesticFreight      Decimal?  @map("domestic_freight") @db.Decimal(12, 2)
+  warehouseCode        String?   @map("warehouse_code") @db.VarChar(30)
+  currency             String    @default("RMB") @db.VarChar(10)
+  expectedArrival      DateTime? @map("expected_arrival") @db.Date
+  purchaserId          BigInt?   @map("purchaser_id")
+  assignerId           BigInt?   @map("assigner_id")
+  assignedAt           DateTime? @map("assigned_at")
+  status               String    @default("pending_assign") @db.VarChar(30)
+  cancelReason         String?   @map("cancel_reason") @db.Text
+  remark               String?   @db.Text
+  convertedPoId        BigInt?   @map("converted_po_id")
+  confirmedAt          DateTime? @map("confirmed_at")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+
+  @@index([status], map: "idx_pre_po_status")
+  @@index([devId], map: "idx_pre_po_dev")
+  @@index([purchaserId], map: "idx_pre_po_purchaser")
+  @@map("pre_purchase_order")
+}
+
+// ───────────── 仓库 ─────────────
+
+model Warehouse {
+  id            Int      @id @default(autoincrement())
+  warehouseCode String   @unique @map("warehouse_code") @db.VarChar(30)
+  warehouseName String   @map("warehouse_name") @db.VarChar(100)
+  warehouseType String   @default("logistics") @map("warehouse_type") @db.VarChar(20)
+  address       String?  @db.VarChar(500)
+  city          String?  @db.VarChar(50)
+  country       String?  @default("South Africa") @db.VarChar(50)
+  contactName   String?  @map("contact_name") @db.VarChar(50)
+  contactPhone  String?  @map("contact_phone") @db.VarChar(30)
+  status        Int      @default(1) @db.TinyInt
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@map("warehouse")
+}
+
+model WarehouseZone {
+  id            BigInt              @id @default(autoincrement())
+  zoneCode      String              @map("zone_code") @db.VarChar(30)
+  zoneName      String              @map("zone_name") @db.VarChar(100)
+  warehouseCode String              @map("warehouse_code") @db.VarChar(30)
+  zoneType      String              @default("storage") @map("zone_type") @db.VarChar(20)
+  status        Int                 @default(1) @db.TinyInt
+  remark        String?             @db.VarChar(500)
+  createdAt     DateTime            @default(now()) @map("created_at")
+  locations     WarehouseLocation[]
+
+  @@unique([warehouseCode, zoneCode], map: "uk_zone_wh")
+  @@index([warehouseCode], map: "idx_zone_wh")
+  @@map("warehouse_zone")
+}
+
+model WarehouseLocation {
+  id            BigInt              @id @default(autoincrement())
+  locationCode  String              @map("location_code") @db.VarChar(30)
+  warehouseCode String              @map("warehouse_code") @db.VarChar(30)
+  zoneId        BigInt              @map("zone_id")
+  aisle         String?             @db.VarChar(10)
+  rack          String?             @db.VarChar(10)
+  level         String?             @db.VarChar(10)
+  bin           String?             @db.VarChar(10)
+  maxVolumeCbm  Decimal?            @map("max_volume_cbm") @db.Decimal(10, 4)
+  maxWeightKg   Decimal?            @map("max_weight_kg") @db.Decimal(10, 2)
+  status        String              @default("available") @db.VarChar(20)
+  remark        String?             @db.VarChar(500)
+  createdAt     DateTime            @default(now()) @map("created_at")
+  updatedAt     DateTime            @updatedAt @map("updated_at")
+  zone          WarehouseZone       @relation(fields: [zoneId], references: [id])
+  inventoryItems InventoryLocation[]
+
+  @@unique([warehouseCode, locationCode], map: "uk_loc_wh")
+  @@index([zoneId], map: "idx_loc_zone")
+  @@map("warehouse_location")
+}
+
+model InventoryLocation {
+  id            BigInt            @id @default(autoincrement())
+  productId     BigInt            @map("product_id")
+  sku           String            @db.VarChar(30)
+  warehouseCode String            @map("warehouse_code") @db.VarChar(30)
+  locationId    BigInt            @map("location_id")
+  locationCode  String            @map("location_code") @db.VarChar(30)
+  qty           Int               @default(0)
+  batchNo       String?           @map("batch_no") @db.VarChar(50)
+  inboundNo     String?           @map("inbound_no") @db.VarChar(30)
+  updatedAt     DateTime          @updatedAt @map("updated_at")
+  location      WarehouseLocation @relation(fields: [locationId], references: [id])
+
+  @@unique([productId, locationId, batchNo], map: "uk_inv_loc")
+  @@index([sku, warehouseCode], map: "idx_inv_loc_sku")
+  @@map("inventory_location")
+}
+
+// ───────────── 入库 ─────────────
+
+model InboundOrder {
+  id                  BigInt             @id @default(autoincrement())
+  inboundNo           String             @unique @map("inbound_no") @db.VarChar(30)
+  poId                BigInt?            @map("po_id")
+  sourceWarehouseCode String?            @map("source_warehouse_code") @db.VarChar(30)
+  warehouseCode       String             @map("warehouse_code") @db.VarChar(30)
+  warehouseNo         String?            @map("warehouse_no") @db.VarChar(30)
+  trackingNo          String?            @map("tracking_no") @db.VarChar(50)
+  status        String             @default("pending_receipt") @db.VarChar(20)
+  pushWmsAt     DateTime?          @map("push_wms_at")
+  arrivedAt     DateTime?          @map("arrived_at")
+  arrivedBy     BigInt?            @map("arrived_by")
+  receivedAt    DateTime?          @map("received_at")
+  receivedBy    BigInt?            @map("received_by")
+  qcAt          DateTime?          @map("qc_at")
+  qcBy          BigInt?            @map("qc_by")
+  putawayAt     DateTime?          @map("putaway_at")
+  putawayBy     BigInt?            @map("putaway_by")
+  confirmedAt   DateTime?          @map("confirmed_at")
+  confirmedBy   BigInt?            @map("confirmed_by")
+  remark        String?            @db.Text
+  omsCustomerCode String?          @map("oms_customer_code") @db.VarChar(30)
+  labelPrintCount Int              @default(0) @map("label_print_count")
+  createdAt     DateTime           @default(now()) @map("created_at")
+  updatedAt     DateTime           @updatedAt @map("updated_at")
+  items         InboundOrderItem[]
+  putawayItems  InboundPutawayItem[]
+  cartons       InboundCarton[]
+
+  @@index([omsCustomerCode], map: "idx_inbound_oms_customer")
+  @@map("inbound_order")
+}
+
+model InboundCarton {
+  id         BigInt              @id @default(autoincrement())
+  inboundId  BigInt              @map("inbound_id")
+  boxCode    String              @map("box_code") @db.VarChar(50)
+  boxSeq     Int                 @map("box_seq")
+  status     String              @default("pending") @db.VarChar(20)
+  receivedAt DateTime?           @map("received_at")
+  receivedBy BigInt?             @map("received_by")
+  createdAt  DateTime            @default(now()) @map("created_at")
+  order      InboundOrder        @relation(fields: [inboundId], references: [id], onDelete: Cascade)
+  items      InboundCartonItem[]
+
+  @@unique([inboundId, boxCode], map: "uk_inbound_box_code")
+  @@index([inboundId, status], map: "idx_carton_inbound_status")
+  @@map("inbound_carton")
+}
+
+model InboundCartonItem {
+  id            BigInt        @id @default(autoincrement())
+  cartonId      BigInt        @map("carton_id")
+  inboundItemId BigInt?       @map("inbound_item_id")
+  productId     BigInt        @map("product_id")
+  sku           String        @db.VarChar(30)
+  qty           Int
+  carton        InboundCarton @relation(fields: [cartonId], references: [id], onDelete: Cascade)
+
+  @@index([cartonId], map: "idx_carton_item_carton")
+  @@map("inbound_carton_item")
+}
+
+model InboundArrivalScan {
+  id            BigInt   @id @default(autoincrement())
+  inboundId     BigInt   @map("inbound_id")
+  scanCode      String   @map("scan_code") @db.VarChar(50)
+  scanType      String   @map("scan_type") @db.VarChar(20)
+  warehouseCode String   @map("warehouse_code") @db.VarChar(30)
+  operatorId    BigInt?  @map("operator_id")
+  scannedAt     DateTime @default(now()) @map("scanned_at")
+
+  @@index([inboundId], map: "idx_arrival_inbound")
+  @@index([warehouseCode, scannedAt], map: "idx_arrival_wh_time")
+  @@map("inbound_arrival_scan")
+}
+
+model InboundOrderItem {
+  id          BigInt       @id @default(autoincrement())
+  inboundId   BigInt       @map("inbound_id")
+  productId   BigInt       @map("product_id")
+  sku         String       @db.VarChar(30)
+  expectedQty Int          @map("expected_qty")
+  actualQty   Int?         @map("actual_qty")
+  diffQty     Int?         @default(0) @map("diff_qty")
+  qcStatus    String?      @default("pending") @map("qc_status") @db.VarChar(20)
+  qcRemark    String?      @map("qc_remark") @db.VarChar(500)
+  putawayQty  Int?         @default(0) @map("putaway_qty")
+  remark      String?      @db.VarChar(500)
+  createdAt   DateTime     @default(now()) @map("created_at")
+  order       InboundOrder @relation(fields: [inboundId], references: [id])
+
+  @@map("inbound_order_item")
+}
+
+model InboundPutawayItem {
+  id            BigInt   @id @default(autoincrement())
+  inboundId     BigInt   @map("inbound_id")
+  inboundItemId BigInt   @map("inbound_item_id")
+  locationId    BigInt   @map("location_id")
+  locationCode  String   @map("location_code") @db.VarChar(30)
+  qty           Int
+  operatorId    BigInt?  @map("operator_id")
+  putawayAt     DateTime @default(now()) @map("putaway_at")
+  order         InboundOrder @relation(fields: [inboundId], references: [id])
+
+  @@index([inboundId], map: "idx_putaway_inbound")
+  @@map("inbound_putaway_item")
+}
+
+// ───────────── 库存 ─────────────
+
+model Inventory {
+  id            BigInt   @id @default(autoincrement())
+  productId     BigInt   @map("product_id")
+  sku           String   @db.VarChar(30)
+  warehouseCode String   @map("warehouse_code") @db.VarChar(30)
+  totalQty      Int      @default(0) @map("total_qty")
+  availableQty  Int      @default(0) @map("available_qty")
+  lockedQty     Int      @default(0) @map("locked_qty")
+  avgCostRmb    Decimal? @map("avg_cost_rmb") @db.Decimal(12, 2)
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@unique([productId, warehouseCode], map: "uk_inv")
+  @@index([sku], map: "idx_inv_sku")
+  @@map("inventory")
+}
+
+model InventoryLog {
+  id            BigInt   @id @default(autoincrement())
+  productId     BigInt   @map("product_id")
+  sku           String   @db.VarChar(30)
+  warehouseCode String   @map("warehouse_code") @db.VarChar(30)
+  changeType    String   @map("change_type") @db.VarChar(20)
+  changeQty     Int      @map("change_qty")
+  beforeQty     Int      @map("before_qty")
+  afterQty      Int      @map("after_qty")
+  referenceNo   String?  @map("reference_no") @db.VarChar(50)
+  operatorId    BigInt?  @map("operator_id")
+  remark        String?  @db.VarChar(500)
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@map("inventory_log")
+}
+
+// ───────────── 物流仓收货记录 ─────────────
+
+model LogisticsReceipt {
+  id            BigInt                 @id @default(autoincrement())
+  receiptNo     String                 @unique @map("receipt_no") @db.VarChar(30)
+  poId          BigInt                 @map("po_id")
+  poNo          String                 @map("po_no") @db.VarChar(30)
+  warehouseCode String                 @map("warehouse_code") @db.VarChar(30)
+  operatorName  String?                @map("operator_name") @db.VarChar(50)
+  remark        String?                @db.Text
+  receivedAt    DateTime               @default(now()) @map("received_at")
+  createdAt     DateTime               @default(now()) @map("created_at")
+  items         LogisticsReceiptItem[]
+
+  @@index([warehouseCode], map: "idx_lr_wh")
+  @@index([poId], map: "idx_lr_po")
+  @@map("logistics_receipt")
+}
+
+model LogisticsReceiptItem {
+  id          BigInt           @id @default(autoincrement())
+  receiptId   BigInt           @map("receipt_id")
+  productId   BigInt           @map("product_id")
+  sku         String           @db.VarChar(30)
+  productName String?          @map("product_name") @db.VarChar(300)
+  expectedQty Int              @map("expected_qty")
+  actualQty   Int              @map("actual_qty")
+  damagedQty  Int              @default(0) @map("damaged_qty")
+  qcStatus    String           @default("pass") @map("qc_status") @db.VarChar(20)
+  qcRemark    String?          @map("qc_remark") @db.VarChar(500)
+  receipt     LogisticsReceipt @relation(fields: [receiptId], references: [id], onDelete: Cascade)
+
+  @@map("logistics_receipt_item")
+}
+
+// ───────────── 出库 ─────────────
+
+model OutboundOrder {
+  id                 BigInt             @id @default(autoincrement())
+  outboundNo         String             @unique @map("outbound_no") @db.VarChar(30)
+  customerId         BigInt?            @map("customer_id")
+  warehouseCode      String             @map("warehouse_code") @db.VarChar(30)
+  destType           String             @default("cpt") @map("dest_type") @db.VarChar(20)
+  fbaNo              String?            @map("fba_no") @db.VarChar(50)
+  sellerStoreName    String?            @map("seller_store_name") @db.VarChar(200)
+  takealotSellerId   String?            @map("takealot_seller_id") @db.VarChar(30)
+  takealotBookingRef String?            @map("takealot_booking_ref") @db.VarChar(50)
+  shipmentDueDate    DateTime?          @map("shipment_due_date") @db.Date
+  trackingNo         String?            @map("tracking_no") @db.VarChar(50)
+  logisticsProduct   String?            @map("logistics_product") @db.VarChar(50)
+  carrier            String?            @db.VarChar(50)
+  cargoType          String?            @map("cargo_type") @db.VarChar(30)
+  fbaWarehouse       String?            @map("fba_warehouse") @db.VarChar(30)
+  pickerId           BigInt?            @map("picker_id")
+  pickSource         String?            @map("pick_source") @db.VarChar(20)
+  pickingStartedAt   DateTime?          @map("picking_started_at")
+  pickedAt           DateTime?          @map("picked_at")
+  isProblem          Boolean            @default(false) @map("is_problem")
+  problemRemark      String?            @map("problem_remark") @db.VarChar(200)
+  exceptionFromStatus String?           @map("exception_from_status") @db.VarChar(20)
+  batchNo            String?            @map("batch_no") @db.VarChar(50)
+  platform           String?            @db.VarChar(30)
+  appointmentStatus  String?            @map("appointment_status") @db.VarChar(30)
+  appointmentDate    DateTime?          @map("appointment_date") @db.DateTime(0)
+  reviewerId         BigInt?            @map("reviewer_id")
+  reviewedAt         DateTime?          @map("reviewed_at")
+  reviewSource       String?            @map("review_source") @db.VarChar(20)
+  isPalletized       Boolean            @default(false) @map("is_palletized")
+  palletInfo         String?            @map("pallet_info") @db.VarChar(200)
+  status             String             @default("pending_pick") @db.VarChar(20)
+  needsRelabel       Boolean            @default(false) @map("needs_relabel")
+  relabelConfirmedAt DateTime?          @map("relabel_confirmed_at")
+  relabelPrintCount  Int                @default(0) @map("relabel_print_count")
+  remark             String?            @db.Text
+  recipientJson      String?            @map("recipient_json") @db.Text
+  attachmentName     String?            @map("attachment_name") @db.VarChar(200)
+  attachmentPath     String?            @map("attachment_path") @db.VarChar(500)
+  createdBy          BigInt?            @map("created_by")
+  shippedAt          DateTime?          @map("shipped_at")
+  deliveredAt          DateTime?          @map("delivered_at")
+  podCode              String?            @map("pod_code") @db.VarChar(80)
+  podScannedAt         DateTime?          @map("pod_scanned_at")
+  createdAt          DateTime           @default(now()) @map("created_at")
+  updatedAt          DateTime           @updatedAt @map("updated_at")
+  items              OutboundOrderItem[]
+  attachments        OutboundAttachment[]
+
+  @@index([warehouseCode], map: "idx_ob_wh")
+  @@index([status], map: "idx_ob_status")
+  @@index([appointmentDate], map: "idx_ob_appointment_date")
+  @@map("outbound_order")
+}
+
+model OutboundOrderItem {
+  id           BigInt        @id @default(autoincrement())
+  outboundId   BigInt        @map("outbound_id")
+  productId    BigInt        @map("product_id")
+  sku          String        @db.VarChar(30)
+  productName  String?       @map("product_name") @db.VarChar(300)
+  qty          Int
+  pickedQty    Int           @default(0) @map("picked_qty")
+  locationCode String?       @map("location_code") @db.VarChar(30)
+  oldBarcode   String?       @map("old_barcode") @db.VarChar(50)
+  newBarcode   String?       @map("new_barcode") @db.VarChar(50)
+  relabelScannedAt DateTime? @map("relabel_scanned_at")
+  order        OutboundOrder @relation(fields: [outboundId], references: [id], onDelete: Cascade)
+
+  @@map("outbound_order_item")
+}
+
+model OutboundAttachment {
+  id              BigInt        @id @default(autoincrement())
+  outboundId      BigInt        @map("outbound_id")
+  fileType        String        @map("file_type") @db.VarChar(30)
+  fileName        String        @map("file_name") @db.VarChar(200)
+  filePath        String        @map("file_path") @db.VarChar(500)
+  sku             String?       @db.VarChar(30)
+  platformBarcode String?       @map("platform_barcode") @db.VarChar(100)
+  unitIndex       Int?          @map("unit_index")
+  sourcePage      Int?          @map("source_page")
+  sourceRow       Int?          @map("source_row")
+  sourceColumn    Int?          @map("source_column")
+  labelRole       String?       @map("label_role") @db.VarChar(30)
+  contentHash     String?       @map("content_hash") @db.Char(64)
+  createdAt       DateTime      @default(now()) @map("created_at")
+  order           OutboundOrder @relation(fields: [outboundId], references: [id], onDelete: Cascade)
+
+  @@index([outboundId], map: "idx_ob_att_outbound")
+  @@index([outboundId, fileType, sku, unitIndex], map: "idx_ob_att_label")
+  @@map("outbound_attachment")
+}
+
+// ───────────── 线索与 CRM ─────────────
+
+model Lead {
+  id           BigInt         @id @default(autoincrement())
+  leadNo       String         @unique @map("lead_no") @db.VarChar(30)
+  companyName  String         @map("company_name") @db.VarChar(200)
+  contactName  String?        @map("contact_name") @db.VarChar(50)
+  contactPhone String?        @map("contact_phone") @db.VarChar(30)
+  email        String?        @db.VarChar(100)
+  source       String?        @db.VarChar(30)
+  status       String         @default("new") @db.VarChar(20)
+  assigneeId   BigInt?        @map("assignee_id")
+  remark       String?        @db.Text
+  createdAt    DateTime       @default(now()) @map("created_at")
+  updatedAt    DateTime       @updatedAt @map("updated_at")
+  followUps    LeadFollowUp[]
+  deals        LeadDeal[]
+
+  @@index([status], map: "idx_lead_status")
+  @@index([assigneeId], map: "idx_lead_assignee")
+  @@map("lead")
+}
+
+model LeadFollowUp {
+  id           BigInt    @id @default(autoincrement())
+  leadId       BigInt    @map("lead_id")
+  followType   String    @default("phone") @map("follow_type") @db.VarChar(20)
+  content      String    @db.Text
+  nextPlan     String?   @map("next_plan") @db.Text
+  nextFollowAt DateTime? @map("next_follow_at")
+  operatorId   BigInt?   @map("operator_id")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  lead         Lead      @relation(fields: [leadId], references: [id])
+
+  @@map("lead_follow_up")
+}
+
+model LeadDeal {
+  id          BigInt   @id @default(autoincrement())
+  leadId      BigInt   @map("lead_id")
+  dealNo      String   @unique @map("deal_no") @db.VarChar(30)
+  dealAmount  Decimal? @map("deal_amount") @db.Decimal(14, 2)
+  dealDate    DateTime @map("deal_date") @db.Date
+  productDesc String?  @map("product_desc") @db.Text
+  status      String   @default("pending") @db.VarChar(20)
+  remark      String?  @db.Text
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  lead        Lead     @relation(fields: [leadId], references: [id])
+
+  @@map("lead_deal")
+}
+
+// ───────────── 客户结算 ─────────────
+
+model Customer {
+  id           BigInt   @id @default(autoincrement())
+  customerCode String   @unique @map("customer_code") @db.VarChar(30)
+  customerName String   @map("customer_name") @db.VarChar(200)
+  companyName  String?  @map("company_name") @db.VarChar(200)
+  contactEmail String?  @map("contact_email") @db.VarChar(120)
+  contactName  String?  @map("contact_name") @db.VarChar(50)
+  contactPhone String?  @map("contact_phone") @db.VarChar(30)
+  balance      Decimal  @default(0) @db.Decimal(14, 2)
+  status       Int      @default(1) @db.TinyInt
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@map("customer")
+}
+
+model CustomerSkuInventory {
+  id          BigInt   @id @default(autoincrement())
+  customerId  BigInt   @map("customer_id")
+  sku         String   @db.VarChar(30)
+  productName String   @map("product_name") @db.VarChar(300)
+  quantity    Int      @default(0)
+  unitPrice   Decimal? @map("unit_price") @db.Decimal(12, 2)
+  pricingId   BigInt?  @map("pricing_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@unique([customerId, sku], map: "uk_customer_sku_inv")
+  @@index([customerId], map: "idx_csi_customer")
+  @@index([sku], map: "idx_csi_sku")
+  @@map("customer_sku_inventory")
+}
+
+model OmsCatalogOrder {
+  id           BigInt   @id @default(autoincrement())
+  orderNo      String   @unique @map("order_no") @db.VarChar(50)
+  customerId   BigInt   @map("customer_id")
+  customerCode String?  @map("customer_code") @db.VarChar(30)
+  sku          String   @db.VarChar(30)
+  quantity     Int
+  unitPrice    Decimal  @map("unit_price") @db.Decimal(12, 2)
+  totalAmount  Decimal  @map("total_amount") @db.Decimal(14, 2)
+  balanceBefore Decimal? @map("balance_before") @db.Decimal(14, 2)
+  balanceAfter  Decimal? @map("balance_after") @db.Decimal(14, 2)
+  pricingId    BigInt?  @map("pricing_id")
+  status       String   @default("confirmed") @db.VarChar(20)
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([customerId, sku], map: "idx_oms_order_customer_sku")
+  @@map("oms_catalog_order")
+}
+
+model ReturnOrder {
+  id                BigInt            @id @default(autoincrement())
+  returnNo          String            @unique @map("return_no") @db.VarChar(50)
+  customerId        BigInt            @map("customer_id")
+  omsCustomerCode   String?           @map("oms_customer_code") @db.VarChar(30)
+  orderNo           String            @map("order_no") @db.VarChar(50)
+  referenceNo       String?           @map("reference_no") @db.VarChar(100)
+  trackingNo        String?           @map("tracking_no") @db.VarChar(100)
+  sellerStoreName   String?           @map("seller_store_name") @db.VarChar(200)
+  sellerTaxNo       String?           @map("seller_tax_no") @db.VarChar(100)
+  returnWarehouse   String?           @map("return_warehouse") @db.VarChar(20)
+  expectedArrivalAt DateTime?         @map("expected_arrival_at")
+  returnReason      String            @map("return_reason") @db.VarChar(200)
+  returnDescription String?           @map("return_description") @db.Text
+  requestedProcess  String            @map("requested_process") @db.VarChar(30)
+  status            String            @default("pending_arrival") @db.VarChar(30)
+  processResult     String?           @map("process_result") @db.VarChar(30)
+  processRemark     String?           @map("process_remark") @db.Text
+  receivedAt        DateTime?         @map("received_at")
+  receivedQty       Int?              @map("received_qty")
+  receivedCartonCount Int?            @map("received_carton_count")
+  totalVolumeCbm    Decimal?          @map("total_volume_cbm") @db.Decimal(10, 6)
+  totalGrossWeightKg Decimal?         @map("total_gross_weight_kg") @db.Decimal(10, 3)
+  totalChargeableWeightKg Decimal?    @map("total_chargeable_weight_kg") @db.Decimal(10, 3)
+  estimatedFeeTotal Decimal?          @map("estimated_fee_total") @db.Decimal(14, 2)
+  feeStatus         String?           @default("none") @map("fee_status") @db.VarChar(20)
+  measuredAt        DateTime?         @map("measured_at")
+  feeCalculatedAt   DateTime?         @map("fee_calculated_at")
+  inspectionResult  String?           @map("inspection_result") @db.VarChar(30)
+  inspectionRemark  String?           @map("inspection_remark") @db.Text
+  inspectedAt       DateTime?         @map("inspected_at")
+  inspectedBy       BigInt?           @map("inspected_by")
+  customerDecision  String?           @default("pending") @map("customer_decision") @db.VarChar(20)
+  customerDecidedAt DateTime?         @map("customer_decided_at")
+  customerProcessChoice String?       @map("customer_process_choice") @db.VarChar(30)
+  decisionDeadline  DateTime?         @map("decision_deadline")
+  receivedBy        BigInt?           @map("received_by")
+  processedAt       DateTime?         @map("processed_at")
+  processedBy       BigInt?           @map("processed_by")
+  remark            String?           @db.Text
+  createdAt         DateTime          @default(now()) @map("created_at")
+  updatedAt         DateTime          @updatedAt @map("updated_at")
+  items             ReturnOrderItem[]
+  attachments       ReturnAttachment[]
+  cartons           ReturnCartonMeasure[]
+
+  @@index([omsCustomerCode], map: "idx_return_oms_customer")
+  @@index([status], map: "idx_return_status")
+  @@index([customerId], map: "idx_return_customer")
+  @@map("return_order")
+}
+
+model ReturnOrderItem {
+  id          BigInt      @id @default(autoincrement())
+  returnId    BigInt      @map("return_id")
+  sku         String      @db.VarChar(50)
+  productName String      @map("product_name") @db.VarChar(300)
+  quantity    Int
+  returnOrder ReturnOrder @relation(fields: [returnId], references: [id], onDelete: Cascade)
+
+  @@index([returnId], map: "idx_return_item_return")
+  @@map("return_order_item")
+}
+
+model ReturnAttachment {
+  id          BigInt      @id @default(autoincrement())
+  returnId    BigInt      @map("return_id")
+  fileType    String      @default("return_doc") @map("file_type") @db.VarChar(30)
+  fileName    String      @map("file_name") @db.VarChar(200)
+  filePath    String      @map("file_path") @db.VarChar(500)
+  createdAt   DateTime    @default(now()) @map("created_at")
+  returnOrder ReturnOrder @relation(fields: [returnId], references: [id], onDelete: Cascade)
+
+  @@index([returnId], map: "idx_return_att_return")
+  @@map("return_attachment")
+}
+
+model ReturnCartonMeasure {
+  id                   BigInt      @id @default(autoincrement())
+  returnId             BigInt      @map("return_id")
+  cartonNo             Int         @default(1) @map("carton_no")
+  lengthCm             Decimal     @map("length_cm") @db.Decimal(10, 2)
+  widthCm              Decimal     @map("width_cm") @db.Decimal(10, 2)
+  heightCm             Decimal     @map("height_cm") @db.Decimal(10, 2)
+  grossWeightKg        Decimal     @default(0) @map("gross_weight_kg") @db.Decimal(10, 3)
+  volumeCbm            Decimal     @map("volume_cbm") @db.Decimal(10, 6)
+  volumetricWeightKg   Decimal     @map("volumetric_weight_kg") @db.Decimal(10, 3)
+  chargeableWeightKg   Decimal     @map("chargeable_weight_kg") @db.Decimal(10, 3)
+  createdAt            DateTime    @default(now()) @map("created_at")
+  returnOrder          ReturnOrder @relation(fields: [returnId], references: [id], onDelete: Cascade)
+
+  @@index([returnId], map: "idx_return_carton_return")
+  @@map("return_carton_measure")
+}
+
+model ReturnFeeTemplate {
+  id            BigInt                  @id @default(autoincrement())
+  templateCode  String                  @unique @map("template_code") @db.VarChar(50)
+  templateName  String                  @map("template_name") @db.VarChar(100)
+  isDefault     Boolean                 @default(false) @map("is_default")
+  warehouseCode String?                 @map("warehouse_code") @db.VarChar(20)
+  customerId    BigInt?                 @map("customer_id")
+  status        String                  @default("active") @db.VarChar(20)
+  createdAt     DateTime                @default(now()) @map("created_at")
+  rules         ReturnFeeTemplateRule[]
+
+  @@index([customerId], map: "idx_return_fee_template_customer")
+  @@index([warehouseCode], map: "idx_return_fee_template_wh")
+  @@map("return_fee_template")
+}
+
+model ReturnFeeTemplateRule {
+  id          BigInt            @id @default(autoincrement())
+  templateId  BigInt            @map("template_id")
+  template    ReturnFeeTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  chargeType  String            @map("charge_type") @db.VarChar(40)
+  description String            @db.VarChar(200)
+  calcMode    String            @map("calc_mode") @db.VarChar(30)
+  unitPrice   Decimal           @map("unit_price") @db.Decimal(12, 2)
+  minQty      Decimal?          @map("min_qty") @db.Decimal(12, 4)
+  sortOrder   Int               @default(0) @map("sort_order")
+  autoApply   Boolean           @default(true) @map("auto_apply")
+
+  @@index([templateId], map: "idx_return_fee_rule_template")
+  @@map("return_fee_template_rule")
+}
+
+model BillingOrder {
+  id           BigInt             @id @default(autoincrement())
+  billingNo    String             @unique @map("billing_no") @db.VarChar(30)
+  customerId   BigInt             @map("customer_id")
+  billingMonth String             @map("billing_month") @db.VarChar(7)
+  totalAmount  Decimal            @default(0) @map("total_amount") @db.Decimal(14, 2)
+  paidAmount   Decimal            @default(0) @map("paid_amount") @db.Decimal(14, 2)
+  status       String             @default("pending") @db.VarChar(20)
+  remark       String?            @db.Text
+  createdAt    DateTime           @default(now()) @map("created_at")
+  updatedAt    DateTime           @updatedAt @map("updated_at")
+  items        BillingOrderItem[]
+
+  @@map("billing_order")
+}
+
+model BillingOrderItem {
+  id          BigInt       @id @default(autoincrement())
+  billingId   BigInt       @map("billing_id")
+  itemType    String       @map("item_type") @db.VarChar(30)
+  description String?      @db.VarChar(500)
+  quantity    Int?         @default(1)
+  unitPrice   Decimal?     @map("unit_price") @db.Decimal(12, 2)
+  amount      Decimal      @db.Decimal(14, 2)
+  createdAt   DateTime     @default(now()) @map("created_at")
+  billing     BillingOrder @relation(fields: [billingId], references: [id])
+
+  @@map("billing_order_item")
+}
+
+model BillingCharge {
+  id            BigInt    @id @default(autoincrement())
+  chargeNo      String    @unique @map("charge_no") @db.VarChar(30)
+  customerId    BigInt    @map("customer_id")
+  chargeType    String    @map("charge_type") @db.VarChar(30)
+  source        String    @default("manual") @db.VarChar(20)
+  description   String?   @db.VarChar(500)
+  amount        Decimal   @db.Decimal(14, 2)
+  quantity      Int       @default(1)
+  unitPrice     Decimal?  @map("unit_price") @db.Decimal(12, 2)
+  chargeDate    DateTime  @map("charge_date") @db.Date
+  bizRef        String?   @map("biz_ref") @db.VarChar(100)
+  sourceRef     String?   @map("source_ref") @db.VarChar(100)
+  warehouseCode String?   @map("warehouse_code") @db.VarChar(30)
+  status        String    @default("pending") @db.VarChar(20)
+  billingId     BigInt?   @map("billing_id")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  @@index([customerId, chargeDate, id], map: "ix_billing_charge_customer_date")
+  @@index([status, chargeDate, id], map: "ix_billing_charge_status_date")
+  @@map("billing_charge")
+}
+
+model CustomerRecharge {
+  id            BigInt   @id @default(autoincrement())
+  rechargeNo    String   @unique @map("recharge_no") @db.VarChar(30)
+  customerId    BigInt   @map("customer_id")
+  amount        Decimal  @db.Decimal(14, 2)
+  paymentMethod String   @default("bank") @map("payment_method") @db.VarChar(20)
+  status        String   @default("pending") @db.VarChar(20)
+  remark        String?  @db.VarChar(500)
+  operatorId    BigInt?  @map("operator_id")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@map("customer_recharge")
+}
+
+// ───────────── 成本台账 ─────────────
+
+model CostLedger {
+  id           BigInt   @id @default(autoincrement())
+  costNo       String   @unique @map("cost_no") @db.VarChar(30)
+  productId    BigInt?  @map("product_id")
+  sku          String?  @db.VarChar(30)
+  costType     String   @map("cost_type") @db.VarChar(30)
+  amountRmb    Decimal  @map("amount_rmb") @db.Decimal(14, 2)
+  amountZar    Decimal? @map("amount_zar") @db.Decimal(14, 2)
+  exchangeRate Decimal? @map("exchange_rate") @db.Decimal(10, 4)
+  referenceNo  String?  @map("reference_no") @db.VarChar(50)
+  costDate     DateTime @map("cost_date") @db.Date
+  remark       String?  @db.VarChar(500)
+  createdBy    BigInt?  @map("created_by")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([costDate], map: "idx_cost_date")
+  @@map("cost_ledger")
+}
+
+// ───────────── 利润分析 ─────────────
+
+model ProfitAnalysis {
+  id            BigInt   @id @default(autoincrement())
+  productId     BigInt?  @map("product_id")
+  sku           String?  @db.VarChar(30)
+  analysisMonth String   @map("analysis_month") @db.VarChar(7)
+  salesQty      Int?     @default(0) @map("sales_qty")
+  salesAmount   Decimal? @default(0) @map("sales_amount") @db.Decimal(14, 2)
+  totalCost     Decimal? @default(0) @map("total_cost") @db.Decimal(14, 2)
+  grossProfit   Decimal? @default(0) @map("gross_profit") @db.Decimal(14, 2)
+  profitRate    Decimal? @default(0) @map("profit_rate") @db.Decimal(6, 4)
+  remark        String?  @db.VarChar(500)
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@map("profit_analysis")
+}
+
+// ───────────── 供应商海运账单 ─────────────
+
+model SupplierFreightBill {
+  id             BigInt   @id @default(autoincrement())
+  billNo         String   @unique @map("bill_no") @db.VarChar(30)
+  supplierId     BigInt   @map("supplier_id")
+  poId           BigInt?  @unique @map("po_id")
+  poNo           String?  @map("po_no") @db.VarChar(30)
+  source         String   @default("manual") @db.VarChar(30)
+  billMonth      String   @map("bill_month") @db.VarChar(7)
+  totalAmount    Decimal  @default(0) @map("total_amount") @db.Decimal(14, 2)
+  containerCount Int?     @default(0) @map("container_count")
+  weightKg       Decimal? @map("weight_kg") @db.Decimal(12, 2)
+  status         String   @default("draft") @db.VarChar(20)
+  remark         String?  @db.Text
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@index([supplierId], map: "idx_sfb_supplier")
+  @@map("supplier_freight_bill")
+}
+
+// ───────────── 同步日志 ─────────────
+
+model SyncLog {
+  id           BigInt    @id @default(autoincrement())
+  syncType     String    @map("sync_type") @db.VarChar(30)
+  targetSystem String    @map("target_system") @db.VarChar(30)
+  referenceNo  String?   @map("reference_no") @db.VarChar(50)
+  status       String    @default("pending") @db.VarChar(20)
+  requestBody  Json?     @map("request_body")
+  responseBody Json?     @map("response_body")
+  errorMessage String?   @map("error_message") @db.Text
+  retryCount   Int?      @default(0) @map("retry_count")
+  nextRetryAt  DateTime? @map("next_retry_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  @@index([status], map: "idx_sync_status")
+  @@index([syncType], map: "idx_sync_type")
+  @@map("sync_log")
+}
+
+// ───────────── 异步导入导出 ─────────────
+
+model AsyncIoJob {
+  id            BigInt    @id @default(autoincrement())
+  jobNo         String    @unique @map("job_no") @db.VarChar(30)
+  jobType       String    @map("job_type") @db.VarChar(20)
+  module        String    @db.VarChar(30)
+  fileName      String?   @map("file_name") @db.VarChar(200)
+  fileUrl       String?   @map("file_url") @db.VarChar(500)
+  totalRows     Int?      @default(0) @map("total_rows")
+  processedRows Int?      @default(0) @map("processed_rows")
+  failedRows    Int?      @default(0) @map("failed_rows")
+  status        String    @default("pending") @db.VarChar(20)
+  errorMessage  String?   @map("error_message") @db.Text
+  operatorId    BigInt?   @map("operator_id")
+  startedAt     DateTime? @map("started_at")
+  finishedAt    DateTime? @map("finished_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  @@map("async_io_job")
+}
+
+// ───────────── 系统公告 ─────────────
+
+model Announcement {
+  id            BigInt    @id @default(autoincrement())
+  title         String    @db.VarChar(100)
+  category      String    @default("系统") @db.VarChar(20)
+  content       String    @db.Text
+  targetChannel String    @default("erp") @map("target_channel") @db.VarChar(10)
+  isPinned      Boolean?  @default(false) @map("is_pinned")
+  publishedBy   BigInt?   @map("published_by")
+  publishedAt   DateTime? @map("published_at")
+  scheduledAt   DateTime? @map("scheduled_at")
+  expiresAt     DateTime? @map("expires_at")
+  status        String    @default("draft") @db.VarChar(10)
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  @@map("announcement")
+}
+
+// ───────────── 操作日志 ─────────────
+
+model OperationLog {
+  id           BigInt   @id @default(autoincrement())
+  operatorId   BigInt?  @map("operator_id")
+  operatorName String?  @map("operator_name") @db.VarChar(50)
+  module       String   @db.VarChar(30)
+  action       String   @db.VarChar(30)
+  targetType   String?  @map("target_type") @db.VarChar(30)
+  targetId     String?  @map("target_id") @db.VarChar(50)
+  detail       Json?
+  ipAddress    String?  @map("ip_address") @db.VarChar(50)
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([operatorId], map: "idx_oplog_operator")
+  @@index([module], map: "idx_oplog_module")
+  @@index([createdAt], map: "idx_oplog_time")
+  @@map("operation_log")
+}
+
+// ───────────── 货盘库存（定价） ─────────────
+
+model ProductPricing {
+  id                BigInt    @id @default(autoincrement())
+  sku               String    @unique @db.VarChar(30)
+  productName       String    @map("product_name") @db.VarChar(300)
+  spec              String?   @db.VarChar(100)
+  costRmb           Decimal   @default(0) @map("cost_rmb") @db.Decimal(12, 2)
+  purchaseQty       Int       @default(0) @map("purchase_qty")
+  inboundQty        Int       @default(0) @map("inbound_qty")
+  visibleStockQty   Int?      @map("visible_stock_qty")
+  soldQty           Int       @default(0) @map("sold_qty")
+  poNo              String?   @map("po_no") @db.VarChar(30)
+  inboundNo         String?   @map("inbound_no") @db.VarChar(30)
+  seaFreight        Decimal   @default(0) @map("sea_freight") @db.Decimal(12, 2)
+  domesticFee       Decimal   @default(0) @map("domestic_fee") @db.Decimal(12, 2)
+  exchangeRate      Decimal   @default(2.5) @map("exchange_rate") @db.Decimal(10, 4)
+  freightCallbackAt DateTime? @map("freight_callback_at")
+  marketPrice       Decimal?  @map("market_price") @db.Decimal(12, 2)
+  pricingLogic      String?   @map("pricing_logic") @db.VarChar(500)
+  targetProfitRate  Decimal?  @map("target_profit_rate") @db.Decimal(6, 2)
+  finalPrice        Decimal?  @map("final_price") @db.Decimal(12, 2)
+  overseasDeliveryFee Decimal? @default(0) @map("overseas_delivery_fee") @db.Decimal(12, 2)
+  platformCommission  Decimal? @default(0) @map("platform_commission") @db.Decimal(12, 2)
+  platformCommissionRate Decimal? @default(15) @map("platform_commission_rate") @db.Decimal(6, 2)
+  platformDeliveryFee Decimal? @default(0) @map("platform_delivery_fee") @db.Decimal(12, 2)
+  pricingStatus     String    @default("waiting_freight") @map("pricing_status") @db.VarChar(30)
+  omsSyncAt         DateTime? @map("oms_sync_at")
+  visibleOnOms      Boolean   @default(false) @map("visible_on_oms")
+  orderableOnOms    Boolean   @default(false) @map("orderable_on_oms")
+  visibleOnOmsAt    DateTime? @map("visible_on_oms_at")
+  orderableOnOmsAt  DateTime? @map("orderable_on_oms_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+  histories         ProductPricingHistory[]
+  priceRecords      ProductPriceRecord[]
+
+  @@index([pricingStatus], map: "idx_pricing_status")
+  @@map("product_pricing")
+}
+
+model ProductPricingHistory {
+  id           BigInt         @id @default(autoincrement())
+  pricingId    BigInt         @map("pricing_id")
+  operatorRole String         @map("operator_role") @db.VarChar(50)
+  action       String         @db.VarChar(50)
+  detail       String         @db.Text
+  createdAt    DateTime       @default(now()) @map("created_at")
+  pricing      ProductPricing @relation(fields: [pricingId], references: [id], onDelete: Cascade)
+
+  @@index([pricingId], map: "idx_pph_pricing")
+  @@map("product_pricing_history")
+}
+
+model ProductPriceRecord {
+  id          BigInt         @id @default(autoincrement())
+  pricingId   BigInt         @map("pricing_id")
+  marketPrice Decimal        @map("market_price") @db.Decimal(12, 2)
+  price       Decimal        @db.Decimal(12, 2)
+  operator    String         @db.VarChar(50)
+  note        String?        @db.VarChar(500)
+  createdAt   DateTime       @default(now()) @map("created_at")
+  pricing     ProductPricing @relation(fields: [pricingId], references: [id], onDelete: Cascade)
+
+  @@index([pricingId], map: "idx_ppr_pricing")
+  @@map("product_price_record")
+}
+
+// ───────────── Takealot 店铺监控 ─────────────
+
+model TakealotStore {
+  id               BigInt   @id @default(autoincrement())
+  slot             Int      @unique @db.TinyInt
+  storeName        String   @map("store_name") @db.VarChar(100)
+  coachRole        String   @map("coach_role") @db.VarChar(20)
+  apiKey           String?  @map("api_key") @db.VarChar(500)
+  takealotSellerId BigInt?  @map("takealot_seller_id")
+  displayName      String?  @map("display_name") @db.VarChar(200)
+  enabled          Boolean  @default(true)
+  remark           String?  @db.VarChar(500)
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  @@index([coachRole], map: "idx_takealot_store_coach")
+  @@map("takealot_store")
+}

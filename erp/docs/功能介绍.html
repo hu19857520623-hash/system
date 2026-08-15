@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>Takealot ERP 功能介绍</title>
+<style>
+  @page { margin: 16mm 14mm 18mm 14mm; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif;
+    font-size: 10pt;
+    line-height: 1.6;
+    color: #2a3034;
+    margin: 0;
+    padding: 0;
+  }
+  h1 {
+    font-size: 20pt;
+    color: #1a1d26;
+    border-bottom: 2px solid #2563eb;
+    padding-bottom: 8px;
+    margin: 0 0 10px;
+    page-break-after: avoid;
+  }
+  h2 {
+    font-size: 13pt;
+    color: #1e3a5f;
+    margin: 20px 0 8px;
+    padding-left: 10px;
+    border-left: 4px solid #2563eb;
+    page-break-after: avoid;
+  }
+  h3 {
+    font-size: 11pt;
+    color: #374151;
+    margin: 14px 0 6px;
+    page-break-after: avoid;
+  }
+  p { margin: 6px 0; }
+  blockquote {
+    margin: 8px 0;
+    padding: 6px 12px;
+    background: #eff6ff;
+    border-left: 4px solid #2563eb;
+    color: #4b5563;
+    font-size: 9.5pt;
+  }
+  hr {
+    border: none;
+    border-top: 1px solid #e5e7eb;
+    margin: 14px 0;
+  }
+  pre {
+    background: #1f2937;
+    color: #e5e7eb;
+    padding: 10px 12px;
+    border-radius: 6px;
+    font-size: 8.5pt;
+    line-height: 1.5;
+    page-break-inside: avoid;
+    white-space: pre-wrap;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 8px 0 12px;
+    font-size: 9pt;
+    page-break-inside: avoid;
+  }
+  th {
+    background: #eff6ff;
+    color: #1e40af;
+    font-weight: 600;
+    text-align: left;
+    padding: 6px 8px;
+    border: 1px solid #dbeafe;
+  }
+  td {
+    padding: 5px 8px;
+    border: 1px solid #e5e7eb;
+    vertical-align: top;
+  }
+  tr:nth-child(even) td { background: #f9fafb; }
+  strong { color: #111827; }
+  .cover-meta {
+    color: #6b7280;
+    font-size: 9.5pt;
+    margin-bottom: 16px;
+  }
+  .footer-note {
+    margin-top: 20px;
+    font-size: 9pt;
+    color: #9ca3af;
+    font-style: italic;
+  }
+</style>
+</head>
+<body>
+<h1>Takealot ERP 功能详细介绍</h1>
+<blockquote><p>版本：V1.0 · 最后更新：2026-07-31</p></blockquote>
+<blockquote><p>适用对象：产品、运营、仓储、财务、开发人员</p></blockquote>
+<blockquote><p>系统架构：Vue 3 前端 + NestJS 后端 + MySQL 8.0</p></blockquote>
+<hr />
+<h2>文档说明</h2>
+<p>本文档对 <strong>Takealot ERP 当前已实现功能</strong> 做逐项说明，包括：业务目的、适用角色、页面入口、核心操作、状态流转及与其他模块的衔接。未实现或部分实现的功能在相应章节末尾标注。</p>
+<p><strong>状态图例：</strong> ✅ 已实现 · 🟡 部分实现</p>
+<hr />
+<h2>一、系统基础</h2>
+<h3>1.1 登录与鉴权</h3>
+<p><strong>目的：</strong> 保障系统访问安全，按角色分配功能权限。</p>
+<p><strong>入口：</strong> <code>/login</code></p>
+<p class="footer-note">功能说明：</p>
+<p>- 用户名 + 密码登录，成功后颁发 JWT Token，会话内访问所有 API。</p>
+<p>- 登录后加载用户资料、角色名称、权限码列表（如 <code>outbound.view</code>、<code>inbound.putaway</code>）。</p>
+<p>- 前端根据权限码控制菜单可见性与按钮启用状态；后端 <code>@RequirePerms</code> 二次校验，防止越权。</p>
+<p class="footer-note">相关 API：</p>
+<p>- <code>POST /api/auth/login</code> — 登录</p>
+<p>- <code>GET /api/auth/profile</code> — 获取当前用户与权限</p>
+<p>- <code>PUT /api/auth/profile</code> — 更新姓名、手机、邮箱</p>
+<p>- <code>PUT /api/auth/password</code> — 修改密码</p>
+<hr />
+<h3>1.2 用户管理</h3>
+<p><strong>目的：</strong> 维护 ERP 操作账号、角色与细粒度权限。</p>
+<p><strong>入口：</strong> <code>/permissions</code>（侧边栏「用户管理」）</p>
+<p class="footer-note">功能说明：</p>
+<p>- 创建/编辑/停用系统用户，绑定角色（系统管理员、采购、仓储、财务、销售等）。</p>
+<p>- 支持用户级权限覆盖（在角色权限基础上增减）。</p>
+<p>- 用户状态：启用（status=1）/ 停用。</p>
+<hr />
+<h3>1.3 工作台</h3>
+<p><strong>目的：</strong> 登录后的运营指挥中心，一眼掌握待办与关键指标。</p>
+<p><strong>入口：</strong> <code>/dashboard</code></p>
+<p class="footer-note">功能说明：</p>
+<table>
+<tr><th>区域</th><th>内容</th></tr>
+<tr><td>KPI 卡片</td><td>可用库存 SKU 数、供应商数、线索数、待审采购单、待审选品、同步失败数等</td></tr>
+<tr><td>业务流水线</td><td>国内链（采购→中转→发运）与海外仓链（到仓→收货→上架→出库）各阶段待办计数</td></tr>
+<tr><td>7 日趋势</td><td>物流收货量折线图</td></tr>
+<tr><td>待办通知</td><td>可点击跳转：线索跟进、选品审核、采购审核、入库各阶段、出库、定价、同步失败</td></tr>
+<tr><td>快捷入口</td><td>一键进入常用页面</td></tr>
+<tr><td>系统公告</td><td>发布/编辑/删除公告，支持 ERP 与 OMS 渠道</td></tr>
+</table>
+<p><strong>相关 API：</strong> <code>GET /api/dashboard/stats</code>、<code>/trends</code>、<code>/notifications</code>、<code>/announcements</code></p>
+<hr />
+<h3>1.4 操作日志</h3>
+<p><strong>目的：</strong> 追溯关键业务操作（谁、何时、对什么对象做了什么）。</p>
+<p><strong>入口：</strong> <code>/operation-logs</code></p>
+<p><strong>记录范围示例：</strong> 入库测量、上架、出库发运、定价确认、权限变更等。</p>
+<p><strong>字段：</strong> 操作人、模块、动作、目标类型/ID、详情 JSON、IP、时间。</p>
+<hr />
+<h3>1.5 异步导出导入</h3>
+<p><strong>目的：</strong> 大批量 Excel/CSV 导入导出不阻塞浏览器，后台任务队列处理。</p>
+<p><strong>入口：</strong> <code>/async-io</code></p>
+<p><strong>适用场景：</strong> 线索批量导入、库存导出、大列表导出等耗时操作。</p>
+<hr />
+<h2>二、获客与销售（CRM）</h2>
+<h3>2.1 线索池</h3>
+<p><strong>目的：</strong> 集中管理销售线索（公海），支持分配与领取。</p>
+<p><strong>入口：</strong> <code>/leads/pool</code></p>
+<p class="footer-note">核心操作：</p>
+<p>- <strong>新建线索：</strong> 公司名称、联系人、电话、邮箱、来源、备注。</p>
+<p>- <strong>CSV 导入：</strong> 批量导入线索。</p>
+<p>- <strong>开始跟进：</strong> 将线索分配给销售并进入「跟进中」状态。</p>
+<p>- <strong>筛选：</strong> 状态（新线索/跟进中/已成交/已流失）、关键词搜索。</p>
+<p><strong>状态流转：</strong> <code>new</code> → <code>following</code> → <code>deal</code> / <code>lost</code></p>
+<hr />
+<h3>2.2 我的跟进</h3>
+<p><strong>目的：</strong> 销售个人待跟进线索的工作台。</p>
+<p><strong>入口：</strong> <code>/leads/follow</code></p>
+<p class="footer-note">核心操作：</p>
+<p>- <strong>写跟进：</strong> 跟进方式（电话等）、内容、下次计划、下次跟进时间；保存后线索保持 <code>following</code>。</p>
+<p>- <strong>标记成交：</strong> 填写店铺类型等信息，线索变为 <code>deal</code>，进入成交管理。</p>
+<hr />
+<h3>2.3 成交管理</h3>
+<p><strong>目的：</strong> 管理已成交客户，并转化为 ERP 正式客户。</p>
+<p><strong>入口：</strong> <code>/leads/deals</code></p>
+<p class="footer-note">核心操作：</p>
+<p>- 查看成交详情、跟进历史。</p>
+<p>- <strong>转 ERP 客户：</strong> 在系统中创建 <code>Customer</code> 记录，后续可走充值、结算、出库关联。</p>
+<p>- 按渠道、店铺类型、负责人、成交日期筛选；支持导出。</p>
+<hr />
+<h3>2.4 获客报表</h3>
+<p><strong>目的：</strong> 销售管理层查看转化数据（只读看板）。</p>
+<p><strong>入口：</strong> <code>/leads/reports</code></p>
+<p><strong>展示内容：</strong> 线索总数、跟进数、成交数、流失数、转化率；渠道分布、月度趋势、销售排行、转化漏斗。</p>
+<hr />
+<h2>三、商品与选品</h2>
+<h3>3.1 商品主数据</h3>
+<p><strong>目的：</strong> 维护 SKU 级商品档案，作为采购、入库、库存、出库的统一主数据。</p>
+<p><strong>入口：</strong> <code>/products</code></p>
+<p class="footer-note">核心字段：</p>
+<p>- 基础：SKU、SPU、品名、规格、品类、品牌、条码。</p>
+<p>- 物理：长/宽/高（cm）、重量（kg）—— 入库测量会回写此处。</p>
+<p>- 商业：成本、海运分摊、国内费用、Takealot 链接、图片。</p>
+<p>- 关联：开发人、采购员、供应商。</p>
+<p><strong>核心操作：</strong> 新增/编辑、启用/停用、确认主数据、打印 SKU 标签、图片管理。</p>
+<p><strong>状态：</strong> <code>active</code>（可用）、<code>pending</code>（待完善）、<code>inactive</code>（停用）</p>
+<hr />
+<h3>3.2 产品开发（选品）</h3>
+<p><strong>目的：</strong> 产品开发人员提交选品申请，填写多平台参考链接与预估成本。</p>
+<p><strong>入口：</strong> <code>/product-dev</code></p>
+<p class="footer-note">核心操作：</p>
+<p>- 创建选品单：Takealot/Amazon/1688 链接、规格、预估成本、市场价、卖点说明。</p>
+<p>- <strong>提交审核</strong> → 产品主管在「产品审核」页审批。</p>
+<p><strong>状态流转：</strong> <code>draft</code> → <code>submitted</code> → <code>approved</code> / <code>rejected</code></p>
+<hr />
+<h3>3.3 产品审核</h3>
+<p><strong>目的：</strong> 产品主管审核选品申请，通过后进入预采购流程。</p>
+<p><strong>入口：</strong> <code>/product-audit</code></p>
+<p><strong>核心操作：</strong> 查看选品详情、通过/驳回（含审核意见）。</p>
+<p><strong>通过后：</strong> 生成预采购单或进入待分配采购员队列。</p>
+<hr />
+<h2>四、国内供应链</h2>
+<h3>4.1 供应商管理</h3>
+<p><strong>目的：</strong> 维护国内供应商档案（名称、联系人、结算方式等）。</p>
+<p><strong>入口：</strong> <code>/suppliers</code></p>
+<hr />
+<h3>4.2 采购订单</h3>
+<p><strong>目的：</strong> 国内采购全流程：预采购 → 正式 PO → 双审 → 核定数量 → 进入物流收货。</p>
+<p><strong>入口：</strong> <code>/purchase</code></p>
+<p class="footer-note">Tab 与流程：</p>
+<table>
+<tr><th>Tab</th><th>说明</th></tr>
+<tr><td>预采购分配</td><td>选品通过后，主管将预采购单分配给采购员</td></tr>
+<tr><td>预采购单</td><td>采购员维护供应商、仓库、SKU 数量与单价</td></tr>
+<tr><td>采购订单</td><td>正式 PO 列表</td></tr>
+<tr><td>核定实际数量</td><td>产品主管核定实际采购量</td></tr>
+<tr><td>采购审核</td><td>采购主管审核 PO</td></tr>
+<tr><td>财务审核</td><td>财务审核通过后同步商品主数据、货盘定价、成本台账</td></tr>
+</table>
+<p><strong>创建 PO 字段：</strong> 供应商、目标中转仓、预计到货、国内运费、SKU 明细（数量、单价）。</p>
+<p><strong>PO 状态：</strong> <code>pending_actual_qty</code> → <code>pending_po_audit</code> → <code>pending_finance</code> → <code>finance_approved</code> / <code>rejected</code></p>
+<p><strong>财务审核通过后：</strong> 自动创建/更新 <code>Product</code>、<code>ProductPricing</code>（状态 <code>waiting_freight</code>）、写入成本台账。</p>
+<hr />
+<h3>4.3 物流中转仓</h3>
+<p><strong>目的：</strong> 国内物流中转仓收货作业，对接采购 PO。</p>
+<p><strong>入口：</strong> <code>/logistics-wh</code></p>
+<p class="footer-note">核心操作：</p>
+<p>- 按 PO 收货登记，更新中转仓在途/在库状态。</p>
+<p>- 与「发运海外仓」衔接：货物从中转仓发往南非海外仓。</p>
+<hr />
+<h3>4.4 中转仓库存查询</h3>
+<p><strong>目的：</strong> 查询国内中转仓当前库存（尚未发运海外仓的部分）。</p>
+<p><strong>入口：</strong> <code>/logistics-inventory</code></p>
+<hr />
+<h3>4.5 发运海外仓</h3>
+<p><strong>目的：</strong> 从国内中转仓创建入库预报，发运至南非海外仓（JHB 等）。</p>
+<p><strong>入口：</strong> <code>/inbound/create</code></p>
+<p class="footer-note">核心操作：</p>
+<p>1. <strong>填写基本信息</strong></p>
+<p>- 始发中转仓、目的海外仓、入仓号（必填）、预计到货、备注、附件。</p>
+<p>2. <strong>维护 SKU 明细</strong></p>
+<p>- SKU、入库数量、长宽高重量；支持 CSV 导入。</p>
+<p>- 可选填写海运费（LCL/FCL），系统按体积分摊到 SKU。</p>
+<p>3. <strong>外箱装箱（可选）</strong></p>
+<p>- 配置箱码与箱内 SKU 数量，须与明细总数一致；也可提交后自动生成。</p>
+<p>4. <strong>草稿</strong></p>
+<p>- 支持保存草稿、继续编辑、正式提交。</p>
+<p>5. <strong>提交后</strong></p>
+<p>- 创建 <code>InboundOrder</code>，状态 <code>pending_receipt</code>（在途）。</p>
+<p>- 海运费同步至对应 SKU 的货盘定价记录。</p>
+<p><strong>标签：</strong> 可下载 SKU 标签、外箱标 HTML/PDF，供国内贴标。</p>
+<hr />
+<h2>五、海外仓 · 仓储作业</h2>
+<h3>5.1 库位管理</h3>
+<p><strong>目的：</strong> 维护海外仓库区与货架库位，供上架、拣货使用。</p>
+<p><strong>入口：</strong> <code>/warehouse/locations</code></p>
+<p class="footer-note">层级结构：</p>
+<p>- <strong>仓库</strong>（<code>warehouseType=wms</code>，如 WMS-JHB-01）</p>
+<p>- <strong>库区</strong>（WarehouseZone，分区字母 A/B/C…）</p>
+<p>- <strong>库位</strong>（WarehouseLocation，如 A-01-02，状态 available）</p>
+<p><strong>核心操作：</strong> 批量创建库位、打印库位标签、查看库位当前库存。</p>
+<hr />
+<h3>5.2 到仓扫描（核心作业台）</h3>
+<p><strong>目的：</strong> 海外仓现场一站式完成入库后半段：到仓确认 → 收货 → 清点 → 测量 → 上架。</p>
+<p><strong>入口：</strong> <code>/inbound/arrival-scan</code></p>
+<p>（旧「入库上架」路由已合并至此，<code>?step=putaway</code> 可直达上架步骤）</p>
+<p><strong>适用角色：</strong> 海外仓收货员、上架员。</p>
+<p class="footer-note">五步流程：</p>
+<p>#### 步骤 1：到仓确认</p>
+<p>- 选择操作仓库（海外仓）。</p>
+<p>- 扫描或输入：入库单号 / 入仓号 / 跟踪号。</p>
+<p>- 确认到仓 → 状态 <code>pending_receipt</code> → <code>arrived</code>。</p>
+<p>#### 步骤 2：扫箱收货</p>
+<p>- <strong>有外箱标：</strong> 扫描箱码，整箱计入收货。</p>
+<p>- <strong>无外箱标：</strong> 扫描 SKU + 填写每箱件数，逐件累加。</p>
+<p>- 支持「开始收货」后持续扫箱 → 状态 <code>receiving</code>。</p>
+<p>#### 步骤 3：人工清点（QC）</p>
+<p>- 按 SKU 确认实收数量。</p>
+<p>- QC 状态：通过 / 异常；可填 QC 备注。</p>
+<p>- 清点完成 → <code>pending_putaway</code>；若有差异且不接受 → <code>exception</code>。</p>
+<p>#### 步骤 4：测量体积</p>
+<p>- 逐 SKU 填写实测长、宽、高（cm）。</p>
+<p>- 写入 <code>Product.lengthCm/widthCm/heightCm</code>。</p>
+<p>- <strong>必须先测量，才能进入上架步骤。</strong></p>
+<p>#### 步骤 5：扫码上架</p>
+<p>- 扫描 SKU + 目标库位 + 上架数量。</p>
+<p>- 写入 <code>InboundPutawayItem</code>、<code>InventoryLocation</code>，增加 <code>Inventory.availableQty</code>。</p>
+<p>- 全部上架完成 → 入库单 <code>completed</code>。</p>
+<p>- 触发货盘定价 <code>inboundQty</code> 更新，满足条件时可自动 OMS 可下单。</p>
+<p><strong>异常处理：</strong> 状态为 <code>exception</code> 的单据需主管「放行上架」后继续测量/上架。</p>
+<p class="footer-note">相关 API：</p>
+<p>- <code>POST /api/inbound/arrival-scan</code></p>
+<p>- <code>POST /api/inbound/:id/receive-box</code></p>
+<p>- <code>POST /api/inbound/:id/qc</code></p>
+<p>- <code>POST /api/inbound/:id/measure-dimensions</code></p>
+<p>- <code>POST /api/inbound/:id/putaway</code></p>
+<p>- <code>POST /api/inbound/:id/resolve-exception</code></p>
+<hr />
+<h3>5.3 入库单管理</h3>
+<p><strong>目的：</strong> 后台查询与管理入库单，跟踪全状态；部分操作可在此发起，实际上架仍在「到仓扫描」。</p>
+<p><strong>入口：</strong> <code>/inbound/receipt</code></p>
+<p class="footer-note">状态 Tab：</p>
+<table>
+<tr><th>状态</th><th>含义</th></tr>
+<tr><td>在途</td><td>已发运，未到海外仓</td></tr>
+<tr><td>已到仓</td><td>已确认到仓，待收货</td></tr>
+<tr><td>收货中</td><td>正在扫箱收货</td></tr>
+<tr><td>待上架</td><td>清点完成，待测量/上架</td></tr>
+<tr><td>已入库</td><td>上架完成</td></tr>
+<tr><td>异常</td><td>清点或流程异常</td></tr>
+</table>
+<p><strong>核心操作：</strong> 搜索、查看详情、开始收货、提交清点（QC 弹窗）、异常放行、跳转到仓扫描。</p>
+<hr />
+<h3>5.4 库存查询</h3>
+<p><strong>目的：</strong> 查询海外仓已上架实收库存，支持库位级明细与手工调整。</p>
+<p><strong>入口：</strong> <code>/inventory</code></p>
+<p class="footer-note">筛选条件：</p>
+<p>- 客户代码、SKU（支持空格分隔多个）、仓库（多选，默认 JHB）。</p>
+<p>- 产品代码 / 品名（可精确匹配）、EAN 条码。</p>
+<p>- 数量类型（可用/总量/锁定）及区间。</p>
+<p>- 品类关键词、低库存预警。</p>
+<p><strong>列表展示：</strong> SKU、品名、可用/总量/锁定、在途数量、平均成本等。</p>
+<p class="footer-note">核心操作：</p>
+<p>- 点击 SKU → 查看库位分布（各库位数量）。</p>
+<p>- 查看出库记录（该 SKU 历史出库）。</p>
+<p>- <strong>库存导入 / 库位调整</strong>（需 <code>inventory.adjust</code> 权限）：手工增加或修正库位库存。</p>
+<p>- 导出 CSV。</p>
+<p class="footer-note">库存模型：</p>
+<p>- <code>Inventory</code>：仓库维度汇总（totalQty / availableQty / lockedQty）。</p>
+<p>- <code>InventoryLocation</code>：库位 + SKU 维度明细。</p>
+<p>- 出库创建时：<code>availableQty ↓</code>，<code>lockedQty ↑</code>；发运或取消时相应释放/扣减。</p>
+<hr />
+<h3>5.5 SKU 查询</h3>
+<p><strong>目的：</strong> 以单个 SKU 为视角，聚合展示主数据、各仓库存、近期变动。</p>
+<p><strong>入口：</strong> <code>/inventory/sku-query</code>（可从库存查询页跳转）</p>
+<hr />
+<h3>5.6 出库单管理</h3>
+<p><strong>目的：</strong> 管理出库全生命周期：创建 → 拣货 → 复核 → 换标 → 发运 → 送达。</p>
+<p><strong>入口：</strong> <code>/outbound</code></p>
+<p class="footer-note">列表布局（对标 WMS）：</p>
+<p>- 顶部 <strong>4 列筛选网格</strong>：单号、客户、时间、SKU、仓库、目的地、物流、承运商、拣货员、换标、批次、平台、预约、问题件等；点「查询」生效。</p>
+<p>- <strong>状态 Tab</strong>（带数量）：待拣货 / 复核中 / 待换标 / 待发运 / 已发货 / 已送达 / 异常 / 已作废 / 问题件 / 全部。</p>
+<p>- <strong>工具栏：</strong> 预约派送、分配拣货员、打印拣货单、导出、+ 预约发货。</p>
+<p>- <strong>表格：</strong> NO.、FBA 编号、出库单号（可复制）、发货仓库、物流产品、承运商、箱货类型、状态；行内「操作」下拉。</p>
+<p class="footer-note">状态与操作对照：</p>
+<table>
+<tr><th>状态</th><th>可用操作</th></tr>
+<tr><td>待拣货</td><td>分配拣货员、下载/打印拣货单、完成拣货</td></tr>
+<tr><td>复核中</td><td>复核打包（可填打托信息）</td></tr>
+<tr><td>待换标</td><td>扫码换标（扫旧条码确认）</td></tr>
+<tr><td>待发运</td><td>发运（填跟踪号、承运商）</td></tr>
+<tr><td>已发运</td><td>确认送达（可选 POD 码）</td></tr>
+<tr><td>异常</td><td>解除异常（恢复原状态）</td></tr>
+<tr><td>任意（未完结）</td><td>标记异常、取消（FBA 可预约派送）</td></tr>
+</table>
+<p class="footer-note">完整流程：</p>
+<pre>
+创建出库单（锁定库存）
+    ↓
+待拣货 → 分配拣货员 → 完成拣货（选库位、拣货来源 PDA/拣货单）
+    ↓
+复核中 → 复核打包（复核人、是否打托）
+    ↓
+[若需换标] 待换标 → 扫码换标确认
+    ↓
+待发运 → 发运（扣减 totalQty/lockedQty，写 billing_charge）
+    ↓
+已发运 → 确认送达（POD）
+    ↓
+已送达
+</pre>
+<p class="footer-note">筛选与导出：</p>
+<p>- 支持 CSV 导出（含客户、SKU 摘要、拣货员、复核、打托、跟踪号等 20+ 字段）。</p>
+<p>- <code>GET /api/outbound/status-counts</code> 返回各 Tab 数量。</p>
+<p><strong>计费联动：</strong> 发运时按件数自动生成拣货费、打包费、出库运费等 <code>BillingCharge</code>。</p>
+<hr />
+<h3>5.7 预约发货（创建出库单）</h3>
+<p><strong>目的：</strong> 独立全页创建出库单，面向 Takealot 入仓等场景，表单比列表页弹窗更完整。</p>
+<p><strong>入口：</strong> <code>/outbound/create</code></p>
+<p class="footer-note">出库信息：</p>
+<p>- 发货仓库、出库类型（Takealot / FBA / CPT 自提 / 本地配送）。</p>
+<p>- 配送方式、参考号、平台、PO 单号。</p>
+<p>- Takealot 目的仓（JHB1 / CPT1 / DBN1 → 写入物流产品字段）。</p>
+<p>- 客户、是否换标、备注。</p>
+<p class="footer-note">Takealot 文件上传（前端四类）：</p>
+<p>- 外箱标、SKU 标签、发货清单、预约单。</p>
+<p>- 🟡 <strong>当前后端仅保存第一个附件</strong>；多附件子表待扩展。</p>
+<p class="footer-note">货品明细：</p>
+<p>- 从该仓库可用库存中选择 SKU。</p>
+<p>- 填写出库数量、申报品名、申报价值、行备注。</p>
+<p>- 提交时校验数量 ≤ 可用库存。</p>
+<p><strong>提交结果：</strong> 创建 <code>OutboundOrder</code>（状态 <code>pending_pick</code>），锁定库存，跳转出库单管理。</p>
+<hr />
+<h2>六、货盘与 OMS</h2>
+<h3>6.1 货盘库存（定价中心）</h3>
+<p><strong>目的：</strong> 运营对「已发运/已入库 SKU」进行成本核算、定价，并同步至 OMS 供客户下单。</p>
+<p><strong>入口：</strong> <code>/pricing</code></p>
+<p class="footer-note">定价状态 Tab：</p>
+<table>
+<tr><th>状态</th><th>含义</th></tr>
+<tr><td>待发运</td><td>PO 财务审核后创建，等待国内发运</td></tr>
+<tr><td>待定价</td><td>海运费已回传，等待运营填价</td></tr>
+<tr><td>已定价待同步</td><td>售价已确认，待推 OMS</td></tr>
+<tr><td>已同步 OMS</td><td>已在 OMS 展示/可下单</td></tr>
+</table>
+<p class="footer-note">定价表单字段：</p>
+<p>- 成本、海运费、国内费、汇率。</p>
+<p>- 市场参考价、目标利润率、最终售价、定价逻辑说明。</p>
+<p>- 平台佣金、平台配送费、海外配送费。</p>
+<p>- 可见库存（OMS 展示用）。</p>
+<p class="footer-note">核心操作：</p>
+<p>- <strong>海运费回传：</strong> 发运海外仓或手工回调写入 <code>seaFreight</code>。</p>
+<p>- <strong>确认定价：</strong> 填写最终售价 → <code>priced</code>。</p>
+<p>- <strong>同步 OMS：</strong> 设置 <code>visibleOnOms</code> / <code>orderableOnOms</code> → <code>synced</code>。</p>
+<p>- <strong>调价（reprice）：</strong> 已同步 SKU 改价后再次同步。</p>
+<p><strong>入库联动：</strong> 海外仓上架完成后更新 <code>inboundQty</code>，满足规则时可自动变为 OMS 可下单。</p>
+<hr />
+<h3>6.2 OMS 对外接口</h3>
+<p><strong>目的：</strong> 供 OMS 系统拉取货盘、客户下单，与 ERP 库存/余额联动。</p>
+<table>
+<tr><th>API</th><th>说明</th></tr>
+<tr><td><code>GET /api/pricing/oms/catalog</code></td><td>OMS 拉取可售 SKU 目录</td></tr>
+<tr><td><code>GET /api/pricing/oms/catalog/:sku</code></td><td>单 SKU 详情</td></tr>
+<tr><td><code>POST /api/pricing/oms/purchase</code></td><td>OMS 下单回调：扣客户余额、写 <code>OmsCatalogOrder</code>、记 <code>catalog_purchase</code> 费用</td></tr>
+</table>
+<hr />
+<h3>6.3 客户 SKU 库存</h3>
+<p><strong>目的：</strong> 记录客户通过 OMS 购买的 SKU 持有量（货盘库存的客户视图）。</p>
+<p><strong>数据表：</strong> <code>customer_sku_inventory</code>（customerId + sku + quantity + unitPrice）</p>
+<p><strong>入口：</strong> 客户详情 / 货盘相关页面可查看。</p>
+<hr />
+<h2>七、财务</h2>
+<h3>7.1 客户列表</h3>
+<p><strong>目的：</strong> 管理 ERP 正式客户（由成交转化或手工创建）。</p>
+<p><strong>入口：</strong> <code>/customers</code></p>
+<p><strong>核心字段：</strong> 客户编码、名称、联系人、余额、状态。</p>
+<p><strong>核心操作：</strong> 新建/编辑客户、查看 SKU 持有、充值历史。</p>
+<hr />
+<h3>7.2 客户充值</h3>
+<p><strong>目的：</strong> 为客户账户充值，供 OMS 下单扣款。</p>
+<p><strong>入口：</strong> <code>/customer-recharge</code></p>
+<p><strong>操作：</strong> 选择客户、充值金额、支付方式、备注 → 立即到账（<code>Customer.balance ↑</code>），写入 <code>CustomerRecharge</code>。</p>
+<hr />
+<h3>7.3 客户结算</h3>
+<p><strong>目的：</strong> 汇总 WMS/ERP 产生的各类费用，按客户生成账单并确认入账。</p>
+<p><strong>入口：</strong> <code>/billing</code></p>
+<p class="footer-note">两个视图：</p>
+<p>#### 费用明细</p>
+<p>- 逐笔费用：出库拣货、打包、发运、换标、仓储、OMS 购货等。</p>
+<p>- 筛选：客户、来源（WMS/手工）、费用类型、日期。</p>
+<p>- 手工作业费录入：换标、换箱、检验等。</p>
+<p>#### 客户维度（账单）</p>
+<p>- 选定时间范围内「待入账」费用 → <strong>生成账单</strong>（按客户汇总为 <code>BillingOrder</code>）。</p>
+<p>- <strong>确认账单</strong> → 费用状态变为已入账。</p>
+<p class="footer-note">费用来源：</p>
+<p>- 自动：出库发运时写 <code>BillingCharge</code>（<code>source=wms</code>）。</p>
+<p>- OMS 下单：写 <code>catalog_purchase</code> 类型费用。</p>
+<p>- 手工：财务录入换标等工费。</p>
+<p><strong>chargeType 示例：</strong> <code>wms_outbound</code>、<code>picking</code>、<code>outbound_ship</code>、<code>relabel</code>、<code>catalog_purchase</code>、<code>storage</code>、<code>handling</code> 等。</p>
+<hr />
+<h3>7.4 供应商海运账单</h3>
+<p><strong>目的：</strong> 与供应商核对海运费用。</p>
+<p><strong>入口：</strong> <code>/supplier-freight</code></p>
+<hr />
+<h3>7.5 成本台账</h3>
+<p><strong>目的：</strong> 按 SKU/批次追溯采购成本、海运分摊、国内费用，服务利润分析。</p>
+<p><strong>入口：</strong> <code>/cost</code></p>
+<p><strong>数据来源：</strong> 采购财务审核、发运分摊、入库确认等环节写入。</p>
+<hr />
+<h2>八、运营分析</h2>
+<h3>8.1 利润 / 采购分析</h3>
+<p><strong>目的：</strong> 从采购成本、定价、销售维度分析 SKU 利润。</p>
+<p><strong>入口：</strong> <code>/profit-analysis</code></p>
+<hr />
+<h3>8.2 店铺监控</h3>
+<p><strong>目的：</strong> 监控 Takealot 店铺销售与排名等指标（需配置店铺数据源）。</p>
+<p><strong>入口：</strong> <code>/store-monitor</code></p>
+<hr />
+<h3>8.3 同步日志</h3>
+<p><strong>目的：</strong> 查看与 OMS、外部系统同步的成功/失败记录，支持重试。</p>
+<p><strong>入口：</strong> <code>/sync</code></p>
+<hr />
+<h2>九、端到端主业务链路</h2>
+<pre>
+┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+│  线索/成交   │ →  │  选品/审核   │ →  │  预采购/PO  │
+└─────────────┘    └─────────────┘    └──────┬──────┘
+                                              ↓
+┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+│  OMS 客户下单 │ ←  │  货盘定价    │ ←  │ 中转仓/发运  │
+└──────┬──────┘    └─────────────┘    └──────┬──────┘
+       ↓                                      ↓
+┌─────────────┐                      ┌─────────────┐
+│  客户结算    │ ← ─ ─ ─ ─ ─ ─ ─ ─ │  到仓/上架   │
+└─────────────┘                      └──────┬──────┘
+       ↑                                      ↓
+       └──────── 出库/计费 ← ─ ─ ─ ─  库存查询  ─┘
+</pre>
+<p class="footer-note">典型 Takealot 路径：</p>
+<p>1. 选品 → 采购 → 中转仓收货 → 发运 JHB 海外仓</p>
+<p>2. 到仓扫描（收货→清点→测量→上架）→ 货盘定价 → 同步 OMS</p>
+<p>3. 客户 OMS 下单 / 或直接预约发货（Takealot 入仓）</p>
+<p>4. 出库（拣货→复核→发运→送达）→ 自动计费 → 客户结算</p>
+<hr />
+<h2>十、权限体系（常用权限码）</h2>
+<table>
+<tr><th>权限码</th><th>说明</th></tr>
+<tr><td><code>inbound.view</code> / <code>inbound.receive</code> / <code>inbound.putaway</code></td><td>入库查看/收货/上架</td></tr>
+<tr><td><code>outbound.view</code> / <code>outbound.create</code> / <code>outbound.pick</code> / <code>outbound.pack</code> / <code>outbound.ship</code> / <code>outbound.relabel</code></td><td>出库各环节</td></tr>
+<tr><td><code>inventory.view</code> / <code>inventory.adjust</code></td><td>库存查询/调整</td></tr>
+<tr><td><code>pricing.view</code> / <code>pricing.confirm</code> / <code>pricing.sync</code></td><td>定价与 OMS 同步</td></tr>
+<tr><td><code>billing.view</code> / <code>billing.confirm</code></td><td>结算查看/确认</td></tr>
+<tr><td><code>purchase.view</code> / <code>purchase.approve</code> / <code>purchase.finance</code></td><td>采购审核</td></tr>
+<tr><td><code>leads.view</code> / <code>leads.manage</code></td><td>线索管理</td></tr>
+</table>
+<hr />
+<h2>十一、已知限制（已实现功能的边界）</h2>
+<table>
+<tr><th>项目</th><th>说明</th></tr>
+<tr><td>Takealot 多附件</td><td>预约发货页 4 类文件，后端仅存 1 个</td></tr>
+<tr><td>出库状态 Tab</td><td>无「拣货中/已打托」独立 Tab，打托为复核时布尔字段</td></tr>
+<tr><td>问题件 vs 异常</td><td>标记异常时两者同时写入，Tab 有重叠</td></tr>
+<tr><td>批量导入跟踪号</td><td>未实现</td></tr>
+<tr><td>客户唛头</td><td>无独立字段</td></tr>
+<tr><td>数据库迁移</td><td>使用 <code>prisma db push</code>，无 Migrate 历史文件</td></tr>
+</table>
+<hr />
+<p class="footer-note">如需将本文档导出 PDF，执行：<code>python docs/scripts/feature_intro_to_pdf.py</code></p>
+</body>
+</html>

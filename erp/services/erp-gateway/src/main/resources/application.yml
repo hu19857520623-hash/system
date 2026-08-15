@@ -1,0 +1,29 @@
+server:
+  port: 9000
+
+spring:
+  application:
+    name: erp-gateway
+  cloud:
+    gateway:
+      discovery:
+        locator:
+          enabled: false
+      routes:
+        # Safe default: proxy everything to the legacy NestJS backend.
+        # Enable Java routes with profile `migration` (see application-migration.yml).
+        - id: legacy-backend
+          uri: ${LEGACY_BACKEND_URL:http://localhost:3000}
+          predicates:
+            - Path=/api/**
+
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_URL:http://localhost:8761/eureka/}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,gateway

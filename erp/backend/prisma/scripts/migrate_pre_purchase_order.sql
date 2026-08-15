@@ -1,0 +1,31 @@
+CREATE TABLE IF NOT EXISTS pre_purchase_order (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  pre_po_no VARCHAR(30) NOT NULL UNIQUE,
+  dev_id BIGINT NOT NULL,
+  apply_no VARCHAR(30) NOT NULL,
+  sku VARCHAR(30) NOT NULL,
+  product_name VARCHAR(300) NOT NULL,
+  spec VARCHAR(100) NULL,
+  planned_qty INT NOT NULL,
+  unit_price DECIMAL(12,2) NULL,
+  supplier_id BIGINT NULL,
+  domestic_freight DECIMAL(12,2) NULL,
+  warehouse_code VARCHAR(30) NULL,
+  currency VARCHAR(10) NOT NULL DEFAULT 'RMB',
+  expected_arrival DATE NULL,
+  purchaser_id BIGINT NULL,
+  assigner_id BIGINT NULL,
+  assigned_at DATETIME NULL,
+  status VARCHAR(30) NOT NULL DEFAULT 'pending_assign',
+  cancel_reason TEXT NULL,
+  remark TEXT NULL,
+  converted_po_id BIGINT NULL,
+  confirmed_at DATETIME NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX idx_pre_po_status (status),
+  INDEX idx_pre_po_dev (dev_id),
+  INDEX idx_pre_po_purchaser (purchaser_id)
+);
+
+ALTER TABLE purchase_order ADD COLUMN pre_po_id BIGINT NULL AFTER finance_remark;
