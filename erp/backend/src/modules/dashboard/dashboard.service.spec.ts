@@ -14,6 +14,7 @@ function createPrismaMock() {
     inboundOrder: { count: jest.fn() },
     outboundOrder: { count: jest.fn() },
     productPricing: { count: jest.fn() },
+    mingruiShipment: { count: jest.fn() },
     logisticsReceipt: { count: jest.fn() },
     logisticsReceiptItem: { aggregate: jest.fn() },
   }
@@ -121,6 +122,7 @@ describe('DashboardService', () => {
     prisma.outboundOrder.count.mockResolvedValue(0)
     prisma.productPricing.count.mockResolvedValue(0)
     prisma.syncLog.count.mockResolvedValue(0)
+    prisma.mingruiShipment.count.mockResolvedValue(0)
 
     const result = await service.notifications()
     expect(result.badges.logistics_wh).toBe(1)

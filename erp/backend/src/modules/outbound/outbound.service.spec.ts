@@ -161,3 +161,103 @@ describe('OutboundService cropped label storage', () => {
     expect(files.read).toHaveBeenCalledWith('right-outbound.pdf')
   })
 })
+
+describe('OutboundService.createFromOms transaction', () => {
+  const now = new Date('2026-08-18T00:00:00Z')
+  const freshOrder = {
+    id: 9n,
+    outboundNo: 'OUT-OMS-1',
+    customerId: 1n,
+    warehouseCode: 'WMS-JHB-01',
+    status: 'pending_pick',
+    trackingNo: null,
+    carrier: null,
+    logisticsProduct: null,
+    platform: null,
+    remark: null,
+    fbaNo: null,
+    fbaWarehouse: null,
+    sellerStoreName: null,
+    takealotSellerId: null,
+    takealotBookingRef: null,
+    recipientJson: null,
+    shipmentDueDate: null,
+    appointmentDate: null,
+    shippedAt: null,
+    deliveredAt: null,
+    podCode: null,
+    createdAt: now,
+    updatedAt: now,
+    items: [{ sku: 'SKU-A', productName: 'Widget', qty: 2, productId: 2n }],
+    attachments: [],
+  }
+
+  it('locks warehouse stock, holdings, balance and charges in one transaction', async () => {
+    const billing = { recordOutboundCharges: jest.fn().mockResolvedValue([]) }
+    const prisma: any = {
+      customer: { findUnique: jest.fn() },
+      outboundOrder: { findUnique: jest.fn() },
+      product: { findUnique: jest.fn() },
+      customerSkuInventory: { findUnique: jest.fn() },
+      $transaction: jest.fn(),
+    }
+    const service = new OutboundService(prisma, billing as any, {
+      write: jest.fn(),
+      read: jest.fn(),
+    } as any)
+
+    const tx = {
+      customerSkuInventory: {
+        findUnique: jest.fn().mockResolvedValue({ id: 11n, quantity: 10 }),
+        update: jest.fn().mockResolvedValue({}),
+      },
+      customer: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      outboundOrder: { findUnique: jest.fn().mockResolvedValue(freshOrder) },
+    }
+    prisma.$transaction.mockImplementation(async (work: any) => work(tx))
+    prisma.customer.findUnique.mockResolvedValue({
+      id: 1n,
+      customerCode: 'CUST-1',
+      customerName: 'Acme',
+      status: 1,
+      balance: 1000,
+    })
+    prisma.outboundOrder.findUnique.mockResolvedValue(null)
+    prisma.product.findUnique.mockResolvedValue({ id: 2n, sku: 'SKU-A', productName: 'Widget' })
+    prisma.customerSkuInventory.findUnique.mockResolvedValue({ id: 11n, quantity: 10 })
+    const createSpy = jest.spyOn(service, 'create').mockResolvedValue({ id: 9 } as any)
+
+    const result = await service.createFromOms({
+      customerCode: 'CUST-1',
+      warehouseCode: 'WMS-JHB-01',
+      outboundNo: 'OUT-OMS-1',
+      stockSource: 'catalog',
+      items: [{ sku: 'SKU-A', qty: 2 }],
+      preDeduct: {
+        preDeductTotal: 12.5,
+        lines: [{ type: 'handling', label: '出库操作费', amount: 12.5 }],
+      },
+    } as any)
+
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1)
+    expect(createSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ outboundNo: 'OUT-OMS-1' }),
+      undefined,
+      tx,
+    )
+    expect(tx.customerSkuInventory.update).toHaveBeenCalledWith({
+      where: { id: 11n },
+      data: { quantity: { decrement: 2 } },
+    })
+    expect(tx.customer.updateMany).toHaveBeenCalledWith({
+      where: { id: 1n, status: 1, balance: { gte: 12.5 } },
+      data: { balance: { decrement: 12.5 } },
+    })
+    expect(billing.recordOutboundCharges).toHaveBeenCalledWith(
+      expect.objectContaining({ outboundNo: 'OUT-OMS-1', customerId: 1 }),
+      tx,
+    )
+    expect(result.idempotent).toBe(false)
+    expect((result as { erpId?: number }).erpId).toBe(9)
+  })
+})

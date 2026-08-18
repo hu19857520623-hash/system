@@ -19,6 +19,7 @@ const TABLES = [
   'billing_order_item',
   'billing_order',
   'customer',
+  'lead_deal_attachment',
   'lead_deal',
   'lead_follow_up',
   'lead',

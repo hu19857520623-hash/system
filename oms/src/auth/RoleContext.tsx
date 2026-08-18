@@ -48,7 +48,7 @@ interface RoleContextValue {
   mustChangePassword: boolean
   authReady: boolean
   authToken: string
-  login: (email: string, password: string, remember?: boolean) => Promise<SessionUser>
+  login: (username: string, password: string, remember?: boolean) => Promise<SessionUser>
   changePassword: (currentPassword: string, newPassword: string) => Promise<void>
   logout: () => Promise<void>
   can: (permission: Permission) => boolean
@@ -101,8 +101,9 @@ export function RoleProvider({ children }: { children: React.ReactNode }) {
         storeAuthSession(next, isPersistentAuthSession())
         setSession(next)
       })
-      .catch(() => {
-        if (!cancelled) clearSession()
+      .catch((error) => {
+        const status = (error as { status?: number } | null)?.status
+        if (!cancelled && status === 401) clearSession()
       })
       .finally(() => {
         if (!cancelled) setAuthReady(true)
@@ -110,8 +111,8 @@ export function RoleProvider({ children }: { children: React.ReactNode }) {
     return () => { cancelled = true }
   }, [])
 
-  const login = useCallback(async (email: string, password: string, remember = true) => {
-    const response = await apiPost<unknown>('/auth/login', { email, password, remember })
+  const login = useCallback(async (username: string, password: string, remember = true) => {
+    const response = await apiPost<unknown>('/auth/login', { username, password, remember })
     const next = normalizeAuthSession(response)
     storeAuthSession(next, remember)
     setSession(next)
@@ -125,6 +126,7 @@ export function RoleProvider({ children }: { children: React.ReactNode }) {
     const response = await apiPost<unknown>('/auth/change-password', {
       currentPassword,
       newPassword,
+      remember,
     })
 
     let next: AuthSession
@@ -167,7 +169,7 @@ export function RoleProvider({ children }: { children: React.ReactNode }) {
     isLoggedIn: Boolean(session),
     user: session?.user ?? null,
     userId: session?.user.id ?? '',
-    userEmail: session?.user.email ?? '',
+    userEmail: session?.user.username ?? session?.user.email ?? '',
     userName: session?.user.name ?? '',
     customerId: session?.user.customerId ?? null,
     customerCode: session?.user.customerCode ?? '',

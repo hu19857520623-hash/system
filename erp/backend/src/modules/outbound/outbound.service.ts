@@ -6,6 +6,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common'
 import { createHash, randomUUID } from 'crypto'
+import { Prisma } from '@prisma/client'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { FileStoreService } from '../../common/file-store.service'
 import { BillingService } from '../billing/billing.service'
@@ -158,6 +159,14 @@ export class OutboundService {
     private billing: BillingService,
     private files: FileStoreService,
   ) {}
+
+  private runInTx<T>(
+    tx: Prisma.TransactionClient | undefined,
+    work: (client: Prisma.TransactionClient) => Promise<T>,
+  ): Promise<T> {
+    if (tx) return work(tx)
+    return this.prisma.$transaction(work, { timeout: 20000 })
+  }
 
   private writeAttachment(fileName: string, contentBase64: string) {
     const buf = decodeAttachmentBase64(contentBase64)
@@ -413,7 +422,13 @@ export class OutboundService {
     const [rows, total] = await Promise.all([
       this.prisma.outboundOrder.findMany({
         where,
-        include: { items: true, attachments: { orderBy: { id: 'asc' } } },
+        include: {
+          items: true,
+          attachments: {
+            where: { fileType: { notIn: ['skuLabel', 'outerLabel'] } },
+            orderBy: { id: 'asc' },
+          },
+        },
         skip: (page - 1) * pageSize,
         take: pageSize,
         orderBy: { id: 'desc' },
@@ -484,7 +499,7 @@ export class OutboundService {
     return item
   }
 
-  async create(data: any, operatorId?: number) {
+  async create(data: any, operatorId?: number, tx?: Prisma.TransactionClient) {
     const warehouseCode = data.warehouseCode?.trim()
     if (!warehouseCode) throw new BadRequestException('请指定出库仓库')
     const lines: any[] = data.items || []
@@ -517,12 +532,12 @@ export class OutboundService {
       })
     }
 
-    return this.prisma.$transaction(async (tx) => {
+    return this.runInTx(tx, async (client) => {
       for (const line of lines) {
         const qty = Number(line.qty)
         if (qty <= 0) throw new BadRequestException(`${line.sku} 数量须大于 0`)
         const productId = BigInt(line.productId)
-        const inv = await tx.inventory.findUnique({
+        const inv = await client.inventory.findUnique({
           where: { productId_warehouseCode: { productId, warehouseCode } },
         })
         if (!inv || inv.availableQty < qty) {
@@ -530,7 +545,7 @@ export class OutboundService {
         }
       }
 
-      const order = await tx.outboundOrder.create({
+      const order = await client.outboundOrder.create({
         data: {
           outboundNo,
           customerId: data.customerId ? BigInt(data.customerId) : null,
@@ -568,10 +583,10 @@ export class OutboundService {
       })
 
       const firstAttachment = attachmentInputs.length
-        ? await this.persistAttachments(tx, order.id, attachmentInputs)
+        ? await this.persistAttachments(client, order.id, attachmentInputs)
         : null
       if (firstAttachment) {
-        await tx.outboundOrder.update({
+        await client.outboundOrder.update({
           where: { id: order.id },
           data: {
             attachmentName: firstAttachment.attachmentName,
@@ -580,19 +595,19 @@ export class OutboundService {
         })
       }
 
-      const fullOrder = await tx.outboundOrder.findUnique({
+      const fullOrder = await client.outboundOrder.findUnique({
         where: { id: order.id },
         include: { items: true, attachments: { orderBy: { id: 'asc' } } },
       })
       if (!fullOrder) throw new BadRequestException('创建出库单失败')
 
       for (const item of fullOrder.items) {
-        const inv = await tx.inventory.findUnique({
+        const inv = await client.inventory.findUnique({
           where: {
             productId_warehouseCode: { productId: item.productId, warehouseCode },
           },
         })!
-        await tx.inventory.update({
+        await client.inventory.update({
           where: { id: inv!.id },
           data: {
             availableQty: inv!.availableQty - item.qty,
@@ -1046,6 +1061,12 @@ th{background:#f5f5f5}
       include: { items: true },
     })
     if (!order) throw new NotFoundException('出库单不存在')
+    if (order.status === 'pending_pick' || !order.pickerId) {
+      throw new BadRequestException('请先分配拣货员后再完成拣货')
+    }
+    if (order.status !== 'picking') {
+      throw new BadRequestException('当前状态不可拣货')
+    }
 
     const items = await Promise.all(
       order.items.map(async (item) => {
@@ -1084,11 +1105,15 @@ th{background:#f5f5f5}
     })
     if (!order) throw new NotFoundException('出库单不存在')
     if (order.status === 'exception') throw new BadRequestException('异常单已暂停流程，请先解除异常')
-    if (!['pending_pick', 'picking'].includes(order.status)) {
+    if (order.status === 'pending_pick' || !order.pickerId) {
+      throw new BadRequestException('请先分配拣货员后再完成拣货')
+    }
+    if (order.status !== 'picking') {
       throw new BadRequestException('当前状态不可拣货')
     }
 
     const pickSource: PickSource = payload.pickSource === 'pda' ? 'pda' : 'pick_list'
+    if (!payload.items?.length) throw new BadRequestException('请提交拣货明细')
     const lineMap = new Map(order.items.map((i) => [Number(i.id), i]))
     const resolvedLines: { id: number; locationCode: string; pickedQty: number }[] = []
     for (const line of payload.items || []) {
@@ -1136,12 +1161,16 @@ th{background:#f5f5f5}
           status: 'picked',
           pickedAt: new Date(),
           pickSource,
-          pickerId: order.pickerId || (operatorId ? BigInt(operatorId) : undefined),
+          pickerId: order.pickerId,
           pickingStartedAt: order.pickingStartedAt || new Date(),
         },
       })
     })
-    return this.detail(id)
+    return {
+      id,
+      outboundNo: order.outboundNo,
+      status: 'picked',
+    }
   }
 
   async startReview(id: number) {
@@ -1383,8 +1412,9 @@ th{background:#f5f5f5}
     if (order.customerId) {
       const actualFees = parseOmsOutboundActualFees(order.remark)
       const totalQty = order.items.reduce((s, i) => s + (i.pickedQty || i.qty), 0)
+      const existingCharges = await this.billing.listChargesByBizRef(order.outboundNo)
 
-      if (actualFees?.lines?.length) {
+      if (actualFees?.lines?.length && !existingCharges.length) {
         for (const line of actualFees.lines) {
           const created = await this.billing.createCharge({
             customerId: Number(order.customerId),
@@ -1400,6 +1430,8 @@ th{background:#f5f5f5}
           })
           shipCharges.push(created)
         }
+      } else if (existingCharges.length) {
+        shipCharges.push(...existingCharges)
       } else {
         const pickingFee = Math.round(totalQty * PICKING_UNIT_FEE * 100) / 100
         const packFee = Math.round(totalQty * PACK_UNIT_FEE * 100) / 100
@@ -1447,7 +1479,7 @@ th{background:#f5f5f5}
         )
       }
 
-      if (order.needsRelabel) {
+      if (order.needsRelabel && !shipCharges.some((c) => c.chargeType === 'relabel')) {
         const printCount = order.relabelPrintCount > 0
           ? order.relabelPrintCount
           : totalQty
@@ -1796,75 +1828,85 @@ th{background:#f5f5f5}
       }
     }
 
-    const created = await this.create(
-      {
-        outboundNo,
-        warehouseCode,
-        customerId: Number(customer.id),
-        destType,
-        platform: data.platform,
-        fbaNo: data.fbaNo?.trim() || data.poNumber?.trim() || undefined,
-        fbaWarehouse: data.fbaWarehouse,
-        sellerStoreName: data.sellerStoreName?.trim() || undefined,
-        takealotSellerId: data.takealotSellerId?.trim() || undefined,
-        takealotBookingRef: data.takealotBookingRef?.trim() || undefined,
-        shipmentDueDate: data.shipmentDueDate,
-        appointmentDate: data.appointmentDate,
-        logisticsProduct: shippingMethod,
-        remark,
-        recipient: data.recipient,
-        needsRelabel: true,
-        items: resolved.map((l) => ({
-          productId: Number(l.productId),
-          sku: l.sku,
-          productName: l.productName,
-          qty: l.qty,
-        })),
-        attachments: normalizedAttachments,
-      },
-      undefined,
-    )
+    const { created, fresh } = await this.prisma.$transaction(async (tx) => {
+      const created = await this.create(
+        {
+          outboundNo,
+          warehouseCode,
+          customerId: Number(customer.id),
+          destType,
+          platform: data.platform,
+          fbaNo: data.fbaNo?.trim() || data.poNumber?.trim() || undefined,
+          fbaWarehouse: data.fbaWarehouse,
+          sellerStoreName: data.sellerStoreName?.trim() || undefined,
+          takealotSellerId: data.takealotSellerId?.trim() || undefined,
+          takealotBookingRef: data.takealotBookingRef?.trim() || undefined,
+          shipmentDueDate: data.shipmentDueDate,
+          appointmentDate: data.appointmentDate,
+          logisticsProduct: shippingMethod,
+          remark,
+          recipient: data.recipient,
+          needsRelabel: true,
+          items: resolved.map((l) => ({
+            productId: Number(l.productId),
+            sku: l.sku,
+            productName: l.productName,
+            qty: l.qty,
+          })),
+          attachments: normalizedAttachments,
+        },
+        undefined,
+        tx,
+      )
 
-    if (stockSource === 'catalog' || preDeductTotal > 0) {
-      await this.prisma.$transaction(async (tx) => {
-        if (stockSource === 'catalog') {
-          for (const line of resolved) {
-            const holding = await tx.customerSkuInventory.findUnique({
-              where: { customerId_sku: { customerId: customer.id, sku: line.sku } },
-            })
-            if (!holding || holding.quantity < line.qty) {
-              throw new BadRequestException(
-                `客户持有库存不足：${line.sku} 持有 ${holding?.quantity ?? 0}，需要 ${line.qty}`,
-              )
-            }
-            await tx.customerSkuInventory.update({
-              where: { id: holding.id },
-              data: { quantity: { decrement: line.qty } },
-            })
-          }
-        }
-        if (preDeductTotal > 0) {
-          const debited = await tx.customer.updateMany({
-            where: {
-              id: customer.id,
-              status: 1,
-              balance: { gte: preDeductTotal },
-            },
-            data: { balance: { decrement: preDeductTotal } },
+      if (stockSource === 'catalog') {
+        for (const line of resolved) {
+          const holding = await tx.customerSkuInventory.findUnique({
+            where: { customerId_sku: { customerId: customer.id, sku: line.sku } },
           })
-          if (debited.count !== 1) {
+          if (!holding || holding.quantity < line.qty) {
             throw new BadRequestException(
-              `客户余额不足：需预扣 ¥${preDeductTotal.toFixed(2)}，当前余额 ¥${Number(customer.balance).toFixed(2)}`,
+              `客户持有库存不足：${line.sku} 持有 ${holding?.quantity ?? 0}，需要 ${line.qty}`,
             )
           }
+          await tx.customerSkuInventory.update({
+            where: { id: holding.id },
+            data: { quantity: { decrement: line.qty } },
+          })
         }
-      })
-    }
+      }
+      if (preDeductTotal > 0) {
+        const debited = await tx.customer.updateMany({
+          where: {
+            id: customer.id,
+            status: 1,
+            balance: { gte: preDeductTotal },
+          },
+          data: { balance: { decrement: preDeductTotal } },
+        })
+        if (debited.count !== 1) {
+          throw new BadRequestException(
+            `客户余额不足：需预扣 ¥${preDeductTotal.toFixed(2)}，当前余额 ¥${Number(customer.balance).toFixed(2)}`,
+          )
+        }
+      }
+      if (preDeduct?.lines?.length) {
+        await this.billing.recordOutboundCharges({
+          customerId: Number(customer.id),
+          outboundNo,
+          warehouseCode,
+          source: 'erp',
+          lines: preDeduct.lines,
+        }, tx)
+      }
 
-    const fresh = await this.prisma.outboundOrder.findUnique({
-      where: { outboundNo },
-      include: { items: true, attachments: { orderBy: { id: 'asc' } } },
-    })
+      const fresh = await tx.outboundOrder.findUnique({
+        where: { outboundNo },
+        include: { items: true, attachments: { orderBy: { id: 'asc' } } },
+      })
+      return { created, fresh }
+    }, { timeout: 20000 })
+
     return {
       ...this.mapOutboundForOms({
         ...fresh!,
@@ -1981,8 +2023,10 @@ th{background:#f5f5f5}
   }
 
   /** OMS：下载 POD 签收单 */
-  async downloadPodForOms(outboundNo: string, customerCode?: string) {
+  async downloadPodForOms(outboundNo: string, customerCode: string) {
     const no = String(outboundNo || '').trim()
+    const code = String(customerCode || '').trim()
+    if (!code) throw new BadRequestException('缺少 customerCode')
     const order = await this.prisma.outboundOrder.findUnique({
       where: { outboundNo: no },
       include: {
@@ -1990,13 +2034,11 @@ th{background:#f5f5f5}
       },
     })
     if (!order) throw new NotFoundException(`出库单 ${no} 不存在`)
-    if (customerCode?.trim()) {
-      const customer = await this.prisma.customer.findUnique({
-        where: { customerCode: customerCode.trim() },
-      })
-      if (!customer || order.customerId !== customer.id) {
-        throw new BadRequestException('客户编码与出库单不匹配')
-      }
+    const customer = await this.prisma.customer.findUnique({
+      where: { customerCode: code },
+    })
+    if (!customer || order.customerId !== customer.id) {
+      throw new BadRequestException('客户编码与出库单不匹配')
     }
     const att = order.attachments[0]
     if (!att) throw new NotFoundException('该出库单暂无 POD 签收单')

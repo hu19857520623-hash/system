@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { leadApi } from '@/api/client.js'
 import { fmtTime, mapLead } from '@/api/mappers.ts'
 import { useListLoader, withAction } from '@/composables/useListLoader.ts'
-import { useTablePagination } from '@/composables/useTablePagination.ts'
+import { useServerPagination } from '@/composables/useTablePagination.ts'
 import { useRowActions } from '@/composables/useRowActions'
 import ListPagination from '@/components/ListPagination.vue'
 import { ROUTE_MAP } from '@/constants/index.js'
@@ -27,16 +27,36 @@ const followForm = ref({
 })
 
 const LEAD_STATUS_MAP: Record<string, { label: string; type: string }> = {
+  new: { label: '新线索', type: 'info' },
   following: { label: '跟进中', type: 'info' },
   recall: { label: '需再次跟进', type: 'warning' },
   hot: { label: '意向高', type: 'success' },
+  deal: { label: '成交', type: 'success' },
   won: { label: '成交', type: 'success' },
   invalid: { label: '无效客户', type: 'info' },
+  lost: { label: '已流失', type: 'info' },
   nurture: { label: '暂无意向', type: 'info' },
 }
 
+const { page, pageSize, total, resetPage } = useServerPagination()
+
 const { loading, items: leads, load } = useListLoader(async () => {
-  const res = await leadApi.list({ status: 'following', pageSize: 100 })
+  const params: Record<string, string | number> = {
+    page: page.value,
+    pageSize: pageSize.value,
+    statuses: 'new,following',
+  }
+  const keyword = searchQ.value.trim()
+  if (keyword) params.keyword = keyword
+  const userId = app.authenticatedUser?.id
+  const canViewAll = app.hasPerm('leads_pool.view_all')
+  if (tab.value === 'mine' && userId) params.assigneeId = userId
+  if (tab.value === 'follow') {
+    params.followDue = '1'
+    if (!canViewAll && userId) params.assigneeId = userId
+  }
+  const res = await leadApi.list(params)
+  total.value = res.total ?? 0
   return {
     items: (res.items || []).map((r: any) => {
       const m = mapLead(r)
@@ -48,7 +68,7 @@ const { loading, items: leads, load } = useListLoader(async () => {
         owner: m.owner,
         ownerId: m.assigneeId,
         contact: [r.contactName, r.contactPhone].filter(Boolean).join(' / ') || '—',
-        status: 'following',
+        status: r.status || 'following',
         situation: latestFollow?.content || r.remark || '—',
         remark: r.remark || '—',
         inquiryAt: m.time?.split(' ')[0] || '—',
@@ -61,20 +81,10 @@ const { loading, items: leads, load } = useListLoader(async () => {
   }
 })
 
-const filtered = computed(() => {
-  return leads.value.filter((l) => {
-    if (tab.value === 'mine' && l.ownerId !== app.authenticatedUser?.id) return false
-    if (tab.value === 'follow' && !['following', 'recall', 'hot'].includes(l.status)) return false
-    if (searchQ.value) {
-      const q = searchQ.value.toLowerCase()
-      if (!l.name.toLowerCase().includes(q) && !l.id.toLowerCase().includes(q)) return false
-    }
-    return true
-  })
-})
-
-const { page, pageSize, total, pagedItems, resetPage } = useTablePagination(filtered)
-watch([tab, searchQ], resetPage)
+function applyFilters() {
+  resetPage()
+  load()
+}
 
 function writeFollow(row: any) {
   followTarget.value = row
@@ -93,11 +103,15 @@ async function submitFollow() {
     ElMessage.warning('请填写本次跟进内容')
     return
   }
+  if (followTarget.value?._leadId == null) {
+    ElMessage.error('线索 ID 缺失，请刷新后重试')
+    return
+  }
   followSaving.value = true
   try {
     const ok = await withAction(async () => {
       await leadApi.followUp(followTarget.value._leadId, {
-        followType: followForm.value.followType,
+        followType: followForm.value.followType || 'phone',
         content,
         nextPlan: followForm.value.nextPlan.trim() || undefined,
         nextFollowAt: followForm.value.nextFollowAt || undefined,
@@ -126,6 +140,8 @@ async function markDeal(row: any) {
   } catch { /* cancelled */ }
 }
 
+watch(tab, applyFilters)
+watch([page, pageSize], load)
 onMounted(load)
 </script>
 
@@ -134,14 +150,22 @@ onMounted(load)
     <template #header>
       <div class="page-header">
         <span class="page-title">我的跟进</span>
-        <el-input v-model="searchQ" placeholder="搜索线索" clearable style="width:180px" size="small" />
+        <el-input
+          v-model="searchQ"
+          placeholder="搜索线索"
+          clearable
+          style="width:180px"
+          size="small"
+          @keyup.enter="applyFilters"
+          @clear="applyFilters"
+        />
       </div>
     </template>
     <el-tabs v-model="tab" type="card">
       <el-tab-pane label="我的线索" name="mine" />
       <el-tab-pane label="待跟进" name="follow" />
     </el-tabs>
-    <el-table :data="pagedItems" stripe border size="small">
+    <el-table :data="leads" stripe border size="small">
       <el-table-column prop="id" label="线索编号" width="140">
         <template #default="{ row }"><span style="font-family:var(--font-mono);font-size:12px">{{ row.id }}</span></template>
       </el-table-column>
@@ -165,6 +189,10 @@ onMounted(load)
         </template>
       </el-table-column>
     </el-table>
+    <el-empty
+      v-if="!loading && !leads.length"
+      :description="tab === 'follow' ? '暂无到期待跟进线索' : '当前账号没有归属线索，可在线索池领取后跟进'"
+    />
     <ListPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
   </el-card>
 
@@ -173,6 +201,7 @@ onMounted(load)
     :title="`写跟进 · ${followTarget?.name || ''}`"
     width="560px"
     destroy-on-close
+    append-to-body
   >
     <el-form label-width="92px">
       <el-form-item label="跟进方式" required>

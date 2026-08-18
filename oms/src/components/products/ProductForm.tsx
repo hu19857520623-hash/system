@@ -192,6 +192,8 @@ export default function ProductForm({ product, mode = 'create' }: ProductFormPro
             unit: unit || undefined,
             costRmb: declaredValue || undefined,
             spec: nameEn || undefined,
+            hasBattery: hasBattery === 'yes',
+            image: images[0] && images[0].length <= 500 ? images[0] : undefined,
           })
         } catch (error) {
           await updateLocalProducts([productId], { productStatus: 'draft' })

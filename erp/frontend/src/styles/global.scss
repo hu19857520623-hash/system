@@ -1,4 +1,5 @@
 @use 'variables' as *;
+@use 'detail';
 
 :root {
   color-scheme: light;
@@ -798,12 +799,18 @@ html.dark .el-button--primary.is-link { color: #60a5fa !important; }
 .el-drawer__footer { border-color: var(--border) !important; }
 .el-message-box {
   --el-messagebox-content-color: var(--text-secondary);
+  position: relative;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 48px);
+  overflow: auto;
   background: var(--panel-solid) !important;
   border: 1px solid var(--border-strong) !important;
   border-radius: 16px !important;
   box-shadow: var(--shadow-panel) !important;
 }
 .el-message-box__title { color: var(--text) !important; }
+.el-message-box__btns { padding: 8px 16px 16px !important; }
+.row-detail-item:last-child:nth-child(odd) { grid-column: 1 / -1; }
 .row-detail-box { width: min(680px, calc(100vw - 32px)) !important; }
 .row-detail-box .el-message-box__content { padding: 18px 20px !important; }
 .row-detail-grid {
@@ -836,7 +843,38 @@ html.dark .el-button--primary.is-link { color: #60a5fa !important; }
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
-.el-overlay { background: var(--overlay) !important; backdrop-filter: blur(5px); }
+.el-overlay {
+  position: fixed !important;
+  inset: 0 !important;
+  overflow: auto !important;
+  z-index: 3000;
+  background: var(--overlay) !important;
+  backdrop-filter: blur(5px);
+}
+.el-overlay-dialog {
+  position: fixed !important;
+  inset: 0 !important;
+  overflow: auto;
+}
+.el-overlay.is-message-box {
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 12px;
+}
+.el-table .el-table-fixed-column--right .cell,
+.el-table .el-table-fixed-column--left .cell {
+  white-space: normal;
+}
+.el-table .cell .el-button.is-link + .el-button.is-link {
+  margin-left: 0;
+}
+.el-table .cell:has(> .el-button.is-link) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  align-items: center;
+}
 .el-tabs { --el-text-color-primary: var(--text); --el-text-color-regular: var(--text-muted); }
 .el-tabs__nav-wrap::after { background: var(--border) !important; }
 .el-tabs__item { color: var(--text-muted) !important; }

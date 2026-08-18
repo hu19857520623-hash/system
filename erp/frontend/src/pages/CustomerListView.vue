@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
 import { customerApi, warehouseApi } from '@/api/client.js'
@@ -16,6 +16,7 @@ import {
 
 const app = useAppStore()
 const router = useRouter()
+const route = useRoute()
 
 type StatusFilter = 'all' | 'active' | 'disabled'
 
@@ -54,9 +55,9 @@ const editingId = ref<number | null>(null)
 const warehouseOptions = ref<{ code: string; name: string }[]>([])
 const passwordVisible = ref(false)
 const passwordCustomer = ref<ReturnType<typeof mapCustomer> | null>(null)
-const passwordForm = ref({ loginEmail: '', temporaryPassword: '', confirmPassword: '' })
+const passwordForm = ref({ username: '', temporaryPassword: '', confirmPassword: '' })
 const createSuccessVisible = ref(false)
-const createSuccess = ref<{ customerCode: string; loginEmail: string } | null>(null)
+const createSuccess = ref<{ customerCode: string; username: string } | null>(null)
 
 const emptyForm = () => ({
   customerCode: '',
@@ -71,7 +72,7 @@ const emptyForm = () => ({
   permissionMode: 'template' as 'template' | 'explicit',
   permissionTemplate: 'ecommerce' as OmsCustomerType,
   permissions: [...OMS_PERMISSION_TEMPLATES.ecommerce] as OmsPortalPermission[],
-  loginEmail: '',
+  username: '',
   temporaryPassword: '',
   confirmPassword: '',
 })
@@ -84,6 +85,22 @@ const passwordFormRef = ref<FormInstance>()
 type ValidationCallback = (error?: Error) => void
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+const USERNAME_PATTERN = /^[A-Za-z0-9._-]+$/
+
+function usernameValidator(required: boolean) {
+  return (_rule: unknown, value: unknown, callback: ValidationCallback) => {
+    const username = String(value ?? '').trim().toLowerCase()
+    if (!username) {
+      callback(required ? new Error('请填写 OMS 登录账号') : undefined)
+    } else if (username.length < 6) {
+      callback(new Error('登录账号至少 6 个字符'))
+    } else if (username.length > 50 || !USERNAME_PATTERN.test(username)) {
+      callback(new Error('登录账号须为 6-50 位字母、数字、点、下划线或短横线'))
+    } else {
+      callback()
+    }
+  }
+}
 
 function requiredTextValidator(label: string, maxLength: number) {
   return (_rule: unknown, value: unknown, callback: ValidationCallback) => {
@@ -110,11 +127,8 @@ function emailValidator(label: string, required: boolean, maxLength: number) {
 function temporaryPasswordError(value: unknown) {
   const password = String(value ?? '')
   if (!password) return '请填写临时密码'
-  if (password.length < 10) return '临时密码至少 10 位'
+  if (password.length < 6) return '临时密码至少 6 位'
   if (password.length > 128) return '临时密码不能超过 128 位'
-  if (!/[a-z]/.test(password) || !/[A-Z]/.test(password) || !/\d/.test(password)) {
-    return '临时密码必须包含大写字母、小写字母和数字'
-  }
   return ''
 }
 
@@ -162,7 +176,7 @@ const createRules: FormRules = {
   warehouse: [{ validator: requiredTextValidator('默认仓库', 100), trigger: 'change' }],
   permissionTemplate: [{ required: true, message: '请选择权限模板', trigger: 'change' }],
   permissions: [{ validator: permissionsValidator, trigger: 'change' }],
-  loginEmail: [{ validator: emailValidator('OMS 登录邮箱', true, 200), trigger: 'blur' }],
+  username: [{ validator: usernameValidator(true), trigger: 'blur' }],
   temporaryPassword: [{ validator: temporaryPasswordValidator, trigger: 'blur' }],
   confirmPassword: [{ validator: createPasswordConfirmationValidator, trigger: 'blur' }],
 }
@@ -176,7 +190,7 @@ const editRules: FormRules = {
 }
 
 const passwordRules: FormRules = {
-  loginEmail: [{ validator: emailValidator('OMS 登录邮箱', true, 200), trigger: 'blur' }],
+  username: [{ validator: usernameValidator(true), trigger: 'blur' }],
   temporaryPassword: [{ validator: temporaryPasswordValidator, trigger: 'blur' }],
   confirmPassword: [{ validator: resetPasswordConfirmationValidator, trigger: 'blur' }],
 }
@@ -211,7 +225,7 @@ function handleCreateClosed() {
 }
 
 function handlePasswordClosed() {
-  passwordForm.value = { loginEmail: '', temporaryPassword: '', confirmPassword: '' }
+  passwordForm.value = { username: '', temporaryPassword: '', confirmPassword: '' }
   passwordCustomer.value = null
   passwordFormRef.value?.clearValidate()
 }
@@ -294,7 +308,7 @@ function openEdit(row: any) {
     permissionMode: 'template',
     permissionTemplate: (row.omsType || 'ecommerce') as OmsCustomerType,
     permissions: [...(row.omsPermissions || [])] as OmsPortalPermission[],
-    loginEmail: row.portalLoginEmail || '',
+    username: row.portalUsername || row.portalLoginEmail || '',
     temporaryPassword: '',
     confirmPassword: '',
   }
@@ -317,14 +331,18 @@ function handlePermissionModeChange(mode: string | number | boolean | undefined)
   }
 }
 
-function suggestPortalLoginEmail() {
-  if (!form.value.loginEmail) form.value.loginEmail = form.value.contactEmail
+function suggestPortalUsername() {
+  if (form.value.username) return
+  const code = form.value.customerCode.trim().toLowerCase()
+  if (USERNAME_PATTERN.test(code) && code.length >= 6 && code.length <= 50) {
+    form.value.username = code
+  }
 }
 
 function openPortalPassword(row: any) {
   passwordCustomer.value = row
   passwordForm.value = {
-    loginEmail: row.portalLoginEmail || row.email || '',
+    username: row.portalUsername || row.portalLoginEmail || '',
     temporaryPassword: '',
     confirmPassword: '',
   }
@@ -346,7 +364,7 @@ async function submitPortalPassword() {
     return
   }
   const payload = {
-    loginEmail: f.loginEmail.trim().toLowerCase(),
+    username: f.username.trim().toLowerCase(),
     temporaryPassword: f.temporaryPassword,
   }
   clearPasswordSecrets()
@@ -354,7 +372,7 @@ async function submitPortalPassword() {
   try {
     const result = await customerApi.resetPortalTemporaryPassword(row.id, payload)
     passwordVisible.value = false
-    ElMessage.success(`${actionLabel}成功：${result.customerCode} · ${result.portalLoginEmail}`)
+    ElMessage.success(`${actionLabel}成功：${result.customerCode} · ${result.portalUsername || result.portalLoginEmail}`)
     await reloadAll()
   } catch (e: any) {
     ElMessage.error(`${e?.message || `${actionLabel}失败`}；临时密码未保留，请重新输入`)
@@ -386,7 +404,7 @@ function goRecharge(row: any) {
 async function submitCreate() {
   const f = form.value
   if (!(await validateForm(createFormRef.value))) return
-  const loginEmail = f.loginEmail.trim().toLowerCase()
+  const username = f.username.trim().toLowerCase()
   const payload = {
     customerCode: f.customerCode.trim(),
     customerName: f.customerName.trim(),
@@ -400,7 +418,7 @@ async function submitCreate() {
     ...(f.permissionMode === 'template'
       ? { permissionTemplate: f.permissionTemplate }
       : { permissions: f.permissions }),
-    loginEmail,
+    username,
     temporaryPassword: f.temporaryPassword,
   }
   clearCreateSecrets()
@@ -409,7 +427,7 @@ async function submitCreate() {
     const result = await customerApi.create(payload)
     createSuccess.value = {
       customerCode: result.customerCode || payload.customerCode,
-      loginEmail: result.oms?.portalLoginEmail || loginEmail,
+      username: result.oms?.portalUsername || result.oms?.portalLoginEmail || username,
     }
     form.value = emptyForm()
     createVisible.value = false
@@ -464,6 +482,8 @@ watch([statusFilter, page, pageSize], () => load())
 watch(statusFilter, () => { page.value = 1 })
 
 onMounted(() => {
+  const q = String(route.query.q || '').trim()
+  if (q) searchQ.value = q
   void reloadAll()
   void loadWarehouses()
 })
@@ -640,7 +660,7 @@ onMounted(() => {
                 v-model="form.contactEmail"
                 type="email"
                 placeholder="contact@example.com"
-                @blur="suggestPortalLoginEmail"
+                @blur="suggestPortalUsername"
               />
             </el-form-item>
             <el-form-item label="联系人" prop="contactName">
@@ -682,8 +702,8 @@ onMounted(() => {
                 />
               </el-select>
             </el-form-item>
-            <el-form-item label="登录邮箱" prop="loginEmail" required>
-              <el-input v-model="form.loginEmail" type="email" autocomplete="off" placeholder="portal@example.com" />
+            <el-form-item label="登录账号" prop="username" required>
+              <el-input v-model="form.username" autocomplete="off" placeholder="至少 6 位，字母数字或 . _ -" />
             </el-form-item>
             <el-form-item label="权限方式" required>
               <el-radio-group v-model="form.permissionMode" @change="handlePermissionModeChange">
@@ -728,7 +748,7 @@ onMounted(() => {
                 type="password"
                 show-password
                 autocomplete="new-password"
-                placeholder="至少 10 位，含大小写字母和数字"
+                placeholder="至少 6 位"
               />
             </el-form-item>
             <el-form-item label="确认密码" prop="confirmPassword" required>
@@ -751,7 +771,7 @@ onMounted(() => {
     </el-dialog>
 
     <el-dialog v-model="createSuccessVisible" width="520px" destroy-on-close>
-      <el-result icon="success" title="OMS 开户成功" sub-title="客户现在可以使用登录邮箱和临时密码进入 OMS">
+      <el-result icon="success" title="OMS 开户成功" sub-title="客户现在可以使用登录账号和临时密码进入 OMS">
         <template #extra>
           <div v-if="createSuccess" class="success-account">
             <div class="success-account-row">
@@ -759,8 +779,8 @@ onMounted(() => {
               <strong class="mono">{{ createSuccess.customerCode }}</strong>
             </div>
             <div class="success-account-row">
-              <span>OMS 登录邮箱</span>
-              <strong>{{ createSuccess.loginEmail }}</strong>
+              <span>OMS 登录账号</span>
+              <strong>{{ createSuccess.username }}</strong>
             </div>
             <el-alert
               title="临时密码不会再次显示；客户首次登录后必须修改密码。"
@@ -778,7 +798,7 @@ onMounted(() => {
       v-model="detailVisible"
       width="760px"
       destroy-on-close
-      class="customer-detail-dialog"
+      class="customer-detail-dialog erp-detail"
       :show-close="true"
     >
       <template #header>
@@ -963,8 +983,8 @@ onMounted(() => {
         label-width="100px"
         size="small"
       >
-        <el-form-item label="登录邮箱" prop="loginEmail" required>
-          <el-input v-model="passwordForm.loginEmail" type="email" autocomplete="off" />
+        <el-form-item label="登录账号" prop="username" required>
+          <el-input v-model="passwordForm.username" autocomplete="off" placeholder="至少 6 位" />
         </el-form-item>
         <el-form-item label="临时密码" prop="temporaryPassword" required>
           <el-input
@@ -972,7 +992,7 @@ onMounted(() => {
             type="password"
             show-password
             autocomplete="new-password"
-            placeholder="至少 10 位，含大小写字母和数字"
+            placeholder="至少 6 位"
           />
         </el-form-item>
         <el-form-item label="确认密码" prop="confirmPassword" required>
@@ -995,12 +1015,12 @@ onMounted(() => {
 <style scoped>
 .customer-page,
 :global(.customer-detail-dialog) {
-  --customer-ink:#172033;
-  --customer-muted:#718096;
-  --customer-line:#e7ebf2;
-  --customer-canvas:#f5f7fb;
-  --customer-primary:#3157d5;
-  --customer-teal:#11867b;
+  --customer-ink: var(--text);
+  --customer-muted: var(--text-muted);
+  --customer-line: var(--border);
+  --customer-canvas: var(--panel-soft);
+  --customer-primary: var(--primary);
+  --customer-teal: var(--cyan);
 }
 .customer-page {
   display:flex;
@@ -1249,11 +1269,11 @@ onMounted(() => {
   padding:16px;
   border:1px solid var(--customer-line);
   border-radius:12px;
-  background:#fff;
+  background:var(--panel-solid);
 }
 .detail-panel--portal {
-  background:linear-gradient(145deg,rgba(49,87,213,.07),rgba(255,255,255,.8) 55%);
-  border-color:rgba(49,87,213,.18);
+  background:linear-gradient(145deg,rgba(79,70,229,.08),var(--panel-solid) 55%);
+  border-color:rgba(79,70,229,.18);
 }
 .detail-panel-heading {
   display:flex;
@@ -1292,17 +1312,17 @@ onMounted(() => {
   border-radius:12px;
   background:var(--customer-line);
 }
-.finance-strip > div { min-height:74px; padding:14px; background:#fbfcfe; }
+.finance-strip > div { min-height:74px; padding:14px; background:var(--panel-solid); }
 .finance-strip strong { display:block; min-height:18px; color:var(--customer-ink); font-size:13px; }
 .detail-section-title { color:var(--customer-ink); font-size:12px; font-weight:700; }
 .permission-summary { margin:17px 0; }
 .permission-chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:9px; }
 .permission-chips span {
   padding:4px 8px;
-  border:1px solid #dfe5f2;
+  border:1px solid var(--border);
   border-radius:6px;
-  background:#f7f9fd;
-  color:#53627b;
+  background:var(--panel-soft);
+  color: var(--text-secondary);
   font:500 10px/1.2 var(--font-mono,Consolas,monospace);
 }
 .inventory-heading {

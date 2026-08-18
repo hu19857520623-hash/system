@@ -4,7 +4,7 @@ import { parseCsv } from '../../common/csv.util'
 export const LEADS_IMPORT_HEADERS = [
   '线索编号',
   '客户名称',
-  '联系人',
+  '联系方式',
   '电话',
   '来源',
   '归属销售',
@@ -35,8 +35,8 @@ export function parseLeadsImportCsv(content: string): ParsedLeadImportRow[] {
   const header = rows[0].map((h) => h.trim())
   const leadNoIdx = colIdx(header, ['线索编号', 'leadNo', 'lead_no'])
   const nameIdx = colIdx(header, ['客户名称', '公司名称', 'company', 'companyName'])
-  const contactIdx = colIdx(header, ['联系人', 'contact', 'contactName'])
-  const phoneIdx = colIdx(header, ['电话', 'phone', 'contact_phone', 'contactPhone'])
+  const contactIdx = colIdx(header, ['联系方式', '联系人', 'contact', 'contactName'])
+  const phoneIdx = colIdx(header, ['电话', '联系电话', 'phone', 'contact_phone', 'contactPhone'])
   const sourceIdx = colIdx(header, ['来源', 'source'])
   const assigneeIdx = colIdx(header, ['归属销售', 'assignee', '销售', 'assigneeName'])
   const remarkIdx = colIdx(header, ['备注', 'remark'])

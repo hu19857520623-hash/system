@@ -4,6 +4,7 @@ import {
   mergeTakealotParsed,
   parseTakealotDocumentText,
   parseTakealotFilename,
+  takealotIdentityConflicts,
   takealotMissingFields,
   takealotParseConflicts,
   takealotParseWarnings,
@@ -55,6 +56,7 @@ const conflict = parseTakealotDocumentText(
   '发货清单',
 )
 assert.ok(takealotParseConflicts([manifest, conflict]).length >= 2)
+assert.ok(takealotIdentityConflicts([manifest, conflict]).some(item => item.includes('PO 单号')))
 
 const realFilename = parseTakealotFilename(
   'shipping_note_PO_29896140_13_08_2026_CPT_1.pdf',
@@ -113,6 +115,28 @@ assert.equal(realMerged.shipmentDate, '2026-08-19')
 assert.deepEqual(takealotParseWarnings(realMerged), [
   '预约日期 2026-08-20 晚于 Due Date 2026-08-19',
 ])
+assert.deepEqual(
+  takealotIdentityConflicts([realFilename, realManifest, realBooking]),
+  [],
+  'filename _PO_{sellerId}_ must not be treated as a conflicting PO number',
+)
+
+const otherPo = parseTakealotDocumentText(
+  'PO Number: 111111111\nSeller ID: 29896140\nIncluded POs: 111111111',
+  '发货清单',
+)
+assert.ok(
+  takealotIdentityConflicts([realManifest, otherPo]).some(item => item.includes('PO 单号')),
+  'a second file with a different PO must be rejected',
+)
+
+const otherSeller = parseTakealotDocumentText(
+  'PO Number: 184505024\nSeller ID: 11111111',
+  '发货清单',
+)
+assert.ok(
+  takealotIdentityConflicts([realManifest, otherSeller]).some(item => item.includes('Seller ID')),
+)
 
 const expectedVsObserved = mergeTakealotParsed(
   {

@@ -1,21 +1,37 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
+import * as path from 'path'
 import { PrismaService } from '../../common/prisma/prisma.service'
+import { FileStoreService } from '../../common/file-store.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
 import { parseLeadsImportCsv } from './leads-import.util'
 import {
   LEAD_ASSIGNEE_ROLE_CODES,
   LEAD_SELF_ASSIGN_ROLE_CODES,
 } from '@erp/shared/permissions.catalog'
+import { CustomersService } from '../customers/customers.service'
+import { CreateCustomerDto } from '../customers/dto/customer.dto'
+
+const DEAL_FILE_MAX_BYTES = 10 * 1024 * 1024
+const DEAL_FILE_MAX_COUNT = 30
+const DEAL_FILE_EXTS = new Set([
+  '.pdf', '.jpg', '.jpeg', '.png', '.webp', '.doc', '.docx', '.xls', '.xlsx', '.zip',
+])
 
 @Injectable()
 export class LeadsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private files: FileStoreService,
+    private customers: CustomersService,
+  ) {}
 
   async list(
     q: PaginationDto & {
       status?: string
+      statuses?: string
       assigneeId?: number
       source?: string
+      followDue?: string
       dealStatus?: string
       shopType?: string
       dealDateFrom?: string
@@ -27,7 +43,12 @@ export class LeadsService {
     const { page, pageSize } = getPagination(q)
     const where: any = {}
     const and: any[] = []
-    if (q.status) where.status = q.status
+    const statuses = String(q.statuses || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+    if (statuses.length) where.status = { in: statuses }
+    else if (q.status) where.status = q.status
     if (q.assigneeId) where.assigneeId = BigInt(q.assigneeId)
     if (q.source) where.source = q.source
     if (q.createdAtFrom || q.createdAtTo) {
@@ -65,6 +86,13 @@ export class LeadsService {
       dealWhere.dealDate = dealDate
     }
     if (Object.keys(dealWhere).length) and.push({ deals: { some: dealWhere } })
+    if (q.followDue === '1' || q.followDue === 'true') {
+      and.push({
+        followUps: {
+          none: { nextFollowAt: { gt: new Date() } },
+        },
+      })
+    }
     if (and.length) where.AND = and
 
     const includeDeals =
@@ -76,7 +104,19 @@ export class LeadsService {
       orderBy: { id: 'desc' },
       include: {
         followUps: { orderBy: { id: 'desc' }, take: 1 },
-        ...(includeDeals ? { deals: { orderBy: { id: 'desc' }, take: 1 } } : {}),
+        ...(includeDeals
+          ? {
+              deals: {
+                orderBy: { id: 'desc' as const },
+                include: {
+                  attachments: {
+                    orderBy: { id: 'desc' as const },
+                    select: { id: true, fileName: true, fileSize: true, createdAt: true },
+                  },
+                },
+              },
+            }
+          : {}),
       },
     }
 
@@ -85,17 +125,32 @@ export class LeadsService {
       this.prisma.lead.count({ where }),
     ])
     const assigneeIds = [...new Set(rows.map((r) => r.assigneeId).filter(Boolean))] as bigint[]
-    const users = assigneeIds.length
-      ? await this.prisma.sysUser.findMany({
-          where: { id: { in: assigneeIds } },
-          select: { id: true, realName: true, username: true },
-        })
-      : []
-    const nameMap = new Map(users.map((u) => [Number(u.id), u.realName || u.username]))
-    const items = rows.map((r) => ({
-      ...r,
-      assigneeName: r.assigneeId ? nameMap.get(Number(r.assigneeId)) ?? null : null,
-    }))
+    const customerIds = [...new Set(rows.map((r) => r.customerId).filter(Boolean))] as bigint[]
+    const [users, customerRows] = await Promise.all([
+      assigneeIds.length
+        ? this.prisma.sysUser.findMany({
+            where: { id: { in: assigneeIds } },
+            select: { id: true, realName: true, username: true },
+          })
+        : Promise.resolve([] as { id: bigint; realName: string | null; username: string }[]),
+      customerIds.length
+        ? this.prisma.customer.findMany({
+            where: { id: { in: customerIds } },
+            select: { id: true, customerCode: true, customerName: true },
+          })
+        : Promise.resolve([] as { id: bigint; customerCode: string; customerName: string }[]),
+    ])
+    const nameMap = new Map<number, string>(users.map((u) => [Number(u.id), u.realName || u.username]))
+    const customerMap = new Map(customerRows.map((c) => [Number(c.id), c] as const))
+    const items = rows.map((r) => {
+      const customer = r.customerId ? customerMap.get(Number(r.customerId)) : null
+      return {
+        ...r,
+        assigneeName: r.assigneeId ? nameMap.get(Number(r.assigneeId)) ?? null : null,
+        customerCode: customer?.customerCode ?? null,
+        customerName: customer?.customerName ?? null,
+      }
+    })
     return { items, total, page, pageSize }
   }
 
@@ -137,7 +192,18 @@ export class LeadsService {
   async detail(id: number) {
     const row = await this.prisma.lead.findUnique({
       where: { id: BigInt(id) },
-      include: { followUps: { orderBy: { id: 'desc' } }, deals: { orderBy: { id: 'desc' } } },
+      include: {
+        followUps: { orderBy: { id: 'desc' } },
+        deals: {
+          orderBy: { id: 'desc' },
+          include: {
+            attachments: {
+              orderBy: { id: 'desc' },
+              select: { id: true, fileName: true, fileSize: true, createdAt: true },
+            },
+          },
+        },
+      },
     })
     if (!row) throw new NotFoundException('线索不存在')
     const userIds = [
@@ -210,7 +276,7 @@ export class LeadsService {
   }
 
   async addFollowUp(id: number, data: any, operatorId?: number) {
-    await this.detail(id)
+    const lead = await this.detail(id)
     const content = String(data.content || '').trim()
     if (!content) throw new BadRequestException('请填写跟进内容')
     const followType = String(data.followType || 'phone')
@@ -231,12 +297,14 @@ export class LeadsService {
         operatorId: operatorId ? BigInt(operatorId) : undefined,
       },
     })
-    await this.prisma.lead.update({ where: { id: BigInt(id) }, data: { status: 'following' } })
+    const patch: { status: string; assigneeId?: bigint } = { status: 'following' }
+    if (operatorId && !lead.assigneeId) patch.assigneeId = BigInt(operatorId)
+    await this.prisma.lead.update({ where: { id: BigInt(id) }, data: patch })
     return fu
   }
 
   async addDeal(id: number, data: any) {
-    await this.detail(id)
+    const lead = await this.detail(id)
     const deal = await this.prisma.leadDeal.create({
       data: {
         leadId: BigInt(id),
@@ -249,12 +317,131 @@ export class LeadsService {
       },
     })
     await this.prisma.lead.update({ where: { id: BigInt(id) }, data: { status: 'deal' } })
+    const files = Array.isArray(data.attachments) ? data.attachments : []
+    if (files.length) {
+      await this.saveDealAttachments(Number(deal.id), files)
+    }
+    return this.dealWithAttachments(Number(deal.id), Number(lead.id))
+  }
+
+  async confirmToErp(leadId: number, data: CreateCustomerDto) {
+    const lead = await this.detail(leadId)
+    const dealCount = await this.prisma.leadDeal.count({ where: { leadId: BigInt(leadId) } })
+    if (!dealCount) throw new BadRequestException('没有成交记录，无法转客户')
+    if (lead.customerId) {
+      throw new BadRequestException('该线索已转为 ERP/OMS 客户，请勿重复开通')
+    }
+
+    const created = await this.customers.create(data, async (tx, customer) => {
+      await tx.lead.update({
+        where: { id: BigInt(leadId) },
+        data: { customerId: customer.id, status: 'deal' },
+      })
+      await tx.leadDeal.updateMany({
+        where: { leadId: BigInt(leadId) },
+        data: { status: 'confirmed' },
+      })
+    })
+
+    return {
+      leadId,
+      customerId: created.id,
+      customerCode: created.customerCode,
+      customerName: created.customerName,
+      oms: created.oms,
+      portalUsername: created.oms?.portalUsername || created.oms?.portalLoginEmail || data.username || data.loginEmail,
+      portalLoginEmail: created.oms?.portalUsername || created.oms?.portalLoginEmail || data.username || data.loginEmail,
+    }
+  }
+
+  async uploadDealAttachments(
+    leadId: number,
+    dealId: number,
+    attachments: { fileName: string; contentBase64?: string }[],
+  ) {
+    await this.assertDealBelongsToLead(leadId, dealId)
+    const saved = await this.saveDealAttachments(dealId, attachments || [])
+    return this.dealWithAttachments(dealId, leadId, saved)
+  }
+
+  async downloadDealAttachment(leadId: number, dealId: number, attachmentId: number) {
+    await this.assertDealBelongsToLead(leadId, dealId)
+    const att = await this.prisma.leadDealAttachment.findFirst({
+      where: { id: BigInt(attachmentId), dealId: BigInt(dealId) },
+    })
+    if (!att) throw new NotFoundException('客户资料不存在')
+    return { fileName: att.fileName, content: this.files.read(att.filePath) }
+  }
+
+  private async assertDealBelongsToLead(leadId: number, dealId: number) {
+    const deal = await this.prisma.leadDeal.findFirst({
+      where: { id: BigInt(dealId), leadId: BigInt(leadId) },
+    })
+    if (!deal) throw new NotFoundException('成交记录不存在')
     return deal
+  }
+
+  private async dealWithAttachments(dealId: number, _leadId: number, extraSaved?: number) {
+    const deal = await this.prisma.leadDeal.findUnique({
+      where: { id: BigInt(dealId) },
+      include: {
+        attachments: {
+          orderBy: { id: 'desc' },
+          select: { id: true, fileName: true, fileSize: true, createdAt: true },
+        },
+      },
+    })
+    if (!deal) throw new NotFoundException('成交记录不存在')
+    return {
+      ...deal,
+      uploadedCount: extraSaved ?? deal.attachments.length,
+    }
+  }
+
+  private async saveDealAttachments(
+    dealId: number,
+    attachments: { fileName: string; contentBase64?: string }[],
+  ) {
+    const existing = await this.prisma.leadDealAttachment.count({ where: { dealId: BigInt(dealId) } })
+    const incoming = attachments.filter((a) => a?.fileName && a?.contentBase64)
+    if (!incoming.length) throw new BadRequestException('请选择要上传的客户资料')
+    if (existing + incoming.length > DEAL_FILE_MAX_COUNT) {
+      throw new BadRequestException(`每次成交最多上传 ${DEAL_FILE_MAX_COUNT} 份资料`)
+    }
+
+    let saved = 0
+    for (const att of incoming) {
+      const payload = String(att.contentBase64 || '')
+      const raw = payload.includes(',') ? payload.slice(payload.indexOf(',') + 1) : payload
+      const buf = Buffer.from(raw, 'base64')
+      if (!buf.length) throw new BadRequestException(`文件 ${att.fileName} 内容为空`)
+      if (buf.length > DEAL_FILE_MAX_BYTES) {
+        throw new BadRequestException(`文件 ${att.fileName} 超过 10MB`)
+      }
+      const ext = path.extname(att.fileName || '').toLowerCase()
+      if (!DEAL_FILE_EXTS.has(ext)) {
+        throw new BadRequestException(`不支持的文件类型：${att.fileName}`)
+      }
+      const safeBase = path.basename(att.fileName).replace(/[^\w.\u4e00-\u9fa5-]/g, '_')
+      const storedName = `${dealId}_${Date.now()}_${saved}_${safeBase}`
+      const written = this.files.write('lead-deal-docs', storedName, buf)
+      await this.prisma.leadDealAttachment.create({
+        data: {
+          dealId: BigInt(dealId),
+          fileName: path.basename(att.fileName).slice(0, 200),
+          filePath: written.relativePath,
+          fileSize: buf.length,
+        },
+      })
+      saved += 1
+    }
+    return saved
   }
 
   async remove(id: number) {
     await this.detail(id)
     await this.prisma.leadFollowUp.deleteMany({ where: { leadId: BigInt(id) } })
+    await this.prisma.leadDealAttachment.deleteMany({ where: { deal: { leadId: BigInt(id) } } })
     await this.prisma.leadDeal.deleteMany({ where: { leadId: BigInt(id) } })
     await this.prisma.lead.delete({ where: { id: BigInt(id) } })
     return { id }
@@ -314,21 +501,81 @@ export class LeadsService {
   }
 
   /** 获客报表汇总 */
-  async report() {
-    const [total, following, deal, lost] = await Promise.all([
-      this.prisma.lead.count(),
-      this.prisma.lead.count({ where: { status: 'following' } }),
-      this.prisma.lead.count({ where: { status: 'deal' } }),
-      this.prisma.lead.count({ where: { status: 'lost' } }),
+  async report(range?: string) {
+    const createdAt = this.reportCreatedAtFilter(range)
+    const where = createdAt ? { createdAt } : {}
+    const [total, following, deal, lost, thisMonthNew, leads, bySource] = await Promise.all([
+      this.prisma.lead.count({ where }),
+      this.prisma.lead.count({ where: { ...where, status: 'following' } }),
+      this.prisma.lead.count({ where: { ...where, status: 'deal' } }),
+      this.prisma.lead.count({ where: { ...where, status: 'lost' } }),
+      this.prisma.lead.count({ where: { createdAt: this.reportCreatedAtFilter('month') } }),
+      this.prisma.lead.findMany({
+        where,
+        select: { assigneeId: true, status: true, createdAt: true },
+      }),
+      this.prisma.lead.groupBy({ by: ['source'], where, _count: { _all: true } }),
     ])
-    const bySource = await this.prisma.lead.groupBy({ by: ['source'], _count: { _all: true } })
+    const assigneeIds = [...new Set(leads.map((l) => l.assigneeId).filter(Boolean))] as bigint[]
+    const users = assigneeIds.length
+      ? await this.prisma.sysUser.findMany({
+          where: { id: { in: assigneeIds } },
+          select: { id: true, realName: true, username: true },
+        })
+      : []
+    const nameMap = new Map(users.map((u) => [Number(u.id), u.realName || u.username]))
+    const salesMap = new Map<number, { name: string; total: number; following: number; won: number }>()
+    for (const lead of leads) {
+      const id = lead.assigneeId ? Number(lead.assigneeId) : 0
+      const row = salesMap.get(id) || {
+        name: id ? nameMap.get(id) || '未分配' : '未分配',
+        total: 0,
+        following: 0,
+        won: 0,
+      }
+      row.total += 1
+      if (lead.status === 'following') row.following += 1
+      if (lead.status === 'deal') row.won += 1
+      salesMap.set(id, row)
+    }
+    const monthlyMap = new Map<string, { count: number; won: number }>()
+    for (const lead of leads) {
+      const key = `${lead.createdAt.getFullYear()}-${String(lead.createdAt.getMonth() + 1).padStart(2, '0')}`
+      const row = monthlyMap.get(key) || { count: 0, won: 0 }
+      row.count += 1
+      if (lead.status === 'deal') row.won += 1
+      monthlyMap.set(key, row)
+    }
+    const monthly = [...monthlyMap.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .slice(-6)
+      .map(([month, row]) => ({ month, ...row }))
+    const salesRank = [...salesMap.values()]
+      .map((row) => ({
+        ...row,
+        rate: row.total ? Number(((row.won / row.total) * 100).toFixed(1)) : 0,
+      }))
+      .sort((a, b) => b.won - a.won || b.total - a.total)
     return {
       total,
       following,
       deal,
       lost,
+      thisMonthNew,
       conversionRate: total ? Number(((deal / total) * 100).toFixed(1)) : 0,
       bySource: bySource.map((s) => ({ source: s.source || '其他', count: s._count._all })),
+      monthly,
+      salesRank,
     }
+  }
+
+  private reportCreatedAtFilter(range?: string): { gte: Date } | undefined {
+    const now = new Date()
+    if (range === 'month') return { gte: new Date(now.getFullYear(), now.getMonth(), 1) }
+    if (range === 'quarter') {
+      const quarterStartMonth = Math.floor(now.getMonth() / 3) * 3
+      return { gte: new Date(now.getFullYear(), quarterStartMonth, 1) }
+    }
+    return undefined
   }
 }

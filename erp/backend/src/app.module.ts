@@ -4,6 +4,7 @@ import { APP_GUARD } from '@nestjs/core'
 
 import { PrismaModule } from './common/prisma/prisma.module'
 import { PermissionsModule } from './common/permissions/permissions.module'
+import { OmsInternalAuthModule } from './common/oms-internal-auth.module'
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard'
 import { RolesGuard } from './common/guards/roles.guard'
 import { PermissionsGuard } from './common/guards/permissions.guard'
@@ -34,11 +35,13 @@ import { OutboundModule } from './modules/outbound/outbound.module'
 import { StoreMonitorModule } from './modules/store-monitor/store-monitor.module'
 import { OperationLogModule } from './modules/operation-log/operation-log.module'
 import { ReturnsModule } from './modules/returns/returns.module'
+import { MingruiModule } from './modules/mingrui/mingrui.module'
 import { validateEnvironment } from './config/environment'
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true, validate: validateEnvironment }),
+    OmsInternalAuthModule,
     PrismaModule,
     PermissionsModule,
     AuthModule,
@@ -64,6 +67,7 @@ import { validateEnvironment } from './config/environment'
     LogisticsReceiptModule,
     OutboundModule,
     ReturnsModule,
+    MingruiModule,
     StoreMonitorModule,
     WarehouseLocationModule,
     OperationLogModule,

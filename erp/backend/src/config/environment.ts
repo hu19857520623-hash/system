@@ -34,5 +34,11 @@ export function resolveCorsOrigins(value: unknown, nodeEnv: unknown): string[] {
   if (String(nodeEnv || 'development') === 'production') {
     throw new Error('CORS_ORIGINS is required in production')
   }
-  return ['http://localhost:5173', 'http://localhost:8080']
+  return [
+    'http://localhost:5180',
+    'http://127.0.0.1:5180',
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+    'http://localhost:8080',
+  ]
 }

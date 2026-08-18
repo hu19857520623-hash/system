@@ -27,6 +27,7 @@ type OmsAccountProvisioningRow = {
   warehouse: string
   permissions: string
   portalUserId: string | null
+  portalUsername: string | null
   portalLoginEmail: string | null
   portalMustChangePassword: boolean | number | null
 }
@@ -34,14 +35,14 @@ type OmsAccountProvisioningRow = {
 type PortalUserLookupRow = {
   id: string
   customerId: string
-  loginEmail: string
+  username: string
 }
 
 type PortalConfiguration = {
   portalType: OmsCustomerType
   warehouse: string
   permissions: OmsPortalPermission[]
-  loginEmail: string
+  username: string
 }
 
 export type ProvisionedOmsAccount = {
@@ -52,6 +53,7 @@ export type ProvisionedOmsAccount = {
   permissions: OmsPortalPermission[]
   omsStatus: 'active' | 'disabled'
   portalReady: boolean
+  portalUsername: string | null
   portalLoginEmail: string | null
   portalStatus: 'active' | 'disabled' | null
   mustChangePassword: boolean | null
@@ -68,7 +70,10 @@ export class CustomerProvisioningService {
 
   async create(
     data: CreateCustomerDto,
-    options: { requirePortal: boolean } = { requirePortal: false },
+    options: {
+      requirePortal: boolean
+      afterCreate?: (tx: Prisma.TransactionClient, customer: Customer) => Promise<void>
+    } = { requirePortal: false },
   ): Promise<CustomerProvisioningResult> {
     const portalInput = this.resolveCreatePortalInput(data, options.requirePortal)
     const passwordHash = portalInput
@@ -79,7 +84,7 @@ export class CustomerProvisioningService {
           portalType: portalInput.portalType,
           warehouse: portalInput.warehouse,
           permissions: portalInput.permissions,
-          loginEmail: portalInput.loginEmail,
+          username: portalInput.username,
         }
       : undefined
 
@@ -93,7 +98,7 @@ export class CustomerProvisioningService {
 
         if (portal) {
           const existingOmsAccount = await this.findOmsAccount(tx, customerCode)
-          await this.assertLoginEmailAvailable(tx, portal.loginEmail, existingOmsAccount?.id)
+          await this.assertUsernameAvailable(tx, portal.username, existingOmsAccount?.id)
         }
 
         const customer = await tx.customer.create({
@@ -112,6 +117,7 @@ export class CustomerProvisioningService {
         const oms = portal && passwordHash
           ? await this.upsertOmsRows(tx, customer, portal, passwordHash)
           : null
+        if (options.afterCreate) await options.afterCreate(tx, customer)
         return { customer, oms }
       })
     } catch (error) {
@@ -126,8 +132,8 @@ export class CustomerProvisioningService {
       data.permissions,
       false,
     )
-    const normalizedLoginEmail = data.loginEmail
-      ? this.normalizeEmail(data.loginEmail)
+    const normalizedUsername = data.username || data.loginEmail
+      ? this.requireUsername(data.username || data.loginEmail)
       : undefined
     const passwordHash = data.temporaryPassword
       ? await this.hashTemporaryPassword(data.temporaryPassword)
@@ -158,7 +164,7 @@ export class CustomerProvisioningService {
           const newPortal = this.resolveUpdatePortalInput(data)
           const newPasswordHash = passwordHash
             || await this.hashTemporaryPassword(newPortal.temporaryPassword)
-          await this.assertLoginEmailAvailable(tx, newPortal.loginEmail)
+          await this.assertUsernameAvailable(tx, newPortal.username)
           const oms = await this.upsertOmsRows(
             tx,
             customer,
@@ -166,15 +172,15 @@ export class CustomerProvisioningService {
               portalType: newPortal.portalType,
               warehouse: newPortal.warehouse,
               permissions: newPortal.permissions,
-              loginEmail: newPortal.loginEmail,
+              username: newPortal.username,
             },
             newPasswordHash,
           )
           return { customer, oms }
         }
 
-        if (normalizedLoginEmail) {
-          await this.assertLoginEmailAvailable(tx, normalizedLoginEmail, account.id)
+        if (normalizedUsername) {
+          await this.assertUsernameAvailable(tx, normalizedUsername, account.id)
         }
 
         const portalType = requestedPortalType || this.asPortalType(account.type)
@@ -202,7 +208,7 @@ export class CustomerProvisioningService {
 
         await this.upsertBillingAccount(tx, customer, account.id, warehouse)
 
-        let portalLoginEmail = account.portalLoginEmail
+        let portalUsername = account.portalUsername || account.portalLoginEmail
         let portalUserId = account.portalUserId
         let portalReady = Boolean(account.portalUserId)
         let mustChangePassword: boolean | null = account.portalUserId
@@ -213,7 +219,7 @@ export class CustomerProvisioningService {
           if (passwordHash) {
             await tx.$executeRaw(Prisma.sql`
               UPDATE \`oms_PortalUser\`
-              SET \`loginEmail\` = COALESCE(${normalizedLoginEmail || null}, \`loginEmail\`),
+              SET \`username\` = COALESCE(${normalizedUsername || null}, \`username\`),
                   \`passwordHash\` = ${passwordHash},
                   \`role\` = ${portalType},
                   \`status\` = ${status},
@@ -225,30 +231,30 @@ export class CustomerProvisioningService {
           } else {
             await tx.$executeRaw(Prisma.sql`
               UPDATE \`oms_PortalUser\`
-              SET \`loginEmail\` = COALESCE(${normalizedLoginEmail || null}, \`loginEmail\`),
+              SET \`username\` = COALESCE(${normalizedUsername || null}, \`username\`),
                   \`role\` = ${portalType},
                   \`status\` = ${status},
                   \`updatedAt\` = ${now}
               WHERE \`id\` = ${account.portalUserId}
             `)
           }
-          portalLoginEmail = normalizedLoginEmail || account.portalLoginEmail
-        } else if (normalizedLoginEmail || passwordHash) {
-          if (!normalizedLoginEmail || !passwordHash) {
+          portalUsername = normalizedUsername || account.portalUsername || account.portalLoginEmail
+        } else if (normalizedUsername || passwordHash) {
+          if (!normalizedUsername || !passwordHash) {
             throw new BadRequestException(
-              '首次创建 OMS 登录用户时必须同时提供 loginEmail 和 temporaryPassword',
+              '首次创建 OMS 登录用户时必须同时提供 username 和 temporaryPassword',
             )
           }
           portalUserId = await this.savePortalUser(
             tx,
             account.id,
             customer.customerCode,
-            normalizedLoginEmail,
+            normalizedUsername,
             passwordHash,
             portalType,
             status,
           )
-          portalLoginEmail = normalizedLoginEmail
+          portalUsername = normalizedUsername
           portalReady = true
           mustChangePassword = true
         }
@@ -263,7 +269,8 @@ export class CustomerProvisioningService {
             permissions,
             omsStatus: status,
             portalReady,
-            portalLoginEmail,
+            portalUsername,
+            portalLoginEmail: portalUsername,
             portalStatus: portalReady ? status : null,
             mustChangePassword,
           },
@@ -278,7 +285,7 @@ export class CustomerProvisioningService {
     where: Prisma.CustomerWhereUniqueInput,
     data: SetPortalTemporaryPasswordDto,
   ): Promise<CustomerProvisioningResult> {
-    const loginEmail = this.normalizeEmail(data.loginEmail)
+    const username = this.requireUsername(data.username || data.loginEmail)
     const passwordHash = await this.hashTemporaryPassword(data.temporaryPassword)
 
     try {
@@ -289,14 +296,14 @@ export class CustomerProvisioningService {
         const account = await this.findOmsAccount(tx, customer.customerCode)
         if (!account) throw new BadRequestException('该客户尚未开通 OMS 账户')
 
-        await this.assertLoginEmailAvailable(tx, loginEmail, account.id)
+        await this.assertUsernameAvailable(tx, username, account.id)
         const portalType = this.asPortalType(account.type)
         const status = this.toOmsStatus(customer.status)
         const portalUserId = await this.savePortalUser(
           tx,
           account.id,
           customer.customerCode,
-          loginEmail,
+          username,
           passwordHash,
           portalType,
           status,
@@ -313,7 +320,8 @@ export class CustomerProvisioningService {
             permissions: this.parseStoredPermissions(account.permissions),
             omsStatus: status,
             portalReady: true,
-            portalLoginEmail: loginEmail,
+            portalUsername: username,
+            portalLoginEmail: username,
             portalStatus: status,
             mustChangePassword: true,
           },
@@ -342,19 +350,19 @@ export class CustomerProvisioningService {
     if (
       !portalType ||
       !data.warehouse?.trim() ||
-      !data.loginEmail ||
+      !this.portalIdentity(data) ||
       !data.temporaryPassword ||
       !permissions
     ) {
       throw new BadRequestException(
-        'OMS 开户必须提供 portalType、warehouse、权限、loginEmail 和 temporaryPassword',
+        'OMS 开户必须提供 portalType、warehouse、权限、username 和 temporaryPassword',
       )
     }
     return {
       portalType,
       warehouse: data.warehouse.trim(),
       permissions,
-      loginEmail: this.normalizeEmail(data.loginEmail),
+      username: this.requireUsername(this.portalIdentity(data)),
       temporaryPassword: data.temporaryPassword,
     }
   }
@@ -371,19 +379,19 @@ export class CustomerProvisioningService {
     if (
       !portalType ||
       !data.warehouse?.trim() ||
-      !data.loginEmail ||
+      !this.portalIdentity(data) ||
       !data.temporaryPassword ||
       !permissions
     ) {
       throw new BadRequestException(
-        '首次开通 OMS 时必须提供 portalType、warehouse、权限、loginEmail 和 temporaryPassword',
+        '首次开通 OMS 时必须提供 portalType、warehouse、权限、username 和 temporaryPassword',
       )
     }
     return {
       portalType,
       warehouse: data.warehouse.trim(),
       permissions,
-      loginEmail: this.normalizeEmail(data.loginEmail),
+      username: this.requireUsername(this.portalIdentity(data)),
       temporaryPassword: data.temporaryPassword,
     }
   }
@@ -404,6 +412,7 @@ export class CustomerProvisioningService {
     warehouse?: string
     permissionTemplate?: OmsCustomerType
     permissions?: OmsPortalPermission[]
+    username?: string
     loginEmail?: string
     temporaryPassword?: string
   }): boolean {
@@ -413,9 +422,14 @@ export class CustomerProvisioningService {
       data.warehouse,
       data.permissionTemplate,
       data.permissions,
+      data.username,
       data.loginEmail,
       data.temporaryPassword,
     ].some((value) => value !== undefined)
+  }
+
+  private portalIdentity(data: { username?: string; loginEmail?: string }): string | undefined {
+    return data.username || data.loginEmail
   }
 
   private resolveRequestedPermissions(
@@ -434,12 +448,8 @@ export class CustomerProvisioningService {
   }
 
   private async hashTemporaryPassword(password: string): Promise<string> {
-    if (
-      password.length < 8 ||
-      password.length > 128 ||
-      !/(?=.*[A-Za-z])(?=.*\d)/.test(password)
-    ) {
-      throw new BadRequestException('临时密码须为 8-128 位，且包含字母和数字')
+    if (password.length < 6 || password.length > 128) {
+      throw new BadRequestException('临时密码须为 6-128 位')
     }
     return bcrypt.hash(password, BCRYPT_ROUNDS)
   }
@@ -494,7 +504,7 @@ export class CustomerProvisioningService {
       tx,
       account.id,
       customer.customerCode,
-      portal.loginEmail,
+      portal.username,
       passwordHash,
       portal.portalType,
       status,
@@ -509,7 +519,8 @@ export class CustomerProvisioningService {
       permissions: portal.permissions,
       omsStatus: status,
       portalReady: true,
-      portalLoginEmail: portal.loginEmail,
+      portalUsername: portal.username,
+      portalLoginEmail: portal.username,
       portalStatus: status,
       mustChangePassword: true,
     }
@@ -551,7 +562,7 @@ export class CustomerProvisioningService {
     tx: Prisma.TransactionClient,
     accountId: string,
     customerCode: string,
-    loginEmail: string,
+    username: string,
     passwordHash: string,
     portalType: OmsCustomerType,
     status: 'active' | 'disabled',
@@ -561,7 +572,7 @@ export class CustomerProvisioningService {
     if (existingPortalUserId) {
       await tx.$executeRaw(Prisma.sql`
         UPDATE \`oms_PortalUser\`
-        SET \`loginEmail\` = ${loginEmail},
+        SET \`username\` = ${username},
             \`passwordHash\` = ${passwordHash},
             \`role\` = ${portalType},
             \`status\` = ${status},
@@ -575,12 +586,12 @@ export class CustomerProvisioningService {
     const portalUserId = this.stableOmsId('portal', customerCode)
     await tx.$executeRaw(Prisma.sql`
       INSERT INTO \`oms_PortalUser\`
-        (\`id\`, \`customerId\`, \`loginEmail\`, \`passwordHash\`, \`role\`, \`status\`,
+        (\`id\`, \`customerId\`, \`username\`, \`passwordHash\`, \`role\`, \`status\`,
          \`mustChangePassword\`, \`createdAt\`, \`updatedAt\`, \`lastLoginAt\`)
       VALUES (
         ${portalUserId},
         ${accountId},
-        ${loginEmail},
+        ${username},
         ${passwordHash},
         ${portalType},
         ${status},
@@ -600,7 +611,8 @@ export class CustomerProvisioningService {
     const rows = await tx.$queryRaw<OmsAccountProvisioningRow[]>(Prisma.sql`
       SELECT c.\`id\`, c.\`type\`, c.\`warehouse\`, c.\`permissions\`,
              u.\`id\` AS \`portalUserId\`,
-             u.\`loginEmail\` AS \`portalLoginEmail\`,
+             u.\`username\` AS \`portalUsername\`,
+             u.\`username\` AS \`portalLoginEmail\`,
              u.\`mustChangePassword\` AS \`portalMustChangePassword\`
       FROM \`oms_CustomerAccount\` c
       LEFT JOIN \`oms_PortalUser\` u ON u.\`customerId\` = c.\`id\`
@@ -610,19 +622,19 @@ export class CustomerProvisioningService {
     return rows[0]
   }
 
-  private async assertLoginEmailAvailable(
+  private async assertUsernameAvailable(
     tx: Prisma.TransactionClient,
-    loginEmail: string,
+    username: string,
     currentAccountId?: string,
   ): Promise<void> {
     const rows = await tx.$queryRaw<PortalUserLookupRow[]>(Prisma.sql`
-      SELECT \`id\`, \`customerId\`, \`loginEmail\`
+      SELECT \`id\`, \`customerId\`, \`username\`
       FROM \`oms_PortalUser\`
-      WHERE \`loginEmail\` = ${loginEmail}
+      WHERE \`username\` = ${username}
         AND (${currentAccountId || null} IS NULL OR \`customerId\` <> ${currentAccountId || null})
       LIMIT 1
     `)
-    if (rows.length) throw new ConflictException('OMS 登录邮箱已存在')
+    if (rows.length) throw new ConflictException('OMS 登录账号已存在')
   }
 
   private parseStoredPermissions(raw: string): OmsPortalPermission[] {
@@ -637,6 +649,22 @@ export class CustomerProvisioningService {
   private asPortalType(value: string): OmsCustomerType {
     if (value === 'ecommerce' || value === 'catalog' || value === 'hybrid') return value
     throw new BadRequestException(`OMS 账户类型 ${value} 无效`)
+  }
+
+  private normalizeUsername(value: string): string {
+    return value.trim().toLowerCase()
+  }
+
+  private requireUsername(value: string | undefined): string {
+    const username = this.normalizeUsername(value || '')
+    if (
+      username.length < 6
+      || username.length > 50
+      || !/^[A-Za-z0-9._-]+$/.test(username)
+    ) {
+      throw new BadRequestException('OMS 登录账号须为 6-50 位字母、数字、点、下划线或短横线')
+    }
+    return username
   }
 
   private normalizeEmail(value: string): string {
@@ -668,7 +696,7 @@ export class CustomerProvisioningService {
       (prismaError?.code === 'P2010' && String(prismaError.meta?.code) === '1062') ||
       prismaError?.code === 'ER_DUP_ENTRY'
     ) {
-      throw new ConflictException('客户代码或 OMS 登录邮箱已存在')
+      throw new ConflictException('客户代码或 OMS 登录账号已存在')
     }
     throw new InternalServerErrorException('客户与 OMS 账户同步失败')
   }

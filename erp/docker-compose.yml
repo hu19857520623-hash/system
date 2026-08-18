@@ -42,6 +42,7 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080}
       AUTO_SCHEMA_SYNC: ${AUTO_SCHEMA_SYNC:-false}
       TAKEALOT_PROXY_URL: http://takealot-monitor:3456
+      LISTEN_HOST: 0.0.0.0
     ports:
       # 宿主机 3000 常被本地 npm run start:dev 占用，映射到 3001
       - "3001:3000"
@@ -58,8 +59,10 @@ services:
         <<: *build-args
     container_name: erp-takealot-monitor
     restart: unless-stopped
+    environment:
+      LISTEN_HOST: 0.0.0.0
     ports:
-      - "3456:3456"
+      - "127.0.0.1:3456:3456"
 
   frontend:
     build:

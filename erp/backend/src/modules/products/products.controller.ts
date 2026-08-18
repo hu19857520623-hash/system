@@ -4,6 +4,8 @@ import { ProductsService } from './products.service'
 import { PaginationDto } from '../../common/dto/pagination.dto'
 import { RequireAnyPerm, RequirePerms } from '../../common/decorators/require-perms.decorator'
 import { Public } from '../../common/decorators/public.decorator'
+import { OmsBridge } from '../../common/decorators/oms-bridge.decorator'
+import { CreateOmsProductDto } from './dto/oms-product.dto'
 import { CurrentUser } from '../../common/decorators/current-user.decorator'
 
 @Controller('products')
@@ -32,9 +34,9 @@ export class ProductsController {
   }
 
   /** OMS P2：客户建品 */
-  @Public()
+  @OmsBridge()
   @Post('oms')
-  createFromOms(@Body() body: any) {
+  createFromOms(@Body() body: CreateOmsProductDto) {
     return this.service.createFromOms(body)
   }
 

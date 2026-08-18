@@ -13,7 +13,11 @@ import { JwtStrategy } from './jwt.strategy'
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
-        secret: config.get<string>('JWT_SECRET') || 'takealot-erp-secret',
+        secret: (() => {
+          const secret = String(config.get<string>('JWT_SECRET') || '').trim()
+          if (!secret) throw new Error('JWT_SECRET is required')
+          return secret
+        })(),
         signOptions: { expiresIn: config.get<string>('JWT_EXPIRES_IN') || '7d' },
       }),
     }),

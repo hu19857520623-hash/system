@@ -4,6 +4,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { returnsApi, operationLogApi } from '@/api/client.js'
 import { useAppStore } from '@/stores/app'
 import ListPagination from '@/components/ListPagination.vue'
+import DetailSheet from '@/components/ui/DetailSheet.vue'
 
 const app = useAppStore()
 
@@ -1092,9 +1093,38 @@ onMounted(loadList)
       :total="listTotal"
     />
 
-    <el-dialog v-model="detailVisible" :title="'退件详情 · ' + (detailRow?.returnNo || '')" width="720px">
+    <el-dialog v-model="detailVisible" :title="'退件详情 · ' + (detailRow?.returnNo || '')" width="760px" class="erp-detail">
       <div v-loading="detailLoading">
         <template v-if="detailRow">
+          <DetailSheet
+            :kicker="detailRow.returnNo"
+            :title="detailRow.orderNo || '退件'"
+            :subtitle="[detailRow.omsCustomerCode, warehouseLabel(detailRow.returnWarehouse)].filter(Boolean).join(' · ')"
+          >
+            <template #status>
+              <el-tag :type="statusTagType(detailRow.status)" size="small">
+                {{ detailRow.statusLabel || STATUS_LABELS[detailRow.status] || detailRow.status }}
+              </el-tag>
+            </template>
+            <template #metrics>
+              <div class="erp-detail__metric">
+                <label>总体积</label>
+                <strong>{{ formatCbm(detailRow.totalVolumeCbm) }} CBM</strong>
+              </div>
+              <div class="erp-detail__metric">
+                <label>计费重</label>
+                <strong>{{ detailRow.totalChargeableWeightKg ?? '—' }} kg</strong>
+              </div>
+              <div class="erp-detail__metric is-accent">
+                <label>预估费用</label>
+                <strong>{{ formatFee(detailRow.estimatedFeeTotal) }}</strong>
+              </div>
+              <div class="erp-detail__metric">
+                <label>实收 / 箱数</label>
+                <strong>{{ detailRow.receivedQty ?? '—' }} / {{ detailRow.receivedCartonCount ?? '—' }}</strong>
+              </div>
+            </template>
+          </DetailSheet>
           <el-descriptions :column="2" border size="small">
             <el-descriptions-item label="客户">{{ detailRow.omsCustomerCode || '—' }}</el-descriptions-item>
             <el-descriptions-item label="订单号">{{ detailRow.orderNo }}</el-descriptions-item>

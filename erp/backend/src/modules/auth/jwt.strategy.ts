@@ -10,7 +10,11 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
-      secretOrKey: config.get<string>('JWT_SECRET') || 'takealot-erp-secret',
+      secretOrKey: (() => {
+        const secret = String(config.get<string>('JWT_SECRET') || '').trim()
+        if (!secret) throw new Error('JWT_SECRET is required')
+        return secret
+      })(),
     })
   }
 

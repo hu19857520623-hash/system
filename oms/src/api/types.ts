@@ -15,7 +15,8 @@ export interface CustomerAccountDto {
   createdAt: string
   lastLoginAt: string
   portalUser?: {
-    loginEmail: string
+    username?: string
+    loginEmail?: string
     status: string
     mustChangePassword: boolean
     lastLoginAt?: string | null

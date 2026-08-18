@@ -28,16 +28,16 @@ async function request(
 async function main() {
   const suffix = randomUUID()
   const userId = `verify-${suffix}`.slice(0, 50)
-  const email = `verify-${suffix}@example.invalid`
-  const temporaryPassword = `Tmp-${randomBytes(12).toString('hex')}A1`
-  const changedPassword = `New-${randomBytes(12).toString('hex')}B2`
+  const username = `verify${suffix.replace(/-/g, '').slice(0, 10)}`
+  const temporaryPassword = `tmp${randomBytes(4).toString('hex')}`
+  const changedPassword = `new${randomBytes(4).toString('hex')}`
   const now = new Date().toISOString()
 
   await prisma.portalUser.create({
     data: {
       id: userId,
       customerId: null,
-      loginEmail: email,
+      username,
       passwordHash: await bcrypt.hash(temporaryPassword, 4),
       role: 'sys_admin',
       status: 'active',
@@ -53,13 +53,13 @@ async function main() {
 
     const invalidLogin = await request('/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ email, password: 'WrongPassword1' }),
+      body: JSON.stringify({ username, password: 'WrongPassword1' }),
     })
     assert.equal(invalidLogin.status, 401)
 
     const login = await request('/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ email, password: temporaryPassword }),
+      body: JSON.stringify({ username, password: temporaryPassword }),
     })
     assert.equal(login.status, 200)
     const loginToken = String(login.body.token || '')
@@ -85,7 +85,7 @@ async function main() {
 
     const oldPasswordLogin = await request('/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ email, password: temporaryPassword }),
+      body: JSON.stringify({ username, password: temporaryPassword }),
     })
     assert.equal(oldPasswordLogin.status, 401)
 

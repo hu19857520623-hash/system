@@ -95,6 +95,7 @@ model Supplier {
 model Product {
   id          BigInt   @id @default(autoincrement())
   sku         String   @unique @db.VarChar(30)
+  customerSku String?  @map("customer_sku") @db.VarChar(50)
   spu         String?  @db.VarChar(30)
   productName String   @map("product_name") @db.VarChar(300)
   spec        String?  @db.VarChar(100)
@@ -112,6 +113,10 @@ model Product {
   seaFreightPerUnit  Decimal? @default(0) @map("sea_freight_per_unit") @db.Decimal(12, 2)
   domesticFeePerUnit Decimal? @default(0) @map("domestic_fee_per_unit") @db.Decimal(12, 2)
   barcode     String?  @db.VarChar(50)
+  declaredNameEn String? @map("declared_name_en") @db.VarChar(300)
+  declaredNameCn String? @map("declared_name_cn") @db.VarChar(300)
+  unit        String?  @db.VarChar(20)
+  hasBattery  Boolean  @default(false) @map("has_battery")
   imageUrl    String?  @map("image_url") @db.VarChar(500)
   takealotUrl String?  @map("takealot_url") @db.VarChar(500)
   developerId BigInt?  @map("developer_id")
@@ -127,6 +132,7 @@ model Product {
 
   @@index([supplierId], map: "idx_product_supplier")
   @@index([status], map: "idx_product_status")
+  @@index([customerSku], map: "idx_product_customer_sku")
   @@map("product")
 }
 
@@ -202,6 +208,9 @@ model PurchaseOrder {
   financeAt       DateTime?           @map("finance_at")
   poAuditRemark   String?             @map("po_audit_remark") @db.VarChar(500)
   financeRemark   String?             @map("finance_remark") @db.VarChar(500)
+  paymentStatus   String              @default("unpaid") @map("payment_status") @db.VarChar(20)
+  paidAt          DateTime?           @map("paid_at")
+  paidBy          BigInt?             @map("paid_by")
   prePoId         BigInt?             @map("pre_po_id")
   createdAt       DateTime            @default(now()) @map("created_at")
   updatedAt       DateTime            @updatedAt @map("updated_at")
@@ -399,6 +408,13 @@ model InboundOrder {
   confirmedBy   BigInt?            @map("confirmed_by")
   remark        String?            @db.Text
   omsCustomerCode String?          @map("oms_customer_code") @db.VarChar(30)
+  inboundType     String?          @map("inbound_type") @db.VarChar(50)
+  deliveryMethod  String?          @map("delivery_method") @db.VarChar(50)
+  stockSource     String?          @map("stock_source") @db.VarChar(30)
+  referenceNo     String?          @map("reference_no") @db.VarChar(100)
+  eta             String?          @db.VarChar(40)
+  contact         String?          @db.VarChar(100)
+  contactPhone    String?          @map("contact_phone") @db.VarChar(50)
   labelPrintCount Int              @default(0) @map("label_print_count")
   createdAt     DateTime           @default(now()) @map("created_at")
   updatedAt     DateTime           @updatedAt @map("updated_at")
@@ -667,6 +683,7 @@ model Lead {
   status       String         @default("new") @db.VarChar(20)
   assigneeId   BigInt?        @map("assignee_id")
   remark       String?        @db.Text
+  customerId   BigInt?        @map("customer_id")
   createdAt    DateTime       @default(now()) @map("created_at")
   updatedAt    DateTime       @updatedAt @map("updated_at")
   followUps    LeadFollowUp[]
@@ -674,6 +691,7 @@ model Lead {
 
   @@index([status], map: "idx_lead_status")
   @@index([assigneeId], map: "idx_lead_assignee")
+  @@index([customerId], map: "idx_lead_customer")
   @@map("lead")
 }
 
@@ -692,19 +710,33 @@ model LeadFollowUp {
 }
 
 model LeadDeal {
-  id          BigInt   @id @default(autoincrement())
-  leadId      BigInt   @map("lead_id")
-  dealNo      String   @unique @map("deal_no") @db.VarChar(30)
-  dealAmount  Decimal? @map("deal_amount") @db.Decimal(14, 2)
-  dealDate    DateTime @map("deal_date") @db.Date
-  productDesc String?  @map("product_desc") @db.Text
-  status      String   @default("pending") @db.VarChar(20)
-  remark      String?  @db.Text
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
-  lead        Lead     @relation(fields: [leadId], references: [id])
+  id          BigInt               @id @default(autoincrement())
+  leadId      BigInt               @map("lead_id")
+  dealNo      String               @unique @map("deal_no") @db.VarChar(30)
+  dealAmount  Decimal?             @map("deal_amount") @db.Decimal(14, 2)
+  dealDate    DateTime             @map("deal_date") @db.Date
+  productDesc String?              @map("product_desc") @db.Text
+  status      String               @default("pending") @db.VarChar(20)
+  remark      String?              @db.Text
+  createdAt   DateTime             @default(now()) @map("created_at")
+  updatedAt   DateTime             @updatedAt @map("updated_at")
+  lead        Lead                 @relation(fields: [leadId], references: [id])
+  attachments LeadDealAttachment[]
 
   @@map("lead_deal")
+}
+
+model LeadDealAttachment {
+  id        BigInt   @id @default(autoincrement())
+  dealId    BigInt   @map("deal_id")
+  fileName  String   @map("file_name") @db.VarChar(200)
+  filePath  String   @map("file_path") @db.VarChar(500)
+  fileSize  Int      @default(0) @map("file_size")
+  createdAt DateTime @default(now()) @map("created_at")
+  deal      LeadDeal @relation(fields: [dealId], references: [id], onDelete: Cascade)
+
+  @@index([dealId], map: "idx_lead_deal_att_deal")
+  @@map("lead_deal_attachment")
 }
 
 // ───────────── 客户结算 ─────────────
@@ -1175,7 +1207,7 @@ model TakealotStore {
   slot             Int      @unique @db.TinyInt
   storeName        String   @map("store_name") @db.VarChar(100)
   coachRole        String   @map("coach_role") @db.VarChar(20)
-  apiKey           String?  @map("api_key") @db.VarChar(500)
+  apiKey           String?  @map("api_key") @db.VarChar(1024)
   takealotSellerId BigInt?  @map("takealot_seller_id")
   displayName      String?  @map("display_name") @db.VarChar(200)
   enabled          Boolean  @default(true)
@@ -1185,4 +1217,44 @@ model TakealotStore {
 
   @@index([coachRole], map: "idx_takealot_store_coach")
   @@map("takealot_store")
+}
+
+// ───────────── 明瑞物流下单 ─────────────
+
+model MingruiShipment {
+  id              BigInt    @id @default(autoincrement())
+  shipmentNo      String    @unique @map("shipment_no") @db.VarChar(30)
+  status          String    @default("draft") @db.VarChar(30)
+  mode            String    @default("lcl") @db.VarChar(10)
+  poNos           String?   @map("po_nos") @db.VarChar(500)
+  poRefs          Json?     @map("po_refs")
+  inboundNo       String?   @map("inbound_no") @db.VarChar(30)
+  destWarehouse   String?   @map("dest_warehouse") @db.VarChar(30)
+  originCity      String?   @map("origin_city") @db.VarChar(50)
+  destPort        String?   @map("dest_port") @db.VarChar(50)
+  packages        Int?      @default(0)
+  weightKg        Decimal?  @map("weight_kg") @db.Decimal(12, 2)
+  volumeCbm       Decimal?  @map("volume_cbm") @db.Decimal(12, 3)
+  freightAmount   Decimal?  @map("freight_amount") @db.Decimal(14, 2)
+  etd             DateTime? @db.Date
+  eta             DateTime? @db.Date
+  vesselName      String?   @map("vessel_name") @db.VarChar(100)
+  blNo            String?   @map("bl_no") @db.VarChar(50)
+  containerNo     String?   @map("container_no") @db.VarChar(50)
+  mingruiOrderNo  String?   @map("mingrui_order_no") @db.VarChar(50)
+  trackingStatus  String?   @map("tracking_status") @db.VarChar(50)
+  trackingDetail  String?   @map("tracking_detail") @db.Text
+  cargoItems      Json?     @map("cargo_items")
+  apiStatus       String    @default("not_configured") @map("api_status") @db.VarChar(30)
+  apiPayload      Json?     @map("api_payload")
+  lastSyncAt      DateTime? @map("last_sync_at")
+  lastSyncError   String?   @map("last_sync_error") @db.VarChar(500)
+  remark          String?   @db.Text
+  createdBy       BigInt?   @map("created_by")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  @@index([status], map: "idx_mingrui_status")
+  @@index([createdAt], map: "idx_mingrui_created")
+  @@map("mingrui_shipment")
 }

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { purchaseApi, supplierApi, usersApi, productDevApi, warehouseApi, productApi } from '@/api/client.js'
 import { mapPurchaseOrder, mapPrePurchaseOrder, mapProductDev } from '@/api/mappers.ts'
@@ -7,13 +8,16 @@ import { useListLoader, withAction } from '@/composables/useListLoader.ts'
 import { useTablePagination } from '@/composables/useTablePagination.ts'
 import { useAppStore } from '@/stores/app'
 import ListPagination from '@/components/ListPagination.vue'
+import DetailSheet from '@/components/ui/DetailSheet.vue'
 import {
   PIPELINE_PURCHASE_ASSIGN,
   PIPELINE_PRE_PO,
   PIPELINE_PURCHASE_ORDERS,
 } from '@/constants/productPipeline.ts'
+import { productDevImageSrc } from '@/utils/productDevImage.ts'
 
 const app = useAppStore()
+const router = useRouter()
 
 const mainTab = ref('orders')
 const searchQ = ref('')
@@ -21,7 +25,8 @@ const searchQ = ref('')
 const canCreate = computed(() => app.hasPerm('purchase.create'))
 const canAssignPurchaser = computed(() => app.hasPerm('purchase.assign'))
 const canPoAudit = computed(() => app.hasPerm('purchase.po_audit'))
-const canFinanceAudit = computed(() => app.hasPerm('purchase.finance_audit'))
+const canMarkPaid = computed(() => app.hasPerm('purchase.mark_paid'))
+const canMingruiOrder = computed(() => app.hasPerm('mingrui.order'))
 const canSetActualQty = computed(() => app.hasPerm('product_audit.purchase_qty') || app.hasPerm('product_audit.approve'))
 
 const { loading, items: poItems, load } = useListLoader(async () => {
@@ -83,14 +88,23 @@ const tabs = computed(() => {
   if (canSetActualQty.value) {
     list.push({ id: 'actual_qty', label: '核定实际数量' })
   }
-  list.push({ id: 'po_pending', label: '采购审核' }, { id: 'finance_pending', label: '财务审核' })
+  list.push({ id: 'po_pending', label: '采购审核' }, { id: 'paid', label: '已打款' })
   return list
 })
+
+function canShowPayment(statusKey?: string) {
+  return ['finance_approved', 'at_logistics_wh', 'received', 'completed', 'approved'].includes(String(statusKey || ''))
+}
+
+function goMingruiOrder(row?: { poNo?: string }) {
+  const poNo = row?.poNo || selectedPo.value?.poNo
+  router.push({ path: '/mingrui', query: poNo ? { poNo } : {} })
+}
 
 function poTone(statusKey: string) {
   if (['finance_approved', 'at_logistics_wh', 'received', 'completed'].includes(statusKey)) return 'ok'
   if (statusKey === 'rejected') return 'danger'
-  if (statusKey === 'pending_po_audit' || statusKey === 'pending_finance' || statusKey === 'pending_actual_qty') return 'warn'
+  if (statusKey === 'pending_po_audit' || statusKey === 'pending_actual_qty') return 'warn'
   return 'info'
 }
 
@@ -130,7 +144,7 @@ function poProductNameLabel(items: any[] | undefined) {
 const poList = computed(() => {
   let list = poItems.value
   if (mainTab.value === 'po_pending') list = list.filter(p => p.statusKey === 'pending_po_audit')
-  if (mainTab.value === 'finance_pending') list = list.filter(p => p.statusKey === 'pending_finance')
+  if (mainTab.value === 'paid') list = list.filter(p => p.paymentStatus === 'paid')
   if (mainTab.value === 'actual_qty') list = list.filter(p => p.statusKey === 'pending_actual_qty')
   if (searchQ.value) {
     const q = searchQ.value.toLowerCase()
@@ -698,6 +712,15 @@ const auditTimeline = computed(() => {
       type: p.statusKey === 'rejected' && p.financeRemark ? 'danger' : 'success',
     })
   }
+  if (p.paidAtStr) {
+    steps.push({
+      time: p.paidAtStr,
+      role: p.paidByName,
+      action: '标记已打款',
+      detail: '已转财务',
+      type: 'success',
+    })
+  }
   return steps
 })
 
@@ -728,7 +751,7 @@ async function passPoAudit() {
   }
   const ok = await withAction(async () => {
     await purchaseApi.approve(selectedPo.value.id, { remark: '审核通过', warehouseCode })
-  }, '采购审核已通过，转财务审核')
+  }, '采购审核已通过，已同步主数据，可安排入库；打款后将转财务')
   if (ok) {
     detailVisible.value = false
     load()
@@ -755,35 +778,28 @@ async function rejectPoAudit() {
   } catch { /* cancelled */ }
 }
 
-async function passFinanceAudit() {
+async function markPoPaid() {
   if (!selectedPo.value) return
   const ok = await withAction(async () => {
-    await purchaseApi.financeApprove(selectedPo.value.id, { remark: '财务审核通过' })
-  }, '财务审核已通过，商品主数据已同步，可安排采购入库')
+    await purchaseApi.markPaid(selectedPo.value.id, { remark: '已打款' })
+  }, '已标记打款，费用信息已转财务')
   if (ok) {
-    detailVisible.value = false
+    const detail = await purchaseApi.detail(selectedPo.value.id)
+    selectedPo.value = mapPurchaseOrder(detail)
     load()
   }
 }
 
-async function rejectFinanceAudit() {
+async function markPoUnpaid() {
   if (!selectedPo.value) return
-  try {
-    const { value } = await ElMessageBox.prompt('请填写驳回原因', '财务审核驳回', {
-      confirmButtonText: '确认驳回',
-      cancelButtonText: '取消',
-      inputPattern: /\S+/,
-      inputErrorMessage: '驳回原因不能为空',
-      type: 'warning',
-    })
-    const ok = await withAction(async () => {
-      await purchaseApi.rejectFinance(selectedPo.value.id, { remark: value })
-    }, '采购单已驳回')
-    if (ok) {
-      detailVisible.value = false
-      load()
-    }
-  } catch { /* cancelled */ }
+  const ok = await withAction(async () => {
+    await purchaseApi.markUnpaid(selectedPo.value.id)
+  }, '已改回未打款')
+  if (ok) {
+    const detail = await purchaseApi.detail(selectedPo.value.id)
+    selectedPo.value = mapPurchaseOrder(detail)
+    load()
+  }
 }
 </script>
 
@@ -812,7 +828,7 @@ async function rejectFinanceAudit() {
               size="small"
               @keyup.enter="loadMyPrePo"
             />
-            <el-input v-else-if="mainTab === 'orders' || mainTab === 'po_pending' || mainTab === 'finance_pending' || mainTab === 'actual_qty'" v-model="searchQ" placeholder="搜索单号 / SKU / 供应商" clearable style="width:200px" size="small" />
+            <el-input v-else-if="mainTab === 'orders' || mainTab === 'po_pending' || mainTab === 'paid' || mainTab === 'actual_qty'" v-model="searchQ" placeholder="搜索单号 / SKU / 供应商" clearable style="width:200px" size="small" />
             <el-button v-if="canCreate && mainTab === 'orders'" type="primary" size="small" @click="openCreatePo">+ 创建采购单</el-button>
           </div>
         </div>
@@ -868,12 +884,15 @@ async function rejectFinanceAudit() {
         <ListPagination v-model:page="prePoPage" v-model:page-size="prePoPageSize" :total="prePoTotal" />
       </div>
 
-      <template v-else-if="mainTab === 'orders' || mainTab === 'po_pending' || mainTab === 'finance_pending' || mainTab === 'actual_qty'">
+      <template v-else-if="mainTab === 'orders' || mainTab === 'po_pending' || mainTab === 'paid' || mainTab === 'actual_qty'">
       <el-alert v-if="mainTab === 'orders'" type="info" :closable="false" show-icon style="margin-bottom:12px">
       <p class="flow-hint">{{ PIPELINE_PURCHASE_ORDERS }}</p>
       </el-alert>
       <el-alert v-if="mainTab === 'actual_qty'" type="warning" :closable="false" show-icon style="margin-bottom:12px">
         产品主管在此核定实际采购数量，提交后进入「采购审核」。
+      </el-alert>
+      <el-alert v-if="mainTab === 'paid'" type="info" :closable="false" show-icon style="margin-bottom:12px">
+        已打款采购单已转财务。采购主管可继续「明瑞物流下单」订舱发运海外仓。财务可查看费用明细，但不能修改打款状态。
       </el-alert>
       <el-table v-loading="loading" :data="pagedItems" stripe border style="width: 100%" size="small">
         <el-table-column prop="poNo" label="采购单号" width="150">
@@ -900,12 +919,21 @@ async function rejectFinanceAudit() {
             </el-tag>
           </template>
         </el-table-column>
+        <el-table-column label="打款" width="90">
+          <template #default="{ row }">
+            <el-tag v-if="canShowPayment(row.statusKey)" :type="row.paymentStatus === 'paid' ? 'success' : 'warning'" size="small">
+              {{ row.paymentStatusLabel || (row.paymentStatus === 'paid' ? '已打款' : '未打款') }}
+            </el-tag>
+            <span v-else>—</span>
+          </template>
+        </el-table-column>
         <el-table-column prop="createdAtStr" label="创建时间" width="110" />
-        <el-table-column label="操作" width="100" fixed="right">
+        <el-table-column label="操作" width="160" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="openDetail(row)">
-              {{ (canSetActualQty && row.statusKey === 'pending_actual_qty') ? '核定数量' : (canPoAudit && row.statusKey === 'pending_po_audit') || (canFinanceAudit && row.statusKey === 'pending_finance') ? '去审核' : '详情' }}
+              {{ (canSetActualQty && row.statusKey === 'pending_actual_qty') ? '核定数量' : (canPoAudit && row.statusKey === 'pending_po_audit') ? '去审核' : '详情' }}
             </el-button>
+            <el-button v-if="canMingruiOrder && canShowPayment(row.statusKey)" link type="success" size="small" @click="goMingruiOrder(row)">明瑞下单</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -1033,10 +1061,37 @@ async function rejectFinanceAudit() {
     </div>
   </el-drawer>
 
-  <el-drawer v-model="detailVisible" :title="(selectedPo?.poNo || '') + ' · 采购单详情'" size="960px" direction="rtl">
+  <el-drawer v-model="detailVisible" :title="(selectedPo?.poNo || '') + ' · 采购单详情'" size="960px" direction="rtl" class="erp-detail">
     <div v-loading="detailLoading" class="detail-body">
       <template v-if="selectedPo">
-        <el-descriptions v-if="selectedPo.statusKey !== 'pending_finance'" :column="2" border size="small" title="基本信息">
+        <DetailSheet
+          :kicker="selectedPo.poNo"
+          :title="selectedPo.supplier"
+          :subtitle="[selectedPo.purchaserName, selectedPo.warehouseName, selectedPo.createdAtStr].filter(Boolean).join(' · ')"
+        >
+          <template #status>
+            <el-tag :type="poTone(selectedPo.statusKey) === 'ok' ? 'success' : poTone(selectedPo.statusKey) === 'warn' ? 'warning' : poTone(selectedPo.statusKey) === 'danger' ? 'danger' : 'info'" size="small">{{ selectedPo.status }}</el-tag>
+          </template>
+          <template #metrics>
+            <div class="erp-detail__metric is-accent">
+              <label>采购总额</label>
+              <strong>¥ {{ fmtMoney(poDisplayAmount(selectedPo)) }}</strong>
+            </div>
+            <div class="erp-detail__metric">
+              <label>国内运费</label>
+              <strong>{{ selectedPo.domesticFreight != null ? `¥ ${Number(selectedPo.domesticFreight).toFixed(2)}` : '—' }}</strong>
+            </div>
+            <div class="erp-detail__metric">
+              <label>币种</label>
+              <strong>{{ selectedPo.currency || '—' }}</strong>
+            </div>
+            <div class="erp-detail__metric">
+              <label>预计到货</label>
+              <strong>{{ selectedPo.expectedArrivalStr || '—' }}</strong>
+            </div>
+          </template>
+        </DetailSheet>
+        <el-descriptions :column="2" border size="small" title="基本信息">
           <el-descriptions-item label="采购单号"><span style="font-family:var(--font-mono)">{{ selectedPo.poNo }}</span></el-descriptions-item>
           <el-descriptions-item label="状态">
             <el-tag :type="poTone(selectedPo.statusKey) === 'ok' ? 'success' : poTone(selectedPo.statusKey) === 'warn' ? 'warning' : poTone(selectedPo.statusKey) === 'danger' ? 'danger' : 'info'" size="small">{{ selectedPo.status }}</el-tag>
@@ -1062,7 +1117,7 @@ async function rejectFinanceAudit() {
           <el-descriptions-item label="采购员">{{ selectedPo.purchaserName }}</el-descriptions-item>
           <el-descriptions-item label="币种">{{ selectedPo.currency }}</el-descriptions-item>
           <el-descriptions-item label="采购总额">
-            <span style="font-weight:600;color:#1f9d92">¥ {{ fmtMoney(poDisplayAmount(selectedPo)) }}</span>
+            <span class="erp-money">¥ {{ fmtMoney(poDisplayAmount(selectedPo)) }}</span>
             <span v-if="selectedPo.statusKey === 'pending_actual_qty'" class="form-tip">按核定数量×单价预估，提交实际数量后更新</span>
           </el-descriptions-item>
           <el-descriptions-item label="国内运费">
@@ -1070,11 +1125,19 @@ async function rejectFinanceAudit() {
           </el-descriptions-item>
           <el-descriptions-item label="预计到货">{{ selectedPo.expectedArrivalStr || '—' }}</el-descriptions-item>
           <el-descriptions-item label="创建时间">{{ selectedPo.createdAtStr }}</el-descriptions-item>
+          <el-descriptions-item v-if="canShowPayment(selectedPo.statusKey)" label="打款状态">
+            <el-tag :type="selectedPo.paymentStatus === 'paid' ? 'success' : 'warning'" size="small">
+              {{ selectedPo.paymentStatus === 'paid' ? '已打款' : '未打款' }}
+            </el-tag>
+            <span v-if="selectedPo.paymentStatus === 'paid'" class="form-tip">
+              {{ selectedPo.paidByName }} · {{ selectedPo.paidAtStr }} · 已转财务
+            </span>
+          </el-descriptions-item>
           <el-descriptions-item label="备注" :span="2">{{ selectedPo.remark || '—' }}</el-descriptions-item>
         </el-descriptions>
 
-        <template v-if="selectedPo.statusKey === 'pending_finance'">
-          <div class="detail-section-title">财务审核 · 费用去向</div>
+        <template v-if="canShowPayment(selectedPo.statusKey)">
+          <div class="detail-section-title">费用明细（转财务）</div>
           <el-descriptions :column="2" border size="small" title="单据信息">
             <el-descriptions-item label="采购单号"><span class="mono">{{ selectedPo.poNo }}</span></el-descriptions-item>
             <el-descriptions-item label="供应商">{{ selectedPo.supplier }}</el-descriptions-item>
@@ -1101,11 +1164,11 @@ async function rejectFinanceAudit() {
             <el-descriptions-item label="Logo 费用">{{ confirmationMoney(financeSummary(selectedPo).logo) }}</el-descriptions-item>
             <el-descriptions-item label="纸箱费用">{{ confirmationMoney(financeSummary(selectedPo).carton) }}</el-descriptions-item>
             <el-descriptions-item label="备用纸箱费用">{{ confirmationMoney(financeSummary(selectedPo).spareCarton) }}</el-descriptions-item>
-            <el-descriptions-item label="预计总支出" :span="2"><strong style="font-size:16px;color:#1f9d92">{{ confirmationMoney(financeSummary(selectedPo).total) }}</strong></el-descriptions-item>
+            <el-descriptions-item label="预计总支出" :span="2"><strong class="erp-money">{{ confirmationMoney(financeSummary(selectedPo).total) }}</strong></el-descriptions-item>
           </el-descriptions>
         </template>
 
-        <template v-if="selectedPo.statusKey !== 'pending_finance' && selectedPo.purchaseConfirmation">
+        <template v-if="selectedPo.purchaseConfirmation">
           <div class="detail-section-title">采购确认信息</div>
           <el-descriptions :column="2" border size="small" title="供应商与产品确认">
             <el-descriptions-item label="预采购单号"><span class="mono">{{ selectedPo.purchaseConfirmation.prePoNo || '—' }}</span></el-descriptions-item>
@@ -1155,8 +1218,8 @@ async function rejectFinanceAudit() {
           </el-descriptions>
         </template>
 
-        <div v-if="selectedPo.statusKey !== 'pending_finance'" class="detail-section-title">SKU 明细</div>
-        <el-table v-if="selectedPo.statusKey !== 'pending_finance'" :data="selectedPo.items || []" border size="small" style="margin-bottom:20px">
+        <div class="detail-section-title">SKU 明细</div>
+        <el-table :data="selectedPo.items || []" border size="small" style="margin-bottom:20px">
           <el-table-column prop="sku" label="SKU" width="110">
             <template #default="{ row }"><span style="font-family:var(--font-mono);font-size:12px">{{ row.sku }}</span></template>
           </el-table-column>
@@ -1185,8 +1248,8 @@ async function rejectFinanceAudit() {
           <el-table-column prop="remark" label="行备注" min-width="100" show-overflow-tooltip />
         </el-table>
 
-        <div v-if="selectedPo.statusKey !== 'pending_finance'" class="detail-section-title">审核记录</div>
-        <el-timeline v-if="selectedPo.statusKey !== 'pending_finance' && auditTimeline.length">
+        <div class="detail-section-title">审核记录</div>
+        <el-timeline v-if="auditTimeline.length">
           <el-timeline-item
             v-for="(h, i) in auditTimeline"
             :key="i"
@@ -1199,7 +1262,7 @@ async function rejectFinanceAudit() {
             <div style="font-size:12px;color:#5c6578;margin-top:4px">{{ h.detail }}</div>
           </el-timeline-item>
         </el-timeline>
-        <el-empty v-if="selectedPo.statusKey !== 'pending_finance' && !auditTimeline.length" description="暂无审核记录" :image-size="60" />
+        <el-empty v-if="!auditTimeline.length" description="暂无审核记录" :image-size="60" />
       </template>
     </div>
     <template #footer>
@@ -1212,10 +1275,11 @@ async function rejectFinanceAudit() {
           <el-button type="danger" plain @click="rejectPoAudit">驳回</el-button>
           <el-button type="primary" @click="passPoAudit">审核通过</el-button>
         </template>
-        <template v-if="selectedPo?.statusKey === 'pending_finance' && canFinanceAudit">
-          <el-button type="danger" plain @click="rejectFinanceAudit">驳回</el-button>
-          <el-button type="primary" @click="passFinanceAudit">财务通过</el-button>
+        <template v-if="canMarkPaid && canShowPayment(selectedPo?.statusKey)">
+          <el-button v-if="selectedPo.paymentStatus !== 'paid'" type="success" @click="markPoPaid">标记已打款</el-button>
+          <el-button v-else type="warning" plain @click="markPoUnpaid">标记未打款</el-button>
         </template>
+        <el-button v-if="canMingruiOrder && canShowPayment(selectedPo?.statusKey)" type="primary" @click="goMingruiOrder(selectedPo)">明瑞物流下单</el-button>
       </div>
     </template>
   </el-drawer>
@@ -1328,7 +1392,7 @@ async function rejectFinanceAudit() {
           </el-form-item>
           <el-form-item label="Takealot 售价图">
             <div v-if="assignDevDetail.takealotPriceImageUrl" class="image-preview-row">
-              <el-image :src="assignDevDetail.takealotPriceImageUrl" fit="cover" class="preview-img" :preview-src-list="[assignDevDetail.takealotPriceImageUrl]" />
+              <el-image :src="productDevImageSrc(assignDevDetail.takealotPriceImageUrl)" fit="cover" class="preview-img" :preview-src-list="[productDevImageSrc(assignDevDetail.takealotPriceImageUrl)]" />
             </div>
             <span v-else class="empty-val">—</span>
           </el-form-item>
@@ -1346,7 +1410,7 @@ async function rejectFinanceAudit() {
           </el-form-item>
           <el-form-item label="1688 产品图">
             <div v-if="assignDevDetail.alibaba1688ImageUrl" class="image-preview-row">
-              <el-image :src="assignDevDetail.alibaba1688ImageUrl" fit="cover" class="preview-img" :preview-src-list="[assignDevDetail.alibaba1688ImageUrl]" />
+              <el-image :src="productDevImageSrc(assignDevDetail.alibaba1688ImageUrl)" fit="cover" class="preview-img" :preview-src-list="[productDevImageSrc(assignDevDetail.alibaba1688ImageUrl)]" />
             </div>
             <span v-else class="empty-val">—</span>
           </el-form-item>

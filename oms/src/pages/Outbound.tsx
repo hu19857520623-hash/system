@@ -38,6 +38,7 @@ import {
   mergeTakealotParsed,
   parseTakealotDocumentText,
   parseTakealotFilename,
+  takealotIdentityConflicts,
   takealotMissingFields,
   takealotParseConflicts,
   takealotParseWarnings,
@@ -486,6 +487,11 @@ export default function Outbound() {
     kind: TakealotAttachmentKind | 'auto',
   ) => {
     if (!files?.length) return
+    const selected = Array.from(files)
+    if (selected.length > 1) {
+      setParseErrors(['请一次只上传一个文件。后传文件的 PO 号、Seller ID、目的仓等必须与已上传文件一致，否则将拒绝上传。'])
+      return
+    }
     setParseBusy(true)
     setParseErrors([])
     const next: FileAttachment[] = []
@@ -495,7 +501,7 @@ export default function Outbound() {
     const nextLabelResults = { ...takealotLabelResults }
     const generatedLabelResults: Record<string, TakealotLabelPdfResult> = {}
     try {
-      for (const file of Array.from(files)) {
+      for (const file of selected) {
         const fromName = parseTakealotFilename(file.name)
         let text = ''
         if (file.name.toLowerCase().endsWith('.pdf')) {
@@ -583,6 +589,30 @@ export default function Outbound() {
         }
         partsByFile.set(`${fileType}:${file.name}`, fileParts)
       }
+      if (!partsByFile.size) {
+        setParseErrors(errors.length ? errors : [`${selected[0].name}：无法识别，已拒绝上传`])
+        return
+      }
+
+      const incomingParts = [...partsByFile.values()].flat()
+      const intraMismatches = takealotIdentityConflicts(incomingParts)
+      if (intraMismatches.length) {
+        setParseErrors([
+          `${selected[0].name} 已拒绝上传：文件内字段不一致。${intraMismatches.join('；')}`,
+        ])
+        return
+      }
+      const existingParts = [...takealotParsedParts.current.entries()]
+        .filter(([key]) => !uploadedTypes.has(key.split(':')[0] as TakealotAttachmentKind))
+        .flatMap(([, parts]) => parts)
+      const crossMismatches = takealotIdentityConflicts([...existingParts, ...incomingParts])
+      if (crossMismatches.length) {
+        setParseErrors([
+          `${selected[0].name} 已拒绝上传：与已上传文件字段不一致。${crossMismatches.join('；')}`,
+        ])
+        return
+      }
+
       if (kind === 'auto' || TAKEALOT_DOWNLOAD_ITEMS.some(item => item.fileType === kind)) {
         setOutboundType('Takealot入仓')
       }
@@ -958,7 +988,7 @@ export default function Outbound() {
             <div>
               <h2 className="text-base font-semibold text-text-primary">Takealot 文件智能识别</h2>
               <p className="mt-1 text-xs text-text-muted">
-                支持一次上传预约单、发货清单、SKU 标签和外箱标，自动填写 PO、目的仓、预约时间、Seller 与 SKU 明细。
+                请逐个上传预约单、发货清单、SKU 标签和外箱标。后传文件的 PO 号、Seller ID、目的仓等必须与已上传文件一致，否则将拒绝上传。
               </p>
             </div>
             {takealotParsedDoc && (
@@ -973,7 +1003,6 @@ export default function Outbound() {
           <input
             ref={fileInputRef}
             type="file"
-            multiple
             accept=".pdf,.txt,.csv,application/pdf,text/plain,text/csv"
             className="hidden"
             onChange={e => {
@@ -983,6 +1012,7 @@ export default function Outbound() {
           />
           <button
             type="button"
+            disabled={parseBusy}
             onClick={() => fileInputRef.current?.click()}
             onDragEnter={e => {
               e.preventDefault()
@@ -1003,7 +1033,7 @@ export default function Outbound() {
             <p className="mt-2 text-sm font-semibold text-text-primary">
               {parseBusy ? '正在读取并识别文件…' : '点击选择或拖入 Takealot 文件'}
             </p>
-            <p className="mt-1 text-[11px] text-text-muted">可同时上传多个 PDF；系统自动判断文件类型</p>
+            <p className="mt-1 text-[11px] text-text-muted">一次只能上传一个 PDF；请按文件逐个添加</p>
           </button>
 
           <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -1025,12 +1055,13 @@ export default function Outbound() {
                   />
                   <button
                     type="button"
+                    disabled={parseBusy}
                     onClick={() => takealotFileRefs.current[item.fileType]?.click()}
                     className="w-full rounded-lg border border-border-light bg-surface-muted/40 px-3 py-2.5 text-left hover:border-primary-300 hover:bg-primary-50/30"
                   >
                     <p className="text-xs font-medium text-text-secondary">{item.label}</p>
                     <p className={`mt-0.5 text-[10px] ${uploaded.length ? 'text-emerald-700' : 'text-text-muted'}`}>
-                      {uploaded.length ? `${uploaded.length} 个文件` : '可单独补传'}
+                      {uploaded.length ? `${uploaded.length} 个文件` : '一次上传一个'}
                     </p>
                   </button>
                 </div>

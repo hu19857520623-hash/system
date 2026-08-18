@@ -118,8 +118,8 @@
           "label": "采购订单-主管审核/驳回"
         },
         {
-          "id": "purchase.finance_audit",
-          "label": "采购订单-财务审核/驳回"
+          "id": "purchase.mark_paid",
+          "label": "采购订单-标记打款"
         },
         {
           "id": "logistics_wh.view",
@@ -144,6 +144,14 @@
         {
           "id": "create_inbound.label",
           "label": "创建入库单-标签"
+        },
+        {
+          "id": "mingrui.view",
+          "label": "明瑞物流-查看"
+        },
+        {
+          "id": "mingrui.order",
+          "label": "明瑞物流-下单"
         },
         {
           "id": "warehouse_location.view",
@@ -357,6 +365,10 @@
         {
           "id": "permissions.manage",
           "label": "权限管理-管理"
+        },
+        {
+          "id": "announcement.manage",
+          "label": "系统公告-发布"
         }
       ]
     }
@@ -372,7 +384,7 @@
       "roleCode": "ops_manager",
       "roleName": "采购主管",
       "templateKey": "采购主管",
-      "description": "PO 审核、物流与入库协调"
+      "description": "PO 审核、明瑞物流下单与入库协调"
     },
     {
       "roleCode": "purchaser",
@@ -390,7 +402,7 @@
       "roleCode": "finance",
       "roleName": "财务",
       "templateKey": "财务",
-      "description": "财务审核与结算"
+      "description": "查看已打款采购单与结算"
     },
     {
       "roleCode": "cs",
@@ -481,13 +493,15 @@
       "purchase.create",
       "purchase.assign",
       "purchase.po_audit",
-      "purchase.finance_audit",
+      "purchase.mark_paid",
       "logistics_wh.view",
       "logistics_wh.receive",
       "logistics_wh.manage",
       "create_inbound.view",
       "create_inbound.create",
       "create_inbound.label",
+      "mingrui.view",
+      "mingrui.order",
       "warehouse_location.view",
       "warehouse_location.edit",
       "warehouse_location.batch_create",
@@ -527,6 +541,7 @@
       "async_io.export",
       "permissions.view",
       "permissions.manage",
+      "announcement.manage",
       "store_monitor.view",
       "store_monitor.view_all",
       "store_monitor.manage",
@@ -542,12 +557,15 @@
       "purchase.create",
       "purchase.assign",
       "purchase.po_audit",
+      "purchase.mark_paid",
       "logistics_wh.view",
       "logistics_wh.receive",
       "logistics_wh.manage",
       "create_inbound.view",
       "create_inbound.create",
       "create_inbound.label",
+      "mingrui.view",
+      "mingrui.order",
       "warehouse_location.view",
       "warehouse_location.edit",
       "warehouse_location.batch_create",
@@ -582,11 +600,13 @@
       "pricing.freight_callback",
       "purchase.view",
       "purchase.create",
+      "purchase.mark_paid",
       "logistics_wh.view",
       "logistics_wh.receive",
       "create_inbound.view",
       "create_inbound.create",
       "create_inbound.label",
+      "mingrui.view",
       "warehouse_location.view",
       "inbound.view",
       "inventory_query.view",
@@ -620,7 +640,6 @@
     "财务": [
       "products.view",
       "purchase.view",
-      "purchase.finance_audit",
       "cost.view",
       "billing.view",
       "billing.generate",
@@ -755,13 +774,15 @@
     "purchase.create",
     "purchase.assign",
     "purchase.po_audit",
-    "purchase.finance_audit",
+    "purchase.mark_paid",
     "logistics_wh.view",
     "logistics_wh.receive",
     "logistics_wh.manage",
     "create_inbound.view",
     "create_inbound.create",
     "create_inbound.label",
+    "mingrui.view",
+    "mingrui.order",
     "warehouse_location.view",
     "warehouse_location.edit",
     "warehouse_location.batch_create",
@@ -808,6 +829,7 @@
     "async_io.import",
     "async_io.export",
     "permissions.view",
-    "permissions.manage"
+    "permissions.manage",
+    "announcement.manage"
   ]
 }

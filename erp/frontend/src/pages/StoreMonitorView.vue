@@ -76,12 +76,24 @@ async function loadSession() {
   await checkService()
 }
 
+function cloneForPostMessage<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value ?? null))
+}
+
 function injectIframeSession() {
   const frame = frameRef.value
   if (!frame?.contentWindow || !session.value) return
   const token = getAccessToken()
-  const payload = { type: 'erp-auth', token, session: session.value }
-  frame.contentWindow.postMessage(payload, window.location.origin)
+  const payload = {
+    type: 'erp-auth',
+    token,
+    session: cloneForPostMessage(session.value),
+  }
+  try {
+    frame.contentWindow.postMessage(payload, window.location.origin)
+  } catch (error: any) {
+    ElMessage.error(error?.message || '店铺看板会话注入失败')
+  }
 }
 
 function onFrameLoad() {
@@ -102,6 +114,10 @@ async function saveStoreKey(row: any) {
   const apiKey = (editKeys.value[row.slot] || '').trim()
   if (!row.configured && !apiKey) {
     ElMessage.warning('请先粘贴 Takealot API Key')
+    return
+  }
+  if (apiKey && apiKey.length < 16) {
+    ElMessage.warning('API Key 过短，请粘贴 Takealot 后台生成的完整密钥，不要把店铺名填进密钥框')
     return
   }
   savingSlot.value = row.slot
@@ -233,6 +249,14 @@ onMounted(loadSession)
       </div>
     </header>
 
+    <div v-if="serviceState === 'offline'" class="setup-callout">
+      <div>
+        <strong>Takealot 代理未启动（127.0.0.1:3456）</strong>
+        <span>店铺看板依赖本机 Chrome 通道。请运行仓库根目录 dev-local.ps1，或单独启动 erp/takealot-monitor。</span>
+      </div>
+      <el-button type="primary" plain @click="checkService">重新检测</el-button>
+    </div>
+
     <div v-if="canManage && !loading && configuredCount === 0" class="setup-callout">
       <div>
         <strong>还没有接入店铺</strong>
@@ -310,7 +334,13 @@ onMounted(loadSession)
         <el-table-column prop="slot" label="槽位" width="64" align="center" />
         <el-table-column label="店铺名" min-width="140">
           <template #default="{ row }">
-            <el-input v-model="storeNameEdits[row.slot]" size="small" maxlength="40" />
+            <el-input
+              v-model="storeNameEdits[row.slot]"
+              size="small"
+              maxlength="40"
+              autocomplete="off"
+              placeholder="店铺备注名"
+            />
           </template>
         </el-table-column>
         <el-table-column prop="coachLabel" label="陪跑" width="82" />
@@ -322,6 +352,8 @@ onMounted(loadSession)
               :placeholder="row.configured ? row.apiKeyMasked : '粘贴 Takealot API Key'"
               size="small"
               show-password
+              autocomplete="new-password"
+              name="takealot-api-key"
             />
           </template>
         </el-table-column>

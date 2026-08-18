@@ -1,17 +1,17 @@
-import { Body, Controller, Get, Param, ParseIntPipe, Post, Put, Query, UseGuards } from '@nestjs/common'
+import { Body, Controller, Get, Param, ParseIntPipe, Post, Put, Query } from '@nestjs/common'
 import { CustomersService } from './customers.service'
 import { PaginationDto } from '../../common/dto/pagination.dto'
 import { CurrentUser } from '../../common/decorators/current-user.decorator'
 import { RequireAnyPerm, RequirePerms } from '../../common/decorators/require-perms.decorator'
-import { Public } from '../../common/decorators/public.decorator'
+import { OmsBridge } from '../../common/decorators/oms-bridge.decorator'
 import { Roles } from '../../common/decorators/roles.decorator'
 import {
   CreateCustomerDto,
   InternalSetPortalTemporaryPasswordDto,
+  RechargeCustomerDto,
   SetPortalTemporaryPasswordDto,
   UpdateCustomerDto,
 } from './dto/customer.dto'
-import { OmsInternalTokenGuard } from './oms-internal-token.guard'
 
 @Controller('customers')
 export class CustomersController {
@@ -24,16 +24,14 @@ export class CustomersController {
   }
 
   /** OMS server：使用共享数据库执行与 ERP 开户相同的原子开通流程 */
-  @Public()
-  @UseGuards(OmsInternalTokenGuard)
+  @OmsBridge()
   @Post('oms/provision')
   provisionFromOms(@Body() body: CreateCustomerDto) {
     return this.service.provisionFromOms(body)
   }
 
   /** OMS server：由内部调用方重置临时密码，且强制首次登录改密。 */
-  @Public()
-  @UseGuards(OmsInternalTokenGuard)
+  @OmsBridge()
   @Post('oms/reset-temporary-password')
   setPortalTemporaryPasswordFromOms(
     @Body() body: InternalSetPortalTemporaryPasswordDto,
@@ -42,21 +40,21 @@ export class CustomersController {
   }
 
   /** OMS：按客户编码查主数据与余额 */
-  @Public()
+  @OmsBridge()
   @Get('oms/by-code/:customerCode')
   omsCustomerByCode(@Param('customerCode') customerCode: string) {
     return this.service.findByCodeForOms(customerCode)
   }
 
   /** OMS：按客户编码查货盘持有库存 */
-  @Public()
+  @OmsBridge()
   @Get('oms/by-code/:customerCode/sku-inventory')
   omsSkuInventoryByCode(@Param('customerCode') customerCode: string) {
     return this.service.skuInventoryByCodeForOms(customerCode)
   }
 
   /** OMS P1：客户库存视图（持有 + 仓存） */
-  @Public()
+  @OmsBridge()
   @Get('oms/by-code/:customerCode/inventory-view')
   omsInventoryView(
     @Param('customerCode') customerCode: string,
@@ -66,14 +64,14 @@ export class CustomersController {
   }
 
   /** OMS P2：客户自助充值 */
-  @Public()
+  @OmsBridge()
   @Post('oms/by-code/:customerCode/recharge')
-  omsRecharge(@Param('customerCode') customerCode: string, @Body() body: any) {
+  omsRecharge(@Param('customerCode') customerCode: string, @Body() body: RechargeCustomerDto) {
     return this.service.rechargeFromOms(customerCode, body)
   }
 
   /** OMS P2：充值记录 */
-  @Public()
+  @OmsBridge()
   @Get('oms/by-code/:customerCode/recharges')
   omsRecharges(@Param('customerCode') customerCode: string) {
     return this.service.listRechargesForOms(customerCode)
@@ -121,7 +119,7 @@ export class CustomersController {
 
   @RequirePerms('budget_credit.create')
   @Post(':id/recharge')
-  recharge(@Param('id', ParseIntPipe) id: number, @Body() body: any, @CurrentUser('userId') userId: number) {
+  recharge(@Param('id', ParseIntPipe) id: number, @Body() body: RechargeCustomerDto, @CurrentUser('userId') userId: number) {
     return this.service.recharge(id, body, userId)
   }
 }

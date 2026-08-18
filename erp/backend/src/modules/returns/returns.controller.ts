@@ -2,7 +2,8 @@ import { Body, Controller, Delete, Get, Param, ParseIntPipe, Post, Put, Query, R
 import type { Response } from 'express'
 import { ReturnsService } from './returns.service'
 import { PaginationDto } from '../../common/dto/pagination.dto'
-import { Public } from '../../common/decorators/public.decorator'
+import { OmsBridge } from '../../common/decorators/oms-bridge.decorator'
+import { CreateOmsReturnDto } from './dto/oms-return.dto'
 import { RequireAnyPerm, RequirePerms } from '../../common/decorators/require-perms.decorator'
 import { CurrentUser } from '../../common/decorators/current-user.decorator'
 
@@ -10,31 +11,31 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator'
 export class ReturnsController {
   constructor(private readonly service: ReturnsService) {}
 
-  @Public()
+  @OmsBridge()
   @Post('oms')
-  omsCreate(@Body() body: any) {
+  omsCreate(@Body() body: CreateOmsReturnDto) {
     return this.service.createFromOms(body)
   }
 
-  @Public()
+  @OmsBridge()
   @Get('oms/by-customer/:customerCode')
   omsListByCustomer(@Param('customerCode') customerCode: string) {
     return this.service.listByOmsCustomer(customerCode)
   }
 
-  @Public()
+  @OmsBridge()
   @Get('oms/by-no/:returnNo')
   omsGetByNo(@Param('returnNo') returnNo: string) {
     return this.service.getByReturnNoForOms(returnNo)
   }
 
-  @Public()
+  @OmsBridge()
   @Post('oms/by-no/:returnNo/cancel')
   omsCancel(@Param('returnNo') returnNo: string, @Body() body: { customerCode?: string }) {
     return this.service.cancelFromOms(returnNo, body?.customerCode)
   }
 
-  @Public()
+  @OmsBridge()
   @Post('oms/by-no/:returnNo/decide')
   omsDecide(
     @Param('returnNo') returnNo: string,
@@ -43,14 +44,15 @@ export class ReturnsController {
     return this.service.decideFromOms(returnNo, body)
   }
 
-  @Public()
+  @OmsBridge()
   @Get('oms/by-no/:returnNo/attachment/:attachmentId')
   async omsDownloadAttachment(
     @Param('returnNo') returnNo: string,
     @Param('attachmentId', ParseIntPipe) attachmentId: number,
+    @Query('customerCode') customerCode: string,
     @Res() res: Response,
   ) {
-    const file = await this.service.downloadAttachmentByReturnNo(returnNo, attachmentId)
+    const file = await this.service.downloadAttachmentByReturnNo(returnNo, attachmentId, customerCode)
     res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(file.fileName)}"`)
     res.send(file.content)
   }

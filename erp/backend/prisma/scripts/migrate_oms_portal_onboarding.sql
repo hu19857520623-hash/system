@@ -142,8 +142,14 @@ SET @idx_exists := (
     AND TABLE_NAME = 'oms_PortalUser'
     AND INDEX_NAME = 'oms_PortalUser_loginEmail_key'
 );
+SET @has_login_email := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'oms_PortalUser'
+    AND COLUMN_NAME = 'loginEmail'
+);
 SET @sql := IF(
-  @idx_exists = 0,
+  @idx_exists = 0 AND @has_login_email > 0,
   'CREATE UNIQUE INDEX `oms_PortalUser_loginEmail_key` ON `oms_PortalUser` (`loginEmail`)',
   'SELECT 1'
 );

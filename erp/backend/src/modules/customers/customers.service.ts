@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
+import { Prisma, type Customer } from '@prisma/client'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
 import { notifyOms } from '../../common/oms-notify.util'
@@ -182,8 +183,11 @@ export class CustomersService {
     }
   }
 
-  async create(data: CreateCustomerDto) {
-    const result = await this.provisioning.create(data, { requirePortal: true })
+  async create(
+    data: CreateCustomerDto,
+    afterCreate?: (tx: Prisma.TransactionClient, customer: Customer) => Promise<void>,
+  ) {
+    const result = await this.provisioning.create(data, { requirePortal: true, afterCreate })
     return this.toProvisioningResponse(result)
   }
 
@@ -208,7 +212,8 @@ export class CustomersService {
     return {
       customerCode: result.customer.customerCode,
       portalReady: true,
-      portalLoginEmail: result.oms.portalLoginEmail,
+      portalUsername: result.oms.portalUsername || result.oms.portalLoginEmail,
+      portalLoginEmail: result.oms.portalUsername || result.oms.portalLoginEmail,
       portalStatus: result.oms.portalStatus,
       mustChangePassword: result.oms.mustChangePassword,
     }
@@ -339,19 +344,21 @@ export class CustomersService {
   }
 
   private toInternalProvisioningResponse(result: CustomerProvisioningResult) {
-    if (!result.oms?.portalReady || !result.oms.portalLoginEmail) {
+    if (!result.oms?.portalReady || !(result.oms.portalUsername || result.oms.portalLoginEmail)) {
       throw new BadRequestException('OMS 门户账户未完成开通')
     }
+    const username = result.oms.portalUsername || result.oms.portalLoginEmail
     return {
       customer: this.toPublicCustomer(result.customer),
       portalAccount: {
         id: result.oms.omsId,
         customerId: result.oms.omsId,
-        loginEmail: result.oms.portalLoginEmail,
+        username,
+        loginEmail: username,
         role: result.oms.type,
         // Keep compatibility aliases for older internal callers.
         code: result.customer.customerCode,
-        email: result.oms.portalLoginEmail,
+        email: username,
         type: result.oms.type,
         warehouse: result.oms.warehouse,
         status: result.oms.portalStatus || result.oms.omsStatus,

@@ -2,14 +2,16 @@ import { Body, Controller, Delete, Get, Param, ParseIntPipe, Post, Put, Query } 
 import { AnnouncementService } from './announcement.service'
 import { PaginationDto } from '../../common/dto/pagination.dto'
 import { CurrentUser } from '../../common/decorators/current-user.decorator'
-import { Public } from '../../common/decorators/public.decorator'
+import { OmsBridge } from '../../common/decorators/oms-bridge.decorator'
+import { RequirePerms } from '../../common/decorators/require-perms.decorator'
+import { UpsertAnnouncementDto } from './dto/announcement.dto'
 
 @Controller('announcements')
 export class AnnouncementController {
   constructor(private readonly service: AnnouncementService) {}
 
   /** OMS P2：已发布 OMS 渠道公告 */
-  @Public()
+  @OmsBridge()
   @Get('oms')
   listForOms() {
     return this.service.listForOms()
@@ -25,16 +27,19 @@ export class AnnouncementController {
     return this.service.detail(id)
   }
 
+  @RequirePerms('announcement.manage')
   @Post()
-  create(@Body() body: any, @CurrentUser('userId') userId: number) {
+  create(@Body() body: UpsertAnnouncementDto, @CurrentUser('userId') userId: number) {
     return this.service.create(body, userId)
   }
 
+  @RequirePerms('announcement.manage')
   @Put(':id')
-  update(@Param('id', ParseIntPipe) id: number, @Body() body: any) {
+  update(@Param('id', ParseIntPipe) id: number, @Body() body: UpsertAnnouncementDto) {
     return this.service.update(id, body)
   }
 
+  @RequirePerms('announcement.manage')
   @Delete(':id')
   remove(@Param('id', ParseIntPipe) id: number) {
     return this.service.remove(id)

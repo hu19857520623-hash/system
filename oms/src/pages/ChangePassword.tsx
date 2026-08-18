@@ -25,13 +25,10 @@ export default function ChangePassword() {
       return
     }
     if (
-      newPassword.length < 10
+      newPassword.length < 6
       || newPassword.length > 128
-      || !/[a-z]/.test(newPassword)
-      || !/[A-Z]/.test(newPassword)
-      || !/\d/.test(newPassword)
     ) {
-      setError('新密码须为 10-128 位，且包含大写字母、小写字母和数字')
+      setError('新密码须为 6-128 位')
       return
     }
     if (newPassword !== confirmation) {
@@ -64,7 +61,7 @@ export default function ChangePassword() {
               className={formInput()}
             />
           </FormField>
-          <FormField label="新密码" hint="10-128 位，含大小写字母和数字" required>
+          <FormField label="新密码" hint="6-128 位" required>
             <input
               type="password"
               autoComplete="new-password"

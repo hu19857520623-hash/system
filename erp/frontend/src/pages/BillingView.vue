@@ -14,8 +14,8 @@ const searchQ = ref('')
 const filterCustomer = ref<number | ''>('')
 const filterSource = ref('all')
 const filterType = ref('all')
-const dateFrom = ref('2026-06-01')
-const dateTo = ref('2026-06-30')
+const dateFrom = ref('')
+const dateTo = ref('')
 
 const generateVisible = ref(false)
 const generatePreview = ref({ chargeCount: 0, totalAmount: 0, customerCount: 0 })
@@ -212,8 +212,8 @@ function resetFilters() {
   filterCustomer.value = ''
   filterSource.value = 'all'
   filterType.value = 'all'
-  dateFrom.value = '2026-06-01'
-  dateTo.value = '2026-06-30'
+  dateFrom.value = ''
+  dateTo.value = ''
   searchQ.value = ''
 }
 
@@ -272,7 +272,7 @@ onMounted(async () => {
         <div class="callout-title">客户结算 · {{ tab === 'charges' ? '逐笔费用明细' : '按客户汇总账单' }}</div>
         <div class="callout-body">
           <template v-if="tab === 'charges'">
-            每笔扣费可追溯至 ERP 出库单 / 仓储周期 / 手工作业单；状态为「待入账」的费用可在选定时间范围内汇总生成账单。
+            每笔扣费可追溯至 OMS/ERP 出库单、仓储周期或手工作业。OMS 下出库单时若有运费预扣会立即入账；未预扣的费用在仓库发运后入账。不选日期则显示全部。
           </template>
           <template v-else>
             账单由所选时间范围内的未入账费用按客户汇总生成，确认后标记为已入账。
@@ -299,8 +299,8 @@ onMounted(async () => {
           <el-option label="全部类型" value="all" />
           <el-option v-for="t in CHARGE_TYPES" :key="t.value" :label="t.label" :value="t.value" />
         </el-select>
-        <el-date-picker v-model="dateFrom" type="date" value-format="YYYY-MM-DD" placeholder="开始日期" size="small" style="width: 130px" />
-        <el-date-picker v-model="dateTo" type="date" value-format="YYYY-MM-DD" placeholder="结束日期" size="small" style="width: 130px" />
+        <el-date-picker v-model="dateFrom" type="date" value-format="YYYY-MM-DD" placeholder="开始日期" size="small" clearable style="width: 130px" />
+        <el-date-picker v-model="dateTo" type="date" value-format="YYYY-MM-DD" placeholder="结束日期" size="small" clearable style="width: 130px" />
         <el-button size="small" @click="resetFilters">重置</el-button>
       </div>
 
@@ -332,8 +332,12 @@ onMounted(async () => {
           </template>
         </el-table-column>
       </el-table>
-
-      <!-- 客户维度（账单汇总） -->
+      <el-empty
+        v-if="tab === 'charges' && !chargeLoading && !pagedItems.length"
+        description="暂无费用。OMS 出库有预扣运费会立即出现；未预扣的请等仓库发运，或点「手工作业费」录入。"
+        :image-size="64"
+        style="margin-top:16px"
+      />
       <el-table v-else :data="pagedItems" stripe border size="small">
         <el-table-column prop="id" label="账单号" width="160">
           <template #default="{ row }"><span class="mono">{{ row.id }}</span></template>

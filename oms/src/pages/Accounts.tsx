@@ -27,6 +27,7 @@ type CreateAccountDraft = {
   contactName: string
   contactPhone: string
   email: string
+  username: string
   omsType: CustomerAccountType
   warehouse: string
   permissionTemplate: CustomerAccountType
@@ -51,6 +52,7 @@ const EMPTY_CREATE_DRAFT: CreateAccountDraft = {
   contactName: '',
   contactPhone: '',
   email: '',
+  username: '',
   omsType: 'ecommerce',
   warehouse: 'WMS-JHB-01',
   permissionTemplate: 'ecommerce',
@@ -63,12 +65,12 @@ const EMPTY_RESET_DRAFT: ResetPasswordDraft = {
   confirmPassword: '',
 }
 
+function isPortalUsername(value: string) {
+  return /^[A-Za-z0-9._-]{6,50}$/.test(value.trim())
+}
+
 function isStrongTemporaryPassword(value: string) {
-  return value.length >= 10
-    && value.length <= 128
-    && /[a-z]/.test(value)
-    && /[A-Z]/.test(value)
-    && /\d/.test(value)
+  return value.length >= 6 && value.length <= 128
 }
 
 function templateName(priceTemplates: { id: string; name: string }[], id: string | null | undefined) {
@@ -144,7 +146,8 @@ export default function Accounts() {
     const required: [keyof CreateAccountDraft, string][] = [
       ['customerName', '客户名称'],
       ['warehouse', '仓库'],
-      ['email', '邮箱'],
+      ['email', '联系邮箱'],
+      ['username', '登录账号'],
       ['temporaryPassword', '临时密码'],
     ]
     const missing = required.find(([key]) => !createDraft[key].trim())
@@ -164,10 +167,13 @@ export default function Accounts() {
     if (createDraft.contactName.trim().length > 50) return setCreateError('联系人最多 50 个字符')
     if (createDraft.contactPhone.trim().length > 30) return setCreateError('联系电话最多 30 个字符')
     if (createDraft.warehouse.trim().length > 100) return setCreateError('仓库编码最多 100 个字符')
-    if (!emailPattern.test(createDraft.email.trim())) return setCreateError('邮箱格式无效')
-    if (createDraft.email.trim().length > 120) return setCreateError('邮箱最多 120 个字符')
+    if (!emailPattern.test(createDraft.email.trim())) return setCreateError('联系邮箱格式无效')
+    if (createDraft.email.trim().length > 120) return setCreateError('联系邮箱最多 120 个字符')
+    if (!isPortalUsername(createDraft.username)) {
+      return setCreateError('登录账号须为 6-50 位字母、数字、点、下划线或短横线')
+    }
     if (!isStrongTemporaryPassword(createDraft.temporaryPassword)) {
-      return setCreateError('临时密码须为 10-128 位，且包含大写字母、小写字母和数字')
+      return setCreateError('临时密码须为 6-128 位')
     }
     if (createDraft.temporaryPassword !== createDraft.confirmPassword) {
       return setCreateError('两次输入的临时密码不一致')
@@ -175,6 +181,7 @@ export default function Accounts() {
     setCreateSaving(true)
     try {
       const email = createDraft.email.trim().toLowerCase()
+      const username = createDraft.username.trim().toLowerCase()
       const response = await apiPost<unknown>('/accounts', {
         ...(createDraft.customerCode.trim()
           ? { customerCode: createDraft.customerCode.trim() }
@@ -184,9 +191,8 @@ export default function Accounts() {
         contactName: createDraft.contactName.trim() || undefined,
         contactPhone: createDraft.contactPhone.trim() || undefined,
         email,
-        // Kept during the unified ERP/OMS rollout for older API deployments.
         contactEmail: email,
-        loginEmail: email,
+        username,
         omsType: createDraft.omsType,
         warehouse: createDraft.warehouse.trim(),
         permissionTemplate: createDraft.permissionTemplate,
@@ -232,7 +238,7 @@ export default function Accounts() {
     if (!resetting) return
     setResetError('')
     if (!isStrongTemporaryPassword(resetDraft.temporaryPassword)) {
-      return setResetError('临时密码须为 10-128 位，且包含大写字母、小写字母和数字')
+      return setResetError('临时密码须为 6-128 位')
     }
     if (resetDraft.temporaryPassword !== resetDraft.confirmPassword) {
       return setResetError('两次输入的临时密码不一致')
@@ -378,8 +384,10 @@ export default function Accounts() {
                   ) : (
                     <Badge status="available" label="账号就绪" />
                   )}
-                  {acc.portalUser?.loginEmail && (
-                    <p className="mt-1 text-[10px] text-text-muted">{acc.portalUser.loginEmail}</p>
+                  {(acc.portalUser?.username || acc.portalUser?.loginEmail) && (
+                    <p className="mt-1 text-[10px] text-text-muted">
+                      {acc.portalUser.username || acc.portalUser.loginEmail}
+                    </p>
                   )}
                 </td>
                 <td className="table-cell text-xs text-text-muted whitespace-nowrap">
@@ -447,13 +455,23 @@ export default function Accounts() {
               <FormField label="联系人">
                 <input className={formInput()} value={createDraft.contactName} onChange={event => setCreateDraft(draft => ({ ...draft, contactName: event.target.value }))} />
               </FormField>
-              <FormField label="邮箱（联系与登录）" required>
+              <FormField label="联系邮箱" required>
                 <input
                   type="email"
                   autoComplete="off"
                   className={formInput()}
                   value={createDraft.email}
                   onChange={event => setCreateDraft(draft => ({ ...draft, email: event.target.value }))}
+                />
+              </FormField>
+              <FormField label="登录账号" hint="6-50 位字母、数字、点、下划线或短横线" required>
+                <input
+                  type="text"
+                  autoComplete="off"
+                  className={formInput()}
+                  value={createDraft.username}
+                  placeholder="例如 acme001"
+                  onChange={event => setCreateDraft(draft => ({ ...draft, username: event.target.value }))}
                 />
               </FormField>
               <FormField label="联系电话">
@@ -494,7 +512,7 @@ export default function Accounts() {
                   <option value="hybrid">混合客户模板</option>
                 </select>
               </FormField>
-              <FormField label="临时密码" hint="10-128 位，含大小写字母和数字" required>
+              <FormField label="临时密码" hint="6-128 位" required>
                 <input type="password" autoComplete="new-password" className={formInput()} value={createDraft.temporaryPassword} onChange={event => setCreateDraft(draft => ({ ...draft, temporaryPassword: event.target.value }))} />
               </FormField>
               <FormField label="确认临时密码" required>
@@ -531,9 +549,9 @@ export default function Accounts() {
             </div>
             <div className="space-y-4 px-6 py-5">
               <div className="rounded-lg bg-surface-muted px-3 py-2.5 text-xs text-text-secondary">
-                登录邮箱：{resetting.portalUser?.loginEmail || resetting.email}
+                登录账号：{resetting.portalUser?.username || resetting.portalUser?.loginEmail || resetting.code}
               </div>
-              <FormField label="临时密码" hint="10-128 位，含大小写字母和数字" required>
+              <FormField label="临时密码" hint="6-128 位" required>
                 <input
                   type="password"
                   autoComplete="new-password"

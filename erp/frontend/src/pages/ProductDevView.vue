@@ -3,6 +3,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { productDevApi } from '@/api/client.js'
 import { mapProductDev } from '@/api/mappers.ts'
+import { productDevImageSrc } from '@/utils/productDevImage.ts'
 import { useListLoader, withAction } from '@/composables/useListLoader.ts'
 import { useTablePagination } from '@/composables/useTablePagination.ts'
 import { useAppStore } from '@/stores/app'
@@ -105,6 +106,63 @@ function emptyForm(): DevForm {
 const dialogVisible = ref(false)
 const editingId = ref<number | null>(null)
 const form = ref<DevForm>(emptyForm())
+const priceImageUploading = ref(false)
+const alibabaImageUploading = ref(false)
+
+async function fileToBase64(file: File) {
+  const buf = await file.arrayBuffer()
+  const bytes = new Uint8Array(buf)
+  let binary = ''
+  bytes.forEach((b) => { binary += String.fromCharCode(b) })
+  return btoa(binary)
+}
+
+async function uploadDevImage(
+  file: File,
+  field: 'takealotPriceImageUrl' | 'alibaba1688ImageUrl',
+  uploading: { value: boolean },
+  successText: string,
+) {
+  if (!file.type.startsWith('image/')) {
+    ElMessage.warning('请上传图片文件')
+    return
+  }
+  if (file.size > 5 * 1024 * 1024) {
+    ElMessage.warning('图片不能超过 5MB')
+    return
+  }
+  uploading.value = true
+  try {
+    const res = await productDevApi.uploadPriceImage({
+      fileName: file.name,
+      contentBase64: await fileToBase64(file),
+    })
+    form.value[field] = res.imageUrl
+    ElMessage.success(successText)
+  } catch (err: any) {
+    ElMessage.error(err?.message || '图片上传失败')
+  } finally {
+    uploading.value = false
+  }
+}
+
+async function handlePriceImageUpload(options: { file: File }) {
+  await uploadDevImage(options.file, 'takealotPriceImageUrl', priceImageUploading, '售价图已上传')
+}
+
+async function handleAlibabaImageUpload(options: { file: File }) {
+  await uploadDevImage(options.file, 'alibaba1688ImageUrl', alibabaImageUploading, '1688 产品图已上传')
+}
+
+function submitMissingMessage() {
+  if (!form.value.sku.trim()) return '请填写 SKU'
+  if (!form.value.name.trim()) return '请填写商品名称'
+  if (!form.value.link.trim()) return '请填写 Takealot 链接'
+  if (!form.value.takealotPriceImageUrl.trim()) return '请上传 Takealot 售价图'
+  if (form.value.cost === '' || !Number.isFinite(Number(form.value.cost))) return '请填写采购价格'
+  if (form.value.marketPrice === '' || !Number.isFinite(Number(form.value.marketPrice))) return '请填写市场参考价'
+  return null
+}
 
 function calcVolumeMetrics(lengthCm: string, widthCm: string, heightCm: string) {
   const l = Number(lengthCm)
@@ -210,6 +268,14 @@ function fillFormFromProduct(p: ReturnType<typeof mapProductDev>) {
 }
 
 async function submitAudit(id: number) {
+  const p = products.value.find(x => x.id === id)
+  if (p) {
+    if (!p.sku?.trim()) { ElMessage.warning('请填写 SKU'); return }
+    if (!p.link || p.link === '#') { ElMessage.warning('请填写 Takealot 链接'); return }
+    if (!p.takealotPriceImageUrl) { ElMessage.warning('请上传 Takealot 售价图'); return }
+    if (!p.cost) { ElMessage.warning('请填写采购价格'); return }
+    if (!p.marketPrice) { ElMessage.warning('请填写市场参考价'); return }
+  }
   const ok = await withAction(async () => {
     await productDevApi.submit(id)
   }, '已提交审核')
@@ -253,7 +319,8 @@ async function saveDraft() {
 }
 
 async function submitForm() {
-  if (!form.value.name) { ElMessage.warning('请填写商品名称'); return }
+  const missing = submitMissingMessage()
+  if (missing) { ElMessage.warning(missing); return }
   if (estProfit.value != null && estProfit.value < 0) {
     try {
       await ElMessageBox.confirm(
@@ -355,15 +422,15 @@ async function submitForm() {
       </el-table-column>
     </el-table>
     <ListPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
-    <p style="font-size:11px;color:#8b95a8;margin-top:10px">SKU 可选手填，审核通过时若未填则系统自动生成；包装尺寸填写后自动计算 CBM 与体积重。核定数量为计划参考，实际采购以采购单为准。</p>
+    <p style="font-size:11px;color:#8b95a8;margin-top:10px">提交审核时需填写 SKU、Takealot 链接、售价图、采购价格与市场参考价；包装尺寸填写后自动计算 CBM 与体积重。核定数量为计划参考，实际采购以采购单为准。</p>
   </el-card>
 
   <el-dialog v-model="dialogVisible" :title="editingId ? '编辑选品申请' : '新建选品申请'" width="780px" top="4vh" destroy-on-close>
     <el-scrollbar max-height="70vh">
       <el-form label-width="118px" class="dev-form">
         <el-divider content-position="left">基本信息</el-divider>
-        <el-form-item label="SKU">
-          <el-input v-model="form.sku" placeholder="可选，留空则审核通过后自动生成" maxlength="30" />
+        <el-form-item label="SKU" required>
+          <el-input v-model="form.sku" placeholder="请填写 SKU" maxlength="30" />
         </el-form-item>
         <el-form-item label="商品名称" required>
           <el-input v-model="form.name" placeholder="输入商品名称" />
@@ -373,11 +440,31 @@ async function submitForm() {
         </el-form-item>
 
         <el-divider content-position="left">链接与图片</el-divider>
-        <el-form-item label="Takealot 链接">
+        <el-form-item label="Takealot 链接" required>
           <el-input v-model="form.link" placeholder="https://www.takealot.com/..." />
         </el-form-item>
-        <el-form-item label="Takealot 售价图">
-          <el-input v-model="form.takealotPriceImageUrl" placeholder="竞品售价截图 URL" />
+        <el-form-item label="Takealot 售价图" required>
+          <div class="upload-block">
+            <el-upload
+              :show-file-list="false"
+              accept="image/jpeg,image/png,image/gif,image/webp,.jpg,.jpeg,.png,.gif,.webp"
+              :disabled="priceImageUploading"
+              :http-request="handlePriceImageUpload"
+            >
+              <el-button size="small" :loading="priceImageUploading">上传文件</el-button>
+            </el-upload>
+            <div v-if="form.takealotPriceImageUrl" class="image-preview-row">
+              <el-image
+                :src="productDevImageSrc(form.takealotPriceImageUrl)"
+                fit="cover"
+                class="preview-img"
+                :preview-src-list="[productDevImageSrc(form.takealotPriceImageUrl)]"
+                preview-teleported
+              />
+              <el-button link type="danger" size="small" @click="form.takealotPriceImageUrl = ''">移除</el-button>
+            </div>
+            <span class="form-tip">支持 JPG / PNG / GIF / WebP，单张最大 5MB</span>
+          </div>
         </el-form-item>
         <el-form-item label="亚马逊链接">
           <el-input v-model="form.amazonUrl" placeholder="https://www.amazon.com/..." />
@@ -386,7 +473,27 @@ async function submitForm() {
           <el-input v-model="form.alibaba1688Url" placeholder="https://detail.1688.com/..." />
         </el-form-item>
         <el-form-item label="1688 产品图">
-          <el-input v-model="form.alibaba1688ImageUrl" placeholder="1688 产品图片 URL" />
+          <div class="upload-block">
+            <el-upload
+              :show-file-list="false"
+              accept="image/jpeg,image/png,image/gif,image/webp,.jpg,.jpeg,.png,.gif,.webp"
+              :disabled="alibabaImageUploading"
+              :http-request="handleAlibabaImageUpload"
+            >
+              <el-button size="small" :loading="alibabaImageUploading">上传文件</el-button>
+            </el-upload>
+            <div v-if="form.alibaba1688ImageUrl" class="image-preview-row">
+              <el-image
+                :src="productDevImageSrc(form.alibaba1688ImageUrl)"
+                fit="cover"
+                class="preview-img"
+                :preview-src-list="[productDevImageSrc(form.alibaba1688ImageUrl)]"
+                preview-teleported
+              />
+              <el-button link type="danger" size="small" @click="form.alibaba1688ImageUrl = ''">移除</el-button>
+            </div>
+            <span class="form-tip">与售价图相同：JPG / PNG / GIF / WebP，单张最大 5MB</span>
+          </div>
         </el-form-item>
 
         <el-divider content-position="left">尺寸（可选）</el-divider>
@@ -412,10 +519,10 @@ async function submitForm() {
         </el-form-item>
 
         <el-divider content-position="left">价格与物流</el-divider>
-        <el-form-item label="采购价格 (RMB)">
+        <el-form-item label="采购价格 (RMB)" required>
           <el-input v-model="form.cost" placeholder="0.00" style="width:160px" />
         </el-form-item>
-        <el-form-item label="市场参考价 (R)">
+        <el-form-item label="市场参考价 (R)" required>
           <el-input v-model="form.marketPrice" placeholder="Takealot 竞品在售价（兰特）" style="width:200px" />
         </el-form-item>
         <el-form-item label="售价 RMB">
@@ -510,6 +617,9 @@ async function submitForm() {
 
 .dev-form :deep(.el-divider__text) { font-size:12px; color:#858a8c; }
 .form-tip { font-size:11px; color:#a39a8c; display:block; margin-top:4px; }
+.upload-block { display:flex; flex-direction:column; align-items:flex-start; gap:8px; }
+.image-preview-row { display:flex; align-items:center; gap:10px; }
+.preview-img { width:80px; height:80px; border-radius:6px; border:1px solid #ece6dd; }
 .dim-row { display:flex; align-items:center; gap:8px; }
 .profit-box { font-size:14px; color:#1f9d92; font-weight:600; }
 .profit-box.warn { color:#c4782b; }

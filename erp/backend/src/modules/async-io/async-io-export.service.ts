@@ -32,13 +32,26 @@ export class AsyncIoExportService {
       case '成交客户':
       case 'leads_deals':
         return this.exportLeadsDeals()
+      case '中转仓库存':
+      case 'logistics_inventory':
+        return this.exportInventory('logistics')
       default:
         return this.exportGeneric(module)
     }
   }
 
-  private async exportInventory() {
-    const rows = await this.prisma.inventory.findMany({ take: 5000, orderBy: { id: 'desc' } })
+  private async exportInventory(warehouseType?: string) {
+    const warehouseCodes = warehouseType
+      ? (await this.prisma.warehouse.findMany({
+          where: { warehouseType },
+          select: { warehouseCode: true },
+        })).map((w) => w.warehouseCode)
+      : null
+    const rows = await this.prisma.inventory.findMany({
+      where: warehouseCodes?.length ? { warehouseCode: { in: warehouseCodes } } : warehouseType ? { warehouseCode: '__none__' } : undefined,
+      take: 5000,
+      orderBy: { id: 'desc' },
+    })
     const products = await this.prisma.product.findMany({
       where: { id: { in: rows.map((r) => r.productId) } },
     })
@@ -48,7 +61,8 @@ export class AsyncIoExportService {
       const p = prodMap.get(Number(r.productId))
       return [r.warehouseCode, r.sku, p?.productName || '', p?.spec || '', r.totalQty, r.availableQty, r.lockedQty]
     })
-    return { fileName: `库存_${Date.now()}.csv`, content: toCsv(headers, data), totalRows: data.length }
+    const prefix = warehouseType === 'logistics' ? '中转仓库存' : '库存'
+    return { fileName: `${prefix}_${Date.now()}.csv`, content: toCsv(headers, data), totalRows: data.length }
   }
 
   private async exportSyncLogs() {
@@ -108,7 +122,7 @@ export class AsyncIoExportService {
 
   private async exportLeadsDeals() {
     const rows = await this.prisma.lead.findMany({ where: { status: 'deal' }, take: 5000 })
-    const headers = ['线索号', '公司', '联系人', '电话', '来源']
+    const headers = ['线索号', '公司', '联系方式', '电话', '来源']
     const data = rows.map((r) => [r.leadNo, r.companyName, r.contactName || '', r.contactPhone || '', r.source || ''])
     return { fileName: `成交客户_${Date.now()}.csv`, content: toCsv(headers, data), totalRows: data.length }
   }

@@ -1,4 +1,5 @@
-import { Body, Controller, Get, Post, Put } from '@nestjs/common'
+import { Body, Controller, Get, Post, Put, Req } from '@nestjs/common'
+import type { Request } from 'express'
 import { AuthService } from './auth.service'
 import { LoginDto } from './dto/login.dto'
 import { UpdateProfileDto } from './dto/update-profile.dto'
@@ -11,9 +12,16 @@ export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Public()
+  @Get('health')
+  health() {
+    return { ok: true, service: 'erp-api' }
+  }
+
+  @Public()
   @Post('login')
-  login(@Body() dto: LoginDto) {
-    return this.authService.login(dto)
+  login(@Body() dto: LoginDto, @Req() req: Request) {
+    const clientKey = String(req.ip || req.socket?.remoteAddress || 'unknown')
+    return this.authService.login(dto, clientKey)
   }
 
   @Get('profile')

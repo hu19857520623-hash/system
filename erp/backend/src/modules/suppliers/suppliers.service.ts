@@ -30,6 +30,7 @@ export class SuppliersService {
   }
 
   async create(data: any) {
+    this.assertRequired(data)
     if (!data.supplierCode) data.supplierCode = 'SUP-' + Date.now().toString().slice(-6)
     if (!data.paymentTerms) data.paymentTerms = '现结'
     return this.prisma.supplier.create({ data })
@@ -37,7 +38,15 @@ export class SuppliersService {
 
   async update(id: number, data: any) {
     await this.detail(id)
+    this.assertRequired(data)
     return this.prisma.supplier.update({ where: { id: BigInt(id) }, data })
+  }
+
+  private assertRequired(data: any) {
+    if (!String(data?.supplierName || '').trim()) throw new BadRequestException('请填写供应商名称')
+    if (!String(data?.contactName || '').trim()) throw new BadRequestException('请填写联系人')
+    if (!String(data?.contactPhone || '').trim()) throw new BadRequestException('请填写电话')
+    if (!String(data?.paymentTerms || '').trim()) throw new BadRequestException('请选择结算方式')
   }
 
   async remove(id: number) {

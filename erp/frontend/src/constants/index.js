@@ -12,6 +12,7 @@ export const ROUTE_MAP = {
   product_audit: '/product-audit',
   logistics_wh: '/logistics-wh',
   logistics_inventory: '/logistics-inventory',
+  mingrui: '/mingrui',
   create_inbound: '/inbound/create',
   inbound_receipt: '/inbound/receipt',
   inventory_query: '/inventory',
@@ -35,7 +36,6 @@ export const ROUTE_MAP = {
 /** 采购单状态 */
 export const PO_STATUS = {
   pending_po_audit: { label: '待采购审核', type: 'warning' },
-  pending_finance: { label: '待财务审核', type: 'warning' },
   finance_approved: { label: '待中转仓收货', type: 'warning' },
   at_logistics_wh: { label: '中转仓部分收货', type: 'info' },
   wms: { label: '海外仓在途', type: 'info' },

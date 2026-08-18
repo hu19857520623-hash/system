@@ -49,7 +49,10 @@ function openEdit(row: any) {
 }
 
 async function save() {
-  if (!form.value.name) { ElMessage.warning('请填写供应商名称'); return }
+  if (!form.value.name.trim()) { ElMessage.warning('请填写供应商名称'); return }
+  if (!form.value.contact.trim()) { ElMessage.warning('请填写联系人'); return }
+  if (!form.value.phone.trim()) { ElMessage.warning('请填写电话'); return }
+  if (!form.value.settle) { ElMessage.warning('请选择结算方式'); return }
   const payload = {
     supplierName: form.value.name,
     contactName: form.value.contact,
@@ -129,11 +132,17 @@ async function removeSupplier(row: any) {
     </el-card>
 
     <el-dialog v-model="dialogVisible" :title="dialogTitle" width="500px">
-      <el-form label-width="80px">
-        <el-form-item label="名称"><el-input v-model="form.name" placeholder="供应商名称" /></el-form-item>
-        <el-form-item label="联系人"><el-input v-model="form.contact" placeholder="联系人" /></el-form-item>
-        <el-form-item label="电话"><el-input v-model="form.phone" placeholder="电话" /></el-form-item>
-        <el-form-item label="结算方式">
+      <el-form label-width="96px">
+        <el-form-item label="名称" required>
+          <el-input v-model="form.name" placeholder="供应商名称" />
+        </el-form-item>
+        <el-form-item label="联系人" required>
+          <el-input v-model="form.contact" placeholder="联系人" />
+        </el-form-item>
+        <el-form-item label="电话" required>
+          <el-input v-model="form.phone" placeholder="电话" />
+        </el-form-item>
+        <el-form-item label="结算方式" required>
           <el-select v-model="form.settle" placeholder="选择" style="width:100%">
             <el-option label="现结" value="现结" />
             <el-option label="月结" value="月结" />

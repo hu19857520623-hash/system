@@ -3,11 +3,34 @@ import { useNavigate } from 'react-router-dom'
 import {
   ArrowRight,
   Eye, EyeOff, ArrowDownToLine, ArrowUpFromLine, Package, Wallet,
-  Lock, Mail,
+  Lock, User,
 } from 'lucide-react'
 import { Button, Card } from '../components/ui'
 import { FormField, formInput } from '../components/ui/form'
 import { useRole } from '../auth/RoleContext'
+
+const LOGIN_USERNAME_KEY = 'oms-login-username'
+const LOGIN_EMAIL_KEY = 'oms-login-email'
+const REMEMBER_KEY = 'oms-remember-login'
+
+function readSavedUsername() {
+  try {
+    const saved = localStorage.getItem(LOGIN_USERNAME_KEY)
+    if (saved) return saved
+    const legacy = localStorage.getItem(LOGIN_EMAIL_KEY) || ''
+    return legacy.includes('@') ? '' : legacy
+  } catch {
+    return ''
+  }
+}
+
+function readRememberPreference() {
+  try {
+    return localStorage.getItem(REMEMBER_KEY) !== '0'
+  } catch {
+    return true
+  }
+}
 
 const FEATURES = [
   { icon: ArrowDownToLine, label: '预约入库', desc: '预报单 · 箱唛标签' },
@@ -33,12 +56,19 @@ function OmsLogo({ compact = false }: { compact?: boolean }) {
 export default function Login() {
   const navigate = useNavigate()
   const { login, isLoggedIn, mustChangePassword, authReady } = useRole()
-  const [email, setEmail] = useState('')
+  const [username, setUsername] = useState(readSavedUsername)
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
-  const [remember, setRemember] = useState(true)
+  const [remember, setRemember] = useState(readRememberPreference)
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [apiOnline, setApiOnline] = useState<boolean | null>(null)
+
+  useEffect(() => {
+    fetch('/api/health')
+      .then((res) => setApiOnline(res.ok))
+      .catch(() => setApiOnline(false))
+  }, [])
 
   useEffect(() => {
     if (!authReady || !isLoggedIn) return
@@ -48,27 +78,47 @@ export default function Login() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
-    if (!email.trim()) {
-      setError('请输入登录邮箱')
+    if (!username.trim()) {
+      setError('请输入登录账号')
+      return
+    }
+    if (username.trim().length < 6) {
+      setError('登录账号至少 6 个字符')
       return
     }
     if (!password) {
       setError('请输入密码')
       return
     }
+    if (password.length < 6) {
+      setError('密码至少 6 个字符')
+      return
+    }
 
     setSubmitting(true)
     try {
-      const user = await login(email.trim().toLowerCase(), password, remember)
+      const loginUsername = username.trim().toLowerCase()
+      const user = await login(loginUsername, password, remember)
+      try {
+        localStorage.setItem(REMEMBER_KEY, remember ? '1' : '0')
+        if (remember) localStorage.setItem(LOGIN_USERNAME_KEY, loginUsername)
+        else localStorage.removeItem(LOGIN_USERNAME_KEY)
+        localStorage.removeItem(LOGIN_EMAIL_KEY)
+      } catch {
+        /* ignore quota / private mode */
+      }
       navigate(user.mustChangePassword ? '/change-password' : '/', { replace: true })
     } catch (loginError) {
       const status = (loginError as { status?: number } | null)?.status
       if (status === 401) {
-        setError('邮箱或密码不正确，或账号已停用')
+        setError('账号或密码不正确，或账号已停用')
       } else if (status === 429) {
         setError('登录尝试过于频繁，请稍后再试')
-      } else if (loginError instanceof TypeError) {
-        setError('无法连接登录服务，请检查网络后重试')
+      } else if (
+        (loginError as { code?: string } | null)?.code === 'NETWORK'
+        || loginError instanceof TypeError
+      ) {
+        setError('无法连接 OMS 服务（127.0.0.1:3001）。请运行仓库根目录 dev-local.ps1，或单独启动 oms。')
       } else {
         setError(loginError instanceof Error ? loginError.message : '登录失败，请稍后重试')
       }
@@ -135,16 +185,21 @@ export default function Login() {
             </div>
 
             <Card className="overflow-hidden shadow-card" padding>
+              {apiOnline === false && (
+                <div className="mb-4 rounded-lg bg-red-50 px-3 py-2.5 text-xs text-red-700 ring-1 ring-red-100">
+                  OMS 服务未启动（127.0.0.1:3001）。请运行仓库根目录 dev-local.ps1，或单独启动 oms。
+                </div>
+              )}
               <form className="space-y-5" onSubmit={handleSubmit}>
-                <FormField label="登录邮箱" required>
+                <FormField label="登录账号" required>
                   <div className="relative">
-                    <Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-muted" />
+                    <User className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-muted" />
                     <input
-                      type="email"
+                      type="text"
                       autoComplete="username"
-                      value={email}
-                      onChange={e => { setEmail(e.target.value); setError('') }}
-                      placeholder="name@company.co.za"
+                      value={username}
+                      onChange={e => { setUsername(e.target.value); setError('') }}
+                      placeholder="至少 6 个字符"
                       disabled={submitting}
                       className={formInput('pl-10')}
                     />
@@ -159,7 +214,7 @@ export default function Login() {
                       autoComplete="current-password"
                       value={password}
                       onChange={e => { setPassword(e.target.value); setError('') }}
-                      placeholder="请输入密码"
+                      placeholder="至少 6 个字符"
                       disabled={submitting}
                       className={formInput('pl-10 pr-10')}
                     />
@@ -182,7 +237,7 @@ export default function Login() {
                       onChange={e => setRemember(e.target.checked)}
                       className="rounded border-border text-primary-600 focus:ring-primary-500"
                     />
-                    记住登录状态
+                    记住账号
                   </label>
                   <span className="text-text-muted">忘记密码请联系系统管理员重置</span>
                 </div>

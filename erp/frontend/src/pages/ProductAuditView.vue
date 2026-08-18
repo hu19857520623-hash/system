@@ -9,6 +9,7 @@ import { useTablePagination } from '@/composables/useTablePagination.ts'
 import { useAppStore } from '@/stores/app'
 import ListPagination from '@/components/ListPagination.vue'
 import { PIPELINE_AUDIT_ALERT, PIPELINE_AUDIT_FOOTER } from '@/constants/productPipeline.ts'
+import { productDevImageSrc } from '@/utils/productDevImage.ts'
 
 const app = useAppStore()
 
@@ -205,15 +206,15 @@ function tagType(status: string) {
     <p class="page-foot">{{ PIPELINE_AUDIT_FOOTER }}</p>
   </el-card>
 
-  <el-dialog v-model="dialogVisible" :title="selectedAudit?.applyNo + ' · 选品审核'" width="780px" top="4vh" destroy-on-close>
+  <el-dialog v-model="dialogVisible" :title="selectedAudit?.applyNo + ' · 选品审核'" width="780px" top="4vh" destroy-on-close class="erp-detail">
     <el-scrollbar v-if="selectedAudit" max-height="70vh">
       <el-form label-width="118px" class="audit-detail-form">
         <el-divider content-position="left">基本信息</el-divider>
         <el-form-item label="申请单号"><el-input :model-value="selectedAudit.applyNo" readonly /></el-form-item>
         <el-form-item label="选品名称"><el-input :model-value="selectedAudit.name" readonly /></el-form-item>
         <el-form-item label="SKU">
-          <el-input :model-value="selectedAudit.sku && selectedAudit.sku !== '—' ? selectedAudit.sku : '审核通过后确定'" readonly />
-          <span class="form-tip">开发可预填；未填则审核通过时系统自动生成</span>
+          <el-input :model-value="selectedAudit.sku && selectedAudit.sku !== '—' ? selectedAudit.sku : '—'" readonly />
+          <span class="form-tip">提交申请时必填</span>
         </el-form-item>
         <el-form-item label="规格"><el-input :model-value="displayVal(selectedAudit.spec)" readonly /></el-form-item>
         <el-form-item label="提交人"><el-input :model-value="selectedAudit.user" readonly /></el-form-item>
@@ -229,7 +230,7 @@ function tagType(status: string) {
         </el-form-item>
         <el-form-item label="Takealot 售价图">
           <div v-if="selectedAudit.takealotPriceImageUrl" class="image-preview-row">
-            <el-image :src="selectedAudit.takealotPriceImageUrl" fit="cover" class="preview-img" :preview-src-list="[selectedAudit.takealotPriceImageUrl]" />
+            <el-image :src="productDevImageSrc(selectedAudit.takealotPriceImageUrl)" fit="cover" class="preview-img" :preview-src-list="[productDevImageSrc(selectedAudit.takealotPriceImageUrl)]" />
           </div>
           <span v-else class="empty-val">—</span>
         </el-form-item>
@@ -247,7 +248,7 @@ function tagType(status: string) {
         </el-form-item>
         <el-form-item label="1688 产品图">
           <div v-if="selectedAudit.alibaba1688ImageUrl" class="image-preview-row">
-            <el-image :src="selectedAudit.alibaba1688ImageUrl" fit="cover" class="preview-img" :preview-src-list="[selectedAudit.alibaba1688ImageUrl]" />
+            <el-image :src="productDevImageSrc(selectedAudit.alibaba1688ImageUrl)" fit="cover" class="preview-img" :preview-src-list="[productDevImageSrc(selectedAudit.alibaba1688ImageUrl)]" />
           </div>
           <span v-else class="empty-val">—</span>
         </el-form-item>
@@ -306,7 +307,7 @@ function tagType(status: string) {
         <el-divider content-position="left">审核操作</el-divider>
         <el-form-item label="计划采购数量">
           <el-input-number v-model="form.purchaseQty" :min="0" :step="100" :disabled="selectedAudit.status !== '待审核' || !canSetQty" style="width:200px" />
-          <span class="form-tip">核定计划参考量；采购员实际下单数量、单价、国内运费可以不同，财务审核后同步至货盘定价</span>
+          <span class="form-tip">核定计划参考量；采购员实际下单数量、单价、国内运费可以不同，采购审核后同步至货盘定价</span>
         </el-form-item>
         <el-form-item v-if="selectedAudit.status === '待审核'" label="审核意见">
           <el-input v-model="form.remark" type="textarea" :rows="2" placeholder="选填，通过时可备注说明" />

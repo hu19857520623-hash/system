@@ -204,7 +204,7 @@ async function seedDemoData() {
       purchaserId,
       warehouseCode: 'LW-SZ-01',
       totalAmount: 134250,
-      status: 'pending_finance',
+      status: 'finance_approved',
       items: {
         create: [{ productId: products[4].id, sku: 'TK-99002', productName: '无线运动耳机', quantity: 1500, unitPrice: 89.5, amount: 134250 }],
       },

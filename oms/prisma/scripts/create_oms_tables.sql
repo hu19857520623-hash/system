@@ -50,7 +50,7 @@ PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 CREATE TABLE IF NOT EXISTS `oms_PortalUser` (
     `id` VARCHAR(50) NOT NULL,
     `customerId` VARCHAR(50) NULL,
-    `loginEmail` VARCHAR(200) NOT NULL,
+    `username` VARCHAR(50) NOT NULL,
     `passwordHash` VARCHAR(255) NOT NULL,
     `role` VARCHAR(30) NOT NULL,
     `status` VARCHAR(30) NOT NULL,
@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS `oms_PortalUser` (
     `updatedAt` VARCHAR(40) NOT NULL,
     `lastLoginAt` VARCHAR(40) NULL,
     UNIQUE INDEX `oms_PortalUser_customerId_key`(`customerId`),
-    UNIQUE INDEX `oms_PortalUser_loginEmail_key`(`loginEmail`),
+    UNIQUE INDEX `oms_PortalUser_username_key`(`username`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 

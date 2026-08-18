@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { User, Lock } from '@element-plus/icons-vue'
 import { useAppStore } from '@/stores/app'
+import { authApi } from '@/api/client.js'
 import ThemeToggle from '@/components/ThemeToggle.vue'
 
 const router = useRouter()
@@ -14,10 +15,17 @@ const username = ref('')
 const password = ref('')
 const remember = ref(true)
 const loading = ref(false)
+const backendOnline = ref<boolean | null>(null)
 
-onMounted(() => {
+onMounted(async () => {
   const saved = localStorage.getItem('login_username')
   if (saved) username.value = saved
+  try {
+    await authApi.health()
+    backendOnline.value = true
+  } catch {
+    backendOnline.value = false
+  }
 })
 
 async function handleSubmit() {
@@ -100,6 +108,16 @@ async function handleSubmit() {
           <p>使用您的账号密码进入工作台</p>
         </div>
 
+        <el-alert
+          v-if="backendOnline === false"
+          type="error"
+          :closable="false"
+          show-icon
+          title="ERP 后端未启动（127.0.0.1:3000）"
+          description="请运行仓库根目录 dev-local.ps1，或单独启动 erp/backend。"
+          style="margin-bottom: 16px"
+        />
+
         <el-form label-position="top" @submit.prevent="handleSubmit">
           <el-form-item label="登录名">
             <el-input
@@ -147,7 +165,7 @@ async function handleSubmit() {
             <span>liuyang</span>
             <span>sunhao</span>
           </div>
-          <span class="hint-pwd">默认密码 123456</span>
+          <span class="hint-pwd">密码请向管理员获取</span>
         </div>
       </div>
     </main>

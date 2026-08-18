@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { leadApi } from '@/api/client.js'
 import { useTablePagination } from '@/composables/useTablePagination.ts'
 import { useRowActions } from '@/composables/useRowActions'
@@ -39,7 +39,7 @@ const CHANNEL_COLORS = ['#f07178', '#1a1a1a', '#2ec4b6', '#5b9fd4', '#b0a89c', '
 async function loadReport() {
   loading.value = true
   try {
-    const data = await leadApi.report()
+    const data = await leadApi.report({ range: range.value === 'all' ? undefined : range.value })
     const total = data.total ?? 0
     const following = data.following ?? 0
     const won = data.deal ?? 0
@@ -52,7 +52,7 @@ async function loadReport() {
       won,
       lost,
       pending,
-      thisMonthNew: pending,
+      thisMonthNew: data.thisMonthNew ?? pending,
     }
 
     const valid = total - lost
@@ -75,6 +75,8 @@ async function loadReport() {
       { name: '跟进中', value: following, color: '#e8a23a' },
       { name: '已成交', value: won, color: '#1f9d92' },
     ]
+    monthly.value = data.monthly || []
+    salesRank.value = data.salesRank || []
   } finally {
     loading.value = false
   }
@@ -85,6 +87,7 @@ function pct(v: number, total: number) {
 }
 
 onMounted(loadReport)
+watch(range, loadReport)
 </script>
 
 <template>

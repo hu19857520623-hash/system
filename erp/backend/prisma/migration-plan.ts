@@ -27,6 +27,7 @@ export const MIGRATION_ORDER = [
   'migrate_operation_log.sql',
   'migrate_inbound_oms_customer.sql',
   'migrate_oms_portal_onboarding.sql',
+  'migrate_portal_username.sql',
   'migrate_return_order.sql',
   'migrate_return_receipt_phase1.sql',
   'migrate_return_attachment.sql',
@@ -40,7 +41,13 @@ export const MIGRATION_ORDER = [
   'migrate_outbound_recipient.sql',
   'migrate_outbound_schema_sync.sql',
   'migrate_outbound_attachment_label_meta.sql',
+  'migrate_purchase_payment_status.sql',
+  'migrate_lead_deal_attachment.sql',
+  'migrate_lead_customer_id.sql',
+  'migrate_mingrui_shipment.sql',
   'migrate_schema_full_sync.sql',
+  'migrate_oms_form_db_columns.sql',
+  'migrate_takealot_store_api_key.sql',
 ] as const
 
 /**

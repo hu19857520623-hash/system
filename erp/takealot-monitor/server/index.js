@@ -14,6 +14,7 @@ const {
 
 const app = express();
 const PORT = process.env.PORT || 3456;
+const LISTEN_HOST = process.env.LISTEN_HOST || '127.0.0.1';
 const TAKEALOT_BASE = 'https://marketplace-api.takealot.com/v1';
 const DATA_DIR = path.join(__dirname, '../data/snapshots');
 
@@ -289,6 +290,15 @@ app.use('/api/proxy', async (req, res) => {
         : null;
 
     const result = await forwardToTakealot(targetUrl, req.method, headers, body);
+    if (result.status === 401) {
+      res.status(400);
+      res.set('Content-Type', 'application/json');
+      res.set('X-Proxy-Via', result.via || 'unknown');
+      return res.send(JSON.stringify({
+        error: 'takealot_auth_failed',
+        message: 'Takealot API Key 无效或已过期，请重新粘贴完整密钥后保存再测试',
+      }));
+    }
 
     res.status(result.status);
     res.set('Content-Type', result.headers['content-type'] || 'application/json');
@@ -309,9 +319,9 @@ app.get('*', (_req, res) => {
   res.sendFile(path.join(__dirname, '../web/index.html'));
 });
 
-app.listen(PORT, () => {
+app.listen(PORT, LISTEN_HOST, () => {
   const browser = findBrowserExecutable();
-  console.log(`Takealot 卖家数据中心: http://localhost:${PORT}`);
+  console.log(`Takealot 卖家数据中心: http://${LISTEN_HOST}:${PORT}`);
   console.log(
     `代理模式: 优先 Chrome (${browser ? path.basename(path.dirname(browser)) : '未找到'}) → curl → node https`
   );

@@ -131,9 +131,26 @@ export class InboundService {
     return rows.map(r => ({ id: Number(r.id), fileName: String(r.fileName) }))
   }
 
-  async downloadOmsAttachment(inboundNo: string, attachmentId: number) {
+  async downloadStaffAttachment(inboundId: number, attachmentId: number) {
+    const order = await this.prisma.inboundOrder.findUnique({ where: { id: BigInt(inboundId) } })
+    if (!order) throw new NotFoundException('入库单不存在')
+    const rows: { fileName: string; filePath: string }[] = await this.prisma.$queryRawUnsafe(
+      'SELECT file_name as fileName, file_path as filePath FROM inbound_attachment WHERE id = ? AND inbound_id = ?',
+      attachmentId,
+      Number(order.id),
+    )
+    if (!rows.length) throw new NotFoundException('附件不存在')
+    return { fileName: rows[0].fileName, content: this.files.read(rows[0].filePath) }
+  }
+
+  async downloadOmsAttachment(inboundNo: string, attachmentId: number, customerCode: string) {
+    const code = String(customerCode || '').trim()
+    if (!code) throw new BadRequestException('缺少 customerCode')
     const order = await this.prisma.inboundOrder.findUnique({ where: { inboundNo: inboundNo.trim() } })
     if (!order) throw new NotFoundException('入库单不存在')
+    if (!order.omsCustomerCode || order.omsCustomerCode !== code) {
+      throw new BadRequestException('客户编码与入库单不匹配')
+    }
     const rows: { fileName: string; filePath: string }[] = await this.prisma.$queryRawUnsafe(
       'SELECT file_name as fileName, file_path as filePath FROM inbound_attachment WHERE id = ? AND inbound_id = ?',
       attachmentId,
@@ -1340,6 +1357,13 @@ export class InboundService {
     status: string
     remark: string | null
     omsCustomerCode?: string | null
+    inboundType?: string | null
+    deliveryMethod?: string | null
+    stockSource?: string | null
+    referenceNo?: string | null
+    eta?: string | null
+    contact?: string | null
+    contactPhone?: string | null
     createdAt: Date
     updatedAt: Date
     arrivedAt?: Date | null
@@ -1367,13 +1391,13 @@ export class InboundService {
       omsCustomerCode: order.omsCustomerCode ?? null,
       remark: stripOmsSystemTags(order.remark),
       source: meta.source || null,
-      inboundType: meta.inboundType || null,
-      deliveryMethod: meta.deliveryMethod || null,
-      stockSource: meta.stockSource || 'owned',
-      referenceNo: meta.referenceNo || null,
-      eta: meta.eta || null,
-      contact: meta.contact || null,
-      contactPhone: meta.contactPhone || null,
+      inboundType: order.inboundType || meta.inboundType || null,
+      deliveryMethod: order.deliveryMethod || meta.deliveryMethod || null,
+      stockSource: order.stockSource || meta.stockSource || 'owned',
+      referenceNo: order.referenceNo || meta.referenceNo || null,
+      eta: order.eta || meta.eta || null,
+      contact: order.contact || meta.contact || null,
+      contactPhone: order.contactPhone || meta.contactPhone || null,
       createdAt: order.createdAt,
       updatedAt: order.updatedAt,
       arrivedAt: order.arrivedAt ?? null,
@@ -1403,18 +1427,50 @@ export class InboundService {
     }
   }
 
+  private resolveWmsWarehouseCode(code: string): string {
+    const aliases: Record<string, string> = {
+      jhb1: 'WMS-JHB-01',
+      jhb: 'WMS-JHB-01',
+      'wms-jhb-01': 'WMS-JHB-01',
+      cpt1: 'WMS-CPT-01',
+      cpt: 'WMS-CPT-01',
+      'wms-cpt-01': 'WMS-CPT-01',
+      dbn: 'WMS-DBN-01',
+      'wms-dbn-01': 'WMS-DBN-01',
+    }
+    return aliases[code.toLowerCase()] || code
+  }
+
   private async ensureProductBySku(
     sku: string,
     productName?: string,
   ): Promise<{ id: bigint; sku: string; productName: string }> {
-    const existing = await this.prisma.product.findUnique({ where: { sku } })
+    const trimmed = sku.trim()
+    const existing = await this.prisma.product.findUnique({ where: { sku: trimmed } })
     if (existing) {
       return { id: existing.id, sku: existing.sku, productName: existing.productName }
     }
+    const byCustomerSku = await this.prisma.product.findFirst({ where: { customerSku: trimmed } })
+    if (byCustomerSku) {
+      return { id: byCustomerSku.id, sku: byCustomerSku.sku, productName: byCustomerSku.productName }
+    }
+    const omsRows = await this.prisma.$queryRawUnsafe<Array<{ internalSku: string }>>(
+      'SELECT internalSku FROM oms_Product WHERE customerSku = ? OR internalSku = ? LIMIT 1',
+      trimmed,
+      trimmed,
+    )
+    const mappedSku = String(omsRows[0]?.internalSku || '').trim()
+    if (mappedSku) {
+      const mapped = await this.prisma.product.findUnique({ where: { sku: mappedSku } })
+      if (mapped) {
+        return { id: mapped.id, sku: mapped.sku, productName: mapped.productName }
+      }
+    }
     const created = await this.prisma.product.create({
       data: {
-        sku,
-        productName: (productName || sku).slice(0, 300),
+        sku: trimmed.slice(0, 30),
+        customerSku: trimmed.slice(0, 50),
+        productName: (productName || trimmed).slice(0, 300),
         category: 'OMS',
         status: 'active',
         syncStatus: 'pending',
@@ -1451,7 +1507,7 @@ export class InboundService {
     const lines = Array.isArray(data.items) ? data.items : []
     if (!lines.length) throw new BadRequestException('请填写入库明细')
 
-    const warehouseCode = String(data.warehouseCode || 'WMS-JHB-01').trim()
+    const warehouseCode = this.resolveWmsWarehouseCode(String(data.warehouseCode || 'WMS-JHB-01').trim())
     const wh = await this.prisma.warehouse.findUnique({ where: { warehouseCode } })
     if (!wh || wh.warehouseType !== 'wms') {
       throw new BadRequestException(`目的仓 ${warehouseCode} 必须是海外仓（wms）`)
@@ -1505,6 +1561,13 @@ export class InboundService {
         trackingNo: String(data.trackingNo || data.referenceNo || '').trim() || undefined,
         remark: remarkParts,
         omsCustomerCode: customerCode,
+        inboundType: data.inboundType?.trim() || null,
+        deliveryMethod: data.deliveryMethod?.trim() || null,
+        stockSource: data.stockSource?.trim() || null,
+        referenceNo: data.referenceNo?.trim() || null,
+        eta: data.eta?.trim() || null,
+        contact: data.contact?.trim() || null,
+        contactPhone: data.contactPhone?.trim() || null,
         status: 'pending_receipt',
         items: {
           create: resolved.map((l) => ({

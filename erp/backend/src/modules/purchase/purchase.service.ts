@@ -29,7 +29,7 @@ export class PurchaseService {
     const supplierIds = [...new Set(rows.map((r) => r.supplierId))]
     const userIds = [
       ...new Set(
-        rows.flatMap((r) => [r.purchaserId, r.auditorId, r.financeId].filter(Boolean)),
+        rows.flatMap((r) => [r.purchaserId, r.auditorId, r.financeId, r.paidBy].filter(Boolean)),
       ),
     ] as bigint[]
     const whCodes = [...new Set(rows.map((r) => r.warehouseCode).filter(Boolean))] as string[]
@@ -73,6 +73,11 @@ export class PurchaseService {
       financeAt: row.financeAt,
       financeAtStr: fmtTime(row.financeAt),
       financeRemark: row.financeRemark || '',
+      paymentStatus: row.paymentStatus === 'paid' ? 'paid' : 'unpaid',
+      paidAt: row.paidAt,
+      paidAtStr: fmtTime(row.paidAt),
+      paidBy: row.paidBy ? Number(row.paidBy) : null,
+      paidByName: row.paidBy ? userMap.get(Number(row.paidBy)) || '—' : '—',
       createdAt: row.createdAt,
       createdAtStr: fmtTime(row.createdAt),
       items: (row.items || []).map((i: any) => ({
@@ -443,6 +448,7 @@ export class PurchaseService {
   }
 
   async list(q: PaginationDto & { status?: string }) {
+    await this.promotePendingFinanceOrders()
     const { page, pageSize } = getPagination(q)
     const where: any = {}
     if (q.status) where.status = q.status
@@ -565,7 +571,8 @@ export class PurchaseService {
       const order = await tx.purchaseOrder.update({
         where: { id: BigInt(id) },
         data: {
-          status: 'pending_finance',
+          status: 'finance_approved',
+          paymentStatus: 'unpaid',
           warehouseCode: row.warehouseCode ? undefined : targetWarehouseCode,
           auditorId: auditorId ? BigInt(auditorId) : undefined,
           auditedAt: new Date(),
@@ -579,6 +586,7 @@ export class PurchaseService {
           data: { warehouseCode: targetWarehouseCode },
         })
       }
+      await this.applyPostAuditEffects(tx, order, auditorId)
       return order
     })
     const [item] = await this.enrichOrders([updated])
@@ -808,102 +816,150 @@ export class PurchaseService {
     return { processed }
   }
 
+  /** 采购审核通过后同步商品主数据、成本台账与供应商账单。 */
+  private async applyPostAuditEffects(tx: any, po: any, operatorId?: number) {
+    const { perLine: lineDomesticMap } = allocatePoDomesticFreight(po)
+    const confirmation = po.prePoId
+      ? await tx.prePurchaseOrder.findUnique({ where: { id: po.prePoId } })
+      : null
+    const costBreakdown = computePoFinanceApprovalCosts(po, confirmation)
+    const productLines: Array<{ line: any; product: any }> = []
+
+    for (const line of po.items) {
+      const qty = line.quantity
+      const unitPrice = Number(line.unitPrice)
+      const lineDomestic = lineDomesticMap.get(String(line.id)) ?? 0
+      const domesticPerUnit = qty > 0 ? lineDomestic / qty : 0
+      const product = await this.syncProductMasterFromLine(tx, po, line, domesticPerUnit)
+      productLines.push({ line, product })
+
+      const pricingData = {
+        productName: line.productName || line.sku,
+        costRmb: unitPrice,
+        purchaseQty: qty,
+        poNo: po.poNo,
+        domesticFee: domesticPerUnit,
+      }
+      const existing = await tx.productPricing.findUnique({ where: { sku: line.sku } })
+      if (existing) {
+        await tx.productPricing.update({ where: { sku: line.sku }, data: pricingData })
+      } else {
+        await tx.productPricing.create({
+          data: {
+            sku: line.sku,
+            ...pricingData,
+            pricingStatus: 'waiting_freight',
+            exchangeRate: 2.5,
+          },
+        })
+      }
+    }
+
+    await this.createCostLedgersForFinanceApproval(tx, po, productLines, operatorId, costBreakdown)
+    await this.freightBill.recordFromFinanceApproval(tx, {
+      poId: po.id,
+      poNo: po.poNo,
+      supplierId: po.supplierId,
+      totalAmount: costBreakdown.total,
+      costRemark: formatPoFinanceCostRemark(po.poNo, costBreakdown),
+      financeAt: po.auditedAt || po.financeAt || new Date(),
+    })
+
+    for (const { line } of productLines) {
+      await this.opLog.log({
+        operatorId,
+        module: 'product',
+        action: 'sync_from_po',
+        targetType: 'product',
+        targetId: line.sku,
+        detail: {
+          message: `采购审核通过，采购单 ${po.poNo} 同步主数据：采购成本 ¥${Number(line.unitPrice)}/件`,
+          poNo: po.poNo,
+          costRmb: Number(line.unitPrice),
+        },
+      })
+    }
+  }
+
+  /** 将历史「待财务审核」单据推进到已审核，并补齐主数据/成本。 */
+  private async promotePendingFinanceOrders() {
+    const pending = await this.prisma.purchaseOrder.findMany({
+      where: { status: 'pending_finance' },
+      include: { items: true },
+    })
+    for (const row of pending) {
+      await this.prisma.$transaction(async (tx) => {
+        const order = await tx.purchaseOrder.update({
+          where: { id: row.id },
+          data: {
+            status: 'finance_approved',
+            paymentStatus: 'unpaid',
+            financeRemark: row.financeRemark || '财务审核环节已取消，采购审核通过后直接待收货',
+          } as any,
+          include: { items: true },
+        })
+        await this.applyPostAuditEffects(tx, order, row.auditorId ? Number(row.auditorId) : undefined)
+      })
+    }
+  }
+
+  async setPaymentStatus(id: number, paid: boolean, operatorId?: number, remark?: string) {
+    const row = await this.detail(id)
+    const markable = ['finance_approved', 'at_logistics_wh', 'received', 'completed', 'approved']
+    if (!markable.includes(row.status)) {
+      throw new BadRequestException('采购审核通过后才能标记打款状态')
+    }
+    const next = paid ? 'paid' : 'unpaid'
+    if (row.paymentStatus === next) {
+      throw new BadRequestException(paid ? '该采购单已是已打款' : '该采购单已是未打款')
+    }
+    const updated = await this.prisma.purchaseOrder.update({
+      where: { id: BigInt(id) },
+      data: {
+        paymentStatus: next,
+        paidAt: paid ? new Date() : null,
+        paidBy: paid && operatorId ? BigInt(operatorId) : null,
+        financeRemark: remark?.trim() || row.financeRemark || undefined,
+      } as any,
+      include: { items: true },
+    })
+    const [item] = await this.enrichOrders([updated])
+    await this.opLog.log({
+      operatorId,
+      module: 'purchase',
+      action: paid ? 'po_mark_paid' : 'po_mark_unpaid',
+      targetType: 'purchase_order',
+      targetId: item.poNo,
+      detail: {
+        paymentStatus: next,
+        remark: remark?.trim() || (paid ? '已打款，已转财务' : '改回未打款'),
+        totalAmount: item.totalAmount,
+        supplierName: item.supplierName,
+      },
+    })
+    return item
+  }
+
   async financeApprove(id: number, financeId?: number, remark?: string) {
     const row = await this.detail(id)
-    if (row.status !== 'pending_finance') throw new BadRequestException('当前状态不可进行财务审核')
+    if (row.status !== 'pending_finance') throw new BadRequestException('财务审核环节已取消，请在采购审核通过后标记打款')
 
     const updated = await this.prisma.$transaction(async (tx) => {
       const po = await tx.purchaseOrder.update({
         where: { id: BigInt(id) },
         data: {
           status: 'finance_approved',
+          paymentStatus: 'unpaid',
           financeId: financeId ? BigInt(financeId) : undefined,
           financeAt: new Date(),
-          financeRemark: remark || '财务审核通过',
+          financeRemark: remark || '财务审核环节已取消',
         } as any,
         include: { items: true },
       })
-
-      const { perLine: lineDomesticMap } = allocatePoDomesticFreight(po)
-
-      const confirmation = po.prePoId
-        ? await tx.prePurchaseOrder.findUnique({ where: { id: po.prePoId } })
-        : null
-      const costBreakdown = computePoFinanceApprovalCosts(po, confirmation)
-
-      const productLines: Array<{ line: any; product: any }> = []
-      for (const line of po.items) {
-        const qty = line.quantity
-        const unitPrice = Number(line.unitPrice)
-        const lineDomestic = lineDomesticMap.get(String(line.id)) ?? 0
-        const domesticPerUnit = qty > 0 ? lineDomestic / qty : 0
-
-        const product = await this.syncProductMasterFromLine(tx, po, line, domesticPerUnit)
-        productLines.push({ line, product })
-
-        const pricingData = {
-          productName: line.productName || line.sku,
-          costRmb: unitPrice,
-          purchaseQty: qty,
-          poNo: po.poNo,
-          domesticFee: domesticPerUnit,
-        }
-        const existing = await tx.productPricing.findUnique({ where: { sku: line.sku } })
-        if (existing) {
-          await tx.productPricing.update({
-            where: { sku: line.sku },
-            data: pricingData,
-          })
-        } else {
-          await tx.productPricing.create({
-            data: {
-              sku: line.sku,
-              ...pricingData,
-              pricingStatus: 'waiting_freight',
-              exchangeRate: 2.5,
-            },
-          })
-        }
-      }
-
-      await this.createCostLedgersForFinanceApproval(tx, po, productLines, financeId, costBreakdown)
-
-      await this.freightBill.recordFromFinanceApproval(tx, {
-        poId: po.id,
-        poNo: po.poNo,
-        supplierId: po.supplierId,
-        totalAmount: costBreakdown.total,
-        costRemark: formatPoFinanceCostRemark(po.poNo, costBreakdown),
-        financeAt: po.financeAt,
-      })
-
-      return { po, productLines }
+      await this.applyPostAuditEffects(tx, po, financeId)
+      return po
     })
-
-    for (const { line } of updated.productLines) {
-      await this.opLog.log({
-        operatorId: financeId,
-        module: 'product',
-        action: 'sync_from_po',
-        targetType: 'product',
-        targetId: line.sku,
-        detail: {
-          message: `财务审核通过，采购单 ${updated.po.poNo} 同步主数据：采购成本 ¥${Number(line.unitPrice)}/件`,
-          poNo: updated.po.poNo,
-          costRmb: Number(line.unitPrice),
-        },
-      })
-    }
-
-    const [item] = await this.enrichOrders([updated.po])
-    await this.opLog.log({
-      operatorId: financeId,
-      module: 'purchase',
-      action: 'finance_approve',
-      targetType: 'purchase_order',
-      targetId: item.poNo,
-      detail: { remark: remark || '财务审核通过', statusAfter: item.status },
-    })
+    const [item] = await this.enrichOrders([updated])
     return item
   }
 

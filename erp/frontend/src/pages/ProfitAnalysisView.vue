@@ -1,14 +1,20 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
-import { dashboardApi, profitApi } from '@/api/client.js'
+import { computed, onMounted, ref, watch } from 'vue'
+import { customerApi, dashboardApi, profitApi, supplierApi } from '@/api/client.js'
 import { num } from '@/api/mappers.ts'
 import { useTablePagination } from '@/composables/useTablePagination.ts'
 import ListPagination from '@/components/ListPagination.vue'
 
-const period = ref('month')
+const period = ref('year')
+const dateRange = ref<string[]>([])
+const keyword = ref('')
+const customerId = ref<number | ''>('')
+const supplierId = ref<number | ''>('')
 const tab = ref('profit')
 const dim = ref('sku')
 const loading = ref(false)
+const customers = ref<{ id: number; name: string }[]>([])
+const suppliers = ref<{ id: number; name: string }[]>([])
 
 const summary = ref([
   { label: '营业收入', value: '—', change: '—', tone: 'success' },
@@ -27,6 +33,29 @@ const { page: rankPage, pageSize: rankPageSize, total: rankTotal, pagedItems: ra
 const { page: profitPage, pageSize: profitPageSize, total: profitTotal, pagedItems: profitPagedItems } = useTablePagination(profitRows)
 const { page: purchasePage, pageSize: purchasePageSize, total: purchaseTotal, pagedItems: purchasePagedItems } = useTablePagination(purchaseRows)
 
+const periodLabel = computed(() => {
+  if (period.value === 'custom') {
+    const from = dateRange.value?.[0]
+    const to = dateRange.value?.[1]
+    if (from || to) return `${from || '起始'} ~ ${to || '至今'}`
+    return '自定义日期'
+  }
+  return { month: '本月', quarter: '本季度', year: '本年度', all: '全部时间' }[period.value] || '本年度'
+})
+
+function queryParams() {
+  const custom = period.value === 'custom'
+  return {
+    period: period.value,
+    dateFrom: custom ? dateRange.value?.[0] || undefined : undefined,
+    dateTo: custom ? dateRange.value?.[1] || undefined : undefined,
+    keyword: keyword.value.trim() || undefined,
+    customerId: customerId.value || undefined,
+    supplierId: supplierId.value || undefined,
+    dim: dim.value,
+  }
+}
+
 function fmtMoney(v: number) {
   return `¥ ${v.toLocaleString()}`
 }
@@ -36,35 +65,61 @@ function fmtMargin(rate: number, sales: number, profit: number) {
   return `${pct.toFixed(1)}%`
 }
 
+async function loadLookups() {
+  const [custRes, supRes] = await Promise.all([
+    customerApi.list({ pageSize: 200 }).catch(() => ({ items: [] })),
+    supplierApi.list({ pageSize: 200 }).catch(() => ({ items: [] })),
+  ])
+  customers.value = (custRes.items || []).map((c: any) => ({
+    id: Number(c.id),
+    name: c.customerName || c.customerCode,
+  }))
+  suppliers.value = (supRes.items || []).map((s: any) => ({
+    id: Number(s.id),
+    name: s.supplierName || s.supplierCode || s.name,
+  }))
+}
+
 async function loadAll() {
   loading.value = true
   try {
+    const params = queryParams()
     const [stats, profitSummary, detail] = await Promise.all([
       dashboardApi.stats(),
-      profitApi.summary({ period: period.value }),
-      profitApi.detail({ period: period.value }),
+      profitApi.summary(params),
+      profitApi.detail(params),
     ])
 
     const sales = num(profitSummary.salesAmount)
     const cost = num(profitSummary.totalCost)
+    const freight = num(profitSummary.freightCost)
     const gross = num(profitSummary.grossProfit)
     const rate = num(profitSummary.profitRate)
 
     summary.value = [
-      { label: '营业收入', value: fmtMoney(sales), change: '—', tone: 'success' },
-      { label: '采购成本', value: fmtMoney(cost), change: '—', tone: '' },
-      { label: '物流费用', value: '—', change: '—', tone: '' },
-      { label: '毛利润', value: fmtMoney(gross), change: '—', tone: 'success' },
-      { label: '毛利率', value: `${rate}%`, change: '—', tone: 'success' },
-      { label: '在库SKU', value: String(stats.products ?? 0), change: '—', tone: '' },
+      { label: '营业收入', value: fmtMoney(sales), change: '客户结算入账', tone: 'success' },
+      { label: '采购成本', value: fmtMoney(cost - freight), change: '成本台账', tone: '' },
+      { label: '物流费用', value: fmtMoney(freight), change: '运费/海运', tone: '' },
+      { label: '毛利润', value: fmtMoney(gross), change: '营收 − 成本', tone: 'success' },
+      { label: '毛利率', value: `${rate}%`, change: periodLabel.value, tone: 'success' },
+      { label: '在库SKU', value: String(profitSummary.skuCount ?? stats.products ?? 0), change: '—', tone: '' },
     ]
+
+    purchaseRows.value = (profitSummary.purchase || []).map((row: any) => ({
+      dim: row.dim,
+      poCount: row.poCount,
+      totalAmt: fmtMoney(num(row.totalAmt)),
+      avgLead: row.avgLead || '—',
+      onTime: row.onTime || '—',
+      quality: row.quality || '—',
+    }))
 
     const rows = detail || []
     profitRows.value = rows.map((row: any) => ({
       dim: row.sku || row.productName || '—',
       revenue: fmtMoney(num(row.salesAmount)),
       cost: fmtMoney(num(row.totalCost)),
-      freight: '—',
+      freight: fmtMoney(num(row.freight)),
       profit: fmtMoney(num(row.grossProfit)),
       margin: fmtMargin(num(row.profitRate), num(row.salesAmount), num(row.grossProfit)),
     }))
@@ -89,22 +144,78 @@ async function loadAll() {
   }
 }
 
-onMounted(loadAll)
-watch(period, loadAll)
+function resetFilters() {
+  period.value = 'year'
+  dateRange.value = []
+  keyword.value = ''
+  customerId.value = ''
+  supplierId.value = ''
+  loadAll()
+}
+
+function onPeriodChange(value: string) {
+  if (value !== 'custom') {
+    dateRange.value = []
+    loadAll()
+  }
+}
+
+onMounted(async () => {
+  await loadLookups()
+  await loadAll()
+})
+watch(dim, loadAll)
 </script>
 
 <template>
   <el-card v-loading="loading">
     <template #header>
       <div class="page-header">
-        <span class="page-title">利润 / 采购分析</span>
-        <el-radio-group v-model="period" size="small">
-          <el-radio-button value="month">本月</el-radio-button>
-          <el-radio-button value="quarter">本季度</el-radio-button>
-          <el-radio-button value="year">本年度</el-radio-button>
-        </el-radio-group>
+        <div>
+          <div class="page-title">利润 / 采购分析</div>
+          <p class="page-subtitle">按时间、客户、供应商和关键词筛选营收、成本与采购表现</p>
+        </div>
       </div>
     </template>
+
+    <div class="filter-bar">
+      <el-radio-group v-model="period" size="small" @change="onPeriodChange">
+        <el-radio-button value="month">本月</el-radio-button>
+        <el-radio-button value="quarter">本季度</el-radio-button>
+        <el-radio-button value="year">本年度</el-radio-button>
+        <el-radio-button value="all">全部</el-radio-button>
+        <el-radio-button value="custom">自定义</el-radio-button>
+      </el-radio-group>
+      <el-date-picker
+        v-if="period === 'custom'"
+        v-model="dateRange"
+        type="daterange"
+        value-format="YYYY-MM-DD"
+        range-separator="至"
+        start-placeholder="开始日期"
+        end-placeholder="结束日期"
+        size="small"
+        clearable
+        style="width:260px"
+      />
+      <el-input
+        v-model="keyword"
+        clearable
+        size="small"
+        placeholder="SKU / 商品 / 客户 / 供应商"
+        style="width:220px"
+        @keyup.enter="loadAll"
+      />
+      <el-select v-model="customerId" placeholder="全部客户" clearable size="small" filterable style="width:160px">
+        <el-option v-for="c in customers" :key="c.id" :label="c.name" :value="c.id" />
+      </el-select>
+      <el-select v-model="supplierId" placeholder="全部供应商" clearable size="small" filterable style="width:160px">
+        <el-option v-for="s in suppliers" :key="s.id" :label="s.name" :value="s.id" />
+      </el-select>
+      <el-button type="primary" size="small" @click="loadAll">查询</el-button>
+      <el-button size="small" @click="resetFilters">重置</el-button>
+      <span class="filter-summary">{{ periodLabel }}</span>
+    </div>
 
     <div class="kpi-strip">
       <div v-for="s in summary" :key="s.label" class="kpi-item">
@@ -140,6 +251,7 @@ watch(period, loadAll)
         </el-table-column>
       </el-table>
       <ListPagination v-model:page="profitPage" v-model:page-size="profitPageSize" :total="profitTotal" />
+      <el-empty v-if="!profitRows.length" description="当前筛选条件下暂无利润明细。可改成「全部」或放宽日期后再查。" :image-size="56" style="margin-top:12px" />
 
       <el-divider />
       <div class="section-title">商品销售排行</div>
@@ -172,7 +284,7 @@ watch(period, loadAll)
         </el-table-column>
       </el-table>
       <ListPagination v-model:page="purchasePage" v-model:page-size="purchasePageSize" :total="purchaseTotal" />
-      <el-empty v-if="!purchaseRows.length" description="暂无采购分析数据" :image-size="60" style="margin-top:16px" />
+      <el-empty v-if="!purchaseRows.length" description="当前筛选条件下暂无采购分析数据" :image-size="60" style="margin-top:16px" />
     </template>
   </el-card>
 </template>
@@ -180,6 +292,15 @@ watch(period, loadAll)
 <style scoped>
 .page-header { display:flex; align-items:center; justify-content:space-between; }
 .page-title { font-weight:600; font-size:15px; }
+.page-subtitle { margin-top:4px; color:var(--text-muted); font-size:12px; }
+.filter-bar {
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+  align-items:center;
+  margin-bottom:14px;
+}
+.filter-summary { color:var(--text-muted); font-size:12px; margin-left:4px; }
 .section-title { font-size:14px; font-weight:650; color:#e2e8f0; margin-bottom:10px; }
 .kpi-strip {
   display:grid;

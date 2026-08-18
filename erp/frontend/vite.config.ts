@@ -25,6 +25,10 @@ export default defineConfig({
         replacement: fileURLToPath(new URL('../shared/permissions.catalog.ts', import.meta.url)),
       },
       {
+        find: '@erp/shared/oms-portal.permissions',
+        replacement: fileURLToPath(new URL('../shared/oms-portal.permissions.ts', import.meta.url)),
+      },
+      {
         find: '@erp/shared',
         replacement: fileURLToPath(new URL('../shared', import.meta.url)),
       },

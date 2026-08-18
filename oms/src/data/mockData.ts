@@ -166,7 +166,8 @@ export interface CustomerAccount {
   createdAt: string
   lastLoginAt: string
   portalUser?: {
-    loginEmail: string
+    loginEmail?: string
+    username?: string
     status: string
     mustChangePassword: boolean
     lastLoginAt?: string | null

@@ -9,6 +9,7 @@ import { useListLoader, withAction } from '@/composables/useListLoader.ts'
 import { useTablePagination } from '@/composables/useTablePagination.ts'
 import { useAppStore } from '@/stores/app'
 import ListPagination from '@/components/ListPagination.vue'
+import DetailSheet from '@/components/ui/DetailSheet.vue'
 import { useAsyncIo } from '@/composables/useAsyncIo'
 import { downloadProductImportTemplate, PRODUCT_IMPORT_FIELDS } from '@/constants/importTemplates.ts'
 import ImportFieldLegend from '@/components/ImportFieldLegend.vue'
@@ -415,7 +416,7 @@ async function enableProduct(row: any) {
       </el-tabs>
 
       <el-alert type="info" :closable="false" show-icon style="margin-bottom:12px">
-        选品链路商品主数据在<strong>采购财务审核通过</strong>后自动从预采购/正式采购单同步写入；此前无需手工维护主数据。
+        选品链路商品主数据在<strong>采购主管审核通过</strong>后自动从预采购/正式采购单同步写入；此前无需手工维护主数据。
       </el-alert>
 
       <el-table
@@ -558,7 +559,7 @@ async function enableProduct(row: any) {
   </el-dialog>
 
   <!-- Product Detail Dialog -->
-  <el-dialog v-model="detailVisible" :title="'商品详情 · ' + (detailProduct?.sku || '')" width="860px" top="4vh" destroy-on-close>
+  <el-dialog v-model="detailVisible" :title="'商品详情 · ' + (detailProduct?.sku || '')" width="860px" top="4vh" destroy-on-close class="erp-detail">
     <div v-if="detailProduct" class="product-detail">
       <div class="product-image-panel">
         <div v-if="detailProduct.images?.length" class="image-gallery">
@@ -605,22 +606,38 @@ async function enableProduct(row: any) {
         </p>
       </div>
       <div class="product-info-panel">
+        <DetailSheet :kicker="detailProduct.sku" :title="detailProduct.name" :subtitle="[detailProduct.spec, detailProduct.supplier].filter(Boolean).join(' · ')">
+          <template #status>
+            <el-tag size="small">{{ detailProduct.status }}</el-tag>
+          </template>
+          <template #metrics>
+            <div class="erp-detail__metric">
+              <label>采购成本</label>
+              <strong>¥ {{ formatMoney(detailProduct.purchaseCost) }}</strong>
+            </div>
+            <div class="erp-detail__metric">
+              <label>海运费用</label>
+              <strong>¥ {{ formatMoney(detailProduct.seaFreight) }}</strong>
+            </div>
+            <div class="erp-detail__metric">
+              <label>国内运费</label>
+              <strong>¥ {{ formatMoney(detailProduct.domesticFee) }}</strong>
+            </div>
+            <div class="erp-detail__metric is-accent">
+              <label>综合成本</label>
+              <strong>¥ {{ formatMoney(detailProduct.totalCost || detailProduct.cost) }}</strong>
+            </div>
+          </template>
+        </DetailSheet>
         <dl class="info-list">
-          <div class="info-row"><dt>商品名称</dt><dd>{{ detailProduct.name }}</dd></div>
-          <div class="info-row"><dt>SKU</dt><dd>{{ detailProduct.sku }}</dd></div>
           <div class="info-row"><dt>SPU</dt><dd>{{ detailProduct.spu || '—' }}</dd></div>
           <div class="info-row"><dt>规格</dt><dd>{{ detailProduct.spec || '—' }}</dd></div>
-          <div class="info-row cost-row"><dt>采购成本</dt><dd>¥ {{ formatMoney(detailProduct.purchaseCost) }} / 件</dd></div>
-          <div class="info-row cost-row"><dt>海运费用</dt><dd>¥ {{ formatMoney(detailProduct.seaFreight) }} / 件</dd></div>
-          <div class="info-row cost-row"><dt>国内运费</dt><dd>¥ {{ formatMoney(detailProduct.domesticFee) }} / 件</dd></div>
-          <div class="info-row cost-row total"><dt>综合成本</dt><dd>¥ {{ formatMoney(detailProduct.totalCost || detailProduct.cost) }} / 件</dd></div>
           <div class="info-row"><dt>尺寸 (cm)</dt><dd>{{ detailProduct.length }}×{{ detailProduct.width }}×{{ detailProduct.height }}</dd></div>
           <div class="info-row"><dt>重量 (kg)</dt><dd>{{ detailProduct.weight || '—' }}</dd></div>
           <div class="info-row"><dt>条码</dt><dd>{{ detailProduct.barcode || '—' }}</dd></div>
           <div class="info-row"><dt>开发人</dt><dd>{{ detailProduct.developer }}</dd></div>
           <div class="info-row"><dt>采购员</dt><dd>{{ detailProduct.purchaser }}</dd></div>
           <div class="info-row"><dt>供应商</dt><dd>{{ detailProduct.supplier }}</dd></div>
-          <div class="info-row"><dt>状态</dt><dd>{{ detailProduct.status }}</dd></div>
           <div class="info-row"><dt>同步</dt><dd>{{ detailProduct.sync }}</dd></div>
         </dl>
         <p class="cost-hint">综合成本 = 采购成本 + 海运费用 + 国内运费；海运费在入库发运回传后写入。</p>
@@ -630,9 +647,9 @@ async function enableProduct(row: any) {
     <el-divider v-if="detailProduct" content-position="left">操作记录</el-divider>
     <el-timeline v-if="detailProduct?.history?.length" class="product-history">
       <el-timeline-item v-for="(h, i) in detailProduct.history" :key="i" :timestamp="h.time" placement="top">
-        <span style="font-weight:600">{{ h.operator }}</span>
-        <span style="color:#8b95a8"> · {{ h.role }} · {{ h.action }}</span>
-        <div v-if="h.detail" style="font-size:12px;color:#5c6578;margin-top:2px">{{ h.detail }}</div>
+        <span class="hist-op">{{ h.operator }}</span>
+        <span class="hist-meta"> · {{ h.role }} · {{ h.action }}</span>
+        <div v-if="h.detail" class="hist-detail">{{ h.detail }}</div>
       </el-timeline-item>
     </el-timeline>
     <el-empty v-else-if="detailProduct" description="暂无操作记录" :image-size="60" />
@@ -730,14 +747,14 @@ async function enableProduct(row: any) {
 .page-header { display: flex; align-items: center; justify-content: space-between; }
 .page-title { font-weight: 600; font-size: 15px; }
 .header-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.sel-count { font-size: 12px; color: #1f9d92; white-space: nowrap; }
-.product-thumb { width: 40px; height: 40px; border-radius: 4px; border: 1px solid #ece6dd; }
+.sel-count { font-size: 12px; color: var(--cyan); white-space: nowrap; }
+.product-thumb { width: 40px; height: 40px; border-radius: 4px; border: 1px solid var(--border); }
 .thumb-wrap { position: relative; display: inline-block; }
 .img-count {
   position: absolute; right: -4px; bottom: -4px; min-width: 16px; height: 16px; padding: 0 4px;
-  border-radius: 8px; background: #1f9d92; color: #fff; font-size: 10px; line-height: 16px; text-align: center;
+  border-radius: 8px; background: var(--primary); color: #fff; font-size: 10px; line-height: 16px; text-align: center;
 }
-.no-thumb { color: #c0c4cc; font-size: 12px; }
+.no-thumb { color: var(--text-muted); font-size: 12px; }
 .product-detail { display: flex; gap: 24px; align-items: flex-start; }
 .product-image-panel { width: 280px; flex-shrink: 0; }
 .product-info-panel { flex: 1; min-width: 0; }
@@ -745,29 +762,39 @@ async function enableProduct(row: any) {
   display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px;
 }
 .image-gallery.edit { grid-template-columns: repeat(4, 72px); }
-.gallery-item { position: relative; aspect-ratio: 1; border-radius: 6px; overflow: hidden; border: 1px solid #ece6dd; }
+.gallery-item { position: relative; aspect-ratio: 1; border-radius: 8px; overflow: hidden; border: 1px solid var(--border); }
 .gallery-image { width: 100%; height: 100%; }
 .gallery-remove {
   position: absolute; top: 4px; right: 4px; width: 20px !important; height: 20px !important;
   min-height: 20px; padding: 0 !important; font-size: 14px; line-height: 1;
 }
 .image-box {
-  width: 200px; height: 120px; border: 1px dashed #dcdfe6; border-radius: 8px;
-  background: #fafafa; display: flex; align-items: center; justify-content: center;
+  width: 200px; height: 120px; border: 1px dashed var(--border); border-radius: 8px;
+  background: var(--panel-soft); display: flex; align-items: center; justify-content: center;
   overflow: hidden; margin-bottom: 12px;
 }
 .image-box.small { width: 72px; height: 72px; margin-bottom: 0; }
-.image-placeholder { color: #909399; font-size: 13px; }
-.image-hint { margin: 8px 0 0; font-size: 12px; color: #909399; line-height: 1.5; }
+.image-placeholder { color: var(--text-muted); font-size: 13px; }
+.image-hint { margin: 8px 0 0; font-size: 12px; color: var(--text-muted); line-height: 1.5; }
 .image-hint.inline { margin: 8px 0 0; }
 .edit-image-section { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
 .info-list { margin: 0; }
-.info-row { display: flex; gap: 12px; padding: 8px 0; border-bottom: 1px solid #f0ebe3; font-size: 13px; }
-.info-row dt { width: 88px; flex-shrink: 0; color: #8b7355; font-weight: 500; }
-.info-row dd { margin: 0; color: #2b2b2b; word-break: break-all; }
+.info-row { display: flex; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border-subtle); font-size: 13px; }
+.info-row dt { width: 88px; flex-shrink: 0; color: var(--text-muted); font-weight: 500; }
+.info-row dd { margin: 0; color: var(--text); word-break: break-all; }
 .info-row.cost-row dd { font-family: var(--font-mono, monospace); }
-.info-row.total dt, .info-row.total dd { color: #1f9d92; font-weight: 600; }
-.cost-hint { margin: 8px 0 0; font-size: 12px; color: #909399; line-height: 1.5; }
+.info-row.total dt, .info-row.total dd { color: var(--cyan); font-weight: 600; }
+.cost-hint { margin: 8px 0 0; font-size: 12px; color: var(--text-muted); line-height: 1.5; }
+.product-info-panel :deep(.erp-detail__metrics) {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
 .product-history { margin-top: 4px; padding-left: 4px; max-height: 240px; overflow-y: auto; }
-.create-hint { margin: 0 0 0 96px; font-size: 12px; color: #909399; line-height: 1.5; }
+.hist-op { font-weight: 600; color: var(--text); }
+.hist-meta { color: var(--text-muted); }
+.hist-detail { margin-top: 2px; color: var(--text-secondary); font-size: 12px; }
+.create-hint { margin: 0 0 0 96px; font-size: 12px; color: var(--text-muted); line-height: 1.5; }
+@media (max-width: 800px) {
+  .product-detail { flex-direction: column; }
+  .product-image-panel { width: 100%; }
+}
 </style>

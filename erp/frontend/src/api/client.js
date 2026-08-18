@@ -6,13 +6,41 @@ import { clearAccessToken, getAccessToken } from '@/auth/tokenStore'
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
 
+function describeNetworkError(err) {
+  const msg = err instanceof Error ? err.message : String(err)
+  if (
+    err instanceof TypeError
+    || /failed to fetch|fetch failed|networkerror|econnrefused|econnreset/i.test(msg)
+  ) {
+    return new Error('无法连接 ERP 后端（127.0.0.1:3000）。请先运行仓库根目录 dev-local.ps1，或单独启动 erp/backend。')
+  }
+  return err instanceof Error ? err : new Error(msg)
+}
+
+function shouldClearErpSession(url, status) {
+  return status === 401
+    && !String(url).includes('/auth/login')
+    && !String(url).includes('/store-monitor')
+}
+
 async function downloadRequest(url) {
   const token = getAccessToken()
-  const response = await fetch(`${BASE_URL}${url}`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-  })
+  let response
+  try {
+    response = await fetch(`${BASE_URL}${url}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+  } catch (err) {
+    throw describeNetworkError(err)
+  }
   if (!response.ok) {
     const error = await response.json().catch(() => ({ message: response.statusText }))
+    if (shouldClearErpSession(url, response.status)) {
+      clearAccessToken()
+      if (!window.location.pathname.startsWith('/login')) {
+        window.location.href = `/login?redirect=${encodeURIComponent(window.location.pathname)}`
+      }
+    }
     throw new Error(error.message || `HTTP ${response.status}`)
   }
   const blob = await response.blob()
@@ -24,9 +52,14 @@ async function downloadRequest(url) {
 
 async function openHtmlPrint(url) {
   const token = getAccessToken()
-  const response = await fetch(`${BASE_URL}${url}`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-  })
+  let response
+  try {
+    response = await fetch(`${BASE_URL}${url}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+  } catch (err) {
+    throw describeNetworkError(err)
+  }
   if (!response.ok) {
     const error = await response.json().catch(() => ({ message: response.statusText }))
     throw new Error(error.message || `HTTP ${response.status}`)
@@ -52,11 +85,16 @@ async function request(url, options = {}) {
     config.headers['Authorization'] = `Bearer ${token}`
   }
 
-  const response = await fetch(`${BASE_URL}${url}`, config)
+  let response
+  try {
+    response = await fetch(`${BASE_URL}${url}`, config)
+  } catch (err) {
+    throw describeNetworkError(err)
+  }
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ message: response.statusText }))
-    if (response.status === 401 && !url.includes('/auth/login')) {
+    if (shouldClearErpSession(url, response.status)) {
       clearAccessToken()
       if (!window.location.pathname.startsWith('/login')) {
         window.location.href = `/login?redirect=${encodeURIComponent(window.location.pathname)}`
@@ -65,8 +103,11 @@ async function request(url, options = {}) {
     if (response.status === 403) {
       throw new Error(error.message || '无权限执行此操作')
     }
+    if (response.status === 429) {
+      throw new Error(error.message || '请求过于频繁，请稍后再试')
+    }
     if (response.status === 502 || response.status === 503) {
-      throw new Error(error.message || '上游服务暂时不可用，请稍后重试')
+      throw new Error(error.message || '上游服务暂时不可用。店铺监控请确认 Takealot 代理（127.0.0.1:3456）已启动。')
     }
     throw new Error(error.message || `HTTP ${response.status}`)
   }
@@ -102,6 +143,7 @@ export const api = {
 
 export const authApi = {
   login: (data) => api.post('/auth/login', data),
+  health: () => api.get('/auth/health'),
   profile: () => api.get('/auth/profile'),
   updateProfile: (data) => api.put('/auth/profile', data),
   changePassword: (data) => api.put('/auth/password', data),
@@ -153,7 +195,12 @@ export const leadApi = {
   remove: (id) => api.delete(`/leads/${id}`),
   followUp: (id, data) => api.post(`/leads/${id}/follow-up`, data),
   deal: (id, data) => api.post(`/leads/${id}/deal`, data),
-  report: () => api.get('/leads/report'),
+  confirmToErp: (id, data) => api.post(`/leads/${id}/to-erp`, data),
+  uploadDealAttachments: (id, dealId, attachments) =>
+    api.post(`/leads/${id}/deals/${dealId}/attachments`, { attachments }),
+  downloadDealAttachment: (id, dealId, attachmentId) =>
+    downloadRequest(`/leads/${id}/deals/${dealId}/attachments/${attachmentId}`),
+  report: (params) => api.get('/leads/report', params),
   importCsv: (content) => api.post('/leads/import', { content }),
 }
 
@@ -181,6 +228,7 @@ export const productDevApi = {
   detail: (id) => api.get(`/product-dev/${id}`),
   create: (data) => api.post('/product-dev', data),
   update: (id, data) => api.put(`/product-dev/${id}`, data),
+  uploadPriceImage: (data) => api.post('/product-dev/price-image', data),
   submit: (id) => api.post(`/product-dev/${id}/submit`),
   approve: (id, data) => api.post(`/product-dev/${id}/approve`, data),
   reject: (id, data) => api.post(`/product-dev/${id}/reject`, data),
@@ -217,8 +265,8 @@ export const purchaseApi = {
   create: (data) => api.post('/purchase-orders', data),
   approve: (id, data) => api.post(`/purchase-orders/${id}/approve`, data || {}),
   rejectPoAudit: (id, data) => api.post(`/purchase-orders/${id}/reject-po-audit`, data),
-  financeApprove: (id, data) => api.post(`/purchase-orders/${id}/finance-approve`, data || {}),
-  rejectFinance: (id, data) => api.post(`/purchase-orders/${id}/reject-finance`, data),
+  markPaid: (id, data) => api.post(`/purchase-orders/${id}/mark-paid`, data || {}),
+  markUnpaid: (id, data) => api.post(`/purchase-orders/${id}/mark-unpaid`, data || {}),
   remove: (id) => api.delete(`/purchase-orders/${id}`),
 }
 
@@ -244,8 +292,8 @@ export const inboundApi = {
   uploadAttachment: (data) => api.post('/inbound/attachments', data),
   downloadSkuLabel: (id, sku) => downloadRequest(`/inbound/${id}/labels/sku${sku ? `?sku=${encodeURIComponent(sku)}` : ''}`),
   downloadOuterLabel: (id) => downloadRequest(`/inbound/${id}/labels/outer`),
-  downloadOmsAttachment: (inboundNo, attachmentId) =>
-    downloadRequest(`/inbound/oms/by-no/${encodeURIComponent(inboundNo)}/attachment/${attachmentId}`),
+  downloadOmsAttachment: (inboundId, attachmentId) =>
+    downloadRequest(`/inbound/${inboundId}/attachments/${attachmentId}`),
 }
 
 // ── 退件 ──
@@ -422,6 +470,17 @@ export const billingApi = {
 export const freightBillApi = {
   list: (params) => api.get('/freight-bills', params),
   create: (data) => api.post('/freight-bills', data),
+}
+
+export const mingruiApi = {
+  list: (params) => api.get('/mingrui-shipments', params),
+  eligiblePos: () => api.get('/mingrui-shipments/eligible-pos'),
+  detail: (id) => api.get(`/mingrui-shipments/${id}`),
+  create: (data) => api.post('/mingrui-shipments', data),
+  update: (id, data) => api.patch(`/mingrui-shipments/${id}`, data),
+  submit: (id) => api.post(`/mingrui-shipments/${id}/submit`),
+  sync: (id, data) => api.post(`/mingrui-shipments/${id}/sync`, data),
+  cancel: (id) => api.post(`/mingrui-shipments/${id}/cancel`),
 }
 
 // ── 利润 ──

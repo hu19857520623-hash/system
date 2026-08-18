@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
+import { Prisma } from '@prisma/client'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
 import { OperationLogService } from '../operation-log/operation-log.service'
@@ -65,13 +66,14 @@ export class PrePurchaseService {
     sku: string
     purchaseQty: number
     estimatedCost?: unknown
-  }) {
-    const existing = await this.prisma.prePurchaseOrder.findFirst({
+  }, tx?: Prisma.TransactionClient) {
+    const db = tx ?? this.prisma
+    const existing = await db.prePurchaseOrder.findFirst({
       where: { devId: dev.id, status: { notIn: ['cancelled', 'confirmed'] } },
     })
     if (existing) return existing
 
-    return this.prisma.prePurchaseOrder.create({
+    return db.prePurchaseOrder.create({
       data: {
         prePoNo: `PRE-${dev.sku}`,
         devId: dev.id,
@@ -327,15 +329,18 @@ export class PrePurchaseService {
       patch.volumetricWeightKg = packageVolumeCbm == null ? null : Math.round(packageVolumeCbm * 167 * 1000) / 1000
     }
 
-    const updated = await this.prisma.prePurchaseOrder.update({ where: { id: BigInt(id) }, data: patch })
-    if (patch.sku && patch.sku !== row.sku) {
-      await this.prisma.productDev.update({ where: { id: row.devId }, data: { sku: patch.sku } })
-    }
-    const devPatch: any = {}
-    for (const field of ['spec', 'productLengthCm', 'productWidthCm', 'productHeightCm', 'packageLengthCm', 'packageWidthCm', 'packageHeightCm', 'packageVolumeCbm', 'volumetricWeightKg']) {
-      if (patch[field] !== undefined) devPatch[field === 'packageVolumeCbm' ? 'cbm' : field] = patch[field]
-    }
-    if (Object.keys(devPatch).length) await this.prisma.productDev.update({ where: { id: row.devId }, data: devPatch })
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const saved = await tx.prePurchaseOrder.update({ where: { id: BigInt(id) }, data: patch })
+      if (patch.sku && patch.sku !== row.sku) {
+        await tx.productDev.update({ where: { id: row.devId }, data: { sku: patch.sku } })
+      }
+      const devPatch: Record<string, unknown> = {}
+      for (const field of ['spec', 'productLengthCm', 'productWidthCm', 'productHeightCm', 'packageLengthCm', 'packageWidthCm', 'packageHeightCm', 'packageVolumeCbm', 'volumetricWeightKg']) {
+        if (patch[field] !== undefined) devPatch[field === 'packageVolumeCbm' ? 'cbm' : field] = patch[field]
+      }
+      if (Object.keys(devPatch).length) await tx.productDev.update({ where: { id: row.devId }, data: devPatch })
+      return saved
+    })
     const [item] = await this.enrich([updated])
     return item
   }

@@ -11,12 +11,53 @@ import { PrismaService } from '../../common/prisma/prisma.service'
 import { PermissionsService } from '../../common/permissions/permissions.service'
 import type { AuthUser } from '../../common/decorators/current-user.decorator'
 import {
+  decryptStoreApiKey,
+  encryptStoreApiKey,
+  isEncryptedStoreApiKey,
+  maskStoreApiKey,
+  resolveStoreApiKeySecret,
+} from './store-api-key.crypto'
+import {
   ALL_STORE_SLOTS,
   coachLabel,
   coachRoleForSlot,
 } from './store-monitor.constants'
 
 const VALID_COACH_ROLES = ['coach1', 'coach2'] as const
+const MIN_API_KEY_LENGTH = 16
+
+function parseJsonObject(text: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(text)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {}
+  } catch {
+    return {}
+  }
+}
+
+function takealotAuthFailed(status: number, payload: Record<string, unknown>, raw = '') {
+  const detail = String(
+    payload.message || payload.detail || payload.description || payload.title || raw || '',
+  ).trim()
+  const lower = detail.toLowerCase()
+  return (
+    status === 401
+    || lower.includes('authentication failed')
+    || lower === 'unauthorized'
+  )
+}
+
+function takealotErrorMessage(status: number, payload: Record<string, unknown>, raw = '') {
+  if (takealotAuthFailed(status, payload, raw)) {
+    return 'Takealot API Key 无效或已过期，请重新粘贴完整密钥后保存再测试'
+  }
+  const detail = String(
+    payload.message || payload.detail || payload.description || payload.title || '',
+  ).trim()
+  return detail || `Takealot 接口返回 HTTP ${status}`
+}
 
 @Injectable()
 export class StoreMonitorService {
@@ -33,6 +74,45 @@ export class StoreMonitorService {
     ).replace(/\/+$/, '')
   }
 
+  private secret() {
+    return resolveStoreApiKeySecret(
+      this.config.get<string>('STORE_API_KEY_SECRET'),
+      this.config.get<string>('JWT_SECRET'),
+    )
+  }
+
+  private plainApiKey(stored: string | null | undefined) {
+    try {
+      return decryptStoreApiKey(stored, this.secret())
+    } catch {
+      throw new BadRequestException('店铺 API Key 无法解密，请重新保存密钥')
+    }
+  }
+
+  private persistApiKey(plain: string) {
+    return encryptStoreApiKey(plain, this.secret())
+  }
+
+  private maskStoredKey(stored: string | null | undefined) {
+    try {
+      return maskStoreApiKey(decryptStoreApiKey(stored, this.secret()))
+    } catch {
+      return '****'
+    }
+  }
+
+  private async resolvedApiKey(store: { slot: number; apiKey: string | null }) {
+    const plain = this.plainApiKey(store.apiKey)
+    if (!plain) throw new BadRequestException(`店铺 ${store.slot} 未配置 API Key`)
+    if (store.apiKey && !isEncryptedStoreApiKey(store.apiKey)) {
+      await this.prisma.takealotStore.update({
+        where: { slot: store.slot },
+        data: { apiKey: this.persistApiKey(plain) },
+      })
+    }
+    return plain
+  }
+
   private async fetchProxy(path: string, init?: RequestInit, timeoutMs = 90_000) {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), timeoutMs)
@@ -46,7 +126,7 @@ export class StoreMonitorService {
       if (controller.signal.aborted) {
         throw new ServiceUnavailableException('店铺监控代理响应超时，请检查本地代理服务')
       }
-      throw new ServiceUnavailableException(`店铺监控代理不可用：${message}`)
+      throw new ServiceUnavailableException('店铺监控代理未启动（默认 127.0.0.1:3456）。请运行仓库根目录 dev-local.ps1，或单独执行 erp/takealot-monitor 的 npm start')
     } finally {
       clearTimeout(timeout)
     }
@@ -152,7 +232,7 @@ export class StoreMonitorService {
       displayName: s.displayName,
       remark: s.remark,
       apiKeyMasked: manageKeys && s.apiKey
-        ? `${s.apiKey.slice(0, 4)}****${s.apiKey.slice(-4)}`
+        ? this.maskStoredKey(s.apiKey)
         : '',
       canEditKey: manageKeys,
       canEditCoach: assignCoach,
@@ -196,6 +276,9 @@ export class StoreMonitorService {
     if (data.apiKey && data.apiKey.trim().length > 500) {
       throw new BadRequestException('API Key 长度异常')
     }
+    if (data.apiKey && data.apiKey.trim().length < MIN_API_KEY_LENGTH) {
+      throw new BadRequestException('API Key 过短，请粘贴 Takealot 后台生成的完整密钥，不要填写店铺名')
+    }
 
     const row = await this.prisma.takealotStore.findUnique({ where: { slot } })
     if (!row) throw new NotFoundException('店铺不存在')
@@ -204,7 +287,11 @@ export class StoreMonitorService {
       where: { slot },
       data: {
         storeName: data.storeName?.trim() ?? undefined,
-        apiKey: data.apiKey === '' ? null : data.apiKey?.trim() ?? undefined,
+        apiKey: data.apiKey === ''
+          ? null
+          : data.apiKey
+            ? this.persistApiKey(data.apiKey.trim())
+            : undefined,
         coachRole: data.coachRole ?? undefined,
         enabled: data.enabled ?? undefined,
         remark: data.remark ?? undefined,
@@ -221,23 +308,18 @@ export class StoreMonitorService {
 
   async checkStore(user: AuthUser, slot: number) {
     const store = await this.assertSlotAccess(user, slot)
+    const apiKey = await this.resolvedApiKey(store)
     const upstream = await this.fetchProxy('/api/proxy/seller', {
       method: 'GET',
       headers: {
         Accept: 'application/json',
-        'X-API-Key': store.apiKey!,
+        'X-API-Key': apiKey,
       },
     })
     const text = await upstream.text()
-    let payload: Record<string, unknown> = {}
-    try {
-      payload = JSON.parse(text)
-    } catch {
-      // Preserve the upstream status while returning a stable ERP error.
-    }
+    const payload = parseJsonObject(text)
     if (!upstream.ok) {
-      const detail = String(payload.message || payload.description || payload.title || '').trim()
-      throw new BadRequestException(detail || `Takealot 接口返回 HTTP ${upstream.status}`)
+      throw new BadRequestException(takealotErrorMessage(upstream.status, payload, text))
     }
 
     const sellerIdValue = payload.seller_id
@@ -286,9 +368,10 @@ export class StoreMonitorService {
     ) {
       throw new BadRequestException('无效的 Takealot API 路径')
     }
+    const apiKey = await this.resolvedApiKey(store)
     const headers: Record<string, string> = {
       Accept: 'application/json',
-      'X-API-Key': store.apiKey!,
+      'X-API-Key': apiKey,
     }
     if (req.headers['content-type']) headers['Content-Type'] = String(req.headers['content-type'])
 
@@ -299,6 +382,15 @@ export class StoreMonitorService {
 
     const upstream = await this.fetchProxy(`/api/proxy/${subPath}`, init)
     const text = await upstream.text()
+    const payload = parseJsonObject(text)
+    if (takealotAuthFailed(upstream.status, payload, text)) {
+      res.status(400)
+      res.setHeader('Content-Type', 'application/json')
+      res.send(JSON.stringify({
+        message: takealotErrorMessage(upstream.status, payload, text),
+      }))
+      return
+    }
     res.status(upstream.status)
     const ct = upstream.headers.get('content-type')
     if (ct) res.setHeader('Content-Type', ct)

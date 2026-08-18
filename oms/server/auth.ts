@@ -40,6 +40,26 @@ export function normalizeEmail(value: unknown): string {
   return String(value || '').trim().toLowerCase()
 }
 
+export const USERNAME_PATTERN = /^[A-Za-z0-9._-]+$/
+export const USERNAME_MIN_LENGTH = 6
+export const USERNAME_MAX_LENGTH = 50
+export const PASSWORD_MIN_LENGTH = 6
+export const PASSWORD_MAX_LENGTH = 128
+
+export function normalizeUsername(value: unknown): string {
+  return String(value || '').trim().toLowerCase()
+}
+
+export function isValidUsername(value: string) {
+  return value.length >= USERNAME_MIN_LENGTH
+    && value.length <= USERNAME_MAX_LENGTH
+    && USERNAME_PATTERN.test(value)
+}
+
+export function requestedUsername(body: { username?: unknown; email?: unknown; loginEmail?: unknown } | null | undefined): string {
+  return normalizeUsername(body?.username || body?.email || body?.loginEmail)
+}
+
 export function isLoginAllowed(
   userStatus: string | undefined,
   accountStatus: string | undefined,
@@ -63,11 +83,7 @@ export function isPortalIdentityActive(
 }
 
 export function isStrongPassword(value: string) {
-  return value.length >= 10
-    && value.length <= 128
-    && /[a-z]/.test(value)
-    && /[A-Z]/.test(value)
-    && /\d/.test(value)
+  return value.length >= PASSWORD_MIN_LENGTH && value.length <= PASSWORD_MAX_LENGTH
 }
 
 export function getJwtSecret(): string {
@@ -86,10 +102,10 @@ export function getJwtSecret(): string {
   )
 }
 
-export function issueAccessToken(claims: AuthClaims): string {
+export function issueAccessToken(claims: AuthClaims, remember = false): string {
   return jwt.sign(claims, getJwtSecret(), {
     algorithm: 'HS256',
-    expiresIn: '15m',
+    expiresIn: remember ? '7d' : '15m',
     subject: claims.userId,
     issuer: 'takealot-oms',
     audience: 'takealot-oms-web',
@@ -146,6 +162,42 @@ export function requireSysAdmin(req: AuthenticatedRequest, res: Response, next: 
     return
   }
   next()
+}
+
+const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
+
+/** Permission required for a mutating /api path, or null to skip. */
+export function requiredWritePermission(method: string, apiPath: string): string | null {
+  if (!WRITE_METHODS.has(String(method || '').toUpperCase())) return null
+  const p = String(apiPath || '').split('?')[0] || '/'
+  if (p.startsWith('/auth')) return null
+  if (p === '/health' || p.startsWith('/erp/webhooks')) return null
+  if (p === '/system-messages/read') return 'dashboard:read'
+  if (p.includes('/recharge')) return 'billing:recharge'
+  if (p.startsWith('/billing')) return 'billing:recharge'
+  if (p.startsWith('/erp/purchase')) return 'catalog:write'
+  if (p.startsWith('/erp/products')) return 'product:write'
+  if (p.startsWith('/erp/inbound') || p.startsWith('/inbound')) return 'inbound:write'
+  if (p.startsWith('/erp/outbound') || p.startsWith('/outbound')) return 'outbound:write'
+  if (p.startsWith('/erp/returns') || p.startsWith('/return')) return 'returns:write'
+  if (p.startsWith('/orders')) return 'order:write'
+  if (p.startsWith('/platform-sku')) return 'platform:write'
+  if (p.startsWith('/inventory')) return 'inventory:read'
+  if (p.startsWith('/logistics')) return 'logistics:read'
+  if (p.startsWith('/accounts') || p.startsWith('/fee-templates') || p.startsWith('/payment-methods')) {
+    return 'account:manage'
+  }
+  if (p.startsWith('/stores')) return 'store:manage'
+  return '__unknown_write__'
+}
+
+export function assertApiWritePermission(req: AuthenticatedRequest, res: Response) {
+  const required = requiredWritePermission(req.method, req.path)
+  if (!required) return true
+  if (req.auth?.role === 'sys_admin') return true
+  if (required !== '__unknown_write__' && req.auth?.permissions?.includes(required)) return true
+  res.status(403).json({ error: '没有此项操作权限' })
+  return false
 }
 
 export function hasValidInternalToken(supplied: unknown): boolean {

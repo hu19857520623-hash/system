@@ -81,12 +81,10 @@ const packVisible = ref(false)
 const appointmentVisible = ref(false)
 const relabelVisible = ref(false)
 const podUploadVisible = ref(false)
-const labelVisible = ref(false)
 const pickOrder = ref<any>(null)
 const packOrder = ref<any>(null)
 const appointmentOrder = ref<any>(null)
 const relabelOrder = ref<any>(null)
-const labelOrder = ref<any>(null)
 const deliverOrder = ref<any>(null)
 const shipOrder = ref<any>(null)
 const problemOrder = ref<any>(null)
@@ -106,12 +104,13 @@ const appointmentDate = ref('')
 const deliverPodFile = ref<File | null>(null)
 const podFileInputRef = ref<HTMLInputElement | null>(null)
 const assignPickerId = ref<number | null>(null)
+const assignTargetIds = ref<number[]>([])
 const problemRemark = ref('')
 const exceptionRemark = ref('')
 const pickLines = ref<any[]>([])
 const pickLoading = ref(false)
+const pickSubmitting = ref(false)
 const packDetailLoading = ref(false)
-const labelDetailLoading = ref(false)
 const labelActionLoading = reactive<Record<string, boolean>>({})
 const relabelLines = ref<{ id: number; sku: string; productName: string; scannedBarcode: string; newBarcode: string }[]>([])
 
@@ -250,7 +249,10 @@ function handleRowCommand(command: string, row: any) {
   }
   switch (command) {
     case 'labels':
-      openLabelManager(row)
+      downloadRowLabels(row)
+      break
+    case 'assignPicker':
+      openAssignPicker(row)
       break
     case 'relabel':
       openRelabel(row)
@@ -375,10 +377,19 @@ const assignableSelected = computed(() =>
 
 const printablePickOrders = computed(() => {
   if (selectedRows.value.length) {
-    return selectedRows.value.filter((r) => ['pending_pick', 'picking'].includes(r.status))
+    return selectedRows.value.filter((r) => r.status === 'picking')
   }
-  return orders.value.filter((r) => ['pending_pick', 'picking'].includes(r.status))
+  return orders.value.filter((r) => r.status === 'picking')
 })
+
+function rowActionAttachments(row: any) {
+  const atts = row.attachments?.length
+    ? row.attachments
+    : row.attachmentName
+      ? [{ id: 0, fileName: row.attachmentName, fileType: 'other' }]
+      : []
+  return atts.filter((att: any) => !['skuLabel', 'outerLabel'].includes(att.fileType))
+}
 
 function handleSelectionChange(rows: any[]) {
   selectedRows.value = rows
@@ -412,16 +423,17 @@ async function downloadAttachmentById(row: any, attachmentId: number) {
   }
 }
 
-async function openLabelManager(row: any) {
-  labelOrder.value = row
-  labelVisible.value = true
-  labelDetailLoading.value = true
+async function downloadRowLabels(row: any) {
   try {
-    labelOrder.value = await outboundApi.detail(row.id)
+    const { blob, fileName } = await outboundApi.downloadSkuLabels(row.id)
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = fileName || `${row.outboundNo || 'outbound'}-labels.pdf`
+    a.click()
+    URL.revokeObjectURL(url)
   } catch (err: any) {
-    ElMessage.error(err?.message || '加载平台商品标签失败')
-  } finally {
-    labelDetailLoading.value = false
+    ElMessage.error(err.message || '下载标签失败')
   }
 }
 
@@ -564,6 +576,10 @@ async function submitRelabel(allowSkipScan = false) {
 }
 
 async function openPick(row: any) {
+  if (row.status !== 'picking' || !row.pickerId) {
+    ElMessage.warning('请先分配拣货员后再完成拣货')
+    return
+  }
   pickOrder.value = row
   pickSource.value = 'pda'
   pickLines.value = []
@@ -604,18 +620,24 @@ async function submitPick() {
     ElMessage.warning('存在未分配库位的 SKU，请先完成上架')
     return
   }
-  await withAction(async () => {
-    await outboundApi.pick(pickOrder.value.id, {
-      pickSource: pickSource.value,
-      items: pickLines.value.map((l) => ({
-        id: l.id,
-        pickedQty: l.pickedQty,
-      })),
-    })
-    pickVisible.value = false
-    filterStatus.value = 'picked'
-    await reloadAll()
-  }, `${pickOrder.value.outboundNo} 已完成拣货`)
+  pickSubmitting.value = true
+  try {
+    await withAction(async () => {
+      await outboundApi.pick(pickOrder.value.id, {
+        pickSource: pickSource.value,
+        items: pickLines.value.map((l) => ({
+          id: l.id,
+          pickedQty: l.pickedQty,
+          locationCode: l.locationCode,
+        })),
+      })
+      pickVisible.value = false
+      filterStatus.value = 'picked'
+      await reloadAll()
+    }, `${pickOrder.value.outboundNo} 已完成拣货`)
+  } finally {
+    pickSubmitting.value = false
+  }
 }
 
 async function openPack(row: any) {
@@ -799,13 +821,15 @@ async function submitShip() {
   }, `${shipOrder.value.outboundNo} 已发运，库存已扣减并生成计费`)
 }
 
-function openAssignPicker() {
+function openAssignPicker(row?: any) {
   if (!canPick.value) return
-  const rows = assignableSelected.value
-  if (!rows.length) {
-    ElMessage.warning('请勾选待拣货的出库单')
+  const rows = row ? [row] : assignableSelected.value
+  const ids = rows.filter((r) => r.status === 'pending_pick').map((r) => r.id)
+  if (!ids.length) {
+    ElMessage.warning(row ? '仅待拣货状态可分配拣货员' : '请勾选待拣货的出库单')
     return
   }
+  assignTargetIds.value = ids
   assignPickerId.value = pickerUsers.value[0]?.id ?? null
   assignVisible.value = true
 }
@@ -815,16 +839,22 @@ async function submitAssignPicker() {
     ElMessage.warning('请选择拣货员')
     return
   }
+  if (!assignTargetIds.value.length) {
+    ElMessage.warning('请勾选待拣货的出库单')
+    return
+  }
+  const count = assignTargetIds.value.length
   await withAction(async () => {
     await outboundApi.assignPicker({
-      ids: assignableSelected.value.map((r) => r.id),
+      ids: assignTargetIds.value,
       pickerId: assignPickerId.value!,
     })
     assignVisible.value = false
     selectedRows.value = []
+    assignTargetIds.value = []
     filterStatus.value = 'picking'
     await reloadAll()
-  }, `已分配 ${assignableSelected.value.length} 单`)
+  }, `已分配 ${count} 单`)
 }
 
 function openProblem(row: any) {
@@ -905,7 +935,7 @@ async function doExport() {
 function printPickList() {
   const rows = printablePickOrders.value
   if (!rows.length) {
-    ElMessage.warning('没有可打印的待拣货单')
+    ElMessage.warning('没有可打印的拣货中出库单')
     return
   }
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>拣货单</title>
@@ -1105,7 +1135,7 @@ function statusTag(status: string) {
             v-if="canPick"
             size="small"
             :disabled="!assignableSelected.length"
-            @click="openAssignPicker"
+            @click="openAssignPicker()"
           >
             分配拣货员
           </el-button>
@@ -1172,8 +1202,11 @@ function statusTag(status: string) {
               <el-button link type="primary" size="small">操作</el-button>
               <template #dropdown>
                 <el-dropdown-menu>
-                  <el-dropdown-item command="labels">
-                    平台商品标签
+                  <el-dropdown-item
+                    v-if="row.status === 'pending_relabel'"
+                    command="labels"
+                  >
+                    下载标签
                   </el-dropdown-item>
                   <el-dropdown-item
                     v-if="row.status === 'pending_relabel' && canRelabel"
@@ -1182,13 +1215,19 @@ function statusTag(status: string) {
                     扫码换标
                   </el-dropdown-item>
                   <el-dropdown-item
-                    v-if="['pending_pick', 'picking'].includes(row.status) && canPick"
+                    v-if="row.status === 'pending_pick' && canPick"
+                    command="assignPicker"
+                  >
+                    分配拣货员
+                  </el-dropdown-item>
+                  <el-dropdown-item
+                    v-if="row.status === 'picking' && canPick"
                     command="downloadPick"
                   >
                     下载拣货清单
                   </el-dropdown-item>
                   <el-dropdown-item
-                    v-if="['pending_pick', 'picking'].includes(row.status) && canPick"
+                    v-if="row.status === 'picking' && canPick"
                     command="pick"
                   >
                     完成拣货
@@ -1218,11 +1257,11 @@ function statusTag(status: string) {
                     预约派送
                   </el-dropdown-item>
                   <el-dropdown-item
-                    v-for="att in (row.attachments?.length ? row.attachments : (row.attachmentName ? [{ id: 0, fileName: row.attachmentName, fileType: 'other' }] : []))"
+                    v-for="att in rowActionAttachments(row)"
                     :key="att.id || att.fileName"
                     :command="att.id ? `downloadAtt:${att.id}` : 'downloadCpt'"
                   >
-                    下载{{ att.fileType === 'pod' ? 'POD签收单' : att.fileType === 'outerLabel' ? '外箱标' : att.fileType === 'skuLabel' ? 'SKU标签' : att.fileType === 'deliveryList' ? '发货清单' : att.fileType === 'appointment' ? '预约单' : '附件' }}
+                    下载{{ att.fileType === 'pod' ? 'POD签收单' : att.fileType === 'deliveryList' ? '发货清单' : att.fileType === 'appointment' ? '预约单' : '附件' }}
                   </el-dropdown-item>
                   <el-dropdown-item
                     v-if="canCreate && !['cancelled', 'shipped', 'delivered'].includes(row.status)"
@@ -1258,25 +1297,6 @@ function statusTag(status: string) {
 
       <ListPagination v-model:page="page" v-model:page-size="pageSize" :total="listTotal" />
     </el-card>
-
-    <!-- 平台商品标签 -->
-    <el-dialog
-      v-model="labelVisible"
-      :title="`平台商品标签 · ${labelOrder?.outboundNo || ''}`"
-      width="min(980px, 94vw)"
-    >
-      <OutboundLabelPanel
-        :detail="labelOrder"
-        :loading="labelDetailLoading"
-        :action-loading="labelActionLoading"
-        @print-order="printOrderLabels(labelOrder)"
-        @print-sku="(line) => printSkuLabels(labelOrder, line)"
-        @print-unit="(line, unitIndex) => printUnitLabel(labelOrder, line, unitIndex)"
-      />
-      <template #footer>
-        <el-button @click="labelVisible = false">关闭</el-button>
-      </template>
-    </el-dialog>
 
     <!-- 换标 -->
     <el-dialog
@@ -1356,7 +1376,7 @@ function statusTag(status: string) {
       </el-table>
       <template #footer>
         <el-button @click="pickVisible = false">取消</el-button>
-        <el-button type="primary" @click="submitPick">完成拣货</el-button>
+        <el-button type="primary" :loading="pickSubmitting" @click="submitPick">完成拣货</el-button>
       </template>
     </el-dialog>
 
@@ -1366,15 +1386,6 @@ function statusTag(status: string) {
       :title="`复核打包 · ${packOrder?.outboundNo || ''}`"
       width="min(980px, 94vw)"
     >
-      <OutboundLabelPanel
-        class="pack-label-panel"
-        :detail="packOrder"
-        :loading="packDetailLoading"
-        :action-loading="labelActionLoading"
-        @print-order="printOrderLabels(packOrder)"
-        @print-sku="(line) => printSkuLabels(packOrder, line)"
-        @print-unit="(line, unitIndex) => printUnitLabel(packOrder, line, unitIndex)"
-      />
       <div v-if="packOrder?.needsRelabel" class="pick-hint" style="margin-bottom:12px">
         本单需换标：复核完成后将进入「待换标」，换标确认后再发运。
       </div>
@@ -1501,7 +1512,7 @@ function statusTag(status: string) {
 
     <!-- 分配拣货员 -->
     <el-dialog v-model="assignVisible" title="分配拣货员" width="360px">
-      <p class="dialog-hint">已选 {{ assignableSelected.length }} 单（仅待拣货）</p>
+      <p class="dialog-hint">已选 {{ assignTargetIds.length }} 单（仅待拣货）</p>
       <el-select v-model="assignPickerId" placeholder="选择拣货员" style="width:100%">
         <el-option v-for="u in pickerUsers" :key="u.id" :label="u.name" :value="u.id" />
       </el-select>
@@ -1680,9 +1691,6 @@ function statusTag(status: string) {
 }
 .legacy-relabel {
   margin-top: 14px;
-}
-.pack-label-panel {
-  margin-bottom: 14px;
 }
 .pack-cartons {
   width: 100%;

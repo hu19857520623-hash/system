@@ -228,7 +228,6 @@ export function mapPurchaseOrder(row: any) {
     draft: '草稿',
     pending_po_audit: '待主管审核',
     pending_actual_qty: '待核定实际数量',
-    pending_finance: '待财务审核',
     approved: '已批准',
     finance_approved: '待中转仓收货',
     at_logistics_wh: '中转仓部分收货',
@@ -257,6 +256,10 @@ export function mapPurchaseOrder(row: any) {
     financeName: row.financeName || '—',
     financeAtStr: row.financeAtStr || '',
     financeRemark: row.financeRemark || '',
+    paymentStatus: row.paymentStatus === 'paid' ? 'paid' : 'unpaid',
+    paymentStatusLabel: row.paymentStatus === 'paid' ? '已打款' : '未打款',
+    paidAtStr: row.paidAtStr || '',
+    paidByName: row.paidByName || '—',
     expectedArrivalStr: row.expectedArrivalStr || fmtDate(row.expectedArrival),
     createdAtStr: row.createdAtStr || fmtTime(row.createdAt),
     purchaseConfirmation: row.purchaseConfirmation || null,
@@ -350,7 +353,8 @@ export function mapCustomer(row: any) {
     catalog: '货盘',
     hybrid: '混合',
   }
-  const portalReady = Boolean(oms?.portalReady || oms?.portalLoginEmail)
+  const portalUsername = oms?.portalUsername || oms?.portalLoginEmail || ''
+  const portalReady = Boolean(oms?.portalReady || portalUsername)
   const portalStatus = oms?.portalStatus || (portalReady ? oms?.omsStatus : '') || ''
   const portalMustChangePassword = oms?.mustChangePassword === true
   const omsLastLogin = oms?.lastLoginAt ? fmtTime(oms.lastLoginAt) : ''
@@ -395,7 +399,8 @@ export function mapCustomer(row: any) {
     omsPendingBill: oms?.pendingBill != null ? num(oms.pendingBill) : null,
     omsPermissions: oms?.permissions || [],
     portalReady,
-    portalLoginEmail: oms?.portalLoginEmail || '',
+    portalUsername,
+    portalLoginEmail: portalUsername,
     portalStatus,
     portalMustChangePassword,
     portalActivationLabel,

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { leadApi } from '@/api/client.js'
 import { fmtTime, mapLead } from '@/api/mappers.ts'
@@ -9,10 +10,12 @@ import { useAsyncIo } from '@/composables/useAsyncIo'
 import { downloadLeadsImportTemplate, LEADS_IMPORT_FIELDS } from '@/constants/importTemplates.ts'
 import ImportFieldLegend from '@/components/ImportFieldLegend.vue'
 import ListPagination from '@/components/ListPagination.vue'
+import DetailSheet from '@/components/ui/DetailSheet.vue'
 import { useAppStore } from '@/stores/app'
 import { LEAD_SELF_ASSIGN_ROLE_CODES } from '@erp/shared/permissions.catalog'
 
 const app = useAppStore()
+const router = useRouter()
 const { importCsv } = useAsyncIo()
 
 interface SalesUser {
@@ -136,7 +139,7 @@ function openNewLead() {
 
 async function submitNewLead() {
   if (!newLead.value.company || !newLead.value.contact) {
-    ElMessage.warning('请填写客户名称和联系人')
+    ElMessage.warning('请填写客户名称和联系方式')
     return
   }
   if (!newLead.value.assigneeId) {
@@ -162,10 +165,10 @@ async function submitNewLead() {
 
 async function follow(row: any) {
   const leadId = row._raw?.id ?? row.id
-  await withAction(async () => {
+  const ok = await withAction(async () => {
     await leadApi.followUp(leadId, { content: '开始跟进', followType: 'phone' })
-    await load()
-  }, `已开始跟进「${row.company}」`)
+  }, `已开始跟进「${row.company}」，正在打开我的跟进`)
+  if (ok) await router.push('/leads/follow')
 }
 
 async function importLeads() {
@@ -214,6 +217,22 @@ function money(value: unknown) {
   return Number.isFinite(amount) ? `¥${amount.toFixed(2)}` : String(value)
 }
 
+async function downloadDealFile(deal: any, att: { id: number; fileName: string }) {
+  const leadId = detailData.value?.id
+  if (leadId == null) return
+  try {
+    const { blob, fileName } = await leadApi.downloadDealAttachment(leadId, deal.id, att.id)
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = fileName || att.fileName
+    a.click()
+    URL.revokeObjectURL(url)
+  } catch (error: any) {
+    ElMessage.error(error?.message || '下载失败')
+  }
+}
+
 async function detail(row: any) {
   detailVisible.value = true
   detailLoading.value = true
@@ -256,7 +275,7 @@ onMounted(async () => {
       <div class="filter-bar">
         <el-input
           v-model="searchQ"
-          placeholder="客户名称、线索编号、联系人或电话"
+          placeholder="客户名称、线索编号、联系方式"
           clearable
           class="filter-keyword"
           @keyup.enter="applyFilters"
@@ -299,7 +318,7 @@ onMounted(async () => {
           </template>
         </el-table-column>
         <el-table-column prop="company" label="客户名称" min-width="180" />
-        <el-table-column prop="contact" label="联系人" width="120" />
+        <el-table-column prop="contact" label="联系方式" width="120" />
         <el-table-column prop="phone" label="电话" width="160" />
         <el-table-column prop="source" label="来源" width="80" />
         <el-table-column prop="status" label="状态" width="90">
@@ -327,9 +346,19 @@ onMounted(async () => {
     :title="`线索详情${detailData?.leadNo ? ` · ${detailData.leadNo}` : ''}`"
     width="760px"
     destroy-on-close
+    class="erp-detail"
   >
     <div v-loading="detailLoading" class="lead-detail">
       <template v-if="detailData">
+        <DetailSheet
+          :kicker="detailData.leadNo"
+          :title="detailData.companyName || '未命名客户'"
+          :subtitle="[detailData.contactName, detailData.contactPhone, detailData.source].filter(Boolean).join(' · ')"
+        >
+          <template #status>
+            <el-tag size="small">{{ LEAD_STATUS_LABELS[detailData.status] || detailData.status || '—' }}</el-tag>
+          </template>
+        </DetailSheet>
         <el-descriptions :column="2" border>
           <el-descriptions-item label="线索编号">{{ detailData.leadNo || '—' }}</el-descriptions-item>
           <el-descriptions-item label="状态">
@@ -337,7 +366,7 @@ onMounted(async () => {
           </el-descriptions-item>
           <el-descriptions-item label="客户名称">{{ detailData.companyName || '—' }}</el-descriptions-item>
           <el-descriptions-item label="归属销售">{{ detailData.assigneeName || '未分配' }}</el-descriptions-item>
-          <el-descriptions-item label="联系人">{{ detailData.contactName || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="联系方式">{{ detailData.contactName || '—' }}</el-descriptions-item>
           <el-descriptions-item label="电话">{{ detailData.contactPhone || '—' }}</el-descriptions-item>
           <el-descriptions-item label="邮箱">{{ detailData.email || '—' }}</el-descriptions-item>
           <el-descriptions-item label="来源">{{ detailData.source || '—' }}</el-descriptions-item>
@@ -381,6 +410,23 @@ onMounted(async () => {
           <el-table-column label="状态" width="90">
             <template #default="{ row }">{{ DEAL_STATUS_LABELS[row.status] || row.status || '—' }}</template>
           </el-table-column>
+          <el-table-column label="客户资料" min-width="180">
+            <template #default="{ row }">
+              <span v-if="!row.attachments?.length">—</span>
+              <div v-else class="deal-files">
+                <el-button
+                  v-for="att in row.attachments"
+                  :key="att.id"
+                  link
+                  type="primary"
+                  size="small"
+                  @click="downloadDealFile(row, att)"
+                >
+                  {{ att.fileName }}
+                </el-button>
+              </div>
+            </template>
+          </el-table-column>
         </el-table>
       </template>
     </div>
@@ -390,18 +436,18 @@ onMounted(async () => {
   </el-dialog>
 
   <el-dialog v-model="dialogVisible" title="新建线索" width="520px">
-    <el-form label-width="80px">
+    <el-form label-width="96px">
       <el-form-item label="线索编号">
         <el-input v-model="newLead.leadNo" placeholder="留空则自动生成，如 LD-XHS-0099" clearable />
       </el-form-item>
-      <el-form-item label="客户名称">
+      <el-form-item label="客户名称" required>
         <el-input v-model="newLead.company" placeholder="输入客户名称" />
       </el-form-item>
-      <el-form-item label="联系人">
-        <el-input v-model="newLead.contact" placeholder="输入联系人姓名" />
+      <el-form-item label="联系方式" required>
+        <el-input v-model="newLead.contact" placeholder="姓名 / 微信 / 手机均可" />
       </el-form-item>
-      <el-form-item label="电话">
-        <el-input v-model="newLead.phone" placeholder="输入电话号码" />
+      <el-form-item label="电话（选填）">
+        <el-input v-model="newLead.phone" placeholder="可再填一个电话号码" />
       </el-form-item>
       <el-form-item label="来源">
         <el-select v-model="newLead.source" style="width:100%">
@@ -487,4 +533,5 @@ onMounted(async () => {
 }
 .follow-head span,
 .follow-secondary { color: var(--el-text-color-secondary); }
+.deal-files { display:flex; flex-direction:column; align-items:flex-start; gap:2px; }
 </style>

@@ -392,6 +392,7 @@ export class ProductsService {
       data: {
         sku,
         productName,
+        customerSku: data.customerSku?.trim() || null,
         spu: data.spu?.trim() || null,
         spec: data.spec?.trim() || null,
         category: data.category?.trim() || null,
@@ -402,6 +403,13 @@ export class ProductsService {
         weightKg: toDecimal(data.weightKg),
         costRmb: toDecimal(data.costRmb) ?? 0,
         barcode: data.barcode?.trim() || null,
+        declaredNameEn: data.declaredNameEn?.trim() || null,
+        declaredNameCn: data.declaredNameCn?.trim() || null,
+        unit: data.unit?.trim() || null,
+        hasBattery: Boolean(data.hasBattery),
+        imageUrl: typeof data.imageUrl === 'string' && data.imageUrl.trim() && data.imageUrl.trim().length <= 500
+          ? data.imageUrl.trim()
+          : null,
         takealotUrl: data.takealotUrl?.trim() || null,
         developerId: data.developerId ? BigInt(data.developerId) : undefined,
         purchaserId: data.purchaserId ? BigInt(data.purchaserId) : undefined,
@@ -642,7 +650,8 @@ export class ProductsService {
     if (!this.files.exists(relativePath)) throw new NotFoundException('图片不存在')
     const buf = this.files.read(relativePath)
     const ext = path.extname(safe).toLowerCase()
-    res.setHeader('Content-Type', IMAGE_MIME[ext] || 'application/octet-stream')
+    if (!IMAGE_MIME[ext]) throw new NotFoundException('图片不存在')
+    res.setHeader('Content-Type', IMAGE_MIME[ext])
     res.setHeader('Cache-Control', 'public, max-age=86400')
     res.send(buf)
   }
@@ -689,6 +698,14 @@ export class ProductsService {
         category: data.category || null,
         brand: data.brand || null,
         barcode: data.barcode || data.customCode || null,
+        customerSku,
+        declaredNameEn: data.declaredNameEn || data.spec || null,
+        declaredNameCn: data.declaredNameCn || null,
+        unit: data.unit || null,
+        hasBattery: Boolean(data.hasBattery),
+        imageUrl: typeof data.image === 'string' && data.image.length <= 500
+          ? data.image
+          : (typeof data.imageUrl === 'string' && data.imageUrl.length <= 500 ? data.imageUrl : null),
         lengthCm: data.lengthCm,
         widthCm: data.widthCm,
         heightCm: data.heightCm,

@@ -4,40 +4,42 @@ import { InboundService } from './inbound.service'
 import { PaginationDto } from '../../common/dto/pagination.dto'
 import { CurrentUser } from '../../common/decorators/current-user.decorator'
 import { RequireAnyPerm, RequirePerms } from '../../common/decorators/require-perms.decorator'
-import { Public } from '../../common/decorators/public.decorator'
+import { OmsBridge } from '../../common/decorators/oms-bridge.decorator'
+import { CreateOmsAsnDto } from './dto/oms-asn.dto'
 
 @Controller('inbound')
 export class InboundController {
   constructor(private readonly service: InboundService) {}
 
   /** OMS P1：客户预约入库 ASN */
-  @Public()
+  @OmsBridge()
   @Post('oms/asn')
-  omsCreateAsn(@Body() body: any) {
+  omsCreateAsn(@Body() body: CreateOmsAsnDto) {
     return this.service.createAsnFromOms(body)
   }
 
-  @Public()
+  @OmsBridge()
   @Get('oms/by-customer/:customerCode')
   omsListByCustomer(@Param('customerCode') customerCode: string) {
     return this.service.listByOmsCustomer(customerCode)
   }
 
-  @Public()
+  @OmsBridge()
   @Get('oms/by-no/:inboundNo')
   omsGetByNo(@Param('inboundNo') inboundNo: string) {
     return this.service.getByInboundNoForOms(inboundNo)
   }
 
-  @Public()
+  @OmsBridge()
   @Get('oms/by-no/:inboundNo/attachment/:attachmentId')
   @Header('Content-Type', 'application/octet-stream')
   async omsDownloadAttachment(
     @Param('inboundNo') inboundNo: string,
     @Param('attachmentId', ParseIntPipe) attachmentId: number,
+    @Query('customerCode') customerCode: string,
     @Res() res: Response,
   ) {
-    const file = await this.service.downloadOmsAttachment(inboundNo, attachmentId)
+    const file = await this.service.downloadOmsAttachment(inboundNo, attachmentId, customerCode)
     res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(file.fileName)}"`)
     res.send(file.content)
   }
@@ -101,6 +103,19 @@ export class InboundController {
   @Header('Content-Type', 'text/html;charset=utf-8')
   async outerLabel(@Param('id', ParseIntPipe) id: number, @Res() res: Response) {
     const file = await this.service.getOuterLabel(id)
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(file.fileName)}"`)
+    res.send(file.content)
+  }
+
+  @RequireAnyPerm('create_inbound.view', 'inbound.view')
+  @Get(':id/attachments/:attachmentId')
+  @Header('Content-Type', 'application/octet-stream')
+  async downloadStaffAttachment(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('attachmentId', ParseIntPipe) attachmentId: number,
+    @Res() res: Response,
+  ) {
+    const file = await this.service.downloadStaffAttachment(id, attachmentId)
     res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(file.fileName)}"`)
     res.send(file.content)
   }

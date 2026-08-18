@@ -23,7 +23,7 @@ export interface CustomerCreateRequest {
   warehouse: string
   permissionTemplate?: OmsCustomerType
   permissions?: OmsPortalPermission[]
-  loginEmail: string
+  username: string
   temporaryPassword: string
 }
 
@@ -34,6 +34,7 @@ export interface CustomerPortalAccountWire {
   permissions: OmsPortalPermission[]
   omsStatus: 'active' | 'disabled'
   portalReady: boolean
+  portalUsername?: string | null
   portalLoginEmail: string | null
   portalStatus: 'active' | 'disabled' | null
   mustChangePassword: boolean | null
@@ -44,13 +45,14 @@ export interface CustomerPortalAccountWire {
 }
 
 export interface PortalTemporaryPasswordRequest {
-  loginEmail: string
+  username: string
   temporaryPassword: string
 }
 
 export interface PortalTemporaryPasswordResult {
   customerCode: string
   portalReady: true
+  portalUsername?: string
   portalLoginEmail: string
   portalStatus: 'active' | 'disabled'
   mustChangePassword: true
@@ -69,6 +71,7 @@ export interface CustomerUpdateRequest {
   warehouse?: string
   permissionTemplate?: OmsCustomerType
   permissions?: OmsPortalPermission[]
+  username?: string
   loginEmail?: string
 }
 
@@ -155,6 +158,7 @@ export const operationLogApi: ApiGroup
 export const customerApi: CustomerApi
 export const billingApi: ApiGroup
 export const freightBillApi: ApiGroup
+export const mingruiApi: ApiGroup
 export const profitApi: ApiGroup
 export const announcementApi: ApiGroup
 export const asyncIoApi: ApiGroup

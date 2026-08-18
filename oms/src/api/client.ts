@@ -4,6 +4,7 @@ const SESSION_SESSION_KEY = 'oms-auth-session-tab'
 
 export type SessionUser = {
   id: string
+  username: string
   email: string
   status: string
   role: import('../auth/permissions').OmsRole
@@ -22,7 +23,7 @@ export type AuthSession = {
 }
 
 export type AuthLoginRequest = {
-  email: string
+  username: string
   password: string
   remember?: boolean
 }
@@ -44,14 +45,15 @@ export type OmsAccountProvisionRequest = {
   omsType: 'ecommerce' | 'catalog' | 'hybrid'
   warehouse: string
   permissions: import('../auth/permissions').Permission[]
-  loginEmail: string
+  username: string
   temporaryPassword: string
 }
 
 export type OmsPortalAccountDto = {
   id: string
   customerId: string
-  loginEmail: string
+  username: string
+  loginEmail?: string
   role: 'ecommerce' | 'catalog' | 'hybrid'
   status: 'active' | 'disabled'
   mustChangePassword: boolean
@@ -72,7 +74,7 @@ export type OmsAccountProvisionResponse = {
 }
 
 export type OmsResetPasswordRequest = {
-  loginEmail?: string
+  username?: string
   temporaryPassword: string
 }
 
@@ -88,12 +90,11 @@ export function normalizeSessionUser(value: unknown): SessionUser {
   const raw = asRecord(value)
   if (!raw) throw new Error('登录响应缺少用户信息')
 
-  // userId/loginEmail are accepted while older OMS API deployments roll over
-  // to the unified id/email contract.
+  // userId/username/loginEmail are accepted while older OMS API deployments roll over.
   const id = optionalString(raw.id ?? raw.userId)
-  const email = optionalString(raw.email ?? raw.loginEmail).toLowerCase()
+  const username = optionalString(raw.username ?? raw.email ?? raw.loginEmail).toLowerCase()
   const role = optionalString(raw.role)
-  if (!id || !email || !['sys_admin', 'ecommerce', 'catalog', 'hybrid'].includes(role)) {
+  if (!id || !username || !['sys_admin', 'ecommerce', 'catalog', 'hybrid'].includes(role)) {
     throw new Error('登录响应中的用户身份无效')
   }
 
@@ -112,7 +113,8 @@ export function normalizeSessionUser(value: unknown): SessionUser {
 
   return {
     id,
-    email,
+    username,
+    email: username,
     status: optionalString(raw.status) || 'active',
     role: role as SessionUser['role'],
     customerId,
@@ -121,7 +123,7 @@ export function normalizeSessionUser(value: unknown): SessionUser {
       ? raw.permissions.filter(permission => typeof permission === 'string') as SessionUser['permissions']
       : [],
     mustChangePassword: Boolean(raw.mustChangePassword),
-    name: optionalString(raw.name) || email,
+    name: optionalString(raw.name) || username,
     type,
     warehouse: optionalString(raw.warehouse),
   }
@@ -154,6 +156,21 @@ export function isPersistentAuthSession() {
   return Boolean(localStorage.getItem(LOCAL_SESSION_KEY))
 }
 
+function describeOmsNetworkError(err: unknown) {
+  const msg = err instanceof Error ? err.message : String(err)
+  if (
+    err instanceof TypeError
+    || /failed to fetch|fetch failed|networkerror|econnrefused|econnreset/i.test(msg)
+  ) {
+    const error = new Error(
+      '无法连接 OMS 服务（127.0.0.1:3001）。请运行仓库根目录 dev-local.ps1，或单独启动 oms。',
+    ) as Error & { code?: string }
+    error.code = 'NETWORK'
+    return error
+  }
+  return err instanceof Error ? err : new Error(msg)
+}
+
 export function storeAuthSession(session: AuthSession | null, remember = true) {
   localStorage.removeItem(LOCAL_SESSION_KEY)
   sessionStorage.removeItem(SESSION_SESSION_KEY)
@@ -166,7 +183,12 @@ export async function fetchWithAuth(url: string, init?: RequestInit) {
   const headers = new Headers(init?.headers)
   const token = getStoredAuthSession()?.token
   if (token) headers.set('Authorization', `Bearer ${token}`)
-  const response = await fetch(url, { ...init, headers })
+  let response: Response
+  try {
+    response = await fetch(url, { ...init, headers })
+  } catch (err) {
+    throw describeOmsNetworkError(err)
+  }
   if (response.status === 401) {
     storeAuthSession(null)
     window.dispatchEvent(new Event('oms:unauthorized'))
@@ -182,10 +204,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
   if (token) headers.set('Authorization', `Bearer ${token}`)
 
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...init,
-    headers,
-  })
+  let res: Response
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
+      ...init,
+      headers,
+    })
+  } catch (err) {
+    throw describeOmsNetworkError(err)
+  }
   if (!res.ok) {
     const text = await res.text().catch(() => '')
     let message = text

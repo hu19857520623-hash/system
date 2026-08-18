@@ -3,8 +3,9 @@ import type { Response } from 'express'
 import { OutboundService, OutboundListQuery } from './outbound.service'
 import { CurrentUser } from '../../common/decorators/current-user.decorator'
 import { RequireAnyPerm, RequirePerms } from '../../common/decorators/require-perms.decorator'
-import { Public } from '../../common/decorators/public.decorator'
+import { OmsBridge } from '../../common/decorators/oms-bridge.decorator'
 import { CreateOmsOutboundDto } from './dto/oms-outbound.dto'
+import { AssignPickerDto, PickOutboundDto } from './dto/pick-outbound.dto'
 
 function sendPdf(res: Response, file: { fileName: string; content: Buffer }) {
   res.setHeader('Content-Type', 'application/pdf')
@@ -19,19 +20,19 @@ export class OutboundController {
   constructor(private readonly service: OutboundService) {}
 
   /** OMS P1：客户预约出库 */
-  @Public()
+  @OmsBridge()
   @Post('oms')
   omsCreate(@Body() body: CreateOmsOutboundDto) {
     return this.service.createFromOms(body)
   }
 
-  @Public()
+  @OmsBridge()
   @Get('oms/by-customer/:customerCode')
   omsListByCustomer(@Param('customerCode') customerCode: string) {
     return this.service.listByOmsCustomer(customerCode)
   }
 
-  @Public()
+  @OmsBridge()
   @Get('oms/by-customer/:customerCode/sku/:sku/outbounds')
   omsSkuOutbounds(
     @Param('customerCode') customerCode: string,
@@ -40,31 +41,31 @@ export class OutboundController {
     return this.service.listSkuOutboundsForOms(customerCode, sku)
   }
 
-  @Public()
+  @OmsBridge()
   @Get('oms/by-customer/:customerCode/logistics')
   omsLogisticsByCustomer(@Param('customerCode') customerCode: string) {
     return this.service.listLogisticsByOmsCustomer(customerCode)
   }
 
-  @Public()
+  @OmsBridge()
   @Get('oms/by-no/:outboundNo')
   omsGetByNo(@Param('outboundNo') outboundNo: string) {
     return this.service.getByOutboundNoForOms(outboundNo)
   }
 
   /** OMS 客户回传 POD 签收单文件 */
-  @Public()
+  @OmsBridge()
   @Post('oms/by-no/:outboundNo/pod')
   omsUploadPod(@Param('outboundNo') outboundNo: string, @Body() body: any) {
     return this.service.uploadPodFromOms(outboundNo, body)
   }
 
   /** OMS 下载 POD 签收单 */
-  @Public()
+  @OmsBridge()
   @Get('oms/by-no/:outboundNo/pod')
   async omsDownloadPod(
     @Param('outboundNo') outboundNo: string,
-    @Query('customerCode') customerCode: string | undefined,
+    @Query('customerCode') customerCode: string,
     @Res() res: Response,
   ) {
     const file = await this.service.downloadPodForOms(outboundNo, customerCode)
@@ -90,6 +91,12 @@ export class OutboundController {
   @Get()
   list(@Query() q: OutboundListQuery) {
     return this.service.list(q)
+  }
+
+  @RequirePerms('outbound.pick')
+  @Post('assign-picker')
+  assignPicker(@Body() body: AssignPickerDto) {
+    return this.service.assignPicker(body.ids || [], body.pickerId)
   }
 
   @RequirePerms('outbound.view')
@@ -169,12 +176,6 @@ export class OutboundController {
     throw new BadRequestException('出库单请由客户在 OMS 预约创建，ERP 仅负责拣货、打包与发运')
   }
 
-  @RequirePerms('outbound.pick')
-  @Post('assign-picker')
-  assignPicker(@Body() body: { ids: number[]; pickerId: number }) {
-    return this.service.assignPicker(body.ids || [], body.pickerId)
-  }
-
   @RequirePerms('outbound.create')
   @Post(':id/attachment')
   uploadAttachment(@Param('id', ParseIntPipe) id: number, @Body() body: any) {
@@ -195,7 +196,7 @@ export class OutboundController {
 
   @RequirePerms('outbound.pick')
   @Post(':id/pick')
-  pick(@Param('id', ParseIntPipe) id: number, @Body() body: any, @CurrentUser('userId') userId: number) {
+  pick(@Param('id', ParseIntPipe) id: number, @Body() body: PickOutboundDto, @CurrentUser('userId') userId: number) {
     return this.service.pick(id, body, userId)
   }
 

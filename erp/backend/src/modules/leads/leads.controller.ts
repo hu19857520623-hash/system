@@ -1,8 +1,10 @@
-import { Body, Controller, Delete, Get, Param, ParseIntPipe, Post, Put, Query } from '@nestjs/common'
+import { Body, Controller, Delete, Get, Param, ParseIntPipe, Post, Put, Query, Res } from '@nestjs/common'
+import type { Response } from 'express'
 import { LeadsService } from './leads.service'
-import { PaginationDto } from '../../common/dto/pagination.dto'
+import { LeadsListQueryDto } from './leads-list.query.dto'
 import { CurrentUser } from '../../common/decorators/current-user.decorator'
 import { RequireAnyPerm, RequirePerms } from '../../common/decorators/require-perms.decorator'
+import { CreateCustomerDto } from '../customers/dto/customer.dto'
 
 @Controller('leads')
 export class LeadsController {
@@ -10,26 +12,13 @@ export class LeadsController {
 
   @RequirePerms('leads_reports.view')
   @Get('report')
-  report() {
-    return this.service.report()
+  report(@Query('range') range?: string) {
+    return this.service.report(range)
   }
 
-  @RequireAnyPerm('leads_pool.view', 'leads_deals.view')
+  @RequireAnyPerm('leads_pool.view', 'leads_deals.view', 'leads_follow.view')
   @Get()
-  list(
-    @Query()
-    q: PaginationDto & {
-      status?: string
-      assigneeId?: number
-      source?: string
-      dealStatus?: string
-      shopType?: string
-      dealDateFrom?: string
-      dealDateTo?: string
-      createdAtFrom?: string
-      createdAtTo?: string
-    },
-  ) {
+  list(@Query() q: LeadsListQueryDto) {
     return this.service.list(q)
   }
 
@@ -45,7 +34,20 @@ export class LeadsController {
     return this.service.listAssignees(userId)
   }
 
-  @RequirePerms('leads_pool.view')
+  @RequireAnyPerm('leads_deals.view', 'leads_pool.view')
+  @Get(':id/deals/:dealId/attachments/:attachmentId')
+  async downloadDealAttachment(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('dealId', ParseIntPipe) dealId: number,
+    @Param('attachmentId', ParseIntPipe) attachmentId: number,
+    @Res() res: Response,
+  ) {
+    const file = await this.service.downloadDealAttachment(id, dealId, attachmentId)
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(file.fileName)}"`)
+    res.send(file.content)
+  }
+
+  @RequireAnyPerm('leads_pool.view', 'leads_follow.view', 'leads_deals.view')
   @Get(':id')
   detail(@Param('id', ParseIntPipe) id: number) {
     return this.service.detail(id)
@@ -73,6 +75,22 @@ export class LeadsController {
   @Post(':id/deal')
   addDeal(@Param('id', ParseIntPipe) id: number, @Body() body: any) {
     return this.service.addDeal(id, body)
+  }
+
+  @RequirePerms('leads_deals.edit')
+  @Post(':id/to-erp')
+  confirmToErp(@Param('id', ParseIntPipe) id: number, @Body() body: CreateCustomerDto) {
+    return this.service.confirmToErp(id, body)
+  }
+
+  @RequirePerms('leads_deals.edit')
+  @Post(':id/deals/:dealId/attachments')
+  uploadDealAttachments(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('dealId', ParseIntPipe) dealId: number,
+    @Body() body: { attachments?: { fileName: string; contentBase64?: string }[] },
+  ) {
+    return this.service.uploadDealAttachments(id, dealId, body?.attachments || [])
   }
 
   @RequirePerms('leads_pool.create')

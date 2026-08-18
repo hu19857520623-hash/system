@@ -30,4 +30,11 @@ describe('environment validation', () => {
     expect(resolveCorsOrigins('https://erp.example.com, https://admin.example.com', 'production'))
       .toEqual(['https://erp.example.com', 'https://admin.example.com'])
   })
+
+  it('includes the Vite ERP origin in development defaults', () => {
+    expect(resolveCorsOrigins(undefined, 'development')).toEqual(expect.arrayContaining([
+      'http://localhost:5180',
+      'http://127.0.0.1:5180',
+    ]))
+  })
 })

@@ -4,6 +4,7 @@ import cors from 'cors'
 import { PrismaClient } from '@prisma/client'
 import bcrypt from 'bcryptjs'
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto'
+import { resolveOmsCorsOrigins } from './cors.js'
 import {
   assertCustomerCode,
   assertCustomerId,
@@ -13,16 +14,21 @@ import {
   isLoginAllowed,
   isPortalIdentityActive,
   isStrongPassword,
+  isValidUsername,
   issueAccessToken,
   normalizeEmail,
+  normalizeUsername,
+  requestedUsername,
   OMS_ROLES,
   requireInternalToken,
   requireSysAdmin,
+  assertApiWritePermission,
   SYS_ADMIN_PERMISSIONS,
   type AuthClaims,
   type AuthenticatedRequest,
   type OmsRole,
 } from './auth.js'
+import { LoginRateLimiter } from './login-rate-limit.js'
 import {
   refundOutboundPreDeduct,
   settleOutboundFees,
@@ -68,12 +74,14 @@ import {
 } from './erpClient.js'
 
 const prisma = new PrismaClient()
+const loginLimiter = new LoginRateLimiter()
 const app = express()
 const PORT = Number(process.env.API_PORT || 3001)
 const WEBHOOK_SECRET = String(process.env.OMS_WEBHOOK_SECRET || '').trim()
 getJwtSecret()
 
-app.use(cors())
+const corsOrigins = resolveOmsCorsOrigins(process.env.OMS_CORS_ORIGINS, process.env.NODE_ENV)
+app.use(cors({ origin: corsOrigins, credentials: true }))
 app.use(express.json({
   limit: '15mb',
   verify: (req, _res, buffer) => {
@@ -108,6 +116,11 @@ function sanitizeErrorPayload(value: unknown): unknown {
 }
 
 app.use((_req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN')
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin')
+  res.setHeader('X-DNS-Prefetch-Control', 'off')
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')
   const json = res.json.bind(res)
   res.json = ((body: unknown) => json(
     res.statusCode >= 400 ? sanitizeErrorPayload(body) : body,
@@ -335,7 +348,7 @@ async function buildBootstrap(auth: AuthClaims) {
   const portalUsers = await prisma.portalUser.findMany({
     select: {
       customerId: true,
-      loginEmail: true,
+      username: true,
       status: true,
       mustChangePassword: true,
       lastLoginAt: true,
@@ -412,8 +425,10 @@ function publicSession(
       role: claims.role,
       permissions: claims.permissions,
       mustChangePassword: claims.mustChangePassword,
-      loginEmail: identity.loginEmail,
-      name: identity.customerAccount?.name || identity.loginEmail,
+      username: identity.username,
+      loginEmail: identity.username,
+      email: identity.username,
+      name: identity.customerAccount?.name || identity.username,
       type: identity.customerAccount?.type || null,
       warehouse: identity.customerAccount?.warehouse || '',
     },
@@ -493,13 +508,22 @@ function authenticateActiveApi(
 
 app.post('/api/auth/login', async (req, res) => {
   try {
-    const loginEmail = normalizeEmail(req.body?.email)
+    const username = requestedUsername(req.body)
     const password = String(req.body?.password || '')
-    if (!loginEmail || !password) {
-      return res.status(400).json({ error: '请输入登录邮箱和密码' })
+    if (!username || !password) {
+      return res.status(400).json({ error: '请输入登录账号和密码' })
+    }
+    const rateKey = `${req.ip || req.socket.remoteAddress || 'unknown'}:${username}`
+    try {
+      loginLimiter.assertAllowed(rateKey)
+    } catch (error) {
+      if ((error as { status?: number }).status === 429) {
+        return res.status(429).json({ error: (error as Error).message })
+      }
+      throw error
     }
     const portalUser = await prisma.portalUser.findUnique({
-      where: { loginEmail },
+      where: { username },
       include: { customerAccount: true },
     })
     if (!portalUser || !OMS_ROLES.includes(portalUser.role as OmsRole) || !isLoginAllowed(
@@ -509,8 +533,10 @@ app.post('/api/auth/login', async (req, res) => {
       portalUser.role,
       portalUser.customerId,
     )) {
-      return res.status(401).json({ error: '邮箱或密码不正确，或账号已停用' })
+      loginLimiter.recordFailure(rateKey)
+      return res.status(401).json({ error: '账号或密码不正确，或账号已停用' })
     }
+    loginLimiter.recordSuccess(rateKey)
     const claims = claimsForIdentity(portalUser)
     const now = new Date().toISOString()
     await prisma.$transaction(async tx => {
@@ -525,7 +551,7 @@ app.post('/api/auth/login', async (req, res) => {
         })
       }
     })
-    res.json(publicSession(issueAccessToken(claims), claims, portalUser))
+    res.json(publicSession(issueAccessToken(claims, Boolean(req.body?.remember)), claims, portalUser))
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: '登录服务暂不可用' })
@@ -541,8 +567,10 @@ app.get('/api/auth/me', authenticateApi, async (req: AuthenticatedRequest, res) 
     const claims = claimsForIdentity(portalUser)
     res.json({
       ...claims,
-      loginEmail: portalUser.loginEmail,
-      name: portalUser.customerAccount?.name || portalUser.loginEmail,
+      username: portalUser.username,
+      loginEmail: portalUser.username,
+      email: portalUser.username,
+      name: portalUser.customerAccount?.name || portalUser.username,
       type: portalUser.customerAccount?.type || null,
       warehouse: portalUser.customerAccount?.warehouse || '',
     })
@@ -557,7 +585,7 @@ app.post('/api/auth/change-password', authenticateApi, async (req: Authenticated
     const currentPassword = String(req.body?.currentPassword || '')
     const newPassword = String(req.body?.newPassword || '')
     if (!isStrongPassword(newPassword)) {
-      return res.status(400).json({ error: '新密码须为 10-128 位，且包含大写字母、小写字母和数字' })
+      return res.status(400).json({ error: '新密码须为 6-128 位' })
     }
     const portalUser = await loadPortalIdentity(req.auth!.userId)
     if (
@@ -579,7 +607,7 @@ app.post('/api/auth/change-password', authenticateApi, async (req: Authenticated
       ...claimsForIdentity(portalUser),
       mustChangePassword: false,
     }
-    res.json(publicSession(issueAccessToken(claims), claims, {
+    res.json(publicSession(issueAccessToken(claims, Boolean(req.body?.remember)), claims, {
       ...portalUser,
       ...updated,
     }))
@@ -595,20 +623,23 @@ app.post('/api/auth/logout', authenticateApi, (_req, res) => {
 
 async function resetCustomerTemporaryPassword(
   customerId: string,
-  requestedLoginEmail: unknown,
+  requestedLogin: unknown,
   temporaryPassword: string,
 ) {
   if (!isStrongPassword(temporaryPassword)) {
-    return { status: 400, error: '临时密码须为 10-128 位，且包含大写字母、小写字母和数字' } as const
+    return { status: 400, error: '临时密码须为 6-128 位' } as const
   }
-  const account = await prisma.customerAccount.findUnique({ where: { id: customerId } })
+  const account = await prisma.customerAccount.findUnique({
+    where: { id: customerId },
+    include: { portalUser: { select: { username: true } } },
+  })
   if (!account) return { status: 404, error: '客户不存在' } as const
-  const loginEmail = normalizeEmail(requestedLoginEmail || account.email)
-  if (!loginEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(loginEmail)) {
-    return { status: 400, error: '请提供有效的登录邮箱' } as const
+  const username = normalizeUsername(requestedLogin) || account.portalUser?.username || ''
+  if (!isValidUsername(username)) {
+    return { status: 400, error: '登录账号须为 6-50 位字母、数字、点、下划线或短横线' } as const
   }
   const updated = await resetOmsPortalPassword(account.code, {
-    loginEmail,
+    username,
     temporaryPassword,
   })
   return { status: 200, data: updated } as const
@@ -631,7 +662,7 @@ app.post(
       }
       const result = await resetCustomerTemporaryPassword(
         String(req.params.id),
-        req.body?.loginEmail,
+        req.body?.username ?? req.body?.loginEmail,
         String(req.body?.temporaryPassword || ''),
       )
       if ('error' in result) return res.status(result.status).json({ error: result.error })
@@ -649,7 +680,7 @@ app.post(
     try {
       const result = await resetCustomerTemporaryPassword(
         String(req.params.id),
-        req.body?.loginEmail,
+        req.body?.username ?? req.body?.loginEmail,
         String(req.body?.temporaryPassword || ''),
       )
       if ('error' in result) return res.status(result.status).json({ error: result.error })
@@ -696,6 +727,7 @@ app.use('/api', (req: AuthenticatedRequest, res, next) => {
   authenticateApi(req, res, async () => {
     try {
       if (!(await refreshAuthenticatedIdentity(req, res))) return
+      if (!assertApiWritePermission(req, res)) return
       if (
         req.auth?.mustChangePassword
         && req.path !== '/auth/me'
@@ -1921,9 +1953,15 @@ app.post('/api/erp/returns/:returnNo/decide', async (req, res) => {
 
 app.get('/api/erp/returns/:returnNo/attachment/:attachmentId', async (req, res) => {
   try {
+    const customerCode = authenticatedCustomerCode(
+      req,
+      typeof req.query.customerCode === 'string' ? req.query.customerCode : undefined,
+    )
+    if (!customerCode) return res.status(400).json({ error: '缺少 customerCode' })
     const file = await downloadErpReturnAttachment(
       String(req.params.returnNo),
       Number(req.params.attachmentId),
+      customerCode,
     )
     res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(file.fileName)}"`)
     res.send(file.content)
@@ -2122,7 +2160,11 @@ app.post('/api/erp/outbound/:outboundNo/pod', async (req, res) => {
 
 app.get('/api/erp/outbound/:outboundNo/pod', async (req, res) => {
   try {
-    const customerCode = typeof req.query.customerCode === 'string' ? req.query.customerCode : undefined
+    const customerCode = authenticatedCustomerCode(
+      req,
+      typeof req.query.customerCode === 'string' ? req.query.customerCode : undefined,
+    )
+    if (!customerCode) return res.status(400).json({ error: '缺少 customerCode' })
     const file = await downloadErpOutboundPod(String(req.params.outboundNo), customerCode)
     const inline = req.query.inline === '1'
     const lower = file.fileName.toLowerCase()
@@ -2163,15 +2205,17 @@ app.post('/api/accounts', requireSysAdmin, async (req, res) => {
       omsType?: 'ecommerce' | 'catalog' | 'hybrid'
       warehouse?: string
       permissions?: string[]
+      username?: string
       loginEmail?: string
       temporaryPassword?: string
     }
+    const username = requestedUsername(body)
     const required: [string, unknown][] = [
       ['customerName', body.customerName],
       ['contactEmail', body.contactEmail],
       ['omsType', body.omsType],
       ['warehouse', body.warehouse],
-      ['loginEmail', body.loginEmail],
+      ['username', username],
       ['temporaryPassword', body.temporaryPassword],
     ]
     const missing = required.find(([, value]) => !String(value || '').trim())
@@ -2198,11 +2242,8 @@ app.post('/api/accounts', requireSysAdmin, async (req, res) => {
     if (!['ecommerce', 'catalog', 'hybrid'].includes(String(body.omsType))) {
       return res.status(400).json({ error: '客户类型无效' })
     }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizeEmail(body.loginEmail))) {
-      return res.status(400).json({ error: '登录邮箱格式无效' })
-    }
-    if (normalizeEmail(body.loginEmail).length > 200) {
-      return res.status(400).json({ error: '登录邮箱最多 200 个字符' })
+    if (!isValidUsername(username)) {
+      return res.status(400).json({ error: '登录账号须为 6-50 位字母、数字、点、下划线或短横线' })
     }
     const contactEmail = normalizeEmail(body.contactEmail)
     if (contactEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail)) {
@@ -2212,7 +2253,7 @@ app.post('/api/accounts', requireSysAdmin, async (req, res) => {
       return res.status(400).json({ error: '联系邮箱最多 120 个字符' })
     }
     if (!isStrongPassword(String(body.temporaryPassword))) {
-      return res.status(400).json({ error: '临时密码须为 10-128 位，且包含大写字母、小写字母和数字' })
+      return res.status(400).json({ error: '临时密码须为 6-128 位' })
     }
     if (!Array.isArray(body.permissions)) {
       return res.status(400).json({ error: 'permissions 必须是数组' })
@@ -2235,7 +2276,7 @@ app.post('/api/accounts', requireSysAdmin, async (req, res) => {
       omsType: body.omsType!,
       warehouse: String(body.warehouse).trim(),
       permissions,
-      loginEmail: normalizeEmail(body.loginEmail),
+      username,
       temporaryPassword: String(body.temporaryPassword),
     })
     res.status(201).json(provisioned)
@@ -2317,12 +2358,12 @@ app.patch('/api/accounts/:id', requireSysAdmin, async (req, res) => {
     if (patch.permissionTemplate !== undefined) {
       erpPatch.permissionTemplate = String(patch.permissionTemplate).trim()
     }
-    if (patch.loginEmail !== undefined) {
-      const value = normalizeEmail(patch.loginEmail)
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) || value.length > 200) {
-        return res.status(400).json({ error: '登录邮箱格式无效' })
+    if (patch.username !== undefined || patch.loginEmail !== undefined) {
+      const value = requestedUsername(patch)
+      if (!isValidUsername(value)) {
+        return res.status(400).json({ error: '登录账号须为 6-50 位字母、数字、点、下划线或短横线' })
       }
-      erpPatch.loginEmail = value
+      erpPatch.username = value
     }
 
     if (Object.keys(erpPatch).length > 0) {
@@ -2346,7 +2387,7 @@ app.patch('/api/accounts/:id', requireSysAdmin, async (req, res) => {
       include: {
         portalUser: {
           select: {
-            loginEmail: true,
+            username: true,
             status: true,
             mustChangePassword: true,
             lastLoginAt: true,
@@ -2663,8 +2704,20 @@ app.get('/api/billing', async (req: AuthenticatedRequest, res) => {
       where: scope ? { customerCode: req.auth!.customerCode } : undefined,
       orderBy: { date: 'desc' },
     })
+    let creditBalance = billing?.creditBalance ?? 0
+    if (scope && req.auth?.customerCode) {
+      try {
+        const erp = await fetchErpCustomerByCode(req.auth.customerCode)
+        const preDeduct = feeRecords
+          .filter(record => record.method === 'pre_deduct')
+          .reduce((sum, record) => sum + Math.abs(Number(record.amount) || 0), 0)
+        creditBalance = Math.round((Number(erp.balance) - preDeduct) * 100) / 100
+      } catch {
+        // ERP 不可用时回退本地镜像余额
+      }
+    }
     res.json({
-      creditBalance: billing?.creditBalance ?? 0,
+      creditBalance,
       feeRecords,
     })
   } catch (e) {
@@ -2728,9 +2781,13 @@ app.put('/api/logistics', async (req, res) => {
 
 app.put('/api/billing', async (req: AuthenticatedRequest, res) => {
   try {
-    const { creditBalance, feeRecords } = req.body as {
+  const { creditBalance, feeRecords } = req.body as {
       creditBalance: number
       feeRecords: Record<string, unknown>[]
+    }
+    const requestedBalance = Math.round(Number(creditBalance) * 100) / 100
+    if (!Number.isFinite(requestedBalance)) {
+      return res.status(400).json({ error: 'Invalid creditBalance' })
     }
 
     await prisma.$transaction(async tx => {
@@ -2739,11 +2796,13 @@ app.put('/api/billing', async (req: AuthenticatedRequest, res) => {
         ? await tx.billingAccount.findUnique({ where: { customerId: scope } })
         : await tx.billingAccount.findFirst({ orderBy: { id: 'asc' } })
       if (!billing) throw new Error('Billing account not found')
-      await tx.billingAccount.update({
-        where: { id: billing.id },
-        data: { creditBalance },
-      })
-      for (const f of feeRecords) {
+      if (!scope) {
+        await tx.billingAccount.update({
+          where: { id: billing.id },
+          data: { creditBalance: requestedBalance },
+        })
+      }
+      for (const f of feeRecords || []) {
         const id = String(f.id)
         const data = {
           date: String(f.date),
@@ -2776,15 +2835,19 @@ app.put('/api/billing', async (req: AuthenticatedRequest, res) => {
 app.delete('/api/billing/pre-deduct/:outboundNo', async (req: AuthenticatedRequest, res) => {
   try {
     const outboundNo = String(req.params.outboundNo || '').trim()
-    const result = await prisma.$transaction(async tx => {
-      const scope = customerScope(req)
-      if (scope) {
-        const outbound = await tx.outboundOrder.findFirst({
-          where: { outboundNo, customerId: scope },
-          select: { id: true },
-        })
-        if (!outbound) throw new Error('Outbound order not found')
+    if (!outboundNo) return res.status(400).json({ error: '缺少 outboundNo' })
+    const scope = customerScope(req)
+    if (scope) {
+      try {
+        await fetchErpOutboundByNo(outboundNo)
+        return res.status(409).json({ error: '出库单已提交 ERP，不能自行退回预扣' })
+      } catch (e) {
+        if (!(e instanceof ErpApiError) || (e.status !== 404 && e.status !== 400)) {
+          throw e
+        }
       }
+    }
+    const result = await prisma.$transaction(async tx => {
       const records = await tx.feeRecord.findMany({
         where: {
           refNo: outboundNo,
@@ -2806,12 +2869,28 @@ app.delete('/api/billing/pre-deduct/:outboundNo', async (req: AuthenticatedReque
         })
       }
       const nextBalance = (billing?.creditBalance ?? 0) + refunded
-      if (billing) {
+      if (billing && !scope) {
         await tx.billingAccount.update({ where: { id: billing.id }, data: { creditBalance: nextBalance } })
       }
       return { refunded, creditBalance: nextBalance }
     })
-    res.json({ ok: true, ...result })
+    let creditBalance = result.creditBalance
+    if (scope && req.auth?.customerCode) {
+      try {
+        const erp = await fetchErpCustomerByCode(req.auth.customerCode)
+        const remaining = await prisma.feeRecord.findMany({
+          where: { customerCode: req.auth.customerCode, method: 'pre_deduct' },
+        })
+        const preDeduct = remaining.reduce(
+          (sum, record) => sum + Math.abs(Number(record.amount) || 0),
+          0,
+        )
+        creditBalance = Math.round((Number(erp.balance) - preDeduct) * 100) / 100
+      } catch {
+        creditBalance = Math.round((Number(result.creditBalance) - Number(result.refunded)) * 100) / 100
+      }
+    }
+    res.json({ ok: true, refunded: result.refunded, creditBalance })
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: String(e) })
@@ -3210,8 +3289,10 @@ app.put('/api/payment-methods', async (req, res) => {
 })
 
 async function ensureConfiguredPortalAdmin() {
-  const configuredEmail = normalizeEmail(
-    process.env.OMS_PORTAL_ADMIN_EMAIL
+  const configuredUsername = normalizeUsername(
+    process.env.OMS_PORTAL_ADMIN_USERNAME
+      || process.env.OMS_BOOTSTRAP_ADMIN_USERNAME
+      || process.env.OMS_PORTAL_ADMIN_EMAIL
       || process.env.OMS_BOOTSTRAP_ADMIN_EMAIL,
   )
   const configuredPassword = String(
@@ -3221,25 +3302,32 @@ async function ensureConfiguredPortalAdmin() {
   )
   const allowDevFallback = process.env.NODE_ENV === 'development'
     && process.env.OMS_ALLOW_INSECURE_DEV_AUTH === 'true'
-  const useDevFallback = !configuredEmail && !configuredPassword && allowDevFallback
-  const email = useDevFallback ? 'admin@oms.local' : configuredEmail
+  const useDevFallback = !configuredUsername && !configuredPassword && allowDevFallback
+  const mappedConfigured = configuredUsername === 'admin@oms.local'
+    || configuredUsername === 'admin@example.com'
+    || configuredUsername.startsWith('admin@')
+    ? 'omsadmin'
+    : configuredUsername.includes('@')
+      ? normalizeUsername(configuredUsername.split('@')[0])
+      : configuredUsername
+  const username = useDevFallback ? 'omsadmin' : mappedConfigured
   const password = useDevFallback ? 'DevAdmin123!' : configuredPassword
-  if (!email && !password) return
-  if (!email || !password) {
+  if (!username && !password) return
+  if (!username || !password) {
     throw new Error(
-      'OMS_BOOTSTRAP_ADMIN_EMAIL and OMS_BOOTSTRAP_ADMIN_PASSWORD must be configured together',
+      'OMS_BOOTSTRAP_ADMIN_USERNAME and OMS_BOOTSTRAP_ADMIN_PASSWORD must be configured together',
     )
   }
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 200) {
-    throw new Error('OMS_BOOTSTRAP_ADMIN_EMAIL is invalid')
+  if (!isValidUsername(username)) {
+    throw new Error('OMS_BOOTSTRAP_ADMIN_USERNAME is invalid')
   }
   if (!isStrongPassword(password)) {
     throw new Error('OMS_BOOTSTRAP_ADMIN_PASSWORD does not meet the password policy')
   }
-  const existing = await prisma.portalUser.findUnique({ where: { loginEmail: email } })
+  const existing = await prisma.portalUser.findUnique({ where: { username } })
   if (existing) {
     if (existing.role !== 'sys_admin' || existing.customerId !== null) {
-      throw new Error('OMS_BOOTSTRAP_ADMIN_EMAIL is already assigned to a customer identity')
+      throw new Error('OMS_BOOTSTRAP_ADMIN_USERNAME is already assigned to a customer identity')
     }
     return
   }
@@ -3250,7 +3338,7 @@ async function ensureConfiguredPortalAdmin() {
     data: {
       id,
       customerId: null,
-      loginEmail: email,
+      username,
       passwordHash: await bcrypt.hash(password, 12),
       role: 'sys_admin',
       status: 'active',
@@ -3260,7 +3348,7 @@ async function ensureConfiguredPortalAdmin() {
       updatedAt: now,
     },
   })
-  console.log(`Configured OMS portal administrator created: ${email}`)
+  console.log(`Configured OMS portal administrator created: ${username}`)
 }
 
 async function start() {
@@ -3271,8 +3359,9 @@ async function start() {
     throw new Error('OMS_INTERNAL_TOKEN must be configured with at least 32 bytes in production')
   }
   await ensureConfiguredPortalAdmin()
-  app.listen(PORT, () => {
-    console.log(`OMS API listening on http://127.0.0.1:${PORT}`)
+  const listenHost = String(process.env.LISTEN_HOST || '127.0.0.1').trim() || '127.0.0.1'
+  app.listen(PORT, listenHost, () => {
+    console.log(`OMS API listening on http://${listenHost}:${PORT}`)
   })
 }
 

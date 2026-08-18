@@ -44,7 +44,7 @@ model PortalUser {
   id                 String           @id @db.VarChar(50)
   customerId         String?          @unique @db.VarChar(50)
   customerAccount    CustomerAccount? @relation(fields: [customerId], references: [id])
-  loginEmail         String           @unique @db.VarChar(200)
+  username           String           @unique @db.VarChar(50)
   passwordHash       String           @db.VarChar(255)
   role               String           @db.VarChar(30)
   status             String           @db.VarChar(30)

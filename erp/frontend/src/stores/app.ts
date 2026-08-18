@@ -114,6 +114,7 @@ const NAV: NavGroup[] = [
     items: [
       { id: 'logistics_wh', name: '物流中转仓', badgeKey: 'logistics_wh' },
       { id: 'logistics_inventory', name: '中转仓库存查询' },
+      { id: 'mingrui', name: '明瑞物流下单', badgeKey: 'mingrui' },
       { id: 'create_inbound', name: '发运海外仓' },
     ],
   },
@@ -170,6 +171,7 @@ const NAV_ROUTE_MAP: Record<string, string> = {
   purchase: '/purchase',
   logistics_wh: '/logistics-wh',
   logistics_inventory: '/logistics-inventory',
+  mingrui: '/mingrui',
   warehouse_locations: '/warehouse/locations',
   inbound_arrival: '/inbound/arrival-scan',
   create_inbound: '/inbound/create',
@@ -370,6 +372,7 @@ export const useAppStore = defineStore('app', {
         purchase: 'purchase.view',
         logistics_wh: 'logistics_wh.view',
         logistics_inventory: 'logistics_wh.view',
+        mingrui: 'mingrui.view',
         warehouse_locations: 'warehouse_location.view',
         inbound_arrival: 'inbound.arrival_scan',
         create_inbound: 'create_inbound.view',

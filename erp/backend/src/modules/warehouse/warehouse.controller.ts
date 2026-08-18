@@ -6,7 +6,7 @@ import { RequireAnyPerm, RequirePerms } from '../../common/decorators/require-pe
 export class WarehouseController {
   constructor(private readonly service: WarehouseService) {}
 
-  @RequireAnyPerm('logistics_wh.view', 'outbound.view', 'outbound.create', 'inventory_query.view', 'create_inbound.view')
+  @RequireAnyPerm('logistics_wh.view', 'outbound.view', 'outbound.create', 'inventory_query.view', 'create_inbound.view', 'mingrui.view')
   @Get()
   list(@Query('type') type?: string) {
     return this.service.list(type)

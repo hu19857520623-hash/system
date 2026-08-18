@@ -4,6 +4,16 @@ import { PrePurchaseService } from './pre-purchase.service'
 import { PaginationDto } from '../../common/dto/pagination.dto'
 import { AuthUser, CurrentUser } from '../../common/decorators/current-user.decorator'
 import { RequireAnyPerm, RequirePerms } from '../../common/decorators/require-perms.decorator'
+import {
+  AssignPurchaserDto,
+  CancelPrePurchaseDto,
+  CreatePurchaseOrderDto,
+  PaymentRemarkDto,
+  PoAuditDto,
+  PoRejectDto,
+  SetActualQtyDto,
+  UpdatePrePurchaseDto,
+} from './dto/purchase.dto'
 
 @Controller('purchase-orders')
 export class PurchaseController {
@@ -34,7 +44,7 @@ export class PurchaseController {
   @Put('pre-purchase/:id')
   updatePrePo(
     @Param('id', ParseIntPipe) id: number,
-    @Body() body: any,
+    @Body() body: UpdatePrePurchaseDto,
     @CurrentUser() user: AuthUser,
   ) {
     return this.prePurchase.update(id, body, user)
@@ -44,20 +54,20 @@ export class PurchaseController {
   @Post('pre-purchase/:id/assign')
   assignPrePo(
     @Param('id', ParseIntPipe) id: number,
-    @Body() body: { purchaserId?: number },
+    @Body() body: AssignPurchaserDto,
     @CurrentUser('userId') userId: number,
   ) {
-    return this.prePurchase.assign(id, body?.purchaserId || 0, userId)
+    return this.prePurchase.assign(id, body.purchaserId, userId)
   }
 
   @RequirePerms('purchase.create')
   @Post('pre-purchase/:id/cancel')
   cancelPrePo(
     @Param('id', ParseIntPipe) id: number,
-    @Body() body: { reason?: string },
+    @Body() body: CancelPrePurchaseDto,
     @CurrentUser() user: AuthUser,
   ) {
-    return this.prePurchase.cancel(id, body?.reason || '', user)
+    return this.prePurchase.cancel(id, body.reason || '', user)
   }
 
   @RequirePerms('purchase.create')
@@ -70,7 +80,7 @@ export class PurchaseController {
   @Post(':id/set-actual-qty')
   setActualQty(
     @Param('id', ParseIntPipe) id: number,
-    @Body() body: { quantity?: number; remark?: string },
+    @Body() body: SetActualQtyDto,
     @CurrentUser('userId') userId: number,
   ) {
     return this.service.setActualQty(id, body, userId)
@@ -104,10 +114,10 @@ export class PurchaseController {
   @Post('assign-purchaser/:devId')
   assignPurchaser(
     @Param('devId', ParseIntPipe) devId: number,
-    @Body() body: { purchaserId?: number },
+    @Body() body: AssignPurchaserDto,
     @CurrentUser('userId') userId: number,
   ) {
-    return this.service.assignPurchaser(devId, body?.purchaserId || 0, userId)
+    return this.service.assignPurchaser(devId, body.purchaserId, userId)
   }
 
   @RequirePerms('purchase.view')
@@ -118,32 +128,32 @@ export class PurchaseController {
 
   @RequirePerms('purchase.create')
   @Post()
-  create(@Body() body: any, @CurrentUser('userId') userId: number) {
+  create(@Body() body: CreatePurchaseOrderDto, @CurrentUser('userId') userId: number) {
     return this.service.create(body, userId)
   }
 
   @RequirePerms('purchase.po_audit')
   @Post(':id/approve')
-  approve(@Param('id', ParseIntPipe) id: number, @Body() body: any, @CurrentUser('userId') userId: number) {
-    return this.service.approve(id, userId, body?.remark, body?.warehouseCode)
+  approve(@Param('id', ParseIntPipe) id: number, @Body() body: PoAuditDto, @CurrentUser('userId') userId: number) {
+    return this.service.approve(id, userId, body.remark, body.warehouseCode)
   }
 
   @RequirePerms('purchase.po_audit')
   @Post(':id/reject-po-audit')
-  rejectPoAudit(@Param('id', ParseIntPipe) id: number, @Body() body: any, @CurrentUser('userId') userId: number) {
-    return this.service.rejectPoAudit(id, userId, body?.remark)
+  rejectPoAudit(@Param('id', ParseIntPipe) id: number, @Body() body: PoRejectDto, @CurrentUser('userId') userId: number) {
+    return this.service.rejectPoAudit(id, userId, body.remark)
   }
 
-  @RequirePerms('purchase.finance_audit')
-  @Post(':id/finance-approve')
-  financeApprove(@Param('id', ParseIntPipe) id: number, @Body() body: any, @CurrentUser('userId') userId: number) {
-    return this.service.financeApprove(id, userId, body?.remark)
+  @RequirePerms('purchase.mark_paid')
+  @Post(':id/mark-paid')
+  markPaid(@Param('id', ParseIntPipe) id: number, @Body() body: PaymentRemarkDto, @CurrentUser('userId') userId: number) {
+    return this.service.setPaymentStatus(id, true, userId, body.remark)
   }
 
-  @RequirePerms('purchase.finance_audit')
-  @Post(':id/reject-finance')
-  rejectFinance(@Param('id', ParseIntPipe) id: number, @Body() body: any, @CurrentUser('userId') userId: number) {
-    return this.service.rejectFinance(id, userId, body?.remark)
+  @RequirePerms('purchase.mark_paid')
+  @Post(':id/mark-unpaid')
+  markUnpaid(@Param('id', ParseIntPipe) id: number, @Body() body: PaymentRemarkDto, @CurrentUser('userId') userId: number) {
+    return this.service.setPaymentStatus(id, false, userId, body.remark)
   }
 
   @RequirePerms('purchase.create')

@@ -19,6 +19,7 @@ export type OmsCustomerRow = {
   monthlySpent: number | null
   pendingBill: number | null
   budgetUsed: number | null
+  portalUsername: string | null
   portalLoginEmail: string | null
   portalStatus: string | null
   mustChangePassword: boolean | null
@@ -81,6 +82,7 @@ export async function fetchOmsCustomerRows(prisma: PrismaService): Promise<OmsCu
       monthlySpent: number | null
       pendingBill: number | null
       budgetUsed: number | null
+      portalUsername: string | null
       portalLoginEmail: string | null
       portalStatus: string | null
       mustChangePassword: boolean | number | null
@@ -106,7 +108,8 @@ export async function fetchOmsCustomerRows(prisma: PrismaService): Promise<OmsCu
       b.monthlySpent,
       b.pendingBill,
       b.budgetUsed,
-      u.loginEmail AS portalLoginEmail,
+      u.username AS portalUsername,
+      u.username AS portalLoginEmail,
       u.status AS portalStatus,
       u.mustChangePassword,
       u.lastLoginAt AS portalLastLoginAt
@@ -135,7 +138,8 @@ export async function fetchOmsCustomerRows(prisma: PrismaService): Promise<OmsCu
     monthlySpent: r.monthlySpent != null ? Number(r.monthlySpent) : null,
     pendingBill: r.pendingBill != null ? Number(r.pendingBill) : null,
     budgetUsed: r.budgetUsed != null ? Number(r.budgetUsed) : null,
-    portalLoginEmail: r.portalLoginEmail ? String(r.portalLoginEmail) : null,
+    portalUsername: r.portalUsername ? String(r.portalUsername) : (r.portalLoginEmail ? String(r.portalLoginEmail) : null),
+    portalLoginEmail: r.portalLoginEmail ? String(r.portalLoginEmail) : (r.portalUsername ? String(r.portalUsername) : null),
     portalStatus: r.portalStatus ? String(r.portalStatus) : null,
     mustChangePassword:
       r.mustChangePassword == null ? null : Boolean(r.mustChangePassword),
@@ -156,8 +160,9 @@ export function toOmsPayload(row: OmsCustomerRow) {
     pendingBill: row.pendingBill,
     budgetUsed: row.budgetUsed,
     omsStatus: row.status,
-    portalReady: Boolean(row.portalLoginEmail),
-    portalLoginEmail: row.portalLoginEmail,
+    portalReady: Boolean(row.portalUsername || row.portalLoginEmail),
+    portalUsername: row.portalUsername || row.portalLoginEmail,
+    portalLoginEmail: row.portalUsername || row.portalLoginEmail,
     portalStatus: row.portalStatus,
     mustChangePassword: row.mustChangePassword,
   }

@@ -121,9 +121,19 @@ ALTER TABLE `oms_PortalUser`
   MODIFY COLUMN `customerId` VARCHAR(50) NULL;
 
 -- Application writes are normalized too; this backfills pre-existing identities.
-UPDATE `oms_PortalUser`
-SET `loginEmail` = LOWER(TRIM(`loginEmail`))
-WHERE `loginEmail` <> LOWER(TRIM(`loginEmail`));
+-- Skipped after migrate_portal_username.sql replaced loginEmail with username.
+SET @has_login_email := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'oms_PortalUser'
+    AND COLUMN_NAME = 'loginEmail'
+);
+SET @sql := IF(
+  @has_login_email > 0,
+  'UPDATE `oms_PortalUser` SET `loginEmail` = LOWER(TRIM(`loginEmail`)) WHERE `loginEmail` <> LOWER(TRIM(`loginEmail`))',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 SET @idx_exists := (
   SELECT COUNT(*) FROM information_schema.STATISTICS
@@ -144,8 +154,14 @@ SET @idx_exists := (
     AND TABLE_NAME = 'oms_PortalUser'
     AND INDEX_NAME = 'oms_PortalUser_loginEmail_key'
 );
+SET @has_login_email := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'oms_PortalUser'
+    AND COLUMN_NAME = 'loginEmail'
+);
 SET @sql := IF(
-  @idx_exists = 0,
+  @idx_exists = 0 AND @has_login_email > 0,
   'CREATE UNIQUE INDEX `oms_PortalUser_loginEmail_key` ON `oms_PortalUser` (`loginEmail`)',
   'SELECT 1'
 );

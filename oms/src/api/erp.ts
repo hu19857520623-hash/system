@@ -523,6 +523,9 @@ export function createErpProduct(body: {
   declaredNameEn?: string
   declaredNameCn?: string
   unit?: string
+  hasBattery?: boolean
+  image?: string
+  imageUrl?: string
   remark?: string
 }) {
   return apiPost<{ id: number; sku: string; productName: string; status: string }>('/erp/products', body)

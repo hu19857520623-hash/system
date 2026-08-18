@@ -41,8 +41,8 @@ const createDto: CreateCustomerDto = {
   portalType: 'ecommerce',
   warehouse: 'WMS-JHB-01',
   permissionTemplate: 'ecommerce',
-  loginEmail: ' Portal@Acme.Test ',
-  temporaryPassword: 'Temporary1A',
+  username: 'acmeportal',
+  temporaryPassword: 'abcdef1',
 }
 
 function buildTransaction() {
@@ -101,7 +101,7 @@ describe('CustomerProvisioningService unified ERP/OMS provisioning', () => {
       oms: {
         omsId: 'erp-customer-cus-042',
         portalReady: true,
-        portalLoginEmail: 'portal@acme.test',
+        portalLoginEmail: 'acmeportal',
         mustChangePassword: true,
       },
     })
@@ -109,7 +109,7 @@ describe('CustomerProvisioningService unified ERP/OMS provisioning', () => {
       result,
       (_key, value) => typeof value === 'bigint' ? Number(value) : value,
     )
-    expect(serialized).not.toContain('Temporary1A')
+    expect(serialized).not.toContain('abcdef1')
     expect(serialized).not.toContain('bcrypt-hash')
 
     const accountInsert = tx.$executeRaw.mock.calls[0]
@@ -119,9 +119,9 @@ describe('CustomerProvisioningService unified ERP/OMS provisioning', () => {
     const portalInsert = tx.$executeRaw.mock.calls[2]
     expect(rawText(portalInsert)).toContain('oms_PortalUser')
     expect(rawValues(portalInsert)).toContain('erp-portal-cus-042')
-    expect(rawValues(portalInsert)).toContain('portal@acme.test')
+    expect(rawValues(portalInsert)).toContain('acmeportal')
     expect(rawValues(portalInsert)).toContain('bcrypt-hash')
-    expect(rawValues(portalInsert)).not.toContain('Temporary1A')
+    expect(rawValues(portalInsert)).not.toContain('abcdef1')
   })
 
   it('rejects a duplicate ERP customer code before shared writes', async () => {
@@ -140,11 +140,11 @@ describe('CustomerProvisioningService unified ERP/OMS provisioning', () => {
       .mockResolvedValueOnce([{
         id: 'portal-existing',
         customerId: 'oms-existing',
-        loginEmail: 'portal@acme.test',
+        username: 'acmeportal',
       }])
 
     await expect(service.create(createDto, { requirePortal: true }))
-      .rejects.toThrow('OMS 登录邮箱已存在')
+      .rejects.toThrow('OMS 登录账号已存在')
     expect(tx.customer.create).not.toHaveBeenCalled()
   })
 
@@ -191,7 +191,7 @@ describe('CustomerProvisioningService unified ERP/OMS provisioning', () => {
       warehouse: 'WMS-CPT-01',
       permissions: '["catalog:read"]',
       portalUserId: 'erp-portal-cus-042',
-      portalLoginEmail: 'portal@acme.test',
+      portalLoginEmail: 'acmeportal',
       portalMustChangePassword: 0,
     }])
     tx.$executeRaw.mockResolvedValue(1)
@@ -225,7 +225,7 @@ describe('CustomerProvisioningService unified ERP/OMS provisioning', () => {
       .mockResolvedValueOnce([{
         ...account,
         portalUserId: 'erp-portal-cus-042',
-        portalLoginEmail: 'portal@acme.test',
+        portalLoginEmail: 'acmeportal',
         portalMustChangePassword: 0,
       }])
       .mockResolvedValueOnce([])
@@ -233,17 +233,17 @@ describe('CustomerProvisioningService unified ERP/OMS provisioning', () => {
 
     const result = await service.resetTemporaryPassword(
       { id: BigInt(42) },
-      { loginEmail: 'Portal@Acme.Test', temporaryPassword: 'ResetPass1' },
+      { username: 'acmeportal', temporaryPassword: 'reset1' },
     )
 
     expect(result.oms).toMatchObject({
-      portalLoginEmail: 'portal@acme.test',
+      portalLoginEmail: 'acmeportal',
       mustChangePassword: true,
     })
     expect(tx.$executeRaw).toHaveBeenCalledTimes(1)
     const update = tx.$executeRaw.mock.calls[0]
     expect(rawText(update)).toContain('mustChangePassword')
     expect(rawValues(update)).toContain('bcrypt-hash')
-    expect(rawValues(update)).not.toContain('ResetPass1')
+    expect(rawValues(update)).not.toContain('reset1')
   })
 })

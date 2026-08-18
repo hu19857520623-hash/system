@@ -6,8 +6,8 @@ import { PrismaClient } from '@prisma/client'
 
 const checks = [
   { table: 'outbound_order', columns: ['cargo_type', 'fba_warehouse', 'seller_store_name', 'appointment_date', 'recipient_json'] },
-  { table: 'inbound_order', columns: ['oms_customer_code'] },
-  { table: 'product', columns: ['sea_freight_per_unit', 'domestic_fee_per_unit'] },
+  { table: 'inbound_order', columns: ['oms_customer_code', 'inbound_type', 'delivery_method', 'reference_no', 'eta'] },
+  { table: 'product', columns: ['sea_freight_per_unit', 'domestic_fee_per_unit', 'customer_sku', 'declared_name_en', 'declared_name_cn', 'unit', 'has_battery'] },
   { table: 'product_pricing', columns: ['inbound_qty', 'sold_qty', 'visible_stock_qty'] },
   { table: 'customer_sku_inventory', columns: ['customer_id', 'sku', 'quantity'] },
   { table: 'inbound_carton', columns: ['inbound_id', 'box_code'] },
@@ -31,7 +31,10 @@ const checks = [
       'content_hash',
     ],
   },
-  { table: 'oms_OutboundOrder', columns: ['sellerStoreName', 'takealotDestWarehouse'] },
+  { table: 'purchase_order', columns: ['payment_status', 'paid_at', 'paid_by'] },
+  { table: 'lead_deal_attachment', columns: ['deal_id', 'file_name', 'file_path'] },
+  { table: 'mingrui_shipment', columns: ['shipment_no', 'status', 'mingrui_order_no', 'api_status'] },
+  { table: 'takealot_store', columns: ['api_key', 'coach_role', 'store_name'] },
 ]
 
 const prisma = new PrismaClient()

@@ -75,23 +75,27 @@ export function takealotMissingFields(doc: TakealotParsedDoc): string[] {
   return missing
 }
 
-export function takealotParseConflicts(parts: Partial<TakealotParsedDoc>[]): string[] {
-  const conflicts: string[] = []
-  const labels: Array<[keyof TakealotParsedDoc, string]> = [
-    ['poNumber', 'PO 单号'],
-    ['sellerId', 'Seller ID'],
-    ['sellerName', '店铺名称'],
-    ['appointmentDate', '预约时间'],
-    ['bookingRef', 'Booking Reference'],
-    ['asnNumber', 'ASN'],
-    ['shipmentName', 'Shipment Name'],
-    ['totalUnits', '总件数'],
-  ]
-  for (const [key, label] of labels) {
-    const values = new Set(parts.map(part => part[key]).filter(Boolean).map(String))
-    if (values.size > 1) conflicts.push(`${label}存在冲突：${[...values].join(' / ')}`)
-  }
+const TAKEALOT_IDENTITY_FIELDS: Array<[keyof TakealotParsedDoc, string]> = [
+  ['poNumber', 'PO 单号'],
+  ['sellerId', 'Seller ID'],
+  ['appointmentDate', '预约时间'],
+  ['bookingRef', 'Booking Reference'],
+  ['asnNumber', 'ASN'],
+]
 
+function conflictingFieldValues(
+  parts: Partial<TakealotParsedDoc>[],
+  fields: Array<[keyof TakealotParsedDoc, string]>,
+): string[] {
+  const conflicts: string[] = []
+  for (const [key, label] of fields) {
+    const values = new Set(parts.map(part => part[key]).filter(Boolean).map(String))
+    if (values.size > 1) conflicts.push(`${label}不一致：${[...values].join(' / ')}`)
+  }
+  return conflicts
+}
+
+function warehouseConflicts(parts: Partial<TakealotParsedDoc>[]): string[] {
   const warehouseParts = parts.filter(part => part.warehouseCode)
   const explicitWarehouses = new Set(
     warehouseParts
@@ -102,8 +106,28 @@ export function takealotParseConflicts(parts: Partial<TakealotParsedDoc>[]): str
     warehouseParts.map(part => part.warehouseCode?.replace(/\d+$/, '')).filter(Boolean),
   )
   if (explicitWarehouses.size > 1 || warehouseRegions.size > 1) {
-    conflicts.push(`目的仓存在冲突：${[...new Set(warehouseParts.map(part => part.warehouseCode))].join(' / ')}`)
+    return [`目的仓不一致：${[...new Set(warehouseParts.map(part => part.warehouseCode))].join(' / ')}`]
   }
+  return []
+}
+
+/** Upload-time identity check. Filename `_PO_{sellerId}_` is not a PO number. */
+export function takealotIdentityConflicts(parts: Partial<TakealotParsedDoc>[]): string[] {
+  return [
+    ...conflictingFieldValues(parts, TAKEALOT_IDENTITY_FIELDS),
+    ...warehouseConflicts(parts),
+  ]
+}
+
+export function takealotParseConflicts(parts: Partial<TakealotParsedDoc>[]): string[] {
+  const conflicts = [
+    ...takealotIdentityConflicts(parts),
+    ...conflictingFieldValues(parts, [
+      ['sellerName', '店铺名称'],
+      ['shipmentName', 'Shipment Name'],
+      ['totalUnits', '总件数'],
+    ]),
+  ]
 
   const qtyBySku = new Map<string, Set<number>>()
   for (const part of parts) {

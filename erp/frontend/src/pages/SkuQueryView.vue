@@ -6,6 +6,7 @@ import type { TableInstance } from 'element-plus'
 import { inventoryApi } from '@/api/client.js'
 import { fmtTime, fmtDate } from '@/api/mappers.ts'
 import ListPagination from '@/components/ListPagination.vue'
+import DetailSheet from '@/components/ui/DetailSheet.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -484,21 +485,25 @@ onMounted(() => {
       <ListPagination v-model:page="page" v-model:page-size="pageSize" :total="listTotal" />
     </div>
 
-    <el-dialog v-model="detailVisible" :title="`产品详情 · ${detailRow?.sku || ''}`" width="520px">
+    <el-dialog v-model="detailVisible" :title="`产品详情 · ${detailRow?.sku || ''}`" width="560px" class="erp-detail">
       <template v-if="detailRow">
+        <DetailSheet
+          :kicker="detailRow.sku"
+          :title="detailRow.productName"
+          :subtitle="[detailRow.spec, detailRow.category, detailRow.brand].filter(Boolean).join(' · ')"
+        >
+          <template #status>
+            <el-tag size="small">{{ detailRow.statusLabel }}</el-tag>
+          </template>
+        </DetailSheet>
         <dl class="detail-dl">
-          <dt>SKU</dt><dd class="mono">{{ detailRow.sku }}</dd>
           <dt>SPU</dt><dd>{{ detailRow.spu || '—' }}</dd>
-          <dt>商品名</dt><dd>{{ detailRow.productName }}</dd>
-          <dt>规格</dt><dd>{{ detailRow.spec || '—' }}</dd>
           <dt>条码</dt><dd>{{ detailRow.barcode || '—' }}</dd>
-          <dt>品类/品牌</dt><dd>{{ detailRow.category || '—' }} / {{ detailRow.brand || '—' }}</dd>
           <dt>客户申报(cm)</dt><dd>{{ detailRow.customerDimLabel || '—' }}</dd>
           <dt>仓库实测(cm)</dt><dd>{{ detailRow.measuredDimLabel || '—' }}</dd>
           <dt>仓租计费(cm)</dt><dd>{{ detailRow.billingDimLabel || '—' }}<span v-if="detailRow.billingDimSource" class="lbl">（{{ detailRow.billingDimSource === 'measured' ? '优先实测' : detailRow.billingDimSource === 'customer' ? '客户申报' : '—' }}）</span></dd>
           <dt>重量(kg)</dt><dd>{{ detailRow.weightLabel || '—' }}</dd>
           <dt>申报成本</dt><dd>{{ detailRow.costRmb != null ? detailRow.costRmb : '—' }}</dd>
-          <dt>状态</dt><dd>{{ detailRow.statusLabel }}</dd>
           <dt>销售状态</dt><dd>{{ detailRow.salesStatus }}</dd>
           <dt>添加时间</dt><dd>{{ fmtTime(detailRow.createdAt) }}</dd>
           <dt>更新时间</dt><dd>{{ fmtTime(detailRow.updatedAt) }}</dd>
@@ -737,24 +742,6 @@ onMounted(() => {
 
 .gear {
   margin-right: 2px;
-}
-
-.detail-dl {
-  display: grid;
-  grid-template-columns: 88px 1fr;
-  gap: 8px 12px;
-  margin: 0;
-  font-size: 13px;
-}
-
-.detail-dl dt {
-  color: #909399;
-  margin: 0;
-}
-
-.detail-dl dd {
-  margin: 0;
-  color: #303133;
 }
 
 @media (max-width: 1100px) {

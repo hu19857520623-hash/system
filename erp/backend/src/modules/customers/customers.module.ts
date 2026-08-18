@@ -1,7 +1,6 @@
 import { Module } from '@nestjs/common'
 import { CustomersService } from './customers.service'
 import { CustomersController } from './customers.controller'
-import { OmsInternalTokenGuard } from './oms-internal-token.guard'
 import { CustomerProvisioningService } from './customer-provisioning.service'
 
 @Module({
@@ -9,7 +8,7 @@ import { CustomerProvisioningService } from './customer-provisioning.service'
   providers: [
     CustomersService,
     CustomerProvisioningService,
-    OmsInternalTokenGuard,
   ],
+  exports: [CustomersService],
 })
 export class CustomersModule {}

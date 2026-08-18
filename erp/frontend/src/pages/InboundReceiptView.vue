@@ -8,6 +8,7 @@ import { withAction } from '@/composables/useListLoader.ts'
 import { useAppStore } from '@/stores/app'
 import { INBOUND_STATUS } from '@/constants/index.js'
 import ListPagination from '@/components/ListPagination.vue'
+import DetailSheet from '@/components/ui/DetailSheet.vue'
 
 const app = useAppStore()
 const route = useRoute()
@@ -227,9 +228,9 @@ async function openDetail(row: any) {
   }
 }
 
-async function downloadOmsAttachment(inboundNo: string, attachmentId: number, fileName: string) {
+async function downloadOmsAttachment(inboundId: number, attachmentId: number, fileName: string) {
   try {
-    const { blob, fileName: fn } = await inboundApi.downloadOmsAttachment(inboundNo, attachmentId)
+    const { blob, fileName: fn } = await inboundApi.downloadOmsAttachment(inboundId, attachmentId)
     const a = document.createElement('a')
     a.href = URL.createObjectURL(blob)
     a.download = fn || fileName || 'attachment'
@@ -399,9 +400,20 @@ onMounted(async () => {
     <el-empty v-if="!loading && !orderRows.length" description="暂无入库单" />
     <ListPagination v-model:page="page" v-model:page-size="pageSize" :total="listTotal" />
 
-    <el-dialog v-model="detailVisible" :title="`入库详情 · ${detailOrder?.inboundNo || ''}`" width="760px" class="inbound-detail-dialog" destroy-on-close>
+    <el-dialog v-model="detailVisible" :title="`入库详情 · ${detailOrder?.inboundNo || ''}`" width="760px" class="inbound-detail-dialog erp-detail" destroy-on-close>
       <div v-loading="detailLoading">
         <template v-if="detailOrder">
+          <DetailSheet
+            :kicker="detailOrder.inboundNo"
+            :title="detailOrder.warehouseCode || '入库单'"
+            :subtitle="[detailOrder.warehouseNo, detailOrder.trackingNo].filter(Boolean).join(' · ')"
+          >
+            <template #status>
+              <el-tag :type="statusTagType(detailOrder.status, detailOrder.displayStatus)" size="small">
+                {{ detailStatusLabel }}
+              </el-tag>
+            </template>
+          </DetailSheet>
           <el-descriptions :column="3" border size="small" class="detail-desc">
             <el-descriptions-item label="入库单号">
               <span class="mono">{{ detailOrder.inboundNo }}</span>
@@ -460,7 +472,7 @@ onMounted(async () => {
                 :key="att.id"
                 type="button"
                 class="att-link"
-                @click="downloadOmsAttachment(detailOrder.inboundNo, att.id, att.fileName)"
+                @click="downloadOmsAttachment(detailOrder.id, att.id, att.fileName)"
               >
                 下载 {{ att.fileName }}
               </button>

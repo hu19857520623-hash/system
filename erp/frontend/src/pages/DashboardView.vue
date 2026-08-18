@@ -32,8 +32,10 @@ const kpis = ref([
 
 const quickEntries = ref([
   { id: 'leads_pool', icon: 'leads_pool', label: '线索池' },
+  { id: 'leads_follow', icon: 'leads_pool', label: '我的跟进' },
   { id: 'products', icon: 'products', label: '商品主数据' },
   { id: 'purchase', icon: 'purchase', label: '采购订单' },
+  { id: 'create_inbound', icon: 'inbound', label: '发运海外仓' },
   { id: 'inbound_arrival', icon: 'inbound_arrival', label: '到仓扫描' },
   { id: 'inbound', icon: 'inbound', label: '入库单管理' },
   { id: 'inbound_putaway', icon: 'inbound_putaway', label: '入库上架' },
@@ -170,7 +172,7 @@ async function loadDashboard() {
     const [stats, anns, scheduledRes, notif] = await Promise.all([
       dashboardApi.stats(),
       dashboardApi.announcements(),
-      app.hasPerm('permissions.manage')
+      app.hasPerm('announcement.manage')
         ? announcementApi.list({ status: 'scheduled', targetChannel: 'erp', pageSize: 20 }).catch(() => ({ items: [] }))
         : Promise.resolve({ items: [] }),
       dashboardApi.notifications().catch(() => ({ items: [], badges: {} })),
@@ -188,7 +190,7 @@ async function loadDashboard() {
     const badge = notif.badges || {}
     pipelineDomestic.value = [
       { label: '选品审核', count: `${stats.pendingAudit ?? 0} 待审`, cls: stats.pendingAudit ? 'warn' : '' },
-      { label: '采购/财务', count: `${stats.pendingPo ?? 0} PO`, cls: stats.pendingPo ? 'warn' : '' },
+      { label: '采购审核', count: `${stats.pendingPo ?? 0} PO`, cls: stats.pendingPo ? 'warn' : '' },
       { label: '中转仓收货', count: `${badge.logistics_wh ?? 0} PO`, cls: badge.logistics_wh ? 'warn' : '' },
     ]
     pipelineOverseas.value = [
@@ -305,25 +307,20 @@ async function deleteAnnouncement(ann: { id: string }) {
 
 const ICONS: Record<string, string> = {
   leads_pool: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+  leads_follow: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg>',
   products: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M21 8.5 12 3 3 8.5v7L12 21l9-5.5v-7z"/><path d="M3 8.5 12 14l9-5.5M12 14v7"/></svg>',
   purchase: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M9 5H5a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-4"/><path d="M9 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v0a2 2 0 0 1-2 2h-2a2 2 0 0 1-2-2z"/><path d="M9 12h6M9 16h4"/></svg>',
   inbound_arrival: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M3 7h18"/><path d="M5 7V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v2"/><path d="M7 11h.01M7 15h.01M11 11h.01M11 15h.01M15 11h.01M15 15h.01"/><path d="M5 7v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7"/></svg>',
   inbound: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M12 21V9"/><path d="m7 14 5 5 5-5"/><path d="M5 3h14"/></svg>',
+  create_inbound: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M12 18v-6M9 15h6"/></svg>',
   inbound_putaway: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M4 19h16"/><path d="m4 15 4-4 4 4 8-8 4 4"/><path d="M4 11V5h16v6"/></svg>',
   outbound: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>',
   billing: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/><path d="M6 15h4"/></svg>',
 }
 
 function navigateTo(id: string) {
-  const map: Record<string, string> = {
-    leads_pool: '/leads/pool', products: '/products', purchase: '/purchase',
-    inbound_arrival: '/inbound/arrival-scan',
-    inbound: '/inbound/receipt', inbound_putaway: '/inbound/arrival-scan?step=putaway', outbound: '/outbound',
-    billing: '/billing', reports: '/profit-analysis', profit_analysis: '/profit-analysis',
-    product_audit: '/product-audit', sync: '/sync', create_inbound: '/inbound/receipt',
-    logistics_wh: '/logistics-wh', dashboard: '/dashboard',
-  }
-  if (map[id]) router.push(map[id])
+  const path = app.navRouteMap[id]
+  if (path) router.push(path)
 }
 
 onMounted(() => {
@@ -425,7 +422,7 @@ onMounted(() => {
       <div class="card">
         <div class="card-header">
           系统公告
-          <el-button v-if="app.hasPerm('permissions.manage')" type="primary" size="small" @click="openPublishDialog">发布公告</el-button>
+          <el-button v-if="app.hasPerm('announcement.manage')" type="primary" size="small" @click="openPublishDialog">发布公告</el-button>
         </div>
         <div class="card-body">
           <el-empty v-if="!announcements.length" description="暂无公告" :image-size="48" />
@@ -436,7 +433,7 @@ onMounted(() => {
               <el-tag v-if="ann.displayPhase === 'scheduled'" size="small" type="warning">待发布</el-tag>
               <el-tag size="small" :type="ann.targetChannel === 'oms' ? 'warning' : 'success'">{{ TARGET_LABEL[ann.targetChannel] }}</el-tag>
               <span class="announce-time">{{ ann.time }}</span>
-              <span v-if="app.hasPerm('permissions.manage')" class="announce-actions">
+              <span v-if="app.hasPerm('announcement.manage')" class="announce-actions">
                 <el-button link type="primary" size="small" @click="editAnnouncement(ann)">编辑</el-button>
                 <el-button link type="danger" size="small" @click="deleteAnnouncement(ann)">删除</el-button>
               </span>

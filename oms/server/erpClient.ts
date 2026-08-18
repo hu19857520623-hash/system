@@ -27,6 +27,7 @@ async function erpRequest<T>(path: string, init?: RequestInit): Promise<T> {
       headers: {
         'Content-Type': 'application/json',
         Accept: 'application/json',
+        ...internalHeaders(),
         ...(init?.headers ?? {}),
       },
     })
@@ -84,7 +85,7 @@ export type ErpOmsProvisionRequest = {
   omsType: 'ecommerce' | 'catalog' | 'hybrid'
   warehouse: string
   permissions: string[]
-  loginEmail: string
+  username: string
   temporaryPassword: string
 }
 
@@ -102,7 +103,8 @@ export type ErpOmsProvisionResponse = {
   portalAccount: {
     id: string
     customerId: string
-    loginEmail: string
+    username: string
+    loginEmail?: string
     role: 'ecommerce' | 'catalog' | 'hybrid'
     status: 'active' | 'disabled'
     mustChangePassword: boolean
@@ -131,7 +133,7 @@ export type ErpOmsCustomerUpdateRequest = {
   warehouse?: string
   permissions?: string[]
   permissionTemplate?: string
-  loginEmail?: string
+  username?: string
 }
 
 export function updateOmsCustomer(
@@ -151,7 +153,7 @@ export function updateOmsCustomer(
 
 export function resetOmsPortalPassword(
   customerCode: string,
-  body: { loginEmail: string; temporaryPassword: string },
+  body: { username: string; temporaryPassword: string },
 ) {
   const template = String(
     process.env.ERP_OMS_RESET_PASSWORD_PATH
@@ -504,9 +506,15 @@ export function decideErpReturn(
   })
 }
 
-export async function downloadErpReturnAttachment(returnNo: string, attachmentId: number) {
-  const url = `${ERP_API_BASE}/returns/oms/by-no/${encodeURIComponent(returnNo)}/attachment/${attachmentId}`
-  const res = await fetch(url, { headers: { Accept: '*/*' } })
+export async function downloadErpReturnAttachment(
+  returnNo: string,
+  attachmentId: number,
+  customerCode: string,
+) {
+  const code = String(customerCode || '').trim()
+  if (!code) throw new ErpApiError(400, '缺少 customerCode')
+  const url = `${ERP_API_BASE}/returns/oms/by-no/${encodeURIComponent(returnNo)}/attachment/${attachmentId}?customerCode=${encodeURIComponent(code)}`
+  const res = await fetch(url, { headers: { Accept: '*/*', ...internalHeaders() } })
   if (!res.ok) {
     const text = await res.text().catch(() => '')
     throw new ErpApiError(res.status, text || res.statusText)
@@ -608,10 +616,11 @@ export function uploadErpPodReceipt(
   })
 }
 
-export async function downloadErpOutboundPod(outboundNo: string, customerCode?: string) {
-  const q = customerCode ? `?customerCode=${encodeURIComponent(customerCode)}` : ''
-  const url = `${ERP_API_BASE}/outbound/oms/by-no/${encodeURIComponent(outboundNo)}/pod${q}`
-  const res = await fetch(url, { headers: { Accept: '*/*' } })
+export async function downloadErpOutboundPod(outboundNo: string, customerCode: string) {
+  const code = String(customerCode || '').trim()
+  if (!code) throw new ErpApiError(400, '缺少 customerCode')
+  const url = `${ERP_API_BASE}/outbound/oms/by-no/${encodeURIComponent(outboundNo)}/pod?customerCode=${encodeURIComponent(code)}`
+  const res = await fetch(url, { headers: { Accept: '*/*', ...internalHeaders() } })
   if (!res.ok) {
     const text = await res.text().catch(() => '')
     throw new ErpApiError(res.status, text || res.statusText)

@@ -34,6 +34,18 @@ const normalizeEmail = ({ value }: { value: unknown }) => {
   return normalized || undefined
 }
 
+const normalizeUsername = ({ obj, value }: { obj: Record<string, unknown>; value: unknown }) => {
+  const raw = typeof value === 'string' && value.trim()
+    ? value
+    : typeof obj.loginEmail === 'string'
+      ? obj.loginEmail
+      : ''
+  const normalized = String(raw).trim().toLowerCase()
+  return normalized || undefined
+}
+
+export const PORTAL_USERNAME_PATTERN = /^[A-Za-z0-9._-]+$/
+
 export class CreateCustomerDto {
   @Transform(trim)
   @IsString()
@@ -115,18 +127,26 @@ export class CreateCustomerDto {
   permissions?: OmsPortalPermission[]
 
   @IsOptional()
-  @Transform(normalizeEmail)
-  @IsEmail()
+  @Transform(normalizeUsername)
+  @IsString()
+  @MinLength(6, { message: '登录账号至少 6 位' })
+  @MaxLength(50)
+  @Matches(PORTAL_USERNAME_PATTERN, {
+    message: '登录账号只能包含字母、数字、点、下划线和短横线',
+  })
+  username?: string
+
+  /** @deprecated Use username. Accepted as an alias for OMS login identity. */
+  @IsOptional()
+  @Transform(trimOptional)
+  @IsString()
   @MaxLength(200)
   loginEmail?: string
 
   @IsOptional()
   @IsString()
-  @MinLength(8, { message: '临时密码至少 8 位' })
+  @MinLength(6, { message: '临时密码至少 6 位' })
   @MaxLength(128)
-  @Matches(/^(?=.*[A-Za-z])(?=.*\d).+$/, {
-    message: '临时密码必须包含字母和数字',
-  })
   temporaryPassword?: string
 }
 
@@ -199,33 +219,49 @@ export class UpdateCustomerDto {
   permissions?: OmsPortalPermission[]
 
   @IsOptional()
-  @Transform(normalizeEmail)
-  @IsEmail()
+  @Transform(normalizeUsername)
+  @IsString()
+  @MinLength(6, { message: '登录账号至少 6 位' })
+  @MaxLength(50)
+  @Matches(PORTAL_USERNAME_PATTERN, {
+    message: '登录账号只能包含字母、数字、点、下划线和短横线',
+  })
+  username?: string
+
+  /** @deprecated Use username. Accepted as an alias for OMS login identity. */
+  @IsOptional()
+  @Transform(trimOptional)
+  @IsString()
   @MaxLength(200)
   loginEmail?: string
 
   @IsOptional()
   @IsString()
-  @MinLength(8, { message: '临时密码至少 8 位' })
+  @MinLength(6, { message: '临时密码至少 6 位' })
   @MaxLength(128)
-  @Matches(/^(?=.*[A-Za-z])(?=.*\d).+$/, {
-    message: '临时密码必须包含字母和数字',
-  })
   temporaryPassword?: string
 }
 
 export class SetPortalTemporaryPasswordDto {
-  @Transform(normalizeEmail)
-  @IsEmail()
+  @Transform(normalizeUsername)
+  @IsString()
+  @MinLength(6, { message: '登录账号至少 6 位' })
+  @MaxLength(50)
+  @Matches(PORTAL_USERNAME_PATTERN, {
+    message: '登录账号只能包含字母、数字、点、下划线和短横线',
+  })
+  username: string
+
+  /** @deprecated Use username. */
+  @IsOptional()
+  @Transform(trimOptional)
+  @IsString()
   @MaxLength(200)
-  loginEmail: string
+  loginEmail?: string
 
   @IsString()
-  @MinLength(8, { message: '临时密码至少 8 位' })
+  @MinLength(6, { message: '临时密码至少 6 位' })
   @MaxLength(128)
-  @Matches(/^(?=.*[A-Za-z])(?=.*\d).+$/, {
-    message: '临时密码必须包含字母和数字',
-  })
   temporaryPassword: string
 }
 
@@ -236,4 +272,41 @@ export class InternalSetPortalTemporaryPasswordDto extends SetPortalTemporaryPas
   @MaxLength(30)
   @Matches(/^[A-Za-z0-9_-]+$/, { message: '客户代码只能包含字母、数字、下划线和短横线' })
   customerCode: string
+}
+
+export class RechargeCustomerDto {
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0.01, { message: '充值金额须大于 0' })
+  amount: number
+
+  @IsOptional()
+  @Transform(trimOptional)
+  @IsString()
+  @MaxLength(30)
+  paymentMethod?: string
+
+  @IsOptional()
+  @Transform(trimOptional)
+  @IsString()
+  @MaxLength(50)
+  paymentMethodId?: string
+
+  @IsOptional()
+  @Transform(trimOptional)
+  @IsString()
+  @MaxLength(100)
+  paymentMethodTitle?: string
+
+  @IsOptional()
+  @Transform(trimOptional)
+  @IsString()
+  @MaxLength(80)
+  rechargeNo?: string
+
+  @IsOptional()
+  @Transform(trimOptional)
+  @IsString()
+  @MaxLength(500)
+  remark?: string
 }

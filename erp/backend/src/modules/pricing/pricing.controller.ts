@@ -4,7 +4,7 @@ import { OmsPurchaseService } from './oms-purchase.service'
 import { PaginationDto } from '../../common/dto/pagination.dto'
 import { CurrentUser } from '../../common/decorators/current-user.decorator'
 import { RequirePerms } from '../../common/decorators/require-perms.decorator'
-import { Public } from '../../common/decorators/public.decorator'
+import { OmsBridge } from '../../common/decorators/oms-bridge.decorator'
 
 @Controller('pricing')
 export class PricingController {
@@ -14,20 +14,20 @@ export class PricingController {
   ) {}
 
   /** OMS 客户下单回调（幂等：同一 orderNo 重复提交返回原结果） */
-  @Public()
+  @OmsBridge()
   @Post('oms/purchase')
   omsPurchaseCallback(@Body() body: any) {
     return this.omsPurchase.recordPurchase(body)
   }
 
   /** OMS 展示层拉取货盘（含剩余库存） */
-  @Public()
+  @OmsBridge()
   @Get('oms/catalog')
   listOmsCatalog() {
     return this.service.listOmsCatalogForOms()
   }
 
-  @Public()
+  @OmsBridge()
   @Get('oms/catalog/:sku')
   getOmsCatalogSku(@Param('sku') sku: string) {
     return this.service.getOmsCatalogSkuForOms(sku)

@@ -24,6 +24,7 @@ export function useRowActions() {
     ElMessageBox.alert(content, title, {
       confirmButtonText: '关闭',
       customClass: 'row-detail-box',
+      appendTo: document.body,
     })
   }
 
@@ -35,7 +36,12 @@ export function useRowActions() {
 
   async function confirmAction(message: string, title = '操作确认', type: 'warning' | 'info' = 'warning') {
     try {
-      await ElMessageBox.confirm(message, title, { type, confirmButtonText: '确认', cancelButtonText: '取消' })
+      await ElMessageBox.confirm(message, title, {
+        type,
+        confirmButtonText: '确认',
+        cancelButtonText: '取消',
+        appendTo: document.body,
+      })
       return true
     } catch {
       return false

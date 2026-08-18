@@ -8,6 +8,7 @@ import { useListLoader, withAction } from '@/composables/useListLoader.ts'
 import { useTablePagination } from '@/composables/useTablePagination.ts'
 import { useAppStore } from '@/stores/app'
 import ListPagination from '@/components/ListPagination.vue'
+import DetailSheet from '@/components/ui/DetailSheet.vue'
 import { PIPELINE_PRICING_ALERT } from '@/constants/productPipeline.ts'
 
 const app = useAppStore()
@@ -667,13 +668,33 @@ async function submitReprice() {
     </template>
   </el-card>
 
-  <el-dialog v-model="pricingVisible" :title="'货盘库存 · ' + (editing?.name || '')" width="720px" top="6vh">
+  <el-dialog v-model="pricingVisible" :title="'货盘库存 · ' + (editing?.name || '')" width="760px" top="6vh" class="erp-detail">
     <template v-if="editing">
+      <DetailSheet :kicker="editing.sku" :title="editing.name">
+        <template #metrics>
+          <div class="erp-detail__metric">
+            <label>采购成本</label>
+            <strong>¥ {{ editing.cost }}</strong>
+          </div>
+          <div class="erp-detail__metric">
+            <label>海运费 / 件</label>
+            <strong>¥ {{ editing.seaFreight }}</strong>
+          </div>
+          <div class="erp-detail__metric">
+            <label>可见库存</label>
+            <strong>{{ editing.visibleStockQty != null ? editing.visibleStockQty.toLocaleString() : '—' }}</strong>
+          </div>
+          <div class="erp-detail__metric is-accent">
+            <label>剩余库存</label>
+            <strong>{{ editing.remainingStockQty?.toLocaleString?.() ?? '—' }}</strong>
+          </div>
+        </template>
+      </DetailSheet>
       <el-steps
         :active="pricingStepActive(editing.pricingStatus)"
         finish-status="success" align-center style="margin-bottom:20px"
       >
-        <el-step title="成本同步" description="财务审核采购单" />
+        <el-step title="成本同步" description="采购审核通过" />
         <el-step title="入库同步" description="发运自动分摊海运" />
         <el-step title="定价" description="主管/陪跑填价" />
         <el-step title="同步OMS" description="陪跑同步上架" />
@@ -683,7 +704,7 @@ async function submitReprice() {
       <el-descriptions :column="3" border size="small">
         <el-descriptions-item label="采购单">{{ editing.poNo || '—' }}</el-descriptions-item>
         <el-descriptions-item label="入库单">{{ editing.inboundNo || '—' }}</el-descriptions-item>
-        <el-descriptions-item label="采购数量">{{ editing.purchaseQty.toLocaleString() }} <span class="form-tip">（财务审核时按实际采购单写入）</span></el-descriptions-item>
+        <el-descriptions-item label="采购数量">{{ editing.purchaseQty.toLocaleString() }} <span class="form-tip">（采购审核时按实际采购单写入）</span></el-descriptions-item>
         <el-descriptions-item label="采购成本">¥ {{ editing.cost }} <span class="form-tip">（实际单价）</span></el-descriptions-item>
         <el-descriptions-item label="海运费/件">¥ {{ editing.seaFreight }}</el-descriptions-item>
         <el-descriptions-item label="国内费用/件">¥ {{ editing.domesticFee }} <span class="form-tip">（采购单国内运费分摊）</span></el-descriptions-item>
@@ -695,8 +716,8 @@ async function submitReprice() {
         </el-descriptions-item>
         <el-descriptions-item label="已售 / 剩余">
           <span style="font-weight:600">{{ editing.soldQty?.toLocaleString?.() ?? 0 }}</span>
-          <span style="color:#94a3b8;margin:0 6px">/</span>
-          <span :style="{ fontWeight: 600, color: editing.remainingStockQty === 0 ? '#c95e60' : '#1f9d92' }">
+          <span class="text-muted" style="margin:0 6px">/</span>
+          <span :class="editing.remainingStockQty === 0 ? 'erp-money is-neg' : 'erp-money'">
             {{ editing.remainingStockQty?.toLocaleString?.() ?? '—' }}
           </span>
           <span class="form-tip">OMS 客户购买后自动累计已售，剩余 = 可见库存 − 已售</span>
@@ -709,7 +730,7 @@ async function submitReprice() {
       <el-form label-width="150px">
         <el-form-item label="市场参考价(R)">
           <span v-if="editing.marketPrice" style="font-weight:600;font-size:15px">R {{ editing.marketPrice.toFixed(2) }}</span>
-          <span v-else style="color:#c4782b">产品开发阶段未填写</span>
+          <span v-else class="text-warn">产品开发阶段未填写</span>
           <span v-if="editing.marketPrice" class="form-tip">≈ ¥ {{ marketPriceRmb.toFixed(2) }}</span>
           <span class="form-tip">Takealot 竞品在售价（兰特），来自产品开发自动带入</span>
         </el-form-item>
@@ -732,7 +753,7 @@ async function submitReprice() {
           <span class="form-tip">≈ ¥ {{ estDeliveryRmb.toFixed(2) }}/件</span>
         </el-form-item>
         <el-form-item v-if="editing.finalPrice" label="预估利润(¥)">
-          <span :style="{ color: estProfit >= 0 ? '#1f9d92' : '#c95e60', fontWeight: 600 }">
+          <span :class="estProfit >= 0 ? 'erp-money' : 'erp-money is-neg'">
             ¥ {{ estProfit.toFixed(2) }}（利润率 {{ estProfitRate.toFixed(1) }}%）
           </span>
           <el-tag v-if="estProfit < 0" type="danger" size="small" style="margin-left:8px">亏损</el-tag>

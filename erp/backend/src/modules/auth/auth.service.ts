@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common'
+import { BadRequestException, HttpException, HttpStatus, Injectable, UnauthorizedException } from '@nestjs/common'
 import { JwtService } from '@nestjs/jwt'
 import * as bcrypt from 'bcryptjs'
 import { PrismaService } from '../../common/prisma/prisma.service'
@@ -6,23 +6,43 @@ import { PermissionsService } from '../../common/permissions/permissions.service
 import { LoginDto } from './dto/login.dto'
 import { UpdateProfileDto } from './dto/update-profile.dto'
 import { ChangePasswordDto } from './dto/change-password.dto'
+import { LoginRateLimiter } from './login-rate-limit'
 
 @Injectable()
 export class AuthService {
+  private readonly loginLimiter = new LoginRateLimiter()
+
   constructor(
     private prisma: PrismaService,
     private jwt: JwtService,
     private permissions: PermissionsService,
   ) {}
 
-  async login(dto: LoginDto) {
+  async login(dto: LoginDto, clientKey = 'unknown') {
+    const rateKey = `${clientKey}:${String(dto.username || '').trim().toLowerCase()}`
+    try {
+      this.loginLimiter.assertAllowed(rateKey)
+    } catch (error) {
+      if ((error as { status?: number }).status === 429) {
+        throw new HttpException((error as Error).message, HttpStatus.TOO_MANY_REQUESTS)
+      }
+      throw error
+    }
+
     const user = await this.prisma.sysUser.findUnique({ where: { username: dto.username } })
-    if (!user) throw new UnauthorizedException('用户名或密码错误')
+    if (!user) {
+      this.loginLimiter.recordFailure(rateKey)
+      throw new UnauthorizedException('用户名或密码错误')
+    }
     if (user.status !== 1) throw new UnauthorizedException('账号已被禁用')
 
     const ok = await bcrypt.compare(dto.password, user.passwordHash)
-    if (!ok) throw new UnauthorizedException('用户名或密码错误')
+    if (!ok) {
+      this.loginLimiter.recordFailure(rateKey)
+      throw new UnauthorizedException('用户名或密码错误')
+    }
 
+    this.loginLimiter.recordSuccess(rateKey)
     await this.prisma.sysUser.update({
       where: { id: user.id },
       data: { lastLoginAt: new Date() },

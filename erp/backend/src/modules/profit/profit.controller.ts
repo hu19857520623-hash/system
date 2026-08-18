@@ -1,5 +1,5 @@
 import { Controller, Get, Query } from '@nestjs/common'
-import { ProfitService } from './profit.service'
+import { ProfitQuery, ProfitService } from './profit.service'
 import { RequirePerms } from '../../common/decorators/require-perms.decorator'
 
 @Controller('profit')
@@ -8,13 +8,13 @@ export class ProfitController {
 
   @RequirePerms('profit_analysis.view')
   @Get('summary')
-  summary(@Query() q: { month?: string }) {
+  summary(@Query() q: ProfitQuery) {
     return this.service.summary(q)
   }
 
   @RequirePerms('profit_analysis.view')
   @Get('detail')
-  detail(@Query() q: { month?: string }) {
+  detail(@Query() q: ProfitQuery & { dim?: string }) {
     return this.service.detail(q)
   }
 }

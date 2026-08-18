@@ -2,21 +2,22 @@ import { Body, Controller, Get, Param, ParseIntPipe, Post, Query } from '@nestjs
 import { BillingService } from './billing.service'
 import { PaginationDto } from '../../common/dto/pagination.dto'
 import { RequirePerms } from '../../common/decorators/require-perms.decorator'
-import { Public } from '../../common/decorators/public.decorator'
+import { OmsBridge } from '../../common/decorators/oms-bridge.decorator'
+import { CreateBillingChargeDto, CreateBillingOrderDto, GenerateBillingDto } from './dto/billing.dto'
 
 @Controller('billing')
 export class BillingController {
   constructor(private readonly service: BillingService) {}
 
   /** OMS P2：客户费用明细 */
-  @Public()
+  @OmsBridge()
   @Get('oms/by-customer/:customerCode/charges')
   omsCharges(@Param('customerCode') customerCode: string) {
     return this.service.listChargesForOms(customerCode)
   }
 
   /** OMS P2：客户账单 */
-  @Public()
+  @OmsBridge()
   @Get('oms/by-customer/:customerCode/bills')
   omsBills(@Param('customerCode') customerCode: string) {
     return this.service.listBillsForOms(customerCode)
@@ -30,19 +31,19 @@ export class BillingController {
 
   @RequirePerms('billing.manual')
   @Post('charges')
-  createCharge(@Body() body: any) {
+  createCharge(@Body() body: CreateBillingChargeDto) {
     return this.service.createCharge(body)
   }
 
   @RequirePerms('billing.generate')
   @Post('generate/preview')
-  previewGenerate(@Body() body: any) {
+  previewGenerate(@Body() body: GenerateBillingDto) {
     return this.service.previewGenerate(body)
   }
 
   @RequirePerms('billing.generate')
   @Post('generate')
-  generateFromCharges(@Body() body: any) {
+  generateFromCharges(@Body() body: GenerateBillingDto) {
     return this.service.generateFromCharges(body)
   }
 
@@ -60,7 +61,7 @@ export class BillingController {
 
   @RequirePerms('billing.generate')
   @Post()
-  create(@Body() body: any) {
+  create(@Body() body: CreateBillingOrderDto) {
     return this.service.generate(body)
   }
 

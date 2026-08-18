@@ -1,7 +1,10 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
+import { Prisma } from '@prisma/client'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
 import { notifyOms } from '../../common/oms-notify.util'
+import { parseOmsOutboundPreDeduct } from '../../common/oms-sync-meta.util'
+import { CreateBillingChargeDto, CreateBillingOrderDto, GenerateBillingDto } from './dto/billing.dto'
 
 export const BILLING_CHARGE_TYPE_LABELS: Record<string, string> = {
   wms_outbound: 'WMS出库单',
@@ -40,8 +43,8 @@ export class BillingService {
     return no.startsWith(prefix) ? no : `${prefix}${no}`
   }
 
-  private async nextChargeSuffix(customerId: number): Promise<string> {
-    const rows: any[] = await this.prisma.$queryRawUnsafe(
+  private async nextChargeSuffix(customerId: number, db: Prisma.TransactionClient | PrismaService = this.prisma): Promise<string> {
+    const rows: any[] = await db.$queryRawUnsafe(
       'SELECT charge_no FROM billing_charge WHERE customer_id = ? ORDER BY id DESC LIMIT 1',
       customerId,
     )
@@ -51,51 +54,95 @@ export class BillingService {
     return `CHG-${String(next).padStart(3, '0')}`
   }
 
-  private async seedChargesIfEmpty() {
-    const rows: any[] = await this.prisma.$queryRawUnsafe('SELECT COUNT(*) as cnt FROM billing_charge')
-    const cnt = Number(rows[0]?.cnt ?? 0)
-    if (cnt > 0) return
+  private mapFeeLineType(type?: string, chargeType?: string) {
+    const raw = String(chargeType || type || '').toLowerCase()
+    if (raw.includes('ship') || raw === 'freight' || raw === 'shipping') return 'outbound_ship'
+    if (raw.includes('pick')) return 'picking'
+    if (raw.includes('relabel') || raw.includes('label')) return 'relabel'
+    if (raw.includes('storage')) return 'storage'
+    if (raw.includes('order')) return 'order_fee'
+    if (raw.includes('inspect')) return 'inspection'
+    return 'handling'
+  }
 
-    const customers = await this.prisma.customer.findMany({ take: 3, orderBy: { id: 'asc' } })
-    if (!customers.length) return
+  async listChargesByBizRef(bizRef: string, tx?: Prisma.TransactionClient) {
+    const ref = String(bizRef || '').trim()
+    if (!ref) return []
+    const db = tx ?? this.prisma
+    const rows: any[] = await db.$queryRawUnsafe(
+      'SELECT id, charge_no, charge_type, amount, description, biz_ref FROM billing_charge WHERE biz_ref = ? ORDER BY id ASC',
+      ref,
+    )
+    return rows.map((r) => ({
+      id: Number(r.id),
+      chargeNo: String(r.charge_no || ''),
+      chargeType: String(r.charge_type || 'other'),
+      amount: Number(r.amount || 0),
+      description: String(r.description || ''),
+      bizRef: r.biz_ref || ref,
+    }))
+  }
 
-    const seeds = [
-      { type: 'storage', source: 'wms', amount: 186200, desc: '6月仓储费 · 库位天数 × 体积', ref: 'WMS-STO-202606', status: 'confirmed' },
-      { type: 'wms_outbound', source: 'wms', amount: 12450, desc: 'WMS 出库账单 · 拣货+包装+出库', ref: 'WMS-BILL-20260608-001', status: 'confirmed' },
-      { type: 'picking', source: 'wms', amount: 4100, desc: '拣货费 · 按件计费', ref: 'WMS-BILL-20260608-001', status: 'confirmed' },
-      { type: 'order_fee', source: 'wms', amount: 2880, desc: 'WMS 推送 · 订单处理费', ref: 'WMS-BILL-20260612-002', status: 'pending' },
-      { type: 'relabel', source: 'manual', amount: 2500, desc: '更换 FNSKU 标签 × 500 件', ref: '手工录入', status: 'confirmed' },
-      { type: 'repack', source: 'manual', amount: 4200, desc: '外箱更换 + 加固包装', ref: '手工录入', status: 'pending' },
-      { type: 'handling', source: 'manual', amount: 1800, desc: '异常件拆检 + 重新上架', ref: '手工录入', status: 'pending' },
-    ]
-
-    let i = 1
-    for (const s of seeds) {
-      const cust = customers[(i - 1) % customers.length]
-      const day = String(Math.min(28, 5 + i)).padStart(2, '0')
-      const chargeNo = this.formatChargeNo(cust.customerCode, `CHG-${String(i).padStart(3, '0')}`)
-      await this.prisma.$executeRawUnsafe(
-        `INSERT INTO billing_charge (charge_no, customer_id, charge_type, source, description, amount, quantity, unit_price, charge_date, source_ref, warehouse_code, status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        chargeNo,
-        cust.id,
-        s.type,
-        s.source,
-        s.desc,
-        s.amount,
-        1,
-        s.amount,
-        `2026-06-${day}`,
-        s.ref,
-        'WMS-JHB-01',
-        s.status,
+  async recordOutboundCharges(input: {
+    customerId: number
+    outboundNo: string
+    warehouseCode?: string
+    source?: string
+    lines: { type?: string; chargeType?: string; label?: string; amount: number; detail?: string }[]
+  }, tx?: Prisma.TransactionClient) {
+    const existing = await this.listChargesByBizRef(input.outboundNo, tx)
+    if (existing.length) return existing
+    const created: Awaited<ReturnType<BillingService['createCharge']>>[] = []
+    for (const line of input.lines || []) {
+      const amount = Math.round(Number(line.amount || 0) * 100) / 100
+      if (!(amount > 0)) continue
+      created.push(
+        await this.createCharge({
+          customerId: input.customerId,
+          chargeType: this.mapFeeLineType(line.type, line.chargeType),
+          source: input.source || 'erp',
+          description: `${line.label || '出库费用'} · ${input.outboundNo}${line.detail ? ` · ${line.detail}` : ''}`,
+          amount,
+          quantity: 1,
+          unitPrice: amount,
+          bizRef: input.outboundNo,
+          sourceRef: input.outboundNo,
+          warehouseCode: input.warehouseCode,
+        }, tx),
       )
-      i++
+    }
+    return created
+  }
+
+  /** 把已存在的 OMS 出库预扣补进结算明细，避免下单后本页空白 */
+  private async backfillOutboundCharges() {
+    try {
+      const orders = await this.prisma.outboundOrder.findMany({
+        where: { customerId: { not: null }, status: { not: 'cancelled' } },
+        select: { outboundNo: true, customerId: true, warehouseCode: true, remark: true, createdAt: true },
+        orderBy: { id: 'desc' },
+        take: 200,
+      })
+      for (const order of orders) {
+        if (!order.customerId) continue
+        const preDeduct = parseOmsOutboundPreDeduct(order.remark)
+        const lines = (preDeduct?.lines || []).filter((l) => Number(l.amount) > 0)
+        if (!lines.length) continue
+        await this.recordOutboundCharges({
+          customerId: Number(order.customerId),
+          outboundNo: order.outboundNo,
+          warehouseCode: order.warehouseCode,
+          source: 'erp',
+          lines,
+        })
+      }
+    } catch {
+      /* 补账失败不阻断费用列表 */
     }
   }
 
   async listCharges(q: PaginationDto & { customerId?: number; chargeType?: string; source?: string; status?: string; dateFrom?: string; dateTo?: string }) {
-    await this.seedChargesIfEmpty()
+    await this.backfillOutboundCharges()
     const { page, pageSize } = getPagination(q)
     const conds: string[] = ['1=1']
     const params: unknown[] = []
@@ -154,15 +201,16 @@ export class BillingService {
     return { items, total, page, pageSize }
   }
 
-  async createCharge(data: any) {
+  async createCharge(data: CreateBillingChargeDto, tx?: Prisma.TransactionClient) {
     if (!data.customerId) throw new BadRequestException('请选择客户')
     if (!data.amount || Number(data.amount) <= 0) throw new BadRequestException('请填写有效金额')
-    const customer = await this.prisma.customer.findUnique({ where: { id: BigInt(data.customerId) } })
+    const db = tx ?? this.prisma
+    const customer = await db.customer.findUnique({ where: { id: BigInt(data.customerId) } })
     if (!customer) throw new BadRequestException('客户不存在')
-    const suffix = data.chargeNo || await this.nextChargeSuffix(Number(data.customerId))
+    const suffix = data.chargeNo || await this.nextChargeSuffix(Number(data.customerId), db)
     const chargeNo = this.formatChargeNo(customer.customerCode, suffix)
     const chargeDate = data.chargeDate || new Date().toISOString().slice(0, 10)
-    await this.prisma.$executeRawUnsafe(
+    await db.$executeRawUnsafe(
       `INSERT INTO billing_charge (charge_no, customer_id, charge_type, source, description, amount, quantity, unit_price, charge_date, biz_ref, source_ref, warehouse_code, status)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
       chargeNo,
@@ -179,7 +227,7 @@ export class BillingService {
       data.warehouseCode || 'WMS-JHB-01',
     )
     const rows: { id: bigint; charge_type: string; amount: unknown; description: string; biz_ref: string | null }[] =
-      await this.prisma.$queryRawUnsafe(
+      await db.$queryRawUnsafe(
         'SELECT id, charge_type, amount, description, biz_ref FROM billing_charge WHERE charge_no = ? LIMIT 1',
         chargeNo,
       )
@@ -237,7 +285,7 @@ export class BillingService {
   }
 
   /** 汇总待入账费用生成账单（按客户） */
-  async generateFromCharges(data: { dateFrom?: string; dateTo?: string; customerId?: number }) {
+  async generateFromCharges(data: GenerateBillingDto) {
     const conds = ["status = 'pending'", 'billing_id IS NULL']
     const params: unknown[] = []
     if (data.dateFrom) { conds.push('charge_date >= ?'); params.push(data.dateFrom) }
@@ -255,62 +303,64 @@ export class BillingService {
     })
 
     const period = (data.dateFrom || pending[0].charge_date?.toISOString?.()?.slice(0, 10) || new Date().toISOString().slice(0, 10)).slice(0, 7)
-    const created: any[] = []
 
-    for (const [customerId, charges] of byCustomer) {
-      const total = charges.reduce((s, c) => s + Number(c.amount), 0)
-      const billingNo = `BL-${period.replace('-', '')}-${customerId}-${Date.now().toString().slice(-4)}`
-      const order = await this.prisma.billingOrder.create({
-        data: {
-          billingNo,
-          customerId: BigInt(customerId),
-          billingMonth: period,
-          totalAmount: total,
-          status: 'pending',
-          remark: data.dateFrom && data.dateTo ? `${data.dateFrom} ~ ${data.dateTo}` : undefined,
-          items: {
-            create: charges.map((c) => ({
-              itemType: c.charge_type,
-              description: c.description || BILLING_CHARGE_TYPE_LABELS[c.charge_type] || c.charge_type,
-              quantity: c.quantity ?? 1,
-              unitPrice: c.unit_price ?? c.amount,
-              amount: c.amount,
-            })),
+    return this.prisma.$transaction(async (tx) => {
+      const created: any[] = []
+      for (const [customerId, charges] of byCustomer) {
+        const total = charges.reduce((s, c) => s + Number(c.amount), 0)
+        const billingNo = `BL-${period.replace('-', '')}-${customerId}-${Date.now().toString().slice(-4)}`
+        const order = await tx.billingOrder.create({
+          data: {
+            billingNo,
+            customerId: BigInt(customerId),
+            billingMonth: period,
+            totalAmount: total,
+            status: 'pending',
+            remark: data.dateFrom && data.dateTo ? `${data.dateFrom} ~ ${data.dateTo}` : undefined,
+            items: {
+              create: charges.map((c) => ({
+                itemType: c.charge_type,
+                description: c.description || BILLING_CHARGE_TYPE_LABELS[c.charge_type] || c.charge_type,
+                quantity: c.quantity ?? 1,
+                unitPrice: c.unit_price ?? c.amount,
+                amount: c.amount,
+              })),
+            },
           },
-        },
-        include: { items: true },
-      })
+          include: { items: true },
+        })
 
-      for (const c of charges) {
-        await this.prisma.$executeRawUnsafe(
-          `UPDATE billing_charge SET billing_id = ?, status = 'confirmed' WHERE id = ?`,
-          order.id,
-          c.id,
-        )
+        for (const c of charges) {
+          await tx.$executeRawUnsafe(
+            `UPDATE billing_charge SET billing_id = ?, status = 'confirmed' WHERE id = ?`,
+            order.id,
+            c.id,
+          )
+        }
+
+        const customer = await tx.customer.findUnique({ where: { id: BigInt(customerId) } })
+        created.push({
+          ...order,
+          id: Number(order.id),
+          customerId,
+          customerName: customer?.customerName || customer?.customerCode,
+          totalAmount: Number(order.totalAmount),
+          chargeCount: charges.length,
+        })
       }
 
-      const customer = await this.prisma.customer.findUnique({ where: { id: BigInt(customerId) } })
-      created.push({
-        ...order,
-        id: Number(order.id),
-        customerId,
-        customerName: customer?.customerName || customer?.customerCode,
-        totalAmount: Number(order.totalAmount),
-        chargeCount: charges.length,
-      })
-    }
-
-    return { bills: created, count: created.length, totalCharges: pending.length }
+      return { bills: created, count: created.length, totalCharges: pending.length }
+    })
   }
 
   /** 兼容旧接口：手动指定明细创建账单 */
-  generate(data: any) {
-    const lines: any[] = data.items || []
+  generate(data: CreateBillingOrderDto) {
+    const lines = data.items
     const total = lines.reduce((s, i) => s + Number(i.amount ?? 0), 0)
     return this.prisma.billingOrder.create({
       data: {
         billingNo: data.billingNo || 'BL-' + Date.now().toString().slice(-8),
-        customerId: BigInt(data.customerId ?? 0),
+        customerId: BigInt(data.customerId),
         billingMonth: data.billingMonth,
         totalAmount: total,
         status: 'pending',
@@ -328,7 +378,7 @@ export class BillingService {
     })
   }
 
-  async previewGenerate(data: { dateFrom?: string; dateTo?: string; customerId?: number }) {
+  async previewGenerate(data: GenerateBillingDto) {
     const conds = ["status = 'pending'", 'billing_id IS NULL']
     const params: unknown[] = []
     if (data.dateFrom) { conds.push('charge_date >= ?'); params.push(data.dateFrom) }

@@ -6,6 +6,7 @@ import { useListLoader, withAction } from '@/composables/useListLoader.ts'
 import { useTablePagination } from '@/composables/useTablePagination.ts'
 import { useRowActions } from '@/composables/useRowActions'
 import ListPagination from '@/components/ListPagination.vue'
+import DetailSheet from '@/components/ui/DetailSheet.vue'
 
 const { exportTask, toast } = useRowActions()
 
@@ -301,12 +302,28 @@ onMounted(load)
     v-model="detailVisible"
     :title="`充值明细 · ${detailCustomer?.name || ''}`"
     width="640px"
+    class="erp-detail"
   >
-    <div v-if="detailCustomer" class="detail-summary">
-      <span>客户 ID：<strong class="mono">{{ detailCustomer.id }}</strong></span>
-      <span>当前余额：<strong>¥ {{ detailCustomer.balance.toLocaleString() }}</strong></span>
-      <span>累计充值：<strong>¥ {{ detailCustomer.totalRecharge.toLocaleString() }}</strong></span>
-    </div>
+    <DetailSheet
+      v-if="detailCustomer"
+      :kicker="String(detailCustomer.id)"
+      :title="detailCustomer.name"
+    >
+      <template #metrics>
+        <div class="erp-detail__metric is-accent">
+          <label>当前余额</label>
+          <strong>¥ {{ detailCustomer.balance.toLocaleString() }}</strong>
+        </div>
+        <div class="erp-detail__metric">
+          <label>累计充值</label>
+          <strong>¥ {{ detailCustomer.totalRecharge.toLocaleString() }}</strong>
+        </div>
+        <div class="erp-detail__metric">
+          <label>充值笔数</label>
+          <strong>{{ detailHistory.length }}</strong>
+        </div>
+      </template>
+    </DetailSheet>
     <el-table v-loading="detailLoading" :data="detailHistory" border size="small" max-height="360">
       <el-table-column prop="rechargeNo" label="充值单号" width="160">
         <template #default="{ row }"><span class="mono">{{ row.rechargeNo }}</span></template>

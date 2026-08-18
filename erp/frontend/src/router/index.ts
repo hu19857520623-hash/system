@@ -27,6 +27,7 @@ const routes: RouteRecordRaw[] = [
       { path: 'purchase', name: 'Purchase', component: () => import('@/pages/PurchaseView.vue'), meta: { title: '采购订单', section: '国内 · 采购' } },
       { path: 'logistics-wh', name: 'LogisticsWh', component: () => import('@/pages/LogisticsWhView.vue'), meta: { title: '物流中转仓', section: '国内 · 物流中转' } },
       { path: 'logistics-inventory', name: 'LogisticsInventory', component: () => import('@/pages/LogisticsInventoryView.vue'), meta: { title: '中转仓库存查询', section: '国内 · 物流中转' } },
+      { path: 'mingrui', name: 'Mingrui', component: () => import('@/pages/MingruiView.vue'), meta: { title: '明瑞物流下单', section: '国内 · 物流中转' } },
       { path: 'warehouse/locations', name: 'WarehouseLocations', component: () => import('@/pages/WarehouseLocationView.vue'), meta: { title: '库位管理', section: '海外仓 · 仓储作业' } },
       { path: 'inbound/create', name: 'CreateInbound', component: () => import('@/pages/CreateInboundView.vue'), meta: { title: '发运海外仓', section: '国内 · 物流中转' } },
       { path: 'inbound/arrival-scan', name: 'InboundArrivalScan', component: () => import('@/pages/InboundArrivalScanView.vue'), meta: { title: '到仓扫描', section: '海外仓 · 仓储作业' } },

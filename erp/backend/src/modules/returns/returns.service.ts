@@ -878,6 +878,7 @@ export class ReturnsService {
     if (!wh) {
       throw new BadRequestException('退件单缺少有效退件仓库，无法匹配收费模板')
     }
+    await this.ensureMissingWarehouseTemplates()
     const row = await this.prisma.returnFeeTemplate.findFirst({
       where: { status: 'active', warehouseCode: wh },
       include: { rules: { where: { autoApply: true }, orderBy: { sortOrder: 'asc' } } },
@@ -1097,7 +1098,8 @@ export class ReturnsService {
     })
     if (!row) throw new NotFoundException(`退件单 ${no} 不存在`)
     const code = body.customerCode?.trim()
-    if (code && row.omsCustomerCode && row.omsCustomerCode !== code) {
+    if (!code) throw new BadRequestException('缺少 customerCode')
+    if (!row.omsCustomerCode || row.omsCustomerCode !== code) {
       throw new BadRequestException('客户编码与退件单不匹配')
     }
     if (row.status !== 'awaiting_customer') {
@@ -1509,8 +1511,9 @@ export class ReturnsService {
       include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
     })
     if (!row) throw new NotFoundException(`退件单 ${no} 不存在`)
-    const code = customerCode?.trim()
-    if (code && row.omsCustomerCode && row.omsCustomerCode !== code) {
+    const code = String(customerCode || '').trim()
+    if (!code) throw new BadRequestException('缺少 customerCode')
+    if (!row.omsCustomerCode || row.omsCustomerCode !== code) {
       throw new BadRequestException('客户编码与退件单不匹配')
     }
     if (row.status === 'cancelled') {
@@ -1535,10 +1538,15 @@ export class ReturnsService {
     return { ...this.mapReturnForOms(updated), idempotent: false }
   }
 
-  async downloadAttachmentByReturnNo(returnNo: string, attachmentId: number) {
+  async downloadAttachmentByReturnNo(returnNo: string, attachmentId: number, customerCode: string) {
     const no = returnNo.trim()
+    const code = String(customerCode || '').trim()
+    if (!code) throw new BadRequestException('缺少 customerCode')
     const row = await this.prisma.returnOrder.findUnique({ where: { returnNo: no } })
     if (!row) throw new NotFoundException(`退件单 ${no} 不存在`)
+    if (!row.omsCustomerCode || row.omsCustomerCode !== code) {
+      throw new BadRequestException('客户编码与退件单不匹配')
+    }
     return this.downloadAttachment(Number(row.id), attachmentId)
   }
 

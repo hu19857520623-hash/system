@@ -6,6 +6,7 @@ import { mapInventory, mapWarehouse } from '@/api/mappers.ts'
 import { fmtTime } from '@/api/mappers.ts'
 import { useRowActions } from '@/composables/useRowActions'
 import ListPagination from '@/components/ListPagination.vue'
+import DetailSheet from '@/components/ui/DetailSheet.vue'
 
 const router = useRouter()
 const { exportTask } = useRowActions()
@@ -225,41 +226,38 @@ onMounted(async () => {
       v-model="detailVisible"
       :title="`库存详情 · ${detailRow?.sku || ''}`"
       width="680px"
-      class="inventory-detail-dialog"
+      class="inventory-detail-dialog erp-detail"
       destroy-on-close
     >
       <div v-if="detailRow" class="inventory-detail">
-        <div class="detail-identity">
-          <div>
-            <div class="detail-eyebrow">中转仓库存单元</div>
-            <div class="detail-product">{{ detailRow.name || '未命名商品' }}</div>
-            <div class="detail-codes">
-              <span class="mono">{{ detailRow.sku }}</span>
-              <span>{{ detailRow.spec || '无规格信息' }}</span>
+        <DetailSheet
+          :kicker="detailRow.sku"
+          :title="detailRow.name || '未命名商品'"
+          :subtitle="detailRow.spec || '无规格信息'"
+        >
+          <template #status>
+            <el-tag v-if="detailRow.available > 0" type="success" size="small">可发运</el-tag>
+            <el-tag v-else type="info" size="small">暂无可用</el-tag>
+          </template>
+          <template #metrics>
+            <div class="erp-detail__metric">
+              <label>在库总量</label>
+              <strong>{{ Number(detailRow.total || 0).toLocaleString() }}</strong>
             </div>
-          </div>
-          <div class="warehouse-badge">
-            <strong>{{ detailRow.warehouseName || detailRow.warehouse }}</strong>
-            <span class="mono">{{ detailRow.warehouse }}</span>
-          </div>
-        </div>
-
-        <div class="stock-balance">
-          <div class="stock-metric total">
-            <span>在库总量</span>
-            <strong>{{ Number(detailRow.total || 0).toLocaleString() }}</strong>
-          </div>
-          <div class="stock-divider" />
-          <div class="stock-metric available">
-            <span>可发数量</span>
-            <strong>{{ Number(detailRow.available || 0).toLocaleString() }}</strong>
-          </div>
-          <div class="stock-divider" />
-          <div class="stock-metric locked">
-            <span>已锁定</span>
-            <strong>{{ Number(detailRow.locked || 0).toLocaleString() }}</strong>
-          </div>
-        </div>
+            <div class="erp-detail__metric is-accent">
+              <label>可发数量</label>
+              <strong>{{ Number(detailRow.available || 0).toLocaleString() }}</strong>
+            </div>
+            <div class="erp-detail__metric">
+              <label>已锁定</label>
+              <strong>{{ Number(detailRow.locked || 0).toLocaleString() }}</strong>
+            </div>
+            <div class="erp-detail__metric">
+              <label>仓库</label>
+              <strong>{{ detailRow.warehouseName || detailRow.warehouse }}</strong>
+            </div>
+          </template>
+        </DetailSheet>
 
         <el-descriptions :column="2" border class="detail-meta">
           <el-descriptions-item label="最近关联单号">
@@ -294,7 +292,7 @@ onMounted(async () => {
         <el-table-column prop="changeLabel" label="类型" width="100" />
         <el-table-column label="变动" width="80" align="right">
           <template #default="{ row }">
-            <span :style="{ color: row.changeQty >= 0 ? '#1f9d92' : '#e85d5d' }">
+            <span :class="row.changeQty >= 0 ? 'erp-money' : 'erp-money is-neg'">
               {{ row.changeQty >= 0 ? '+' : '' }}{{ row.changeQty }}
             </span>
           </template>
@@ -344,8 +342,8 @@ onMounted(async () => {
 .mono { font-family:var(--font-mono,Consolas,monospace); font-size:12px; }
 .cell-stack { display:flex; flex-direction:column; gap:2px; font-size:12px; }
 .sub { color:var(--el-text-color-secondary); font-size:11px; }
-.ok { color:#1f9d92; }
-.warn { color:#e8953a; }
+.ok { color: var(--cyan); }
+.warn { color: var(--warning); }
 .inventory-detail { display:flex; flex-direction:column; gap:18px; }
 .detail-identity {
   display:flex;
