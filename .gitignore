@@ -44,5 +44,11 @@ backups/
 services/**/target/
 services/.mvn/wrapper/maven-wrapper.jar
 
+# Android PDA
+pda/.gradle/
+pda/**/build/
+pda/local.properties
+pda/.kotlin/
+
 # Nested legacy git metadata
 **/.git.bak/
