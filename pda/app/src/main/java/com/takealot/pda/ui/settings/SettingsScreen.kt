@@ -37,7 +37,14 @@ fun SettingsScreen(onBack: () -> Unit, onLogout: () -> Unit) {
         OutlinedTextField(value = baseUrl, onValueChange = { baseUrl = it }, label = { Text("服务器") }, singleLine = true, colors = fieldColors())
         OutlinedTextField(value = warehouseCode, onValueChange = { warehouseCode = it }, label = { Text("仓库编码") }, singleLine = true, colors = fieldColors())
         Text("PDA 需与后端同一局域网。后端 LISTEN_HOST 需为 0.0.0.0。", color = PdaMuted, fontSize = 12.sp)
-        BigButton("保存") { session.baseUrl = baseUrl; session.warehouseCode = warehouseCode.trim(); onBack() }
+        BigButton(
+            text = "保存",
+            onClick = {
+                session.baseUrl = baseUrl
+                session.warehouseCode = warehouseCode.trim()
+                onBack()
+            },
+        )
         BigButton("退出登录", onClick = { session.logout(); onLogout() }, color = PdaErr)
         BigButton("返回", onClick = onBack, color = PdaMuted)
     }
