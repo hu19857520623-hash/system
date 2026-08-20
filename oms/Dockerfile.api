@@ -1,0 +1,44 @@
+# syntax=docker/dockerfile:1
+
+ARG DOCKER_REGISTRY=docker.io/library/
+
+FROM ${DOCKER_REGISTRY}node:22-alpine AS deps
+WORKDIR /app
+RUN apk add --no-cache openssl
+COPY package.json package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --ignore-scripts
+
+FROM deps AS builder
+COPY prisma ./prisma
+RUN npx prisma generate
+COPY server ./server
+COPY src ./src
+
+FROM ${DOCKER_REGISTRY}node:22-alpine AS runner
+RUN apk add --no-cache openssl dumb-init \
+    && addgroup -g 1001 -S oms \
+    && adduser -S oms -u 1001 -G oms
+WORKDIR /app
+ENV NODE_ENV=production \
+    API_PORT=3001 \
+    LISTEN_HOST=0.0.0.0
+
+COPY package.json package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --omit=dev --ignore-scripts \
+    && npm install tsx@4.23.1 dotenv@17.4.2 --no-save --ignore-scripts
+
+COPY --from=builder --chown=oms:oms /app/node_modules/.prisma ./node_modules/.prisma
+COPY --from=builder --chown=oms:oms /app/node_modules/@prisma ./node_modules/@prisma
+COPY --from=builder --chown=oms:oms /app/prisma ./prisma
+COPY --chown=oms:oms server ./server
+COPY --chown=oms:oms src ./src
+
+USER oms
+EXPOSE 3001
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:3001/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+
+ENTRYPOINT ["dumb-init", "--"]
+CMD ["npx", "tsx", "server/index.ts"]
