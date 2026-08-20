@@ -30,6 +30,22 @@ pda/preview/index.html
 
 账号与 Web ERP 相同，使用「仓库」角色。
 
+## Gradle 一直卡在 Importing？
+
+国内首次同步要下载 Gradle + Android 依赖，网络不好会一直转圈。按顺序试：
+
+1. **先点进度条右侧 X 取消**，看底部 **Build** 窗口红色报错（把最后几行发出来）。
+2. **确认 Android Studio 版本**：建议 2024.2+（Ladybug），**JDK 17**  
+   `File → Settings → Build → Gradle → Gradle JDK` 选 **17**。
+3. **装 Android SDK**：`Tools → SDK Manager`，勾选 **Android 14 (API 34)** 和 **Android SDK Build-Tools**，Apply。
+4. **命令行测下载**（在 `pda` 目录 PowerShell）：
+   ```powershell
+   .\gradlew.bat --version
+   ```
+   能输出版本号说明 Gradle 已下好；若卡住，多半是网络问题。
+5. **清缓存重开**：关掉 Android Studio，删除项目里的 `.gradle` 文件夹，再 Open 工程。
+6. 本工程已配置 **阿里云 Maven + 腾讯云 Gradle 镜像**；若仍失败，检查是否开了代理/VPN 冲突。
+
 ## 作业范围
 
 | 模块 | PDA 做什么 | 对接接口 |
