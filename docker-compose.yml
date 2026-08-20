@@ -1,0 +1,169 @@
+# 本地开发：ERP + OMS 全栈（MySQL 共用 takealot_erp）
+#
+# 用法：
+#   cp docker.env.example .env
+#   docker compose up --build
+#
+# 可选 Takealot 监控代理：
+#   docker compose --profile monitor up --build
+#
+# 初始化演示数据（ERP seed）：
+#   docker compose --profile seed run --rm erp-seed
+#
+# 国内拉镜像慢时可设：
+#   DOCKER_REGISTRY=docker.m.daocloud.io/library/
+
+name: takealot-dev
+
+x-build-args: &build-args
+  DOCKER_REGISTRY: ${DOCKER_REGISTRY:-docker.io/library/}
+
+services:
+  mysql:
+    image: ${DOCKER_REGISTRY:-docker.io/library/}mysql:8.0
+    container_name: takealot-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in .env}
+      MYSQL_DATABASE: takealot_erp
+      TZ: Asia/Shanghai
+    ports:
+      - "${MYSQL_HOST_PORT:-3307}:3306"
+    volumes:
+      - takealot_mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$${MYSQL_ROOT_PASSWORD}"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  erp-backend:
+    build:
+      context: ./erp
+      dockerfile: backend/Dockerfile
+      args:
+        <<: *build-args
+    container_name: takealot-erp-backend
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      LISTEN_HOST: 0.0.0.0
+      DATABASE_URL: mysql://root:${MYSQL_ROOT_PASSWORD}@mysql:3306/takealot_erp
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env (>=32 chars)}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://127.0.0.1:5180,http://localhost:5180,http://127.0.0.1:5173,http://localhost:5173}
+      AUTO_SCHEMA_SYNC: ${AUTO_SCHEMA_SYNC:-false}
+      OMS_WEBHOOK_URL: http://oms-api:3001/api/erp/webhooks/events
+      OMS_WEBHOOK_SECRET: ${OMS_WEBHOOK_SECRET:?Set OMS_WEBHOOK_SECRET in .env}
+      OMS_INTERNAL_TOKEN: ${OMS_INTERNAL_TOKEN:?Set OMS_INTERNAL_TOKEN in .env}
+      TAKEALOT_PROXY_URL: ${TAKEALOT_PROXY_URL:-http://takealot-monitor:3456}
+    ports:
+      - "${ERP_BACKEND_PORT:-3000}:3000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3000/api/auth/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  erp-frontend:
+    build:
+      context: ./erp
+      dockerfile: frontend/Dockerfile
+      args:
+        <<: *build-args
+    container_name: takealot-erp-frontend
+    restart: unless-stopped
+    ports:
+      - "${ERP_FRONTEND_PORT:-5180}:8080"
+    depends_on:
+      erp-backend:
+        condition: service_healthy
+
+  oms-api:
+    build:
+      context: ./oms
+      dockerfile: Dockerfile.api
+      args:
+        <<: *build-args
+    container_name: takealot-oms-api
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      API_PORT: 3001
+      LISTEN_HOST: 0.0.0.0
+      DATABASE_URL: mysql://root:${MYSQL_ROOT_PASSWORD}@mysql:3306/takealot_erp
+      ERP_API_BASE: http://erp-backend:3000/api
+      OMS_INTERNAL_TOKEN: ${OMS_INTERNAL_TOKEN}
+      OMS_JWT_SECRET: ${OMS_JWT_SECRET:?Set OMS_JWT_SECRET in .env (>=32 chars)}
+      OMS_WEBHOOK_SECRET: ${OMS_WEBHOOK_SECRET}
+      OMS_CORS_ORIGINS: ${OMS_CORS_ORIGINS:-http://127.0.0.1:5173,http://localhost:5173,http://127.0.0.1:5180,http://localhost:5180}
+      OMS_ALLOW_INSECURE_DEV_AUTH: ${OMS_ALLOW_INSECURE_DEV_AUTH:-true}
+      OMS_BOOTSTRAP_ADMIN_USERNAME: ${OMS_BOOTSTRAP_ADMIN_USERNAME:-omsadmin}
+      OMS_BOOTSTRAP_ADMIN_PASSWORD: ${OMS_BOOTSTRAP_ADMIN_PASSWORD:-DevAdmin123!}
+    ports:
+      - "${OMS_API_PORT:-3001}:3001"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      erp-backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3001/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 45s
+
+  oms-web:
+    build:
+      context: ./oms
+      dockerfile: Dockerfile.web
+      args:
+        <<: *build-args
+    container_name: takealot-oms-web
+    restart: unless-stopped
+    ports:
+      - "${OMS_WEB_PORT:-5173}:8080"
+    depends_on:
+      oms-api:
+        condition: service_healthy
+
+  takealot-monitor:
+    profiles: ["monitor"]
+    build:
+      context: ./erp/takealot-monitor
+      dockerfile: Dockerfile
+      args:
+        <<: *build-args
+    container_name: takealot-monitor
+    restart: unless-stopped
+    environment:
+      LISTEN_HOST: 0.0.0.0
+      PORT: 3456
+    ports:
+      - "127.0.0.1:3456:3456"
+
+  erp-seed:
+    profiles: ["seed"]
+    build:
+      context: ./erp
+      dockerfile: backend/Dockerfile
+      target: builder-dev
+      args:
+        <<: *build-args
+    environment:
+      DATABASE_URL: mysql://root:${MYSQL_ROOT_PASSWORD}@mysql:3306/takealot_erp
+    command: ["npm", "run", "seed"]
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: "no"
+
+volumes:
+  takealot_mysql_data:

@@ -1,21 +1,22 @@
-# 国内拉取 Docker Hub 失败时，已默认走 DaoCloud 镜像加速
-# 若仍失败，请在 Docker Desktop → Settings → Docker Engine 配置 registry-mirrors（见下方说明）
+# 本目录 compose 已迁移至仓库根目录 `docker-compose.yml`（含 ERP + OMS）。
+# 若只需 ERP 栈，可在根目录执行：
+#   docker compose up erp-backend erp-frontend mysql
+
+# 国内镜像前缀示例见根目录 docker.env.example 中的 DOCKER_REGISTRY
 
 x-build-args: &build-args
-  DOCKER_REGISTRY: docker.m.daocloud.io/library/
+  DOCKER_REGISTRY: ${DOCKER_REGISTRY:-docker.io/library/}
 
 services:
   mysql:
-    image: docker.m.daocloud.io/library/mysql:8.0
+    image: ${DOCKER_REGISTRY:-docker.io/library/}mysql:8.0
     container_name: erp-mysql
     restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: ${ERP_MYSQL_ROOT_PASSWORD:?Set ERP_MYSQL_ROOT_PASSWORD in .env}
-      # 单一业务库：ERP 表 + OMS 的 oms_* 表共用 takealot_erp（勿对 OMS 执行 prisma db push）
       MYSQL_DATABASE: takealot_erp
       TZ: Asia/Shanghai
     ports:
-      # 宿主机 3306 常被本地 MySQL 占用，映射到 3307 避免冲突
       - "3307:3306"
     volumes:
       - erp_mysql_data:/var/lib/mysql
@@ -36,23 +37,35 @@ services:
     environment:
       PORT: 3000
       NODE_ENV: production
-      DATABASE_URL: mysql://root:${ERP_MYSQL_ROOT_PASSWORD:?Set ERP_MYSQL_ROOT_PASSWORD in .env}@mysql:3306/takealot_erp
+      LISTEN_HOST: 0.0.0.0
+      DATABASE_URL: mysql://root:${ERP_MYSQL_ROOT_PASSWORD}@mysql:3306/takealot_erp
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
       JWT_EXPIRES_IN: 7d
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5180}
       AUTO_SCHEMA_SYNC: ${AUTO_SCHEMA_SYNC:-false}
       TAKEALOT_PROXY_URL: http://takealot-monitor:3456
-      LISTEN_HOST: 0.0.0.0
     ports:
-      # 宿主机 3000 常被本地 npm run start:dev 占用，映射到 3001
-      - "3001:3000"
+      - "3000:3000"
     depends_on:
       mysql:
         condition: service_healthy
-      takealot-monitor:
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        <<: *build-args
+    container_name: erp-frontend
+    restart: unless-stopped
+    ports:
+      - "5180:8080"
+    depends_on:
+      backend:
         condition: service_started
 
   takealot-monitor:
+    profiles: ["monitor"]
     build:
       context: ./takealot-monitor
       args:
@@ -64,31 +77,16 @@ services:
     ports:
       - "127.0.0.1:3456:3456"
 
-  frontend:
-    build:
-      context: .
-      dockerfile: frontend/Dockerfile
-      args:
-        <<: *build-args
-    container_name: erp-frontend
-    restart: unless-stopped
-    ports:
-      - "8080:80"
-    depends_on:
-      - backend
-      - takealot-monitor
-
-  # 一次性初始化演示数据：docker compose --profile seed run --rm seed
   seed:
     profiles: ["seed"]
     build:
       context: .
       dockerfile: backend/Dockerfile
-      target: builder
+      target: builder-dev
       args:
         <<: *build-args
     environment:
-      DATABASE_URL: mysql://root:${ERP_MYSQL_ROOT_PASSWORD:?Set ERP_MYSQL_ROOT_PASSWORD in .env}@mysql:3306/takealot_erp
+      DATABASE_URL: mysql://root:${ERP_MYSQL_ROOT_PASSWORD}@mysql:3306/takealot_erp
     command: npm run seed
     depends_on:
       mysql:
