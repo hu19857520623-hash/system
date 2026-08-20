@@ -1,4 +1,5 @@
-# 将 PDA 分支干净拉到本地（默认 D:\all）
+# 将 PDA 分支干净拉到本地（默认 D:\all，整仓）
+# 若只要 pda 目录，请用 pull-pda-only.ps1
 # 用法（PowerShell）：
 #   cd D:\
 #   powershell -ExecutionPolicy Bypass -File D:\all\scripts\pull-pda-branch.ps1
