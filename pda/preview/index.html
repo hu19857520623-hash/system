@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <title>仓库 PDA 界面预览</title>
+  <style>
+    :root {
+      --bg: #111418;
+      --surface: #1c2128;
+      --surface2: #252c36;
+      --accent: #f5a623;
+      --ok: #3ddc97;
+      --err: #ff6b6b;
+      --warn: #f5c542;
+      --muted: #8b949e;
+      --text: #f2f4f7;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: #0b0d10;
+      color: var(--text);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 28px;
+      justify-content: center;
+      align-items: flex-start;
+      padding: 28px 16px 48px;
+    }
+    .hint {
+      width: 100%;
+      max-width: 420px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+      text-align: center;
+    }
+    .hint strong { color: var(--text); }
+    .phone {
+      width: 360px;
+      height: 720px;
+      background: var(--bg);
+      border: 10px solid #2a3038;
+      border-radius: 28px;
+      overflow: hidden;
+      box-shadow: 0 24px 60px rgba(0,0,0,.45);
+      display: flex;
+      flex-direction: column;
+      position: relative;
+    }
+    .status-bar {
+      height: 28px;
+      padding: 6px 16px 0;
+      font-size: 11px;
+      color: var(--muted);
+      display: flex;
+      justify-content: space-between;
+    }
+    .screen { flex: 1; overflow: auto; padding: 12px 16px 16px; }
+    .screen.hidden { display: none; }
+    h1 { font-size: 22px; margin: 0 0 4px; }
+    h2 { font-size: 20px; margin: 0; }
+    .sub { color: var(--muted); font-size: 13px; margin-bottom: 14px; }
+    label { display: block; color: var(--muted); font-size: 12px; margin: 10px 0 4px; }
+    input, select {
+      width: 100%;
+      background: transparent;
+      border: 1px solid #4a5563;
+      border-radius: 8px;
+      color: var(--text);
+      padding: 12px 10px;
+      font-size: 15px;
+      outline: none;
+    }
+    input:focus { border-color: var(--accent); }
+    .btn {
+      width: 100%;
+      height: 48px;
+      border: 0;
+      border-radius: 10px;
+      background: var(--accent);
+      color: #1a1204;
+      font-size: 16px;
+      font-weight: 600;
+      margin-top: 12px;
+      cursor: pointer;
+    }
+    .btn.ok { background: var(--ok); }
+    .btn.ghost { background: var(--surface2); color: var(--text); }
+    .btn.warn { background: var(--warn); }
+    .row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+    .link { background: none; border: 0; color: var(--accent); font-size: 14px; cursor: pointer; }
+    .tile, .card, .line {
+      background: var(--surface);
+      border-radius: 12px;
+      padding: 12px 14px;
+      margin-bottom: 8px;
+    }
+    .tile { cursor: pointer; }
+    .tile:hover, .line.sel { background: var(--surface2); }
+    .tile .t { font-size: 17px; font-weight: 600; }
+    .tile .d { font-size: 12px; color: var(--muted); margin-top: 2px; }
+    .sec { color: var(--muted); font-size: 12px; margin: 14px 0 6px; }
+    .chip {
+      font-size: 12px;
+      padding: 3px 8px;
+      border-radius: 6px;
+      background: rgba(245, 197, 66, .2);
+      color: var(--warn);
+    }
+    .chip.ok { background: rgba(61,220,151,.2); color: var(--ok); }
+    .kv { display: flex; justify-content: space-between; font-size: 13px; margin: 4px 0; }
+    .kv span { color: var(--muted); }
+    .banner {
+      background: rgba(61,220,151,.18);
+      color: var(--ok);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 14px;
+      margin: 10px 0;
+    }
+    .qty { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
+    .qty button {
+      flex: 1; height: 40px; border: 0; border-radius: 8px;
+      background: var(--surface2); color: var(--text); font-size: 18px; cursor: pointer;
+    }
+    .qty .n { flex: 1.2; text-align: center; }
+    .qty .n b { font-size: 20px; display: block; }
+  </style>
+</head>
+<body>
+  <p class="hint">
+    这是 <strong>仓库 PDA</strong> 的界面预览，布局与 Android App 一致。<br />
+    点按钮可在登录 / 首页 / 入库 / 出库之间切换。要跑真机请用 Android Studio 打开 <code>pda/</code>。
+  </p>
+
+  <div class="phone">
+    <div class="status-bar"><span>9:41</span><span>PDA · 仓库</span></div>
+
+    <div id="login" class="screen">
+      <h1 style="margin-top:24px">仓库 PDA</h1>
+      <p class="sub">入库到仓 / 收货清点 / 上架 / 出库拣货</p>
+      <label>服务器</label>
+      <input value="http://10.0.2.2:3000/api" />
+      <label>用户名</label>
+      <input value="warehouse" />
+      <label>密码</label>
+      <input type="password" value="******" />
+      <button class="btn" onclick="go('home')">登录</button>
+      <p class="sub" style="margin-top:12px">真机请填局域网地址，例如 http://192.168.1.20:3000/api</p>
+    </div>
+
+    <div id="home" class="screen hidden">
+      <div class="row">
+        <div>
+          <h2>你好，张仓管</h2>
+          <p class="sub" style="margin:0">轻量仓库作业</p>
+        </div>
+        <button class="link" onclick="go('settings')">设置</button>
+      </div>
+      <label>作业仓库</label>
+      <select><option>JHB1 约翰内斯堡 (JHB1)</option></select>
+      <div class="sec">入库</div>
+      <div class="tile" onclick="go('arrival')"><div class="t">到仓扫描</div><div class="d">扫入库单 / 跟踪号</div></div>
+      <div class="tile" onclick="go('receive')"><div class="t">扫箱收货</div><div class="d">扫外箱标或 SKU</div></div>
+      <div class="tile" onclick="go('qc')"><div class="t">清点</div><div class="d">扫 SKU 累加实收</div></div>
+      <div class="tile" onclick="go('putaway')"><div class="t">上架</div><div class="d">扫 SKU 再扫库位</div></div>
+      <div class="sec">出库</div>
+      <div class="tile" onclick="go('pick')"><div class="t">拣货</div><div class="d">扫出库单，按库位拣货</div></div>
+      <div class="tile" onclick="go('review')"><div class="t">复核</div><div class="d">扫 SKU 核对后提交</div></div>
+    </div>
+
+    <div id="arrival" class="screen hidden">
+      <div class="row"><h2>到仓扫描</h2><button class="link" onclick="go('home')">返回</button></div>
+      <label>扫入库单 / 跟踪号</label>
+      <input value="IN-20260819-0012" />
+      <button class="btn" onclick="document.getElementById('arr-ok').style.display='block'">提交扫描</button>
+      <div id="arr-ok" class="banner" style="display:none">IN-20260819-0012 到仓扫描成功</div>
+      <div class="card">
+        <div class="row"><strong>IN-20260819-0012</strong><span class="chip">已到仓</span></div>
+        <div class="kv"><span>仓库</span>JHB1</div>
+        <div class="kv"><span>件数</span>0 / 120</div>
+      </div>
+    </div>
+
+    <div id="receive" class="screen hidden">
+      <div class="row"><h2>扫箱收货</h2><button class="link" onclick="go('home')">返回</button></div>
+      <label>扫外箱标 / SKU</label>
+      <input placeholder="扫描后自动提交" />
+      <div class="qty">
+        <button>−</button>
+        <div class="n"><span class="sub" style="margin:0">收货箱数</span><b>1</b></div>
+        <button>+</button>
+      </div>
+      <div class="banner">[外箱标] BOX-03 → SKU-A×20（本单累计 60/120）</div>
+      <div class="card">
+        <div class="row"><strong>IN-20260819-0012</strong><span class="chip">收货中</span></div>
+        <div class="kv"><span>外箱</span>3 / 6</div>
+      </div>
+      <div class="line"><strong>SKU-A</strong><div class="sub" style="margin:0">应收 80 · 实收 60 · 待上架 60</div></div>
+      <div class="line"><strong>SKU-B</strong><div class="sub" style="margin:0">应收 40 · 实收 0 · 待上架 0</div></div>
+    </div>
+
+    <div id="qc" class="screen hidden">
+      <div class="row"><h2>清点</h2><button class="link" onclick="go('home')">返回</button></div>
+      <label>扫 SKU</label>
+      <input value="SKU-A" />
+      <div class="qty">
+        <button>−</button>
+        <div class="n"><span class="sub" style="margin:0">每次件数</span><b>1</b></div>
+        <button>+</button>
+      </div>
+      <div class="banner">SKU-A +1（实收 61/80）</div>
+      <button class="btn ok">提交清点</button>
+      <div class="line"><strong>SKU-A</strong><div class="sub" style="margin:0">应收 80 · 实收 61</div></div>
+      <div class="line"><strong>SKU-B</strong><div class="sub" style="margin:0">应收 40 · 实收 40</div></div>
+    </div>
+
+    <div id="putaway" class="screen hidden">
+      <div class="row"><h2>上架</h2><button class="link" onclick="go('home')">返回</button></div>
+      <label>扫 SKU 或库位</label>
+      <input placeholder="先扫 SKU，再扫库位" />
+      <div class="card">
+        <strong>SKU-A</strong>
+        <label>库位</label>
+        <input value="A-01-03" />
+        <div class="qty">
+          <button>−</button>
+          <div class="n"><span class="sub" style="margin:0">上架数量</span><b>61</b></div>
+          <button>+</button>
+        </div>
+        <button class="btn ok">确认上架</button>
+      </div>
+      <div class="line sel"><strong>SKU-A</strong><div class="sub" style="margin:0">待上架 61</div></div>
+      <div class="line"><strong>SKU-B</strong><div class="sub" style="margin:0">待上架 40</div></div>
+    </div>
+
+    <div id="pick" class="screen hidden">
+      <div class="row"><h2>拣货</h2><button class="link" onclick="go('home')">返回</button></div>
+      <label>扫 SKU 或库位</label>
+      <input placeholder="扫出库单号，或扫 SKU / 库位" />
+      <div class="card">
+        <div class="row"><strong>OUT-20260819-0088</strong><span class="chip">拣货中</span></div>
+        <div class="kv"><span>客户</span>Acme</div>
+        <div class="kv"><span>仓库</span>JHB1</div>
+      </div>
+      <div class="line sel">
+        <div class="row"><strong>SKU-A</strong><span class="chip ok">2/2</span></div>
+        <div class="sub" style="margin:0">库位 A-01-03</div>
+      </div>
+      <div class="line">
+        <div class="row"><strong>SKU-B</strong><span class="chip">0/4</span></div>
+        <div class="sub" style="margin:0">库位 B-02-11</div>
+      </div>
+      <button class="btn ok">提交拣货</button>
+    </div>
+
+    <div id="review" class="screen hidden">
+      <div class="row"><h2>复核</h2><button class="link" onclick="go('home')">返回</button></div>
+      <label>扫 SKU 复核</label>
+      <input />
+      <div class="card">
+        <div class="row"><strong>OUT-20260819-0088</strong><span class="chip">复核中</span></div>
+      </div>
+      <div class="line"><div class="row"><strong>SKU-A</strong><span class="chip ok">2/2</span></div></div>
+      <div class="line"><div class="row"><strong>SKU-B</strong><span class="chip">0/4</span></div></div>
+      <button class="btn ok">提交复核</button>
+    </div>
+
+    <div id="settings" class="screen hidden">
+      <h2>设置</h2>
+      <div class="card">
+        <div class="kv"><span>账号</span>张仓管</div>
+        <div class="kv"><span>用户名</span>warehouse</div>
+      </div>
+      <label>服务器</label>
+      <input value="http://10.0.2.2:3000/api" />
+      <label>仓库编码</label>
+      <input value="JHB1" />
+      <button class="btn" onclick="go('home')">保存</button>
+      <button class="btn" style="background:#ff6b6b;color:#fff" onclick="go('login')">退出登录</button>
+      <button class="btn ghost" onclick="go('home')">返回</button>
+    </div>
+  </div>
+
+  <script>
+    function go(id) {
+      document.querySelectorAll('.screen').forEach((el) => el.classList.add('hidden'));
+      document.getElementById(id).classList.remove('hidden');
+      if (location.hash !== '#' + id) location.hash = id;
+    }
+    window.addEventListener('hashchange', () => {
+      const id = location.hash.slice(1);
+      if (id && document.getElementById(id)) go(id);
+    });
+    if (location.hash) {
+      const id = location.hash.slice(1);
+      if (id && document.getElementById(id)) go(id);
+    }
+  </script>
+</body>
+</html>

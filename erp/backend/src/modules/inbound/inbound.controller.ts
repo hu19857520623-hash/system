@@ -68,7 +68,14 @@ export class InboundController {
     return this.service.uploadAttachment(body)
   }
 
-  @RequireAnyPerm('create_inbound.view', 'inbound.view')
+  @RequireAnyPerm(
+    'create_inbound.view',
+    'inbound.view',
+    'inbound.arrival_scan',
+    'inbound.receive',
+    'inbound.qc',
+    'inbound.putaway',
+  )
   @Get()
   list(@Query() q: PaginationDto & { status?: string }) {
     return this.service.list(q)
@@ -120,7 +127,14 @@ export class InboundController {
     res.send(file.content)
   }
 
-  @RequireAnyPerm('create_inbound.view', 'inbound.view')
+  @RequireAnyPerm(
+    'create_inbound.view',
+    'inbound.view',
+    'inbound.arrival_scan',
+    'inbound.receive',
+    'inbound.qc',
+    'inbound.putaway',
+  )
   @Get(':id')
   detail(@Param('id', ParseIntPipe) id: number) {
     return this.service.detail(id)
