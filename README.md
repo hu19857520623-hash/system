@@ -9,6 +9,26 @@ ERP + OMS 一体化工程仓库，包含：
 
 浏览器预览 PDA 界面：打开 `pda/preview/index.html`。
 
-## 本地启动
+## Docker 本地全栈
 
-详见各子目录 README 与 `docker-compose.yml`。
+```powershell
+cp docker.env.example .env
+docker compose up --build
+```
+
+| 服务 | 地址 |
+|------|------|
+| ERP 前端 | http://127.0.0.1:5180 |
+| ERP API | http://127.0.0.1:3000 |
+| OMS 前端 | http://127.0.0.1:5173 |
+| OMS API | http://127.0.0.1:3001 |
+| MySQL | `127.0.0.1:3307` |
+
+可选：
+
+```powershell
+docker compose --profile monitor up --build   # Takealot 监控代理
+docker compose --profile seed run --rm erp-seed
+```
+
+镜像设计要点：多阶段构建、BuildKit npm 缓存、Alpine、非 root、`nginx-unprivileged`、`no-new-privileges`。

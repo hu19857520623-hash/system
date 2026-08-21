@@ -1,10 +1,20 @@
+# OMS 构建上下文
+.git
+.github
 node_modules
 dist
-.git
+.vite
+.cache
+coverage
 *.log
 .env
 .env.*
-coverage
+!.env.example
+.DS_Store
 docs
 scripts
+sop_images
+SOP_from_docx.json
+*.md
+*.bat
 prisma/seed.ts

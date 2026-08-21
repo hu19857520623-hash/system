@@ -1,6 +1,21 @@
+# ERP 构建上下文：缩小 build context，加速传输
+**/.git
+**/.github
 **/node_modules
 **/dist
-.git
-*.log
-.env
-.env.*
+**/.vite
+**/.cache
+**/coverage
+**/*.log
+**/.env
+**/.env.*
+!**/.env.example
+**/.DS_Store
+**/docs
+**/pda
+takealot-monitor/node_modules
+services
+backend/dist
+frontend/dist
+**/*.md
+!**/*.docker.conf

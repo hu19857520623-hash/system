@@ -1,4 +1,6 @@
+# 仓库根：compose 构建时排除无关大目录
 **/.git
+**/.github
 **/.env
 **/.env.*
 !**/.env.example
@@ -17,3 +19,5 @@
 **/.DS_Store
 **/coverage
 **/pda
+**/docs
+**/*.md

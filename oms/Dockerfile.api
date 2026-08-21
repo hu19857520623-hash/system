@@ -1,42 +1,62 @@
-# syntax=docker/dockerfile:1
+# OMS API · Express + Prisma（tsx 运行 TS）· 多阶段 / 非 root
+#
+# build context: ./oms
+#   docker build -f Dockerfile.api -t oms-api .
 
 ARG DOCKER_REGISTRY=docker.io/library/
+ARG NODE_VERSION=22-alpine
+ARG NPM_REGISTRY=https://registry.npmmirror.com
 
-FROM ${DOCKER_REGISTRY}node:22-alpine AS deps
+# ── 1) 全量依赖（仅用于 prisma generate）──
+FROM ${DOCKER_REGISTRY}node:${NODE_VERSION} AS deps
+ARG NPM_REGISTRY
 WORKDIR /app
-RUN apk add --no-cache openssl
+RUN apk add --no-cache openssl libc6-compat \
+    && npm config set registry ${NPM_REGISTRY}
 COPY package.json package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm \
-    npm ci --ignore-scripts
+    npm ci --ignore-scripts --no-audit --no-fund
 
 FROM deps AS builder
 COPY prisma ./prisma
-RUN npx prisma generate
-COPY server ./server
-COPY src ./src
+RUN --mount=type=cache,target=/root/.npm \
+    npx prisma generate
 
-FROM ${DOCKER_REGISTRY}node:22-alpine AS runner
-RUN apk add --no-cache openssl dumb-init \
-    && addgroup -g 1001 -S oms \
-    && adduser -S oms -u 1001 -G oms
+# ── 2) 生产依赖（不含前端/构建工具）──
+FROM ${DOCKER_REGISTRY}node:${NODE_VERSION} AS prod-deps
+ARG NPM_REGISTRY
 WORKDIR /app
-ENV NODE_ENV=production \
-    API_PORT=3001 \
-    LISTEN_HOST=0.0.0.0
-
+RUN apk add --no-cache openssl libc6-compat \
+    && npm config set registry ${NPM_REGISTRY}
 COPY package.json package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm \
-    npm ci --omit=dev --ignore-scripts \
-    && npm install tsx@4.23.1 dotenv@17.4.2 --no-save --ignore-scripts
+    npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
+    && npm install tsx@4.23.1 dotenv@17.4.2 --no-save --ignore-scripts --no-audit --no-fund
+# 注入已 generate 的 Prisma Client（避免在 runner 再装 prisma CLI）
+COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
+COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
 
-COPY --from=builder --chown=oms:oms /app/node_modules/.prisma ./node_modules/.prisma
-COPY --from=builder --chown=oms:oms /app/node_modules/@prisma ./node_modules/@prisma
+# ── 3) 运行：仅 server + prisma，不打进前端 src ──
+FROM ${DOCKER_REGISTRY}node:${NODE_VERSION} AS runner
+RUN apk add --no-cache openssl dumb-init \
+    && addgroup -g 1001 -S oms \
+    && adduser -S oms -u 1001 -G oms \
+    && mkdir -p /app && chown oms:oms /app
+WORKDIR /app
+
+ENV NODE_ENV=production \
+    API_PORT=3001 \
+    LISTEN_HOST=0.0.0.0 \
+    NPM_CONFIG_UPDATE_NOTIFIER=false
+
+COPY --from=prod-deps --chown=oms:oms /app/package.json /app/package-lock.json ./
+COPY --from=prod-deps --chown=oms:oms /app/node_modules ./node_modules
 COPY --from=builder --chown=oms:oms /app/prisma ./prisma
 COPY --chown=oms:oms server ./server
-COPY --chown=oms:oms src ./src
 
 USER oms
 EXPOSE 3001
+
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:3001/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
