@@ -27,6 +27,7 @@ import com.takealot.pda.ui.components.FeedbackBar
 import com.takealot.pda.ui.components.fieldColors
 import com.takealot.pda.ui.theme.PdaMuted
 import com.takealot.pda.ui.theme.PdaText
+import com.takealot.pda.ui.i18n.tr
 import kotlinx.coroutines.launch
 
 @Composable
@@ -60,13 +61,13 @@ fun LoginScreen(onLoggedIn: () -> Unit) {
     }
 
     Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("仓库 PDA", color = PdaText, fontSize = 28.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 28.dp))
-        Text("入库到仓 / 收货清点 / 上架 / 出库拣货", color = PdaMuted, fontSize = 14.sp)
-        OutlinedTextField(value = baseUrl, onValueChange = { baseUrl = it }, label = { Text("服务器") }, singleLine = true, modifier = Modifier.padding(top = 12.dp), colors = fieldColors())
-        OutlinedTextField(value = username, onValueChange = { username = it }, label = { Text("用户名") }, singleLine = true, colors = fieldColors())
-        OutlinedTextField(value = password, onValueChange = { password = it }, label = { Text("密码") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), colors = fieldColors())
+        Text(tr("pda_title"), color = PdaText, fontSize = 28.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 28.dp))
+        Text(tr("pda_subtitle"), color = PdaMuted, fontSize = 14.sp)
+        OutlinedTextField(value = baseUrl, onValueChange = { baseUrl = it }, label = { Text(tr("server")) }, singleLine = true, modifier = Modifier.padding(top = 12.dp), colors = fieldColors())
+        OutlinedTextField(value = username, onValueChange = { username = it }, label = { Text(tr("username")) }, singleLine = true, colors = fieldColors())
+        OutlinedTextField(value = password, onValueChange = { password = it }, label = { Text(tr("password")) }, singleLine = true, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), colors = fieldColors())
         FeedbackBar(feedback)
-        BigButton(if (busy) "登录中…" else "登录", onClick = { submit() }, enabled = !busy && username.isNotBlank() && password.isNotBlank())
+        BigButton(if (busy) tr("logging_in") else tr("login"), onClick = { submit() }, enabled = !busy && username.isNotBlank() && password.isNotBlank())
         Text("真机请填局域网地址，例如 http://192.168.1.20:3000/api", color = PdaMuted, fontSize = 12.sp)
     }
 }

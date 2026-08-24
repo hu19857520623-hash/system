@@ -1,5 +1,11 @@
 package com.takealot.pda.ui.components
 
+import android.media.AudioManager
+import android.media.ToneGenerator
+import android.os.Build
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,6 +26,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -37,6 +44,7 @@ import com.takealot.pda.ui.theme.PdaSurface
 import com.takealot.pda.ui.theme.PdaSurface2
 import com.takealot.pda.ui.theme.PdaText
 import com.takealot.pda.ui.theme.PdaWarn
+import kotlinx.coroutines.delay
 
 data class Feedback(val ok: Boolean, val message: String)
 
@@ -82,6 +90,21 @@ fun BigButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, 
 @Composable
 fun FeedbackBar(feedback: Feedback?) {
     if (feedback == null) return
+    val context = LocalContext.current
+    LaunchedEffect(feedback.ok, feedback.message) {
+        val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) (context.getSystemService(VibratorManager::class.java))?.defaultVibrator
+        else context.getSystemService(Vibrator::class.java)
+        val effect = if (feedback.ok) VibrationEffect.createOneShot(45, VibrationEffect.DEFAULT_AMPLITUDE)
+        else VibrationEffect.createWaveform(longArrayOf(0, 80, 55, 130), -1)
+        vibrator?.vibrate(effect)
+        val tone = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 80)
+        try {
+            tone.startTone(if (feedback.ok) ToneGenerator.TONE_PROP_ACK else ToneGenerator.TONE_PROP_NACK, if (feedback.ok) 90 else 180)
+            delay(if (feedback.ok) 100 else 190)
+        } finally {
+            tone.release()
+        }
+    }
     Box(
         Modifier.fillMaxWidth()
             .background(if (feedback.ok) PdaOk.copy(alpha = 0.18f) else PdaErr.copy(alpha = 0.18f), RoundedCornerShape(8.dp))

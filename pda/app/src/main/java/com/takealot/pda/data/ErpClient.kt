@@ -59,12 +59,22 @@ class ErpClient(private val session: SessionStore) {
         gson.fromJson(postJson("/inbound/arrival-scan", mapOf("scanCode" to scanCode, "warehouseCode" to warehouseCode)), ArrivalScanResult::class.java)
     }
 
-    suspend fun receiveBox(id: Int, scanCode: String, cartonCount: Int = 1): ScanActionResult = withContext(Dispatchers.IO) {
-        gson.fromJson(postJson("/inbound/$id/receive-box", mapOf("scanCode" to scanCode, "cartonCount" to cartonCount)), ScanActionResult::class.java)
+    suspend fun receiveBox(id: Int, scanCode: String): ScanActionResult = withContext(Dispatchers.IO) {
+        gson.fromJson(postJson("/inbound/$id/receive-box", mapOf("scanCode" to scanCode)), ScanActionResult::class.java)
     }
 
-    suspend fun scanQc(id: Int, scanCode: String, increment: Int = 1): ScanActionResult = withContext(Dispatchers.IO) {
-        gson.fromJson(postJson("/inbound/$id/scan-qc", mapOf("scanCode" to scanCode, "increment" to increment)), ScanActionResult::class.java)
+    suspend fun recordReceivedCartonCount(id: Int, receivedCartonCount: Int): ScanActionResult = withContext(Dispatchers.IO) {
+        gson.fromJson(
+            postJson("/inbound/$id/received-carton-count", mapOf("receivedCartonCount" to receivedCartonCount)),
+            ScanActionResult::class.java,
+        )
+    }
+
+    suspend fun scanQc(id: Int, scanCode: String, increment: Int = 1, clientRequestId: String? = null): ScanActionResult = withContext(Dispatchers.IO) {
+        gson.fromJson(
+            postJson("/inbound/$id/scan-qc", mapOf("scanCode" to scanCode, "increment" to increment, "clientRequestId" to clientRequestId)),
+            ScanActionResult::class.java,
+        )
     }
 
     suspend fun submitQc(id: Int, items: List<Map<String, Any?>>, acceptDiff: Boolean): Unit = withContext(Dispatchers.IO) {
@@ -86,8 +96,8 @@ class ErpClient(private val session: SessionStore) {
         ))))
     }
 
-    suspend fun resolveException(id: Int) = withContext(Dispatchers.IO) {
-        postJson("/inbound/$id/resolve-exception", emptyMap<String, Any>())
+    suspend fun resolveException(id: Int, reason: String) = withContext(Dispatchers.IO) {
+        postJson("/inbound/$id/resolve-exception", mapOf("reason" to reason.trim()))
     }
 
     suspend fun outboundList(

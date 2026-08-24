@@ -36,6 +36,7 @@ data class InboundOrder(
     val trackingNo: String? = "",
     val status: String? = "",
     val displayStatus: String? = "",
+    val receivedCartonCount: Int? = null,
     val items: List<InboundItem>? = emptyList(),
     val cartons: List<InboundCarton>? = emptyList(),
 ) {
@@ -120,6 +121,14 @@ data class PickSuggestionLine(
     val qty: Int = 0,
     val pickedQty: Int = 0,
     val locationCode: String? = "",
+    val suggestions: List<PickLocationSuggestion>? = emptyList(),
+    val uncovered: Int = 0,
+)
+
+data class PickLocationSuggestion(
+    val locationCode: String? = "",
+    val pickQty: Int = 0,
+    val available: Int = 0,
 )
 
 data class PickSuggestions(

@@ -22,6 +22,7 @@ import com.takealot.pda.ui.components.fieldColors
 import com.takealot.pda.ui.theme.PdaErr
 import com.takealot.pda.ui.theme.PdaMuted
 import com.takealot.pda.ui.theme.PdaText
+import com.takealot.pda.ui.i18n.tr
 
 @Composable
 fun SettingsScreen(onBack: () -> Unit, onLogout: () -> Unit) {
@@ -29,16 +30,23 @@ fun SettingsScreen(onBack: () -> Unit, onLogout: () -> Unit) {
     var baseUrl by remember { mutableStateOf(session.baseUrl) }
     var warehouseCode by remember { mutableStateOf(session.warehouseCode) }
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("设置", color = PdaText, fontSize = 22.sp)
+        Text(tr("settings"), color = PdaText, fontSize = 22.sp)
         Panel {
-            KeyValue("账号", session.realName.ifBlank { session.username })
-            KeyValue("用户名", session.username)
+            KeyValue(tr("account"), session.realName.ifBlank { session.username })
+            KeyValue(tr("username"), session.username)
         }
-        OutlinedTextField(value = baseUrl, onValueChange = { baseUrl = it }, label = { Text("服务器") }, singleLine = true, colors = fieldColors())
-        OutlinedTextField(value = warehouseCode, onValueChange = { warehouseCode = it }, label = { Text("仓库编码") }, singleLine = true, colors = fieldColors())
+        OutlinedTextField(value = baseUrl, onValueChange = { baseUrl = it }, label = { Text(tr("server")) }, singleLine = true, colors = fieldColors())
+        OutlinedTextField(value = warehouseCode, onValueChange = { warehouseCode = it }, label = { Text(tr("warehouse_code")) }, singleLine = true, colors = fieldColors())
         Text("PDA 需与后端同一局域网。后端 LISTEN_HOST 需为 0.0.0.0。", color = PdaMuted, fontSize = 12.sp)
-        BigButton("保存") { session.baseUrl = baseUrl; session.warehouseCode = warehouseCode.trim(); onBack() }
-        BigButton("退出登录", onClick = { session.logout(); onLogout() }, color = PdaErr)
-        BigButton("返回", onClick = onBack, color = PdaMuted)
+        BigButton(
+            text = tr("save"),
+            onClick = {
+                session.baseUrl = baseUrl
+                session.warehouseCode = warehouseCode.trim()
+                onBack()
+            },
+        )
+        BigButton(tr("logout"), onClick = { session.logout(); onLogout() }, color = PdaErr)
+        BigButton(tr("back"), onClick = onBack, color = PdaMuted)
     }
 }
