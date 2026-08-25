@@ -40,15 +40,18 @@ import com.takealot.pda.data.InboundOrder
 import com.takealot.pda.data.PdaResumeWork
 import com.takealot.pda.scan.ScanBus
 import com.takealot.pda.ui.components.BigButton
+import com.takealot.pda.ui.components.DocumentCard
 import com.takealot.pda.ui.components.Feedback
 import com.takealot.pda.ui.components.FeedbackBar
 import com.takealot.pda.ui.components.KeyValue
 import com.takealot.pda.ui.components.Panel
 import com.takealot.pda.ui.components.QtyButton
 import com.takealot.pda.ui.components.ScanField
+import com.takealot.pda.ui.components.SkuCard
 import com.takealot.pda.ui.components.StatusChip
 import com.takealot.pda.ui.components.fieldColors
 import com.takealot.pda.ui.theme.PdaAccent
+import com.takealot.pda.ui.theme.PdaInbound
 import com.takealot.pda.ui.theme.PdaMuted
 import com.takealot.pda.ui.theme.PdaOk
 import com.takealot.pda.ui.theme.PdaSurface2
@@ -289,11 +292,12 @@ fun InboundScreen(modeKey: String, onBack: () -> Unit, vm: InboundViewModel = vi
         FeedbackBar(vm.feedback)
         if (order == null) Text("先扫描单号绑定作业入库单", color = PdaMuted, fontSize = 13.sp)
         else {
-            Panel {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(order.no, color = PdaText, fontWeight = FontWeight.SemiBold, fontSize = 18.sp)
-                    StatusChip(order.statusText, statusTone(order.statusKey))
-                }
+            DocumentCard(
+                typeLabel = "入库单",
+                number = order.no,
+                accent = PdaInbound,
+                status = { StatusChip(order.statusText, statusTone(order.statusKey)) },
+            ) {
                 KeyValue("仓库", order.warehouseCode.orEmpty())
                 KeyValue("件数", "${order.itemList.sumOf { it.actualQty ?: 0 }} / ${order.itemList.sumOf { it.expectedQty }}")
                 if (order.receivedCartonCount != null && order.receivedCartonCount > 0) {
@@ -321,20 +325,26 @@ fun InboundScreen(modeKey: String, onBack: () -> Unit, vm: InboundViewModel = vi
                 }
             }
             if (vm.mode == InboundMode.Putaway) PutawayEditor(vm)
-            Text("明细", color = PdaMuted, fontSize = 13.sp)
+            Text("SKU 明细", color = PdaInbound, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
             order.itemList.forEach { item ->
-                Column(
-                    Modifier.fillMaxWidth().background(if (item.id == vm.selectedItemId) PdaSurface2 else PdaSurface2.copy(alpha = 0.45f), RoundedCornerShape(10.dp)).clickable {
+                SkuCard(
+                    sku = item.skuCode,
+                    progress = "${item.actualQty ?: 0}/${item.expectedQty}",
+                    done = (item.actualQty ?: 0) == item.expectedQty,
+                    selected = item.id == vm.selectedItemId,
+                    onClick = {
                         vm.selectedItemId = item.id
                         vm.putawayQty = item.remainingPutaway.coerceAtLeast(1)
                         vm.lengthCm = item.lengthCm?.takeIf { it > 0 }?.toString().orEmpty()
                         vm.widthCm = item.widthCm?.takeIf { it > 0 }?.toString().orEmpty()
                         vm.heightCm = item.heightCm?.takeIf { it > 0 }?.toString().orEmpty()
-                    }.padding(12.dp),
+                    },
                 ) {
-                    Text(item.skuCode, color = PdaText, fontWeight = FontWeight.Medium)
                     Text(item.productName.orEmpty(), color = PdaMuted, fontSize = 12.sp)
-                    Text("应收 ${item.expectedQty} · 实收 ${item.actualQty ?: 0} · 待上架 ${item.remainingPutaway}", color = PdaMuted, fontSize = 12.sp)
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("待上架 ${item.remainingPutaway}", color = PdaText, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                        Text("应收 ${item.expectedQty} · 实收 ${item.actualQty ?: 0}", color = PdaMuted, fontSize = 12.sp)
+                    }
                     if ((item.actualQty ?: 0) != item.expectedQty) Text("差异 ${(item.actualQty ?: 0) - item.expectedQty}", color = PdaWarn, fontSize = 12.sp)
                     if (vm.mode == InboundMode.Putaway && !item.hasMeasuredDims()) Text("缺少商品尺寸：请转「清点」扫描并测量", color = PdaWarn, fontSize = 12.sp)
                 }

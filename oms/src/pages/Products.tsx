@@ -11,7 +11,9 @@ import {
 import { Product, statusLabels, formatCurrency } from '../data/mockData'
 import { importProducts, updateLocalProducts, approveProducts, useProducts } from '../data/inventoryStore'
 import { getPrimaryPlatformBarcode } from '../data/platformBindingUtils'
+import { printBarcodeLabels } from '../data/barcodeLabelTemplate'
 import { getCustomerSkuDisplay } from '../data/skuCode'
+import { notifyIfUserError } from '../utils/userNotify'
 import { useDataScope } from '../auth/useDataScope'
 import { AdminCustomerFilter, AdminCustomerCell } from '../components/admin/AdminCustomerFilter'
 import { useRole } from '../auth/RoleContext'
@@ -228,7 +230,7 @@ export default function Products() {
       window.alert(`已导入 ${result.count} 个产品（待审核）`)
       setTab('reviewing')
     } catch (err) {
-      if ((err as Error).message !== 'cancelled') console.error(err)
+      notifyIfUserError(err, '导入失败')
     }
   }
 
@@ -262,31 +264,11 @@ export default function Products() {
       window.alert('请先勾选要打印条码的产品')
       return
     }
-    const printWindow = window.open('', '_blank', 'width=980,height=720')
-    if (!printWindow) {
-      window.alert('浏览器拦截了打印窗口，请允许弹出窗口后重试')
-      return
-    }
-    const { default: JsBarcode } = await import('jsbarcode')
-    const labels = items.map(product => {
-      const code = displaySku(product)
-      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
-      try {
-        JsBarcode(svg, code, { format: 'CODE128', width: 2, height: 56, margin: 0, displayValue: false })
-      } catch {
-        JsBarcode(svg, product.internalSku, { format: 'CODE128', width: 2, height: 56, margin: 0, displayValue: false })
-      }
-      return `<article class="label"><strong>${product.name.replace(/[<>&"]/g, '')}</strong>${svg.outerHTML}<span>${code.replace(/[<>&"]/g, '')}</span></article>`
-    }).join('')
-    printWindow.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>产品条码</title><style>
-      @page{size:A4;margin:10mm}*{box-sizing:border-box}body{margin:0;font-family:Arial,sans-serif;color:#0f172a}
-      .sheet{display:grid;grid-template-columns:repeat(3,1fr);gap:8mm}.label{height:46mm;border:1px dashed #94a3b8;border-radius:4px;padding:5mm;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3mm;overflow:hidden}
-      strong{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}svg{max-width:100%;height:56px}span{font:12px monospace;letter-spacing:.08em}
-      @media print{.label{break-inside:avoid}}
-    </style></head><body><main class="sheet">${labels}</main></body></html>`)
-    printWindow.document.close()
-    printWindow.focus()
-    window.setTimeout(() => printWindow.print(), 200)
+    const inputs = items.map(product => ({
+      code: product.internalSku.trim() || displaySku(product),
+      copies: 1,
+    })).filter(item => item.code)
+    await printBarcodeLabels(inputs, 'SKU 标签')
   }
 
   const handleBatchImages = async (files: FileList | null) => {

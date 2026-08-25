@@ -8,7 +8,8 @@ import {
   SearchField, FilterActions, inputCls, matchText, type SearchMode,
 } from '../components/ui/filters'
 import {
-  getInventoryStatus, statusLabels, STOCK_SOURCE_LABELS, type StockSource, warehouseFilterOptions, warehouseLabel,
+  getInventoryStatus, statusLabels, STOCK_SOURCE_LABELS,
+  type StockSource, warehouseFilterOptions, warehouseLabel,
 } from '../data/mockData'
 import { refreshInventoryFromErp, useInventoryItems } from '../data/inventoryStore'
 import { useOutboundOrders } from '../data/outboundStore'
@@ -158,6 +159,7 @@ export default function InventoryPage({ alertsOnly }: InventoryPageProps) {
   const filtered = useMemo(() => {
     let list = applyInvFilters(scopedInventory, applied)
     if (poolTab !== 'all') list = list.filter(i => i.stockSource === poolTab)
+    if (tab === 'catalogHoldings') list = list.filter(i => i.stockSource === 'catalog' && i.locked > 0)
     if (tab === 'low') list = list.filter(i => getInventoryStatus(i) === 'low')
     if (tab === 'out') list = list.filter(i => getInventoryStatus(i) === 'out')
     if (tab === 'locked') list = list.filter(i => i.locked > 0)
@@ -167,14 +169,17 @@ export default function InventoryPage({ alertsOnly }: InventoryPageProps) {
 
   const ownedItems = scopedInventory.filter(i => i.stockSource === 'owned')
   const catalogItems = scopedInventory.filter(i => i.stockSource === 'catalog')
+  const catalogHoldings = catalogItems.filter(i => i.locked > 0)
   const totalAvailable = scopedInventory.reduce((s, i) => s + i.available, 0)
   const ownedAvailable = ownedItems.reduce((s, i) => s + i.available, 0)
-  const catalogAvailable = catalogItems.reduce((s, i) => s + i.available, 0)
+  const catalogHoldingQty = catalogItems.reduce((s, i) => s + i.locked, 0)
   const totalLocked = scopedInventory.reduce((s, i) => s + i.locked, 0)
   const alertCount = scopedInventory.filter(i => getInventoryStatus(i) !== 'normal').length
+  const showCatalogHoldColumn = poolTab === 'catalog' || poolTab === 'all'
 
   const tabs = [
     { id: 'all', label: '全部', count: scopedInventory.length },
+    { id: 'catalogHoldings', label: '货盘持有', count: catalogHoldings.length },
     { id: 'low', label: '低库存', count: scopedInventory.filter(i => getInventoryStatus(i) === 'low').length },
     { id: 'out', label: '缺货', count: scopedInventory.filter(i => getInventoryStatus(i) === 'out').length },
     { id: 'locked', label: '有锁定', count: scopedInventory.filter(i => i.locked > 0).length },
@@ -189,7 +194,7 @@ export default function InventoryPage({ alertsOnly }: InventoryPageProps) {
     <div className="page-shell">
       <PageHeader
         title={alertsOnly ? '库存预警' : '库存查询'}
-        desc={dataScope.isAdmin ? '全平台库存总览，可按客户筛选' : (alertsOnly ? '低库存与断货风险 SKU 列表' : '分池查询：自有库存（电商入库）与货盘库存（选品入库），支持多维度数量筛选')}
+        desc={dataScope.isAdmin ? '全平台库存总览，可按客户筛选' : (alertsOnly ? '低库存与断货风险 SKU 列表' : '自有库存看可用量；货盘申购后持有量显示在「货盘持有」列，可出库发货')}
         action={
           <>
             <Button variant="secondary" size="sm" onClick={() => exportInventoryCsv(filtered)}>
@@ -220,7 +225,7 @@ export default function InventoryPage({ alertsOnly }: InventoryPageProps) {
             <StatCard label="SKU 总数" value={scopedInventory.length} />
             <StatCard label="可用库存" value={totalAvailable.toLocaleString()} />
             <StatCard label="自有可用" value={ownedAvailable.toLocaleString()} sub={STOCK_SOURCE_LABELS.owned} />
-            <StatCard label="货盘可用" value={catalogAvailable.toLocaleString()} sub={STOCK_SOURCE_LABELS.catalog} />
+            <StatCard label="货盘持有" value={catalogHoldingQty.toLocaleString()} sub="申购后可发" alert={catalogHoldingQty > 0} />
             <StatCard label="锁定库存" value={totalLocked.toLocaleString()} sub="出库占用" />
             <StatCard label="预警 SKU" value={alertCount} alert={alertCount > 0} />
           </div>
@@ -290,6 +295,7 @@ export default function InventoryPage({ alertsOnly }: InventoryPageProps) {
               <th>自定义编号</th>
               <th>仓库</th>
               <th>库存来源</th>
+              {showCatalogHoldColumn && <th className="text-right">货盘持有</th>}
               <th className="text-right">可用</th>
               <th className="text-right">待上架</th>
               <th className="text-right">待出库</th>
@@ -333,8 +339,17 @@ export default function InventoryPage({ alertsOnly }: InventoryPageProps) {
                       item.stockSource === 'owned' ? 'bg-emerald-50 text-emerald-700' : 'bg-violet-50 text-violet-700'
                     }`}>{STOCK_SOURCE_LABELS[item.stockSource]}</span>
                   </td>
+                  {showCatalogHoldColumn && (
+                    <td className="table-cell text-right font-semibold text-violet-700">
+                      {item.stockSource === 'catalog'
+                        ? (item.locked > 0 ? item.locked.toLocaleString() : '—')
+                        : '—'}
+                    </td>
+                  )}
                   <td className={`table-cell text-right font-semibold ${st !== 'normal' ? (st === 'out' ? 'text-red-600' : 'text-amber-600') : ''}`}>
-                    {item.available.toLocaleString()}
+                    {item.stockSource === 'catalog' && item.locked > 0 && item.available === 0
+                      ? <span className="text-text-muted">—</span>
+                      : item.available.toLocaleString()}
                   </td>
                   <td className="table-cell text-right text-xs">{item.pendingShelving > 0 ? item.pendingShelving : '—'}</td>
                   <td className="table-cell text-right text-xs">{item.pendingOutbound > 0 ? item.pendingOutbound : '—'}</td>

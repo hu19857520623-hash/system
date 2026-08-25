@@ -67,7 +67,7 @@ services:
   takealot-monitor:
     profiles: ["monitor"]
     build:
-      context: ./takealot-monitor
+      context: ../store-monitor
       args:
         <<: *build-args
     container_name: erp-takealot-monitor

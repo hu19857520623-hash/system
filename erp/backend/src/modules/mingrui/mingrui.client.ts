@@ -137,7 +137,7 @@ export class MingruiClient {
       if (shipRes.ok && shipRes.data) {
         shipment = shipRes.data
         trackingRef = trackingRef
-          || text(pick(shipment, 'trackingRef', 'tracking_ref', 'trackNo', 'trackRef'))
+          || text(pick(shipment, 'trackingRef', 'tracking_ref', 'hblNum', 'hbl', 'trackNo', 'trackRef'))
       } else {
         errors.push(shipRes.message)
       }
@@ -172,19 +172,27 @@ export class MingruiClient {
     errors: string[],
   ): MingruiAdapterResult {
     const src = { ...(shipment || {}), ...(tracking || {}) }
-    const nodes = asNodes(pick(tracking, 'nodes', 'nodeList', 'tracks', 'events') ?? pick(src, 'nodes'))
-    const statusCode = text(pick(tracking, 'status', 'statusCode') ?? pick(src, 'status', 'statusCode'))
+    const nodes = asNodes(
+      pick(tracking, 'dataList', 'nodes', 'nodeList', 'tracks', 'events')
+      ?? pick(src, 'dataList', 'nodes'),
+    )
+    const statusCode = text(
+      pick(tracking, 'status', 'statusCode')
+      ?? pick(src, 'status', 'statusCode', 'shipmentStatus'),
+    )
     const statusName = text(
       pick(tracking, 'statusName', 'statusDesc', 'currentStatusName')
       ?? pick(src, 'statusName', 'statusDesc'),
+    ) || humanizeStatusCode(statusCode)
+    const origin = placeName(pick(src, 'origin', 'originCity', 'pol', 'polName', 'porName', 'placeOfReceipt'))
+    const destination = placeName(
+      pick(src, 'destination', 'destPort', 'pod', 'podName', 'destName', 'placeOfDelivery'),
     )
-    const origin = placeName(pick(src, 'origin', 'originCity', 'pol', 'placeOfReceipt'))
-    const destination = placeName(pick(src, 'destination', 'destPort', 'pod', 'placeOfDelivery'))
-    const packages = pkgCount(pick(src, 'packages', 'packageQty', 'pkgQty', 'ctns'))
-    const weightKg = toNumber(pick(src, 'weight', 'weightKg', 'grossWeight'))
-    const volumeCbm = toNumber(pick(src, 'volume', 'volumeCbm', 'cbm', 'measurement'))
+    const packages = pkgCount(pick(src, 'packages', 'pkgs', 'packageQty', 'pkgQty', 'ctns'))
+    const weightKg = toNumber(pick(src, 'weight', 'weightKg', 'grossWeight', 'gw'))
+    const volumeCbm = toNumber(pick(src, 'volume', 'volumeCbm', 'cbm', 'measurement', 'vol'))
     const resolvedJob = text(pick(src, 'jobNum', 'jobNo', 'orderNo')) || jobNum
-    const resolvedRef = text(pick(src, 'trackingRef', 'tracking_ref')) || trackingRef
+    const resolvedRef = text(pick(src, 'trackingRef', 'tracking_ref', 'hblNum', 'hbl')) || trackingRef
     const trackingStatus = statusName || statusCode
     const detail = formatNodes(nodes) || trackingStatus || errors.join('；')
 
@@ -198,9 +206,11 @@ export class MingruiClient {
       trackingDetail: detail,
       localStatus: mapLocalStatus(statusCode, statusName),
       trackingNodes: nodes,
-      blNo: firstRef(src, 'bl', 'bill', 'lading') || text(pick(src, 'blNo', 'billNo', 'mblNo', 'hblNo')),
-      containerNo: firstRef(src, 'container', 'cntr', 'box') || text(pick(src, 'containerNo', 'cntrNo')),
-      vesselName: text(pick(src, 'vesselName', 'vessel', 'shipName'))
+      blNo: text(pick(src, 'blNo', 'billNo', 'mblNo', 'hblNo', 'hblNum'))
+        || firstRef(src, 'bl', 'bill', 'lading'),
+      containerNo: text(pick(src, 'containerNo', 'cntrNo', 'ctnrNo'))
+        || firstRef(src, 'container', 'cntr', 'box'),
+      vesselName: text(pick(src, 'vesselName', 'vessel', 'shipName', 'vsl'))
         || placeName(pick(src, 'vessel')),
       originCity: origin,
       destPort: destination,
@@ -325,9 +335,9 @@ function parseJson(body: string): unknown {
 function unwrapData(json: unknown): unknown {
   const record = asRecord(json)
   if (!record) return json
-  if (record.data != null) return record.data
-  if (record.result != null) return record.result
-  if (record.content != null) return record.content
+  if (record.data != null && typeof record.data === 'object') return record.data
+  if (record.result != null && typeof record.result === 'object') return record.result
+  if (record.content != null && typeof record.content === 'object') return record.content
   return record
 }
 
@@ -339,9 +349,9 @@ function isBizOk(json: unknown): boolean {
   }
   if ('code' in record) {
     const code = String(record.code).trim().toLowerCase()
-    return code === '0' || code === '200' || code === 'ok' || code === 'success'
+    if (code === '0' || code === '200' || code === 'ok' || code === 'success') return true
   }
-  return record.data != null || record.result != null
+  return record.data != null || record.result != null || record.jobNum != null || record.dataList != null
 }
 
 function bizMsg(json: unknown): string | undefined {
@@ -397,12 +407,13 @@ function asNodes(raw: unknown): MingruiTrackingNode[] {
       : []
   return list.map((row) => {
     const node = asRecord(row) || {}
+    const context = text(pick(node, 'context', 'description', 'desc', 'remark', 'detail', 'message'))
     return {
-      status: text(pick(node, 'status', 'statusCode', 'nodeStatus')),
-      statusName: text(pick(node, 'statusName', 'statusDesc', 'nodeName', 'name')),
-      eventTime: text(pick(node, 'eventTime', 'time', 'occurTime', 'dateTime', 'opTime')),
+      status: text(pick(node, 'node', 'status', 'statusCode', 'nodeStatus')),
+      statusName: text(pick(node, 'statusName', 'statusDesc', 'nodeName', 'name')) || context,
+      eventTime: text(pick(node, 'time', 'nodeTime', 'eventTime', 'occurTime', 'dateTime', 'opTime')),
       location: placeName(pick(node, 'location', 'place', 'city')),
-      description: text(pick(node, 'description', 'desc', 'remark', 'detail', 'message')),
+      description: context,
     }
   }).filter((node) => node.status || node.statusName || node.description || node.eventTime)
 }
@@ -433,9 +444,15 @@ function mapLocalStatus(code?: string, name?: string): string | undefined {
   if (!hay.trim()) return undefined
   if (/cancel|void|作废|取消/.test(hay)) return 'cancelled'
   if (/arriv|ata|deliver|discharge|到港|抵达|送达/.test(hay)) return 'arrived'
-  if (/transit|depart|sail|on_?board|picked|collect|ship|在途|运输|开船|已提/.test(hay)) return 'in_transit'
+  if (/intransit|in_transit|transit|depart|sail|on_?board|picked|collect|ship|在途|运输|开船|已提/.test(hay)) return 'in_transit'
   if (/book|confirm|订舱|已订/.test(hay)) return 'booked'
   return undefined
+}
+
+function humanizeStatusCode(code?: string): string | undefined {
+  if (!code) return undefined
+  const normalized = code.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/_/g, ' ').trim()
+  return normalized || undefined
 }
 
 function truncate(value: string, max = 300): string {

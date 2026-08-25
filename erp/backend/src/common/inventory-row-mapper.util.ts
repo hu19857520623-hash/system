@@ -4,7 +4,11 @@
  */
 
 import { parseOmsCustomerCodeFromRemark, parseOmsProductMeta } from './oms-sync-meta.util'
-import { catalogBaseSkuFromInternal } from './catalog-customer.util'
+import {
+  CATALOG_CUSTOMER_CODE,
+  catalogBaseSkuFromInternal,
+  isCatalogInternalSku,
+} from './catalog-customer.util'
 import { deriveCustomerCodeFromInternalSku, deriveCustomerSkuFromInternalSku } from './sku-code.util'
 import {
   JHB_WAREHOUSE_CODE,
@@ -57,6 +61,17 @@ export function resolveCustomerIdentity(input: {
   customerNameByCode?: ReadonlyMap<string, string>
 }): ResolvedCustomerIdentity {
   const sku = String(input.sku || '').trim()
+  if (isCatalogInternalSku(sku)) {
+    const customerCode = CATALOG_CUSTOMER_CODE
+    return {
+      customerCode,
+      customerSku: catalogBaseSkuFromInternal(sku),
+      customerName:
+        input.customerNameByCode?.get(customerCode)
+        || input.customerName?.trim()
+        || '平台货盘',
+    }
+  }
   const meta = parseOmsProductMeta(input.productRemark)
   const fromRemark = parseOmsCustomerCodeFromRemark(input.productRemark)
   const fromRow = String(input.customerCode || '').trim()

@@ -9,6 +9,7 @@ import { findProductByCode } from '../data/platformBindingUtils'
 import { useRole } from '../auth/RoleContext'
 import { getCustomerIdForRole } from '../data/dataScope'
 import { addInboundOrder, nextInboundNo, submitInboundToErp } from '../data/inboundStore'
+import { notifyIfUserError } from '../utils/userNotify'
 import { fileToAttachment, todayDateInput } from '../data/fileUtils'
 import { importCsvFile } from '../data/csvImportExport'
 import {
@@ -117,7 +118,7 @@ export default function Inbound() {
       }))])
       window.alert(`已导入 ${data.length} 行入库明细`)
     } catch (err) {
-      if ((err as Error).message !== 'cancelled') console.error(err)
+      notifyIfUserError(err, '导入失败')
     }
   }
 

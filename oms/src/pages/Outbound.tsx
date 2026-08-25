@@ -11,7 +11,7 @@ import {
   type FileAttachment, type OutboundOrder, type OutboundType, type PlatformSkuMapping,
   type ShipmentSource, type StockSource, type TakealotAttachmentKind,
 } from '../data/mockData'
-import { useProducts } from '../data/inventoryStore'
+import { getOutboundShippableQty, lockStockForOutbound, rollbackStockForOutbound, useInventoryItems, useProducts } from '../data/inventoryStore'
 import { addOutboundOrderOrThrow, nextOutboundNo, removeOutboundOrder, submitOutboundToErp, useOutboundOrders } from '../data/outboundStore'
 import { getCustomerCode, getCustomerIdForRole } from '../data/dataScope'
 import {
@@ -19,10 +19,11 @@ import {
 } from '../data/customerShipFlows'
 import {
   findProductByCode,
+  findTakealotStoresForSeller,
+  pickTakealotStoreForBinding,
   resolvePlatformBarcodes,
   type PlatformBarcodeResolution,
 } from '../data/platformBindingUtils'
-import { lockStockForOutbound, rollbackStockForOutbound } from '../data/inventoryStore'
 import {
   calculateOutboundPreDeduct, warehouseIdToRegion,
   enabledDispatchRules, findDispatchRuleForRegion, regionDispatchLabel, regionLabel,
@@ -66,6 +67,7 @@ import {
   useStores,
 } from '../data/entityStore'
 import { apiPut } from '../api/client'
+import { notifyIfUserError } from '../utils/userNotify'
 
 const OUTBOUND_TYPES = ['Takealot入仓', '一件代发', '中转出库'] as const
 
@@ -151,6 +153,7 @@ export default function Outbound() {
   const [dispatchRuleId, setDispatchRuleId] = useState('')
   const [quickBindTarget, setQuickBindTarget] = useState<{ barcode: string; title?: string } | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const generalAttachmentRef = useRef<HTMLInputElement>(null)
   const takealotFileRefs = useRef<Record<string, HTMLInputElement | null>>({})
   const takealotParsedParts = useRef<Map<string, Partial<TakealotParsedDoc>[]>>(new Map())
   const destinationExplicitlySelected = useRef(false)
@@ -171,8 +174,14 @@ export default function Outbound() {
 
   const isDropship = outboundType === '一件代发'
   const isTakealot = outboundType === 'Takealot入仓'
+  const takealotAttachmentKinds = useMemo(
+    () => new Set(Object.values(TAKEALOT_ATTACHMENT_KINDS)),
+    [],
+  )
   const allProducts = useProducts()
+  useInventoryItems()
   const catalogOnly = role === 'catalog'
+  const stockSource: StockSource = catalogOnly ? 'catalog' : 'owned'
   const { creditBalance } = useBilling()
 
   const effectiveDestRegion = isTakealot
@@ -180,10 +189,38 @@ export default function Outbound() {
     : destRegion
 
   const customerId = getCustomerIdForRole(role)
+  const effectiveTakealotSellerId = (takealotParsedDoc?.sellerId || takealotSellerId.trim()) || undefined
+  const quickBindStore = useMemo(
+    () => pickTakealotStoreForBinding(effectiveTakealotSellerId, customerId ?? undefined),
+    [effectiveTakealotSellerId, customerId],
+  )
   const priceTemplate = useMemo(
     () => getPriceTemplateForCustomer(customerId, effectiveDestRegion),
     [customerId, effectiveDestRegion, role],
   )
+
+  const resolveLineSku = (input: string) => findProductByCode(input)?.internalSku || input.trim()
+
+  const getShippableQty = (sku: string) => getOutboundShippableQty(sku, stockSource, customerId ?? undefined)
+
+  const getRemainingShippableQty = (sku: string, excludeLineId?: string) => {
+    const normalized = resolveLineSku(sku)
+    if (!normalized) return 0
+    const reserved = lines
+      .filter(line => line.id !== excludeLineId && resolveLineSku(line.sku) === normalized)
+      .reduce((sum, line) => sum + Math.max(0, Number(line.qty) || 0), 0)
+    return Math.max(0, getShippableQty(normalized) - reserved)
+  }
+
+  const selectedSkuShippableQty = useMemo(
+    () => (skuInput.trim() ? getRemainingShippableQty(skuInput) : null),
+    [skuInput, lines, stockSource, customerId, allProducts],
+  )
+
+  const updateLineQty = (lineId: string, rawQty: number) => {
+    const qty = Math.max(1, Math.trunc(Number(rawQty) || 0))
+    setLines(prev => prev.map(line => (line.id === lineId ? { ...line, qty } : line)))
+  }
 
   useEffect(() => {
     if (!editOrder || hydratedEditId.current === editOrder.id) return
@@ -221,6 +258,22 @@ export default function Outbound() {
       source: 'manual',
     })))
   }, [editOrder])
+
+  useEffect(() => {
+    if (isTakealot) return
+    setTakealotParseHint('')
+    setTakealotParsedDoc(null)
+    setTakealotLabelResults({})
+    setParseErrors([])
+    takealotParsedParts.current.clear()
+    setAttachments(prev => prev.filter(attachment => {
+      if (attachment.labelRole === 'sourceDocument' || attachment.labelRole === 'unitCrop') return false
+      if (attachment.fileType && takealotAttachmentKinds.has(attachment.fileType as TakealotAttachmentKind)) {
+        return false
+      }
+      return true
+    }))
+  }, [isTakealot, takealotAttachmentKinds])
 
   useEffect(() => {
     if (activeDispatchRules.length === 0) return
@@ -368,7 +421,7 @@ export default function Outbound() {
     const resolutions = new Map(
       resolvePlatformBarcodes(barcodes, {
         customerId: customerId ?? undefined,
-        sellerId: takealotParsedDoc.sellerId,
+        sellerId: effectiveTakealotSellerId,
         platform: 'Takealot',
       }).map(resolution => [resolution.barcode, resolution]),
     )
@@ -399,7 +452,7 @@ export default function Outbound() {
         issues,
       }
     })
-  }, [takealotParsedDoc, labelCrops, platformMappings, customerId])
+  }, [takealotParsedDoc, labelCrops, platformMappings, customerId, effectiveTakealotSellerId])
 
   useEffect(() => {
     if (!takealotParsedDoc) return
@@ -426,10 +479,26 @@ export default function Outbound() {
     }
     const mapped = [...grouped.values()]
     const mappedSkus = new Set(mapped.map(line => line.sku))
-    setLines(previous => [
-      ...previous.filter(line => line.source !== 'takealot' && !mappedSkus.has(line.sku)),
-      ...mapped,
-    ])
+    setLines(previous => {
+      const existingBySku = new Map(previous.map(line => [line.sku, line]))
+      const merged = mapped.map(line => {
+        const existing = existingBySku.get(line.sku)
+        if (!existing) return line
+        return {
+          ...line,
+          id: existing.id,
+          qty: existing.qty,
+          declaredName: existing.declaredName || line.declaredName,
+          declaredValue: existing.declaredValue || line.declaredValue,
+          note: existing.note || line.note,
+          source: existing.source === 'manual' ? 'manual' : line.source,
+        }
+      })
+      return [
+        ...previous.filter(line => line.source !== 'takealot' && !mappedSkus.has(line.sku)),
+        ...merged,
+      ]
+    })
   }, [takealotParsedDoc, takealotValidationRows])
 
   useEffect(() => {
@@ -481,6 +550,19 @@ export default function Outbound() {
       ? [`预约单总件数 ${takealotParsedDoc.totalUnits} 与清单 ${expectedTotal} 不一致`]
       : []),
   ].filter((message, index, list) => list.indexOf(message) === index)
+
+  const onPickGeneralAttachments = async (files: FileList | null) => {
+    if (!files?.length) return
+    const next: FileAttachment[] = []
+    for (const file of Array.from(files)) {
+      next.push(await fileToAttachment(file, 'outbound_doc'))
+    }
+    setAttachments(prev => [...prev, ...next])
+  }
+
+  const removeGeneralAttachment = (fileName: string) => {
+    setAttachments(prev => prev.filter(attachment => attachment.fileName !== fileName))
+  }
 
   const onPickAttachment = async (
     files: FileList | null,
@@ -648,8 +730,7 @@ export default function Outbound() {
   const quickBindEditing = useMemo(() => {
     if (!quickBindTarget) return null
     const sellerStoreIds = new Set(
-      stores
-        .filter(store => store.platform === 'Takealot' && store.sellerId === takealotParsedDoc?.sellerId)
+      findTakealotStoresForSeller(effectiveTakealotSellerId, customerId ?? undefined)
         .map(store => store.id),
     )
     const matches = platformMappings.filter(mapping =>
@@ -657,12 +738,12 @@ export default function Outbound() {
       && mapping.platformBarcode === quickBindTarget.barcode
       && (!customerId || !mapping.customerId || mapping.customerId === customerId)
       && (
-        !takealotParsedDoc?.sellerId
-        || mapping.sellerId === takealotParsedDoc.sellerId
+        !effectiveTakealotSellerId
+        || mapping.sellerId === effectiveTakealotSellerId
         || (!mapping.sellerId && sellerStoreIds.has(mapping.storeId))
       ))
     return matches.length === 1 ? matches[0] : null
-  }, [quickBindTarget, platformMappings, customerId, stores, takealotParsedDoc?.sellerId])
+  }, [quickBindTarget, platformMappings, customerId, effectiveTakealotSellerId])
 
   const openQuickBind = (row: TakealotValidationRow) => {
     if (!can('platform:write')) {
@@ -686,13 +767,15 @@ export default function Outbound() {
       window.alert('快速绑定需要填写平台条码并且只选择一个仓库 SKU')
       return
     }
-    const store = stores.find(item => item.id === form.storeId)
+    const store = stores.find(item => item.id === form.storeId) ?? quickBindStore
+    const bindingSellerId = effectiveTakealotSellerId || store?.sellerId
     const before = platformMappings
     const now = todayDateInput()
     const next = previous
       ? platformMappings.map(mapping => mapping.id === previous.id ? {
           ...mapping,
-          sellerId: takealotParsedDoc?.sellerId || mapping.sellerId,
+          customerId: customerId ?? mapping.customerId,
+          sellerId: bindingSellerId || mapping.sellerId,
           platform: form.platform,
           storeId: form.storeId,
           storeName: store?.name || mapping.storeName,
@@ -711,7 +794,7 @@ export default function Outbound() {
       : [...platformMappings, {
           id: `pb-${Date.now()}`,
           customerId: customerId ?? undefined,
-          sellerId: takealotParsedDoc?.sellerId,
+          sellerId: bindingSellerId,
           platform: form.platform,
           storeId: form.storeId,
           storeName: store?.name || '—',
@@ -921,14 +1004,16 @@ export default function Outbound() {
 
   const addLine = () => {
     if (!skuInput || !qtyInput) return
+    const sku = resolveLineSku(skuInput)
     const prod = findProductByCode(skuInput)
+    const qty = Math.max(1, Math.trunc(Number(qtyInput) || 0))
     const declaredValue = declaredValueInput ? Number(declaredValueInput) : (prod?.price ?? 0)
     setLines(prev => [...prev, {
       id: String(Date.now()),
-      sku: skuInput,
-      name: prod?.name ?? skuInput,
-      qty: Number(qtyInput),
-      declaredName: declaredNameInput || prod?.declaredNameEn || skuInput,
+      sku,
+      name: prod?.name ?? sku,
+      qty,
+      declaredName: declaredNameInput || prod?.declaredNameEn || sku,
       declaredValue: Number.isFinite(declaredValue) ? declaredValue : 0,
       note: noteInput,
       source: 'manual',
@@ -953,6 +1038,7 @@ export default function Outbound() {
       }
       setLines(prev => [...prev, ...data.map(row => ({
         ...row,
+        sku: resolveLineSku(row.sku),
         declaredName: row.declaredName ?? row.name,
         declaredValue: row.declaredValue ?? 0,
         note: row.note ?? '',
@@ -960,7 +1046,7 @@ export default function Outbound() {
       }))])
       window.alert(`已导入 ${data.length} 行出库明细`)
     } catch (err) {
-      if ((err as Error).message !== 'cancelled') console.error(err)
+      notifyIfUserError(err, '导入失败')
     }
   }
 
@@ -981,6 +1067,71 @@ export default function Outbound() {
         </Link>
       </div>
 
+      {!isTakealot && (
+      <Card className="mb-4 overflow-hidden border-primary-200">
+        <div className="border-b border-border-light px-5 py-4">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-primary-600">先上传，再填单</p>
+          <div className="mt-1 flex flex-wrap items-end justify-between gap-2">
+            <div>
+              <h2 className="text-base font-semibold text-text-primary">附件上传</h2>
+              <p className="mt-1 text-xs text-text-muted">
+                上传面单、装箱清单等出库相关文件（可选，支持多文件）
+              </p>
+            </div>
+            {attachments.length > 0 && (
+              <span className="rounded-full bg-emerald-50 px-3 py-1 text-[11px] font-medium text-emerald-700 ring-1 ring-emerald-100">
+                已上传 {attachments.length} 个文件
+              </span>
+            )}
+          </div>
+        </div>
+
+        <div className="p-5">
+          <input
+            ref={generalAttachmentRef}
+            type="file"
+            multiple
+            className="hidden"
+            onChange={e => {
+              void onPickGeneralAttachments(e.target.files)
+              e.currentTarget.value = ''
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => generalAttachmentRef.current?.click()}
+            className="w-full rounded-xl border-2 border-dashed border-border px-5 py-6 text-center transition-colors hover:border-primary-300 hover:bg-surface-muted/40"
+          >
+            <Upload className="mx-auto h-6 w-6 text-primary-500" />
+            <p className="mt-2 text-sm font-semibold text-text-primary">点击选择或拖入文件</p>
+            <p className="mt-1 text-[11px] text-text-muted">支持 PDF、图片、Excel 等常见格式，可多选</p>
+          </button>
+
+          {attachments.length > 0 && (
+            <ul className="mt-4 space-y-2">
+              {attachments.map(attachment => (
+                <li
+                  key={`${attachment.fileName}-${attachment.uploadedAt}`}
+                  className="flex items-center justify-between gap-3 rounded-lg border border-border-light bg-surface-muted/30 px-3 py-2"
+                >
+                  <span className="truncate text-xs text-text-secondary">{attachment.fileName}</span>
+                  <button
+                    type="button"
+                    onClick={() => removeGeneralAttachment(attachment.fileName)}
+                    className="shrink-0 text-red-500 hover:text-red-700"
+                    aria-label={`删除 ${attachment.fileName}`}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </Card>
+      )}
+
+      {isTakealot && (
       <Card className="mb-4 overflow-hidden border-primary-200">
         <div className="border-b border-border-light px-5 py-4">
           <p className="text-[11px] font-semibold uppercase tracking-wide text-primary-600">先上传，再填单</p>
@@ -1212,6 +1363,7 @@ export default function Outbound() {
           )}
         </div>
       </Card>
+      )}
 
       {outboundFlow && !dataScope.isAdmin && (
         <div className="mb-4">
@@ -1410,8 +1562,16 @@ export default function Outbound() {
                 }}
               />
             </FormField>
-            <FormField label="数量" required hint="> 0">
-              <input value={qtyInput} onChange={e => setQtyInput(e.target.value)} type="number" className={formInput()} />
+            <FormField
+              label="数量"
+              required
+              hint={
+                selectedSkuShippableQty != null
+                  ? `仓库可发 ${selectedSkuShippableQty.toLocaleString()} 件${stockSource === 'catalog' ? '（已锁定库存）' : ''}`
+                  : '> 0'
+              }
+            >
+              <input value={qtyInput} onChange={e => setQtyInput(e.target.value)} type="number" min={1} className={formInput()} />
             </FormField>
             <FormField label="申报品名">
               <input
@@ -1462,11 +1622,26 @@ export default function Outbound() {
                       )}
                     </td>
                   </tr>
-                ) : lines.map(row => (
+                ) : lines.map(row => {
+                  const maxQty = getRemainingShippableQty(row.sku, row.id)
+                  const overMax = row.qty > maxQty
+                  return (
                   <tr key={row.id} className="table-row">
                     <td className="table-cell"><MonoCode>{row.sku}</MonoCode></td>
                     <td className="table-cell text-xs">{row.name}</td>
-                    <td className="table-cell text-xs font-semibold">{row.qty}</td>
+                    <td className="table-cell align-top">
+                      <input
+                        type="number"
+                        min={1}
+                        value={row.qty}
+                        onChange={e => updateLineQty(row.id, Number(e.target.value))}
+                        className={formInput('w-24 py-1 text-xs')}
+                      />
+                      <p className={`mt-1 text-[10px] ${overMax ? 'text-amber-700' : 'text-text-muted'}`}>
+                        仓库可发 {maxQty.toLocaleString()} 件
+                        {overMax ? ' · 已超出' : ''}
+                      </p>
+                    </td>
                     <td className="table-cell text-xs">{row.declaredName}</td>
                     <td className="table-cell text-xs">{row.declaredValue > 0 ? formatCurrency(row.declaredValue) : '—'}</td>
                     <td className="table-cell text-xs text-text-muted">{row.note || '—'}</td>
@@ -1480,7 +1655,8 @@ export default function Outbound() {
                       </button>
                     </td>
                   </tr>
-                ))}
+                  )
+                })}
               </tbody>
             </Table>
           </Card>
@@ -1551,8 +1727,10 @@ export default function Outbound() {
       <PlatformBindingModal
         open={Boolean(quickBindTarget)}
         editing={quickBindEditing}
+        customerId={customerId ?? undefined}
         initialValues={{
           platform: 'Takealot',
+          storeId: quickBindStore?.id,
           platformBarcode: quickBindTarget?.barcode || '',
           platformTitle: quickBindTarget?.title || '',
           stockSource: role === 'catalog' ? 'catalog' : 'owned',

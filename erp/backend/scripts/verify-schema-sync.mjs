@@ -35,6 +35,7 @@ const checks = [
   { table: 'lead_deal_attachment', columns: ['deal_id', 'file_name', 'file_path'] },
   { table: 'mingrui_shipment', columns: ['shipment_no', 'status', 'mingrui_order_no', 'api_status'] },
   { table: 'takealot_store', columns: ['api_key', 'coach_role', 'store_name'] },
+  { table: 'operating_ledger', columns: ['entry_no', 'direction', 'category', 'amount', 'currency', 'occurred_on'] },
 ]
 
 const prisma = new PrismaClient()

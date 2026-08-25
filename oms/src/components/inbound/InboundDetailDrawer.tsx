@@ -37,8 +37,9 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged }: 
     window.setTimeout(() => setFeedback(null), 4000)
   }
 
-  const handlePrint = (kind: InboundLabelKind) => {
-    if (printInboundLabels(order, kind)) {
+  const handlePrint = async (kind: InboundLabelKind) => {
+    const ok = await printInboundLabels(order, kind)
+    if (ok) {
       showFeedback('ok', `已打开${kind}打印预览`)
     }
   }

@@ -50,6 +50,33 @@ async function downloadRequest(url) {
   return { blob, fileName }
 }
 
+export function triggerBrowserDownload(blob, fileName = 'download', options = {}) {
+  const { preferNewTab = false } = options
+  if (!blob || blob.size <= 0) throw new Error('文件内容为空')
+  const url = URL.createObjectURL(blob)
+  const safeName = fileName || 'download'
+  const cleanup = () => window.setTimeout(() => URL.revokeObjectURL(url), 5 * 60 * 1000)
+
+  if (preferNewTab || /\.pdf$/i.test(safeName) || blob.type === 'application/pdf') {
+    const tab = window.open(url, '_blank', 'noopener,noreferrer')
+    if (tab) {
+      cleanup()
+      return 'tab'
+    }
+  }
+
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = safeName
+  anchor.rel = 'noopener'
+  anchor.style.display = 'none'
+  document.body.appendChild(anchor)
+  anchor.click()
+  document.body.removeChild(anchor)
+  cleanup()
+  return 'download'
+}
+
 async function openHtmlPrint(url) {
   const token = getAccessToken()
   let response
@@ -281,6 +308,8 @@ export const inboundApi = {
   listArrivalScans: (params) => api.get('/inbound/arrival-scans', params),
   startReceive: (id) => api.post(`/inbound/${id}/start-receive`),
   receiveBox: (id, data) => api.post(`/inbound/${id}/receive-box`, data),
+  recordReceivedCartonCount: (id, data) => api.post(`/inbound/${id}/received-carton-count`, data),
+  scanQc: (id, data) => api.post(`/inbound/${id}/scan-qc`, data),
   scanReceiptLabel: (id, data) => api.post(`/inbound/${id}/scan-receipt-label`, data),
   qc: (id, data) => api.post(`/inbound/${id}/qc`, data),
   resolveException: (id) => api.post(`/inbound/${id}/resolve-exception`),
@@ -307,6 +336,7 @@ export const returnsApi = {
   updateFeeTemplate: (id, data) => api.put(`/returns/fee-templates/${id}`, data),
   deleteFeeTemplate: (id) => api.delete(`/returns/fee-templates/${id}`),
   receive: (id, data) => api.post(`/returns/${id}/receive`, data),
+  reReceive: (id, data) => api.post(`/returns/${id}/re-receive`, data),
   measure: (id, data) => api.post(`/returns/${id}/measure`, data),
   previewFees: (id, data) => api.post(`/returns/${id}/fee-preview`, data),
   calculateFees: (id, data) => api.post(`/returns/${id}/calculate-fees`, data || {}),
@@ -343,6 +373,7 @@ export const outboundApi = {
   uploadAttachment: (id, data) => api.post(`/outbound/${id}/attachment`, data),
   downloadAttachment: (id) => downloadRequest(`/outbound/${id}/attachment`),
   downloadAttachmentById: (id, attachmentId) => downloadRequest(`/outbound/${id}/attachment/${attachmentId}`),
+  downloadPod: (id) => downloadRequest(`/outbound/${id}/pod`),
   downloadSkuLabels: (id) => downloadRequest(`/outbound/${id}/labels`),
   downloadSkuLabelsBySku: (id, sku) =>
     downloadRequest(`/outbound/${id}/labels/sku/${encodeURIComponent(sku)}`),
@@ -488,6 +519,14 @@ export const mingruiApi = {
 export const profitApi = {
   summary: (params) => api.get('/profit/summary', params),
   detail: (params) => api.get('/profit/detail', params),
+}
+
+export const operatingLedgerApi = {
+  list: (params) => api.get('/operating-ledger', params),
+  create: (data) => api.post('/operating-ledger', data),
+  importCsv: (data) => api.post('/operating-ledger/import', data),
+  update: (id, data) => api.put(`/operating-ledger/${id}`, data),
+  remove: (id) => api.delete(`/operating-ledger/${id}`),
 }
 
 // ── 公告 ──

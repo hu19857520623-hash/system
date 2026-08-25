@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
+import { erpConfirm } from '@/utils/messageBox'
 import { productDevApi } from '@/api/client.js'
 import { mapProductDev } from '@/api/mappers.ts'
 import { productDevImageSrc } from '@/utils/productDevImage.ts'
@@ -284,7 +285,7 @@ async function submitAudit(id: number) {
 
 async function withdraw(id: number) {
   try {
-    await ElMessageBox.confirm('确认撤回该申请到草稿状态？', '撤回申请', { type: 'warning' })
+    await erpConfirm('确认撤回该申请到草稿状态？', '撤回申请', { type: 'warning' })
     const ok = await withAction(async () => {
       await productDevApi.update(id, { status: 'draft' })
     }, '已撤回到草稿')
@@ -323,7 +324,7 @@ async function submitForm() {
   if (missing) { ElMessage.warning(missing); return }
   if (estProfit.value != null && estProfit.value < 0) {
     try {
-      await ElMessageBox.confirm(
+      await erpConfirm(
         `按当前售价与采购价测算，预估利润为 ¥${estProfit.value.toFixed(2)}，确认仍要提交吗？`,
         '利润预警',
         { type: 'warning', confirmButtonText: '仍然提交', cancelButtonText: '返回修改' },

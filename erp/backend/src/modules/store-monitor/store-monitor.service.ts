@@ -126,7 +126,7 @@ export class StoreMonitorService {
       if (controller.signal.aborted) {
         throw new ServiceUnavailableException('店铺监控代理响应超时，请检查本地代理服务')
       }
-      throw new ServiceUnavailableException('店铺监控代理未启动（默认 127.0.0.1:3456）。请运行仓库根目录 dev-local.ps1，或单独执行 erp/takealot-monitor 的 npm start')
+      throw new ServiceUnavailableException('店铺监控代理未启动（默认 127.0.0.1:3456）。请运行仓库根目录 dev-local.ps1，或单独执行 store-monitor 的 npm start')
     } finally {
       clearTimeout(timeout)
     }

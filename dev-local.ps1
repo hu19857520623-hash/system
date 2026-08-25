@@ -12,7 +12,7 @@ function Start-DevWindow([string]$title, [string]$cwd, [string]$command) {
 
 Start-DevWindow 'ERP API :3000' (Join-Path $root 'erp\backend') 'npm run start:prod'
 Start-DevWindow 'ERP UI :5180' (Join-Path $root 'erp\frontend') 'npm run dev'
-Start-DevWindow 'Takealot proxy :3456' (Join-Path $root 'erp\takealot-monitor') 'npm start'
+Start-DevWindow 'Takealot proxy :3456' (Join-Path $root 'store-monitor') 'npm start'
 Start-DevWindow 'OMS :3001 / :5173' (Join-Path $root 'oms') '$env:NODE_ENV=''development''; $env:OMS_ALLOW_INSECURE_DEV_AUTH=''true''; npm run dev'
 
 Write-Host '已启动 4 个窗口：ERP API、ERP 前端、Takealot 代理、OMS。' -ForegroundColor Green

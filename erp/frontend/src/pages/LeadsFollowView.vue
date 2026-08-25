@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
+import { erpPrompt } from '@/utils/messageBox'
 import { leadApi } from '@/api/client.js'
 import { fmtTime, mapLead } from '@/api/mappers.ts'
 import { useListLoader, withAction } from '@/composables/useListLoader.ts'
@@ -127,7 +128,7 @@ async function submitFollow() {
 async function markDeal(row: any) {
   if (!(await confirmAction(`确认将「${row.name}」标记为已成交？`, '标记成交'))) return
   try {
-    const { value } = await ElMessageBox.prompt('填写店铺类型（可选）', '成交信息', {
+    const { value } = await erpPrompt('填写店铺类型（可选）', '成交信息', {
       confirmButtonText: '确认成交',
       cancelButtonText: '取消',
       inputValue: '本土店',

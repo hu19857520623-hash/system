@@ -105,7 +105,11 @@ export class AsyncIoExportService {
   }
 
   private async exportFreightBills() {
-    const rows = await this.prisma.supplierFreightBill.findMany({ take: 5000, orderBy: { id: 'desc' } })
+    const rows = await this.prisma.supplierFreightBill.findMany({
+      where: { source: { not: 'finance_approve' } },
+      take: 5000,
+      orderBy: { id: 'desc' },
+    })
     const headers = ['账单号', '供应商ID', '月份', '金额', '柜数', '状态', '备注']
     const data = rows.map((r) => [
       r.billNo, Number(r.supplierId), r.billMonth || '', r.totalAmount, r.containerCount, r.status, r.remark || '',

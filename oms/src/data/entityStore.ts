@@ -10,6 +10,7 @@ import type {
   SystemMessage,
 } from './mockData'
 import type { ReturnOrder } from './returnStore'
+import { notifyError, notifyPersistFailed } from '../utils/userNotify'
 
 export type AnnouncementItem = {
   id: string
@@ -124,7 +125,7 @@ export function setInboundOrders(list: InboundOrder[]) {
 
 export function persistInboundOrders(list: InboundOrder[]) {
   setInboundOrders(list)
-  void apiPut('/inbound-orders', list).catch(err => console.error('persist inbound failed', err))
+  void apiPut('/inbound-orders', list).catch(err => notifyPersistFailed('入库单', err))
 }
 
 export function addInboundOrder(order: InboundOrder) {
@@ -153,7 +154,7 @@ export function setOrders(list: Order[]) {
 
 export function persistOrders(list: Order[]) {
   setOrders(list)
-  void apiPut('/orders', list).catch(err => console.error('persist orders failed', err))
+  void apiPut('/orders', list).catch(err => notifyPersistFailed('订单', err))
 }
 
 export function updateOrder(id: string, patch: Partial<Order>) {
@@ -169,7 +170,7 @@ export function deleteReturnOrder(id: string) {
   setReturnOrders(state.returnOrders.filter(o => o.id !== id))
   void apiDelete(`/return-orders/${encodeURIComponent(id)}`).catch(err => {
     setReturnOrders(before)
-    console.error('delete return failed', err)
+    notifyError(`删除退件单失败：${err instanceof Error ? err.message : String(err)}`)
   })
 }
 
@@ -180,7 +181,7 @@ export function setReturnOrders(list: ReturnOrder[]) {
 
 export function persistReturnOrders(list: ReturnOrder[]) {
   setReturnOrders(list)
-  void apiPut('/return-orders', list).catch(err => console.error('persist return failed', err))
+  void apiPut('/return-orders', list).catch(err => notifyPersistFailed('退件单', err))
 }
 
 export function addReturnOrder(order: ReturnOrder) {

@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { Printer, RefreshCw } from 'lucide-react'
+import { TableActionLink, actionLinkClass } from '../components/outbound/PodReceiptModals'
 import {
   Badge, Button, Card, PageHeader, MonoCode, Tabs, Table, TableFooter, Select, StatCard,
 } from '../components/ui'
@@ -29,6 +30,7 @@ import {
 import { ImportTemplateLegend } from '../components/ui/ImportTemplateLegend'
 import { todayDateInput } from '../data/fileUtils'
 import type { StockSource } from '../data/mockData'
+import { notifyIfUserError } from '../utils/userNotify'
 
 const statusTabs = [
   { id: 'all', label: '全部' },
@@ -178,7 +180,7 @@ export default function InboundRecords() {
       window.alert(`已导入 ${data.length} 张入库预约单（草稿），请在列表中核对后提交`)
       setTab('draft')
     } catch (err) {
-      if ((err as Error).message !== 'cancelled') console.error(err)
+      notifyIfUserError(err, '导入失败')
     }
   }
 
@@ -282,7 +284,7 @@ export default function InboundRecords() {
               <th>应收/实收</th>
               <th>状态</th>
               <th>创建日期</th>
-              <th>操作</th>
+              <th className="w-[76px]">操作</th>
             </tr>
           </thead>
           <tbody className="table-body">
@@ -305,22 +307,22 @@ export default function InboundRecords() {
                 <td className="table-cell text-xs"><span className="font-semibold">{o.receivedQty}</span><span className="text-text-muted"> / {o.totalQty}</span></td>
                 <td className="table-cell"><Badge status={o.status} label={statusLabels[o.status]} /></td>
                 <td className="table-cell text-xs text-text-muted">{o.createdAt}</td>
-                <td className="table-cell">
-                  <div className="flex flex-wrap gap-1">
-                    <Button variant="ghost" size="sm" onClick={() => setDetail(o)}>详情</Button>
+                <td className="table-cell align-top">
+                  <div className="flex min-w-[72px] flex-col gap-0.5">
+                    <TableActionLink onClick={() => setDetail(o)}>详情</TableActionLink>
                     {!['draft'].includes(o.status) && INBOUND_DOWNLOAD_ITEMS.map(l => (
-                      <Button
+                      <TableActionLink
                         key={l}
-                        variant="ghost"
-                        size="sm"
-                        title={`打印${l}`}
-                        onClick={() => printInboundLabels(o, l as InboundLabelKind)}
+                        icon={<Printer className="h-3 w-3 shrink-0" />}
+                        onClick={() => { void printInboundLabels(o, l as InboundLabelKind) }}
                       >
-                        <Printer className="h-3 w-3" />
-                      </Button>
+                        {l === 'SKU 标签' ? 'SKU' : l}
+                      </TableActionLink>
                     ))}
                     {o.status === 'draft' && (
-                      <Link to={`/inbound?edit=${encodeURIComponent(o.id)}`}><Button variant="ghost" size="sm">编辑</Button></Link>
+                      <Link to={`/inbound?edit=${encodeURIComponent(o.id)}`} className={actionLinkClass()}>
+                        编辑
+                      </Link>
                     )}
                   </div>
                 </td>

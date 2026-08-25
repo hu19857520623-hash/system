@@ -15,6 +15,7 @@ import { useDataScope } from '../../auth/useDataScope'
 import { isSysAdmin } from '../../data/dataScope'
 import RoleSwitcher from '../auth/RoleSwitcher'
 import { startErpAutoSync } from '../../data/erpAutoSync'
+import { ToastHost } from '../ui/ToastHost'
 
 interface NavItem {
   to: string
@@ -410,6 +411,7 @@ export default function Layout() {
           <Outlet />
         </main>
       </div>
+      <ToastHost />
     </div>
   )
 }

@@ -20,7 +20,6 @@ function toBillRow(row: any) {
     exchangeRate: row.exchangeRate != null ? Number(row.exchangeRate) : null,
     remark: row.remark || '',
     status: '已核算',
-    tone: 'ok',
     costType: row.costType || '',
     costDate: row.costDate ? String(row.costDate).slice(0, 10) : '',
     createdAt: m.time,
@@ -105,35 +104,37 @@ onMounted(load)
       <el-button @click="resetFilters">重置</el-button>
       <span class="filter-summary">{{ total }} 条 · 合计 ¥ {{ totalAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }}</span>
     </div>
+    <div class="erp-table-scroll cost-table-scroll">
     <el-table :data="pagedItems" stripe border size="small" class="cost-table">
-      <el-table-column prop="id" label="成本单号" width="140">
-        <template #default="{ row }"><span style="font-family:var(--font-mono);font-size:12px">{{ row.id }}</span></template>
+      <el-table-column prop="id" label="成本单号" min-width="132" show-overflow-tooltip>
+        <template #default="{ row }"><span class="mono">{{ row.id }}</span></template>
       </el-table-column>
-      <el-table-column prop="referenceNo" label="关联单号" width="150">
-        <template #default="{ row }"><span style="font-family:var(--font-mono);font-size:12px;color:#2563eb">{{ row.referenceNo }}</span></template>
+      <el-table-column prop="referenceNo" label="关联单号" min-width="140" show-overflow-tooltip>
+        <template #default="{ row }"><span class="mono linkish">{{ row.referenceNo || '—' }}</span></template>
       </el-table-column>
-      <el-table-column prop="sku" label="SKU" min-width="140" />
-      <el-table-column prop="costType" label="费用类型" width="100" />
-      <el-table-column prop="costDate" label="发生日期" width="110" />
-      <el-table-column prop="amountRmb" label="金额 (RMB)" width="120" align="right">
+      <el-table-column prop="sku" label="SKU" min-width="128" show-overflow-tooltip />
+      <el-table-column prop="costType" label="费用类型" min-width="96" show-overflow-tooltip />
+      <el-table-column prop="costDate" label="发生日期" width="108" />
+      <el-table-column prop="amountRmb" label="金额 (RMB)" width="118" align="right">
         <template #default="{ row }">¥ {{ row.amountRmb.toLocaleString(undefined, { minimumFractionDigits: 2 }) }}</template>
       </el-table-column>
-      <el-table-column prop="amountZar" label="金额 (ZAR)" width="120" align="right">
-        <template #default="{ row }">{{ row.amountZar != null ? 'R ' + row.amountZar.toLocaleString(undefined, { minimumFractionDigits: 2 }) : '' }}</template>
+      <el-table-column prop="amountZar" label="金额 (ZAR)" width="118" align="right">
+        <template #default="{ row }">{{ row.amountZar != null ? 'R ' + row.amountZar.toLocaleString(undefined, { minimumFractionDigits: 2 }) : '—' }}</template>
       </el-table-column>
-      <el-table-column prop="exchangeRate" label="汇率" width="90" align="right">
-        <template #default="{ row }">{{ row.exchangeRate ?? '' }}</template>
+      <el-table-column prop="exchangeRate" label="汇率" width="88" align="right">
+        <template #default="{ row }">{{ row.exchangeRate ?? '—' }}</template>
       </el-table-column>
-      <el-table-column prop="remark" label="备注" min-width="160" show-overflow-tooltip />
-      <el-table-column prop="status" label="状态" width="90">
+      <el-table-column prop="remark" label="备注" min-width="140" show-overflow-tooltip />
+      <el-table-column prop="status" label="状态" width="88">
         <template #default="{ row }">
-          <el-tag :type="(row.tone as any)" size="small">{{ row.status }}</el-tag>
+          <el-tag type="success" size="small">{{ row.status }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="80" fixed="right">
+      <el-table-column label="操作" width="72" fixed="right" align="center">
         <template #default="{ row }"><el-button link type="primary" size="small" @click="detail(row)">详情</el-button></template>
       </el-table-column>
     </el-table>
+    </div>
     <ListPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
   </el-card>
 </template>
@@ -145,4 +146,7 @@ onMounted(load)
 .filters { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:14px; }
 .range-separator { color:var(--el-text-color-secondary); }
 .filter-summary { margin-left:auto; color:var(--el-text-color-secondary); font-size:13px; white-space:nowrap; }
+.cost-table-scroll { --erp-table-min-width: 1120px; }
+.mono { font-family: var(--font-mono); font-size: 12px; }
+.linkish { color: #2563eb; }
 </style>

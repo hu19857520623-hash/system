@@ -19,6 +19,7 @@ function buildService() {
       fullPath: 'unused',
     }),
     read: jest.fn().mockReturnValue(Buffer.from('%PDF-stored')),
+    exists: jest.fn().mockReturnValue(true),
   }
   const service = new OutboundService(prisma, {} as any, files)
   return { service, prisma, files }
@@ -85,8 +86,24 @@ describe('OutboundService cropped label storage', () => {
       sku: 'SKU-A',
       unitIndex: 2,
       contentHash,
+      downloadable: true,
     })
     expect(mapped).not.toHaveProperty('filePath')
+  })
+
+  it('marks attachments without local files as not downloadable', () => {
+    const { service, files } = buildService()
+    files.exists.mockReturnValueOnce(false)
+    const [mapped] = (service as any).mapAttachments([
+      {
+        id: 11n,
+        fileType: 'deliveryList',
+        fileName: 'note.pdf',
+        filePath: 'outbound-attachments/missing.pdf',
+        createdAt: new Date('2026-08-13T00:00:00Z'),
+      },
+    ])
+    expect(mapped.downloadable).toBe(false)
   })
 
   it('rejects OMS requests before persistence when SKU label counts mismatch', async () => {

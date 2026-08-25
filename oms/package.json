@@ -19,6 +19,7 @@
     "db:migrate": "node -e \"console.error('Shared DB: do not prisma migrate/db push. Run: npm run db:ensure-oms-tables'); process.exit(1)\"",
     "db:ensure-oms-tables": "prisma db execute --file prisma/scripts/create_oms_tables.sql --schema prisma/schema.prisma",
     "db:migrate:onboarding": "prisma db execute --file prisma/scripts/migrate_oms_portal_onboarding.sql --schema prisma/schema.prisma",
+    "db:migrate:platform-seller-id": "prisma db execute --file prisma/scripts/migrate_platform_sku_seller_id.sql --schema prisma/schema.prisma",
     "db:seed": "tsx prisma/seed.ts",
     "db:studio": "prisma studio --port 5556"
   },

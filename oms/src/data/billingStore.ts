@@ -9,6 +9,8 @@ import {
 } from '../api/erp'
 import type { FeeRecord } from './mockData'
 import type { OutboundFeeLine } from './feeTemplates'
+import { mapErpChargeType } from './chargeType'
+import { notifyPersistFailed } from '../utils/userNotify'
 
 interface BillingState {
   creditBalance: number
@@ -25,7 +27,7 @@ function emit() {
 function persist(next: BillingState) {
   state = next
   emit()
-  void apiPut('/billing', next).catch(err => console.error('persist billing failed', err))
+  void apiPut('/billing', next).catch(err => notifyPersistFailed('账单', err))
 }
 
 async function persistOrThrow(next: BillingState) {
@@ -75,22 +77,12 @@ export function getFeeRecords(): FeeRecord[] {
   return state.feeRecords
 }
 
-function mapChargeType(chargeType: string): FeeRecord['type'] {
-  if (chargeType === 'storage') return 'storage'
-  if (chargeType === 'outbound_ship') return 'shipping'
-  if (chargeType === 'relabel') return 'relabel'
-  if (chargeType === 'picking') return 'picking'
-  if (chargeType === 'inspection') return 'inspection'
-  if (chargeType === 'other') return 'other'
-  return 'handling'
-}
-
 function chargeToFee(c: ErpChargeItem): FeeRecord {
   const date = String(c.chargeDate || '').slice(0, 10)
   return {
     id: `erp-chg-${c.id}`,
     date: date || new Date().toISOString().slice(0, 10),
-    type: mapChargeType(c.chargeType),
+    type: mapErpChargeType(c.chargeType),
     refNo: c.bizRef || c.chargeNo || '—',
     desc: c.description || c.chargeTypeLabel || c.chargeType,
     amount: -Math.abs(Number(c.amount) || 0),
@@ -124,7 +116,7 @@ export async function refreshBillingFromServer(): Promise<void> {
       feeRecords: data.feeRecords,
     })
   } catch (err) {
-    console.error('refreshBillingFromServer failed', err)
+    notifyPersistFailed('账单同步', err)
   }
 }
 
@@ -137,8 +129,8 @@ export async function refreshBillingFromErp(customerCode: string): Promise<void>
     getErpRecharges(customerCode),
   ])
   const erpFees = [
-    ...recharges.items.map(r => rechargeToFee(r, customerCode)),
-    ...charges.items.map(chargeToFee),
+    ...recharges.items.filter(r => r.status === 'confirmed').map(r => rechargeToFee(r, customerCode)),
+    ...charges.items.filter(c => c.status === 'confirmed').map(chargeToFee),
   ]
   const localKeep = state.feeRecords.filter(
     f =>

@@ -1,6 +1,7 @@
 /** P6-3：出库预扣 vs ERP 实算对账（Webhook / 本地复用） */
 
 import type { PrismaClient } from '@prisma/client'
+import { mapErpChargeType } from '../src/data/chargeType.js'
 
 export type OutboundFeeCharge = {
   chargeNo: string
@@ -51,16 +52,6 @@ const CORE_CHARGE_TYPES = new Set(['handling', 'outbound_ship'])
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100
-}
-
-function mapChargeType(chargeType: string): string {
-  if (chargeType === 'storage') return 'storage'
-  if (chargeType === 'outbound_ship') return 'shipping'
-  if (chargeType === 'relabel') return 'relabel'
-  if (chargeType === 'picking') return 'picking'
-  if (chargeType === 'inspection') return 'inspection'
-  if (chargeType === 'other') return 'other'
-  return 'handling'
 }
 
 export async function settleOutboundFees(
@@ -129,7 +120,7 @@ export async function settleOutboundFees(
         data: {
           id: feeId,
           date,
-          type: mapChargeType(c.chargeType),
+          type: mapErpChargeType(c.chargeType),
           refNo: c.bizRef || outboundNo,
           desc: c.description || c.chargeType,
           amount: -Math.abs(Number(c.amount) || 0),

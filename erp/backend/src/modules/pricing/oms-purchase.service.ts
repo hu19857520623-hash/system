@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
 import { PrismaService } from '../../common/prisma/prisma.service'
+import { BillingService } from '../billing/billing.service'
 import { catalogStockPool, remainingCatalogStock } from './catalog-stock.util'
 import { pushCatalogStockToOms } from './oms-catalog-sync.util'
 
@@ -20,7 +21,10 @@ export type OmsPurchaseInput = {
 
 @Injectable()
 export class OmsPurchaseService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private billing: BillingService,
+  ) {}
 
   private async nextChargeSuffix(tx: Parameters<Parameters<PrismaService['$transaction']>[0]>[0], customerId: bigint): Promise<string> {
     const rows: { charge_no: string }[] = await tx.$queryRawUnsafe(
@@ -214,6 +218,7 @@ export class OmsPurchaseService {
     })
 
     await pushCatalogStockToOms(this.prisma, sku)
+    void this.billing.pushCustomerBillingToOms(Number(customerId))
 
     return this.buildPurchaseResult(order, {
       soldQty: newSoldQty,

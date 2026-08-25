@@ -35,6 +35,7 @@ export const PERM_GROUPS: PermissionGroup[] = [
       { id: 'products.view', label: '商品主数据-查看' },
       { id: 'products.edit', label: '商品主数据-编辑' },
       { id: 'products.import', label: '商品主数据-导入' },
+      { id: 'products.print_label', label: '商品主数据-打印SKU标签' },
       { id: 'product_dev.view', label: '产品开发-查看' },
       { id: 'product_dev.create', label: '产品开发-新建' },
       { id: 'product_dev.edit', label: '产品开发-编辑' },
@@ -55,14 +56,14 @@ export const PERM_GROUPS: PermissionGroup[] = [
       { id: 'purchase.assign', label: '采购订单-需求分配' },
       { id: 'purchase.po_audit', label: '采购订单-主管审核/驳回' },
       { id: 'purchase.mark_paid', label: '采购订单-标记打款' },
+      { id: 'purchase.box_label', label: '采购订单-下载外箱标' },
       { id: 'logistics_wh.view', label: '物流仓库-查看' },
       { id: 'logistics_wh.receive', label: '物流仓库-收货' },
       { id: 'logistics_wh.manage', label: '物流仓库-管理' },
       { id: 'create_inbound.view', label: '创建入库单-查看' },
       { id: 'create_inbound.create', label: '创建入库单-创建' },
       { id: 'create_inbound.label', label: '创建入库单-标签' },
-      { id: 'mingrui.view', label: '明瑞物流-查看' },
-      { id: 'mingrui.order', label: '明瑞物流-下单' },
+      { id: 'mingrui.view', label: '明瑞物流-查看物流' },
       { id: 'warehouse_location.view', label: '库位管理-查看' },
       { id: 'warehouse_location.edit', label: '库位管理-编辑' },
       { id: 'warehouse_location.batch_create', label: '库位管理-批量生成' },
@@ -105,6 +106,8 @@ export const PERM_GROUPS: PermissionGroup[] = [
     label: '财务与运营',
     perms: [
       { id: 'cost.view', label: '成本台账-查看' },
+      { id: 'operating_ledger.view', label: '经营收支-查看' },
+      { id: 'operating_ledger.manage', label: '经营收支-记账管理' },
       { id: 'sync.view', label: '同步日志-查看' },
       { id: 'sync.retry', label: '同步日志-重试' },
       { id: 'operation_log.view', label: '操作日志-查看' },
@@ -143,11 +146,13 @@ export const PERM_GROUPS: PermissionGroup[] = [
 /** 已废弃权限码（WMS 推送等），读取/写入时自动剔除 */
 export const DEPRECATED_PERM_CODES: readonly string[] = [
   'create_inbound.push',
+  'mingrui.order',
 ]
 
 /** 旧码 → 新码；值为 null 表示直接删除 */
 export const PERM_ALIASES: Record<string, string | null> = {
   'create_inbound.push': null,
+  'mingrui.order': null,
 }
 
 /** 角色默认权限模板（按中文角色名） */
@@ -155,21 +160,21 @@ export const ROLE_PERM_TEMPLATES: Record<string, string[]> = {
   系统管理员: [
     'leads_pool.view', 'leads_pool.create', 'leads_pool.assign', 'leads_pool.view_all', 'leads_follow.view', 'leads_follow.edit',
     'leads_deals.view', 'leads_deals.edit', 'leads_reports.view',
-    'products.view', 'products.edit', 'products.import',
+    'products.view', 'products.edit', 'products.import', 'products.print_label',
     'product_dev.view', 'product_dev.create', 'product_dev.edit',
     'pricing.view', 'pricing.set', 'pricing.sync_oms', 'pricing.freight_callback',
     'product_audit.view', 'product_audit.approve', 'product_audit.reject', 'product_audit.label', 'product_audit.purchase_qty',
     'suppliers.view', 'suppliers.edit',
-    'purchase.view', 'purchase.create', 'purchase.assign', 'purchase.po_audit', 'purchase.mark_paid',
+    'purchase.view', 'purchase.create', 'purchase.assign', 'purchase.po_audit', 'purchase.mark_paid', 'purchase.box_label',
     'logistics_wh.view', 'logistics_wh.receive', 'logistics_wh.manage',
     'create_inbound.view', 'create_inbound.create', 'create_inbound.label',
-    'mingrui.view', 'mingrui.order',
+    'mingrui.view',
     'warehouse_location.view', 'warehouse_location.edit', 'warehouse_location.batch_create',
     'inbound.view', 'inbound.arrival_scan', 'inbound.receive', 'inbound.qc', 'inbound.putaway', 'inbound.handle_exception', 'inbound.confirm_diff',
     'return.view', 'return.receive', 'return.process',
     'outbound.view', 'outbound.create', 'outbound.relabel', 'outbound.pick', 'outbound.pack', 'outbound.ship',
     'inventory_query.view', 'inventory_query.detail', 'inventory_query.adjust',
-    'cost.view', 'sync.view', 'sync.retry', 'operation_log.view',
+    'cost.view', 'operating_ledger.view', 'operating_ledger.manage', 'sync.view', 'sync.retry', 'operation_log.view',
     'billing.view', 'billing.generate', 'billing.manual',
     'receivable_payable.view', 'receivable_payable.manual',
     'reports.view',
@@ -182,10 +187,10 @@ export const ROLE_PERM_TEMPLATES: Record<string, string[]> = {
   采购主管: [
     'products.view', 'suppliers.view', 'suppliers.edit',
     'pricing.view', 'pricing.freight_callback',
-    'purchase.view', 'purchase.create', 'purchase.assign', 'purchase.po_audit', 'purchase.mark_paid',
+    'purchase.view', 'purchase.create', 'purchase.assign', 'purchase.po_audit', 'purchase.mark_paid', 'purchase.box_label',
     'logistics_wh.view', 'logistics_wh.receive', 'logistics_wh.manage',
     'create_inbound.view', 'create_inbound.create', 'create_inbound.label',
-    'mingrui.view', 'mingrui.order',
+    'mingrui.view',
     'warehouse_location.view', 'warehouse_location.edit', 'warehouse_location.batch_create',
     'inbound.view', 'inbound.arrival_scan', 'inbound.receive', 'inbound.qc', 'inbound.putaway', 'inbound.handle_exception', 'inbound.confirm_diff',
     'outbound.view', 'outbound.create', 'outbound.relabel', 'outbound.pick', 'outbound.pack', 'outbound.ship',
@@ -197,7 +202,7 @@ export const ROLE_PERM_TEMPLATES: Record<string, string[]> = {
   采购: [
     'products.view', 'suppliers.view',
     'pricing.view', 'pricing.freight_callback',
-    'purchase.view', 'purchase.create', 'purchase.mark_paid',
+    'purchase.view', 'purchase.create', 'purchase.mark_paid', 'purchase.box_label',
     'logistics_wh.view', 'logistics_wh.receive',
     'create_inbound.view', 'create_inbound.create', 'create_inbound.label',
     'mingrui.view',
@@ -222,7 +227,7 @@ export const ROLE_PERM_TEMPLATES: Record<string, string[]> = {
   财务: [
     'products.view',
     'purchase.view',
-    'cost.view',
+    'cost.view', 'operating_ledger.view', 'operating_ledger.manage',
     'billing.view', 'billing.generate', 'billing.manual',
     'receivable_payable.view', 'receivable_payable.manual',
     'reports.view', 'profit_analysis.view',
@@ -230,7 +235,7 @@ export const ROLE_PERM_TEMPLATES: Record<string, string[]> = {
     'async_io.export',
   ],
   产品开发主管: [
-    'products.view', 'products.edit', 'products.import',
+    'products.view', 'products.edit', 'products.import', 'products.print_label',
     'product_dev.view', 'product_dev.create', 'product_dev.edit',
     'product_audit.view', 'product_audit.approve', 'product_audit.reject', 'product_audit.label', 'product_audit.purchase_qty',
     'pricing.view', 'pricing.set',
@@ -263,10 +268,11 @@ export const ROLE_PERM_TEMPLATES: Record<string, string[]> = {
     'store_monitor.view',
   ],
   仓库: [
+    'products.view', 'products.print_label',
     'logistics_wh.view', 'logistics_wh.receive', 'logistics_wh.manage',
     'create_inbound.view', 'create_inbound.create', 'create_inbound.label',
     'warehouse_location.view', 'warehouse_location.edit', 'warehouse_location.batch_create',
-    'inbound.view', 'inbound.arrival_scan', 'inbound.receive', 'inbound.qc', 'inbound.putaway', 'inbound.handle_exception', 'inbound.confirm_diff',
+    'inbound.view', 'inbound.arrival_scan', 'inbound.receive', 'inbound.qc', 'inbound.putaway', 'inbound.confirm_diff',
     'outbound.view', 'outbound.create', 'outbound.relabel', 'outbound.pick', 'outbound.pack', 'outbound.ship',
     'inventory_query.view', 'inventory_query.detail', 'inventory_query.adjust',
     'sync.view', 'sync.retry', 'operation_log.view',
@@ -292,7 +298,7 @@ export const ROLE_CODE_TEMPLATE: Record<string, string> = {
 /** 角色元数据（种子 / 管理页） */
 export const ROLE_DEFINITIONS = [
   { roleCode: 'admin', roleName: '系统管理员', templateKey: '系统管理员', description: '拥有全部权限' },
-  { roleCode: 'ops_manager', roleName: '采购主管', templateKey: '采购主管', description: 'PO 审核、明瑞物流下单与入库协调' },
+  { roleCode: 'ops_manager', roleName: '采购主管', templateKey: '采购主管', description: 'PO 审核、明瑞物流查轨迹与入库协调' },
   { roleCode: 'purchaser', roleName: '采购', templateKey: '采购', description: '采购下单与创建入库单' },
   { roleCode: 'warehouse', roleName: '仓库', templateKey: '仓库', description: '收货、清点、上架与库位' },
   { roleCode: 'finance', roleName: '财务', templateKey: '财务', description: '查看已打款采购单与结算' },

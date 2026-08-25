@@ -153,6 +153,16 @@ export class InboundController {
   }
 
   @RequirePerms('inbound.receive')
+  @Post(':id/received-carton-count')
+  recordReceivedCartonCount(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: { receivedCartonCount?: number },
+    @CurrentUser('userId') userId: number,
+  ) {
+    return this.service.recordReceivedCartonCount(id, body, userId)
+  }
+
+  @RequirePerms('inbound.receive')
   @Post(':id/start-receive')
   startReceive(@Param('id', ParseIntPipe) id: number, @CurrentUser('userId') userId: number) {
     return this.service.startReceive(id, userId)
@@ -165,6 +175,12 @@ export class InboundController {
   }
 
   @RequirePerms('inbound.qc')
+  @Post(':id/scan-qc')
+  scanQc(@Param('id', ParseIntPipe) id: number, @Body() body: any, @CurrentUser('userId') userId: number) {
+    return this.service.scanQc(id, body, userId)
+  }
+
+  @RequirePerms('inbound.qc')
   @Post(':id/scan-receipt-label')
   scanReceiptLabel(@Param('id', ParseIntPipe) id: number, @Body() body: { scanCode?: string }) {
     return this.service.scanReceiptLabel(id, body?.scanCode || '')
@@ -172,8 +188,8 @@ export class InboundController {
 
   @RequireAnyPerm('inbound.handle_exception', 'inbound.confirm_diff')
   @Post(':id/resolve-exception')
-  resolveException(@Param('id', ParseIntPipe) id: number, @CurrentUser('userId') userId: number) {
-    return this.service.resolveException(id, userId)
+  resolveException(@Param('id', ParseIntPipe) id: number, @Body() body: { reason?: string }, @CurrentUser('userId') userId: number) {
+    return this.service.resolveException(id, body, userId)
   }
 
   @RequirePerms('inbound.putaway')

@@ -2,10 +2,12 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
 import { OperationLogService } from '../operation-log/operation-log.service'
+import { BillingService } from '../billing/billing.service'
 import { notifyOms } from '../../common/oms-notify.util'
 import { FileStoreService } from '../../common/file-store.service'
 import {
   RETURN_STATUS_LABELS,
+  RETURN_RE_RECEIVE_STATUSES,
   RETURN_FEE_RATES,
   isValidProcessMethod,
   isValidReturnWarehouse,
@@ -60,6 +62,7 @@ export class ReturnsService {
     private prisma: PrismaService,
     private opLog: OperationLogService,
     private files: FileStoreService,
+    private billing: BillingService,
   ) {}
 
   private writeAttachment(fileName: string, contentBase64: string) {
@@ -395,6 +398,63 @@ export class ReturnsService {
       targetId: row.returnNo,
       operatorId: userId,
       detail: { receivedQty, receivedCartonCount },
+    })
+    void this.pushReturnStatusToOms(row.returnNo)
+    return this.enrichRow(updated)
+  }
+
+  async reReceive(
+    id: number,
+    body: { receivedQty?: number; receivedCartonCount?: number; remark?: string },
+    userId: number,
+  ) {
+    const row = await this.prisma.returnOrder.findUnique({ where: { id: BigInt(id) } })
+    if (!row) throw new NotFoundException('退件单不存在')
+    if (!(RETURN_RE_RECEIVE_STATUSES as readonly string[]).includes(row.status)) {
+      throw new BadRequestException('当前状态不可重新收货，仅已收货/已测体积/已算费可修正')
+    }
+
+    const receivedQty = body.receivedQty != null
+      ? Math.floor(Number(body.receivedQty))
+      : row.receivedQty || 0
+    const receivedCartonCount = body.receivedCartonCount != null
+      ? Math.floor(Number(body.receivedCartonCount))
+      : row.receivedCartonCount || 1
+    if (receivedQty <= 0) throw new BadRequestException('实收件数须大于 0')
+    if (receivedCartonCount <= 0) throw new BadRequestException('实收箱数须大于 0')
+
+    await this.clearPendingReturnCharges(row.returnNo)
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await tx.returnCartonMeasure.deleteMany({ where: { returnId: row.id } })
+      return tx.returnOrder.update({
+        where: { id: row.id },
+        data: {
+          status: 'received',
+          receivedAt: new Date(),
+          receivedBy: BigInt(userId),
+          receivedQty,
+          receivedCartonCount,
+          remark: body.remark?.trim() || row.remark || undefined,
+          measuredAt: null,
+          totalVolumeCbm: null,
+          totalGrossWeightKg: null,
+          totalChargeableWeightKg: null,
+          estimatedFeeTotal: null,
+          feeCalculatedAt: null,
+          feeStatus: 'none',
+        },
+        include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
+      })
+    })
+
+    await this.opLog.log({
+      module: 'returns',
+      action: 're_receive',
+      targetType: 'return_order',
+      targetId: row.returnNo,
+      operatorId: userId,
+      detail: { receivedQty, receivedCartonCount, previousStatus: row.status },
     })
     void this.pushReturnStatusToOms(row.returnNo)
     return this.enrichRow(updated)
@@ -933,6 +993,7 @@ export class ReturnsService {
       data.returnNo,
       data.warehouseCode || 'WMS-JHB-01',
     )
+    void this.billing.pushCustomerBillingToOms(data.customerId)
   }
 
   private async clearPendingAutoReturnCharges(returnNo: string) {
@@ -1561,5 +1622,26 @@ export class ReturnsService {
     } catch (err) {
       console.warn('[returns] push OMS skipped:', err)
     }
+  }
+
+  /** 把带客户编码的退货状态再推给 OMS（只发 return.status）。 */
+  async replayOmsStatuses(): Promise<{ returnNo: string; status: string; ok: boolean }[]> {
+    const rows = await this.prisma.returnOrder.findMany({
+      where: { omsCustomerCode: { not: null } },
+      include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
+      orderBy: { id: 'asc' },
+    })
+    const out: { returnNo: string; status: string; ok: boolean }[] = []
+    for (const row of rows) {
+      if (!row.omsCustomerCode) continue
+      const payload = this.mapReturnForOms(row)
+      const ok = await notifyOms(
+        'return.status',
+        row.omsCustomerCode,
+        payload as unknown as Record<string, unknown>,
+      )
+      out.push({ returnNo: row.returnNo, status: row.status, ok })
+    }
+    return out
   }
 }

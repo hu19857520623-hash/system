@@ -328,6 +328,7 @@ CREATE TABLE IF NOT EXISTS `oms_CodeMapping` (
 CREATE TABLE IF NOT EXISTS `oms_PlatformSkuMapping` (
     `id` VARCHAR(50) NOT NULL,
     `customerId` VARCHAR(50) NULL,
+    `sellerId` VARCHAR(100) NULL,
     `platform` VARCHAR(50) NOT NULL,
     `storeId` VARCHAR(50) NOT NULL,
     `storeName` VARCHAR(200) NOT NULL,

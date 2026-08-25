@@ -4,6 +4,7 @@
 import { PrismaClient } from '@prisma/client'
 import {
   ALL_PERM_CODES,
+  DEPRECATED_PERM_CODES,
   ROLE_CODE_TEMPLATE,
   ROLE_PERM_TEMPLATES,
   permLabel,
@@ -32,7 +33,12 @@ async function main() {
     }
   }
 
-  console.log(`✓ 权限已同步 (${ALL_PERM_CODES.length} 项，含 outbound.*)`)
+  if (DEPRECATED_PERM_CODES.length) {
+    await prisma.sysRolePermission.deleteMany({ where: { permCode: { in: [...DEPRECATED_PERM_CODES] } } })
+    await prisma.sysUserPermission.deleteMany({ where: { permCode: { in: [...DEPRECATED_PERM_CODES] } } })
+  }
+
+  console.log(`✓ 权限已同步 (${ALL_PERM_CODES.length} 项，废弃 ${DEPRECATED_PERM_CODES.length} 项)`)
 }
 
 main()

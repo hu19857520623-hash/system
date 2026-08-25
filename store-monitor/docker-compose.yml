@@ -1,0 +1,17 @@
+name: takealot-store-monitor
+
+services:
+  store-monitor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: takealot/store-monitor:local
+    container_name: takealot-store-monitor
+    restart: unless-stopped
+    environment:
+      LISTEN_HOST: 0.0.0.0
+      PORT: 3456
+    ports:
+      - "127.0.0.1:3456:3456"
+    security_opt:
+      - no-new-privileges:true

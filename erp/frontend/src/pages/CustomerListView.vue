@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
+import { erpConfirm } from '@/utils/messageBox'
 import type { FormInstance, FormRules } from 'element-plus'
 import { customerApi, warehouseApi } from '@/api/client.js'
 import { mapCustomer } from '@/api/mappers.ts'
@@ -355,7 +356,7 @@ async function submitPortalPassword() {
   if (!row || !(await validateForm(passwordFormRef.value))) return
   const actionLabel = row.portalReady ? '重置临时密码' : '设置临时密码'
   try {
-    await ElMessageBox.confirm(
+    await erpConfirm(
       `${actionLabel}后现有密码立即失效，客户下次登录必须修改密码。确认继续？`,
       `确认${actionLabel}`,
       { type: 'warning', confirmButtonText: '确认', cancelButtonText: '取消' },
@@ -536,6 +537,7 @@ onMounted(() => {
         <el-button size="small" type="primary" plain @click="page = 1; load()">应用</el-button>
       </div>
 
+      <div class="erp-table-scroll customer-table-scroll">
       <el-table v-loading="loading" :data="rows" size="small" class="customer-table" row-key="code">
         <el-table-column label="客户" min-width="220" fixed="left">
           <template #default="{ row }">
@@ -603,7 +605,7 @@ onMounted(() => {
             <span class="account-status" :class="{ 'is-active': row.statusCode === 1 }">{{ row.status }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="244" fixed="right" align="right">
+        <el-table-column label="操作" width="248" fixed="right" align="right" class-name="ops-col">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="openDetail(row)">详情</el-button>
             <el-button v-if="canEdit && !row.readOnly" link type="primary" size="small" @click="openEdit(row)">编辑</el-button>
@@ -620,6 +622,7 @@ onMounted(() => {
           </template>
         </el-table-column>
       </el-table>
+      </div>
       <el-empty v-if="!loading && !rows.length" description="暂无 OMS 客户账户" />
       <ListPagination v-model:page="page" v-model:page-size="pageSize" :total="listTotal" />
     </el-card>
@@ -1112,6 +1115,7 @@ onMounted(() => {
 .range-sep { color:var(--customer-muted); }
 .mono { font-family:var(--font-mono,Consolas,monospace); font-size:12px; }
 .customer-table { width:100%; }
+.customer-table-scroll { --erp-table-min-width: 1180px; margin-bottom: 0; }
 .customer-table::before { display:none; }
 .customer-table :deep(th.el-table__cell) {
   height:42px;
@@ -1127,6 +1131,12 @@ onMounted(() => {
   border-bottom-color:#edf0f5;
 }
 .customer-table :deep(.el-table__row:hover > td.el-table__cell) { background:#f7f9ff; }
+.customer-table :deep(.el-table__row:hover > td.el-table-fixed-column--right),
+.customer-table :deep(.el-table__row:hover > td.el-table-fixed-column--left) { background:#f7f9ff !important; }
+.customer-table :deep(td.ops-col.el-table-fixed-column--right .cell) {
+  justify-content: flex-end;
+  min-width: 228px;
+}
 .identity-cell {
   display:flex;
   flex-direction:column;

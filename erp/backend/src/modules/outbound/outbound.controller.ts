@@ -100,6 +100,18 @@ export class OutboundController {
   }
 
   @RequirePerms('outbound.view')
+  @Get(':id/pod')
+  async downloadPod(@Param('id', ParseIntPipe) id: number, @Res() res: Response) {
+    const file = await this.service.downloadPodAttachment(id)
+    const isPdf = /\.pdf$/i.test(file.fileName)
+    res.setHeader('Content-Type', isPdf ? 'application/pdf' : 'application/octet-stream')
+    res.setHeader('X-Content-Type-Options', 'nosniff')
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(file.fileName)}"`)
+    res.setHeader('Content-Length', String(file.content.length))
+    res.send(file.content)
+  }
+
+  @RequirePerms('outbound.view')
   @Get(':id/attachment/:attachmentId')
   @Header('Content-Type', 'application/octet-stream')
   async downloadAttachmentById(
@@ -202,8 +214,8 @@ export class OutboundController {
 
   @RequirePerms('outbound.pack')
   @Post(':id/start-review')
-  startReview(@Param('id', ParseIntPipe) id: number) {
-    return this.service.startReview(id)
+  startReview(@Param('id', ParseIntPipe) id: number, @CurrentUser('userId') userId: number) {
+    return this.service.startReview(id, userId)
   }
 
   @RequirePerms('outbound.pack')

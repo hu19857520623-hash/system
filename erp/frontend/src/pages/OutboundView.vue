@@ -1,15 +1,18 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, reactive, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
+import { erpConfirm } from '@/utils/messageBox'
 import {
   outboundApi,
   customerApi,
   usersApi,
+  triggerBrowserDownload,
 } from '@/api/client.js'
 import { withAction } from '@/composables/useListLoader.ts'
 import { useAppStore } from '@/stores/app'
 import ListPagination from '@/components/ListPagination.vue'
+import DetailSheet from '@/components/ui/DetailSheet.vue'
 import OutboundLabelPanel from '@/components/outbound/OutboundLabelPanel.vue'
 import {
   buildOutboundLabelSummary,
@@ -49,6 +52,11 @@ const filterPlatform = ref('all')
 const filterAppointment = ref('all')
 const dateRange = ref<[string, string] | null>(null)
 const appointmentDateRange = ref<[string, string] | null>(null)
+const appointmentDateShortcuts = [
+  { text: '今天', value: () => { const today = new Date(); return [today, today] } },
+  { text: '未来 7 天', value: () => { const start = new Date(); const end = new Date(); end.setDate(end.getDate() + 6); return [start, end] } },
+  { text: '未来 30 天', value: () => { const start = new Date(); const end = new Date(); end.setDate(end.getDate() + 29); return [start, end] } },
+]
 const selectedRows = ref<any[]>([])
 
 const page = ref(1)
@@ -81,6 +89,9 @@ const packVisible = ref(false)
 const appointmentVisible = ref(false)
 const relabelVisible = ref(false)
 const podUploadVisible = ref(false)
+const detailVisible = ref(false)
+const detailLoading = ref(false)
+const detailOrder = ref<any>(null)
 const pickOrder = ref<any>(null)
 const packOrder = ref<any>(null)
 const appointmentOrder = ref<any>(null)
@@ -107,6 +118,25 @@ const assignPickerId = ref<number | null>(null)
 const assignTargetIds = ref<number[]>([])
 const problemRemark = ref('')
 const exceptionRemark = ref('')
+const problemType = ref('')
+const exceptionType = ref('')
+const problemTypeOptions = [
+  { value: 'stock_short', label: '库存短缺' },
+  { value: 'damaged', label: '货品破损' },
+  { value: 'wrong_sku', label: 'SKU 不符' },
+  { value: 'barcode_issue', label: '条码异常' },
+  { value: 'label_missing', label: '标签缺失' },
+  { value: 'other', label: '其他问题' },
+]
+const exceptionTypeOptions = [
+  { value: 'delivery_failure', label: '配送失败' },
+  { value: 'missed_booking', label: '错过预约' },
+  { value: 'customer_cancelled', label: '客户取消' },
+  { value: 'platform_cancelled', label: '平台取消' },
+  { value: 'document_missing', label: '文件缺失' },
+  { value: 'system_sync', label: '系统同步异常' },
+  { value: 'other', label: '其他异常' },
+]
 const pickLines = ref<any[]>([])
 const pickLoading = ref(false)
 const pickSubmitting = ref(false)
@@ -131,8 +161,8 @@ const APPOINTMENT_STATUSES = [
 const STATUS_MAP: Record<string, { label: string; tag: string }> = {
   pending_pick: { label: '待拣货', tag: 'warning' },
   picking: { label: '拣货中', tag: 'warning' },
-  picked: { label: '已拣货', tag: '' },
-  reviewing: { label: '复核中', tag: '' },
+  picked: { label: '已拣货', tag: 'info' },
+  reviewing: { label: '复核中', tag: 'info' },
   pending_relabel: { label: '待换标', tag: 'warning' },
   packed: { label: '待发运', tag: 'success' },
   shipped: { label: '已发运', tag: 'info' },
@@ -244,10 +274,13 @@ function customerLabel(row: any) {
 function handleRowCommand(command: string, row: any) {
   if (command.startsWith('downloadAtt:')) {
     const attId = Number(command.slice('downloadAtt:'.length))
-    downloadAttachmentById(row, attId)
+    void downloadAttachmentById(row, attId)
     return
   }
   switch (command) {
+    case 'detail':
+      void openDetail(row)
+      break
     case 'labels':
       downloadRowLabels(row)
       break
@@ -294,7 +327,10 @@ function handleRowCommand(command: string, row: any) {
       doCancel(row)
       break
     case 'downloadCpt':
-      downloadAttachment(row)
+      void downloadAttachment(row)
+      break
+    case 'downloadPod':
+      void downloadPodAttachment(row)
       break
     default:
       break
@@ -385,53 +421,185 @@ const printablePickOrders = computed(() => {
 function rowActionAttachments(row: any) {
   const atts = row.attachments?.length
     ? row.attachments
-    : row.attachmentName
-      ? [{ id: 0, fileName: row.attachmentName, fileType: 'other' }]
+    : row.attachmentName && row.attachmentDownloadable
+      ? [{ id: 0, fileName: row.attachmentName, fileType: 'other', downloadable: true }]
       : []
-  return atts.filter((att: any) => !['skuLabel', 'outerLabel'].includes(att.fileType))
+  return atts.filter(
+    (att: any) => !['skuLabel', 'outerLabel'].includes(att.fileType) && att.downloadable === true,
+  )
+}
+
+function attachmentActionLabel(att: any) {
+  if (att.fileType === 'pod') return 'POD签收单'
+  if (att.fileType === 'deliveryList') return '发货清单'
+  if (att.fileType === 'appointment') return '预约单'
+  return '附件'
+}
+
+type RowAction = { key: string; command: string; label: string; divided?: boolean }
+
+function rowHasArchivableLabels(row: any) {
+  const summary = buildOutboundLabelSummary(row)
+  if (summary.lines.some((line) => line.printable)) return true
+  return (row.attachments || []).some(
+    (att: any) => ['skuLabel', 'outerLabel'].includes(att.fileType) && att.downloadable !== false,
+  )
+}
+
+const detailCustomerRemark = computed(() => {
+  const remark = detailOrder.value?.customerRemark ?? detailOrder.value?.remark
+  return String(remark || '').trim() || '—'
+})
+
+function appendDetailCommand(cmds: RowAction[]) {
+  cmds.unshift({ key: 'detail', command: 'detail', label: '查看详情' })
+}
+
+function rowCommands(row: any): RowAction[] {
+  const cmds: RowAction[] = []
+  const status = row.status
+
+  if (status === 'cancelled') {
+    appendDetailCommand(cmds)
+    if (rowHasArchivableLabels(row)) {
+      cmds.push({ key: 'labels', command: 'labels', label: '下载标签' })
+    }
+    for (const att of rowActionAttachments(row)) {
+      const isPod = att.fileType === 'pod'
+      const hasAttachmentId = Number.isFinite(att.id) && att.id > 0
+      cmds.push({
+        key: isPod ? 'downloadPod' : (hasAttachmentId ? `att-${att.id}` : `att-${att.fileName || att.fileType || 'file'}`),
+        command: isPod ? 'downloadPod' : (hasAttachmentId ? `downloadAtt:${att.id}` : 'downloadCpt'),
+        label: `下载${attachmentActionLabel(att)}`,
+      })
+    }
+    return cmds
+  }
+
+  appendDetailCommand(cmds)
+
+  if (status === 'pending_relabel') {
+    cmds.push({ key: 'labels', command: 'labels', label: '下载标签' })
+    if (canRelabel.value) cmds.push({ key: 'relabel', command: 'relabel', label: '扫码换标' })
+  }
+  if (status === 'pending_pick' && canPick.value) {
+    cmds.push({ key: 'assignPicker', command: 'assignPicker', label: '分配拣货员' })
+  }
+  if (status === 'picking' && canPick.value) {
+    cmds.push({ key: 'downloadPick', command: 'downloadPick', label: '下载拣货清单' })
+    cmds.push({ key: 'pick', command: 'pick', label: '完成拣货' })
+  }
+  if (['picked', 'reviewing'].includes(status) && canPack.value) {
+    cmds.push({ key: 'pack', command: 'pack', label: '复核打包' })
+  }
+  if (status === 'packed' && canShip.value) {
+    cmds.push({ key: 'ship', command: 'ship', label: '发运' })
+  }
+  if (status === 'shipped' && canShip.value) {
+    cmds.push({ key: 'deliver', command: 'deliver', label: '确认送达' })
+  }
+  if (status === 'delivered' && canCreate.value && !rowHasPod(row)) {
+    cmds.push({ key: 'uploadPod', command: 'uploadPod', label: '上传POD签收单' })
+  }
+  if (canCreate.value && row.destType === 'fba' && status !== 'cancelled') {
+    cmds.push({ key: 'appointment', command: 'appointment', label: '预约派送' })
+  }
+
+  for (const att of rowActionAttachments(row)) {
+    const isPod = att.fileType === 'pod'
+    const hasAttachmentId = Number.isFinite(att.id) && att.id > 0
+    cmds.push({
+      key: isPod ? 'downloadPod' : (hasAttachmentId ? `att-${att.id}` : `att-${att.fileName || att.fileType || 'file'}`),
+      command: isPod ? 'downloadPod' : (hasAttachmentId ? `downloadAtt:${att.id}` : 'downloadCpt'),
+      label: `下载${attachmentActionLabel(att)}`,
+    })
+  }
+
+  if (canCreate.value && !['cancelled', 'shipped', 'delivered'].includes(status)) {
+    cmds.push({
+      key: 'problem',
+      command: 'problem',
+      label: '标记问题件',
+      divided: cmds.length > 0,
+    })
+  }
+  if (canCreate.value && status !== 'exception' && !['cancelled', 'shipped', 'delivered'].includes(status)) {
+    cmds.push({ key: 'exception', command: 'exception', label: '标记异常（暂停流程）' })
+  }
+  if (canCreate.value && row.isProblem && status !== 'cancelled') {
+    cmds.push({ key: 'clearProblem', command: 'clearProblem', label: '解除问题件' })
+  }
+  if (canCreate.value && status === 'exception') {
+    cmds.push({ key: 'clearException', command: 'clearException', label: '解除异常' })
+  }
+  if (canCreate.value && !['shipped', 'delivered', 'cancelled'].includes(status)) {
+    cmds.push({ key: 'cancel', command: 'cancel', label: '取消出库单' })
+  }
+
+  return cmds
 }
 
 function handleSelectionChange(rows: any[]) {
   selectedRows.value = rows
 }
 
+async function openDetail(row: any) {
+  if (!row?.id) return
+  detailVisible.value = true
+  detailLoading.value = true
+  detailOrder.value = null
+  try {
+    detailOrder.value = await outboundApi.detail(row.id)
+  } catch (err: any) {
+    ElMessage.error(err?.message || '加载出库详情失败')
+    detailVisible.value = false
+  } finally {
+    detailLoading.value = false
+  }
+}
+
 async function downloadAttachment(row: any) {
   try {
     const { blob, fileName } = await outboundApi.downloadAttachment(row.id)
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = fileName || row.attachmentName || 'cpt-attachment'
-    a.click()
-    URL.revokeObjectURL(url)
+    triggerBrowserDownload(blob, fileName || row.attachmentName || 'cpt-attachment')
   } catch (err: any) {
     ElMessage.error(err.message || '下载失败')
   }
 }
 
 async function downloadAttachmentById(row: any, attachmentId: number) {
+  if (!Number.isFinite(attachmentId) || attachmentId <= 0) {
+    ElMessage.error('附件信息无效，请刷新列表后重试')
+    return
+  }
   try {
     const { blob, fileName } = await outboundApi.downloadAttachmentById(row.id, attachmentId)
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = fileName || 'attachment'
-    a.click()
-    URL.revokeObjectURL(url)
+    triggerBrowserDownload(blob, fileName || 'attachment')
   } catch (err: any) {
     ElMessage.error(err.message || '下载失败')
+  }
+}
+
+async function downloadPodAttachment(row: any) {
+  if (!row?.id) {
+    ElMessage.warning('出库单信息不完整')
+    return
+  }
+  try {
+    const { blob, fileName } = await outboundApi.downloadPod(row.id)
+    if (!blob?.size) throw new Error('POD 签收单文件为空')
+    const name = fileName || `${row.outboundNo || 'outbound'}-pod.pdf`
+    const mode = triggerBrowserDownload(blob, name, { preferNewTab: true })
+    ElMessage.success(mode === 'tab' ? 'POD 签收单已在新窗口打开' : 'POD 签收单下载已开始')
+  } catch (err: any) {
+    ElMessage.error(err.message || '下载 POD 签收单失败')
   }
 }
 
 async function downloadRowLabels(row: any) {
   try {
     const { blob, fileName } = await outboundApi.downloadSkuLabels(row.id)
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = fileName || `${row.outboundNo || 'outbound'}-labels.pdf`
-    a.click()
-    URL.revokeObjectURL(url)
+    triggerBrowserDownload(blob, fileName || `${row.outboundNo || 'outbound'}-labels.pdf`)
   } catch (err: any) {
     ElMessage.error(err.message || '下载标签失败')
   }
@@ -742,7 +910,7 @@ async function readFileAsBase64(file: File): Promise<string> {
 async function openDeliver(row: any) {
   if (!canShip.value) return
   try {
-    await ElMessageBox.confirm(
+    await erpConfirm(
       `确认出库单 ${row.outboundNo} 已送达平台仓？\n送达后请上传 POD 签收单文件（无需扫描 POD 码）。`,
       '确认送达',
       { confirmButtonText: '确认送达', cancelButtonText: '取消', type: 'info' },
@@ -859,22 +1027,26 @@ async function submitAssignPicker() {
 
 function openProblem(row: any) {
   problemOrder.value = row
+  problemType.value = row.problemType || ''
   problemRemark.value = row.problemRemark || ''
   problemVisible.value = true
 }
 
 function openException(row: any) {
   exceptionOrder.value = row
+  exceptionType.value = row.exceptionType || ''
   exceptionRemark.value = row.problemRemark || ''
   exceptionVisible.value = true
 }
 
 async function submitProblem() {
   if (!problemOrder.value || !canCreate.value) return
+  if (!problemType.value) { ElMessage.warning('请选择拣货问题类型'); return }
   const outboundNo = problemOrder.value.outboundNo
   const ok = await withAction(async () => {
     await outboundApi.setProblem(problemOrder.value.id, {
       markType: 'problem',
+      problemType: problemType.value,
       problemRemark: problemRemark.value.trim() || undefined,
     })
     problemVisible.value = false
@@ -886,10 +1058,12 @@ async function submitProblem() {
 
 async function submitException() {
   if (!exceptionOrder.value || !canCreate.value) return
+  if (!exceptionType.value) { ElMessage.warning('请选择订单异常类型'); return }
   const outboundNo = exceptionOrder.value.outboundNo
   const ok = await withAction(async () => {
     await outboundApi.setProblem(exceptionOrder.value.id, {
       markType: 'exception',
+      exceptionType: exceptionType.value,
       problemRemark: exceptionRemark.value.trim() || undefined,
     })
     exceptionVisible.value = false
@@ -981,7 +1155,8 @@ function statusLabel(status: string) {
 }
 
 function statusTag(status: string) {
-  return STATUS_MAP[status]?.tag || 'info'
+  const tag = STATUS_MAP[status]?.tag
+  return tag || 'info'
 }
 </script>
 
@@ -1030,6 +1205,7 @@ function statusTag(status: string) {
               start-placeholder="开始"
               end-placeholder="结束"
               value-format="YYYY-MM-DD"
+              :shortcuts="appointmentDateShortcuts"
               size="small"
               style="width:100%"
             />
@@ -1198,99 +1374,28 @@ function statusTag(status: string) {
         </el-table-column>
         <el-table-column label="操作" width="88" fixed="right" align="center">
           <template #default="{ row }">
-            <el-dropdown trigger="click" @command="(cmd: string) => handleRowCommand(cmd, row)">
-              <el-button link type="primary" size="small">操作</el-button>
-              <template #dropdown>
-                <el-dropdown-menu>
-                  <el-dropdown-item
-                    v-if="row.status === 'pending_relabel'"
-                    command="labels"
-                  >
-                    下载标签
-                  </el-dropdown-item>
-                  <el-dropdown-item
-                    v-if="row.status === 'pending_relabel' && canRelabel"
-                    command="relabel"
-                  >
-                    扫码换标
-                  </el-dropdown-item>
-                  <el-dropdown-item
-                    v-if="row.status === 'pending_pick' && canPick"
-                    command="assignPicker"
-                  >
-                    分配拣货员
-                  </el-dropdown-item>
-                  <el-dropdown-item
-                    v-if="row.status === 'picking' && canPick"
-                    command="downloadPick"
-                  >
-                    下载拣货清单
-                  </el-dropdown-item>
-                  <el-dropdown-item
-                    v-if="row.status === 'picking' && canPick"
-                    command="pick"
-                  >
-                    完成拣货
-                  </el-dropdown-item>
-                  <el-dropdown-item
-                    v-if="['picked', 'reviewing'].includes(row.status) && canPack"
-                    command="pack"
-                  >
-                    复核打包
-                  </el-dropdown-item>
-                  <el-dropdown-item v-if="row.status === 'packed' && canShip" command="ship">
-                    发运
-                  </el-dropdown-item>
-                  <el-dropdown-item v-if="row.status === 'shipped' && canShip" command="deliver">
-                    确认送达
-                  </el-dropdown-item>
-                  <el-dropdown-item
-                    v-if="row.status === 'delivered' && canCreate && !rowHasPod(row)"
-                    command="uploadPod"
-                  >
-                    上传POD签收单
-                  </el-dropdown-item>
-                  <el-dropdown-item
-                    v-if="canCreate && row.destType === 'fba' && row.status !== 'cancelled'"
-                    command="appointment"
-                  >
-                    预约派送
-                  </el-dropdown-item>
-                  <el-dropdown-item
-                    v-for="att in rowActionAttachments(row)"
-                    :key="att.id || att.fileName"
-                    :command="att.id ? `downloadAtt:${att.id}` : 'downloadCpt'"
-                  >
-                    下载{{ att.fileType === 'pod' ? 'POD签收单' : att.fileType === 'deliveryList' ? '发货清单' : att.fileType === 'appointment' ? '预约单' : '附件' }}
-                  </el-dropdown-item>
-                  <el-dropdown-item
-                    v-if="canCreate && !['cancelled', 'shipped', 'delivered'].includes(row.status)"
-                    command="problem"
-                    divided
-                  >
-                    标记问题件
-                  </el-dropdown-item>
-                  <el-dropdown-item
-                    v-if="canCreate && row.status !== 'exception' && !['cancelled', 'shipped', 'delivered'].includes(row.status)"
-                    command="exception"
-                  >
-                    标记异常（暂停流程）
-                  </el-dropdown-item>
-                  <el-dropdown-item v-if="canCreate && row.isProblem" command="clearProblem">
-                    解除问题件
-                  </el-dropdown-item>
-                  <el-dropdown-item v-if="canCreate && row.status === 'exception'" command="clearException">
-                    解除异常
-                  </el-dropdown-item>
-                  <el-dropdown-item
-                    v-if="canCreate && !['shipped', 'delivered', 'cancelled'].includes(row.status)"
-                    command="cancel"
-                  >
-                    取消出库单
-                  </el-dropdown-item>
-                </el-dropdown-menu>
-              </template>
-            </el-dropdown>
+            <template v-if="rowCommands(row).length">
+              <el-dropdown
+                trigger="click"
+                :teleported="false"
+                popper-class="outbound-row-dropdown"
+              >
+                <el-button link type="primary" size="small" @click.stop>操作</el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item
+                      v-for="item in rowCommands(row)"
+                      :key="item.key"
+                      :divided="item.divided"
+                      @click.stop="handleRowCommand(item.command, row)"
+                    >
+                      {{ item.label }}
+                    </el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+            </template>
+            <span v-else class="muted">—</span>
           </template>
         </el-table-column>
       </el-table>
@@ -1525,6 +1630,9 @@ function statusTag(status: string) {
     <!-- 标记问题件 -->
     <el-dialog v-model="problemVisible" :title="`标记问题件 · ${problemOrder?.outboundNo || ''}`" width="420px">
       <div class="problem-hint">问题件仅作提醒，出库流程可继续；与「异常」不同，异常会暂停流程。</div>
+      <el-select v-model="problemType" placeholder="请选择拣货问题类型" style="width:100%;margin-bottom:12px">
+        <el-option v-for="item in problemTypeOptions" :key="item.value" :label="item.label" :value="item.value" />
+      </el-select>
       <el-input v-model="problemRemark" type="textarea" :rows="3" placeholder="问题说明（可选）" />
       <template #footer>
         <el-button @click="problemVisible = false">取消</el-button>
@@ -1535,10 +1643,78 @@ function statusTag(status: string) {
     <!-- 标记异常 -->
     <el-dialog v-model="exceptionVisible" :title="`标记异常 · ${exceptionOrder?.outboundNo || ''}`" width="420px">
       <div class="problem-hint">标记后出库单进入「异常」状态，流程暂停；处理完成后可解除并恢复原状态。</div>
+      <el-select v-model="exceptionType" placeholder="请选择订单异常类型" style="width:100%;margin-bottom:12px">
+        <el-option v-for="item in exceptionTypeOptions" :key="item.value" :label="item.label" :value="item.value" />
+      </el-select>
       <el-input v-model="exceptionRemark" type="textarea" :rows="3" placeholder="异常说明（可选）" />
       <template #footer>
         <el-button @click="exceptionVisible = false">取消</el-button>
         <el-button type="danger" @click="submitException">确认标记</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 出库详情 -->
+    <el-dialog
+      v-model="detailVisible"
+      :title="`出库详情 · ${detailOrder?.outboundNo || ''}`"
+      width="760px"
+      class="outbound-detail-dialog erp-detail"
+      destroy-on-close
+    >
+      <div v-loading="detailLoading">
+        <template v-if="detailOrder">
+          <DetailSheet
+            :kicker="detailOrder.outboundNo"
+            :title="detailOrder.destination || detailOrder.warehouseCode || '出库单'"
+            :subtitle="[customerLabel(detailOrder), detailOrder.logisticsProduct].filter(Boolean).join(' · ')"
+          >
+            <template #status>
+              <el-tag :type="statusTag(detailOrder.status) as any" size="small">
+                {{ statusLabel(detailOrder.status) }}
+              </el-tag>
+            </template>
+          </DetailSheet>
+          <el-descriptions :column="3" border size="small" class="detail-desc">
+            <el-descriptions-item label="出库单号">
+              <span class="mono">{{ detailOrder.outboundNo }}</span>
+            </el-descriptions-item>
+            <el-descriptions-item label="状态">
+              <el-tag :type="statusTag(detailOrder.status) as any" size="small">
+                {{ statusLabel(detailOrder.status) }}
+              </el-tag>
+            </el-descriptions-item>
+            <el-descriptions-item label="出库仓">
+              <span class="mono">{{ detailOrder.warehouseCode || '—' }}</span>
+            </el-descriptions-item>
+            <el-descriptions-item label="目的地">{{ detailOrder.destination || '—' }}</el-descriptions-item>
+            <el-descriptions-item label="物流产品">{{ detailOrder.logisticsProduct || '—' }}</el-descriptions-item>
+            <el-descriptions-item label="跟踪号">{{ detailOrder.trackingNo || '—' }}</el-descriptions-item>
+            <el-descriptions-item label="箱货类型">{{ cargoTypeLabel(detailOrder) }}</el-descriptions-item>
+            <el-descriptions-item label="件数">{{ detailOrder.totalQty ?? '—' }}</el-descriptions-item>
+            <el-descriptions-item label="创建时间">{{ detailOrder.createdAt || '—' }}</el-descriptions-item>
+            <el-descriptions-item label="客户备注" :span="3">
+              <span class="remark-text">{{ detailCustomerRemark }}</span>
+            </el-descriptions-item>
+          </el-descriptions>
+
+          <div class="detail-section-title">SKU 明细</div>
+          <el-table :data="detailOrder.items || []" border size="small" empty-text="暂无 SKU 明细">
+            <el-table-column prop="sku" label="SKU" width="140">
+              <template #default="{ row }"><span class="mono">{{ row.sku || '—' }}</span></template>
+            </el-table-column>
+            <el-table-column prop="productName" label="品名" min-width="160" show-overflow-tooltip />
+            <el-table-column prop="qty" label="数量" width="80" align="right" />
+            <el-table-column prop="pickedQty" label="已拣" width="80" align="right">
+              <template #default="{ row }">{{ row.pickedQty ?? 0 }}</template>
+            </el-table-column>
+            <el-table-column prop="locationCode" label="库位" width="100">
+              <template #default="{ row }"><span class="mono">{{ row.locationCode || '—' }}</span></template>
+            </el-table-column>
+          </el-table>
+        </template>
+      </div>
+      <template #footer>
+        <el-button type="primary" @click="detailVisible = false">关闭</el-button>
       </template>
     </el-dialog>
   </div>
@@ -1724,6 +1900,20 @@ function statusTag(status: string) {
   margin: 0 0 12px;
   font-size: 13px;
   color: var(--el-text-color-secondary);
+}
+.detail-desc { margin-bottom: 16px; }
+.detail-section-title { font-weight: 600; font-size: 13px; margin: 4px 0 8px; }
+.remark-text { white-space: pre-wrap; word-break: break-word; }
+
+.outbound-table :deep(.el-table__fixed-right),
+.outbound-table :deep(.el-table-fixed-column--right) {
+  overflow: visible;
+}
+.outbound-table :deep(.el-dropdown) {
+  vertical-align: middle;
+}
+:deep(.outbound-row-dropdown) {
+  z-index: 20;
 }
 
 @media (max-width: 1200px) {

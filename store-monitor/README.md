@@ -2,6 +2,9 @@
 
 高保真 Web 管理界面，用于查看 Takealot Marketplace API 数据（报价、销售、交易、发货、退货、卖家信息等）。
 
+本目录是独立工程，不依赖 ERP 源码。它既可直接在 `http://localhost:3456`
+使用，也可由 ERP 通过 `TAKEALOT_PROXY_URL` 接入。
+
 ## 对方需要安装什么？
 
 只需要安装 **Node.js**（自带 npm），其它不用装。

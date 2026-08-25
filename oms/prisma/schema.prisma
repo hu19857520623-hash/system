@@ -346,6 +346,8 @@ model PlatformSkuMapping {
   id                String           @id @db.VarChar(50)
   customerId        String?          @db.VarChar(50)
   customer          CustomerAccount? @relation(fields: [customerId], references: [id])
+  /** Takealot Seller ID（预约单/平台文档中的数字 ID） */
+  sellerId          String?          @db.VarChar(100)
   platform          String           @db.VarChar(50)
   storeId           String           @db.VarChar(50)
   storeName         String           @db.VarChar(200)

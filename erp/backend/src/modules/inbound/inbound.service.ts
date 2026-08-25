@@ -8,6 +8,8 @@ import { PricingService } from '../pricing/pricing.service'
 import { notifyOms } from '../../common/oms-notify.util'
 import { fetchOmsInboundRows, mergeInboundPaginate } from './oms-inbound-bridge.util'
 import { buildInboundRemark, parseOmsInboundMeta, stripOmsSystemTags } from '../../common/oms-sync-meta.util'
+import { resolveBillingDimensions, type ProductDimensionFields } from '../../common/product-dimension.util'
+import { parseInboundQcScanInput } from './inbound-qc-scan.util'
 
 /** 在途，等待到仓扫描 */
 const PENDING_RECEIPT_STATUSES = new Set([
@@ -193,12 +195,9 @@ export class InboundService {
     }))
   }
 
-  private enrichInboundItem(
-    item: any,
-    prodMap: Map<number, { productName: string; spec: string | null; lengthCm?: unknown; widthCm?: unknown; heightCm?: unknown }>,
-  ) {
+  private enrichInboundItem(item: any, prodMap: Map<number, any>) {
     const prod = prodMap.get(Number(item.productId))
-    const numDim = (v: unknown) => (v != null && v !== '' ? Number(v) : null)
+    const billing = resolveBillingDimensions(prod || {})
     return {
       ...item,
       id: Number(item.id),
@@ -206,10 +205,27 @@ export class InboundService {
       productId: Number(item.productId),
       productName: prod?.productName || item.sku,
       spec: prod?.spec || '',
-      lengthCm: numDim(prod?.lengthCm),
-      widthCm: numDim(prod?.widthCm),
-      heightCm: numDim(prod?.heightCm),
+      lengthCm: billing.lengthCm,
+      widthCm: billing.widthCm,
+      heightCm: billing.heightCm,
+      dimensionsSource: billing.source === 'none' ? null : billing.source,
     }
+  }
+
+  private findInboundItemByScan(
+    order: { items: any[] },
+    skuToken: string,
+    prodMap: Map<number, { barcode?: string | null }>,
+  ) {
+    const token = this.normalizeScanToken(skuToken)
+    let item = order.items.find((i) => this.normalizeScanToken(i.sku) === token)
+    if (item) return item
+    item = order.items.find((i) => {
+      const barcode = prodMap.get(Number(i.productId))?.barcode
+      return barcode && this.normalizeScanToken(barcode) === token
+    })
+    if (item) return item
+    return order.items.find((i) => token.endsWith(this.normalizeScanToken(i.sku))) || null
   }
 
   async findByInboundNo(inboundNo: string) {
@@ -450,14 +466,76 @@ export class InboundService {
   private buildReceiveSummary(order: any) {
     const totalExpected = order.items.reduce((s: number, i: any) => s + i.expectedQty, 0)
     const totalReceived = order.items.reduce((s: number, i: any) => s + (i.actualQty ?? 0), 0)
-    return { totalExpected, totalReceived, allReceived: totalReceived >= totalExpected }
+    const cartons = order.cartons || []
+    const expectedCartonCount = cartons.length || null
+    const scannedCartonCount = cartons.filter((c: { status?: string }) => c.status === 'received').length
+    return {
+      totalExpected,
+      totalReceived,
+      allReceived: totalReceived >= totalExpected,
+      expectedCartonCount,
+      scannedCartonCount,
+      receivedCartonCount: order.receivedCartonCount ?? null,
+    }
   }
 
-  /** 扫一箱收一箱：自动识别外箱标 / SKU 标签 */
-  async receiveBox(id: number, data: { scanCode?: string; qty?: number }, operatorId?: number) {
+  /** 扫箱收货：人工清点实收箱数 */
+  async recordReceivedCartonCount(
+    id: number,
+    body: { receivedCartonCount?: number },
+    operatorId?: number,
+  ) {
+    const count = Math.floor(Number(body.receivedCartonCount))
+    if (!Number.isFinite(count) || count <= 0) throw new BadRequestException('实收箱数须大于 0')
+
+    let order = await this.detail(id)
+    if (TERMINAL_STATUSES.has(order.status)) throw new BadRequestException('该入库单已完结')
+    if (PENDING_RECEIPT_STATUSES.has(order.status)) {
+      throw new BadRequestException('请先在「到仓扫描」确认到货')
+    }
+    if (!['arrived', 'receiving'].includes(order.status)) {
+      throw new BadRequestException(`当前状态「${order.status}」不可登记实收箱数`)
+    }
+    if (order.status === 'arrived') {
+      await this.startReceive(id, operatorId)
+    }
+
+    await this.prisma.inboundOrder.update({
+      where: { id: BigInt(id) },
+      data: { receivedCartonCount: count },
+    })
+
+    await this.opLog.log({
+      operatorId,
+      module: 'inbound',
+      action: 'receive_carton_count',
+      targetType: 'inbound_order',
+      targetId: order.inboundNo,
+      detail: { receivedCartonCount: count },
+    })
+
+    const refreshed = await this.detail(id)
+    return {
+      message: `实收箱数已登记：${count} 箱`,
+      receivedCartonCount: count,
+      order: {
+        id: refreshed.id,
+        inboundNo: refreshed.inboundNo,
+        status: refreshed.status,
+        displayStatus: refreshed.displayStatus,
+        ...this.buildReceiveSummary(refreshed),
+      },
+    }
+  }
+
+  /** 扫外箱标：仅登记箱数，不写入 SKU 实收件数（件数在清点与测量确认） */
+  async receiveBox(
+    id: number,
+    data: { scanCode?: string; qty?: number; cartonCount?: number },
+    operatorId?: number,
+  ) {
     const code = String(data.scanCode || '').trim()
-    if (!code) throw new BadRequestException('请扫描或输入箱标 / SKU')
-    const addQty = Math.max(1, Number(data.qty) || 1)
+    if (!code) throw new BadRequestException('请扫描外箱标')
 
     let order = await this.detail(id)
     if (TERMINAL_STATUSES.has(order.status)) throw new BadRequestException('该入库单已完结')
@@ -473,64 +551,12 @@ export class InboundService {
     }
 
     const carton = await this.findPendingCarton(id, order.inboundNo, code)
-    if (carton) {
-      return this.receiveOuterCarton(id, carton, operatorId, order.inboundNo)
+    if (!carton) {
+      throw new NotFoundException(
+        `扫描码 ${code} 未匹配到外箱标。本环节仅确认箱数；SKU 数量（含 1 SKU 一箱 / 一箱多件）请在「清点与测量」扫描确认`,
+      )
     }
-
-    const normalized = this.normalizeScanToken(code)
-    const item = order.items.find((i) => this.normalizeScanToken(i.sku) === normalized)
-    if (!item) {
-      throw new NotFoundException(`扫描码 ${code} 未匹配到外箱标或 SKU，或不属于入库单 ${order.inboundNo}`)
-    }
-
-    const current = item.actualQty ?? 0
-    const remaining = item.expectedQty - current
-    if (remaining <= 0) {
-      throw new BadRequestException(`${item.sku} 已收满 ${item.expectedQty} 件`)
-    }
-    const increment = Math.min(addQty, remaining)
-    const newActual = current + increment
-
-    await this.prisma.inboundOrderItem.update({
-      where: { id: item.id },
-      data: { actualQty: newActual },
-    })
-
-    const refreshed = await this.detail(id)
-    const line = refreshed.items.find((i) => Number(i.id) === Number(item.id))!
-    const summary = this.buildReceiveSummary(refreshed)
-
-    await this.opLog.log({
-      operatorId,
-      module: 'inbound',
-      action: 'receive_box',
-      targetType: 'inbound_order',
-      targetId: order.inboundNo,
-      detail: { scanType: 'sku', sku: item.sku, increment, actualQty: newActual },
-    })
-
-    return {
-      scanType: 'sku' as const,
-      message: `[SKU标签] ${item.sku} +${increment} 件（本单累计 ${summary.totalReceived}/${summary.totalExpected}）`,
-      increment,
-      carton: null,
-      item: {
-        id: line.id,
-        sku: line.sku,
-        productName: line.productName,
-        spec: line.spec,
-        expectedQty: line.expectedQty,
-        actualQty: line.actualQty ?? 0,
-        remaining: line.expectedQty - (line.actualQty ?? 0),
-      },
-      order: {
-        id: refreshed.id,
-        inboundNo: refreshed.inboundNo,
-        status: refreshed.status,
-        displayStatus: refreshed.displayStatus,
-        ...summary,
-      },
-    }
+    return this.receiveOuterCarton(id, carton, operatorId, order.inboundNo)
   }
 
   private async receiveOuterCarton(
@@ -541,32 +567,12 @@ export class InboundService {
   ) {
     const received = await this.prisma.inboundCarton.findUnique({ where: { id: carton.id } })
     if (!received || received.status === 'received') {
-      throw new BadRequestException(`外箱 ${carton.boxCode} 已收货，请勿重复扫描`)
+      throw new BadRequestException(`外箱 ${carton.boxCode} 已确认，请勿重复扫描`)
     }
 
-    const order = await this.detail(inboundId)
-    const itemMap = new Map(order.items.map((i) => [Number(i.id), i]))
+    const expectedCartons = await this.prisma.inboundCarton.count({ where: { inboundId: BigInt(inboundId) } })
 
     await this.prisma.$transaction(async (tx) => {
-      for (const line of carton.items) {
-        const inboundItemId = line.inboundItemId ? Number(line.inboundItemId) : undefined
-        const item = inboundItemId
-          ? itemMap.get(inboundItemId)
-          : order.items.find((i) => this.normalizeScanToken(i.sku) === this.normalizeScanToken(line.sku))
-        if (!item) throw new BadRequestException(`外箱 ${carton.boxCode} 明细 SKU ${line.sku} 无效`)
-
-        const current = item.actualQty ?? 0
-        const remaining = item.expectedQty - current
-        if (remaining <= 0) {
-          throw new BadRequestException(`${item.sku} 已收满，外箱 ${carton.boxCode} 无法重复入账`)
-        }
-        const increment = Math.min(line.qty, remaining)
-        await tx.inboundOrderItem.update({
-          where: { id: item.id },
-          data: { actualQty: current + increment },
-        })
-        item.actualQty = current + increment
-      }
       await tx.inboundCarton.update({
         where: { id: carton.id },
         data: {
@@ -575,11 +581,19 @@ export class InboundService {
           receivedBy: operatorId ? BigInt(operatorId) : undefined,
         },
       })
+      const receivedCount = await tx.inboundCarton.count({
+        where: { inboundId: BigInt(inboundId), status: 'received' },
+      })
+      await tx.inboundOrder.update({
+        where: { id: BigInt(inboundId) },
+        data: { receivedCartonCount: receivedCount },
+      })
     })
 
     const refreshed = await this.detail(inboundId)
     const summary = this.buildReceiveSummary(refreshed)
     const detailText = carton.items.map((l) => `${l.sku}×${l.qty}`).join('、')
+    const receivedCartonCount = refreshed.receivedCartonCount ?? summary.scannedCartonCount
 
     await this.opLog.log({
       operatorId,
@@ -587,13 +601,14 @@ export class InboundService {
       action: 'receive_carton',
       targetType: 'inbound_order',
       targetId: inboundNo,
-      detail: { boxCode: carton.boxCode, items: carton.items },
+      detail: { boxCode: carton.boxCode, items: carton.items, receivedCartonCount },
     })
 
     return {
       scanType: 'outer_box' as const,
-      message: `[外箱标] ${carton.boxCode} → ${detailText}（本单累计 ${summary.totalReceived}/${summary.totalExpected}）`,
-      increment: carton.items.reduce((s, l) => s + l.qty, 0),
+      message: `[外箱标] ${carton.boxCode} 已确认（实收 ${receivedCartonCount}/${expectedCartons} 箱）${detailText ? ` · ${detailText}` : ''}`,
+      increment: 1,
+      receivedCartonCount,
       carton: {
         boxCode: carton.boxCode,
         items: carton.items.map((l) => ({ sku: l.sku, qty: l.qty })),
@@ -665,6 +680,161 @@ export class InboundService {
       expectedQty: item.expectedQty,
       actualQty: item.actualQty ?? item.expectedQty,
       itemId: item.id,
+    }
+  }
+
+  /** 清点与测量：扫描 SKU 累加实收，可选回写测量机长宽高 */
+  async scanQc(
+    id: number,
+    data: {
+      scanCode?: string
+      increment?: number
+      lengthCm?: number
+      widthCm?: number
+      heightCm?: number
+      clientRequestId?: string
+    },
+    operatorId?: number,
+  ) {
+    let parsed: ReturnType<typeof parseInboundQcScanInput>
+    try {
+      parsed = parseInboundQcScanInput(String(data.scanCode || ''), data.increment, data)
+    } catch (error: any) {
+      throw new BadRequestException(error?.message || '扫描内容无效')
+    }
+
+    const clientRequestId = String(data.clientRequestId || '').trim().slice(0, 100)
+    if (clientRequestId) {
+      const duplicate = await this.prisma.operationLog.findFirst({
+        where: {
+          module: 'inbound',
+          action: 'scan_qc',
+          detail: { path: '$.clientRequestId', equals: clientRequestId },
+        },
+        orderBy: { id: 'desc' },
+      })
+      if (duplicate) {
+        return {
+          message: '该扫码请求已处理，已按最新单据状态恢复',
+          increment: 0,
+          duplicate: true,
+        }
+      }
+    }
+
+    let order = await this.detail(id)
+    if (TERMINAL_STATUSES.has(order.status)) throw new BadRequestException('该入库单已完结')
+    if (order.status === 'exception') {
+      throw new BadRequestException('入库单处于异常状态，请先放行后再扫描')
+    }
+    if (PENDING_RECEIPT_STATUSES.has(order.status)) {
+      throw new BadRequestException('请先到仓扫描并完成扫箱收货')
+    }
+
+    const canCount = QC_STATUSES.has(order.status)
+    const canMeasureOnly = PUTAWAY_STATUSES.has(order.status)
+    if (!canCount && !canMeasureOnly) {
+      throw new BadRequestException(`当前状态「${order.status}」不可扫描清点`)
+    }
+
+    const productIds = [...new Set(order.items.map((i) => i.productId))]
+    const products = productIds.length
+      ? await this.prisma.product.findMany({ where: { id: { in: productIds } } })
+      : []
+    const prodMap = new Map(products.map((p) => [Number(p.id), p]))
+
+    const item = this.findInboundItemByScan(order, parsed.skuToken, prodMap)
+    if (!item) {
+      throw new NotFoundException(`扫描码 ${parsed.skuToken} 不属于入库单 ${order.inboundNo}`)
+    }
+
+    const increment = canCount ? parsed.increment : 0
+    const current = item.actualQty ?? 0
+    const newActual = canCount ? current + increment : current
+
+    const hasDims = [parsed.lengthCm, parsed.widthCm, parsed.heightCm].every(
+      (v) => v != null && Number(v) > 0,
+    )
+
+    await this.prisma.$transaction(async (tx) => {
+      if (canCount && increment > 0) {
+        await tx.inboundOrderItem.update({
+          where: { id: item.id },
+          data: { actualQty: newActual },
+        })
+      }
+      if (hasDims) {
+        await tx.product.update({
+          where: { id: item.productId },
+          data: {
+            measuredLengthCm: parsed.lengthCm,
+            measuredWidthCm: parsed.widthCm,
+            measuredHeightCm: parsed.heightCm,
+            measuredAt: new Date(),
+          },
+        })
+      }
+    })
+
+    const refreshed = await this.detail(id)
+    const line = refreshed.items.find((i) => Number(i.id) === Number(item.id))!
+    const summary = this.buildReceiveSummary(refreshed)
+
+    const dimText = hasDims
+      ? ` · 体积 ${parsed.lengthCm}×${parsed.widthCm}×${parsed.heightCm} cm`
+      : ''
+
+    await this.opLog.log({
+      operatorId,
+      module: 'inbound',
+      action: 'scan_qc',
+      targetType: 'inbound_order',
+      targetId: order.inboundNo,
+      detail: {
+        sku: item.sku,
+        increment,
+        actualQty: line.actualQty ?? newActual,
+        lengthCm: parsed.lengthCm,
+        widthCm: parsed.widthCm,
+        heightCm: parsed.heightCm,
+        clientRequestId: clientRequestId || null,
+      },
+    })
+
+    return {
+      message: canCount
+        ? `[清点] ${item.sku} +${increment} 件（累计 ${line.actualQty ?? newActual}/${line.expectedQty}）${dimText}`
+        : `[测量] ${item.sku} 尺寸已更新${dimText}`,
+      sku: line.sku,
+      increment,
+      expectedQty: line.expectedQty,
+      actualQty: line.actualQty ?? newActual,
+      remaining: Math.max(0, line.expectedQty - (line.actualQty ?? newActual)),
+      itemId: line.id,
+      lengthCm: line.lengthCm ?? parsed.lengthCm ?? null,
+      widthCm: line.widthCm ?? parsed.widthCm ?? null,
+      heightCm: line.heightCm ?? parsed.heightCm ?? null,
+      dimensionsSource: line.dimensionsSource ?? (hasDims ? 'measured' : null),
+      item: {
+        id: line.id,
+        sku: line.sku,
+        productName: line.productName,
+        spec: line.spec,
+        expectedQty: line.expectedQty,
+        actualQty: line.actualQty ?? newActual,
+        remaining: Math.max(0, line.expectedQty - (line.actualQty ?? newActual)),
+        lengthCm: line.lengthCm ?? parsed.lengthCm ?? null,
+        widthCm: line.widthCm ?? parsed.widthCm ?? null,
+        heightCm: line.heightCm ?? parsed.heightCm ?? null,
+        dimensionsSource: line.dimensionsSource ?? (hasDims ? 'measured' : null),
+      },
+      order: {
+        id: refreshed.id,
+        inboundNo: refreshed.inboundNo,
+        status: refreshed.status,
+        displayStatus: refreshed.displayStatus,
+        ...summary,
+      },
     }
   }
 
@@ -866,11 +1036,13 @@ export class InboundService {
     return { ...updated, id: Number(updated.id) }
   }
 
-  async resolveException(id: number, operatorId?: number) {
+  async resolveException(id: number, body: { reason?: string }, operatorId?: number) {
     const order = await this.detail(id)
     if (order.status !== 'exception') {
       throw new BadRequestException('仅异常状态的入库单可放行上架')
     }
+    const reason = String(body?.reason || '').trim()
+    if (reason.length < 2) throw new BadRequestException('请填写不少于 2 个字的异常放行原因')
     const updated = await this.prisma.inboundOrder.update({
       where: { id: BigInt(id) },
       data: { status: 'pending_putaway' },
@@ -882,6 +1054,7 @@ export class InboundService {
       action: 'resolve_exception',
       targetType: 'inbound_order',
       targetId: order.inboundNo,
+      detail: { reason },
     })
     return { ...updated, id: Number(updated.id) }
   }
@@ -1179,7 +1352,7 @@ export class InboundService {
     }
 
     if (order.status === 'exception') {
-      await this.resolveException(id, operatorId)
+      await this.resolveException(id, { reason: String(payload?.reason || '旧流程确认放行') }, operatorId)
     } else {
       await this.qc(id, { ...payload, acceptDiff: true }, operatorId)
     }
@@ -1213,7 +1386,7 @@ export class InboundService {
       const widthCm = item.widthCm != null ? Number(item.widthCm) : null
       const heightCm = item.heightCm != null ? Number(item.heightCm) : null
       if (![lengthCm, widthCm, heightCm].every((v) => v != null && v > 0)) {
-        throw new BadRequestException(`SKU ${item.sku} 尚未测量长宽高，请先到「到仓扫描 → 测量体积」填写实测尺寸`)
+        throw new BadRequestException(`SKU ${item.sku} 尚未测量长宽高，请先在「到仓扫描 → 清点与测量」填写实测尺寸`)
       }
       return {
         inboundItemId: Number(item.id),
@@ -1669,5 +1842,26 @@ export class InboundService {
     } catch (err) {
       console.warn('[inbound] push OMS skipped:', err)
     }
+  }
+
+  /** 把带客户编码的入库状态再推给 OMS（只发 inbound.status）。 */
+  async replayOmsStatuses(): Promise<{ inboundNo: string; omsStatus: string; ok: boolean }[]> {
+    const rows = await this.prisma.inboundOrder.findMany({
+      where: { omsCustomerCode: { not: null } },
+      include: { items: true },
+      orderBy: { id: 'asc' },
+    })
+    const out: { inboundNo: string; omsStatus: string; ok: boolean }[] = []
+    for (const row of rows) {
+      if (!row.omsCustomerCode) continue
+      const payload = this.mapInboundForOms(row)
+      const ok = await notifyOms(
+        'inbound.status',
+        row.omsCustomerCode,
+        payload as unknown as Record<string, unknown>,
+      )
+      out.push({ inboundNo: row.inboundNo, omsStatus: String(payload.omsStatus), ok })
+    }
+    return out
   }
 }

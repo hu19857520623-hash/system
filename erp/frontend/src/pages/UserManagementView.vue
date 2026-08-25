@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
+import { erpConfirm } from '@/utils/messageBox'
 import { usersApi, permissionsApi } from '@/api/client.js'
 import { mapUser } from '@/api/mappers.ts'
 import { withAction } from '@/composables/useListLoader.ts'
@@ -278,7 +279,7 @@ async function toggleStatus(row: any) {
   const enabling = row.status !== 'ok'
   const label = enabling ? '启用' : '停用'
   try {
-    await ElMessageBox.confirm(`确认${label}账号「${row.name}（${row.login}）」？`, `${label}用户`, { type: 'warning' })
+    await erpConfirm(`确认${label}账号「${row.name}（${row.login}）」？`, `${label}用户`, { type: 'warning' })
   } catch {
     return
   }
@@ -292,7 +293,7 @@ async function toggleStatus(row: any) {
 async function removeUser(row: any) {
   if (!canManage.value || row.id === app.authenticatedUser?.id) return
   try {
-    await ElMessageBox.confirm(`删除后不可恢复，确认删除「${row.login}」？`, '删除用户', { type: 'warning' })
+    await erpConfirm(`删除后不可恢复，确认删除「${row.login}」？`, '删除用户', { type: 'warning' })
   } catch {
     return
   }

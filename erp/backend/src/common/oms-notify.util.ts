@@ -20,12 +20,12 @@ export async function notifyOms(
   type: OmsNotifyEventType,
   customerCode: string | null | undefined,
   data: Record<string, unknown>,
-): Promise<void> {
+): Promise<boolean> {
   const base = String(process.env.OMS_WEBHOOK_URL || '').trim()
-  if (!base) return
+  if (!base) return false
   const code = String(customerCode || '').trim()
   // 公告可广播；其余事件必须带客户编码
-  if (!code && type !== 'announcement.publish') return
+  if (!code && type !== 'announcement.publish') return false
 
   const url = base.replace(/\/$/, '')
   const eventId = randomUUID()
@@ -56,7 +56,7 @@ export async function notifyOms(
         body: serialized,
         signal: AbortSignal.timeout(5000),
       })
-      if (res.ok) return
+      if (res.ok) return true
       const text = await res.text().catch(() => '')
       lastError = `${res.status} ${text}`
       if (res.status < 500 && res.status !== 429) break
@@ -68,4 +68,5 @@ export async function notifyOms(
     }
   }
   console.warn(`[oms-notify] ${type} → ${code} failed after retries: ${lastError}`)
+  return false
 }

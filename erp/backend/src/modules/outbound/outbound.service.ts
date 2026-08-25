@@ -9,6 +9,7 @@ import { createHash, randomUUID } from 'crypto'
 import { Prisma } from '@prisma/client'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { FileStoreService } from '../../common/file-store.service'
+import { OperationLogService } from '../operation-log/operation-log.service'
 import { BillingService } from '../billing/billing.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
 import { toCsv } from '../../common/csv.util'
@@ -17,8 +18,10 @@ import {
   OUTBOUND_SHIP_BASE,
   OUTBOUND_STATUSES,
   OUTBOUND_STATUS_LABELS,
+  ORDER_EXCEPTION_LABELS,
   PACK_UNIT_FEE,
   PICKING_UNIT_FEE,
+  PICKING_PROBLEM_LABELS,
   PICK_SOURCE_LABELS,
   RELABEL_UNIT_FEE,
   REVIEW_SOURCE_LABELS,
@@ -35,6 +38,7 @@ import {
 } from './outbound.policy'
 import { notifyOms } from '../../common/oms-notify.util'
 import { erpFbaCodesForOmsWarehouse, outboundDestinationLabel } from './oms-warehouse.util'
+import { toOmsOutboundStatus } from './oms-status.util'
 import {
   buildOutboundRemark,
   parseOmsOutboundMeta,
@@ -91,6 +95,8 @@ export type OutboundListQuery = PaginationDto & {
   batchNo?: string
   platform?: string
   appointmentStatus?: string
+  problemType?: string
+  exceptionType?: string
 }
 
 export type OutboundRecipientPayload = {
@@ -158,6 +164,7 @@ export class OutboundService {
     private prisma: PrismaService,
     private billing: BillingService,
     private files: FileStoreService,
+    private opLog: OperationLogService,
   ) {}
 
   private runInTx<T>(
@@ -197,6 +204,7 @@ export class OutboundService {
       labelRole: a.labelRole || null,
       contentHash: a.contentHash || null,
       createdAt: this.fmtTime(a.createdAt),
+      downloadable: Boolean(a.filePath && this.files.exists(a.filePath)),
     }))
   }
 
@@ -267,6 +275,8 @@ export class OutboundService {
     if (q.needsRelabel === 'false') where.needsRelabel = false
     if (q.isProblem === 'true') where.isProblem = true
     if (q.isProblem === 'false') where.isProblem = false
+    if (q.problemType && q.problemType !== 'all') where.problemType = q.problemType
+    if (q.exceptionType && q.exceptionType !== 'all') where.exceptionType = q.exceptionType
     const batchNo = q.batchNo?.trim()
     if (batchNo) where.batchNo = { contains: batchNo }
     if (q.platform && q.platform !== 'all') where.platform = q.platform
@@ -363,6 +373,10 @@ export class OutboundService {
       isPalletized: !!r.isPalletized,
       palletInfo: r.palletInfo || '',
       isProblem: !!r.isProblem,
+      problemType: r.problemType || '',
+      problemTypeLabel: PICKING_PROBLEM_LABELS[r.problemType || ''] || r.problemType || '',
+      exceptionType: r.exceptionType || '',
+      exceptionTypeLabel: ORDER_EXCEPTION_LABELS[r.exceptionType || ''] || r.exceptionType || '',
       problemRemark: r.problemRemark || '',
       exceptionFromStatus: (r as { exceptionFromStatus?: string | null }).exceptionFromStatus || '',
       status: r.status,
@@ -370,11 +384,13 @@ export class OutboundService {
       relabelConfirmedAt: r.relabelConfirmedAt ? this.fmtTime(r.relabelConfirmedAt) : null,
       relabelPrintCount: r.relabelPrintCount ?? 0,
       remark: r.remark || '',
-      remarkSummary: summarizeRemark(r.remark),
+      customerRemark: stripOmsSystemTags(r.remark) || '',
+      remarkSummary: summarizeRemark(stripOmsSystemTags(r.remark)),
       omsPreDeduct: parseOmsOutboundPreDeduct(r.remark),
       omsMeasure: parseOmsOutboundMeasure(r.remark),
       omsActualFees: parseOmsOutboundActualFees(r.remark),
       attachmentName: r.attachmentName || '',
+      attachmentDownloadable: Boolean(r.attachmentPath && this.files.exists(r.attachmentPath)),
       attachments: this.mapAttachments(r.attachments),
       shippedAt: r.shippedAt ? this.fmtTime(r.shippedAt) : null,
       deliveredAt: r.deliveredAt ? this.fmtTime(r.deliveredAt) : null,
@@ -481,7 +497,7 @@ export class OutboundService {
       r.needsRelabel ? '是' : '否',
       r.isProblem ? '是' : '否',
       r.podCode || '',
-      r.remark,
+      r.customerRemark || r.remark,
       r.createdAt,
       r.shippedAt || '',
       r.deliveredAt || '',
@@ -531,8 +547,28 @@ export class OutboundService {
         contentBase64: data.contentBase64,
       })
     }
+    const normalizedAttachments = this.normalizeAttachmentInputs(attachmentInputs)
 
     return this.runInTx(tx, async (client) => {
+      const warehouse = await client.warehouse.findUnique({ where: { warehouseCode } })
+      if (!warehouse) throw new BadRequestException(`出库仓库不存在：${warehouseCode}`)
+      let requiredFiles: string[] = []
+      try {
+        const parsed = JSON.parse(warehouse.requiredOutboundFiles || '[]')
+        if (Array.isArray(parsed)) requiredFiles = parsed.map(String)
+      } catch {
+        requiredFiles = []
+      }
+      const providedTypes = new Set(normalizedAttachments.map(item => item.fileType))
+      const missingTypes = requiredFiles.filter(fileType => !providedTypes.has(fileType))
+      if (missingTypes.length) {
+        const labels: Record<string, string> = {
+          outerLabel: '外箱标签', skuLabel: 'SKU 标签', deliveryList: '送货清单', appointment: '预约文件',
+        }
+        throw new BadRequestException(
+          `${warehouse.warehouseName} 缺少必传文件：${missingTypes.map(item => labels[item] || item).join('、')}`,
+        )
+      }
       for (const line of lines) {
         const qty = Number(line.qty)
         if (qty <= 0) throw new BadRequestException(`${line.sku} 数量须大于 0`)
@@ -582,8 +618,8 @@ export class OutboundService {
         include: { items: true, attachments: true },
       })
 
-      const firstAttachment = attachmentInputs.length
-        ? await this.persistAttachments(client, order.id, attachmentInputs)
+      const firstAttachment = normalizedAttachments.length
+        ? await this.persistAttachments(client, order.id, normalizedAttachments)
         : null
       if (firstAttachment) {
         await client.outboundOrder.update({
@@ -736,12 +772,27 @@ export class OutboundService {
     return this.detail(id)
   }
 
+  async downloadPodAttachment(id: number) {
+    const att = await this.prisma.outboundAttachment.findFirst({
+      where: { outboundId: BigInt(id), fileType: 'pod' },
+      orderBy: { id: 'desc' },
+    })
+    if (!att) throw new NotFoundException('该出库单暂无 POD 签收单')
+    if (!att.filePath || !this.files.exists(att.filePath)) {
+      throw new NotFoundException('POD 签收单文件不存在，可能未同步到本机或已被清理')
+    }
+    return { fileName: att.fileName, content: this.files.read(att.filePath) }
+  }
+
   async downloadAttachment(id: number, attachmentId?: number) {
-    if (attachmentId) {
+    if (attachmentId != null && Number.isFinite(attachmentId) && attachmentId > 0) {
       const att = await this.prisma.outboundAttachment.findFirst({
         where: { id: BigInt(attachmentId), outboundId: BigInt(id) },
       })
       if (!att) throw new NotFoundException('附件不存在')
+      if (!att.filePath || !this.files.exists(att.filePath)) {
+        throw new NotFoundException('附件文件不存在，可能未同步到本机或已被清理')
+      }
       return { fileName: att.fileName, content: this.files.read(att.filePath) }
     }
     const order = await this.prisma.outboundOrder.findUnique({ where: { id: BigInt(id) } })
@@ -751,7 +802,13 @@ export class OutboundService {
         orderBy: { id: 'asc' },
       })
       if (!first) throw new NotFoundException('该出库单无附件')
+      if (!first.filePath || !this.files.exists(first.filePath)) {
+        throw new NotFoundException('附件文件不存在，可能未同步到本机或已被清理')
+      }
       return { fileName: first.fileName, content: this.files.read(first.filePath) }
+    }
+    if (!this.files.exists(order.attachmentPath)) {
+      throw new NotFoundException('附件文件不存在，可能未同步到本机或已被清理')
     }
     return {
       fileName: order.attachmentName || 'attachment',
@@ -895,6 +952,8 @@ export class OutboundService {
     payload: {
       markType?: 'problem' | 'exception' | 'clear_problem' | 'clear_exception'
       problemRemark?: string
+      problemType?: string
+      exceptionType?: string
       /** @deprecated 请使用 markType */
       isProblem?: boolean
     },
@@ -917,10 +976,14 @@ export class OutboundService {
         if (blocked.includes(order.status)) {
           throw new BadRequestException('当前状态不可标记问题件')
         }
+        if (!payload.problemType || !PICKING_PROBLEM_LABELS[payload.problemType]) {
+          throw new BadRequestException('请选择有效的拣货问题类型')
+        }
         await this.prisma.outboundOrder.update({
           where: { id: BigInt(id) },
           data: {
             isProblem: true,
+            problemType: payload.problemType,
             problemRemark: payload.problemRemark?.trim() || order.problemRemark,
           },
         })
@@ -932,10 +995,14 @@ export class OutboundService {
         if (order.status === 'exception') {
           throw new BadRequestException('出库单已处于异常状态')
         }
+        if (!payload.exceptionType || !ORDER_EXCEPTION_LABELS[payload.exceptionType]) {
+          throw new BadRequestException('请选择有效的订单异常类型')
+        }
         await this.prisma.outboundOrder.update({
           where: { id: BigInt(id) },
           data: {
             exceptionFromStatus: order.status,
+            exceptionType: payload.exceptionType,
             status: 'exception',
             problemRemark: payload.problemRemark?.trim() || order.problemRemark,
           },
@@ -944,7 +1011,7 @@ export class OutboundService {
       case 'clear_problem':
         await this.prisma.outboundOrder.update({
           where: { id: BigInt(id) },
-          data: { isProblem: false, problemRemark: null },
+          data: { isProblem: false, problemType: null, problemRemark: null },
         })
         break
       case 'clear_exception':
@@ -956,6 +1023,7 @@ export class OutboundService {
           data: {
             status: order.exceptionFromStatus || 'pending_pick',
             exceptionFromStatus: null,
+            exceptionType: null,
           },
         })
         break
@@ -1173,7 +1241,7 @@ th{background:#f5f5f5}
     }
   }
 
-  async startReview(id: number) {
+  async startReview(id: number, operatorId?: number) {
     const order = await this.prisma.outboundOrder.findUnique({ where: { id: BigInt(id) } })
     if (!order) throw new NotFoundException('出库单不存在')
     if (order.status === 'exception') throw new BadRequestException('异常单已暂停流程，请先解除异常')
@@ -1184,6 +1252,14 @@ th{background:#f5f5f5}
     await this.prisma.outboundOrder.update({
       where: { id: BigInt(id) },
       data: { status: 'reviewing' },
+    })
+    await this.opLog.log({
+      operatorId,
+      module: 'outbound',
+      action: 'start_review',
+      targetType: 'outbound_order',
+      targetId: order.outboundNo,
+      detail: { reviewSource: 'pda_or_web' },
     })
     return this.detail(id)
   }
@@ -1591,25 +1667,25 @@ th{background:#f5f5f5}
 
   // ───────────── OMS P1：客户预约出库 / 物流回写 ─────────────
 
-  private toOmsOutboundStatus(status: string): string {
-    switch (status) {
-      case 'pending_pick':
-      case 'picking':
-      case 'picked':
-      case 'reviewing':
-      case 'pending_relabel':
-      case 'packed':
-        return status === 'pending_pick' ? 'locked' : 'picking'
-      case 'shipped':
-        return 'shipped'
-      case 'delivered':
-        return 'delivered'
-      case 'exception':
-      case 'cancelled':
-        return 'exception'
-      default:
-        return status
+  /** 把已有出库状态再推给 OMS（只发 outbound.status，不重放库存/退款）。 */
+  async replayOmsStatuses(): Promise<{ outboundNo: string; omsStatus: string; ok: boolean }[]> {
+    const rows = await this.prisma.outboundOrder.findMany({
+      where: { customerId: { not: null } },
+      select: { outboundNo: true },
+      orderBy: { id: 'asc' },
+    })
+    const out: { outboundNo: string; omsStatus: string; ok: boolean }[] = []
+    for (const row of rows) {
+      const mapped = await this.getByOutboundNoForOms(row.outboundNo)
+      if (!mapped.customerCode) continue
+      const ok = await notifyOms(
+        'outbound.status',
+        mapped.customerCode,
+        mapped as unknown as Record<string, unknown>,
+      )
+      out.push({ outboundNo: mapped.outboundNo, omsStatus: String(mapped.omsStatus), ok })
     }
+    return out
   }
 
   private mapOutboundForOms(order: {
@@ -1661,7 +1737,7 @@ th{background:#f5f5f5}
       customerName: order.customerName ?? null,
       warehouseCode: order.warehouseCode,
       status: order.status,
-      omsStatus: this.toOmsOutboundStatus(order.status),
+      omsStatus: toOmsOutboundStatus(order.status),
       trackingNo: order.trackingNo,
       carrier: order.carrier,
       logisticsProduct: order.logisticsProduct,
@@ -1976,7 +2052,7 @@ th{background:#f5f5f5}
     return {
       items: rows.map((o) => {
         const line = o.items.find((i) => i.sku === skuCode)
-        const omsStatus = this.toOmsOutboundStatus(o.status)
+        const omsStatus = toOmsOutboundStatus(o.status)
         return {
           outboundNo: o.outboundNo,
           outboundId: Number(o.id),
@@ -2042,6 +2118,9 @@ th{background:#f5f5f5}
     }
     const att = order.attachments[0]
     if (!att) throw new NotFoundException('该出库单暂无 POD 签收单')
+    if (!att.filePath || !this.files.exists(att.filePath)) {
+      throw new NotFoundException('POD 签收单文件不存在，可能未同步到本机或已被清理')
+    }
     return { fileName: att.fileName, content: this.files.read(att.filePath) }
   }
 

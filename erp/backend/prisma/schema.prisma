@@ -321,6 +321,7 @@ model Warehouse {
   country       String?  @default("South Africa") @db.VarChar(50)
   contactName   String?  @map("contact_name") @db.VarChar(50)
   contactPhone  String?  @map("contact_phone") @db.VarChar(30)
+  requiredOutboundFiles String? @map("required_outbound_files") @db.Text
   status        Int      @default(1) @db.TinyInt
   createdAt     DateTime @default(now()) @map("created_at")
 
@@ -416,6 +417,7 @@ model InboundOrder {
   contact         String?          @db.VarChar(100)
   contactPhone    String?          @map("contact_phone") @db.VarChar(50)
   labelPrintCount Int              @default(0) @map("label_print_count")
+  receivedCartonCount Int?         @map("received_carton_count")
   createdAt     DateTime           @default(now()) @map("created_at")
   updatedAt     DateTime           @updatedAt @map("updated_at")
   items         InboundOrderItem[]
@@ -596,6 +598,8 @@ model OutboundOrder {
   pickingStartedAt   DateTime?          @map("picking_started_at")
   pickedAt           DateTime?          @map("picked_at")
   isProblem          Boolean            @default(false) @map("is_problem")
+  problemType        String?            @map("problem_type") @db.VarChar(30)
+  exceptionType      String?            @map("exception_type") @db.VarChar(30)
   problemRemark      String?            @map("problem_remark") @db.VarChar(200)
   exceptionFromStatus String?           @map("exception_from_status") @db.VarChar(20)
   batchNo            String?            @map("batch_no") @db.VarChar(50)
@@ -1007,6 +1011,30 @@ model CostLedger {
 
   @@index([costDate], map: "idx_cost_date")
   @@map("cost_ledger")
+}
+
+// ───────────── 公司日常经营收支 ─────────────
+
+model OperatingLedger {
+  id            BigInt   @id @default(autoincrement())
+  entryNo       String   @unique @map("entry_no") @db.VarChar(30)
+  direction     String   @db.VarChar(10)
+  category      String   @db.VarChar(50)
+  amount        Decimal  @db.Decimal(14, 2)
+  currency      String   @default("CNY") @db.VarChar(10)
+  paymentMethod String?  @map("payment_method") @db.VarChar(30)
+  accountName   String?  @map("account_name") @db.VarChar(100)
+  counterparty  String?  @db.VarChar(150)
+  referenceNo   String?  @map("reference_no") @db.VarChar(50)
+  occurredOn    DateTime @map("occurred_on") @db.Date
+  remark        String?  @db.VarChar(500)
+  createdBy     BigInt?  @map("created_by")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@index([occurredOn], map: "idx_operating_ledger_date")
+  @@index([direction, category], map: "idx_operating_ledger_type_category")
+  @@map("operating_ledger")
 }
 
 // ───────────── 利润分析 ─────────────

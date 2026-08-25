@@ -113,7 +113,7 @@ export class DashboardService {
       { key: 'purchase', screenId: 'purchase', title: '待审采购单', count: purchaseAudit, route: '/purchase', tone: 'warn' as const },
       { key: 'purchase_paid', screenId: 'purchase', title: '已打款采购单', count: purchasePaid, route: '/purchase', tone: 'info' as const },
       { key: 'logistics_wh', screenId: 'logistics_wh', title: '待中转收货', count: logisticsPending, route: '/logistics-wh', tone: 'warn' as const },
-      { key: 'mingrui', screenId: 'mingrui', title: '待明瑞下单', count: mingruiPending, route: '/mingrui', tone: 'warn' as const },
+      { key: 'mingrui', screenId: 'mingrui', title: '明瑞在途', count: mingruiPending, route: '/mingrui', tone: 'warn' as const },
       { key: 'inbound_in_transit', screenId: 'inbound_arrival', title: '在途待扫描', count: inboundInTransit, route: '/inbound/arrival-scan', tone: 'warn' as const },
       { key: 'inbound_arrived', screenId: 'inbound', title: '已到仓待收', count: inboundArrived, route: '/inbound/receipt', tone: 'warn' as const },
       ...(inboundReceiving > 0 ? [{ key: 'inbound_receiving', screenId: 'inbound', title: '收货中入库单', count: inboundReceiving, route: '/inbound/receipt', tone: 'warn' as const }] : []),

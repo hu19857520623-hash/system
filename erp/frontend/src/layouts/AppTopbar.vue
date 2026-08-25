@@ -2,7 +2,7 @@
 import { useAppStore } from '@/stores/app'
 import { useRoute, useRouter } from 'vue-router'
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
-import { ElMessageBox } from 'element-plus'
+import { erpAlert } from '@/utils/messageBox'
 import { useNotifications } from '@/composables/useNotifications'
 import ThemeToggle from '@/components/ThemeToggle.vue'
 
@@ -49,10 +49,10 @@ function goNotify(item: { route: string }) {
 }
 
 function openHelp() {
-  ElMessageBox.alert(
+  erpAlert(
     '获客：线索池领取 → 我的跟进写跟进 → 成交管理上传资料并转 ERP。仓储：到仓扫描 → 入库收货 → 上架 → 出库。财务：客户充值、结算与海运账单。',
     '操作指引',
-    { confirmButtonText: '知道了', appendTo: document.body },
+    { confirmButtonText: '知道了' },
   )
 }
 

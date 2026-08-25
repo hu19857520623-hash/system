@@ -23,6 +23,18 @@ describe('inventory customer identity', () => {
     })
   })
 
+  it('maps catalog pool internal SKU to platform customer TKL', () => {
+    const identity = resolveCustomerIdentity({
+      sku: 'TKL-TK-99001',
+      customerNameByCode: new Map([['TKL', '平台货盘']]),
+    })
+    expect(identity).toEqual({
+      customerCode: 'TKL',
+      customerSku: 'TK-99001',
+      customerName: '平台货盘',
+    })
+  })
+
   it('keeps supplier and customer labels separate in ERP inventory rows', () => {
     const row = buildErpWarehouseInventoryRow({
       id: 1,

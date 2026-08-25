@@ -88,6 +88,53 @@ export class PricingService {
     }
   }
 
+  private async loadCatalogHoldersBySku(skus: string[]) {
+    if (!skus.length) return new Map<string, { customerCode: string; customerName: string; quantity: number }[]>()
+    const rows = await this.prisma.customerSkuInventory.findMany({
+      where: { sku: { in: skus }, quantity: { gt: 0 } },
+      select: { sku: true, quantity: true, customerId: true },
+    })
+    if (!rows.length) return new Map()
+
+    const customers = await this.prisma.customer.findMany({
+      where: { id: { in: [...new Set(rows.map((row) => row.customerId))] } },
+      select: { id: true, customerCode: true, customerName: true },
+    })
+    const customerMap = new Map(customers.map((c) => [Number(c.id), c]))
+    const map = new Map<string, { customerCode: string; customerName: string; quantity: number }[]>()
+
+    for (const row of rows) {
+      const customer = customerMap.get(Number(row.customerId))
+      if (!customer) continue
+      const list = map.get(row.sku) || []
+      list.push({
+        customerCode: customer.customerCode,
+        customerName: customer.customerName,
+        quantity: row.quantity,
+      })
+      map.set(row.sku, list)
+    }
+    for (const list of map.values()) {
+      list.sort((a, b) => b.quantity - a.quantity)
+    }
+    return map
+  }
+
+  private attachHolderFields<T extends { sku: string }>(
+    row: T,
+    holdersMap: Map<string, { customerCode: string; customerName: string; quantity: number }[]>,
+  ) {
+    const holders = holdersMap.get(row.sku) || []
+    return {
+      ...row,
+      holders,
+      holderCount: holders.length,
+      holderSummary: holders.length
+        ? holders.map((h) => `${h.customerCode}(${h.quantity})`).join('、')
+        : '',
+    }
+  }
+
   private async loadWarehouseAvailableBySku(skus: string[]) {
     if (!skus.length) return new Map<string, number>()
     const wmsCodes = (
@@ -164,7 +211,13 @@ export class PricingService {
       this.prisma.productPricing.count({ where }),
     ])
     const stockMap = await this.loadWarehouseAvailableBySku(rows.map((r) => r.sku))
-    return { items: rows.map((r) => this.serialize(r, stockMap.get(r.sku) || 0)), total, page, pageSize }
+    const holdersMap = await this.loadCatalogHoldersBySku(rows.map((r) => r.sku))
+    return {
+      items: rows.map((r) => this.attachHolderFields(this.serialize(r, stockMap.get(r.sku) || 0), holdersMap)),
+      total,
+      page,
+      pageSize,
+    }
   }
 
   async detail(id: number) {
@@ -175,7 +228,8 @@ export class PricingService {
     if (!row) throw new NotFoundException('货盘库存记录不存在')
     const enriched = await this.ensureMarketPrice(row)
     const stockMap = await this.loadWarehouseAvailableBySku([enriched.sku])
-    return this.serialize(enriched, stockMap.get(enriched.sku) || 0)
+    const holdersMap = await this.loadCatalogHoldersBySku([enriched.sku])
+    return this.attachHolderFields(this.serialize(enriched, stockMap.get(enriched.sku) || 0), holdersMap)
   }
 
   /** 入库发运创建时自动同步货盘库存（海运费、入库数量等） */

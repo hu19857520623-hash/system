@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
+import { erpConfirm } from '@/utils/messageBox'
 import type { TableInstance } from 'element-plus'
 import { productApi, asyncIoApi, supplierApi, usersApi } from '@/api/client.js'
 import { mapProduct } from '@/api/mappers.ts'
@@ -13,8 +14,10 @@ import DetailSheet from '@/components/ui/DetailSheet.vue'
 import { useAsyncIo } from '@/composables/useAsyncIo'
 import { downloadProductImportTemplate, PRODUCT_IMPORT_FIELDS } from '@/constants/importTemplates.ts'
 import ImportFieldLegend from '@/components/ImportFieldLegend.vue'
+import { printProductSkuLabels } from '@/features/labels/productLabelPrint.ts'
 
 const app = useAppStore()
+const canPrintLabel = computed(() => app.hasPerm('products.print_label'))
 const { importCsv } = useAsyncIo()
 const route = useRoute()
 
@@ -347,7 +350,7 @@ async function removeProductImage(productId: number, imageId: number | null) {
     return
   }
   try {
-    await ElMessageBox.confirm('确认删除这张图片？', '删除图片', { type: 'warning' })
+    await erpConfirm('确认删除这张图片？', '删除图片', { type: 'warning' })
     const res = await productApi.deleteImage(productId, imageId)
     const product = res.product || res
     if (detailProduct.value?.id === productId) applyProductImages(detailProduct.value, mapProduct(product))
@@ -371,7 +374,7 @@ async function handleEditImageUpload(options: { file: File }) {
 
 async function disableProduct(row: any) {
   try {
-    await ElMessageBox.confirm(`确认禁用商品「${row.name}」（${row.sku}）？禁用后不可用于新采购下单。`, '禁用商品', { type: 'warning' })
+    await erpConfirm(`确认禁用商品「${row.name}」（${row.sku}）？禁用后不可用于新采购下单。`, '禁用商品', { type: 'warning' })
     const ok = await withAction(async () => {
       await productApi.disable(row.id)
     }, '商品已禁用')
@@ -384,6 +387,19 @@ async function enableProduct(row: any) {
     await productApi.enable(row.id)
   }, '商品已启用')
   if (ok) load()
+}
+
+function productLabelItem(row: { sku?: string; name?: string; barcode?: string }) {
+  return { sku: row.sku || '', barcode: row.barcode || row.sku || '' }
+}
+
+async function printSkuLabels(items: Array<{ sku?: string; name?: string; barcode?: string }>) {
+  if (!items.length) {
+    ElMessage.warning('请先勾选要打印条码的商品')
+    return
+  }
+  const ok = await printProductSkuLabels(items.map(productLabelItem))
+  if (ok) ElMessage.success(`已打开 ${items.length} 个 SKU 标签打印预览`)
 }
 </script>
 
@@ -405,6 +421,7 @@ async function enableProduct(row: any) {
             <el-button size="small" :disabled="!selectedRows.length" @click="clearSelection">取消选择</el-button>
             <span v-if="selectedRows.length" class="sel-count">已选 {{ selectedRows.length }} 条</span>
             <el-button type="primary" size="small" :disabled="!selectedRows.length" @click="exportSelected">导出选中</el-button>
+            <el-button v-if="canPrintLabel" size="small" :disabled="!selectedRows.length" @click="printSkuLabels(selectedRows)">打印 SKU 标签</el-button>
           </div>
         </div>
       </template>
@@ -474,10 +491,11 @@ async function enableProduct(row: any) {
             <span :style="{ color: row.sync.includes('✓') ? '#1f9d92' : '#8b95a8', fontSize: '12px' }">{{ row.sync }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="220" fixed="right">
+        <el-table-column label="操作" width="280" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="openEdit(row.id)">编辑</el-button>
             <el-button link type="primary" size="small" @click="openDetail(row.id)">详情</el-button>
+            <el-button v-if="canPrintLabel" link type="success" size="small" @click="printSkuLabels([row])">打印标签</el-button>
             <el-button
               v-if="row.statusKey !== 'inactive'"
               link
@@ -656,6 +674,7 @@ async function enableProduct(row: any) {
 
     <template #footer>
       <el-button @click="detailVisible = false">关闭</el-button>
+      <el-button v-if="canPrintLabel" type="success" plain @click="printSkuLabels([detailProduct])">打印 SKU 标签</el-button>
       <el-button type="primary" @click="detailVisible = false; openEdit(detailProduct.id)">编辑</el-button>
     </template>
   </el-dialog>

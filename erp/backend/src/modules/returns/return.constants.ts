@@ -8,6 +8,9 @@ export const RETURN_PROCESS_METHODS = {
 
 export type ReturnProcessMethod = keyof typeof RETURN_PROCESS_METHODS
 
+/** 允许「重新收货」修正实收/箱数的状态（会清除测体积与待确认费用） */
+export const RETURN_RE_RECEIVE_STATUSES = ['received', 'measured', 'fee_calculated', 'arrived'] as const
+
 export const RETURN_STATUS_LABELS: Record<string, string> = {
   pending_arrival: '在途',
   received: '已收货',

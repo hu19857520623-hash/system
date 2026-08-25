@@ -302,7 +302,8 @@ export function parseTakealotDocumentText(text: string, kind?: TakealotDocKind):
   if (asn) out.asnNumber = asn[1].toUpperCase()
 
   const totalUnits =
-    t.match(/Total units on delivery:\s*(\d+)/i)
+    t.match(/Total units to collect:\s*(\d+)/i)
+    || t.match(/Total units on delivery:\s*(\d+)/i)
     || t.match(/\bTAL\s*MP\s+\d{6,15}\s+ASN[A-Z0-9]+\s+(\d+)\s+Stock\b/i)
   if (totalUnits) out.totalUnits = Number(totalUnits[1])
 

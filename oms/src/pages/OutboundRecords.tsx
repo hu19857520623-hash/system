@@ -23,7 +23,7 @@ import {
   type FulfillmentFilters,
 } from '../data/fulfillmentUtils'
 import FulfillmentDetailDrawer from '../components/outbound/FulfillmentDetailDrawer'
-import { PodStatusBadge, PodUploadModal, PodViewModal, PodRowActions } from '../components/outbound/PodReceiptModals'
+import { PodStatusBadge, PodUploadModal, PodViewModal, PodRowActions, TableActionLink, actionLinkClass } from '../components/outbound/PodReceiptModals'
 import { useRole } from '../auth/RoleContext'
 import { useDataScope } from '../auth/useDataScope'
 import { getCustomerCode, getCustomerIdForRole } from '../data/dataScope'
@@ -253,7 +253,7 @@ export default function OutboundRecords() {
               <th>费用对账</th>
               <th className="text-right">金额</th>
               <th>时间</th>
-              <th>操作</th>
+              <th className="w-[76px]">操作</th>
             </tr>
           </thead>
           <tbody className="table-body">
@@ -320,12 +320,12 @@ export default function OutboundRecords() {
                   {r.amount != null ? formatCurrency(r.amount) : '—'}
                 </td>
                 <td className="table-cell text-xs text-text-muted whitespace-nowrap">{r.createdAt}</td>
-                <td className="table-cell">
-                  <div className="flex flex-wrap gap-1">
-                    <Button variant="ghost" size="sm" onClick={() => setDetailRow(r)}>查看</Button>
+                <td className="table-cell align-top">
+                  <div className="flex min-w-[72px] flex-col gap-0.5">
+                    <TableActionLink onClick={() => setDetailRow(r)}>查看</TableActionLink>
                     {r.outbound?.status === 'draft' && (
-                      <Link to={`/outbound?edit=${encodeURIComponent(r.outbound.id)}`}>
-                        <Button variant="ghost" size="sm">编辑草稿</Button>
+                      <Link to={`/outbound?edit=${encodeURIComponent(r.outbound.id)}`} className={actionLinkClass()}>
+                        编辑
                       </Link>
                     )}
                     <PodRowActions

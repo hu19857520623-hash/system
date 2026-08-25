@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { Plus, Trash2, ListOrdered, Upload } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, FileSearch, Plus, Trash2, ListOrdered, Upload } from 'lucide-react'
 import { Button, Card, MonoCode, Table } from '../components/ui'
 import SkuFuzzyPicker from '../components/ui/SkuFuzzyPicker'
 import { FormSection, FormGrid, FormField, formInput, formSelect, formTextarea } from '../components/ui/form'
@@ -33,6 +33,16 @@ import {
 } from '../data/importTemplates'
 import { ImportTemplateLegend } from '../components/ui/ImportTemplateLegend'
 import type { FileAttachment, Product } from '../data/mockData'
+import { notifyIfUserError } from '../utils/userNotify'
+import {
+  detectTakealotDocKind,
+  mergeTakealotParsed,
+  parseTakealotDocumentText,
+  parseTakealotFilename,
+  toErpTakealotDestWh,
+  type TakealotParsedDoc,
+} from '../data/takealotDocParser'
+import { extractPdfTextFromFile } from '../data/takealotPdfText'
 
 interface LineItem {
   id: string
@@ -40,6 +50,14 @@ interface LineItem {
   name: string
   qty: number
 }
+
+type ReturnPlatform = 'takealot' | 'other'
+
+const TAKEALOT_RETURN_FILE_KIND = 'takealot_return_booking'
+const TAKEALOT_REASON_SCREENSHOT_KIND = 'takealot_return_reason_screenshot'
+const TAKEALOT_SALES_30D_KIND = 'takealot_return_sales_30d'
+const TAKEALOT_RETURNS_30D_KIND = 'takealot_return_returns_30d'
+const OTHER_RETURN_FILE_KIND = 'other_platform_return_doc'
 
 const RETURN_REASONS = [
   '客户拒收',
@@ -55,6 +73,13 @@ function buildReturnOrder(
     editingId: string | null
     returnNo: string
     customerId?: string
+    returnPlatform: ReturnPlatform
+    filledBy: string
+    department: string
+    selfRecall: 'yes' | 'no'
+    inboundPoNumber: string
+    purchasePrice: string
+    userType: string
     orderNo: string
     referenceNo: string
     trackingNo: string
@@ -76,6 +101,15 @@ function buildReturnOrder(
   return {
     id: fields.editingId || `rt-${Date.now()}`,
     customerId: fields.customerId,
+    returnPlatform: fields.returnPlatform,
+    takealotReturnDetails: fields.returnPlatform === 'takealot' ? {
+      filledBy: fields.filledBy.trim() || undefined,
+      department: fields.department.trim() || undefined,
+      selfRecall: fields.selfRecall,
+      inboundPoNumber: fields.inboundPoNumber.trim() || undefined,
+      purchasePrice: fields.purchasePrice ? Number(fields.purchasePrice) : undefined,
+      userType: fields.userType.trim() || undefined,
+    } : undefined,
     returnNo: fields.returnNo,
     orderNo: fields.orderNo.trim(),
     referenceNo: fields.referenceNo.trim() || undefined,
@@ -122,7 +156,21 @@ export default function ReturnApply() {
   const [qtyInput, setQtyInput] = useState('')
   const [lines, setLines] = useState<LineItem[]>([])
   const [attachments, setAttachments] = useState<FileAttachment[]>([])
-  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [returnPlatform, setReturnPlatform] = useState<ReturnPlatform>('takealot')
+  const [filledBy, setFilledBy] = useState('')
+  const [department, setDepartment] = useState('')
+  const [selfRecall, setSelfRecall] = useState<'yes' | 'no'>('yes')
+  const [inboundPoNumber, setInboundPoNumber] = useState('')
+  const [purchasePrice, setPurchasePrice] = useState('')
+  const [userType, setUserType] = useState('微信用户')
+  const [recognizingFiles, setRecognizingFiles] = useState(false)
+  const [recognitionHint, setRecognitionHint] = useState('')
+  const [recognitionWarning, setRecognitionWarning] = useState('')
+  const takealotFileInputRef = useRef<HTMLInputElement>(null)
+  const otherFileInputRef = useRef<HTMLInputElement>(null)
+  const reasonScreenshotInputRef = useRef<HTMLInputElement>(null)
+  const sales30dInputRef = useRef<HTMLInputElement>(null)
+  const returns30dInputRef = useRef<HTMLInputElement>(null)
   const [submitting, setSubmitting] = useState(false)
   const [savingDraft, setSavingDraft] = useState(false)
   const [createdAt, setCreatedAt] = useState(todayDateInput())
@@ -173,6 +221,20 @@ export default function ReturnApply() {
     setRequestedProcess(existing.requestedProcess)
     setRemark(existing.remark ?? '')
     setAttachments(existing.attachments ?? [])
+    setFilledBy(existing.takealotReturnDetails?.filledBy ?? '')
+    setDepartment(existing.takealotReturnDetails?.department ?? '')
+    setSelfRecall(existing.takealotReturnDetails?.selfRecall ?? 'yes')
+    setInboundPoNumber(existing.takealotReturnDetails?.inboundPoNumber ?? '')
+    setPurchasePrice(existing.takealotReturnDetails?.purchasePrice?.toString() ?? '')
+    setUserType(existing.takealotReturnDetails?.userType ?? '微信用户')
+    setReturnPlatform(
+      existing.returnPlatform || (existing.attachments?.some(attachment =>
+        attachment.kind === TAKEALOT_RETURN_FILE_KIND
+        || attachment.fileType === TAKEALOT_RETURN_FILE_KIND
+        || attachment.kind === '预约单'
+        || /^TAL[A-Z0-9]+\.pdf$/i.test(attachment.fileName)
+      ) ? 'takealot' : 'other'),
+    )
     setLines(existing.lineItems.map((l, i) => ({
       id: `${existing.id}-line-${i}`,
       sku: l.sku,
@@ -195,6 +257,13 @@ export default function ReturnApply() {
     editingId,
     returnNo: returnNo || nextReturnNo(),
     customerId,
+    returnPlatform,
+    filledBy,
+    department,
+    selfRecall,
+    inboundPoNumber,
+    purchasePrice,
+    userType,
     orderNo,
     referenceNo,
     trackingNo,
@@ -211,19 +280,134 @@ export default function ReturnApply() {
     createdAt,
   })
 
-  const onPickFiles = async (files: FileList | null) => {
-    if (!files?.length) return
-    const next: FileAttachment[] = []
-    for (const file of Array.from(files)) {
-      next.push(await fileToAttachment(file, 'return_doc'))
+  const applyRecognizedTakealot = (doc: TakealotParsedDoc) => {
+    if (doc.bookingRef) setReferenceNo(doc.bookingRef)
+    if (doc.appointmentDate) setExpectedArrivalAt(toDatetimeLocalInput(doc.appointmentDate))
+    if (doc.sellerName) setSellerStoreName(doc.sellerName)
+    const warehouse = toErpTakealotDestWh(doc.warehouseCode)
+    if (warehouse && RETURN_WAREHOUSE_OPTIONS.some(option => option.value === warehouse)) {
+      setReturnWarehouse(warehouse)
     }
-    setAttachments(prev => [...prev, ...next])
-    if (fileInputRef.current) fileInputRef.current.value = ''
+
+    const details = [
+      doc.bookingRef ? `预约编号 ${doc.bookingRef}` : '',
+      doc.appointmentDate ? `预约时间 ${doc.appointmentDate.replace('T', ' ')}` : '',
+      warehouse ? `仓库 ${warehouse}` : '',
+      doc.totalUnits != null ? `退货数量 ${doc.totalUnits}` : '',
+    ].filter(Boolean)
+    setRecognitionHint(details.length ? details.join(' · ') : '已识别为 Takealot 文件，但未提取到可回填字段')
+  }
+
+  const mergeAttachments = (next: FileAttachment[]) => {
+    const incomingNames = new Set(next.map(item => item.fileName))
+    setAttachments(prev => [...prev.filter(item => !incomingNames.has(item.fileName)), ...next])
+  }
+
+  const onPickTakealotFiles = async (files: FileList | null) => {
+    if (!files?.length) return
+    setRecognizingFiles(true)
+    setRecognitionHint('')
+    setRecognitionWarning('')
+    try {
+      const next: FileAttachment[] = []
+      const takealotParts: Partial<TakealotParsedDoc>[] = []
+
+      for (const file of Array.from(files)) {
+        if (!/\.pdf$/i.test(file.name)) throw new Error('Takealot 预约退货文件必须是 PDF')
+        let text = ''
+        try {
+          text = await extractPdfTextFromFile(file)
+        } catch {
+          // 扫描版 PDF 仍可继续按文件名识别。
+        }
+        const fromName = parseTakealotFilename(file.name)
+        const looksTakealot = Boolean(
+          fromName.bookingRef
+          || /takealot|booking confirmation|booking reference number|date of booking/i.test(`${file.name}\n${text}`),
+        )
+        if (!looksTakealot) throw new Error(`“${file.name}”未识别为 Takealot 预约退货文件，请核对后重新上传`)
+        const kind = detectTakealotDocKind(file.name, text)
+        takealotParts.push(fromName)
+        if (text.trim()) takealotParts.push(parseTakealotDocumentText(text, kind))
+        const attachment = await fileToAttachment(file, TAKEALOT_RETURN_FILE_KIND)
+        next.push({ ...attachment, fileType: TAKEALOT_RETURN_FILE_KIND, labelRole: 'sourceDocument' })
+      }
+
+      applyRecognizedTakealot(mergeTakealotParsed(...takealotParts))
+      mergeAttachments(next)
+    } catch (error) {
+      setRecognitionWarning(error instanceof Error ? error.message : '文件识别失败，请重新上传')
+    } finally {
+      setRecognizingFiles(false)
+      if (takealotFileInputRef.current) takealotFileInputRef.current.value = ''
+    }
+  }
+
+  const onPickOtherPlatformFiles = async (files: FileList | null) => {
+    if (!files?.length) return
+    try {
+      const next = await Promise.all(Array.from(files).map(async file => {
+        const attachment = await fileToAttachment(file, OTHER_RETURN_FILE_KIND)
+        return { ...attachment, fileType: OTHER_RETURN_FILE_KIND, labelRole: 'sourceDocument' }
+      }))
+      mergeAttachments(next)
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : '文件上传失败，请重新上传')
+    } finally {
+      if (otherFileInputRef.current) otherFileInputRef.current.value = ''
+    }
+  }
+
+  const onPickSupportingFiles = async (files: FileList | null, fileKind: string) => {
+    if (!files?.length) return
+    try {
+      const next = await Promise.all(Array.from(files).map(async file => {
+        const attachment = await fileToAttachment(file, fileKind)
+        return { ...attachment, fileType: fileKind, labelRole: 'sourceDocument' }
+      }))
+      mergeAttachments(next)
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : '资料上传失败，请重新上传')
+    }
   }
 
   const removeAttachment = (fileName: string) => {
     setAttachments(prev => prev.filter(a => a.fileName !== fileName))
   }
+
+  const takealotAttachments = attachments.filter(attachment =>
+    attachment.kind === TAKEALOT_RETURN_FILE_KIND
+    || attachment.fileType === TAKEALOT_RETURN_FILE_KIND
+    || attachment.kind === '预约单'
+    || /^TAL[A-Z0-9]+\.pdf$/i.test(attachment.fileName),
+  )
+  const reasonScreenshotAttachments = attachments.filter(attachment => attachment.kind === TAKEALOT_REASON_SCREENSHOT_KIND)
+  const sales30dAttachments = attachments.filter(attachment => attachment.kind === TAKEALOT_SALES_30D_KIND)
+  const returns30dAttachments = attachments.filter(attachment => attachment.kind === TAKEALOT_RETURNS_30D_KIND)
+  const isTakealotAttachment = (attachment: FileAttachment) => (
+    takealotAttachments.includes(attachment)
+    || attachment.kind === TAKEALOT_REASON_SCREENSHOT_KIND
+    || attachment.kind === TAKEALOT_SALES_30D_KIND
+    || attachment.kind === TAKEALOT_RETURNS_30D_KIND
+  )
+  const otherPlatformAttachments = attachments.filter(attachment =>
+    !isTakealotAttachment(attachment),
+  )
+
+  const renderAttachmentList = (files: FileAttachment[]) => files.length > 0 && (
+    <ul className="mt-3 space-y-1.5">
+      {files.map(attachment => (
+        <li key={attachment.fileName} className="flex items-center justify-between rounded-lg bg-white/80 px-3 py-2 text-xs ring-1 ring-border/70">
+          <a href={attachment.url} target="_blank" rel="noreferrer" className="truncate text-primary-600 hover:underline">
+            {attachment.fileName}
+          </a>
+          <button type="button" className="ml-3 shrink-0 text-red-500" onClick={() => removeAttachment(attachment.fileName)} aria-label={`删除 ${attachment.fileName}`}>
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        </li>
+      ))}
+    </ul>
+  )
 
   const addLine = () => {
     if (!skuInput.trim() || !qtyInput) return
@@ -257,7 +441,7 @@ export default function ReturnApply() {
       setLines(prev => [...prev, ...data])
       window.alert(`已导入 ${data.length} 行退件 SKU 明细`)
     } catch (err) {
-      if ((err as Error).message !== 'cancelled') console.error(err)
+      notifyIfUserError(err, '导入失败')
     }
   }
 
@@ -279,8 +463,32 @@ export default function ReturnApply() {
 
   const handleSubmit = async () => {
     if (!requireCustomer()) return
+    if (returnPlatform === 'takealot' && takealotAttachments.length === 0) {
+      window.alert('请在上方上传 Takealot 平台预约退货文件')
+      return
+    }
+    if (returnPlatform === 'takealot' && (!filledBy.trim() || !department.trim())) {
+      window.alert('请填写 Takealot 退货资料中的填写人和所在部门')
+      return
+    }
+    if (returnPlatform === 'takealot' && (!inboundPoNumber.trim() || !purchasePrice)) {
+      window.alert('请填写 Takealot 退货资料中的送仓 PO Number 和当时采购价')
+      return
+    }
+    if (returnPlatform === 'takealot' && reasonScreenshotAttachments.length === 0) {
+      window.alert('请上传退货理由截图')
+      return
+    }
+    if (returnPlatform === 'takealot' && (sales30dAttachments.length === 0 || returns30dAttachments.length === 0)) {
+      window.alert('请上传近 30 天销售数据表和近 30 天退货数据')
+      return
+    }
+    if (returnPlatform === 'other' && otherPlatformAttachments.length === 0) {
+      window.alert('请在下方上传其他平台退货文件')
+      return
+    }
     if (!orderNo.trim()) {
-      window.alert('请填写订单号')
+      window.alert(returnPlatform === 'takealot' ? '请填写系统退货 ID' : '请填写订单号')
       return
     }
     if (!returnReason.trim()) {
@@ -338,14 +546,176 @@ export default function ReturnApply() {
           </Card>
         )}
         <FormSection num={1} title="退件信息">
+          <div className="mb-5 grid gap-4 md:grid-cols-3">
+            <FormField label="退货平台" required hint="只有 Takealot 支持 PDF 自动识别">
+              <select
+                className={formSelect()}
+                value={returnPlatform}
+                onChange={event => {
+                  setReturnPlatform(event.target.value as ReturnPlatform)
+                  setRecognitionWarning('')
+                }}
+              >
+                <option value="takealot">Takealot</option>
+                <option value="other">其他平台</option>
+              </select>
+            </FormField>
+            <div className="md:col-span-2">
+              <p className="mb-1.5 text-xs font-medium text-text-secondary">
+                {returnPlatform === 'takealot' ? 'Takealot 自动识别结果' : '文件处理方式'}
+              </p>
+              {returnPlatform === 'takealot' ? (
+                <div className={`flex min-h-10 items-center gap-2 rounded-lg px-3 py-2 text-xs ring-1 ${
+                  recognitionWarning
+                    ? 'bg-amber-50 text-amber-800 ring-amber-200'
+                    : recognitionHint
+                      ? 'bg-green-50 text-green-800 ring-green-200'
+                      : 'bg-surface-muted text-text-muted ring-border'
+                }`}>
+                  {recognitionWarning
+                    ? <AlertTriangle className="h-4 w-4 shrink-0" />
+                    : recognitionHint
+                      ? <CheckCircle2 className="h-4 w-4 shrink-0" />
+                      : <FileSearch className="h-4 w-4 shrink-0" />}
+                  <span>{recognitionWarning || recognitionHint || '等待上传 Takealot PDF'}</span>
+                </div>
+              ) : (
+                <div className="flex min-h-10 items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 ring-1 ring-amber-200">
+                  <Upload className="h-4 w-4 shrink-0" />
+                  <span>其他平台只保存上传文件，不读取、不识别、不自动回填内容。</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {returnPlatform === 'takealot' && <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50/70 p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-blue-900">① Takealot 平台退货文件（上方）</p>
+                <p className="mt-1 text-xs text-blue-700">上传平台预约退货 PDF，系统自动读取预约编号、时间、仓库和退货数量。</p>
+              </div>
+              <div className="flex items-center gap-2">
+                {takealotAttachments.length > 0 && (
+                  <span className="text-xs text-blue-700">已上传 {takealotAttachments.length} 个</span>
+                )}
+                <input
+                  ref={takealotFileInputRef}
+                  type="file"
+                  accept=".pdf,application/pdf"
+                  multiple
+                  className="hidden"
+                  onChange={event => void onPickTakealotFiles(event.target.files)}
+                />
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  disabled={recognizingFiles}
+                  onClick={() => takealotFileInputRef.current?.click()}
+                >
+                  <Upload className="h-3.5 w-3.5" /> {recognizingFiles ? '识别中…' : '上传 Takealot PDF'}
+                </Button>
+              </div>
+            </div>
+            {renderAttachmentList(takealotAttachments)}
+          </div>}
+
+          {returnPlatform === 'other' && <div className="mb-5 rounded-xl border border-amber-200 bg-amber-50/70 p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-amber-900">② 其他平台退货文件（下方）</p>
+                <p className="mt-1 text-xs text-amber-700">普通上传：保存退货凭证、面单、截图或相关资料，不进行自动识别。</p>
+              </div>
+              <div className="flex items-center gap-2">
+                {otherPlatformAttachments.length > 0 && (
+                  <span className="text-xs text-amber-700">已上传 {otherPlatformAttachments.length} 个</span>
+                )}
+                <input
+                  ref={otherFileInputRef}
+                  type="file"
+                  multiple
+                  className="hidden"
+                  onChange={event => void onPickOtherPlatformFiles(event.target.files)}
+                />
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => otherFileInputRef.current?.click()}
+                >
+                  <Upload className="h-3.5 w-3.5" /> 上传其他平台文件
+                </Button>
+              </div>
+            </div>
+            {renderAttachmentList(otherPlatformAttachments)}
+          </div>}
+
+          {returnPlatform === 'takealot' && (
+            <div className="mb-5 rounded-xl border border-blue-100 bg-white p-4 ring-1 ring-blue-50">
+              <div className="mb-4">
+                <p className="text-sm font-semibold text-text-primary">Takealot 退货资料</p>
+                <p className="mt-1 text-xs text-text-muted">字段与《货盘退货收集表》一致；带 * 的内容提交前必须填写或上传。</p>
+              </div>
+              <FormGrid cols={3}>
+                <FormField label="填写人" required>
+                  <input className={formInput()} value={filledBy} onChange={e => setFilledBy(e.target.value)} />
+                </FormField>
+                <FormField label="所在部门" required>
+                  <input className={formInput()} value={department} onChange={e => setDepartment(e.target.value)} />
+                </FormField>
+                <FormField label="填写时间">
+                  <input type="date" className={formInput()} value={createdAt} onChange={e => setCreatedAt(e.target.value)} />
+                </FormField>
+                <FormField label="自主选择是否收回" required>
+                  <select className={formSelect()} value={selfRecall} onChange={e => setSelfRecall(e.target.value as 'yes' | 'no')}>
+                    <option value="yes">是，收回</option>
+                    <option value="no">否，不收回</option>
+                  </select>
+                </FormField>
+                <FormField label="送仓 PO Number" required hint="用于核对采购价">
+                  <input className={formInput()} value={inboundPoNumber} onChange={e => setInboundPoNumber(e.target.value)} />
+                </FormField>
+                <FormField label="当时采购价" required>
+                  <input type="number" min="0" step="0.01" className={formInput()} value={purchasePrice} onChange={e => setPurchasePrice(e.target.value)} />
+                </FormField>
+                <FormField label="用户类型" required>
+                  <select className={formSelect()} value={userType} onChange={e => setUserType(e.target.value)}>
+                    <option value="微信用户">微信用户</option>
+                    <option value="电商客户">电商客户</option>
+                    <option value="其他">其他</option>
+                  </select>
+                </FormField>
+                <FormField label="对应的客户代码">
+                  <input className={formInput()} value={customerCode || ''} readOnly placeholder="选择客户端后自动带出" />
+                </FormField>
+              </FormGrid>
+              <div className="mt-4 grid gap-3 md:grid-cols-3">
+                {[
+                  { label: '退货理由截图', required: true, files: reasonScreenshotAttachments, ref: reasonScreenshotInputRef, kind: TAKEALOT_REASON_SCREENSHOT_KIND, accept: 'image/*' },
+                  { label: '近 30 天销售数据表', required: true, files: sales30dAttachments, ref: sales30dInputRef, kind: TAKEALOT_SALES_30D_KIND, accept: '.xlsx,.xls,.csv' },
+                  { label: '近 30 天退货数据', required: true, files: returns30dAttachments, ref: returns30dInputRef, kind: TAKEALOT_RETURNS_30D_KIND, accept: '.xlsx,.xls,.csv' },
+                ].map(item => (
+                  <div key={item.kind} className="rounded-lg bg-blue-50/60 p-3 ring-1 ring-blue-100">
+                    <p className="text-xs font-medium text-text-secondary">{item.label} {item.required && <span className="text-red-500">*</span>}</p>
+                    <input ref={item.ref} type="file" accept={item.accept} multiple className="hidden" onChange={event => void onPickSupportingFiles(event.target.files, item.kind)} />
+                    <Button type="button" variant="secondary" size="sm" className="mt-2" onClick={() => item.ref.current?.click()}>
+                      <Upload className="h-3.5 w-3.5" /> 上传资料
+                    </Button>
+                    {renderAttachmentList(item.files)}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           <FormGrid cols={3}>
             <FormField label="退件单号">
               <input className={formInput()} value={returnNo} readOnly placeholder="自动生成" />
             </FormField>
-            <FormField label="订单号" required>
+            <FormField label={returnPlatform === 'takealot' ? '系统退货 ID' : '订单号'} required>
               <input className={formInput()} value={orderNo} onChange={e => setOrderNo(e.target.value)} placeholder="ORD-..." />
             </FormField>
-            <FormField label="参考号">
+            <FormField label={returnPlatform === 'takealot' ? 'Takealot 预约编号' : '参考号'} hint={returnPlatform === 'takealot' ? '上传预约 PDF 后自动带出' : undefined}>
               <input className={formInput()} value={referenceNo} onChange={e => setReferenceNo(e.target.value)} />
             </FormField>
             <FormField label="跟踪号">
@@ -357,14 +727,14 @@ export default function ReturnApply() {
             <FormField label="卖家税号">
               <input className={formInput()} value={sellerTaxNo} onChange={e => setSellerTaxNo(e.target.value)} />
             </FormField>
-            <FormField label="退件仓库" required>
+            <FormField label={returnPlatform === 'takealot' ? '退货的仓库' : '退件仓库'} required>
               <select className={formSelect()} value={returnWarehouse} onChange={e => setReturnWarehouse(e.target.value)}>
                 {RETURN_WAREHOUSE_OPTIONS.map(w => (
                   <option key={w.value} value={w.value}>{w.label}</option>
                 ))}
               </select>
             </FormField>
-            <FormField label="预计到货时间">
+            <FormField label={returnPlatform === 'takealot' ? '预约退货时间（月、日、时）' : '预计到货时间'}>
               <input
                 type="datetime-local"
                 className={formInput()}
@@ -372,7 +742,7 @@ export default function ReturnApply() {
                 onChange={e => setExpectedArrivalAt(e.target.value)}
               />
             </FormField>
-            <FormField label="退件原因" required>
+            <FormField label={returnPlatform === 'takealot' ? '退货原因' : '退件原因'} required>
               <select className={formSelect()} value={returnReason} onChange={e => setReturnReason(e.target.value)}>
                 <option value="">请选择</option>
                 {RETURN_REASONS.map(r => <option key={r} value={r}>{r}</option>)}
@@ -392,31 +762,6 @@ export default function ReturnApply() {
           <FormField label="备注" className="mt-4">
             <input className={formInput()} value={remark} onChange={e => setRemark(e.target.value)} />
           </FormField>
-          <div className="mt-4">
-            <FormField label="附件" hint="可上传退件照片、面单、平台退货凭证等">
-              <div className="flex flex-wrap items-start gap-3">
-                <input ref={fileInputRef} type="file" multiple className="hidden" onChange={e => void onPickFiles(e.target.files)} />
-                <Button type="button" variant="secondary" size="sm" onClick={() => fileInputRef.current?.click()}>
-                  <Upload className="h-3.5 w-3.5" /> 上传文件
-                </Button>
-                {attachments.length > 0 && (
-                  <span className="pt-1 text-xs text-text-muted">已选 {attachments.length} 个文件</span>
-                )}
-              </div>
-              {attachments.length > 0 && (
-                <ul className="mt-2 space-y-1">
-                  {attachments.map(a => (
-                    <li key={a.fileName} className="flex items-center justify-between rounded bg-surface-muted px-2 py-1 text-xs">
-                      <a href={a.url} target="_blank" rel="noreferrer" className="truncate text-primary-600 hover:underline">{a.fileName}</a>
-                      <button type="button" className="ml-2 text-red-500" onClick={() => removeAttachment(a.fileName)}>
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </FormField>
-          </div>
         </FormSection>
 
         <FormSection

@@ -10,6 +10,7 @@ import { operationActionLabel, operationModuleLabel } from '../operation-log/ope
 import { parseProductsImportCsv } from './products-import.util'
 import { buildProductRemark } from '../../common/oms-sync-meta.util'
 import { buildInternalSku } from '../../common/sku-code.util'
+import { CosObjectUrlService } from '../../common/cos-object-url.service'
 
 function num(v: unknown, fallback = 0): number {
   if (v == null || v === '') return fallback
@@ -38,6 +39,7 @@ export class ProductsService {
     private prisma: PrismaService,
     private files: FileStoreService,
     private opLog: OperationLogService,
+    private cosUrls: CosObjectUrlService,
   ) {}
 
   private buildImageList(
@@ -45,7 +47,9 @@ export class ProductsService {
     dbImages: { id: bigint; imageUrl: string }[],
     legacyUrl?: string | null,
   ) {
-    const images = dbImages.map((img) => ({ id: Number(img.id), imageUrl: img.imageUrl }))
+    const images = dbImages
+      .map((img) => ({ id: Number(img.id), imageUrl: this.cosUrls.resolve(img.imageUrl) }))
+      .filter((img) => Boolean(img.imageUrl))
     if (images.length) {
       return {
         images,
@@ -53,11 +57,12 @@ export class ProductsService {
         imageUrl: images[0].imageUrl,
       }
     }
-    if (legacyUrl) {
+    const resolvedLegacyUrl = legacyUrl ? this.cosUrls.resolve(legacyUrl) : ''
+    if (resolvedLegacyUrl) {
       return {
-        images: [{ id: null, imageUrl: legacyUrl }],
-        imageUrls: [legacyUrl],
-        imageUrl: legacyUrl,
+        images: [{ id: null, imageUrl: resolvedLegacyUrl }],
+        imageUrls: [resolvedLegacyUrl],
+        imageUrl: resolvedLegacyUrl,
       }
     }
     return { images: [], imageUrls: [], imageUrl: null }

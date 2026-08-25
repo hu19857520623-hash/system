@@ -128,6 +128,49 @@ describe('MingruiClient', () => {
     )
   })
 
+  it('maps flat AI-OPS shipment and dataList tracking payloads', async () => {
+    const fetchImpl = jest.fn(async (url: string) => {
+      if (String(url).includes('getOneShipment')) {
+        return jsonResponse({
+          code: '200',
+          jobNum: 'SEAE260713941',
+          hblNum: 'TKL-220',
+          polName: 'GUANGZHOU,NANSHA',
+          destName: 'DURBAN, SOUTH AFRICA',
+          podName: 'DURBAN, SOUTH AFRICA',
+          vsl: 'MOL EXPLORER',
+          pkgs: 8,
+          gw: 186,
+          vol: 1.514,
+          etd: '2026-08-11',
+          eta: '2026-09-02',
+          shipmentType: 'LCL',
+          status: 'InTransit',
+        })
+      }
+      return jsonResponse({
+        code: '200',
+        jobNum: 'SEAE260713941',
+        status: 'InTransit',
+        dataList: [
+          { time: '2026-08-18 09:19', context: '船公司已开船 MOL EXPLORER / 096W', node: 'atd' },
+        ],
+      })
+    })
+    const c = client({ MINGRUI_APP_KEY: 'k', MINGRUI_APP_TOKEN: 't' }, fetchImpl)
+    const tracking = await c.queryTracking({ shipmentNo: 'MR1', mingruiOrderNo: 'SEAE260713941' })
+    expect(tracking.ok).toBe(true)
+    expect(tracking.trackingRef).toBe('TKL-220')
+    expect(tracking.blNo).toBe('TKL-220')
+    expect(tracking.originCity).toBe('GUANGZHOU,NANSHA')
+    expect(tracking.destPort).toBe('DURBAN, SOUTH AFRICA')
+    expect(tracking.vesselName).toBe('MOL EXPLORER')
+    expect(tracking.packages).toBe(8)
+    expect(tracking.weightKg).toBe(186)
+    expect(tracking.localStatus).toBe('in_transit')
+    expect(tracking.trackingNodes?.[0]?.description).toContain('开船')
+  })
+
   it('maps HTTP 401 to an auth error without retrying', async () => {
     const fetchImpl = jest.fn(async () => jsonResponse({ message: 'unauthorized' }, 401))
     const c = client({ MINGRUI_APP_KEY: 'k', MINGRUI_APP_TOKEN: 't' }, fetchImpl)

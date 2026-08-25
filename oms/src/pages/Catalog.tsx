@@ -9,6 +9,7 @@ import {
   purchaseCatalogProductViaErp,
   getCatalogAvailableQty,
   mergeErpCatalogIntoState,
+  refreshInventoryFromErp,
 } from '../data/inventoryStore'
 import { getErpCatalog } from '../api/erp'
 import { getErpBalance } from '../api/erp'
@@ -231,6 +232,11 @@ export default function Catalog() {
     }
 
     await syncCatalogAfterPurchase()
+    if (customerId && customerCode && customerCode !== '—') {
+      try {
+        await refreshInventoryFromErp(customerId, customerCode)
+      } catch { /* local apply already updated holdings */ }
+    }
     setCheckoutBusy(false)
     setCheckoutOpen(false)
     setCheckoutLines([])
@@ -238,7 +244,7 @@ export default function Catalog() {
     if (purchased.length && !errors.length) {
       showMsg(
         'ok',
-        `申购成功 ${purchased.length} 项 · 余额 ¥${getCreditBalance().toFixed(2)} · ${purchased.join('；')}`,
+        `申购成功 ${purchased.length} 项 · 余额 ¥${getCreditBalance().toFixed(2)} · 可在「库存查询 → 货盘库存」查看持有量 · ${purchased.join('；')}`,
       )
       if (checkoutSource === 'cart') setCartOpen(false)
     } else if (purchased.length && errors.length) {

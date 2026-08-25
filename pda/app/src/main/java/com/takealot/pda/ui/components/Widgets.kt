@@ -7,6 +7,8 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,6 +17,7 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -34,12 +37,14 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.takealot.pda.ui.theme.PdaAccent
 import com.takealot.pda.ui.theme.PdaErr
 import com.takealot.pda.ui.theme.PdaMuted
 import com.takealot.pda.ui.theme.PdaOk
+import com.takealot.pda.ui.theme.PdaSku
 import com.takealot.pda.ui.theme.PdaSurface
 import com.takealot.pda.ui.theme.PdaSurface2
 import com.takealot.pda.ui.theme.PdaText
@@ -122,6 +127,67 @@ fun StatusChip(text: String, tone: String = "info") {
 @Composable
 fun Panel(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
     Column(modifier.fillMaxWidth().background(PdaSurface, RoundedCornerShape(12.dp)).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) { content() }
+}
+
+@Composable
+fun DocumentCard(
+    typeLabel: String,
+    number: String,
+    accent: Color,
+    modifier: Modifier = Modifier,
+    status: (@Composable () -> Unit)? = null,
+    onClick: (() -> Unit)? = null,
+    content: @Composable () -> Unit,
+) {
+    val clickModifier = if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier
+    Row(
+        modifier.fillMaxWidth()
+            .background(PdaSurface, RoundedCornerShape(12.dp))
+            .border(1.dp, accent.copy(alpha = 0.35f), RoundedCornerShape(12.dp))
+            .then(clickModifier),
+    ) {
+        Box(Modifier.width(5.dp).height(96.dp).background(accent, RoundedCornerShape(topStart = 12.dp, bottomStart = 12.dp)))
+        Column(Modifier.weight(1f).padding(12.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(typeLabel, color = accent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Text(number, color = PdaText, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                }
+                status?.invoke()
+            }
+            content()
+        }
+    }
+}
+
+@Composable
+fun SkuCard(
+    sku: String,
+    progress: String,
+    done: Boolean,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    val borderColor = if (selected) PdaSku else PdaSku.copy(alpha = 0.22f)
+    Column(
+        modifier.fillMaxWidth()
+            .background(if (selected) PdaSurface2 else PdaSurface, RoundedCornerShape(10.dp))
+            .border(if (selected) 2.dp else 1.dp, borderColor, RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Column {
+                Text("SKU", color = PdaSku, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                Text(sku, color = PdaText, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+            }
+            StatusChip(progress, if (done) "ok" else "warn")
+        }
+        content()
+    }
 }
 
 @Composable

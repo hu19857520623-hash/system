@@ -21,6 +21,19 @@ const { loading: whLoading, items: warehouses, load: loadWarehouses } = useListL
   return { items: rows, total: rows.length }
 })
 
+const fileConfigLoading = ref(false)
+const fileConfigWarehouses = ref<any[]>([])
+
+async function loadFileConfigWarehouses() {
+  fileConfigLoading.value = true
+  try {
+    const res = await warehouseApi.list({})
+    fileConfigWarehouses.value = (Array.isArray(res) ? res : res.items || []).map(mapWarehouse)
+  } finally {
+    fileConfigLoading.value = false
+  }
+}
+
 const pendingPos = ref<any[]>([])
 const pendingLoading = ref(false)
 
@@ -59,6 +72,7 @@ watch(tab, (t) => {
   if (t === 'pending') loadPendingPos()
   if (t === 'stock') loadStock()
   if (t === 'receipts') loadReceipts()
+  if (t === 'files') loadFileConfigWarehouses()
 })
 
 watch(stockWarehouse, () => {
@@ -81,11 +95,19 @@ const whForm = ref({
   address: '',
   contactName: '',
   contactPhone: '',
+  requiredOutboundFiles: [] as string[],
 })
+
+const outboundFileOptions = [
+  { value: 'outerLabel', label: '外箱标签' },
+  { value: 'skuLabel', label: 'SKU 标签' },
+  { value: 'deliveryList', label: '送货清单' },
+  { value: 'appointment', label: '预约文件' },
+]
 
 function openAddWarehouse() {
   whEditingId.value = null
-  whForm.value = { warehouseCode: '', warehouseName: '', city: '', address: '', contactName: '', contactPhone: '' }
+  whForm.value = { warehouseCode: '', warehouseName: '', city: '', address: '', contactName: '', contactPhone: '', requiredOutboundFiles: [] }
   whDialogVisible.value = true
 }
 
@@ -98,6 +120,7 @@ function openEditWarehouse(row: any) {
     address: row.address,
     contactName: row.contactName,
     contactPhone: row.contactPhone,
+    requiredOutboundFiles: [...(row.requiredOutboundFiles || [])],
   }
   whDialogVisible.value = true
 }
@@ -115,6 +138,7 @@ async function submitWarehouse() {
         address: whForm.value.address.trim() || undefined,
         contactName: whForm.value.contactName.trim() || undefined,
         contactPhone: whForm.value.contactPhone.trim() || undefined,
+        requiredOutboundFiles: whForm.value.requiredOutboundFiles,
       })
     } else {
       await warehouseApi.create({
@@ -125,10 +149,12 @@ async function submitWarehouse() {
         address: whForm.value.address.trim() || undefined,
         contactName: whForm.value.contactName.trim() || undefined,
         contactPhone: whForm.value.contactPhone.trim() || undefined,
+        requiredOutboundFiles: whForm.value.requiredOutboundFiles,
         country: 'China',
       })
     }
     await loadWarehouses()
+    if (tab.value === 'files') await loadFileConfigWarehouses()
   }, whEditingId.value ? '仓库信息已更新' : '物流仓库已添加')
   if (ok) whDialogVisible.value = false
 }
@@ -160,6 +186,7 @@ function openReceive(row: any) {
       spec: l.spec || '',
       actualQty: l.pendingQty,
       damagedQty: 0,
+      _prevDamagedQty: 0,
       qcStatus: 'pass',
       qcRemark: '',
     }))
@@ -168,7 +195,32 @@ function openReceive(row: any) {
 }
 
 function onDamagedChange(row: any) {
+  const pending = Number(row.pendingQty) || 0
+  const prevDamaged = Number(row._prevDamagedQty ?? 0)
+  let damaged = Math.max(0, Number(row.damagedQty) || 0)
+  damaged = Math.min(damaged, pending)
+  row.damagedQty = damaged
+
+  const delta = damaged - prevDamaged
+  let actual = Number(row.actualQty) || 0
+  if (delta !== 0) actual = Math.max(0, actual - delta)
+  if (actual + damaged > pending) actual = Math.max(0, pending - damaged)
+  row.actualQty = actual
+  row._prevDamagedQty = damaged
+
   if (row.damagedQty > 0 && row.qcStatus === 'pass') row.qcStatus = 'fail'
+}
+
+function onActualChange(row: any) {
+  const pending = Number(row.pendingQty) || 0
+  let actual = Math.max(0, Number(row.actualQty) || 0)
+  actual = Math.min(actual, pending)
+  row.actualQty = actual
+  const maxDamaged = Math.max(0, pending - actual)
+  if ((Number(row.damagedQty) || 0) > maxDamaged) {
+    row.damagedQty = maxDamaged
+    row._prevDamagedQty = maxDamaged
+  }
 }
 
 async function submitReceive() {
@@ -241,6 +293,7 @@ const warehouseOptions = computed(() => warehouses.value.filter(w => w.statusCod
       <el-tab-pane label="待收货 PO" name="pending" />
       <el-tab-pane label="中转仓库存" name="stock" />
       <el-tab-pane label="收货记录" name="receipts" />
+      <el-tab-pane label="出库文件配置" name="files" />
     </el-tabs>
 
     <!-- 物流仓库管理 -->
@@ -254,6 +307,14 @@ const warehouseOptions = computed(() => warehouses.value.filter(w => w.statusCod
         <el-table-column prop="address" label="地址" min-width="160" show-overflow-tooltip />
         <el-table-column prop="contactName" label="联系人" width="90" />
         <el-table-column prop="contactPhone" label="电话" width="120" />
+        <el-table-column label="出库必传文件" min-width="190">
+          <template #default="{ row }">
+            <span v-if="!row.requiredOutboundFiles?.length">不限制</span>
+            <el-tag v-for="fileType in row.requiredOutboundFiles" :key="fileType" size="small" style="margin-right:4px">
+              {{ outboundFileOptions.find(item => item.value === fileType)?.label || fileType }}
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="状态" width="80">
           <template #default="{ row }">
             <el-tag :type="row.statusCode === 1 ? 'success' : 'info'" size="small">{{ row.status }}</el-tag>
@@ -271,10 +332,34 @@ const warehouseOptions = computed(() => warehouses.value.filter(w => w.statusCod
       <ListPagination v-model:page="whPage" v-model:page-size="whPageSize" :total="whTotal" />
     </template>
 
+    <template v-if="tab === 'files'">
+      <el-alert type="info" :closable="false" show-icon style="margin-bottom:12px">
+        可按海外仓或物流仓分别配置。勾选后，创建该仓库的出库单必须上传对应文件。
+      </el-alert>
+      <el-table v-loading="fileConfigLoading" :data="fileConfigWarehouses" stripe border size="small">
+        <el-table-column prop="code" label="仓库编码" width="140" />
+        <el-table-column prop="name" label="仓库名称" min-width="150" />
+        <el-table-column prop="type" label="类型" width="100" />
+        <el-table-column label="必传文件" min-width="280">
+          <template #default="{ row }">
+            <span v-if="!row.requiredOutboundFiles?.length">不限制</span>
+            <el-tag v-for="fileType in row.requiredOutboundFiles" :key="fileType" size="small" style="margin-right:4px">
+              {{ outboundFileOptions.find(item => item.value === fileType)?.label || fileType }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="90">
+          <template #default="{ row }">
+            <el-button link type="primary" size="small" @click="openEditWarehouse(row)">配置</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </template>
+
     <!-- 待收货 PO -->
     <template v-if="tab === 'pending'">
       <el-alert type="info" :closable="false" show-icon style="margin-bottom:12px">
-        财务已批准的采购单，供应商送货至<strong>物流中转仓</strong>后在此登记收货。良品写入中转仓库存；收货完成后方可在「创建入库单」从中转仓发运至海外仓。
+        采购审核通过的采购单，供应商送货至<strong>物流中转仓</strong>后在此登记收货。良品写入中转仓库存；收货完成后方可在「创建入库单」从中转仓发运至海外仓。
       </el-alert>
       <el-table v-loading="pendingLoading" :data="pagedPending" stripe border size="small" style="width: 100%">
         <el-table-column prop="poNo" label="采购单号" width="150">
@@ -389,6 +474,14 @@ const warehouseOptions = computed(() => warehouses.value.filter(w => w.statusCod
       <el-form-item label="地址"><el-input v-model="whForm.address" placeholder="详细地址" /></el-form-item>
       <el-form-item label="联系人"><el-input v-model="whForm.contactName" /></el-form-item>
       <el-form-item label="联系电话"><el-input v-model="whForm.contactPhone" /></el-form-item>
+      <el-form-item label="出库必传">
+        <el-checkbox-group v-model="whForm.requiredOutboundFiles">
+          <el-checkbox v-for="item in outboundFileOptions" :key="item.value" :value="item.value">
+            {{ item.label }}
+          </el-checkbox>
+        </el-checkbox-group>
+        <div style="color:#8b95a8;font-size:12px;line-height:18px">勾选后，创建该仓库出库单时缺少对应文件将无法提交。</div>
+      </el-form-item>
     </el-form>
     <template #footer>
       <el-button @click="whDialogVisible = false">取消</el-button>
@@ -437,10 +530,11 @@ const warehouseOptions = computed(() => warehouses.value.filter(w => w.statusCod
               <el-input-number
                 v-model="row.actualQty"
                 :min="0"
-                :max="row.pendingQty"
+                :max="Math.max(0, row.pendingQty - (row.damagedQty || 0))"
                 size="small"
                 controls-position="right"
                 class="receive-qty-input"
+                @change="onActualChange(row)"
               />
             </template>
           </el-table-column>

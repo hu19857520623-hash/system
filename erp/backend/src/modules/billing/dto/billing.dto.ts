@@ -112,6 +112,24 @@ export class GenerateBillingDto {
   @IsInt()
   @Min(1)
   customerId?: number
+
+  @IsOptional()
+  @Transform(trimOptional)
+  @IsString()
+  @MaxLength(30)
+  customerCode?: string
+
+  @IsOptional()
+  @Transform(trimOptional)
+  @IsString()
+  @MaxLength(20)
+  source?: string
+
+  @IsOptional()
+  @Transform(trimOptional)
+  @IsString()
+  @MaxLength(30)
+  chargeType?: string
 }
 
 export class BillingOrderItemDto {

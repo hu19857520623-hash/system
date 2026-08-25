@@ -29,7 +29,7 @@ Thumbs.db
 
 # Uploads & local data
 **/uploads/
-**/takealot-monitor/data/
+store-monitor/data/
 **/data/imports/
 **/prisma/dev.db
 **/prisma/dev.db-journal
@@ -52,3 +52,9 @@ pda/.kotlin/
 
 # Nested legacy git metadata
 **/.git.bak/
+
+# Codex/local work artifacts
+.codex-audit/
+.codex-tmp/
+outputs/
+tmp/

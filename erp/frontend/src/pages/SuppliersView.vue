@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
+import { erpConfirm } from '@/utils/messageBox'
 import { supplierApi } from '@/api/client.js'
 import { mapSupplier } from '@/api/mappers.ts'
 import { useListLoader, withAction } from '@/composables/useListLoader.ts'
@@ -74,7 +75,7 @@ async function save() {
 
 async function removeSupplier(row: any) {
   try {
-    await ElMessageBox.confirm(
+    await erpConfirm(
       `删除后不可恢复，确认删除供应商「${row.name}」？`,
       '删除供应商',
       { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },

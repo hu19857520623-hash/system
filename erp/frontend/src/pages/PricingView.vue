@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
+import { erpConfirm } from '@/utils/messageBox'
 import { pricingApi, inventoryApi } from '@/api/client.js'
 import { mapPricing, fmtTime } from '@/api/mappers.ts'
 import { useListLoader, withAction } from '@/composables/useListLoader.ts'
@@ -9,6 +10,11 @@ import { useTablePagination } from '@/composables/useTablePagination.ts'
 import { useAppStore } from '@/stores/app'
 import ListPagination from '@/components/ListPagination.vue'
 import DetailSheet from '@/components/ui/DetailSheet.vue'
+import {
+  CATALOG_CUSTOMER_CODE,
+  CATALOG_CUSTOMER_NAME,
+  isCatalogPoolCustomerCode,
+} from '@/constants/catalog.ts'
 import { PIPELINE_PRICING_ALERT } from '@/constants/productPipeline.ts'
 
 const app = useAppStore()
@@ -24,6 +30,8 @@ interface PriceRecord { date: string; marketPrice: number; price: number; operat
 interface PriceItem {
   id: number
   sku: string
+  customerCode: string
+  customerSku: string
   name: string
   spec: string
   cost: number
@@ -34,6 +42,9 @@ interface PriceItem {
   remainingStockQty: number
   catalogStockPool: number
   warehouseAvailableQty: number
+  holderCount?: number
+  holderSummary?: string
+  holders?: Array<{ customerCode: string; customerName: string; quantity: number }>
   poNo: string
   inboundNo: string
   seaFreight: number
@@ -180,7 +191,7 @@ function resetHoldingsFilters() {
 }
 
 function isReclaimableRow(row: HoldingRow) {
-  return Boolean(row.customerCode && row.customerCode !== 'TKL')
+  return Boolean(row.customerCode && !isCatalogPoolCustomerCode(row.customerCode))
 }
 
 async function openCatalogPurchases(row: HoldingRow) {
@@ -355,7 +366,7 @@ async function confirmPrice() {
   if (!editing.value.pricingLogic) { ElMessage.warning('请填写定价逻辑'); return }
   if (estProfit.value < 0) {
     try {
-      await ElMessageBox.confirm(
+      await erpConfirm(
         `预估利润 ¥${estProfit.value.toFixed(2)} 为负，确认继续定价吗？`,
         '亏损预警', { type: 'warning', confirmButtonText: '仍然确认', cancelButtonText: '返回修改' }
       )
@@ -469,7 +480,7 @@ async function submitReprice() {
   if (!repriceForm.value.price) { ElMessage.warning('请填写新售价'); return }
   if (repriceProfit.value < 0) {
     try {
-      await ElMessageBox.confirm(
+      await erpConfirm(
         `预估利润 ¥${repriceProfit.value.toFixed(2)} 为负，确认继续调价吗？`,
         '亏损预警', { type: 'warning', confirmButtonText: '仍然调价', cancelButtonText: '返回修改' }
       )
@@ -521,7 +532,7 @@ async function submitReprice() {
 
     <template v-if="section === 'pool'">
     <el-alert type="info" :closable="false" show-icon style="margin-bottom:14px">
-      {{ PIPELINE_PRICING_ALERT }}
+      {{ PIPELINE_PRICING_ALERT }} · 货盘池客户代码统一为 TKL；「持有客户」列展示 OMS 申购后的客户持有明细，完整列表见「货盘持有」。
     </el-alert>
 
     <div class="stat-bar">
@@ -549,8 +560,14 @@ async function submitReprice() {
     </el-tabs>
 
     <el-table v-loading="loading" :data="pagedItems" stripe border size="small" :row-class-name="rowClassName">
-      <el-table-column prop="sku" label="SKU" width="100">
-        <template #default="{ row }"><span style="font-family:var(--font-mono);font-size:12px">{{ row.sku }}</span></template>
+      <el-table-column prop="customerCode" label="客户代码" width="80" align="center">
+        <template #default="{ row }"><span class="mono catalog-code">{{ row.customerCode || CATALOG_CUSTOMER_CODE }}</span></template>
+      </el-table-column>
+      <el-table-column label="客户 SKU" width="100" show-overflow-tooltip>
+        <template #default="{ row }"><span class="mono">{{ row.customerSku || '—' }}</span></template>
+      </el-table-column>
+      <el-table-column prop="sku" label="内部 SKU" width="118" show-overflow-tooltip>
+        <template #default="{ row }"><span class="mono">{{ row.sku }}</span></template>
       </el-table-column>
       <el-table-column prop="name" label="商品名" min-width="130" />
       <el-table-column prop="purchaseQty" label="采购数量" width="90" align="right">
@@ -577,6 +594,14 @@ async function submitReprice() {
       <el-table-column label="已售" width="72" align="right">
         <template #default="{ row }">
           <span :style="{ color: row.soldQty > 0 ? '#2563eb' : '#b0a89c' }">{{ row.soldQty?.toLocaleString?.() ?? 0 }}</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="持有客户" min-width="140" show-overflow-tooltip>
+        <template #default="{ row }">
+          <template v-if="row.holderCount">
+            <span class="holder-summary">{{ row.holderSummary }}</span>
+          </template>
+          <span v-else class="text-muted">—</span>
         </template>
       </el-table-column>
       <el-table-column label="剩余" width="72" align="right">
@@ -670,7 +695,7 @@ async function submitReprice() {
 
   <el-dialog v-model="pricingVisible" :title="'货盘库存 · ' + (editing?.name || '')" width="760px" top="6vh" class="erp-detail">
     <template v-if="editing">
-      <DetailSheet :kicker="editing.sku" :title="editing.name">
+      <DetailSheet :kicker="editing.customerCode || CATALOG_CUSTOMER_CODE" :title="editing.name" :subtitle="`${CATALOG_CUSTOMER_NAME} · 客户 SKU ${editing.customerSku || '—'} · 内部 ${editing.sku}`">
         <template #metrics>
           <div class="erp-detail__metric">
             <label>采购成本</label>
@@ -702,6 +727,9 @@ async function submitReprice() {
 
       <el-divider content-position="left">关联单据 · 成本与国内费用（来自采购单）· 海运费（来自入库单）</el-divider>
       <el-descriptions :column="3" border size="small">
+        <el-descriptions-item label="客户代码">{{ editing.customerCode || CATALOG_CUSTOMER_CODE }}</el-descriptions-item>
+        <el-descriptions-item label="客户 SKU">{{ editing.customerSku || '—' }}</el-descriptions-item>
+        <el-descriptions-item label="内部 SKU">{{ editing.sku }}</el-descriptions-item>
         <el-descriptions-item label="采购单">{{ editing.poNo || '—' }}</el-descriptions-item>
         <el-descriptions-item label="入库单">{{ editing.inboundNo || '—' }}</el-descriptions-item>
         <el-descriptions-item label="采购数量">{{ editing.purchaseQty.toLocaleString() }} <span class="form-tip">（采购审核时按实际采购单写入）</span></el-descriptions-item>
@@ -723,6 +751,17 @@ async function submitReprice() {
           <span class="form-tip">OMS 客户购买后自动累计已售，剩余 = 可见库存 − 已售</span>
         </el-descriptions-item>
         <el-descriptions-item label="仓内可用">{{ editing.warehouseAvailableQty?.toLocaleString?.() ?? 0 }} <span class="form-tip">（海外仓实际上架数量）</span></el-descriptions-item>
+        <el-descriptions-item label="持有客户" :span="3">
+          <template v-if="editing.holderCount">
+            <span v-for="(holder, idx) in editing.holders" :key="holder.customerCode">
+              <span v-if="idx">、</span>
+              <strong>{{ holder.customerCode }}</strong>
+              {{ holder.customerName ? `（${holder.customerName}）` : '' }}
+              × {{ holder.quantity }}
+            </span>
+          </template>
+          <span v-else class="text-muted">暂无客户持有</span>
+        </el-descriptions-item>
         <el-descriptions-item label="同步时间">{{ editing.freightCallbackTime || '—' }}</el-descriptions-item>
       </el-descriptions>
 
@@ -947,7 +986,7 @@ async function submitReprice() {
 .page-title { font-weight:600; font-size:15px; }
 .section-switch { margin-left:4px; }
 .header-actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-.mono { font-family:var(--font-mono); font-size:12px; }
+.catalog-code { color: #0d766c; font-weight: 650; }
 .cust-name { font-size:11px; color:#718096; margin-top:2px; }
 .reclaim-tip { font-size:12px; color:#64748b; margin:0 0 14px; line-height:1.5; }
 .form-tip { font-size:11px; color:#718096; margin-left:10px; display:block; margin-top:2px; }
@@ -955,6 +994,7 @@ async function submitReprice() {
 
 .stat-bar { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:14px; }
 .oms-flags { display:flex; flex-direction:column; gap:4px; }
+.holder-summary { color: #2563eb; font-size: 12px; }
 .text-muted { color:#718096; font-size:11px; }
 .desc-time { margin-left:8px; font-size:11px; color:#94a3b8; }
 .stat-item {

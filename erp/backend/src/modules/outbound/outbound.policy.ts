@@ -64,6 +64,25 @@ export const APPOINTMENT_LABELS: Record<string, string> = {
   completed: '预约完成',
 }
 
+export const PICKING_PROBLEM_LABELS: Record<string, string> = {
+  stock_short: '库存短缺',
+  damaged: '货品破损',
+  wrong_sku: 'SKU 不符',
+  barcode_issue: '条码异常',
+  label_missing: '标签缺失',
+  other: '其他问题',
+}
+
+export const ORDER_EXCEPTION_LABELS: Record<string, string> = {
+  delivery_failure: '配送失败',
+  missed_booking: '错过预约',
+  customer_cancelled: '客户取消',
+  platform_cancelled: '平台取消',
+  document_missing: '文件缺失',
+  system_sync: '系统同步异常',
+  other: '其他异常',
+}
+
 export const PICK_SOURCES = ['pda', 'pick_list'] as const
 export type PickSource = (typeof PICK_SOURCES)[number]
 

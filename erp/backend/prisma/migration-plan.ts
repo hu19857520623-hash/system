@@ -48,6 +48,8 @@ export const MIGRATION_ORDER = [
   'migrate_schema_full_sync.sql',
   'migrate_oms_form_db_columns.sql',
   'migrate_takealot_store_api_key.sql',
+  'migrate_operating_ledger.sql',
+  'migrate_outbound_phase1_efficiency.sql',
 ] as const
 
 /**

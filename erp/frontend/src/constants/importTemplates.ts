@@ -114,7 +114,7 @@ export function downloadProductImportTemplate() {
 
 /** 库存变更批量导入 — 与 InventoryQueryView 库存变更弹窗一致 */
 export const INVENTORY_ADJUST_IMPORT_FIELDS: ImportFieldDef[] = [
-  { key: 'customerCode', label: '客户代码', required: true, hint: '如 TKL、TKL0001' },
+  { key: 'customerCode', label: '客户代码', required: true, hint: '货盘池填 TKL，客户持有填 TKL0001 等' },
   { key: 'sku', label: 'SKU', required: true, hint: '系统 SKU 或客户 SKU' },
   { key: 'warehouseCode', label: '仓库', required: false, hint: '留空默认 JHB（WMS-JHB-01）' },
   { key: 'fromLocationCode', label: '原库位', required: false, hint: '移库时填写；仅改数量可留空' },

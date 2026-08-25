@@ -53,8 +53,8 @@ export class MingruiService {
       bookingConfigured: false,
       base: this.client.apiBase() || null,
       message: configured
-        ? '已接入明瑞 AI-OPS 物流查询（跟踪状态 / 订单信息）。下单接口尚未提供，请保存草稿并填写明瑞工作号后同步。'
-        : '明瑞查询接口已接通，但未配置认证密钥。请在 erp/backend/.env 填写 MINGRUI_APP_KEY、MINGRUI_APP_TOKEN 后重启后端。',
+        ? '已接入明瑞 AI-OPS（ws.ai-ops.vip）：可凭工作号 jobNum 或提单号 hblNum/trackingRef 同步跟踪状态与订单信息。订舱下单仍在线下完成，ERP 保存运单后填写工作号即可查询。'
+        : '明瑞 AI-OPS 未配置。请在 erp/backend/.env 填写 MINGRUI_APP_KEY、MINGRUI_APP_TOKEN 后重启后端。',
     }
   }
 
@@ -253,9 +253,11 @@ export class MingruiService {
     const previous = asRecord(row.apiPayload)
     const jobNum = query.jobNum || row.mingruiOrderNo
     const trackingRef = query.trackingRef
+      || row.blNo
       || textFrom(previous?.trackingRef)
-      || textFrom(asRecord(previous?.tracking)?.trackingRef)
+      || textFrom(asRecord(previous?.shipment)?.hblNum)
       || textFrom(asRecord(previous?.shipment)?.trackingRef)
+      || textFrom(asRecord(previous?.tracking)?.trackingRef)
     const result = await this.client.queryTracking({
       mingruiOrderNo: jobNum,
       trackingRef,

@@ -16,6 +16,7 @@ import {
   type InventoryAdjustImportRow,
 } from '@/constants/importTemplates.ts'
 import { normalizeImportFileText } from '@/utils/csv'
+import { printProductSkuLabels } from '@/features/labels/productLabelPrint'
 
 const app = useAppStore()
 const router = useRouter()
@@ -173,6 +174,16 @@ function resetFilters() {
   sourceFilter.value = 'all'
   page.value = 1
   load()
+}
+
+async function reprintLabel(row: any) {
+  const printed = await printProductSkuLabels([{
+    sku: row.sku,
+    name: row.productName,
+    barcode: row.barcode || row.ean || row.customerSku,
+    customerCode: row.customerCode,
+  }])
+  if (printed) ElMessage.success(`${row.sku} 标签已打开打印窗口`)
 }
 
 function onSourceChange() {
@@ -607,6 +618,7 @@ watch([page, pageSize], () => load())
                   <el-dropdown-item v-if="row.dataSource === 'erp'" @click="showSkuLocations(row)">库位明细</el-dropdown-item>
                   <el-dropdown-item v-if="row.dataSource === 'erp'" @click="openOutboundLogs(row)">出库记录</el-dropdown-item>
                   <el-dropdown-item v-if="canAdjust && row.dataSource === 'erp'" @click="openAdjustFromRow(row)">调整库存</el-dropdown-item>
+                  <el-dropdown-item @click="reprintLabel(row)">重打商品标签</el-dropdown-item>
                   <el-dropdown-item @click="goSkuQuery(row)">SKU 主数据</el-dropdown-item>
                 </el-dropdown-menu>
               </template>
@@ -651,7 +663,7 @@ watch([page, pageSize], () => load())
     <el-dialog v-model="adjustDialogVisible" title="调整库位库存" width="480px">
       <el-form label-width="90px" size="small">
         <el-form-item label="客户代码" required>
-          <el-input v-model="adjustForm.customerCode" placeholder="如 TKL0001" />
+          <el-input v-model="adjustForm.customerCode" placeholder="货盘填 TKL，客户填 TKL0001" />
         </el-form-item>
         <el-form-item label="SKU"><span class="mono">{{ adjustForm.sku }}</span></el-form-item>
         <el-form-item label="当前库位"><span class="mono">{{ adjustForm.locationCode }}</span></el-form-item>
@@ -678,7 +690,7 @@ watch([page, pageSize], () => load())
         <el-tab-pane label="单条变更" name="single">
           <el-form label-width="90px" size="small" class="change-form">
             <el-form-item label="客户代码" required>
-              <el-input v-model="changeForm.customerCode" placeholder="如 TKL、TKL0001" />
+              <el-input v-model="changeForm.customerCode" placeholder="货盘 TKL / 客户 TKL0001" />
             </el-form-item>
             <el-form-item label="SKU" required>
               <el-select

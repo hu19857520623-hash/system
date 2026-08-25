@@ -18,13 +18,11 @@ import type { PaymentMethod } from '../data/feeTemplates'
 import { DEFAULT_PAYMENT_METHODS } from '../data/feeTemplates'
 import { getCustomerCode, getCustomerIdForRole } from '../data/dataScope'
 import { exportFeeRecordsCsv } from '../data/listExport'
-
-const feeTypeLabels: Record<string, string> = {
-  storage: '仓储费', handling: '操作费', shipping: '物流费', recharge: '充值',
-}
+import { feeTypeLabel } from '../data/chargeType'
 
 const feeTypeColors: Record<string, string> = {
   storage: 'text-indigo-600', handling: 'text-purple-600', shipping: 'text-sky-600', recharge: 'text-emerald-600',
+  catalog_purchase: 'text-amber-600', return_logistics: 'text-orange-600', relabel: 'text-violet-600',
 }
 
 function CopyableRow({ label, value }: { label: string; value: string }) {
@@ -500,9 +498,9 @@ export default function BillingPage({ rechargeOnly }: BillingPageProps) {
       )}
 
       <div className="mb-4 flex flex-wrap gap-2">
-        {['all', 'outbound', 'storage', 'handling', 'shipping', 'recharge'].map(t => (
+        {['all', 'outbound', 'storage', 'handling', 'shipping', 'catalog_purchase', 'return_logistics', 'recharge'].map(t => (
           <FilterChip key={t} active={feeTab === t} onClick={() => setFeeTab(t)}>
-            {t === 'all' ? '全部' : t === 'outbound' ? '出库对账' : feeTypeLabels[t]}
+            {t === 'all' ? '全部' : t === 'outbound' ? '出库对账' : feeTypeLabel(t)}
           </FilterChip>
         ))}
       </div>
@@ -601,8 +599,8 @@ export default function BillingPage({ rechargeOnly }: BillingPageProps) {
             {filteredFees.map(f => (
               <tr key={f.id} className="table-row">
                 <td className="table-cell text-xs text-text-muted">{f.date}</td>
-                <td className={`table-cell text-xs font-semibold ${feeTypeColors[f.type]}`}>
-                  {feeTypeLabels[f.type]}
+                <td className={`table-cell text-xs font-semibold ${feeTypeColors[f.type] || 'text-text-secondary'}`}>
+                  {feeTypeLabel(f.type)}
                   {f.method === 'pre_deduct' && (
                     <span className="ml-1 rounded bg-amber-100 px-1 py-0.5 text-[9px] font-medium text-amber-800">预扣</span>
                   )}

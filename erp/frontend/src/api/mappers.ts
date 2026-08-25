@@ -2,6 +2,8 @@
  * 后端字段 → 前端展示字段映射
  */
 
+import { CATALOG_CUSTOMER_CODE, catalogBaseSkuFromInternal } from '@/constants/catalog.ts'
+
 export function fmtTime(d: string | Date | null | undefined): string {
   if (!d) return ''
   const dt = typeof d === 'string' ? new Date(d) : d
@@ -488,8 +490,9 @@ export function mapWarehouse(row: any) {
     country: row.country || '',
     address: row.address || '',
     contactName: row.contactName || '',
-    contactPhone: row.contactPhone || '',
-    status: row.status === 1 ? '启用' : '停用',
+      contactPhone: row.contactPhone || '',
+      requiredOutboundFiles: Array.isArray(row.requiredOutboundFiles) ? row.requiredOutboundFiles : [],
+      status: row.status === 1 ? '启用' : '停用',
     statusCode: row.status ?? 1,
     _raw: row,
   }
@@ -515,9 +518,14 @@ export function mapLogisticsReceipt(row: any) {
 }
 
 export function mapPricing(row: any) {
+  const sku = row.sku || ''
+  const customerCode = row.customerCode || CATALOG_CUSTOMER_CODE
+  const customerSku = row.customerSku || catalogBaseSkuFromInternal(sku)
   return {
     id: row.id,
-    sku: row.sku,
+    sku,
+    customerCode,
+    customerSku,
     name: row.name || row.productName,
     spec: row.spec || '',
     cost: num(row.cost ?? row.costRmb),
@@ -549,6 +557,9 @@ export function mapPricing(row: any) {
     orderableOnOmsAt: row.orderableOnOmsAt || fmtTime(row.orderableOnOmsAt),
     history: row.history || [],
     priceRecords: row.priceRecords || [],
+    holderCount: row.holderCount ?? 0,
+    holderSummary: row.holderSummary || '',
+    holders: row.holders || [],
     _raw: row,
   }
 }

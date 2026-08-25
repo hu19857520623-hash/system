@@ -25,6 +25,7 @@ import { useRole } from '../auth/RoleContext'
 import { useDataScope } from '../auth/useDataScope'
 import { getCustomerCode, getCustomerIdForRole, resolveErpCustomerContext } from '../data/dataScope'
 import { AdminCustomerFilter } from '../components/admin/AdminCustomerFilter'
+import { notifyIfUserError } from '../utils/userNotify'
 
 type Tab = 'all' | 'draft' | 'pending_arrival' | 'awaiting_customer' | 'arrived' | 'completed' | 'cancelled'
 
@@ -168,7 +169,7 @@ export default function ReturnProcessing() {
       window.alert(`已导入 ${data.length} 张退件预约单（草稿），请在列表中核对后提交`)
       setTab('draft')
     } catch (err) {
-      if ((err as Error).message !== 'cancelled') console.error(err)
+      notifyIfUserError(err, '导入失败')
     }
   }
 

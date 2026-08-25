@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import { apiPut } from '../api/client'
+import { notifyPersistFailed } from '../utils/userNotify'
 import { purchaseErpCatalog, type ErpCatalogItem, type ErpPurchaseResult } from '../api/erp'
 import type { InventoryItem, Product } from './mockData'
 import { getCustomerCode } from './dataScope'
@@ -44,7 +45,7 @@ function emit() {
 
 function persistLocal() {
   emit()
-  void apiPut('/inventory-state', state).catch(err => console.error('persist inventory failed', err))
+  void apiPut('/inventory-state', state).catch(err => notifyPersistFailed('库存', err))
 }
 
 async function persistLocalOrThrow() {
@@ -489,6 +490,28 @@ export function getCatalogAvailableQty(internalSku: string): number {
   if (pool) return pool.available
   const product = state.products.find(p => p.internalSku === internalSku)
   return product?.availableQty ?? 0
+}
+
+/** 出库单行可发上限：自有库存看 available，货盘出库看客户 locked。 */
+export function getOutboundShippableQty(
+  sku: string,
+  stockSource: 'owned' | 'catalog',
+  customerId?: string,
+): number {
+  if (!sku.trim()) return 0
+  if (stockSource === 'catalog') {
+    if (!customerId) return 0
+    const item = state.inventory.find(
+      i => i.sku === sku && i.stockSource === 'catalog' && i.customerId === customerId,
+    )
+    return Math.max(0, item?.locked ?? 0)
+  }
+  const item = state.inventory.find(
+    i => i.sku === sku && i.stockSource === 'owned' && (!i.customerId || i.customerId === customerId),
+  )
+  if (item) return Math.max(0, item.available)
+  const product = state.products.find(p => p.internalSku === sku)
+  return Math.max(0, product?.availableQty ?? 0)
 }
 
 export function getProductsSnapshot(): Product[] {

@@ -2,9 +2,8 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
 import { OperationLogService } from '../operation-log/operation-log.service'
-import { FreightBillService } from '../freight-bill/freight-bill.service'
 import { allocatePoDomesticFreight } from '../../common/po-domestic-freight.util'
-import { computePoFinanceApprovalCosts, formatPoFinanceCostRemark } from '../../common/po-finance-cost.util'
+import { computePoFinanceApprovalCosts } from '../../common/po-finance-cost.util'
 
 function fmtTime(d: Date | null | undefined): string {
   if (!d) return ''
@@ -21,7 +20,6 @@ export class PurchaseService {
   constructor(
     private prisma: PrismaService,
     private opLog: OperationLogService,
-    private freightBill: FreightBillService,
   ) {}
 
   private async enrichOrders(rows: any[]) {
@@ -787,6 +785,24 @@ export class PurchaseService {
     return { count: rows.length, breakdown }
   }
 
+  /** 采购审核通过后写入成本台账；打款标记时幂等补齐，与是否已打款无关。 */
+  private async ensureCostRecordsForPo(tx: any, po: any, operatorId?: number) {
+    const confirmation = po.prePoId
+      ? await tx.prePurchaseOrder.findUnique({ where: { id: po.prePoId } })
+      : null
+    const costBreakdown = computePoFinanceApprovalCosts(po, confirmation)
+    const productLines: Array<{ line: any; product: any }> = []
+    for (const line of po.items || []) {
+      let product = null
+      if (line.productId && line.productId !== BigInt(0)) {
+        product = await tx.product.findUnique({ where: { id: line.productId } })
+      }
+      productLines.push({ line, product })
+    }
+    await this.createCostLedgersForFinanceApproval(tx, po, productLines, operatorId, costBreakdown)
+    return costBreakdown
+  }
+
   /** 补齐历史财务已通过但尚未写入成本台账的采购单。 */
   async backfillFinanceApprovedCostLedgers() {
     const orders = await this.prisma.purchaseOrder.findMany({
@@ -802,14 +818,6 @@ export class PurchaseService {
           : null
         const costBreakdown = computePoFinanceApprovalCosts(order, confirmation)
         await this.createCostLedgersForFinanceApproval(tx, order, productLines, undefined, costBreakdown)
-        await this.freightBill.recordFromFinanceApproval(tx, {
-          poId: order.id,
-          poNo: order.poNo,
-          supplierId: order.supplierId,
-          totalAmount: costBreakdown.total,
-          costRemark: formatPoFinanceCostRemark(order.poNo, costBreakdown),
-          financeAt: order.financeAt,
-        })
       })
       processed += 1
     }
@@ -819,10 +827,6 @@ export class PurchaseService {
   /** 采购审核通过后同步商品主数据、成本台账与供应商账单。 */
   private async applyPostAuditEffects(tx: any, po: any, operatorId?: number) {
     const { perLine: lineDomesticMap } = allocatePoDomesticFreight(po)
-    const confirmation = po.prePoId
-      ? await tx.prePurchaseOrder.findUnique({ where: { id: po.prePoId } })
-      : null
-    const costBreakdown = computePoFinanceApprovalCosts(po, confirmation)
     const productLines: Array<{ line: any; product: any }> = []
 
     for (const line of po.items) {
@@ -855,15 +859,7 @@ export class PurchaseService {
       }
     }
 
-    await this.createCostLedgersForFinanceApproval(tx, po, productLines, operatorId, costBreakdown)
-    await this.freightBill.recordFromFinanceApproval(tx, {
-      poId: po.id,
-      poNo: po.poNo,
-      supplierId: po.supplierId,
-      totalAmount: costBreakdown.total,
-      costRemark: formatPoFinanceCostRemark(po.poNo, costBreakdown),
-      financeAt: po.auditedAt || po.financeAt || new Date(),
-    })
+    await this.ensureCostRecordsForPo(tx, po, operatorId)
 
     for (const { line } of productLines) {
       await this.opLog.log({
@@ -913,15 +909,19 @@ export class PurchaseService {
     if (row.paymentStatus === next) {
       throw new BadRequestException(paid ? '该采购单已是已打款' : '该采购单已是未打款')
     }
-    const updated = await this.prisma.purchaseOrder.update({
-      where: { id: BigInt(id) },
-      data: {
-        paymentStatus: next,
-        paidAt: paid ? new Date() : null,
-        paidBy: paid && operatorId ? BigInt(operatorId) : null,
-        financeRemark: remark?.trim() || row.financeRemark || undefined,
-      } as any,
-      include: { items: true },
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const order = await tx.purchaseOrder.update({
+        where: { id: BigInt(id) },
+        data: {
+          paymentStatus: next,
+          paidAt: paid ? new Date() : null,
+          paidBy: paid && operatorId ? BigInt(operatorId) : null,
+          financeRemark: remark?.trim() || row.financeRemark || undefined,
+        } as any,
+        include: { items: true },
+      })
+      await this.ensureCostRecordsForPo(tx, order, operatorId)
+      return order
     })
     const [item] = await this.enrichOrders([updated])
     await this.opLog.log({
@@ -932,7 +932,7 @@ export class PurchaseService {
       targetId: item.poNo,
       detail: {
         paymentStatus: next,
-        remark: remark?.trim() || (paid ? '已打款，已转财务' : '改回未打款'),
+        remark: remark?.trim() || (paid ? '已标记已打款' : '已标记未打款'),
         totalAmount: item.totalAmount,
         supplierName: item.supplierName,
       },

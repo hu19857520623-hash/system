@@ -3,6 +3,7 @@ import {
   type PlatformSkuMapping,
   type PlatformBindingStatus,
   type StorePlatform,
+  type StoreAccount,
   PLATFORM_BINDING_STATUS_LABELS,
 } from './mockData'
 import { getProductsSnapshot } from './inventoryStore'
@@ -79,6 +80,39 @@ export interface PlatformBarcodeResolveScope {
   platform?: StorePlatform
 }
 
+/** 与 Takealot Seller ID 精确匹配的店铺（用于条码解析范围） */
+export function findTakealotStoresForSeller(
+  sellerId: string | undefined,
+  customerId?: string,
+): StoreAccount[] {
+  const platform = 'Takealot' as const
+  const stores = getStoresSnapshot().filter(store =>
+    store.platform === platform
+    && store.status !== 'disabled'
+    && (!customerId || !store.customerId || store.customerId === customerId))
+  if (!sellerId?.trim()) return stores
+  return stores.filter(store => store.sellerId === sellerId.trim())
+}
+
+export function pickTakealotStoreForBinding(
+  sellerId: string | undefined,
+  customerId?: string,
+  preferredStoreId?: string,
+): StoreAccount | undefined {
+  const strict = findTakealotStoresForSeller(sellerId, customerId)
+  const candidates = strict.length
+    ? strict
+    : getStoresSnapshot().filter(store =>
+      store.platform === 'Takealot'
+      && store.status === 'connected'
+      && (!customerId || !store.customerId || store.customerId === customerId))
+  if (preferredStoreId) {
+    const preferred = candidates.find(store => store.id === preferredStoreId)
+    if (preferred) return preferred
+  }
+  return candidates[0]
+}
+
 interface PlatformBarcodeResolutionBase {
   barcode: string
   mappings: PlatformSkuMapping[]
@@ -116,10 +150,7 @@ export function resolvePlatformBarcode(
     && (!scope.customerId || !mapping.customerId || mapping.customerId === scope.customerId))
 
   if (scope.sellerId) {
-    const scopedStores = getStoresSnapshot().filter(store =>
-      store.platform === platform
-      && store.sellerId === scope.sellerId
-      && (!scope.customerId || !store.customerId || store.customerId === scope.customerId))
+    const scopedStores = findTakealotStoresForSeller(scope.sellerId, scope.customerId)
     const storeIds = new Set(scopedStores.map(store => store.id))
     mappings = mappings.filter(mapping =>
       mapping.sellerId === scope.sellerId

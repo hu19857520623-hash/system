@@ -35,15 +35,18 @@ import com.takealot.pda.data.PdaResumeWork
 import com.takealot.pda.data.outboundStatusLabel
 import com.takealot.pda.scan.ScanBus
 import com.takealot.pda.ui.components.BigButton
+import com.takealot.pda.ui.components.DocumentCard
 import com.takealot.pda.ui.components.Feedback
 import com.takealot.pda.ui.components.FeedbackBar
 import com.takealot.pda.ui.components.KeyValue
 import com.takealot.pda.ui.components.Panel
 import com.takealot.pda.ui.components.ScanField
+import com.takealot.pda.ui.components.SkuCard
 import com.takealot.pda.ui.components.StatusChip
 import com.takealot.pda.ui.theme.PdaAccent
 import com.takealot.pda.ui.theme.PdaMuted
 import com.takealot.pda.ui.theme.PdaOk
+import com.takealot.pda.ui.theme.PdaOutbound
 import com.takealot.pda.ui.theme.PdaSurface
 import com.takealot.pda.ui.theme.PdaSurface2
 import com.takealot.pda.ui.theme.PdaText
@@ -270,20 +273,23 @@ fun OutboundScreen(modeKey: String, onBack: () -> Unit, vm: OutboundViewModel = 
             Text("待作业", color = PdaMuted, fontSize = 13.sp)
             if (vm.list.isEmpty()) Text("暂无任务，可直接扫描出库单号", color = PdaMuted, fontSize = 13.sp)
             vm.list.forEach { row ->
-                Column(Modifier.fillMaxWidth().background(PdaSurface, RoundedCornerShape(10.dp)).clickable { vm.openOrder(row.id) }.padding(12.dp)) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text(row.no, color = PdaText, fontWeight = FontWeight.Medium)
-                        StatusChip(outboundStatusLabel(row.statusKey), "warn")
-                    }
+                DocumentCard(
+                    typeLabel = if (vm.mode == "pick") "拣货单" else "复核单",
+                    number = row.no,
+                    accent = PdaOutbound,
+                    status = { StatusChip(outboundStatusLabel(row.statusKey), "warn") },
+                    onClick = { vm.openOrder(row.id) },
+                ) {
                     Text("${row.customerName.orEmpty()} · ${row.skuSummary.orEmpty().ifBlank { "${row.totalQty} 件" }}", color = PdaMuted, fontSize = 12.sp)
                 }
             }
         } else {
-            Panel {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(order.no, color = PdaText, fontWeight = FontWeight.SemiBold, fontSize = 18.sp)
-                    StatusChip(outboundStatusLabel(order.statusKey), "warn")
-                }
+            DocumentCard(
+                typeLabel = if (vm.mode == "pick") "拣货单" else "复核单",
+                number = order.no,
+                accent = PdaOutbound,
+                status = { StatusChip(outboundStatusLabel(order.statusKey), "warn") },
+            ) {
                 KeyValue("客户", order.customerName.orEmpty())
                 KeyValue("仓库", order.warehouseCode.orEmpty())
                 TextButton(onClick = { vm.clearOrder() }) { Text("换单", color = PdaAccent) }
@@ -292,14 +298,20 @@ fun OutboundScreen(modeKey: String, onBack: () -> Unit, vm: OutboundViewModel = 
                 Text("该单已拣货。确认实物与单据一致后，再开始复核；开始后会记录复核人。", color = PdaWarn, fontSize = 13.sp)
                 BigButton("开始复核", onClick = { vm.startReview() }, enabled = !vm.busy, color = PdaWarn)
             }
+            Text("SKU 明细", color = PdaOutbound, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
             vm.lines.forEach { line ->
-                Column(Modifier.fillMaxWidth().background(if (line.sku == vm.selectedSku) PdaSurface2 else PdaSurface, RoundedCornerShape(10.dp)).clickable { vm.selectedSku = line.sku }.padding(12.dp)) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text(line.sku, color = PdaText, fontWeight = FontWeight.Medium)
-                        Text("${line.scannedQty}/${line.qty}", color = if (line.done) PdaOk else PdaWarn, fontWeight = FontWeight.SemiBold)
-                    }
+                SkuCard(
+                    sku = line.sku,
+                    progress = "${line.scannedQty}/${line.qty}",
+                    done = line.done,
+                    selected = line.sku == vm.selectedSku,
+                    onClick = { vm.selectedSku = line.sku },
+                ) {
                     Text(line.productName, color = PdaMuted, fontSize = 12.sp)
-                    Text("库位 ${line.locationCode.ifBlank { "未填" }}", color = PdaMuted, fontSize = 12.sp)
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("拣货库位", color = PdaMuted, fontSize = 11.sp)
+                        Text(line.locationCode.ifBlank { "未填" }, color = PdaText, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                    }
                     val suggested = vm.locationSuggestions[line.id].orEmpty()
                     if (vm.mode == "pick" && suggested.isNotEmpty()) Text("建议 ${suggested.joinToString("、")}", color = PdaAccent, fontSize = 12.sp)
                 }

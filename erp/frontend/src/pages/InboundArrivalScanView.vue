@@ -11,7 +11,7 @@ import { withAction } from '@/composables/useListLoader.ts'
 const app = useAppStore()
 const route = useRoute()
 
-type WorkStep = 'arrival' | 'receive' | 'qc' | 'measure' | 'putaway'
+type WorkStep = 'arrival' | 'receive' | 'qc' | 'putaway'
 
 const warehouseCode = ref('')
 const overseasWarehouses = ref<ReturnType<typeof mapWarehouse>[]>([])
@@ -32,7 +32,8 @@ const workStep = ref<WorkStep>('arrival')
 const activeOrders = ref<any[]>([])
 
 /** 扫箱收货 */
-const boxQty = ref(1)
+const manualCartonCount = ref<number | null>(null)
+const manualCartonSaving = ref(false)
 const boxScanCode = ref('')
 const boxScanning = ref(false)
 const boxScanRef = ref<{ focus: () => void } | null>(null)
@@ -41,11 +42,13 @@ const boxScanRef = ref<{ focus: () => void } | null>(null)
 const qcLines = ref<any[]>([])
 const qcAcceptDiff = ref(false)
 
-/** 测量体积 & 扫码上架 */
-const measureSelectedItemId = ref<number | null>(null)
-const measureSkuScan = ref('')
-const measureScanRef = ref<{ focus: () => void } | null>(null)
-const measureSubmitting = ref(false)
+/** 清点与测量、扫码上架 */
+const qcSubmitting = ref(false)
+const qcSkuScan = ref('')
+const qcScanIncrement = ref(1)
+const qcSelectedItemId = ref<number | null>(null)
+const qcScanning = ref(false)
+const qcScanRef = ref<{ focus: () => void } | null>(null)
 const putawaySkuScan = ref('')
 const putawayLocationScan = ref('')
 const putawayQty = ref(1)
@@ -75,6 +78,42 @@ const receiveProgress = computed(() => {
   const received = items.reduce((s: number, i: any) => s + (i.actualQty ?? 0), 0)
   return { expected, received, remaining: Math.max(0, expected - received) }
 })
+
+const receiveCartonProgress = computed(() => {
+  const order = activeOrder.value
+  const expected = order?.cartons?.length ?? 0
+  const scanned = receivedCartons.value.length
+  const confirmed = order?.receivedCartonCount ?? manualCartonCount.value ?? null
+  return { expected, scanned, confirmed }
+})
+
+function skuPackingLabel(order: any, sku: string) {
+  const entries = (order?.cartons || []).flatMap((c: any) =>
+    (c.items || []).filter((i: any) => String(i.sku) === sku).map((i: any) => Number(i.qty) || 0),
+  )
+  if (!entries.length) return '—'
+  const boxCount = entries.length
+  const qtySet = [...new Set(entries)]
+  if (qtySet.length === 1) return `${boxCount}箱 × ${qtySet[0]}件/箱`
+  return `${boxCount}箱（混装 ${entries.join('+')} 件/箱）`
+}
+
+function syncManualCartonCount(order?: any) {
+  if (!order) {
+    manualCartonCount.value = null
+    return
+  }
+  if (order.receivedCartonCount != null && order.receivedCartonCount > 0) {
+    manualCartonCount.value = order.receivedCartonCount
+    return
+  }
+  const scanned = (order.cartons || []).filter((c: any) => c.status === 'received').length
+  if ((order.cartons?.length ?? 0) > 0) {
+    manualCartonCount.value = scanned || order.cartons.length || 1
+    return
+  }
+  manualCartonCount.value = 1
+}
 
 const hasOuterCartons = computed(() => (activeOrder.value?.cartons?.length ?? 0) > 0)
 const pendingCartons = computed(() =>
@@ -107,10 +146,6 @@ const measureSummary = computed(() => {
 
 const putawayReadyLines = computed(() => putawayDraftLines.value.filter((l) => hasDimensions(l)))
 
-const measureSelectedLine = computed(() =>
-  putawayDraftLines.value.find((i: any) => i.id === measureSelectedItemId.value) || null,
-)
-
 function hasDimensions(line: { lengthCm?: number; widthCm?: number; heightCm?: number }) {
   return [line.lengthCm, line.widthCm, line.heightCm].every((v) => Number(v) > 0)
 }
@@ -123,10 +158,34 @@ function orderNeedsMeasure(order: any) {
   })
 }
 
+const qcMeasureSummary = computed(() => {
+  const lines = qcLines.value
+  const measured = lines.filter((l) => hasDimensions(l)).length
+  return {
+    total: lines.length,
+    measured,
+    pending: lines.length - measured,
+  }
+})
+
 const stepActiveIndex = computed(() => {
-  const map: Record<WorkStep, number> = { arrival: 0, receive: 1, qc: 2, measure: 3, putaway: 4 }
+  const map: Record<WorkStep, number> = { arrival: 0, receive: 1, qc: 2, putaway: 3 }
   return map[workStep.value] ?? 0
 })
+
+function canShowQcStep(order: any) {
+  if (!order) return false
+  if (['arrived', 'receiving', 'exception'].includes(order.status)) return true
+  return order.status === 'pending_putaway' && orderNeedsMeasure(order)
+}
+
+const canEditQcQty = computed(() =>
+  !!activeOrder.value && ['arrived', 'receiving'].includes(activeOrder.value.status),
+)
+
+const qcSelectedLine = computed(() =>
+  qcLines.value.find((l) => l.id === qcSelectedItemId.value) || null,
+)
 
 function buildPutawayDraft(order: any) {
   putawayDraftLines.value = (order?.items || [])
@@ -151,11 +210,8 @@ function buildPutawayDraft(order: any) {
   if (putawayDraftLines.value.length) {
     putawaySelectedItemId.value = putawayReadyLines.value[0]?.id ?? putawayDraftLines.value[0].id
     putawayQty.value = (putawayReadyLines.value[0] ?? putawayDraftLines.value[0]).remaining
-    measureSelectedItemId.value = putawayDraftLines.value.find((l) => !hasDimensions(l))?.id
-      ?? putawayDraftLines.value[0].id
   } else {
     putawaySelectedItemId.value = null
-    measureSelectedItemId.value = null
     putawayQty.value = 1
   }
 }
@@ -187,7 +243,7 @@ function statusTagType(status: string) {
 function deriveWorkStep(order: any): WorkStep {
   const st = order.status
   if (st === 'pending_putaway' || st === 'exception') {
-    return orderNeedsMeasure(order) ? 'measure' : 'putaway'
+    return orderNeedsMeasure(order) ? 'qc' : 'putaway'
   }
   if (st === 'receiving' || st === 'arrived') return 'receive'
   if (['completed', 'confirmed'].includes(st)) return 'putaway'
@@ -204,7 +260,13 @@ function buildQcLines(order: any) {
     actualQty: item.actualQty ?? 0,
     qcStatus: item.qcStatus === 'fail' ? 'fail' : 'pass',
     qcRemark: item.qcRemark || '',
+    lengthCm: item.lengthCm ?? undefined,
+    widthCm: item.widthCm ?? undefined,
+    heightCm: item.heightCm ?? undefined,
   }))
+  if (!qcSelectedItemId.value && qcLines.value.length) {
+    qcSelectedItemId.value = qcLines.value.find((l) => !hasDimensions(l))?.id ?? qcLines.value[0].id
+  }
 }
 
 async function loadWarehouses() {
@@ -261,6 +323,7 @@ async function loadActiveOrder(id: number, preferredStep?: WorkStep) {
     buildQcLines(data)
     workStep.value = preferredStep || deriveWorkStep(data)
     buildPutawayDraft(data)
+    syncManualCartonCount(data)
     if (workStep.value === 'putaway') {
       await loadLocations(data.warehouseCode)
     }
@@ -290,12 +353,39 @@ function focusBoxScan() {
   nextTick(() => boxScanRef.value?.focus())
 }
 
-function focusMeasureScan() {
-  nextTick(() => measureScanRef.value?.focus())
-}
-
 function focusPutawayScan() {
   nextTick(() => putawayScanRef.value?.focus())
+}
+
+function focusQcScan() {
+  nextTick(() => qcScanRef.value?.focus())
+}
+
+async function submitQcScan() {
+  if (!activeOrder.value) return
+  if (!canQc.value && !canPutaway.value) return
+  const code = qcSkuScan.value.trim()
+  if (!code) {
+    ElMessage.warning('请扫描 SKU')
+    return
+  }
+  qcScanning.value = true
+  try {
+    const res = await inboundApi.scanQc(activeOrder.value.id, {
+      scanCode: code,
+      increment: qcScanIncrement.value,
+    })
+    await loadActiveOrder(activeOrder.value.id, 'qc')
+    qcSelectedItemId.value = res.itemId ?? qcSelectedItemId.value
+    ElMessage.success(res.message || '扫描成功')
+    qcSkuScan.value = ''
+    focusQcScan()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '扫描清点失败')
+    focusQcScan()
+  } finally {
+    qcScanning.value = false
+  }
 }
 
 async function submitArrivalScan() {
@@ -341,61 +431,141 @@ async function submitArrivalScan() {
   }
 }
 
-async function submitReceiveBox() {
+async function submitReceiveCartonScan() {
   if (!canReceive.value || !activeOrder.value) return
   const code = boxScanCode.value.trim()
   if (!code) {
-    ElMessage.warning('请扫描箱标 / SKU')
+    ElMessage.warning('请扫描外箱标')
     return
   }
   boxScanning.value = true
   try {
-    const payload: { scanCode: string; qty?: number } = { scanCode: code }
-    if (!hasOuterCartons.value) payload.qty = boxQty.value
-    const res = await inboundApi.receiveBox(activeOrder.value.id, payload)
-    ElMessage.success(res.message || '收货成功')
+    const res = await inboundApi.receiveBox(activeOrder.value.id, { scanCode: code })
+    ElMessage.success(res.message || '外箱已确认')
     boxScanCode.value = ''
     await loadActiveOrder(activeOrder.value.id, 'receive')
     focusBoxScan()
   } catch (e: any) {
-    ElMessage.error(e?.message || '扫箱收货失败')
+    ElMessage.error(e?.message || '扫描外箱失败')
     focusBoxScan()
   } finally {
     boxScanning.value = false
   }
 }
 
+async function submitManualCartonCount() {
+  if (!canReceive.value || !activeOrder.value) return
+  const count = Math.floor(Number(manualCartonCount.value))
+  if (!Number.isFinite(count) || count <= 0) {
+    ElMessage.warning('实收箱数须大于 0')
+    return
+  }
+  manualCartonSaving.value = true
+  try {
+    const res = await inboundApi.recordReceivedCartonCount(activeOrder.value.id, { receivedCartonCount: count })
+    ElMessage.success(res.message || '实收箱数已保存')
+    await loadActiveOrder(activeOrder.value.id, 'receive')
+  } catch (e: any) {
+    ElMessage.error(e?.message || '保存实收箱数失败')
+  } finally {
+    manualCartonSaving.value = false
+  }
+}
+
 function goToQcStep() {
   if (!activeOrder.value) return
-  if (!['arrived', 'receiving'].includes(activeOrder.value.status)) {
-    ElMessage.warning('当前状态不可清点')
+  if (!canShowQcStep(activeOrder.value)) {
+    ElMessage.warning('当前状态不可清点与测量')
+    return
+  }
+  const confirmed = activeOrder.value.receivedCartonCount ?? manualCartonCount.value
+  if (!confirmed || confirmed <= 0) {
+    ElMessage.warning('请先在「确认箱数」环节登记实收箱数')
     return
   }
   buildQcLines(activeOrder.value)
   workStep.value = 'qc'
+  qcSelectedItemId.value = qcLines.value.find((l) => !hasDimensions(l))?.id ?? qcLines.value[0]?.id ?? null
+  focusQcScan()
 }
 
-async function submitQc() {
-  if (!canQc.value || !activeOrder.value) return
-  const ok = await withAction(async () => {
-    await inboundApi.qc(activeOrder.value.id, {
-      acceptDiff: qcAcceptDiff.value,
-      items: qcLines.value.map((l) => ({
-        id: l.id,
-        sku: l.sku,
-        actualQty: l.actualQty,
-        qcStatus: l.qcStatus,
-        qcRemark: l.qcRemark || undefined,
-      })),
-    })
-    await loadActiveOrder(activeOrder.value.id)
+function measurePayloadFromQcLine(line: any) {
+  return {
+    inboundItemId: line.id,
+    lengthCm: line.lengthCm,
+    widthCm: line.widthCm,
+    heightCm: line.heightCm,
+  }
+}
+
+async function submitQcAndMeasure() {
+  if (!activeOrder.value) return
+  const order = activeOrder.value
+
+  if (order.status === 'exception') {
+    ElMessage.warning('该单处于异常状态，请先点击「异常放行」')
+    return
+  }
+
+  for (const line of qcLines.value) {
+    if (!validateMeasureLine(line)) return
+  }
+
+  const measureItems = qcLines.value.map(measurePayloadFromQcLine)
+  const needsQc = ['arrived', 'receiving'].includes(order.status)
+
+  if (needsQc) {
+    if (!canQc.value) {
+      ElMessage.warning('无清点权限')
+      return
+    }
+    qcSubmitting.value = true
+    const qcOk = await withAction(async () => {
+      await inboundApi.qc(order.id, {
+        acceptDiff: qcAcceptDiff.value,
+        items: qcLines.value.map((l) => ({
+          id: l.id,
+          sku: l.sku,
+          actualQty: l.actualQty,
+          qcStatus: l.qcStatus,
+          qcRemark: l.qcRemark || undefined,
+        })),
+      })
+    }, `${order.inboundNo} 清点已提交`)
+    qcSubmitting.value = false
+    if (!qcOk) return
+
+    const refreshed = await inboundApi.detail(order.id)
+    activeOrder.value = refreshed
+    if (refreshed.status === 'exception') {
+      buildQcLines(refreshed)
+      ElMessage.warning('清点存在异常或数量差异，需主管放行后继续测量')
+      return
+    }
+  } else if (order.status !== 'pending_putaway') {
+    ElMessage.warning('当前状态不可提交清点与测量')
+    return
+  }
+
+  if (!canPutaway.value) {
+    ElMessage.warning('无测量权限')
+    return
+  }
+
+  qcSubmitting.value = true
+  const measureOk = await withAction(async () => {
+    const data = await inboundApi.measureDimensions(activeOrder.value.id, { items: measureItems })
+    activeOrder.value = data
+    buildQcLines(data)
+    buildPutawayDraft(data)
     await loadActiveOrderList()
     await loadRecent()
-  }, `${activeOrder.value.inboundNo} 清点已提交`)
-  if (ok) {
-    workStep.value = 'measure'
-    buildPutawayDraftFromActive()
-    focusMeasureScan()
+  }, `${activeOrder.value.inboundNo} 清点与测量已保存`)
+  qcSubmitting.value = false
+
+  if (measureOk && !orderNeedsMeasure(activeOrder.value)) {
+    ElMessage.success('清点与测量已完成，可进入扫码上架')
+    await goPutawayStep()
   }
 }
 
@@ -408,87 +578,12 @@ function resolveLocationCode(raw: string) {
   return hit ? (hit.locationCode || hit.code) : raw.trim().toUpperCase()
 }
 
-function onMeasureSkuScan() {
-  const code = measureSkuScan.value.trim().toUpperCase()
-  if (!code) return
-  const line = putawayDraftLines.value.find((i: any) => String(i.sku).toUpperCase() === code)
-  if (!line) {
-    ElMessage.warning(`SKU ${measureSkuScan.value} 不在待测量明细中`)
-    return
-  }
-  measureSelectedItemId.value = line.id
-  measureSkuScan.value = ''
-}
-
 function validateMeasureLine(item: any) {
   if (!hasDimensions(item)) {
     ElMessage.warning(`请为 SKU ${item.sku} 填写有效的长宽高（cm）`)
     return false
   }
   return true
-}
-
-function measurePayloadItem(item: any) {
-  return {
-    inboundItemId: item.id,
-    lengthCm: item.lengthCm,
-    widthCm: item.widthCm,
-    heightCm: item.heightCm,
-  }
-}
-
-async function submitMeasureSingle() {
-  if (!canPutaway.value || !activeOrder.value || !measureSelectedLine.value) {
-    ElMessage.warning('请选择待测量 SKU')
-    return
-  }
-  if (activeOrder.value.status !== 'pending_putaway') {
-    ElMessage.warning('当前入库单状态不可测量')
-    return
-  }
-  const line = measureSelectedLine.value
-  if (!validateMeasureLine(line)) return
-
-  measureSubmitting.value = true
-  const ok = await withAction(async () => {
-    const data = await inboundApi.measureDimensions(activeOrder.value.id, {
-      items: [measurePayloadItem(line)],
-    })
-    activeOrder.value = data
-    buildPutawayDraft(data)
-  }, `${line.sku} 体积已保存`)
-  measureSubmitting.value = false
-
-  if (ok && measureSummary.value.pending === 0) {
-    ElMessage.success('全部 SKU 已测量，可进入上架')
-  }
-}
-
-async function submitMeasureAll() {
-  if (!canPutaway.value || !activeOrder.value) return
-  if (activeOrder.value.status !== 'pending_putaway') {
-    ElMessage.warning('当前入库单状态不可测量')
-    return
-  }
-  if (!putawayDraftLines.value.length) {
-    ElMessage.warning('暂无待测量明细')
-    return
-  }
-  for (const item of putawayDraftLines.value) {
-    if (!validateMeasureLine(item)) return
-  }
-
-  measureSubmitting.value = true
-  const ok = await withAction(async () => {
-    const data = await inboundApi.measureDimensions(activeOrder.value.id, {
-      items: putawayDraftLines.value.map(measurePayloadItem),
-    })
-    activeOrder.value = data
-    buildPutawayDraft(data)
-  }, `${activeOrder.value.inboundNo} 体积测量已保存`)
-  measureSubmitting.value = false
-
-  if (ok) ElMessage.success('可进入「扫码上架」步骤')
 }
 
 function onPutawaySkuScan() {
@@ -621,18 +716,13 @@ async function submitPutawayAll() {
   }
 }
 
-async function goMeasureStep() {
-  if (!activeOrder.value) return
-  workStep.value = 'measure'
-  buildPutawayDraftFromActive()
-  focusMeasureScan()
-}
-
 async function goPutawayStep() {
+  if (!activeOrder.value) return
   buildPutawayDraftFromActive()
+  buildQcLines(activeOrder.value)
   if (measureSummary.value.pending > 0) {
-    ElMessage.warning(`还有 ${measureSummary.value.pending} 个 SKU 未完成体积测量`)
-    workStep.value = 'measure'
+    ElMessage.warning(`还有 ${measureSummary.value.pending} 个 SKU 未完成清点与测量`)
+    workStep.value = 'qc'
     return
   }
   if (!putawayReadyLines.value.length) {
@@ -650,7 +740,7 @@ async function resolveAndPutaway() {
   if (!activeOrder.value || activeOrder.value.status !== 'exception') return
   const ok = await withAction(async () => {
     await inboundApi.resolveException(activeOrder.value.id)
-    await loadActiveOrder(activeOrder.value.id, orderNeedsMeasure(activeOrder.value) ? 'measure' : 'putaway')
+    await loadActiveOrder(activeOrder.value.id, orderNeedsMeasure(activeOrder.value) ? 'qc' : 'putaway')
   }, '已放行，可继续作业')
   if (ok && workStep.value === 'putaway') await loadLocations()
 }
@@ -673,7 +763,7 @@ watch(putawaySelectedItemId, (id) => {
 
 watch(workStep, (step) => {
   if (step === 'receive') focusBoxScan()
-  if (step === 'measure') focusMeasureScan()
+  if (step === 'qc') focusQcScan()
   if (step === 'putaway') focusPutawayScan()
 })
 
@@ -683,11 +773,15 @@ onMounted(async () => {
   await loadActiveOrderList()
 
   const inboundId = Number(route.query.inboundId)
-  const step = route.query.step as WorkStep | undefined
+  const step = route.query.step as string | undefined
   if (inboundId > 0) {
-    const preferred = step === 'putaway' || step === 'measure' ? step : undefined
+    const preferred = step === 'putaway'
+      ? 'putaway'
+      : step === 'measure' || step === 'qc'
+        ? 'qc'
+        : undefined
     await loadActiveOrder(inboundId, preferred)
-    if (step === 'putaway' || step === 'measure') workStep.value = step
+    if (step === 'putaway' || step === 'measure' || step === 'qc') workStep.value = step === 'putaway' ? 'putaway' : 'qc'
   } else {
     focusScan()
   }
@@ -717,17 +811,16 @@ onMounted(async () => {
     </template>
 
     <div class="callout info">
-      <div class="callout-title">到仓 → 扫箱收货 → 人工清点 → 测量体积 → 扫码上架</div>
+      <div class="callout-title">到仓 → 确认箱数 → 清点与测量 → 扫码上架</div>
       <div class="callout-body">
-        清点完成后先逐 SKU 测量长宽高（cm）并保存；全部测量完成后，再扫描库位完成上架写入库存。
+        扫箱收货只登记到仓外箱数量（1 SKU 一箱或一箱多件均在下一环节扫 SKU 清点数）；清点与测量再确认件数并录入体积。
       </div>
     </div>
 
     <el-steps :active="stepActiveIndex" simple class="flow-steps">
       <el-step title="到仓扫描" />
-      <el-step title="扫箱收货" />
-      <el-step title="人工清点" />
-      <el-step title="测量体积" />
+      <el-step title="确认箱数" />
+      <el-step title="清点与测量" />
       <el-step title="扫码上架" />
     </el-steps>
 
@@ -756,17 +849,12 @@ onMounted(async () => {
           :type="workStep === 'receive' ? 'primary' : 'default'"
           :disabled="!activeOrder"
           @click="workStep = 'receive'"
-        >收货</el-button>
+        >确认箱数</el-button>
         <el-button
           :type="workStep === 'qc' ? 'primary' : 'default'"
-          :disabled="!activeOrder || !['arrived','receiving','exception'].includes(activeOrder?.status)"
+          :disabled="!canShowQcStep(activeOrder)"
           @click="goToQcStep"
         >清点</el-button>
-        <el-button
-          :type="workStep === 'measure' ? 'primary' : 'default'"
-          :disabled="!activeOrder || !['pending_putaway','exception'].includes(activeOrder?.status)"
-          @click="goMeasureStep"
-        >测量</el-button>
         <el-button
           :type="workStep === 'putaway' ? 'primary' : 'default'"
           :disabled="!activeOrder || !['pending_putaway','exception','completed'].includes(activeOrder?.status)"
@@ -799,7 +887,7 @@ onMounted(async () => {
       </div>
     </div>
 
-    <!-- 扫箱收货 -->
+    <!-- 确认箱数 -->
     <div v-show="workStep === 'receive'" v-loading="loadingOrder" class="panel">
       <template v-if="activeOrder">
         <el-descriptions :column="4" border size="small" class="order-summary">
@@ -810,37 +898,67 @@ onMounted(async () => {
             </el-tag>
           </el-descriptions-item>
           <el-descriptions-item label="入仓号">{{ activeOrder.warehouseNo || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="收货进度">
-            {{ receiveProgress.received }} / {{ receiveProgress.expected }}
+          <el-descriptions-item label="实收箱数">
+            <strong>{{ activeOrder.receivedCartonCount ?? receiveCartonProgress.confirmed ?? '—' }}</strong>
+          </el-descriptions-item>
+          <el-descriptions-item v-if="hasOuterCartons" label="应收箱数">
+            {{ receiveCartonProgress.expected }}
+          </el-descriptions-item>
+          <el-descriptions-item v-if="hasOuterCartons" label="已扫外箱">
+            {{ receiveCartonProgress.scanned }}
+          </el-descriptions-item>
+          <el-descriptions-item label="应收件数" :span="hasOuterCartons ? 1 : 2">
+            {{ receiveProgress.expected }}（下一环节清点）
           </el-descriptions-item>
         </el-descriptions>
 
-        <div v-if="canReceive && ['arrived','receiving'].includes(activeOrder.status)" class="scan-block">
-          <el-alert type="info" :closable="false" show-icon style="margin-bottom:10px">
-            <template v-if="hasOuterCartons">
-              已配置 <strong>{{ activeOrder.cartons.length }}</strong> 个外箱标：扫<strong>外箱标</strong>按装箱明细整箱收货；扫<strong>SKU 标签</strong>仍可按件累加（备用）。
-            </template>
-            <template v-else>
-              未配置外箱时，扫 <strong>SKU 标签</strong> 并按「每箱件数」累加实收。
-            </template>
-          </el-alert>
-          <el-form inline @submit.prevent="submitReceiveBox">
-            <el-form-item v-if="!hasOuterCartons" label="每箱件数">
-              <el-input-number v-model="boxQty" :min="1" :max="9999" size="small" controls-position="right" style="width:120px" />
-            </el-form-item>
-            <el-form-item label="扫描" required>
-              <el-input
-                ref="boxScanRef"
-                v-model="boxScanCode"
-                :placeholder="hasOuterCartons ? '外箱标 / SKU 标签' : 'SKU 标签'"
-                style="width:300px"
-                clearable
-                :disabled="boxScanning"
-                @keyup.enter="submitReceiveBox"
+        <div v-if="canReceive && ['arrived','receiving'].includes(activeOrder.status)" class="scan-block manual-carton-block">
+          <div class="scan-block-title">确认实收箱数</div>
+          <el-form inline @submit.prevent="submitManualCartonCount">
+            <el-form-item label="实收箱数" required>
+              <el-input-number
+                v-model="manualCartonCount"
+                :min="1"
+                :max="9999"
+                size="small"
+                controls-position="right"
+                style="width:120px"
               />
             </el-form-item>
             <el-form-item>
-              <el-button type="primary" :loading="boxScanning" @click="submitReceiveBox">确认收货</el-button>
+              <el-button type="primary" :loading="manualCartonSaving" @click="submitManualCartonCount">
+                确认箱数
+              </el-button>
+            </el-form-item>
+          </el-form>
+          <p class="hint">
+            人工点数登记到仓外箱总数。无论 1 SKU 一箱还是一箱多件，本环节只确认箱数；SKU 实收件数请在「清点与测量」扫描录入。
+          </p>
+        </div>
+
+        <div
+          v-if="canReceive && hasOuterCartons && ['arrived','receiving'].includes(activeOrder.status)"
+          class="scan-block"
+        >
+          <el-alert type="info" :closable="false" show-icon style="margin-bottom:10px">
+            已配置 <strong>{{ activeOrder.cartons.length }}</strong> 个外箱标：可逐箱扫描外箱标核对（每扫 1 次计 1 箱，不写入 SKU 件数）。
+          </el-alert>
+          <el-form inline @submit.prevent="submitReceiveCartonScan">
+            <el-form-item label="扫描外箱标" required>
+              <el-input
+                ref="boxScanRef"
+                v-model="boxScanCode"
+                placeholder="外箱标条码"
+                style="width:300px"
+                clearable
+                :disabled="boxScanning"
+                @keyup.enter="submitReceiveCartonScan"
+              />
+            </el-form-item>
+            <el-form-item>
+              <el-button type="primary" plain :loading="boxScanning" @click="submitReceiveCartonScan">
+                确认外箱
+              </el-button>
             </el-form-item>
           </el-form>
         </div>
@@ -883,189 +1001,180 @@ onMounted(async () => {
           <el-table-column label="应收" width="72" align="right">
             <template #default="{ row }">{{ row.expectedQty }}</template>
           </el-table-column>
-          <el-table-column label="已扫收" width="72" align="right">
-            <template #default="{ row }"><strong>{{ row.actualQty ?? 0 }}</strong></template>
-          </el-table-column>
-          <el-table-column label="待收" width="72" align="right">
-            <template #default="{ row }">
-              {{ Math.max(0, row.expectedQty - (row.actualQty ?? 0)) }}
-            </template>
+          <el-table-column label="装箱参考" min-width="140" show-overflow-tooltip>
+            <template #default="{ row }">{{ skuPackingLabel(activeOrder, row.sku) }}</template>
           </el-table-column>
         </el-table>
 
         <div class="panel-actions">
-          <el-button v-if="canQc" type="primary" @click="goToQcStep">扫箱完成，进入人工清点</el-button>
+          <el-button v-if="canQc" type="primary" @click="goToQcStep">箱数已确认，进入清点与测量</el-button>
         </div>
       </template>
       <el-empty v-else description="请先到仓扫描或选择作业入库单" />
     </div>
 
-    <!-- 人工清点 -->
+    <!-- 清点与测量 -->
     <div v-show="workStep === 'qc'" v-loading="loadingOrder" class="panel">
-      <template v-if="activeOrder">
-        <el-alert type="warning" :closable="false" show-icon style="margin-bottom:12px">
-          清点需人工确认实收数量与 QC 结果，扫描收货不会自动提交清点。
+      <template v-if="activeOrder && canShowQcStep(activeOrder)">
+        <el-alert v-if="activeOrder.status === 'exception'" type="error" :closable="false" show-icon style="margin-bottom:12px">
+          该单清点异常，需主管放行后才能继续测量。
+          <el-button v-if="canResolve" link type="primary" @click="resolveAndPutaway">异常放行</el-button>
         </el-alert>
-        <el-table :data="qcLines" border size="small" stripe>
+        <el-alert v-else type="info" :closable="false" show-icon style="margin-bottom:12px">
+          本环节确认 SKU 实收件数（支持 1 SKU 一箱扫 1 次、或一箱多件时设置「每次件数」后扫 SKU 累加）；测量机回传长宽高会自动填入（也支持 JSON 或「SKU|长|宽|高」）。确认后点击「提交清点与测量」。
+        </el-alert>
+
+        <el-descriptions :column="4" border size="small" class="order-summary">
+          <el-descriptions-item label="入库单"><span class="mono">{{ activeOrder.inboundNo }}</span></el-descriptions-item>
+          <el-descriptions-item label="目的仓"><span class="mono">{{ activeOrder.warehouseCode || '—' }}</span></el-descriptions-item>
+          <el-descriptions-item label="实收箱数">{{ activeOrder.receivedCartonCount ?? '—' }}</el-descriptions-item>
+          <el-descriptions-item label="测量进度">
+            {{ qcMeasureSummary.measured }} / {{ qcMeasureSummary.total }} SKU
+          </el-descriptions-item>
+        </el-descriptions>
+
+        <div class="scan-block">
+          <div class="scan-block-title">扫描清点 / 测量</div>
+          <el-form inline @submit.prevent="submitQcScan">
+            <el-form-item v-if="canEditQcQty" label="每次件数">
+              <el-input-number
+                v-model="qcScanIncrement"
+                :min="1"
+                :max="9999"
+                size="small"
+                controls-position="right"
+                style="width:120px"
+              />
+            </el-form-item>
+            <el-form-item label="扫描 SKU" required>
+              <el-input
+                ref="qcScanRef"
+                v-model="qcSkuScan"
+                placeholder="SKU 标签 / 测量机输出"
+                style="width:320px"
+                clearable
+                :disabled="qcScanning"
+                @keyup.enter="submitQcScan"
+              />
+            </el-form-item>
+            <el-form-item>
+              <el-button
+                type="primary"
+                :loading="qcScanning"
+                :disabled="!(canQc || canPutaway)"
+                @click="submitQcScan"
+              >
+                确认扫描
+              </el-button>
+            </el-form-item>
+          </el-form>
+          <p v-if="qcSelectedLine" class="hint">
+            当前：{{ qcSelectedLine.sku }} · 实收 {{ qcSelectedLine.actualQty }} / {{ qcSelectedLine.expectedQty }}
+            <template v-if="hasDimensions(qcSelectedLine)">
+              · {{ qcSelectedLine.lengthCm }}×{{ qcSelectedLine.widthCm }}×{{ qcSelectedLine.heightCm }} cm
+            </template>
+          </p>
+        </div>
+
+        <el-table
+          :data="qcLines"
+          border
+          size="small"
+          stripe
+          class="qc-measure-table"
+          :row-class-name="({ row }: any) => (row.id === qcSelectedItemId ? 'qc-row-active' : '')"
+          @row-click="(row: any) => { qcSelectedItemId = row.id }"
+        >
           <el-table-column prop="sku" label="SKU" width="118" fixed="left">
             <template #default="{ row }"><span class="mono">{{ row.sku }}</span></template>
           </el-table-column>
-          <el-table-column prop="productName" label="品名" min-width="130" show-overflow-tooltip />
-          <el-table-column prop="spec" label="规格" width="80" show-overflow-tooltip />
-          <el-table-column label="应收" width="72" align="right">
+          <el-table-column prop="productName" label="品名" min-width="120" show-overflow-tooltip />
+          <el-table-column prop="spec" label="规格" width="72" show-overflow-tooltip />
+          <el-table-column label="应收" width="64" align="right">
             <template #default="{ row }">{{ row.expectedQty }}</template>
           </el-table-column>
-          <el-table-column label="实收确认" width="120" align="center">
+          <el-table-column label="实收确认" width="108" align="center">
             <template #default="{ row }">
-              <el-input-number v-model="row.actualQty" :min="0" size="small" controls-position="right" class="qty-input" />
+              <el-input-number
+                v-model="row.actualQty"
+                :min="0"
+                size="small"
+                controls-position="right"
+                class="qty-input"
+                :disabled="!canEditQcQty"
+              />
             </template>
           </el-table-column>
-          <el-table-column label="差异" width="64" align="right">
+          <el-table-column label="差异" width="56" align="right">
             <template #default="{ row }">
               <span :class="{ 'diff-warn': row.actualQty !== row.expectedQty }">
                 {{ row.actualQty - row.expectedQty }}
               </span>
             </template>
           </el-table-column>
-          <el-table-column label="QC" width="96" align="center">
+          <el-table-column label="QC" width="88" align="center">
             <template #default="{ row }">
-              <el-select v-model="row.qcStatus" size="small">
+              <el-select
+                v-model="row.qcStatus"
+                size="small"
+                :disabled="!canEditQcQty"
+              >
                 <el-option label="通过" value="pass" />
                 <el-option label="异常" value="fail" />
               </el-select>
             </template>
           </el-table-column>
-          <el-table-column label="QC 备注" min-width="120">
+          <el-table-column label="长(cm)" width="88" align="center">
             <template #default="{ row }">
-              <el-input v-model="row.qcRemark" size="small" placeholder="说明" clearable />
+              <el-input-number v-model="row.lengthCm" :min="0.1" :precision="1" :controls="false" size="small" class="dim-input" />
+            </template>
+          </el-table-column>
+          <el-table-column label="宽(cm)" width="88" align="center">
+            <template #default="{ row }">
+              <el-input-number v-model="row.widthCm" :min="0.1" :precision="1" :controls="false" size="small" class="dim-input" />
+            </template>
+          </el-table-column>
+          <el-table-column label="高(cm)" width="88" align="center">
+            <template #default="{ row }">
+              <el-input-number v-model="row.heightCm" :min="0.1" :precision="1" :controls="false" size="small" class="dim-input" />
+            </template>
+          </el-table-column>
+          <el-table-column label="QC 备注" min-width="100">
+            <template #default="{ row }">
+              <el-input
+                v-model="row.qcRemark"
+                size="small"
+                placeholder="说明"
+                clearable
+                :disabled="!canEditQcQty"
+              />
             </template>
           </el-table-column>
         </el-table>
-        <div v-if="canResolve" class="qc-footer">
+        <div v-if="canResolve && canEditQcQty" class="qc-footer">
           <el-checkbox v-model="qcAcceptDiff">确认接受数量差异（需主管权限）</el-checkbox>
         </div>
-        <div class="panel-actions">
-          <el-button v-if="canQc" type="primary" @click="submitQc">提交清点</el-button>
+        <div class="panel-actions putaway-footer">
+          <span class="footer-hint">提交后将保存清点结果与实测尺寸</span>
+          <div class="footer-actions">
+            <el-button
+              v-if="(canQc && ['arrived', 'receiving'].includes(activeOrder.status)) || (canPutaway && activeOrder.status === 'pending_putaway')"
+              type="primary"
+              :loading="qcSubmitting"
+              @click="submitQcAndMeasure"
+            >
+              提交清点与测量
+            </el-button>
+            <el-button
+              v-if="qcMeasureSummary.pending === 0 && activeOrder.status === 'pending_putaway'"
+              @click="goPutawayStep"
+            >
+              进入扫码上架
+            </el-button>
+          </div>
         </div>
       </template>
-      <el-empty v-else description="请选择作业入库单" />
-    </div>
-
-    <!-- 测量体积 -->
-    <div v-show="workStep === 'measure'" v-loading="loadingOrder" class="panel">
-      <template v-if="activeOrder">
-        <el-alert v-if="activeOrder.status === 'exception'" type="error" :closable="false" show-icon style="margin-bottom:12px">
-          该单清点异常，需主管放行后才能测量。
-          <el-button v-if="canResolve" link type="primary" @click="resolveAndPutaway">异常放行</el-button>
-        </el-alert>
-
-        <el-descriptions :column="3" border size="small" class="order-summary">
-          <el-descriptions-item label="入库单"><span class="mono">{{ activeOrder.inboundNo }}</span></el-descriptions-item>
-          <el-descriptions-item label="目的仓"><span class="mono">{{ activeOrder.warehouseCode || '—' }}</span></el-descriptions-item>
-          <el-descriptions-item label="测量进度">
-            {{ measureSummary.measured }} / {{ measureSummary.total }} SKU
-          </el-descriptions-item>
-        </el-descriptions>
-
-        <template v-if="activeOrder.status === 'pending_putaway' && putawayDraftLines.length">
-          <div class="putaway-section-head">
-            <span>待测量 SKU（{{ measureSummary.total }} 个 · 待测 {{ measureSummary.pending }}）</span>
-            <span class="hint-inline">测量结果将回写 SKU 查询</span>
-          </div>
-
-          <div class="scan-block">
-            <div class="scan-block-title">扫码选中 SKU</div>
-            <el-form label-width="48px" @submit.prevent="submitMeasureSingle">
-              <el-form-item label="SKU">
-                <el-select
-                  v-model="measureSelectedItemId"
-                  filterable
-                  placeholder="选择 SKU"
-                  style="width:260px"
-                  size="small"
-                >
-                  <el-option
-                    v-for="line in putawayDraftLines"
-                    :key="line.id"
-                    :label="`${line.sku}${hasDimensions(line) ? ' ✓' : ''}`"
-                    :value="line.id"
-                  />
-                </el-select>
-                <el-input
-                  ref="measureScanRef"
-                  v-model="measureSkuScan"
-                  placeholder="扫描 SKU 快速选中"
-                  style="width:200px;margin-left:8px"
-                  size="small"
-                  clearable
-                  @keyup.enter="onMeasureSkuScan"
-                />
-              </el-form-item>
-              <el-form-item>
-                <el-button v-if="canPutaway" type="primary" size="small" :loading="measureSubmitting" @click="submitMeasureSingle">
-                  保存当前 SKU 测量
-                </el-button>
-              </el-form-item>
-            </el-form>
-          </div>
-
-          <div class="sku-cards">
-            <div
-              v-for="(line, idx) in putawayDraftLines"
-              :key="line.id"
-              class="sku-card"
-              :class="{ 'sku-card--active': line.id === measureSelectedItemId }"
-              @click="measureSelectedItemId = line.id"
-            >
-              <div class="sku-card-head">
-                <div class="sku-card-title">
-                  <span class="sku-index">{{ idx + 1 }}</span>
-                  <span class="mono sku-code">{{ line.sku }}</span>
-                  <span v-if="line.productName" class="sku-name">{{ line.productName }}</span>
-                </div>
-                <div class="sku-qty-tags">
-                  <el-tag size="small" type="info">待上架 {{ line.remaining }}</el-tag>
-                  <el-tag v-if="hasDimensions(line)" size="small" type="success">已测量</el-tag>
-                  <el-tag v-else size="small" type="warning">待测量</el-tag>
-                </div>
-              </div>
-              <div class="sku-card-body sku-card-body--measure">
-                <div class="field-group">
-                  <div class="field-group-label">实测尺寸 (cm)</div>
-                  <div class="dim-row">
-                    <div class="dim-field">
-                      <label>长</label>
-                      <el-input-number v-model="line.lengthCm" :min="0.1" :precision="1" :controls="false" size="small" />
-                    </div>
-                    <div class="dim-field">
-                      <label>宽</label>
-                      <el-input-number v-model="line.widthCm" :min="0.1" :precision="1" :controls="false" size="small" />
-                    </div>
-                    <div class="dim-field">
-                      <label>高</label>
-                      <el-input-number v-model="line.heightCm" :min="0.1" :precision="1" :controls="false" size="small" />
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div class="panel-actions putaway-footer">
-            <span class="footer-hint">全部测量完成后进入「扫码上架」</span>
-            <div class="footer-actions">
-              <el-button v-if="canPutaway" :loading="measureSubmitting" @click="submitMeasureAll">保存全部测量</el-button>
-              <el-button
-                v-if="measureSummary.pending === 0"
-                type="primary"
-                @click="goPutawayStep"
-              >进入扫码上架</el-button>
-            </div>
-          </div>
-        </template>
-        <el-empty v-else-if="activeOrder.status === 'completed'" description="该入库单已上架完成" />
-        <el-empty v-else description="暂无待测量明细，请先完成清点" />
-      </template>
+      <el-empty v-else-if="activeOrder" description="当前状态无需清点与测量，请进入扫码上架" />
       <el-empty v-else description="请选择作业入库单" />
     </div>
 
@@ -1096,8 +1205,8 @@ onMounted(async () => {
             show-icon
             style="margin-bottom:12px"
           >
-            还有 {{ measureSummary.pending }} 个 SKU 未完成体积测量。
-            <el-button link type="primary" @click="goMeasureStep">去测量</el-button>
+            还有 {{ measureSummary.pending }} 个 SKU 未完成清点与测量。
+            <el-button link type="primary" @click="goToQcStep">去清点与测量</el-button>
           </el-alert>
 
           <div class="scan-block">
@@ -1213,8 +1322,8 @@ onMounted(async () => {
             </el-button>
           </div>
         </template>
-        <el-empty v-else-if="activeOrder.status === 'pending_putaway' && putawayDraftLines.length && !putawayReadyLines.length" description="请先完成体积测量">
-          <el-button type="primary" @click="goMeasureStep">去测量体积</el-button>
+        <el-empty v-else-if="activeOrder.status === 'pending_putaway' && putawayDraftLines.length && !putawayReadyLines.length" description="请先完成清点与测量">
+          <el-button type="primary" @click="goToQcStep">去清点与测量</el-button>
         </el-empty>
         <el-empty v-else-if="activeOrder.status === 'completed'" description="该入库单已上架完成" />
         <el-empty v-else description="暂无待上架明细，请先完成清点" />
@@ -1267,6 +1376,8 @@ onMounted(async () => {
 .scan-row { display: flex; gap: 8px; width: 100%; max-width: 560px; }
 .scan-row .el-input { flex: 1; }
 .scan-block { margin-bottom: 12px; padding: 12px; background: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0; }
+.manual-carton-block { margin-bottom: 12px; }
+.manual-carton-block .hint { margin: 0; }
 .hint { font-size: 12px; color: var(--el-text-color-secondary); margin: 4px 0 0; }
 .hint-inline { margin-left: 8px; font-size: 12px; color: var(--el-text-color-secondary); }
 .result-box { margin-top: 8px; padding: 12px; border-radius: 8px; font-size: 13px; max-width: 560px; }
@@ -1276,6 +1387,11 @@ onMounted(async () => {
 .panel-actions { margin-top: 12px; }
 .qc-footer { margin-top: 12px; font-size: 13px; }
 .qty-input { width: 100%; max-width: 108px; }
+.dim-input { width: 100%; max-width: 72px; }
+.qc-measure-table :deep(.el-input-number) { width: 100%; }
+.qc-measure-table :deep(.qc-row-active > td) {
+  background: var(--el-color-primary-light-9) !important;
+}
 .diff-warn { color: var(--el-color-warning); font-weight: 600; }
 .recent-section { margin-top: 8px; border-top: 1px solid var(--el-border-color-lighter); padding-top: 16px; }
 .section-title { font-weight: 600; font-size: 14px; margin-bottom: 10px; }

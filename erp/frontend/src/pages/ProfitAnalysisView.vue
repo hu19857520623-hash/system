@@ -29,9 +29,9 @@ const topProducts = ref<{ name: string; sku: string; revenue: string; qty: numbe
 const profitRows = ref<{ dim: string; revenue: string; cost: string; freight: string; profit: string; margin: string }[]>([])
 const purchaseRows = ref<{ dim: string; poCount: number; totalAmt: string; avgLead: string; onTime: string; quality: string }[]>([])
 
-const { page: rankPage, pageSize: rankPageSize, total: rankTotal, pagedItems: rankPagedItems } = useTablePagination(topProducts)
-const { page: profitPage, pageSize: profitPageSize, total: profitTotal, pagedItems: profitPagedItems } = useTablePagination(profitRows)
-const { page: purchasePage, pageSize: purchasePageSize, total: purchaseTotal, pagedItems: purchasePagedItems } = useTablePagination(purchaseRows)
+const { page: rankPage, pageSize: rankPageSize, total: rankTotal, pagedItems: rankPagedItems, resetPage: resetRankPage } = useTablePagination(topProducts)
+const { page: profitPage, pageSize: profitPageSize, total: profitTotal, pagedItems: profitPagedItems, resetPage: resetProfitPage } = useTablePagination(profitRows)
+const { page: purchasePage, pageSize: purchasePageSize, total: purchaseTotal, pagedItems: purchasePagedItems, resetPage: resetPurchasePage } = useTablePagination(purchaseRows)
 
 const periodLabel = computed(() => {
   if (period.value === 'custom') {
@@ -81,6 +81,9 @@ async function loadLookups() {
 }
 
 async function loadAll() {
+  resetRankPage()
+  resetProfitPage()
+  resetPurchasePage()
   loading.value = true
   try {
     const params = queryParams()
@@ -153,12 +156,18 @@ function resetFilters() {
   loadAll()
 }
 
-function onPeriodChange(value: string) {
+watch(period, (value) => {
   if (value !== 'custom') {
     dateRange.value = []
     loadAll()
   }
-}
+})
+
+watch(dateRange, (range) => {
+  if (period.value === 'custom' && range?.[0] && range?.[1]) {
+    loadAll()
+  }
+})
 
 onMounted(async () => {
   await loadLookups()
@@ -179,7 +188,7 @@ watch(dim, loadAll)
     </template>
 
     <div class="filter-bar">
-      <el-radio-group v-model="period" size="small" @change="onPeriodChange">
+      <el-radio-group v-model="period" size="small">
         <el-radio-button value="month">本月</el-radio-button>
         <el-radio-button value="quarter">本季度</el-radio-button>
         <el-radio-button value="year">本年度</el-radio-button>

@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import { apiPut } from '../api/client'
+import { notifyPersistFailed } from '../utils/userNotify'
 import type { LogisticsRecord } from './mockData'
 
 let records: LogisticsRecord[] = []
@@ -12,7 +13,7 @@ function emit() {
 function persist(next: LogisticsRecord[]) {
   records = next
   emit()
-  void apiPut('/logistics', next).catch(err => console.error('persist logistics failed', err))
+  void apiPut('/logistics', next).catch(err => notifyPersistFailed('物流配置', err))
 }
 
 async function persistOrThrow(next: LogisticsRecord[]) {

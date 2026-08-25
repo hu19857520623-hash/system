@@ -10,10 +10,12 @@
 | `frontend/` | Vue 3、Vite、Element Plus Web 应用 |
 | `backend/` | NestJS、Prisma、MySQL 主业务服务 |
 | `services/` | Spring Cloud 网关、认证服务及迁移中的领域服务 |
-| `takealot-monitor/` | Takealot 店铺监控与代理工具 |
 | `shared/` | 跨 Node/Java 同步的权限目录源文件 |
 | `scripts/` | 本地启动、验收和运维脚本 |
 | `docs/` | 架构、流程、安全和操作文档 |
+
+Takealot 店铺监控已拆分为仓库根目录的独立工程 `../store-monitor/`，ERP 通过
+`TAKEALOT_PROXY_URL` 与它通信。
 
 详细边界见 [工程架构](docs/architecture/overview.md) 和
 [Spring 迁移清单](docs/migration/spring-strangler.md)。

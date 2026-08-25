@@ -186,7 +186,7 @@ services:
   takealot-monitor:
     profiles: ["monitor"]
     build:
-      context: ./erp/takealot-monitor
+      context: ./store-monitor
       dockerfile: Dockerfile
       args:
         <<: *build-args

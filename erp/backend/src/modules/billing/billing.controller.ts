@@ -25,7 +25,7 @@ export class BillingController {
 
   @RequirePerms('billing.view')
   @Get('charges')
-  listCharges(@Query() q: PaginationDto & { customerId?: number; chargeType?: string; source?: string; status?: string; dateFrom?: string; dateTo?: string }) {
+  listCharges(@Query() q: PaginationDto & { customerId?: number; customerCode?: string; chargeType?: string; source?: string; status?: string; dateFrom?: string; dateTo?: string }) {
     return this.service.listCharges(q)
   }
 

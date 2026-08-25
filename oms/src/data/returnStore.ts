@@ -23,9 +23,20 @@ function formatArrivalFromErp(iso?: string | null, fallback?: string): string | 
 
 export type ReturnLineItem = { sku: string; name: string; qty: number }
 
+export type TakealotReturnDetails = {
+  filledBy?: string
+  department?: string
+  selfRecall?: 'yes' | 'no'
+  inboundPoNumber?: string
+  purchasePrice?: number
+  userType?: string
+}
+
 export type ReturnOrder = {
   id: string
   customerId?: string
+  returnPlatform?: 'takealot' | 'other'
+  takealotReturnDetails?: TakealotReturnDetails
   returnNo: string
   orderNo: string
   referenceNo?: string
@@ -146,6 +157,8 @@ export function applyErpReturnToLocal(erp: ErpReturnOrder, customerId?: string):
   const order: ReturnOrder = {
     id: existing?.id || `erp-rt-${erp.id}`,
     customerId: customerId || existing?.customerId,
+    returnPlatform: existing?.returnPlatform,
+    takealotReturnDetails: existing?.takealotReturnDetails,
     returnNo: erp.returnNo,
     orderNo: erp.orderNo,
     referenceNo: erp.referenceNo || existing?.referenceNo,
@@ -234,12 +247,17 @@ export async function submitReturnToErp(
       })),
     })
     const merged = applyErpReturnToLocal(erp, order.customerId)
-    const finalOrder = order.attachments?.length
-      ? { ...merged, attachments: order.attachments }
-      : merged
-    if (order.attachments?.length) {
-      updateReturnOrder(finalOrder.id, { attachments: order.attachments })
+    const finalOrder = {
+      ...merged,
+      returnPlatform: order.returnPlatform,
+      takealotReturnDetails: order.takealotReturnDetails,
+      ...(order.attachments?.length ? { attachments: order.attachments } : {}),
     }
+    updateReturnOrder(finalOrder.id, {
+      returnPlatform: order.returnPlatform,
+      takealotReturnDetails: order.takealotReturnDetails,
+      ...(order.attachments?.length ? { attachments: order.attachments } : {}),
+    })
     return { ok: true, order: finalOrder }
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) }

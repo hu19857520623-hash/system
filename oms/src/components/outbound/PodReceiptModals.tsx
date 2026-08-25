@@ -13,9 +13,27 @@ function podBadgeClass(status: LogisticsRecord['podStatus']) {
   return 'bg-slate-100 text-slate-500'
 }
 
-function ghostLinkClass(size: 'sm' | 'md' = 'sm') {
-  const base = 'inline-flex items-center justify-center gap-2 rounded-lg font-medium transition-all duration-150 text-text-secondary hover:bg-surface-subtle hover:text-text-primary'
-  return `${base} ${size === 'sm' ? 'px-3 py-1.5 text-xs' : 'px-4 py-2 text-sm'}`
+export function actionLinkClass(extra = '') {
+  return `inline-flex w-full items-center gap-1.5 whitespace-nowrap rounded-md px-1.5 py-1 text-left text-xs font-medium text-primary-600 transition-colors hover:bg-surface-subtle hover:text-primary-700 ${extra}`.trim()
+}
+
+export function TableActionLink({
+  icon,
+  children,
+  onClick,
+  className = '',
+}: {
+  icon?: React.ReactNode
+  children: React.ReactNode
+  onClick: () => void
+  className?: string
+}) {
+  return (
+    <button type="button" className={actionLinkClass(className)} onClick={onClick}>
+      {icon}
+      <span>{children}</span>
+    </button>
+  )
 }
 
 function isPdfFile(name?: string, url?: string) {
@@ -233,7 +251,7 @@ export function PodViewModal({
           <Button variant="secondary" onClick={onClose}>关闭</Button>
           <button
             type="button"
-            className={ghostLinkClass('md') + ' bg-primary-600 text-white shadow-sm hover:bg-primary-700 hover:text-white'}
+            className={actionLinkClass('justify-center bg-primary-600 px-4 py-2 text-white shadow-sm hover:bg-primary-700 hover:text-white')}
             onClick={() => void downloadPodFile(record.outboundNo, fileName).catch(error => {
               setLoadError(error instanceof Error ? error.message : '下载签收单失败')
             })}
@@ -258,27 +276,26 @@ export function PodRowActions({
   if (!record || record.podStatus === 'not_required') return null
   if (record.podStatus === 'pending') {
     return (
-      <Button variant="ghost" size="sm" onClick={() => onUpload(record)}>
-        <Upload className="h-3 w-3" /> 回传签收单
-      </Button>
+      <TableActionLink icon={<Upload className="h-3 w-3 shrink-0" />} onClick={() => onUpload(record)}>
+        回传
+      </TableActionLink>
     )
   }
   if (record.podStatus === 'uploaded') {
     return (
       <>
-        <Button variant="ghost" size="sm" onClick={() => onView(record)}>
-          <Eye className="h-3 w-3" /> 查看签收单
-        </Button>
-        <button
-          type="button"
-          className={ghostLinkClass('sm')}
+        <TableActionLink icon={<Eye className="h-3 w-3 shrink-0" />} onClick={() => onView(record)}>
+          签收单
+        </TableActionLink>
+        <TableActionLink
+          icon={<Download className="h-3 w-3 shrink-0" />}
           onClick={() => void downloadPodFile(
             record.outboundNo,
             record.podFileName || `POD-${record.outboundNo}`,
           ).catch(error => window.alert(error instanceof Error ? error.message : '下载签收单失败'))}
         >
-          <Download className="h-3 w-3" /> 下载
-        </button>
+          下载
+        </TableActionLink>
       </>
     )
   }

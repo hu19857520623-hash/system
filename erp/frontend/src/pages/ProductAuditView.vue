@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
+import { erpPrompt } from '@/utils/messageBox'
 import { productDevApi, productApi } from '@/api/client.js'
 import { mapProductAudit } from '@/api/mappers.ts'
 import { useListLoader, withAction } from '@/composables/useListLoader.ts'
@@ -111,7 +112,7 @@ async function approve() {
 async function reject() {
   if (!selectedAudit.value) return
   try {
-    const { value } = await ElMessageBox.prompt('请输入驳回原因', '驳回选品', { confirmButtonText: '确认驳回', cancelButtonText: '取消', inputType: 'textarea' })
+    const { value } = await erpPrompt('请输入驳回原因', '驳回选品', { confirmButtonText: '确认驳回', cancelButtonText: '取消', inputType: 'textarea' })
     const ok = await withAction(async () => {
       await productDevApi.reject(selectedAudit.value.id, { remark: value })
     }, '已驳回，退回产品开发')

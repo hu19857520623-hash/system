@@ -32,7 +32,7 @@ function mapFreight(row: any) {
     id: row.billNo,
     supplier: row.supplierName || `供应商 #${row.supplierId}`,
     po: row.poNo || row.remark || '',
-    type: row.source === 'finance_approve' ? '采购成本' : '海运费',
+    type: '海运费',
     amount: num(row.totalAmount).toLocaleString(),
     mode: row.containerCount ? 'FCL' : 'LCL',
     status: st.label,
@@ -122,8 +122,8 @@ onMounted(async () => {
     <template #header>
       <div class="page-header">
         <div>
-          <div class="page-title">供应商海运账单</div>
-          <p class="page-subtitle">记录供应商海运、拼柜与整柜费用</p>
+          <div class="page-title">海运账单</div>
+          <p class="page-subtitle">记录海运、拼柜与整柜费用</p>
         </div>
         <div class="header-actions">
           <el-button type="primary" size="small" @click="addExpense">录入费用</el-button>
@@ -145,34 +145,36 @@ onMounted(async () => {
         <strong>{{ pendingCount }}</strong>
       </div>
     </div>
+    <div class="erp-table-scroll freight-table-scroll">
     <el-table :data="pagedItems" stripe border size="small" class="freight-table">
-      <el-table-column prop="id" label="账单编号" width="140">
-        <template #default="{ row }"><span style="font-family:var(--font-mono);font-size:12px">{{ row.id }}</span></template>
+      <el-table-column prop="id" label="账单编号" min-width="132" show-overflow-tooltip>
+        <template #default="{ row }"><span class="mono">{{ row.id }}</span></template>
       </el-table-column>
-      <el-table-column prop="supplier" label="供应商" min-width="140" />
-      <el-table-column prop="po" label="关联PO" width="150">
-        <template #default="{ row }"><span style="font-family:var(--font-mono);font-size:12px;color:#2563eb">{{ row.po }}</span></template>
+      <el-table-column prop="supplier" label="供应商" min-width="140" show-overflow-tooltip />
+      <el-table-column prop="po" label="关联PO" min-width="140" show-overflow-tooltip>
+        <template #default="{ row }"><span class="mono linkish">{{ row.po || '—' }}</span></template>
       </el-table-column>
-      <el-table-column prop="type" label="费用类型" width="90" />
-      <el-table-column prop="amount" label="金额 (RMB)" width="120" align="right">
+      <el-table-column prop="type" label="费用类型" min-width="96" show-overflow-tooltip />
+      <el-table-column prop="amount" label="金额 (RMB)" width="118" align="right">
         <template #default="{ row }">¥ {{ row.amount }}</template>
       </el-table-column>
-      <el-table-column prop="mode" label="运输方式" width="80" />
-      <el-table-column prop="status" label="状态" width="90">
+      <el-table-column prop="mode" label="运输方式" width="88" />
+      <el-table-column prop="status" label="状态" width="88">
         <template #default="{ row }">
           <el-tag :type="(row.tone as any)" size="small">{{ row.status }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column prop="date" label="日期" width="80" />
-      <el-table-column label="操作" width="100" fixed="right">
+      <el-table-column prop="date" label="日期" width="96" />
+      <el-table-column label="操作" width="72" fixed="right" align="center">
         <template #default="{ row }"><el-button link type="primary" size="small" @click="detail(row)">详情</el-button></template>
       </el-table-column>
     </el-table>
+    </div>
     <ListPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
   </el-card>
 
   <el-dialog v-model="dialogVisible" title="录入海运费用" width="640px" class="freight-entry-dialog">
-    <p class="dialog-note">录入后将生成待入账的供应商海运账单，可在财务确认后进入成本核算。</p>
+    <p class="dialog-note">录入后将生成待入账的海运账单，可在财务确认后进入成本核算。</p>
     <el-form label-position="top">
       <div class="expense-form-grid">
       <el-form-item label="供应商" required class="span-two">
@@ -244,6 +246,9 @@ onMounted(async () => {
   gap:0 16px;
 }
 .span-two { grid-column:1 / -1; }
+.freight-table-scroll { --erp-table-min-width: 980px; }
+.mono { font-family: var(--font-mono); font-size: 12px; }
+.linkish { color: #2563eb; }
 @media (max-width:680px) {
   .bill-summary,
   .expense-form-grid { grid-template-columns:1fr; }

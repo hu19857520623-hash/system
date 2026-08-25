@@ -30,7 +30,7 @@ export declare const ROLE_DEFINITIONS: readonly [{
     readonly roleCode: "ops_manager";
     readonly roleName: "采购主管";
     readonly templateKey: "采购主管";
-    readonly description: "PO 审核、明瑞物流下单与入库协调";
+    readonly description: "PO 审核、明瑞物流查轨迹与入库协调";
 }, {
     readonly roleCode: "purchaser";
     readonly roleName: "采购";

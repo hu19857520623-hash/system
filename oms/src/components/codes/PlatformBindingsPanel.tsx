@@ -18,6 +18,7 @@ import {
   useStores,
 } from '../../data/entityStore'
 import { apiDelete, apiPut } from '../../api/client'
+import { notifyIfUserError } from '../../utils/userNotify'
 import {
   filterBindingsByTab,
   applyPlatformBindingFilters,
@@ -91,6 +92,8 @@ export default function PlatformBindingsPanel() {
     if (canWrite) {
       const matches = dataScope.scope(mappings).filter(mapping =>
         mapping.platform === 'Takealot' && mapping.platformBarcode === barcode)
+      const active = matches.find(mapping => mapping.status === 'active' && mapping.lines.some(line => line.internalSku))
+      if (active) return
       setEditing(matches.length === 1 ? matches[0] : null)
       setQueryPrefill({
         platform: 'Takealot',
@@ -153,6 +156,8 @@ export default function PlatformBindingsPanel() {
     if (prev) {
       next = list.map(m => m.id === prev.id ? {
         ...m,
+        customerId: dataScope.activeCustomerId ?? m.customerId,
+        sellerId: store?.sellerId ?? m.sellerId,
         platform: form.platform,
         storeId: form.storeId,
         storeName: store?.name ?? m.storeName,
@@ -169,6 +174,8 @@ export default function PlatformBindingsPanel() {
     } else {
       next = [...list, {
         id: `pb-${Date.now()}`,
+        customerId: dataScope.activeCustomerId ?? undefined,
+        sellerId: store?.sellerId,
         platform: form.platform,
         storeId: form.storeId,
         storeName: store?.name ?? '—',
@@ -246,7 +253,7 @@ export default function PlatformBindingsPanel() {
         window.alert(`已导入 ${imported.length} 条平台绑定`)
       }
     } catch (err) {
-      if ((err as Error).message !== 'cancelled') console.error(err)
+      notifyIfUserError(err, '导入失败')
     }
   }
 
@@ -440,6 +447,7 @@ export default function PlatformBindingsPanel() {
       <PlatformBindingModal
         open={modalOpen}
         editing={editing}
+        customerId={dataScope.activeCustomerId ?? undefined}
         initialValues={queryPrefill}
         onClose={() => { setModalOpen(false); setEditing(null); setQueryPrefill(undefined) }}
         onSave={handleSave}

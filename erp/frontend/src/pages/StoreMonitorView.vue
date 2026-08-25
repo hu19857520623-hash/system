@@ -252,7 +252,7 @@ onMounted(loadSession)
     <div v-if="serviceState === 'offline'" class="setup-callout">
       <div>
         <strong>Takealot 代理未启动（127.0.0.1:3456）</strong>
-        <span>店铺看板依赖本机 Chrome 通道。请运行仓库根目录 dev-local.ps1，或单独启动 erp/takealot-monitor。</span>
+        <span>店铺看板依赖本机 Chrome 通道。请运行仓库根目录 dev-local.ps1，或单独启动 store-monitor。</span>
       </div>
       <el-button type="primary" plain @click="checkService">重新检测</el-button>
     </div>

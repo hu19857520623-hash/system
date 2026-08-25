@@ -5,9 +5,18 @@ ERP + OMS 一体化工程仓库，包含：
 - `erp/` — ERP 后端（NestJS）与前端（Vue）
 - `oms/` — OMS 后端与前端（React）
 - `pda/` — 仓库 PDA 安卓作业端（入库/出库扫码）
+- `store-monitor/` — 独立的 Takealot 店铺监控与 API 代理工程
 - `scripts/` — 全链路验证与审计脚本
 
 浏览器预览 PDA 界面：打开 `pda/preview/index.html`。
+
+店铺监控可独立运行：
+
+```powershell
+cd store-monitor
+npm install
+npm start
+```
 
 ## Docker 本地全栈
 

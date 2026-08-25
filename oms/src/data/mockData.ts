@@ -123,7 +123,7 @@ export interface InventoryItem {
 export interface FeeRecord {
   id: string
   date: string
-  type: 'storage' | 'handling' | 'shipping' | 'relabel' | 'picking' | 'inspection' | 'other' | 'recharge'
+  type: string
   refNo: string
   desc: string
   amount: number
@@ -547,6 +547,12 @@ export const statusLabels: Record<string, string> = {
   logistics_fail: '物流失败', sync_fail: '同步失败',
   low: '低库存', out: '断货', normal: '正常',
   storage: '仓储费', handling: '操作费', shipping: '物流费', recharge: '充值',
+  relabel: '换标费', picking: '拣货费', inspection: '质检费', other: '其他费用',
+  catalog_purchase: '货盘采购', return_logistics: '退件物流费',
+  return_receipt: '退件收货费', return_measure: '退件测量费', return_handling: '退件操作费',
+  return_inspection: '退件质检费', return_destroy: '退件销毁费', return_repack: '退件包装费',
+  return_restock: '退件上架费', return_relabel: '退件换标费', return_extra: '退件附加费',
+  repack: '换箱费', wms_outbound: 'WMS出库费', order_fee: '订单处理费',
 }
 
 export const statusColors: Record<string, string> = {
@@ -602,9 +608,19 @@ export function formatCurrency(amount: number): string {
 }
 
 export function getInventoryStatus(item: InventoryItem): 'normal' | 'low' | 'out' {
+  const shippable = item.stockSource === 'catalog' ? item.locked : item.available
+  if (shippable === 0 && item.inTransit === 0) return 'out'
+  if (item.stockSource === 'catalog') {
+    if (shippable > 0) return shippable < item.safetyStock ? 'low' : 'normal'
+  }
   if (item.available === 0 && item.inTransit === 0) return 'out'
   if (item.available < item.safetyStock) return 'low'
   return 'normal'
+}
+
+/** 货盘库存以 locked 为可发持有量，自有库存以 available 为准 */
+export function getInventoryShippableQty(item: InventoryItem): number {
+  return item.stockSource === 'catalog' ? item.locked : item.available
 }
 
 export function countOrdersByTab(tab: string, orderList: Order[] = orders): number {
@@ -624,7 +640,7 @@ export function countOrdersByTab(tab: string, orderList: Order[] = orders): numb
 
 // ─── 原项目：商品 / 入库 / 发货出库 / 编码 ─────────────────────────
 
-export type LegacyOrderStatus = 'draft' | 'pending' | 'locked' | 'picking' | 'shipped' | 'delivered' | 'exception'
+export type LegacyOrderStatus = 'draft' | 'pending' | 'locked' | 'picking' | 'shipped' | 'delivered' | 'cancelled' | 'exception'
 export type InboundStatus = 'draft' | 'receiving' | 'partial' | 'completed' | 'exception' | 'on_the_way' | 'shelved'
 export type OutboundType = 'dropship' | 'takealot'
 export type CodeStatus = 'active' | 'pending_review' | 'deprecated'

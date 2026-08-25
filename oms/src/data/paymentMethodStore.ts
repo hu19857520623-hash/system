@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react'
 import { apiPut } from '../api/client'
 import { DEFAULT_PAYMENT_METHODS, type PaymentMethod } from './feeTemplates'
+import { notifyPersistFailed } from '../utils/userNotify'
 
 let methods: PaymentMethod[] = DEFAULT_PAYMENT_METHODS.map(m => ({ ...m }))
 const listeners = new Set<() => void>()
@@ -36,7 +37,7 @@ export function updatePaymentMethods(next: PaymentMethod[]) {
   methods = next.map(m => ({ ...m })).sort((a, b) => a.sortOrder - b.sortOrder)
   emit()
   void apiPut('/payment-methods', methods).catch(err =>
-    console.error('persist payment methods failed', err),
+    notifyPersistFailed('支付方式', err),
   )
 }
 

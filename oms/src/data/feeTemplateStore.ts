@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import { apiDelete, apiPut } from '../api/client'
+import { notifyError, notifyPersistFailed } from '../utils/userNotify'
 import { getAccountsSnapshot } from '../auth/accountStore'
 import {
   DEFAULT_PRICE_TEMPLATE,
@@ -40,7 +41,7 @@ function syncAllTemplatesWithRegions(templates: PriceTemplate[], rules: RegionDi
 function persist(next: TemplateState) {
   state = next
   emit()
-  void apiPut('/fee-templates', next).catch(err => console.error('persist fee templates failed', err))
+  void apiPut('/fee-templates', next).catch(err => notifyPersistFailed('费用模板', err))
 }
 
 function subscribe(listener: () => void) {
@@ -175,7 +176,7 @@ export function removePriceTemplate(id: string) {
   const sameRegionCount = state.priceTemplates.filter(t => inferTemplateRegionCode(t) === code).length
   if (sameRegionCount <= 1) return
   void apiDelete(`/fee-templates/price/${encodeURIComponent(id)}`).catch(err =>
-    console.error('delete price template failed', err),
+    notifyError(`删除价格模板失败：${err instanceof Error ? err.message : String(err)}`),
   )
   updatePriceTemplates(state.priceTemplates.filter(t => t.id !== id))
 }
@@ -197,7 +198,7 @@ export function updateRegionDispatchRules(rules: RegionDispatchRule[]) {
   const removedIds = state.regionDispatchRules.filter(rule => !nextIds.has(rule.id)).map(rule => rule.id)
   for (const id of removedIds) {
     void apiDelete(`/fee-templates/region/${encodeURIComponent(id)}`).catch(err =>
-      console.error('delete region rule failed', err),
+      notifyError(`删除区域规则失败：${err instanceof Error ? err.message : String(err)}`),
     )
   }
   persist({

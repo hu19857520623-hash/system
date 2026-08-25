@@ -180,6 +180,16 @@ export class ReturnsController {
   }
 
   @RequirePerms('return.receive')
+  @Post(':id/re-receive')
+  reReceive(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: { receivedQty?: number; receivedCartonCount?: number; remark?: string },
+    @CurrentUser('userId') userId: number,
+  ) {
+    return this.service.reReceive(id, body, userId)
+  }
+
+  @RequirePerms('return.receive')
   @Post(':id/measure')
   measure(
     @Param('id', ParseIntPipe) id: number,

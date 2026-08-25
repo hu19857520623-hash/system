@@ -160,6 +160,7 @@ export const billingApi: ApiGroup
 export const freightBillApi: ApiGroup
 export const mingruiApi: ApiGroup
 export const profitApi: ApiGroup
+export const operatingLedgerApi: ApiGroup
 export const announcementApi: ApiGroup
 export const asyncIoApi: ApiGroup
 

@@ -29,6 +29,8 @@ export const OPERATION_ACTION_LABELS: Record<string, string> = {
   upload_image: '上传图片',
   delete_image: '删除图片',
   arrival_scan: '到仓扫描',
+  scan_qc: '扫描清点',
+  receive_carton_count: '登记实收箱数',
   start_receive: '开始收货',
   qc: '收货清点',
   resolve_exception: '异常放行',

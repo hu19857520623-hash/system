@@ -141,28 +141,48 @@ export class BillingService {
     }
   }
 
-  async listCharges(q: PaginationDto & { customerId?: number; chargeType?: string; source?: string; status?: string; dateFrom?: string; dateTo?: string }) {
+  private buildPendingChargeFilters(data: GenerateBillingDto) {
+    const conds = ["c.status = 'pending'", 'c.billing_id IS NULL']
+    const params: unknown[] = []
+    if (data.dateFrom) { conds.push('c.charge_date >= ?'); params.push(data.dateFrom) }
+    if (data.dateTo) { conds.push('c.charge_date <= ?'); params.push(data.dateTo) }
+    if (data.customerId) { conds.push('c.customer_id = ?'); params.push(data.customerId) }
+    if (data.customerCode?.trim()) {
+      conds.push('cust.customer_code = ?')
+      params.push(data.customerCode.trim().toUpperCase())
+    }
+    if (data.source?.trim()) { conds.push('c.source = ?'); params.push(data.source.trim()) }
+    if (data.chargeType?.trim()) { conds.push('c.charge_type = ?'); params.push(data.chargeType.trim()) }
+    return { where: conds.join(' AND '), params }
+  }
+
+  async listCharges(q: PaginationDto & { customerId?: number; customerCode?: string; chargeType?: string; source?: string; status?: string; dateFrom?: string; dateTo?: string }) {
     await this.backfillOutboundCharges()
     const { page, pageSize } = getPagination(q)
     const conds: string[] = ['1=1']
     const params: unknown[] = []
     if (q.customerId) { conds.push('c.customer_id = ?'); params.push(q.customerId) }
+    if (q.customerCode?.trim()) {
+      conds.push('cust.customer_code LIKE ?')
+      params.push(`%${q.customerCode.trim().toUpperCase()}%`)
+    }
     if (q.chargeType) { conds.push('c.charge_type = ?'); params.push(q.chargeType) }
     if (q.source) { conds.push('c.source = ?'); params.push(q.source) }
     if (q.status) { conds.push('c.status = ?'); params.push(q.status) }
     if (q.dateFrom) { conds.push('c.charge_date >= ?'); params.push(q.dateFrom) }
     if (q.dateTo) { conds.push('c.charge_date <= ?'); params.push(q.dateTo) }
+    const fromSql = 'billing_charge c LEFT JOIN customer cust ON cust.id = c.customer_id'
     if (q.keyword) {
-      conds.push('(c.charge_no LIKE ? OR c.description LIKE ? OR c.biz_ref LIKE ?)')
+      conds.push('(c.charge_no LIKE ? OR c.description LIKE ? OR c.biz_ref LIKE ? OR cust.customer_code LIKE ? OR cust.customer_name LIKE ?)')
       const kw = `%${q.keyword}%`
-      params.push(kw, kw, kw)
+      params.push(kw, kw, kw, kw, kw)
     }
     const where = conds.join(' AND ')
-    const countRows: any[] = await this.prisma.$queryRawUnsafe(`SELECT COUNT(*) as cnt FROM billing_charge c WHERE ${where}`, ...params)
+    const countRows: any[] = await this.prisma.$queryRawUnsafe(`SELECT COUNT(*) as cnt FROM ${fromSql} WHERE ${where}`, ...params)
     const total = Number(countRows[0]?.cnt ?? 0)
     const offset = (page - 1) * pageSize
     const rows: any[] = await this.prisma.$queryRawUnsafe(
-      `SELECT c.* FROM billing_charge c WHERE ${where} ORDER BY c.charge_date DESC, c.id DESC LIMIT ? OFFSET ?`,
+      `SELECT c.* FROM ${fromSql} WHERE ${where} ORDER BY c.charge_date DESC, c.id DESC LIMIT ? OFFSET ?`,
       ...params,
       pageSize,
       offset,
@@ -232,7 +252,7 @@ export class BillingService {
         chargeNo,
       )
     const row = rows[0]
-    return {
+    const created = {
       chargeNo,
       id: row ? Number(row.id) : undefined,
       chargeType: String(row?.charge_type || data.chargeType || 'other'),
@@ -241,6 +261,10 @@ export class BillingService {
       bizRef: row?.biz_ref || data.bizRef || null,
       ok: true,
     }
+    if (!tx) {
+      void this.pushCustomerBillingToOms(Number(data.customerId))
+    }
+    return created
   }
 
   async list(q: PaginationDto & { status?: string; customerId?: number }) {
@@ -286,13 +310,11 @@ export class BillingService {
 
   /** 汇总待入账费用生成账单（按客户） */
   async generateFromCharges(data: GenerateBillingDto) {
-    const conds = ["status = 'pending'", 'billing_id IS NULL']
-    const params: unknown[] = []
-    if (data.dateFrom) { conds.push('charge_date >= ?'); params.push(data.dateFrom) }
-    if (data.dateTo) { conds.push('charge_date <= ?'); params.push(data.dateTo) }
-    if (data.customerId) { conds.push('customer_id = ?'); params.push(data.customerId) }
-    const where = conds.join(' AND ')
-    const pending: any[] = await this.prisma.$queryRawUnsafe(`SELECT * FROM billing_charge WHERE ${where}`, ...params)
+    const { where, params } = this.buildPendingChargeFilters(data)
+    const pending: any[] = await this.prisma.$queryRawUnsafe(
+      `SELECT c.* FROM billing_charge c LEFT JOIN customer cust ON cust.id = c.customer_id WHERE ${where}`,
+      ...params,
+    )
     if (!pending.length) throw new BadRequestException('当前时间范围内暂无待入账费用')
 
     const byCustomer = new Map<number, any[]>()
@@ -304,7 +326,7 @@ export class BillingService {
 
     const period = (data.dateFrom || pending[0].charge_date?.toISOString?.()?.slice(0, 10) || new Date().toISOString().slice(0, 10)).slice(0, 7)
 
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       const created: any[] = []
       for (const [customerId, charges] of byCustomer) {
         const total = charges.reduce((s, c) => s + Number(c.amount), 0)
@@ -351,6 +373,10 @@ export class BillingService {
 
       return { bills: created, count: created.length, totalCharges: pending.length }
     })
+    for (const bill of result.bills as { customerId: number }[]) {
+      await this.pushCustomerBillingToOms(bill.customerId)
+    }
+    return result
   }
 
   /** 兼容旧接口：手动指定明细创建账单 */
@@ -379,13 +405,11 @@ export class BillingService {
   }
 
   async previewGenerate(data: GenerateBillingDto) {
-    const conds = ["status = 'pending'", 'billing_id IS NULL']
-    const params: unknown[] = []
-    if (data.dateFrom) { conds.push('charge_date >= ?'); params.push(data.dateFrom) }
-    if (data.dateTo) { conds.push('charge_date <= ?'); params.push(data.dateTo) }
-    if (data.customerId) { conds.push('customer_id = ?'); params.push(data.customerId) }
-    const where = conds.join(' AND ')
-    const rows: any[] = await this.prisma.$queryRawUnsafe(`SELECT customer_id, amount FROM billing_charge WHERE ${where}`, ...params)
+    const { where, params } = this.buildPendingChargeFilters(data)
+    const rows: any[] = await this.prisma.$queryRawUnsafe(
+      `SELECT c.customer_id, c.amount FROM billing_charge c LEFT JOIN customer cust ON cust.id = c.customer_id WHERE ${where}`,
+      ...params,
+    )
     const customerIds = [...new Set(rows.map((r) => Number(r.customer_id)))]
     return {
       chargeCount: rows.length,
@@ -400,14 +424,11 @@ export class BillingService {
       where: { id: BigInt(id) },
       data: { status: 'confirmed' },
     })
-    const customer = await this.prisma.customer.findUnique({ where: { id: updated.customerId } })
-    if (customer) {
-      void notifyOms('billing.changed', customer.customerCode, {
-        billingNo: updated.billingNo,
-        status: 'confirmed',
-        totalAmount: Number(updated.totalAmount),
-      })
-    }
+    await this.pushCustomerBillingToOms(Number(updated.customerId), {
+      billingNo: updated.billingNo,
+      status: 'confirmed',
+      totalAmount: Number(updated.totalAmount),
+    })
     return updated
   }
 
@@ -447,5 +468,185 @@ export class BillingService {
       items: result.items,
       total: result.total,
     }
+  }
+
+  /** 把 ERP 客户余额、已确认费用、充值镜像到 OMS（不把 pending 写成实扣）。 */
+  async pushCustomerBillingToOms(
+    customerId: number,
+    extra?: { billingNo?: string; status?: string; totalAmount?: number },
+  ): Promise<boolean> {
+    try {
+      const customer = await this.prisma.customer.findUnique({ where: { id: BigInt(customerId) } })
+      if (!customer) return false
+      await this.ensureOmsBillingMirror(customer)
+
+    const [confirmed, pendingRows, pendingSumRows, monthlyRows, recharges] = await Promise.all([
+      this.prisma.$queryRawUnsafe<Array<{
+        id: bigint
+        charge_no: string
+        charge_type: string
+        amount: unknown
+        description: string | null
+        biz_ref: string | null
+        charge_date: Date | string
+      }>>(
+        `SELECT id, charge_no, charge_type, amount, description, biz_ref, charge_date
+         FROM billing_charge WHERE customer_id = ? AND status = 'confirmed' ORDER BY id ASC`,
+        customer.id,
+      ),
+      this.prisma.$queryRawUnsafe<Array<{ id: bigint }>>(
+        `SELECT id FROM billing_charge WHERE customer_id = ? AND status = 'pending'`,
+        customer.id,
+      ),
+      this.prisma.$queryRawUnsafe<Array<{ total: unknown }>>(
+        `SELECT COALESCE(SUM(amount), 0) AS total FROM billing_charge WHERE customer_id = ? AND status = 'pending'`,
+        customer.id,
+      ),
+      this.prisma.$queryRawUnsafe<Array<{ total: unknown }>>(
+        `SELECT COALESCE(SUM(amount), 0) AS total FROM billing_charge
+         WHERE customer_id = ? AND status = 'confirmed' AND charge_date >= ?`,
+        customer.id,
+        this.currentMonthStart(),
+      ),
+      this.prisma.customerRecharge.findMany({
+        where: { customerId: customer.id, status: 'confirmed' },
+        orderBy: { id: 'asc' },
+      }),
+    ])
+
+    return notifyOms('billing.changed', customer.customerCode, {
+      balance: Number(customer.balance),
+      pendingBill: Number(pendingSumRows[0]?.total || 0),
+      monthlySpent: Number(monthlyRows[0]?.total || 0),
+      charges: confirmed.map((c) => ({
+        id: Number(c.id),
+        chargeNo: String(c.charge_no || ''),
+        chargeType: String(c.charge_type || 'other'),
+        amount: Number(c.amount || 0),
+        description: String(c.description || ''),
+        bizRef: c.biz_ref,
+        chargeDate: this.toChargeDateStr(c.charge_date),
+      })),
+      recharges: recharges.map((r) => ({
+        rechargeNo: r.rechargeNo,
+        amount: Number(r.amount),
+        paymentMethod: r.paymentMethod,
+        remark: r.remark,
+        createdAt: r.createdAt.toISOString(),
+      })),
+      removeChargeIds: pendingRows.map((r) => Number(r.id)),
+      ...(extra?.billingNo
+        ? {
+            billingNo: extra.billingNo,
+            status: extra.status || 'confirmed',
+            totalAmount: extra.totalAmount ?? 0,
+          }
+        : {}),
+    })
+    } catch (err) {
+      console.warn(
+        `[billing] push OMS failed for customer ${customerId}:`,
+        err instanceof Error ? err.message : err,
+      )
+      return false
+    }
+  }
+
+  async replayOmsBilling(): Promise<{ customerCode: string; balance: number; ok: boolean }[]> {
+    const customers = await this.prisma.customer.findMany({ orderBy: { id: 'asc' } })
+    const out: { customerCode: string; balance: number; ok: boolean }[] = []
+    for (const customer of customers) {
+      const ok = await this.pushCustomerBillingToOms(Number(customer.id))
+      out.push({ customerCode: customer.customerCode, balance: Number(customer.balance), ok })
+    }
+    return out
+  }
+
+  private currentMonthStart(): string {
+    const now = new Date()
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`
+  }
+
+  private toChargeDateStr(value: Date | string | null | undefined): string {
+    if (value instanceof Date) return value.toISOString().slice(0, 10)
+    return String(value || '').slice(0, 10)
+  }
+
+  private async ensureOmsBillingMirror(customer: {
+    customerCode: string
+    customerName: string
+    companyName: string | null
+    contactEmail: string | null
+    contactName: string | null
+    contactPhone: string | null
+    balance: unknown
+    status: number
+  }): Promise<void> {
+    const code = customer.customerCode.trim()
+    const accountId = `erp-customer-${code.toLowerCase()}`
+    const billingId = `erp-billing-${code.toLowerCase()}`
+    const omsStatus = customer.status === 1 ? 'active' : 'disabled'
+    const email = (customer.contactEmail || '').trim() || `${code.toLowerCase()}@erp.local`
+    const warehouse = 'jhb1'
+
+    await this.prisma.$executeRaw(Prisma.sql`
+      INSERT INTO \`oms_CustomerAccount\`
+        (\`id\`, \`name\`, \`code\`, \`type\`, \`contact\`, \`email\`, \`status\`,
+         \`permissions\`, \`warehouse\`, \`createdAt\`, \`lastLoginAt\`,
+         \`companyName\`, \`contactPhone\`)
+      VALUES (
+        ${accountId},
+        ${customer.customerName},
+        ${code},
+        ${'ecommerce'},
+        ${customer.contactName || customer.customerName},
+        ${email},
+        ${omsStatus},
+        ${'[]'},
+        ${warehouse},
+        ${new Date().toISOString()},
+        ${''},
+        ${customer.companyName},
+        ${customer.contactPhone}
+      )
+      ON DUPLICATE KEY UPDATE
+        \`name\` = VALUES(\`name\`),
+        \`contact\` = VALUES(\`contact\`),
+        \`email\` = VALUES(\`email\`),
+        \`status\` = VALUES(\`status\`),
+        \`companyName\` = VALUES(\`companyName\`),
+        \`contactPhone\` = VALUES(\`contactPhone\`)
+    `)
+
+    const accounts = await this.prisma.$queryRaw<Array<{ id: string; warehouse: string | null }>>(
+      Prisma.sql`SELECT id, warehouse FROM \`oms_CustomerAccount\` WHERE code = ${code} LIMIT 1`,
+    )
+    const resolvedId = accounts[0]?.id
+    if (!resolvedId) throw new Error(`OMS customer account missing after upsert: ${code}`)
+    const resolvedWarehouse = accounts[0]?.warehouse || warehouse
+
+    await this.prisma.$executeRaw(Prisma.sql`
+      INSERT INTO \`oms_BillingAccount\`
+        (\`id\`, \`customerId\`, \`name\`, \`code\`, \`contact\`, \`warehouse\`,
+         \`creditBalance\`, \`monthlySpent\`, \`pendingBill\`, \`budgetUsed\`)
+      VALUES (
+        ${billingId},
+        ${resolvedId},
+        ${customer.customerName},
+        ${code},
+        ${customer.contactName || customer.customerName},
+        ${resolvedWarehouse},
+        ${Number(customer.balance)},
+        ${0},
+        ${0},
+        ${0}
+      )
+      ON DUPLICATE KEY UPDATE
+        \`name\` = VALUES(\`name\`),
+        \`code\` = VALUES(\`code\`),
+        \`contact\` = VALUES(\`contact\`),
+        \`warehouse\` = VALUES(\`warehouse\`),
+        \`creditBalance\` = VALUES(\`creditBalance\`)
+    `)
   }
 }

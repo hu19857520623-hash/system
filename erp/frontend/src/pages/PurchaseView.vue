@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
+import { erpConfirm, erpPrompt } from '@/utils/messageBox'
 import { purchaseApi, supplierApi, usersApi, productDevApi, warehouseApi, productApi } from '@/api/client.js'
 import { mapPurchaseOrder, mapPrePurchaseOrder, mapProductDev } from '@/api/mappers.ts'
 import { useListLoader, withAction } from '@/composables/useListLoader.ts'
@@ -15,9 +15,9 @@ import {
   PIPELINE_PURCHASE_ORDERS,
 } from '@/constants/productPipeline.ts'
 import { productDevImageSrc } from '@/utils/productDevImage.ts'
+import { downloadPurchaseBoxLabels } from '@/features/labels/purchaseBoxLabel.ts'
 
 const app = useAppStore()
-const router = useRouter()
 
 const mainTab = ref('orders')
 const searchQ = ref('')
@@ -26,7 +26,7 @@ const canCreate = computed(() => app.hasPerm('purchase.create'))
 const canAssignPurchaser = computed(() => app.hasPerm('purchase.assign'))
 const canPoAudit = computed(() => app.hasPerm('purchase.po_audit'))
 const canMarkPaid = computed(() => app.hasPerm('purchase.mark_paid'))
-const canMingruiOrder = computed(() => app.hasPerm('mingrui.order'))
+const canBoxLabel = computed(() => app.hasPerm('purchase.box_label'))
 const canSetActualQty = computed(() => app.hasPerm('product_audit.purchase_qty') || app.hasPerm('product_audit.approve'))
 
 const { loading, items: poItems, load } = useListLoader(async () => {
@@ -88,7 +88,7 @@ const tabs = computed(() => {
   if (canSetActualQty.value) {
     list.push({ id: 'actual_qty', label: '核定实际数量' })
   }
-  list.push({ id: 'po_pending', label: '采购审核' }, { id: 'paid', label: '已打款' })
+  list.push({ id: 'po_pending', label: '采购审核' }, { id: 'payment', label: '打款标记' })
   return list
 })
 
@@ -96,9 +96,9 @@ function canShowPayment(statusKey?: string) {
   return ['finance_approved', 'at_logistics_wh', 'received', 'completed', 'approved'].includes(String(statusKey || ''))
 }
 
-function goMingruiOrder(row?: { poNo?: string }) {
-  const poNo = row?.poNo || selectedPo.value?.poNo
-  router.push({ path: '/mingrui', query: poNo ? { poNo } : {} })
+/** 打款标记页仅保留打款操作，不展示物流/标签入口 */
+function showPoLogisticsActions() {
+  return mainTab.value !== 'payment'
 }
 
 function poTone(statusKey: string) {
@@ -144,7 +144,7 @@ function poProductNameLabel(items: any[] | undefined) {
 const poList = computed(() => {
   let list = poItems.value
   if (mainTab.value === 'po_pending') list = list.filter(p => p.statusKey === 'pending_po_audit')
-  if (mainTab.value === 'paid') list = list.filter(p => p.paymentStatus === 'paid')
+  if (mainTab.value === 'payment') list = list.filter(p => canShowPayment(p.statusKey))
   if (mainTab.value === 'actual_qty') list = list.filter(p => p.statusKey === 'pending_actual_qty')
   if (searchQ.value) {
     const q = searchQ.value.toLowerCase()
@@ -400,24 +400,97 @@ const prePoDialogVisible = ref(false)
 const editingPrePo = ref<any>(null)
 const prePoWarehouses = ref<any[]>([])
 
+function prePoDisplayText(value?: string | null) {
+  const text = String(value ?? '').trim()
+  return text && text !== '—' ? text : ''
+}
+
+function prePoNum(value: unknown): number | undefined {
+  if (value === null || value === undefined || value === '') return undefined
+  const n = Number(value)
+  return Number.isFinite(n) ? n : undefined
+}
+
+function prePoDate(value: unknown): string | undefined {
+  if (!value) return undefined
+  const text = String(value)
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text
+  const date = new Date(text)
+  if (Number.isNaN(date.getTime())) return undefined
+  return date.toISOString().slice(0, 10)
+}
+
+function buildPrePoEditForm(detail: any) {
+  return {
+    id: detail.id,
+    prePoNo: detail.prePoNo,
+    sku: detail.sku || '',
+    productName: detail.productName || '',
+    spec: detail.spec || '',
+    plannedQty: detail.plannedQty ?? 1,
+    unitPrice: prePoNum(detail.unitPrice),
+    supplierId: detail.supplierId ?? null,
+    supplierName: prePoDisplayText(detail.supplierName) || prePoDisplayText(detail.supplier),
+    supplierContactName: detail.supplierContactName || '',
+    supplierContactPhone: detail.supplierContactPhone || '',
+    supplierAddress: detail.supplierAddress || '',
+    domesticFreight: prePoNum(detail.domesticFreight),
+    warehouseCode: detail.warehouseCode || '',
+    expectedArrival: prePoDate(detail.expectedArrival) || prePoDate(detail.expectedArrivalStr),
+    productLink: detail.productLink || '',
+    accessories: detail.accessories || '',
+    moq: prePoNum(detail.moq),
+    leadTimeDays: prePoNum(detail.leadTimeDays),
+    taxRate: prePoNum(detail.taxRate),
+    invoiceTaxRate: prePoNum(detail.invoiceTaxRate),
+    unitTax: prePoNum(detail.unitTax),
+    unitFreight: prePoNum(detail.unitFreight),
+    productLengthCm: prePoNum(detail.productLengthCm),
+    productWidthCm: prePoNum(detail.productWidthCm),
+    productHeightCm: prePoNum(detail.productHeightCm),
+    packageWeightKg: prePoNum(detail.packageWeightKg),
+    packageLengthCm: prePoNum(detail.packageLengthCm),
+    packageWidthCm: prePoNum(detail.packageWidthCm),
+    packageHeightCm: prePoNum(detail.packageHeightCm),
+    sampleStatus: detail.sampleStatus || '',
+    samplePackageInfo: detail.samplePackageInfo || '',
+    sampleImageUrl: detail.sampleImageUrl || '',
+    doubleLayerCarton: detail.doubleLayerCarton ?? null,
+    notPurchaseReason: detail.notPurchaseReason || '',
+    logoUnitFee: prePoNum(detail.logoUnitFee),
+    logoTotalFee: prePoNum(detail.logoTotalFee),
+    cartonTotalPrice: prePoNum(detail.cartonTotalPrice),
+    spareCartonUnitPrice: prePoNum(detail.spareCartonUnitPrice),
+    spareCartonQty: prePoNum(detail.spareCartonQty),
+    piecesPerCarton: prePoNum(detail.piecesPerCarton),
+    productImageUrl: detail.productImageUrl || '',
+    manualUrl: detail.manualUrl || '',
+    remark: detail.remark || '',
+  }
+}
+
+async function loadPrePoWarehouses() {
+  if (prePoWarehouses.value.length) return
+  try {
+    const { warehouseApi } = await import('@/api/client.js')
+    const whRes = await warehouseApi.list()
+    prePoWarehouses.value = whRes.items || whRes || []
+  } catch {
+    prePoWarehouses.value = []
+  }
+}
+
 async function openPrePoEdit(row: any) {
-  editingPrePo.value = {
-    ...row._raw,
-    ...row,
-    supplierName: row._raw?.supplierName || (row.supplier && row.supplier !== '—' ? row.supplier : ''),
-    domesticFreight: row.domesticFreight ?? '',
-  }
   prePoDialogVisible.value = true
-  if (!supplierOptions.value.length) await loadSupplierOptions()
-  if (!prePoWarehouses.value.length) {
-    try {
-      const { warehouseApi } = await import('@/api/client.js')
-      const whRes = await warehouseApi.list()
-      prePoWarehouses.value = whRes.items || whRes || []
-    } catch {
-      prePoWarehouses.value = []
-    }
-  }
+  editingPrePo.value = null
+  const detailPromise = purchaseApi.prePoDetail(row.id).catch(() => row._raw || row)
+  await Promise.all([
+    detailPromise.then((detail) => {
+      editingPrePo.value = buildPrePoEditForm(detail)
+    }),
+    supplierOptions.value.length ? Promise.resolve() : loadSupplierOptions(),
+    loadPrePoWarehouses(),
+  ])
 }
 
 async function savePrePoEdit() {
@@ -520,7 +593,7 @@ function financeSummary(po: any) {
 
 async function cancelPrePoRow(row: any) {
   try {
-    const { value } = await ElMessageBox.prompt('请填写取消采购原因', '取消预采购', {
+    const { value } = await erpPrompt('请填写取消采购原因', '取消预采购', {
       confirmButtonText: '确认取消',
       cancelButtonText: '返回',
       inputPattern: /\S+/,
@@ -536,7 +609,7 @@ async function cancelPrePoRow(row: any) {
 
 async function confirmPrePoRow(row: any) {
   try {
-    await ElMessageBox.confirm(
+    await erpConfirm(
       `确认预采购单 ${row.prePoNo}？将生成正式采购单，实际数量需产品主管核定。`,
       '确认采购',
       { type: 'info' },
@@ -555,7 +628,7 @@ async function submitActualQty(po: any) {
   const line = po.items?.[0]
   if (!line) return
   try {
-    const { value } = await ElMessageBox.prompt(
+    const { value } = await erpPrompt(
       `计划数量 ${line.plannedQty ?? '—'}，请填写实际采购数量`,
       `核定实际数量 · ${line.sku}`,
       {
@@ -703,22 +776,22 @@ const auditTimeline = computed(() => {
       type: p.statusKey === 'rejected' && p.poAuditRemark && !p.financeAtStr ? 'danger' : 'success',
     })
   }
-  if (p.financeAtStr) {
+  if (p.financeAtStr && p.statusKey === 'rejected' && p.financeRemark) {
     steps.push({
       time: p.financeAtStr,
       role: p.financeName,
-      action: p.statusKey === 'rejected' && p.financeRemark ? '财务驳回' : '财务审核',
-      detail: p.financeRemark || '—',
-      type: p.statusKey === 'rejected' && p.financeRemark ? 'danger' : 'success',
+      action: '财务驳回',
+      detail: p.financeRemark,
+      type: 'danger',
     })
   }
   if (p.paidAtStr) {
     steps.push({
       time: p.paidAtStr,
       role: p.paidByName,
-      action: '标记已打款',
-      detail: '已转财务',
-      type: 'success',
+      action: p.paymentStatus === 'paid' ? '标记已打款' : '标记未打款',
+      detail: p.financeRemark || '—',
+      type: p.paymentStatus === 'paid' ? 'success' : 'warning',
     })
   }
   return steps
@@ -751,7 +824,7 @@ async function passPoAudit() {
   }
   const ok = await withAction(async () => {
     await purchaseApi.approve(selectedPo.value.id, { remark: '审核通过', warehouseCode })
-  }, '采购审核已通过，已同步主数据，可安排入库；打款后将转财务')
+  }, '采购审核已通过，已同步主数据，可安排入库；默认未打款，可在详情中标记打款状态')
   if (ok) {
     detailVisible.value = false
     load()
@@ -761,7 +834,7 @@ async function passPoAudit() {
 async function rejectPoAudit() {
   if (!selectedPo.value) return
   try {
-    const { value } = await ElMessageBox.prompt('请填写驳回原因，将退回采购员修改', '采购主管驳回', {
+    const { value } = await erpPrompt('请填写驳回原因，将退回采购员修改', '采购主管驳回', {
       confirmButtonText: '确认驳回',
       cancelButtonText: '取消',
       inputPattern: /\S+/,
@@ -778,28 +851,37 @@ async function rejectPoAudit() {
   } catch { /* cancelled */ }
 }
 
-async function markPoPaid() {
-  if (!selectedPo.value) return
-  const ok = await withAction(async () => {
-    await purchaseApi.markPaid(selectedPo.value.id, { remark: '已打款' })
-  }, '已标记打款，费用信息已转财务')
-  if (ok) {
-    const detail = await purchaseApi.detail(selectedPo.value.id)
-    selectedPo.value = mapPurchaseOrder(detail)
-    load()
-  }
+async function refreshPoAfterPayment(id: number) {
+  const detail = await purchaseApi.detail(id)
+  const mapped = mapPurchaseOrder(detail)
+  if (selectedPo.value?.id === id) selectedPo.value = mapped
+  load()
+  return mapped
 }
 
-async function markPoUnpaid() {
-  if (!selectedPo.value) return
+async function markPoPaid(po?: { id: number }) {
+  const target = po || selectedPo.value
+  if (!target) return
   const ok = await withAction(async () => {
-    await purchaseApi.markUnpaid(selectedPo.value.id)
-  }, '已改回未打款')
-  if (ok) {
-    const detail = await purchaseApi.detail(selectedPo.value.id)
-    selectedPo.value = mapPurchaseOrder(detail)
-    load()
-  }
+    await purchaseApi.markPaid(target.id, { remark: '已打款' })
+  }, '已标记为已打款')
+  if (ok) await refreshPoAfterPayment(target.id)
+}
+
+async function markPoUnpaid(po?: { id: number }) {
+  const target = po || selectedPo.value
+  if (!target) return
+  const ok = await withAction(async () => {
+    await purchaseApi.markUnpaid(target.id)
+  }, '已标记为未打款')
+  if (ok) await refreshPoAfterPayment(target.id)
+}
+
+function downloadPoBoxLabels(po?: any) {
+  const target = po || selectedPo.value
+  if (!target) return
+  downloadPurchaseBoxLabels(target)
+  ElMessage.success(`已下载外箱标 ${target.poNo}-箱唛.html`)
 }
 </script>
 
@@ -828,7 +910,7 @@ async function markPoUnpaid() {
               size="small"
               @keyup.enter="loadMyPrePo"
             />
-            <el-input v-else-if="mainTab === 'orders' || mainTab === 'po_pending' || mainTab === 'paid' || mainTab === 'actual_qty'" v-model="searchQ" placeholder="搜索单号 / SKU / 供应商" clearable style="width:200px" size="small" />
+            <el-input v-else-if="mainTab === 'orders' || mainTab === 'po_pending' || mainTab === 'payment' || mainTab === 'actual_qty'" v-model="searchQ" placeholder="搜索单号 / SKU / 供应商" clearable style="width:200px" size="small" />
             <el-button v-if="canCreate && mainTab === 'orders'" type="primary" size="small" @click="openCreatePo">+ 创建采购单</el-button>
           </div>
         </div>
@@ -884,15 +966,15 @@ async function markPoUnpaid() {
         <ListPagination v-model:page="prePoPage" v-model:page-size="prePoPageSize" :total="prePoTotal" />
       </div>
 
-      <template v-else-if="mainTab === 'orders' || mainTab === 'po_pending' || mainTab === 'paid' || mainTab === 'actual_qty'">
+      <template v-else-if="mainTab === 'orders' || mainTab === 'po_pending' || mainTab === 'payment' || mainTab === 'actual_qty'">
       <el-alert v-if="mainTab === 'orders'" type="info" :closable="false" show-icon style="margin-bottom:12px">
       <p class="flow-hint">{{ PIPELINE_PURCHASE_ORDERS }}</p>
       </el-alert>
       <el-alert v-if="mainTab === 'actual_qty'" type="warning" :closable="false" show-icon style="margin-bottom:12px">
         产品主管在此核定实际采购数量，提交后进入「采购审核」。
       </el-alert>
-      <el-alert v-if="mainTab === 'paid'" type="info" :closable="false" show-icon style="margin-bottom:12px">
-        已打款采购单已转财务。采购主管可继续「明瑞物流下单」订舱发运海外仓。财务可查看费用明细，但不能修改打款状态。
+      <el-alert v-if="mainTab === 'payment'" type="info" :closable="false" show-icon style="margin-bottom:12px">
+        采购审核通过的订单在此标记「已打款」或「未打款」。费用在审核通过时已写入成本台账，与打款状态无关。
       </el-alert>
       <el-table v-loading="loading" :data="pagedItems" stripe border style="width: 100%" size="small">
         <el-table-column prop="poNo" label="采购单号" width="150">
@@ -928,12 +1010,16 @@ async function markPoUnpaid() {
           </template>
         </el-table-column>
         <el-table-column prop="createdAtStr" label="创建时间" width="110" />
-        <el-table-column label="操作" width="160" fixed="right">
+        <el-table-column label="操作" :width="mainTab === 'payment' ? 140 : 220" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="openDetail(row)">
               {{ (canSetActualQty && row.statusKey === 'pending_actual_qty') ? '核定数量' : (canPoAudit && row.statusKey === 'pending_po_audit') ? '去审核' : '详情' }}
             </el-button>
-            <el-button v-if="canMingruiOrder && canShowPayment(row.statusKey)" link type="success" size="small" @click="goMingruiOrder(row)">明瑞下单</el-button>
+            <template v-if="canMarkPaid && canShowPayment(row.statusKey)">
+              <el-button v-if="row.paymentStatus !== 'paid'" link type="success" size="small" @click="markPoPaid(row)">标记已打款</el-button>
+              <el-button v-else link type="warning" size="small" @click="markPoUnpaid(row)">标记未打款</el-button>
+            </template>
+            <el-button v-if="showPoLogisticsActions() && canBoxLabel && canShowPayment(row.statusKey)" link type="primary" size="small" @click="downloadPoBoxLabels(row)">下载外箱标</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -1097,7 +1183,12 @@ async function markPoUnpaid() {
             <el-tag :type="poTone(selectedPo.statusKey) === 'ok' ? 'success' : poTone(selectedPo.statusKey) === 'warn' ? 'warning' : poTone(selectedPo.statusKey) === 'danger' ? 'danger' : 'info'" size="small">{{ selectedPo.status }}</el-tag>
           </el-descriptions-item>
           <el-descriptions-item label="供应商">{{ selectedPo.supplier }}</el-descriptions-item>
-          <el-descriptions-item label="目标中转仓">
+          <el-descriptions-item>
+            <template #label>
+              <span
+                :class="{ 'desc-required-label': selectedPo.statusKey === 'pending_po_audit' && canPoAudit && !selectedPo.warehouseCode }"
+              >目标中转仓</span>
+            </template>
             <el-select
               v-if="selectedPo.statusKey === 'pending_po_audit' && canPoAudit && !selectedPo.warehouseCode"
               v-model="auditWarehouseCode"
@@ -1130,14 +1221,14 @@ async function markPoUnpaid() {
               {{ selectedPo.paymentStatus === 'paid' ? '已打款' : '未打款' }}
             </el-tag>
             <span v-if="selectedPo.paymentStatus === 'paid'" class="form-tip">
-              {{ selectedPo.paidByName }} · {{ selectedPo.paidAtStr }} · 已转财务
+              {{ selectedPo.paidByName }} · {{ selectedPo.paidAtStr }}
             </span>
           </el-descriptions-item>
           <el-descriptions-item label="备注" :span="2">{{ selectedPo.remark || '—' }}</el-descriptions-item>
         </el-descriptions>
 
         <template v-if="canShowPayment(selectedPo.statusKey)">
-          <div class="detail-section-title">费用明细（转财务）</div>
+          <div class="detail-section-title">费用明细</div>
           <el-descriptions :column="2" border size="small" title="单据信息">
             <el-descriptions-item label="采购单号"><span class="mono">{{ selectedPo.poNo }}</span></el-descriptions-item>
             <el-descriptions-item label="供应商">{{ selectedPo.supplier }}</el-descriptions-item>
@@ -1276,15 +1367,16 @@ async function markPoUnpaid() {
           <el-button type="primary" @click="passPoAudit">审核通过</el-button>
         </template>
         <template v-if="canMarkPaid && canShowPayment(selectedPo?.statusKey)">
-          <el-button v-if="selectedPo.paymentStatus !== 'paid'" type="success" @click="markPoPaid">标记已打款</el-button>
-          <el-button v-else type="warning" plain @click="markPoUnpaid">标记未打款</el-button>
+          <el-button v-if="selectedPo.paymentStatus !== 'paid'" type="success" @click="markPoPaid()">标记已打款</el-button>
+          <el-button v-else type="warning" plain @click="markPoUnpaid()">标记未打款</el-button>
         </template>
-        <el-button v-if="canMingruiOrder && canShowPayment(selectedPo?.statusKey)" type="primary" @click="goMingruiOrder(selectedPo)">明瑞物流下单</el-button>
+        <el-button v-if="showPoLogisticsActions() && canBoxLabel && canShowPayment(selectedPo?.statusKey)" type="primary" plain @click="downloadPoBoxLabels()">下载外箱标</el-button>
       </div>
     </template>
   </el-drawer>
 
   <el-dialog v-model="prePoDialogVisible" :title="`编辑预采购单 · ${editingPrePo?.prePoNo || ''}`" width="760px" top="4vh" destroy-on-close>
+    <div v-loading="!editingPrePo" style="min-height:120px">
     <el-scrollbar v-if="editingPrePo" max-height="70vh">
       <el-form label-width="112px" class="pre-po-confirm-form">
         <el-divider content-position="left">基本信息</el-divider>
@@ -1362,6 +1454,7 @@ async function markPoUnpaid() {
         <p class="form-tip">带 * 的规格描述、产品尺寸和包装尺寸为确认采购必填项；体积会自动按长 × 宽 × 高计算并落库。</p>
       </el-form>
     </el-scrollbar>
+    </div>
     <template #footer>
       <el-button @click="prePoDialogVisible = false">取消</el-button>
       <el-button type="primary" @click="savePrePoEdit">保存</el-button>
@@ -1631,6 +1724,11 @@ async function markPoUnpaid() {
 .detail-footer { display: flex; justify-content: flex-end; gap: 10px; }
 .qty-est-hint { display: block; font-size: 10px; color: #a39a8c; font-weight: 400; margin-top: 2px; }
 .flow-hint { margin: 0; font-size: 13px; line-height: 1.55; color: inherit; }
+.desc-required-label::before {
+  content: '*';
+  color: var(--el-color-danger);
+  margin-right: 4px;
+}
 </style>
 
 <style>

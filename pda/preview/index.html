@@ -10,6 +10,9 @@
       --surface: #1c2128;
       --surface2: #252c36;
       --accent: #f5a623;
+      --inbound: #4da3ff;
+      --outbound: #ff9f43;
+      --sku: #67d4e8;
       --ok: #3ddc97;
       --err: #ff6b6b;
       --warn: #f5c542;
@@ -108,7 +111,13 @@
     .tile:hover, .line.sel { background: var(--surface2); }
     .tile .t { font-size: 17px; font-weight: 600; }
     .tile .d { font-size: 12px; color: var(--muted); margin-top: 2px; }
+    .tile.inbound { border: 1px solid rgba(77,163,255,.28); border-left: 5px solid var(--inbound); }
+    .tile.outbound { border: 1px solid rgba(255,159,67,.28); border-left: 5px solid var(--outbound); }
+    .tile.inbound .t { color: var(--inbound); }
+    .tile.outbound .t { color: var(--outbound); }
     .sec { color: var(--muted); font-size: 12px; margin: 14px 0 6px; }
+    .sec.inbound { color: var(--inbound); font-weight: 700; letter-spacing: .08em; }
+    .sec.outbound { color: var(--outbound); font-weight: 700; letter-spacing: .08em; }
     .chip {
       font-size: 12px;
       padding: 3px 8px;
@@ -134,6 +143,19 @@
     }
     .qty .n { flex: 1.2; text-align: center; }
     .qty .n b { font-size: 20px; display: block; }
+    .doc-card { position: relative; overflow: hidden; padding-left: 18px; border: 1px solid transparent; }
+    .doc-card::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 5px; background: currentColor; }
+    .doc-card.inbound { color: var(--inbound); border-color: rgba(77,163,255,.35); }
+    .doc-card.outbound { color: var(--outbound); border-color: rgba(255,159,67,.35); }
+    .entity-type { color: currentColor; font-size: 10px; font-weight: 800; letter-spacing: .12em; margin-bottom: 2px; }
+    .doc-number { color: var(--text); font-size: 17px; font-weight: 700; letter-spacing: .01em; }
+    .doc-card .kv { color: var(--text); }
+    .sku-card { background: var(--surface); border: 1px solid rgba(103,212,232,.25); border-radius: 10px; padding: 11px 12px; margin-bottom: 8px; }
+    .sku-card.sel { background: var(--surface2); border: 2px solid var(--sku); }
+    .sku-type { color: var(--sku); font-size: 10px; font-weight: 800; letter-spacing: .12em; }
+    .sku-code { color: var(--text); font-size: 17px; font-weight: 700; }
+    .location-row { display:flex; justify-content:space-between; align-items:center; margin-top:6px; font-size:12px; color:var(--muted); }
+    .location-row b { color:var(--text); font-size:14px; }
   </style>
 </head>
 <body>
@@ -168,14 +190,14 @@
       </div>
       <label>作业仓库</label>
       <select><option>JHB1 约翰内斯堡 (JHB1)</option></select>
-      <div class="sec">入库</div>
-      <div class="tile" onclick="go('arrival')"><div class="t">到仓扫描</div><div class="d">扫入库单 / 跟踪号</div></div>
-      <div class="tile" onclick="go('receive')"><div class="t">扫箱收货</div><div class="d">扫外箱标或 SKU</div></div>
-      <div class="tile" onclick="go('qc')"><div class="t">清点</div><div class="d">扫 SKU 累加实收</div></div>
-      <div class="tile" onclick="go('putaway')"><div class="t">上架</div><div class="d">扫 SKU 再扫库位</div></div>
-      <div class="sec">出库</div>
-      <div class="tile" onclick="go('pick')"><div class="t">拣货</div><div class="d">扫出库单，按库位拣货</div></div>
-      <div class="tile" onclick="go('review')"><div class="t">复核</div><div class="d">扫 SKU 核对后提交</div></div>
+      <div class="sec inbound">入库 · INBOUND</div>
+      <div class="tile inbound" onclick="go('arrival')"><div class="t">到仓扫描</div><div class="d">扫入库单 / 跟踪号</div></div>
+      <div class="tile inbound" onclick="go('receive')"><div class="t">扫箱收货</div><div class="d">扫外箱标或 SKU</div></div>
+      <div class="tile inbound" onclick="go('qc')"><div class="t">清点</div><div class="d">扫 SKU 累加实收</div></div>
+      <div class="tile inbound" onclick="go('putaway')"><div class="t">上架</div><div class="d">扫 SKU 再扫库位</div></div>
+      <div class="sec outbound">出库 · OUTBOUND</div>
+      <div class="tile outbound" onclick="go('pick')"><div class="t">拣货</div><div class="d">扫出库单，按库位拣货</div></div>
+      <div class="tile outbound" onclick="go('review')"><div class="t">复核</div><div class="d">扫 SKU 核对后提交</div></div>
     </div>
 
     <div id="arrival" class="screen hidden">
@@ -184,8 +206,8 @@
       <input value="IN-20260819-0012" />
       <button class="btn" onclick="document.getElementById('arr-ok').style.display='block'">提交扫描</button>
       <div id="arr-ok" class="banner" style="display:none">IN-20260819-0012 到仓扫描成功</div>
-      <div class="card">
-        <div class="row"><strong>IN-20260819-0012</strong><span class="chip">已到仓</span></div>
+      <div class="card doc-card inbound">
+        <div class="row"><div><div class="entity-type">入库单</div><div class="doc-number">IN-20260819-0012</div></div><span class="chip">已到仓</span></div>
         <div class="kv"><span>仓库</span>JHB1</div>
         <div class="kv"><span>件数</span>0 / 120</div>
       </div>
@@ -201,12 +223,12 @@
         <button>+</button>
       </div>
       <div class="banner">[外箱标] BOX-03 → SKU-A×20（本单累计 60/120）</div>
-      <div class="card">
-        <div class="row"><strong>IN-20260819-0012</strong><span class="chip">收货中</span></div>
+      <div class="card doc-card inbound">
+        <div class="row"><div><div class="entity-type">入库单</div><div class="doc-number">IN-20260819-0012</div></div><span class="chip">收货中</span></div>
         <div class="kv"><span>外箱</span>3 / 6</div>
       </div>
-      <div class="line"><strong>SKU-A</strong><div class="sub" style="margin:0">应收 80 · 实收 60 · 待上架 60</div></div>
-      <div class="line"><strong>SKU-B</strong><div class="sub" style="margin:0">应收 40 · 实收 0 · 待上架 0</div></div>
+      <div class="sku-card"><div class="sku-type">SKU</div><div class="sku-code">SKU-A</div><div class="sub" style="margin:0">应收 80 · 实收 60 · 待上架 60</div></div>
+      <div class="sku-card"><div class="sku-type">SKU</div><div class="sku-code">SKU-B</div><div class="sub" style="margin:0">应收 40 · 实收 0 · 待上架 0</div></div>
     </div>
 
     <div id="qc" class="screen hidden">
@@ -220,8 +242,8 @@
       </div>
       <div class="banner">SKU-A +1（实收 61/80）</div>
       <button class="btn ok">提交清点</button>
-      <div class="line"><strong>SKU-A</strong><div class="sub" style="margin:0">应收 80 · 实收 61</div></div>
-      <div class="line"><strong>SKU-B</strong><div class="sub" style="margin:0">应收 40 · 实收 40</div></div>
+      <div class="sku-card"><div class="sku-type">SKU</div><div class="sku-code">SKU-A</div><div class="sub" style="margin:0">应收 80 · 实收 61</div></div>
+      <div class="sku-card"><div class="sku-type">SKU</div><div class="sku-code">SKU-B</div><div class="sub" style="margin:0">应收 40 · 实收 40</div></div>
     </div>
 
     <div id="putaway" class="screen hidden">
@@ -239,26 +261,26 @@
         </div>
         <button class="btn ok">确认上架</button>
       </div>
-      <div class="line sel"><strong>SKU-A</strong><div class="sub" style="margin:0">待上架 61</div></div>
-      <div class="line"><strong>SKU-B</strong><div class="sub" style="margin:0">待上架 40</div></div>
+      <div class="sku-card sel"><div class="sku-type">SKU · 当前</div><div class="sku-code">SKU-A</div><div class="sub" style="margin:0">待上架 61</div></div>
+      <div class="sku-card"><div class="sku-type">SKU</div><div class="sku-code">SKU-B</div><div class="sub" style="margin:0">待上架 40</div></div>
     </div>
 
     <div id="pick" class="screen hidden">
       <div class="row"><h2>拣货</h2><button class="link" onclick="go('home')">返回</button></div>
       <label>扫 SKU 或库位</label>
       <input placeholder="扫出库单号，或扫 SKU / 库位" />
-      <div class="card">
-        <div class="row"><strong>OUT-20260819-0088</strong><span class="chip">拣货中</span></div>
+      <div class="card doc-card outbound">
+        <div class="row"><div><div class="entity-type">拣货单</div><div class="doc-number">OUT-20260819-0088</div></div><span class="chip">拣货中</span></div>
         <div class="kv"><span>客户</span>Acme</div>
         <div class="kv"><span>仓库</span>JHB1</div>
       </div>
-      <div class="line sel">
-        <div class="row"><strong>SKU-A</strong><span class="chip ok">2/2</span></div>
-        <div class="sub" style="margin:0">库位 A-01-03</div>
+      <div class="sku-card sel">
+        <div class="row"><div><div class="sku-type">SKU · 当前</div><div class="sku-code">SKU-A</div></div><span class="chip ok">2/2</span></div>
+        <div class="location-row"><span>拣货库位</span><b>A-01-03</b></div>
       </div>
-      <div class="line">
-        <div class="row"><strong>SKU-B</strong><span class="chip">0/4</span></div>
-        <div class="sub" style="margin:0">库位 B-02-11</div>
+      <div class="sku-card">
+        <div class="row"><div><div class="sku-type">SKU</div><div class="sku-code">SKU-B</div></div><span class="chip">0/4</span></div>
+        <div class="location-row"><span>拣货库位</span><b>B-02-11</b></div>
       </div>
       <button class="btn ok">提交拣货</button>
     </div>
@@ -267,11 +289,11 @@
       <div class="row"><h2>复核</h2><button class="link" onclick="go('home')">返回</button></div>
       <label>扫 SKU 复核</label>
       <input />
-      <div class="card">
-        <div class="row"><strong>OUT-20260819-0088</strong><span class="chip">复核中</span></div>
+      <div class="card doc-card outbound">
+        <div class="row"><div><div class="entity-type">复核单</div><div class="doc-number">OUT-20260819-0088</div></div><span class="chip">复核中</span></div>
       </div>
-      <div class="line"><div class="row"><strong>SKU-A</strong><span class="chip ok">2/2</span></div></div>
-      <div class="line"><div class="row"><strong>SKU-B</strong><span class="chip">0/4</span></div></div>
+      <div class="sku-card"><div class="row"><div><div class="sku-type">SKU</div><div class="sku-code">SKU-A</div></div><span class="chip ok">2/2</span></div></div>
+      <div class="sku-card"><div class="row"><div><div class="sku-type">SKU</div><div class="sku-code">SKU-B</div></div><span class="chip">0/4</span></div></div>
       <button class="btn ok">提交复核</button>
     </div>
 

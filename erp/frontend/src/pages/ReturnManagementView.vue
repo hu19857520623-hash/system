@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
+import { erpConfirm } from '@/utils/messageBox'
 import { returnsApi, operationLogApi } from '@/api/client.js'
 import { useAppStore } from '@/stores/app'
 import ListPagination from '@/components/ListPagination.vue'
@@ -44,6 +45,7 @@ const logRows = ref<any[]>([])
 const logTarget = ref<any>(null)
 
 const receiveDialog = ref(false)
+const receiveMode = ref<'receive' | 'reReceive'>('receive')
 const receiveTarget = ref<any>(null)
 const receiveQty = ref('')
 const receiveCartons = ref('')
@@ -206,6 +208,8 @@ const STATUS_LABELS: Record<string, string> = {
   cancelled: '已作废',
 }
 
+const RE_RECEIVE_STATUSES = ['received', 'measured', 'fee_calculated', 'arrived'] as const
+
 const STATUS_TABS = [
   { value: 'all' as const, label: '全部' },
   { value: 'pending_arrival' as const, label: '在途' },
@@ -364,7 +368,12 @@ function toggleSelectAll(checked: boolean) {
   selectedIds.value = checked ? tableRows.value.map(r => r.id) : []
 }
 
+function canReReceiveStatus(status: string) {
+  return (RE_RECEIVE_STATUSES as readonly string[]).includes(status)
+}
+
 function openReceive(row: any) {
+  receiveMode.value = 'receive'
   receiveTarget.value = row
   receiveQty.value = String(row.totalQty ?? row.receivedQty ?? '')
   receiveCartons.value = String(row.receivedCartonCount ?? 1)
@@ -372,20 +381,53 @@ function openReceive(row: any) {
   receiveDialog.value = true
 }
 
+function openReReceive(row: any) {
+  receiveMode.value = 'reReceive'
+  receiveTarget.value = row
+  receiveQty.value = String(row.receivedQty ?? row.totalQty ?? '')
+  receiveCartons.value = String(row.receivedCartonCount ?? 1)
+  receiveRemark.value = row.remark || ''
+  receiveDialog.value = true
+}
+
+function startReReceiveFromToolbar() {
+  if (!app.hasPerm('return.receive')) return
+  if (selectedIds.value.length !== 1) {
+    ElMessage.warning('请选择一条退件记录')
+    return
+  }
+  const row = tableRows.value.find(r => r.id === selectedIds.value[0])
+  if (!row) return
+  if (!canReReceiveStatus(row.status)) {
+    ElMessage.warning('仅已收货、已测体积、已算费状态可重新收货')
+    return
+  }
+  openReReceive(row)
+}
+
 async function submitReceive() {
   if (!receiveTarget.value) return
   receiveSubmitting.value = true
   try {
-    const updated = await returnsApi.receive(receiveTarget.value.id, {
+    const payload = {
       receivedQty: Number(receiveQty.value),
       receivedCartonCount: Number(receiveCartons.value),
       remark: receiveRemark.value.trim() || undefined,
-    })
+    }
+    const updated = receiveMode.value === 'reReceive'
+      ? await returnsApi.reReceive(receiveTarget.value.id, payload)
+      : await returnsApi.receive(receiveTarget.value.id, payload)
     receiveDialog.value = false
-    ElMessage.success('收货完成，请测量外箱并确认费用')
-    openMeasure({ ...receiveTarget.value, ...updated })
+    await loadList()
+    if (receiveMode.value === 'reReceive') {
+      ElMessage.success('已更新收货信息，请重新测量外箱并确认费用')
+      openMeasure({ ...receiveTarget.value, ...updated })
+    } else {
+      ElMessage.success('收货完成，请测量外箱并确认费用')
+      openMeasure({ ...receiveTarget.value, ...updated })
+    }
   } catch (e: any) {
-    ElMessage.error(e?.message || '收货失败')
+    ElMessage.error(e?.message || (receiveMode.value === 'reReceive' ? '重新收货失败' : '收货失败'))
   } finally {
     receiveSubmitting.value = false
   }
@@ -523,7 +565,7 @@ function startEditTemplate(tpl: any) {
 async function deleteTemplate(tpl: any) {
   if (!app.hasPerm('return.receive')) return
   try {
-    await ElMessageBox.confirm(
+    await erpConfirm(
       `确定删除 ${tpl.warehouseCode || tpl.templateName} 的收费模板？删除后该仓库退件测体积将无法算费，直至重新创建。`,
       '删除收费模板',
       { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
@@ -712,7 +754,7 @@ async function submitInspect() {
 async function handleDispose(row: any) {
   if (!app.hasPerm('return.process')) return
   try {
-    await ElMessageBox.confirm(`确认退件单 ${row.returnNo} 已销毁？`, '确认销毁')
+    await erpConfirm(`确认退件单 ${row.returnNo} 已销毁？`, '确认销毁')
     await returnsApi.dispose(row.id, { processRemark: '客户确认不留，仓库已销毁' })
     ElMessage.success('已确认销毁')
     await loadList()
@@ -923,9 +965,12 @@ onMounted(loadList)
 
     <div class="table-toolbar">
       <div class="toolbar-left">
-        <el-button size="small" disabled title="功能开发中">强制收货完成</el-button>
-        <el-button size="small" disabled title="功能开发中">打印退件单号</el-button>
-        <el-button size="small" disabled title="功能开发中">重新收货</el-button>
+        <el-button
+          v-if="app.hasPerm('return.receive')"
+          size="small"
+          :disabled="selectedIds.length !== 1"
+          @click="startReReceiveFromToolbar"
+        >重新收货</el-button>
       </div>
       <div class="toolbar-right">
         <el-button size="small" @click="openFeeTemplates">收费模板</el-button>
@@ -1041,6 +1086,12 @@ onMounted(loadList)
               class="op-link"
               @click="openReceive(row)"
             >收货清点</button>
+            <button
+              v-if="canReReceiveStatus(row.status) && app.hasPerm('return.receive')"
+              type="button"
+              class="op-link"
+              @click="openReReceive(row)"
+            >重新收货</button>
             <button
               v-if="['received', 'arrived', 'measured', 'fee_calculated'].includes(row.status) && app.hasPerm('return.receive')"
               type="button"
@@ -1222,7 +1273,19 @@ onMounted(loadList)
       </template>
     </el-dialog>
 
-    <el-dialog v-model="receiveDialog" :title="'收货清点 · ' + (receiveTarget?.returnNo || '')" width="440px">
+    <el-dialog
+      v-model="receiveDialog"
+      :title="(receiveMode === 'reReceive' ? '重新收货 · ' : '收货清点 · ') + (receiveTarget?.returnNo || '')"
+      width="440px"
+    >
+      <el-alert
+        v-if="receiveMode === 'reReceive'"
+        type="warning"
+        :closable="false"
+        show-icon
+        style="margin-bottom:12px"
+        title="重新收货将清除已录入的外箱尺寸与待确认费用，需重新测体积并算费。"
+      />
       <el-form label-width="90px">
         <el-form-item label="实收件数" required>
           <el-input v-model="receiveQty" type="number" min="1" />
@@ -1236,7 +1299,9 @@ onMounted(loadList)
       </el-form>
       <template #footer>
         <el-button @click="receiveDialog = false">取消</el-button>
-        <el-button type="primary" :loading="receiveSubmitting" @click="submitReceive">确认收货</el-button>
+        <el-button type="primary" :loading="receiveSubmitting" @click="submitReceive">
+          {{ receiveMode === 'reReceive' ? '确认重新收货' : '确认收货' }}
+        </el-button>
       </template>
     </el-dialog>
 

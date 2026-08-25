@@ -6,8 +6,9 @@ import {
   type PlatformSkuMapping, type PlatformBindingLine, type StoreAccount,
   PLATFORM_BINDING_STATUS_LABELS,
 } from '../../data/mockData'
-import { useProducts } from '../../data/inventoryStore'
+import { findProductByCode } from '../../data/platformBindingUtils'
 import { useStores } from '../../data/entityStore'
+import SkuFuzzyPicker from '../ui/SkuFuzzyPicker'
 
 export interface BindingFormState {
   platform: PlatformSkuMapping['platform']
@@ -59,12 +60,12 @@ interface Props {
   open: boolean
   editing: PlatformSkuMapping | null
   initialValues?: Partial<BindingFormState>
+  customerId?: string
   onClose: () => void
   onSave: (data: BindingFormState, editing: PlatformSkuMapping | null) => void
 }
 
-export default function PlatformBindingModal({ open, editing, initialValues, onClose, onSave }: Props) {
-  const products = useProducts()
+export default function PlatformBindingModal({ open, editing, initialValues, customerId, onClose, onSave }: Props) {
   const stores = useStores()
   const [form, setForm] = useState<BindingFormState>(() => toFormState(editing, stores, initialValues))
 
@@ -95,10 +96,20 @@ export default function PlatformBindingModal({ open, editing, initialValues, onC
   }
 
   const pickSku = (idx: number, sku: string) => {
-    const prod = products.find(p => p.internalSku === sku)
-    setLine(idx, {
-      internalSku: sku,
-      warehouseName: prod?.name ?? sku,
+    setForm(prev => {
+      const lines = [...prev.lines]
+      const trimmed = sku.trim()
+      if (!trimmed) {
+        lines[idx] = { ...lines[idx], internalSku: '', warehouseName: '' }
+        return { ...prev, lines }
+      }
+      const prod = findProductByCode(trimmed, customerId)
+      lines[idx] = {
+        ...lines[idx],
+        internalSku: prod?.internalSku ?? trimmed,
+        warehouseName: prod?.name ?? lines[idx].warehouseName,
+      }
+      return { ...prev, lines }
     })
   }
 
@@ -171,11 +182,17 @@ export default function PlatformBindingModal({ open, editing, initialValues, onC
               {form.lines.map((line, idx) => (
                 <div key={idx} className="rounded-xl border border-border-light p-4">
                   <FormGrid cols={2}>
-                    <FormField label="仓库商品编码" required>
-                      <select className={formSelect()} value={line.internalSku} onChange={e => pickSku(idx, e.target.value)}>
-                        <option value="">请选择 SKU</option>
-                        {products.map(p => <option key={p.id} value={p.internalSku}>{p.internalSku}</option>)}
-                      </select>
+                    <FormField label="仓库商品编码" required hint="可输入 SKU 或模糊搜索后选择">
+                      <SkuFuzzyPicker
+                        value={line.internalSku}
+                        onChange={sku => pickSku(idx, sku)}
+                        onSelect={product => setLine(idx, {
+                          internalSku: product.internalSku,
+                          warehouseName: product.name,
+                        })}
+                        customerId={customerId}
+                        placeholder="输入或搜索 SKU"
+                      />
                     </FormField>
                     <FormField label="仓库商品名称">
                       <input className={formInput()} value={line.warehouseName} onChange={e => setLine(idx, { warehouseName: e.target.value })} />

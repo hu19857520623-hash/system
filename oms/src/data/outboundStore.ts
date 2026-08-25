@@ -6,6 +6,7 @@ import { getCustomerCode } from './dataScope'
 import { toErpTakealotDestWh, fromErpTakealotDestWh } from './takealotDocParser'
 import { getPriceTemplateForCustomer } from './feeTemplateStore'
 import { buildOutboundTemplateSnapshot } from './feeTemplates'
+import { notifyPersistFailed } from '../utils/userNotify'
 
 let orders: OutboundOrder[] = []
 const listeners = new Set<() => void>()
@@ -17,7 +18,7 @@ function emit() {
 function persist(next: OutboundOrder[]) {
   orders = next
   emit()
-  void apiPut('/outbound-orders', next).catch(err => console.error('persist outbound failed', err))
+  void apiPut('/outbound-orders', next).catch(err => notifyPersistFailed('出库单', err))
 }
 
 function subscribe(listener: () => void) {
@@ -95,7 +96,7 @@ export function resetOutboundOrders(seed: OutboundOrder[]) {
 }
 
 function mapErpOutboundStatus(omsStatus: string): LegacyOrderStatus {
-  const allowed: LegacyOrderStatus[] = ['pending', 'locked', 'picking', 'shipped', 'delivered', 'exception']
+  const allowed: LegacyOrderStatus[] = ['pending', 'locked', 'picking', 'shipped', 'delivered', 'cancelled', 'exception']
   return (allowed.includes(omsStatus as LegacyOrderStatus) ? omsStatus : 'locked') as LegacyOrderStatus
 }
 

@@ -1,22 +1,23 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
+import { erpConfirm } from '@/utils/messageBox'
 import { mingruiApi, warehouseApi } from '@/api/client.js'
 import { fmtTime, num } from '@/api/mappers.ts'
 import { useListLoader, withAction } from '@/composables/useListLoader.ts'
 import { useTablePagination } from '@/composables/useTablePagination.ts'
 import { useAppStore } from '@/stores/app'
+import { MINGRUI_CREATE_ORDER_ENABLED } from '@/constants/mingrui.ts'
 import ListPagination from '@/components/ListPagination.vue'
 import DetailSheet from '@/components/ui/DetailSheet.vue'
+import MingruiTrackingPanel from '@/components/mingrui/MingruiTrackingPanel.vue'
 
 const app = useAppStore()
 const route = useRoute()
 const router = useRouter()
 
-const canOrder = computed(() => app.hasPerm('mingrui.order'))
-const canSubmitBooking = computed(() => canOrder.value && Boolean(apiMeta.value.bookingConfigured))
-const canQueryLogistics = computed(() => Boolean(apiMeta.value.queryConfigured || apiMeta.value.configured))
+const canQueryLogistics = computed(() => app.hasPerm('mingrui.view') && Boolean(apiMeta.value.queryConfigured || apiMeta.value.configured))
 const queryJobNum = ref('')
 const queryTrackingRef = ref('')
 const syncing = ref(false)
@@ -124,16 +125,19 @@ async function submitOrder() {
     ElMessage.warning('请选择要发运的采购单')
     return
   }
-  if (!apiMeta.value.configured) {
-    ElMessage.warning('明瑞物流尚未接通，请先保存草稿')
-    return
-  }
   submitting.value = true
   const ok = await withAction(async () => {
-    const res = await mingruiApi.create({ ...payload(), submit: true })
+    const created = await mingruiApi.create({ ...payload(), submit: false })
     await load()
-    return res
-  }, '已提交明瑞下单')
+    if (form.value.mingruiOrderNo || form.value.trackingRef) {
+      const synced = await mingruiApi.sync(created.id, {
+        jobNum: form.value.mingruiOrderNo || undefined,
+        trackingRef: form.value.trackingRef || undefined,
+      })
+      return synced
+    }
+    return created
+  }, form.value.mingruiOrderNo || form.value.trackingRef ? '运单已保存并已同步物流' : '运单已保存，请填写明瑞工作号后同步')
   submitting.value = false
   if (ok) dialogVisible.value = false
 }
@@ -164,11 +168,11 @@ async function openDetail(row: any) {
 
 async function submitExisting() {
   if (!selected.value) return
-  const ok = await withAction(async () => {
-    selected.value = await mingruiApi.submit(selected.value.id)
-    await load()
-  }, '已提交明瑞下单')
-  if (!ok) return
+  if (!queryJobNum.value && !queryTrackingRef.value) {
+    ElMessage.warning('请先填写明瑞工作号或跟踪参考号')
+    return
+  }
+  await syncLogistics()
 }
 
 async function syncLogistics() {
@@ -192,14 +196,9 @@ async function syncLogistics() {
   if (ok && selected.value?.apiResult?.message) ElMessage.info(selected.value.apiResult.message)
 }
 
-function trackingNodes() {
-  const nodes = selected.value?.trackingNodes || selected.value?.logisticsInfo?.trackingNodes || []
-  return Array.isArray(nodes) ? nodes : []
-}
-
 async function cancelShipment() {
   if (!selected.value) return
-  await ElMessageBox.confirm(`确认取消运单 ${selected.value.shipmentNo}？`, '取消下单', { type: 'warning' })
+  await erpConfirm(`确认取消运单 ${selected.value.shipmentNo}？`, '取消下单', { type: 'warning' })
   const ok = await withAction(async () => {
     selected.value = await mingruiApi.cancel(selected.value.id)
     await load()
@@ -215,10 +214,10 @@ function infoValue(v: unknown) {
 watch(statusFilter, () => load())
 
 onMounted(async () => {
-  await Promise.all([loadLookups(), load()])
+  await load()
   const poNo = String(route.query.poNo || '')
-  if (poNo && canOrder.value) {
-    openCreate(poNo)
+  if (poNo) {
+    ElMessage.info('明瑞订舱请线下完成，可在本页查看已有运单物流信息')
     router.replace({ path: '/mingrui', query: {} })
   }
 })
@@ -229,13 +228,15 @@ onMounted(async () => {
     <template #header>
       <div class="page-header">
         <div>
-          <div class="page-title">明瑞物流下单</div>
-          <p class="page-subtitle">采购主管向明瑞物流订舱发运海外仓。接入 AI-OPS 后可按工作号查询跟踪状态、节点轨迹与订单信息。</p>
+          <div class="page-title">明瑞物流</div>
+          <p class="page-subtitle">查看明瑞海运轨迹：打开运单详情，填写工作号（如 SEAE260713941）或提单号后点击「同步物流信息」拉取 AI-OPS 节点、船名、ETD/ETA 与件重体。订舱请线下与明瑞完成。</p>
         </div>
         <div class="header-actions">
           <el-input v-model="keyword" clearable placeholder="运单 / PO / 提单号" style="width:220px" @keyup.enter="load" />
           <el-button @click="load">查询</el-button>
-          <el-button v-if="canOrder" type="primary" @click="openCreate()">新建下单</el-button>
+          <el-tooltip content="明瑞订舱请线下完成，本页仅支持查看物流" placement="bottom">
+            <el-button type="primary" disabled>新建下单</el-button>
+          </el-tooltip>
         </div>
       </div>
     </template>
@@ -298,21 +299,18 @@ onMounted(async () => {
       <el-table-column label="物流状态" min-width="140">
         <template #default="{ row }">{{ row.trackingStatus || row.logisticsInfo?.apiMessage || '—' }}</template>
       </el-table-column>
-      <el-table-column label="创建" width="110">
-        <template #default="{ row }">{{ fmtDate(row.createdAt) }}</template>
-      </el-table-column>
       <el-table-column label="操作" width="140" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" size="small" @click="openDetail(row)">物流信息</el-button>
         </template>
       </el-table-column>
     </el-table>
-    <el-empty v-if="!loading && !items.length" description="暂无明瑞运单，采购主管可在打款后下单" />
+    <el-empty v-if="!loading && !items.length" description="暂无明瑞运单" />
     <ListPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
   </el-card>
 
-  <el-dialog v-model="dialogVisible" title="明瑞物流下单" width="720px" destroy-on-close>
-    <p class="dialog-note">仅采购主管可下单。当前先写入本地运单；明瑞 API 接入后会用同一张单同步订舱与轨迹。</p>
+  <el-dialog v-if="MINGRUI_CREATE_ORDER_ENABLED" v-model="dialogVisible" title="明瑞物流下单" width="720px" destroy-on-close>
+    <p class="dialog-note">保存本地运单并关联采购单；线下向明瑞订舱后填写工作号（如 SEAE260713941）或提单号，保存时可自动同步 AI-OPS 物流信息。</p>
     <el-form label-position="top">
       <div class="expense-form-grid">
         <el-form-item label="关联采购单" required class="span-two">
@@ -371,11 +369,11 @@ onMounted(async () => {
     <template #footer>
       <el-button @click="dialogVisible = false">取消</el-button>
       <el-button :loading="submitting" @click="saveDraft">保存草稿</el-button>
-      <el-button type="primary" :loading="submitting" :disabled="!apiMeta.configured" @click="submitOrder">提交下单</el-button>
+      <el-button type="primary" :loading="submitting" @click="submitOrder">保存运单</el-button>
     </template>
   </el-dialog>
 
-  <el-drawer v-model="detailVisible" :title="selected ? `明瑞物流信息 · ${selected.shipmentNo}` : '明瑞物流信息'" size="560px" class="erp-detail">
+  <el-drawer v-model="detailVisible" :title="selected ? `明瑞物流信息 · ${selected.shipmentNo}` : '明瑞物流信息'" size="720px" class="erp-detail">
     <template v-if="selected">
       <DetailSheet
         :kicker="selected.shipmentNo"
@@ -409,9 +407,8 @@ onMounted(async () => {
         :title="selected.logisticsInfo?.apiMessage || selected.api?.message"
       />
       <div class="query-box">
-        <el-input v-model="queryJobNum" clearable placeholder="明瑞工作号 jobNum，如 SEAE260713941" />
-        <el-input v-model="queryTrackingRef" clearable placeholder="跟踪参考号 trackingRef，如 TKL-220" />
-        <el-button type="primary" :loading="syncing" :disabled="!canQueryLogistics" @click="syncLogistics">查询物流</el-button>
+        <el-input v-model="queryJobNum" readonly placeholder="明瑞工作号 jobNum，如 SEAE260713941" />
+        <el-input v-model="queryTrackingRef" readonly placeholder="跟踪参考号 trackingRef，如 TKL-220" />
       </div>
       <div class="info-grid">
         <div><span>柜号</span><strong class="mono">{{ infoValue(selected.containerNo) }}</strong></div>
@@ -425,20 +422,7 @@ onMounted(async () => {
         <div><span>重量 / 体积</span><strong>{{ num(selected.weightKg) || '—' }} kg · {{ num(selected.volumeCbm) || '—' }} CBM</strong></div>
         <div><span>最近同步</span><strong>{{ selected.lastSyncAt ? fmtTime(selected.lastSyncAt) : '尚未同步' }}</strong></div>
       </div>
-      <div v-if="trackingNodes().length" class="cargo-block">
-        <div class="cargo-title">跟踪节点</div>
-        <el-timeline>
-          <el-timeline-item
-            v-for="(node, idx) in trackingNodes()"
-            :key="`${node.eventTime || idx}-${node.status || node.statusName || idx}`"
-            :timestamp="node.eventTime || '时间待同步'"
-          >
-            <strong>{{ node.statusName || node.status || '状态更新' }}</strong>
-            <span v-if="node.location" class="node-loc">{{ node.location }}</span>
-            <p v-if="node.description" class="node-desc">{{ node.description }}</p>
-          </el-timeline-item>
-        </el-timeline>
-      </div>
+      <MingruiTrackingPanel :shipment="selected" />
       <div v-if="Array.isArray(selected.cargoItems) && selected.cargoItems.length" class="cargo-block">
         <div class="cargo-title">货物明细</div>
         <el-table :data="selected.cargoItems" size="small" border>
@@ -452,9 +436,7 @@ onMounted(async () => {
     <template #footer>
       <div class="detail-footer">
         <el-button @click="detailVisible = false">关闭</el-button>
-        <el-button :loading="syncing" :disabled="!canQueryLogistics" @click="syncLogistics">同步物流信息</el-button>
-        <el-button v-if="canSubmitBooking && selected?.status === 'draft'" type="primary" @click="submitExisting">提交下单</el-button>
-        <el-button v-if="canOrder && selected && !['arrived','cancelled'].includes(selected.status)" type="danger" plain @click="cancelShipment">取消</el-button>
+        <el-button type="primary" :loading="syncing" :disabled="!canQueryLogistics" @click="syncLogistics">同步物流信息</el-button>
       </div>
     </template>
   </el-drawer>
@@ -518,8 +500,12 @@ onMounted(async () => {
 .cargo-title { margin-bottom:8px; font-size:13px; font-weight:600; }
 .query-box { display:flex; gap:8px; margin-bottom:14px; flex-wrap:wrap; }
 .query-box .el-input { flex:1; min-width:180px; }
-.node-loc { margin-left:8px; color:var(--text-muted); font-size:12px; }
-.node-desc { margin:4px 0 0; color:var(--text-secondary); font-size:12px; }
+.query-box .el-input :deep(.el-input__wrapper) {
+  background: var(--panel-soft);
+  box-shadow: 0 0 0 1px var(--border) inset;
+  cursor: default;
+}
+.query-box .el-input :deep(.el-input__inner) { cursor: default; }
 .detail-footer { display:flex; justify-content:flex-end; gap:8px; flex-wrap:wrap; }
 @media (max-width:680px) {
   .page-header, .header-actions { flex-direction:column; align-items:stretch; }

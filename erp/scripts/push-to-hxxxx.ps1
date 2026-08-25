@@ -20,7 +20,7 @@ Set-Location $TempDir
 $ErpDir = Join-Path $TempDir 'ERP'
 if (-not (Test-Path $ErpDir)) { New-Item -ItemType Directory -Path $ErpDir | Out-Null }
 
-robocopy $SourceDir $ErpDir /MIR /XD node_modules dist .git .vite uploads backups takealot-monitor\data .cursor /XF .env /NFL /NDL /NJH /NJS /nc /ns /np | Out-Null
+robocopy $SourceDir $ErpDir /MIR /XD node_modules dist .git .vite uploads backups .cursor /XF .env /NFL /NDL /NJH /NJS /nc /ns /np | Out-Null
 
 git add ERP/
 $status = git status --porcelain

@@ -34,6 +34,7 @@ import {
   settleOutboundFees,
   type OutboundFeesPayload,
 } from './outbound-settlement.util'
+import { applyErpBillingChanged, openPreDeductTotal, type ErpBillingChangedPayload } from './billing-sync.util'
 import {
   ErpApiError,
   createErpInboundAsn,
@@ -134,6 +135,16 @@ function parseJson<T>(raw: string, fallback: T): T {
   } catch {
     return fallback
   }
+}
+
+function toOmsWarehouseCode(code?: string | null, fallback = 'jhb1'): string {
+  const raw = String(code || '').trim().toLowerCase()
+  if (!raw) return fallback
+  if (['jhb1', 'jhb3', 'cpt1', 'cpt2', 'dbn'].includes(raw)) return raw
+  if (raw.includes('jhb')) return 'jhb1'
+  if (raw.includes('cpt')) return 'cpt1'
+  if (raw.includes('dbn')) return 'dbn'
+  return fallback
 }
 
 function validWebhookSignature(rawBody: Buffer, signature: string): boolean {
@@ -1329,50 +1340,46 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
     }
 
     if (type === 'billing.changed' || type === 'balance.changed') {
-      if (account && typeof data.balance === 'number') {
-        await prisma.billingAccount.updateMany({
-          where: { customerId: account.id },
-          data: { creditBalance: Number(data.balance) },
-        })
+      if (!account) {
+        return res.status(400).json({ error: `OMS 无客户账户 ${customerCode}` })
       }
+      const billingPayload = { ...(data as Record<string, unknown>) }
       if (type === 'balance.changed' && data.rechargeNo) {
-        const rechargeNo = String(data.rechargeNo)
-        const amount = Number(data.amount || 0)
-        const feeId = `erp-rc-${rechargeNo}`
-        const existingFee = await prisma.feeRecord.findUnique({ where: { id: feeId } })
-        if (!existingFee && amount > 0) {
-          await prisma.feeRecord.create({
-            data: {
-              id: feeId,
-              date: new Date().toISOString().slice(0, 10),
-              type: 'recharge',
-              refNo: rechargeNo,
-              desc: `ERP 充值到账 · ${String(data.paymentMethod || 'bank')}`,
-              amount,
-              method: 'actual',
-              customerCode: customerCode || null,
-              rechargeNo,
-              paymentMethodTitle: String(data.paymentMethod || ''),
-            },
-          })
-        }
+        billingPayload.recharges = [
+          {
+            rechargeNo: String(data.rechargeNo),
+            amount: Number(data.amount || 0),
+            paymentMethod: String(data.paymentMethod || 'bank'),
+            remark: data.remark ? String(data.remark) : null,
+            createdAt: new Date().toISOString().slice(0, 10),
+          },
+        ]
       }
+      const applied = await applyErpBillingChanged(
+        prisma,
+        customerCode,
+        account,
+        billingPayload as ErpBillingChangedPayload,
+      )
+      if (!applied.ok) return res.status(400).json({ error: applied.error })
       if (type === 'billing.changed') {
         const billingNo = String(data.billingNo || '')
-        const msgId = `erp-msg-bill-${billingNo || Date.now()}`
-        const existingMsg = await prisma.systemMessage.findUnique({ where: { id: msgId } })
-        if (!existingMsg) {
-          await prisma.systemMessage.create({
-            data: {
-              id: msgId,
-              customerId: account?.id ?? null,
-              title: billingNo ? `账单 ${billingNo} 已确认` : '账单状态已更新',
-              content: `金额 ¥${Number(data.totalAmount || 0).toFixed(2)}，状态：${String(data.status || 'confirmed')}`,
-              type: 'billing',
-              read: false,
-              createdAt: new Date().toISOString().slice(0, 16).replace('T', ' '),
-            },
-          })
+        if (billingNo) {
+          const msgId = `erp-msg-bill-${billingNo}`
+          const existingMsg = await prisma.systemMessage.findUnique({ where: { id: msgId } })
+          if (!existingMsg) {
+            await prisma.systemMessage.create({
+              data: {
+                id: msgId,
+                customerId: account.id,
+                title: `账单 ${billingNo} 已确认`,
+                content: `金额 ¥${Number(data.totalAmount || 0).toFixed(2)}，状态：${String(data.status || 'confirmed')}`,
+                type: 'billing',
+                read: false,
+                createdAt: new Date().toISOString().slice(0, 16).replace('T', ' '),
+              },
+            })
+          }
         }
       }
       return res.json({ ok: true, type, customerCode })
@@ -1421,7 +1428,7 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
         receivedQty,
         totalQty: totalQty || existing?.totalQty || 0,
         trackingNo: inbound.trackingNo ?? existing?.trackingNo,
-        warehouse: inbound.warehouseCode || existing?.warehouse,
+        warehouse: toOmsWarehouseCode(inbound.warehouseCode, existing?.warehouse),
         source: inbound.source || existing?.source,
         inboundType: inbound.inboundType || existing?.inboundType,
         deliveryMethod: inbound.deliveryMethod || existing?.deliveryMethod,
@@ -1454,7 +1461,7 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
             receivedQty,
             status,
             createdAt: new Date().toISOString().slice(0, 10),
-            warehouse: inbound.warehouseCode || 'WMS-JHB-01',
+            warehouse: toOmsWarehouseCode(inbound.warehouseCode, existing?.warehouse || 'jhb1'),
             referenceNo: inbound.referenceNo,
             eta: inbound.eta,
             contact: inbound.contact,
@@ -2694,6 +2701,72 @@ app.delete('/api/outbound-orders/:outboundNo', async (req, res) => {
   }
 })
 
+app.get('/api/reports/summary', async (req: AuthenticatedRequest, res) => {
+  try {
+    const scope = customerScope(req)
+    const [outbounds, inventory, fees] = await Promise.all([
+      prisma.outboundOrder.findMany({
+        where: scope ? { customerId: scope } : undefined,
+        select: { createdAt: true, totalQty: true, status: true, actualFeesTotal: true, preDeductTotal: true },
+      }),
+      prisma.inventoryItem.findMany({
+        where: scope ? { customerId: scope } : undefined,
+        select: { available: true, locked: true, shipped: true },
+      }),
+      prisma.feeRecord.findMany({
+        where: scope ? { customerCode: req.auth?.customerCode || '' } : undefined,
+        select: { type: true, amount: true },
+      }),
+    ])
+    const now = new Date()
+    const months = Array.from({ length: 6 }, (_, index) => {
+      const date = new Date(now.getFullYear(), now.getMonth() - 5 + index, 1)
+      return { key: `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`, label: `${date.getMonth() + 1}月` }
+    })
+    const trendMap = new Map(months.map(month => [month.key, { ...month, orders: 0, units: 0, amount: 0 }]))
+    for (const order of outbounds) {
+      const row = trendMap.get(String(order.createdAt || '').slice(0, 7))
+      if (!row) continue
+      row.orders += 1
+      row.units += Number(order.totalQty) || 0
+      row.amount += Number(order.actualFeesTotal ?? order.preDeductTotal) || 0
+    }
+    const feeLabels: Record<string, string> = {
+      outbound: '出库费', storage: '仓储费', logistics: '物流费', operation: '操作费',
+      recharge: '充值', refund: '退款', adjustment: '调整', other: '其他',
+    }
+    const feeMap = new Map<string, number>()
+    for (const fee of fees) {
+      const amount = Math.abs(Number(fee.amount) || 0)
+      if (amount) feeMap.set(fee.type, (feeMap.get(fee.type) || 0) + amount)
+    }
+    const feeTotal = [...feeMap.values()].reduce((sum, amount) => sum + amount, 0)
+    const activeOrders = outbounds.filter(order => order.status !== 'cancelled')
+    const completedOrders = activeOrders.filter(order => ['shipped', 'delivered'].includes(order.status))
+    const inventoryUnits = inventory.reduce((sum, item) => sum + item.available + item.locked, 0)
+    const shippedUnits = inventory.reduce((sum, item) => sum + item.shipped, 0)
+    res.json({
+      inventoryTurnoverDays: shippedUnits > 0 ? Math.round(inventoryUnits / shippedUnits * 300) / 10 : null,
+      fulfillmentRate: activeOrders.length ? Math.round(completedOrders.length / activeOrders.length * 1000) / 10 : 0,
+      totals: {
+        outboundOrders: outbounds.length,
+        completedOrders: completedOrders.length,
+        exceptionOrders: outbounds.filter(order => order.status === 'exception').length,
+        inventoryUnits,
+        fees: Math.round(feeTotal * 100) / 100,
+      },
+      orderTrend: months.map(month => trendMap.get(month.key)),
+      feeBreakdown: [...feeMap.entries()].map(([type, amount]) => ({
+        type, label: feeLabels[type] || type, amount: Math.round(amount * 100) / 100,
+        pct: feeTotal ? Math.round(amount / feeTotal * 1000) / 10 : 0,
+      })).sort((left, right) => right.amount - left.amount),
+    })
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: '真实报表数据加载失败' })
+  }
+})
+
 app.get('/api/billing', async (req: AuthenticatedRequest, res) => {
   try {
     const scope = customerScope(req)
@@ -2708,9 +2781,7 @@ app.get('/api/billing', async (req: AuthenticatedRequest, res) => {
     if (scope && req.auth?.customerCode) {
       try {
         const erp = await fetchErpCustomerByCode(req.auth.customerCode)
-        const preDeduct = feeRecords
-          .filter(record => record.method === 'pre_deduct')
-          .reduce((sum, record) => sum + Math.abs(Number(record.amount) || 0), 0)
+        const preDeduct = openPreDeductTotal(feeRecords)
         creditBalance = Math.round((Number(erp.balance) - preDeduct) * 100) / 100
       } catch {
         // ERP 不可用时回退本地镜像余额
@@ -2879,12 +2950,9 @@ app.delete('/api/billing/pre-deduct/:outboundNo', async (req: AuthenticatedReque
       try {
         const erp = await fetchErpCustomerByCode(req.auth.customerCode)
         const remaining = await prisma.feeRecord.findMany({
-          where: { customerCode: req.auth.customerCode, method: 'pre_deduct' },
+          where: { customerCode: req.auth.customerCode },
         })
-        const preDeduct = remaining.reduce(
-          (sum, record) => sum + Math.abs(Number(record.amount) || 0),
-          0,
-        )
+        const preDeduct = openPreDeductTotal(remaining)
         creditBalance = Math.round((Number(erp.balance) - preDeduct) * 100) / 100
       } catch {
         creditBalance = Math.round((Number(result.creditBalance) - Number(result.refunded)) * 100) / 100
@@ -3012,6 +3080,7 @@ app.put('/api/platform-sku-mappings', async (req, res) => {
         const id = String(m.id)
         const data = {
             customerId: scope ?? (m.customerId as string | null | undefined) ?? null,
+            sellerId: (m.sellerId as string | null | undefined) ?? null,
             platform: String(m.platform),
             storeId: String(m.storeId),
             storeName: String(m.storeName),

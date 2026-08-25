@@ -1,4 +1,4 @@
-/** 财务审核采购单时的成本拆分（与成本台账、供应商海运账单共用） */
+/** 财务审核采购单时的成本拆分（写入成本台账） */
 
 import { allocatePoDomesticFreight, type PoDomesticFreightOrder } from './po-domestic-freight.util'
 

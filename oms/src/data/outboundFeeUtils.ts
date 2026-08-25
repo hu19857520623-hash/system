@@ -1,4 +1,5 @@
 import type { FeeRecord, OutboundOrder } from './mockData'
+import { feeTypeLabel } from './chargeType'
 
 export type OutboundFeeSummary = {
   outboundNo: string
@@ -67,13 +68,7 @@ export function buildOutboundFeeSummary(
       detail: f.detail,
     })),
     actualLines: actualRecords.map(f => ({
-      label:
-        f.type === 'shipping' ? '物流费' :
-        f.type === 'handling' ? '操作费' :
-        f.type === 'relabel' ? '换标费' :
-        f.type === 'picking' ? '拣货费' :
-        f.type === 'inspection' ? '质检费' :
-        f.type,
+      label: feeTypeLabel(f.type),
       amount: Math.abs(f.amount),
       desc: f.desc,
     })),

@@ -1,0 +1,21 @@
+CREATE TABLE IF NOT EXISTS `operating_ledger` (
+  `id` BIGINT NOT NULL AUTO_INCREMENT,
+  `entry_no` VARCHAR(30) NOT NULL,
+  `direction` VARCHAR(10) NOT NULL,
+  `category` VARCHAR(50) NOT NULL,
+  `amount` DECIMAL(14, 2) NOT NULL,
+  `currency` VARCHAR(10) NOT NULL DEFAULT 'CNY',
+  `payment_method` VARCHAR(30) NULL,
+  `account_name` VARCHAR(100) NULL,
+  `counterparty` VARCHAR(150) NULL,
+  `reference_no` VARCHAR(50) NULL,
+  `occurred_on` DATE NOT NULL,
+  `remark` VARCHAR(500) NULL,
+  `created_by` BIGINT NULL,
+  `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updated_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `operating_ledger_entry_no_key` (`entry_no`),
+  KEY `idx_operating_ledger_date` (`occurred_on`),
+  KEY `idx_operating_ledger_type_category` (`direction`, `category`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

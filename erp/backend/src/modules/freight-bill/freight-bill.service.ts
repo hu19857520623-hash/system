@@ -10,7 +10,7 @@ export class FreightBillService {
 
   async list(q: PaginationDto & { status?: string }) {
     const { page, pageSize } = getPagination(q)
-    const where: any = {}
+    const where: any = { source: { not: 'finance_approve' } }
     if (q.status) where.status = q.status
     if (q.keyword) {
       where.OR = [
@@ -75,7 +75,7 @@ export class FreightBillService {
     })
   }
 
-  /** 财务审核采购单通过后，将采购单全部成本记入供应商海运账单（幂等：同一 PO 不重复建账，已存在则更新金额） */
+  /** @deprecated 采购成本已改由成本台账记录，海运账单页仅展示手工录入的海运费用 */
   async recordFromFinanceApproval(
     tx: Tx,
     input: {
