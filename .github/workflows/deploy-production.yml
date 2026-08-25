@@ -1,0 +1,111 @@
+name: Deploy production
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+
+      - name: Configure deployment SSH key
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' '175.178.50.202 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJTOOSCreL9KknlpIN9qdGHtWKyEFAjon4Bil4MP4CpJ' > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Sync application source
+        run: |
+          rsync -az \
+            --exclude='.git/' \
+            --exclude='.env' \
+            --exclude='*/.env' \
+            --exclude='*/node_modules/' \
+            --exclude='*/dist/' \
+            --exclude='.codex-tmp/' \
+            --exclude='tmp/' \
+            --exclude='erp/docker-compose.yml' \
+            --exclude='erp/backend/Dockerfile' \
+            --exclude='erp/frontend/Dockerfile' \
+            --exclude='erp/frontend/nginx.docker.conf' \
+            --exclude='erp/nginx/' \
+            --exclude='oms/docker-compose.yml' \
+            --exclude='oms/Dockerfile.api' \
+            --exclude='oms/Dockerfile.web' \
+            -e 'ssh -i ~/.ssh/deploy_key -o BatchMode=yes' \
+            ./ ubuntu@175.178.50.202:/opt/system/
+
+      - name: Build and restart ERP and OMS
+        run: |
+          ssh -i ~/.ssh/deploy_key -o BatchMode=yes ubuntu@175.178.50.202 'bash -s' <<'REMOTE'
+          set -Eeuo pipefail
+
+          exec 9>/tmp/system-production-deploy.lock
+          flock -n 9 || { echo 'Another production deployment is running.'; exit 1; }
+
+          cd /opt/system/oms
+          docker compose build oms-api oms-web
+
+          cd /opt/system/erp
+          docker compose build erp-api erp-web
+
+          cd /opt/system/oms
+          docker compose up -d --no-deps oms-api oms-web
+
+          cd /opt/system/erp
+          docker compose up -d --no-deps erp-api erp-web
+          docker restart erp-nginx >/dev/null
+
+          wait_healthy() {
+            local container="$1"
+            local status=''
+            for _ in $(seq 1 60); do
+              status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$container" 2>/dev/null || true)"
+              if [ "$status" = healthy ] || [ "$status" = running ]; then
+                echo "$container: $status"
+                return 0
+              fi
+              if [ "$status" = unhealthy ] || [ "$status" = exited ] || [ "$status" = dead ]; then
+                docker logs --tail 100 "$container" || true
+                return 1
+              fi
+              sleep 5
+            done
+            echo "$container did not become healthy (last status: $status)"
+            docker logs --tail 100 "$container" || true
+            return 1
+          }
+
+          wait_healthy oms-api
+          wait_healthy oms-web
+          wait_healthy erp-api
+          wait_healthy erp-web
+          wait_healthy erp-nginx
+
+          curl --fail --silent --show-error --retry 12 --retry-delay 5 https://www.oms.sztekeluo.com/ >/dev/null
+          curl --fail --silent --show-error --retry 12 --retry-delay 5 https://www.erp.sztekeluo.com/api/auth/health >/dev/null
+          REMOTE
+
+      - name: Deployment summary
+        run: |
+          echo "### Production deployment completed" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Commit: \`$GITHUB_SHA\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- ERP: https://www.erp.sztekeluo.com/" >> "$GITHUB_STEP_SUMMARY"
+          echo "- OMS: https://www.oms.sztekeluo.com/" >> "$GITHUB_STEP_SUMMARY"
