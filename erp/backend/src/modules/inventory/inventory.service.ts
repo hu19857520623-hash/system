@@ -468,11 +468,40 @@ export class InventoryService {
     }
 
     const where = and.length ? { AND: and } : {}
-    const products = await this.prisma.product.findMany({
-      where,
-      orderBy: { updatedAt: 'desc' },
-      take: 5000,
-    })
+    const omsFilters: MergedSkuFilters = {
+      customerCode: q.supplierKeyword?.trim(),
+      title: (q.title || q.keyword || '').trim() || undefined,
+      skuCodes: q.skuCodes,
+      barcode: q.barcode?.trim(),
+      category: q.category?.trim(),
+      brand: q.brand?.trim(),
+      statusFilter,
+      costMin: costMin != null && Number.isFinite(costMin) ? costMin : null,
+      costMax: costMax != null && Number.isFinite(costMax) ? costMax : null,
+      createdFrom: q.createdFrom?.trim(),
+      createdTo: q.createdTo?.trim(),
+      updatedFrom: q.updatedFrom?.trim(),
+      updatedTo: q.updatedTo?.trim(),
+    }
+
+    const [erpTotal, allOmsItems] = await Promise.all([
+      this.prisma.product.count({ where }),
+      fetchOmsProductRows(this.prisma, omsFilters),
+    ])
+
+    // ERP 与 OMS 是两个独立数据源。分页顺序固定为 ERP 主数据在前、OMS
+    // 客户商品在后，避免先截断 5000 条再在内存分页造成总数和数据缺失。
+    const pageStart = (page - 1) * pageSize
+    const erpSkip = Math.min(pageStart, erpTotal)
+    const erpTake = Math.max(0, Math.min(pageSize, erpTotal - erpSkip))
+    const products = erpTake
+      ? await this.prisma.product.findMany({
+          where,
+          orderBy: [{ sku: 'asc' }, { updatedAt: 'desc' }],
+          skip: erpSkip,
+          take: erpTake,
+        })
+      : []
 
     const skus = products.map((p) => p.sku)
     const supplierIds = [...new Set(products.map((p) => p.supplierId).filter(Boolean))] as bigint[]
@@ -578,23 +607,11 @@ export class InventoryService {
       })
     })
 
-    const omsFilters: MergedSkuFilters = {
-      customerCode: q.supplierKeyword?.trim(),
-      title: (q.title || q.keyword || '').trim() || undefined,
-      skuCodes: q.skuCodes,
-      barcode: q.barcode?.trim(),
-      category: q.category?.trim(),
-      brand: q.brand?.trim(),
-      statusFilter,
-      costMin: costMin != null && Number.isFinite(costMin) ? costMin : null,
-      costMax: costMax != null && Number.isFinite(costMax) ? costMax : null,
-      createdFrom: q.createdFrom?.trim(),
-      createdTo: q.createdTo?.trim(),
-      updatedFrom: q.updatedFrom?.trim(),
-      updatedTo: q.updatedTo?.trim(),
-    }
-    const omsItems = await fetchOmsProductRows(this.prisma, omsFilters)
-    const { items, total } = mergePaginate([erpItems, omsItems], page, pageSize)
+    const omsStart = Math.max(0, pageStart - erpTotal)
+    const omsTake = Math.max(0, pageSize - erpItems.length)
+    const omsItems = omsTake ? allOmsItems.slice(omsStart, omsStart + omsTake) : []
+    const items = [...erpItems, ...omsItems]
+    const total = erpTotal + allOmsItems.length
 
     const allSkus = [...new Set(items.map((r) => String(r.sku || '')).filter(Boolean))]
     const invFlags = await this.loadSkuInventoryFlags(allSkus)
