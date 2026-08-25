@@ -37,7 +37,7 @@ model CustomerAccount {
   portalUser          PortalUser?
   systemMessages      SystemMessage[]
 
-  @@map("oms_CustomerAccount")
+  @@map("oms_customeraccount")
 }
 
 model PortalUser {
@@ -53,7 +53,7 @@ model PortalUser {
   updatedAt          String           @db.VarChar(40)
   lastLoginAt        String?          @db.VarChar(40)
 
-  @@map("oms_PortalUser")
+  @@map("oms_portaluser")
 }
 
 /// 客户账单余额（对应 mock CUSTOMER + feeRecords）
@@ -70,7 +70,7 @@ model BillingAccount {
   pendingBill   Float
   budgetUsed    Float
 
-  @@map("oms_BillingAccount")
+  @@map("oms_billingaccount")
 }
 
 model FeeRecord {
@@ -87,7 +87,7 @@ model FeeRecord {
   paymentMethodId    String? @db.VarChar(50)
   paymentMethodTitle String? @db.VarChar(100)
 
-  @@map("oms_FeeRecord")
+  @@map("oms_feerecord")
 }
 
 model StoreAccount {
@@ -109,7 +109,7 @@ model StoreAccount {
   webhookUrl       String           @db.Text
   createdAt        String           @db.VarChar(40)
 
-  @@map("oms_StoreAccount")
+  @@map("oms_storeaccount")
 }
 
 /// SKU 主数据（sku_master）
@@ -148,7 +148,7 @@ model Product {
 
   @@index([internalSku])
   @@index([customerSku])
-  @@map("oms_Product")
+  @@map("oms_product")
 }
 
 /// 库存（inventory_stock）
@@ -179,7 +179,7 @@ model InventoryItem {
 
   @@index([sku])
   @@index([warehouse])
-  @@map("oms_InventoryItem")
+  @@map("oms_inventoryitem")
 }
 
 model Order {
@@ -206,7 +206,7 @@ model Order {
   fees            String           @db.Text // JSON
   logs            String           @db.Text // JSON
 
-  @@map("oms_Order")
+  @@map("oms_order")
 }
 
 model InboundOrder {
@@ -237,7 +237,7 @@ model InboundOrder {
   lineItems       String?          @db.Text // JSON
   attachments     String?          @db.Text // JSON [{kind,fileName,url,uploadedAt}]
 
-  @@map("oms_InboundOrder")
+  @@map("oms_inboundorder")
 }
 
 model ReturnOrder {
@@ -272,7 +272,7 @@ model ReturnOrder {
   customerDecidedAt String?          @map("customer_decided_at") @db.VarChar(40)
   customerProcessChoice String?      @map("customer_process_choice") @db.VarChar(30)
 
-  @@map("oms_ReturnOrder")
+  @@map("oms_returnorder")
 }
 
 model OutboundOrder {
@@ -321,7 +321,7 @@ model OutboundOrder {
   lineItems             String?          @db.Text // JSON
   attachments           String?          @db.Text // JSON [{kind,fileName,url,uploadedAt}]
 
-  @@map("oms_OutboundOrder")
+  @@map("oms_outboundorder")
 }
 
 /// SKU 编码映射（sku_code_mapping）
@@ -339,7 +339,7 @@ model CodeMapping {
 
   @@index([internalSku])
   @@index([codeValue])
-  @@map("oms_CodeMapping")
+  @@map("oms_codemapping")
 }
 
 model PlatformSkuMapping {
@@ -364,7 +364,7 @@ model PlatformSkuMapping {
   lastSyncAt        String?          @db.VarChar(40)
   updatedAt         String           @db.VarChar(40)
 
-  @@map("oms_PlatformSkuMapping")
+  @@map("oms_platformskumapping")
 }
 
 model LogisticsRecord {
@@ -384,7 +384,7 @@ model LogisticsRecord {
   exceptionCode   String? @db.VarChar(50)
   exceptionReason String? @db.Text
 
-  @@map("oms_LogisticsRecord")
+  @@map("oms_logisticsrecord")
 }
 
 model QcReport {
@@ -398,7 +398,7 @@ model QcReport {
   result      String @db.VarChar(30)
   reportDate  String @db.VarChar(40)
 
-  @@map("oms_QcReport")
+  @@map("oms_qcreport")
 }
 
 model SystemMessage {
@@ -412,7 +412,7 @@ model SystemMessage {
   createdAt  String           @db.VarChar(40)
 
   @@index([customerId])
-  @@map("oms_SystemMessage")
+  @@map("oms_systemmessage")
 }
 
 model WebhookEvent {
@@ -425,7 +425,7 @@ model WebhookEvent {
   processedAt  DateTime?
 
   @@index([status, receivedAt])
-  @@map("oms_WebhookEvent")
+  @@map("oms_webhookevent")
 }
 
 model Announcement {
@@ -434,7 +434,7 @@ model Announcement {
   date  String @db.VarChar(40)
   type  String @db.VarChar(30)
 
-  @@map("oms_Announcement")
+  @@map("oms_announcement")
 }
 
 /// 出库价格模板
@@ -449,7 +449,7 @@ model PriceTemplate {
   pickupByRegion   String @db.Text // JSON，应用层默认 "{}"
   updatedAt        String @db.VarChar(40)
 
-  @@map("oms_PriceTemplate")
+  @@map("oms_pricetemplate")
 }
 
 /// 仓租模板
@@ -465,7 +465,7 @@ model StorageRentTemplate {
   freeStorageDays     Int
   updatedAt           String @db.VarChar(40)
 
-  @@map("oms_StorageRentTemplate")
+  @@map("oms_storagerenttemplate")
 }
 
 /// 地区配送规则
@@ -477,7 +477,7 @@ model RegionDispatchRule {
   enabled        Boolean
   remark         String? @db.Text
 
-  @@map("oms_RegionDispatchRule")
+  @@map("oms_regiondispatchrule")
 }
 
 /// 货盘申购记录
@@ -492,7 +492,7 @@ model CatalogPurchase {
 
   @@index([customerId])
   @@index([sku])
-  @@map("oms_CatalogPurchase")
+  @@map("oms_catalogpurchase")
 }
 
 /// 充值支付方式（对公转账 / 支付宝 / 微信等）
@@ -512,5 +512,5 @@ model PaymentMethod {
   customText    String  @default("") @db.VarChar(2000)
   updatedAt     String  @db.VarChar(40)
 
-  @@map("oms_PaymentMethod")
+  @@map("oms_paymentmethod")
 }
