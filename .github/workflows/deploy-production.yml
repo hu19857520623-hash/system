@@ -139,11 +139,33 @@ jobs:
           cd /opt/system/erp
           test -f backend/data/customers-import.json || { echo 'Missing customers-import.json'; exit 1; }
           test -f backend/scripts/import-customers-json.mjs || { echo 'Missing import script'; exit 1; }
-          docker compose cp backend/data/customers-import.json erp-api:/app/data/customers-import.json
-          docker compose cp backend/scripts/import-customers-json.mjs erp-api:/app/scripts/import-customers-json.mjs
-          docker compose exec -T erp-api node scripts/import-customers-json.mjs --apply | tee /tmp/customer-import.log
-          grep -q 'OMS 已关联 ERP 客户数' /tmp/customer-import.log
-          grep -E 'OMS 已关联 ERP 客户数：[0-9]+' /tmp/customer-import.log | tail -n 1 | grep -Eq 'OMS 已关联 ERP 客户数：([2-9][0-9]{2,}|[1-9][0-9]{2,})'
+          grep -q 'OMS 已关联 ERP 客户数' backend/scripts/import-customers-json.mjs
+          import_rc=0
+          docker compose run --rm -T --no-deps \
+            -v /opt/system/erp/backend/data/customers-import.json:/app/data/customers-import.json:ro \
+            -v /opt/system/erp/backend/scripts/import-customers-json.mjs:/app/scripts/import-customers-json.mjs:ro \
+            erp-api node scripts/import-customers-json.mjs --apply > /tmp/customer-import.log 2>&1 || import_rc=$?
+          cat /tmp/customer-import.log
+          if [ "$import_rc" -ne 0 ]; then
+            echo "Customer import failed with exit code ${import_rc}"
+            exit 1
+          fi
+          grep -q '失败 0' /tmp/customer-import.log || { echo 'Customer import reported failures'; exit 1; }
+          erp_admin_pass="${ERP_SEED_ADMIN_PASSWORD:-123456}"
+          import_token="$(
+            curl --fail --silent --show-error -X POST https://www.erp.sztekeluo.com/api/auth/login \
+              -H 'Content-Type: application/json' \
+              -d "{\"username\":\"admin\",\"password\":\"${erp_admin_pass}\"}" \
+            | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['token'])"
+          )"
+          import_total="$(
+            curl --fail --silent --show-error \
+              'https://www.erp.sztekeluo.com/api/customers?page=1&pageSize=1&portalOnly=1' \
+              -H "Authorization: Bearer ${import_token}" \
+            | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['total'])"
+          )"
+          echo "ERP portalOnly customer total after import: ${import_total}"
+          test "${import_total}" -ge 200 || { echo 'Imported OMS customer count below 200'; exit 1; }
 
           wait_healthy takealot-monitor
           wait_healthy erp-nginx

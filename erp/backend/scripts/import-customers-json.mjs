@@ -110,27 +110,41 @@ async function upsertBillingAccount(item, accountId) {
 
 async function upsertPortalUser(accountId, item, passwordHash, omsStatus, nowIso) {
   const portalUserId = stableOmsId('portal', item.customerCode)
-  await prisma.$executeRawUnsafe(
-    `INSERT INTO \`oms_PortalUser\`
-      (\`id\`, \`customerId\`, \`username\`, \`passwordHash\`, \`role\`, \`status\`,
-       \`mustChangePassword\`, \`createdAt\`, \`updatedAt\`, \`lastLoginAt\`)
-     VALUES (?, ?, ?, ?, ?, ?, TRUE, ?, ?, NULL)
-     ON DUPLICATE KEY UPDATE
-      \`username\` = VALUES(\`username\`),
-      \`passwordHash\` = VALUES(\`passwordHash\`),
-      \`role\` = VALUES(\`role\`),
-      \`status\` = VALUES(\`status\`),
-      \`mustChangePassword\` = TRUE,
-      \`updatedAt\` = VALUES(\`updatedAt\`)`,
-    portalUserId,
-    accountId,
-    item.username,
-    passwordHash,
-    PORTAL_TYPE,
-    omsStatus,
-    nowIso,
-    nowIso,
-  )
+  const candidates = [item.username, item.customerCode.trim().toLowerCase()]
+  let lastError = null
+
+  for (const username of candidates) {
+    try {
+      await prisma.$executeRawUnsafe(
+        `INSERT INTO \`oms_PortalUser\`
+          (\`id\`, \`customerId\`, \`username\`, \`passwordHash\`, \`role\`, \`status\`,
+           \`mustChangePassword\`, \`createdAt\`, \`updatedAt\`, \`lastLoginAt\`)
+         VALUES (?, ?, ?, ?, ?, ?, TRUE, ?, ?, NULL)
+         ON DUPLICATE KEY UPDATE
+          \`username\` = VALUES(\`username\`),
+          \`passwordHash\` = VALUES(\`passwordHash\`),
+          \`role\` = VALUES(\`role\`),
+          \`status\` = VALUES(\`status\`),
+          \`mustChangePassword\` = TRUE,
+          \`updatedAt\` = VALUES(\`updatedAt\`)`,
+        portalUserId,
+        accountId,
+        username,
+        passwordHash,
+        PORTAL_TYPE,
+        omsStatus,
+        nowIso,
+        nowIso,
+      )
+      return
+    } catch (error) {
+      lastError = error
+      const message = error instanceof Error ? error.message : String(error)
+      if (!/duplicate|unique/i.test(message)) throw error
+    }
+  }
+
+  throw lastError ?? new Error(`Unable to provision portal user for ${item.customerCode}`)
 }
 
 async function upsertCustomer(item, passwordHash, createPortal) {
