@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
 import { Prisma, type Customer } from '@prisma/client'
 import { PrismaService } from '../../common/prisma/prisma.service'
@@ -194,6 +196,133 @@ export class CustomersService {
   async provisionFromOms(data: CreateCustomerDto) {
     const result = await this.provisioning.create(data, { requirePortal: true })
     return this.toInternalProvisioningResponse(result)
+  }
+
+  /**
+   * 从容器内 JSON 开通/回填 OMS 门户。供生产部署在已运行的 erp-api 内触发，
+   * 避免 docker compose run 写入到错误的数据库实例。
+   */
+  async importLegacyFromFile() {
+    const dataFile = join(process.cwd(), 'data', 'customers-import.json')
+    let rows: Array<Record<string, unknown>>
+    try {
+      rows = JSON.parse(readFileSync(dataFile, 'utf8')) as Array<Record<string, unknown>>
+    } catch {
+      throw new BadRequestException(`缺少导入文件: ${dataFile}`)
+    }
+    if (!Array.isArray(rows) || rows.length === 0) {
+      throw new BadRequestException('导入文件为空')
+    }
+
+    const password = process.env.IMPORT_DEFAULT_PASSWORD || 'ChangeMe123!'
+    let created = 0
+    let updated = 0
+    let failed = 0
+    const errors: Array<{ customerCode: string; message: string }> = []
+
+    for (const raw of rows) {
+      const customerCode = String(raw.customerCode || '').trim()
+      if (!customerCode) {
+        failed += 1
+        continue
+      }
+      try {
+        const username = this.legacyUsername(raw, customerCode)
+        const payload = {
+          customerCode,
+          customerName: String(raw.customerName || customerCode).trim().slice(0, 200),
+          companyName: raw.companyName ? String(raw.companyName).trim().slice(0, 200) : undefined,
+          contactEmail: raw.contactEmail ? String(raw.contactEmail).trim().toLowerCase() : undefined,
+          contactName: raw.contactName ? String(raw.contactName).trim().slice(0, 50) : undefined,
+          contactPhone: raw.contactPhone ? String(raw.contactPhone).trim().slice(0, 30) : undefined,
+          status: Number(raw.status) === 0 ? 0 : 1,
+          portalType: 'hybrid' as const,
+          warehouse: 'jhb1',
+          permissionTemplate: 'hybrid' as const,
+          username,
+          temporaryPassword: password,
+        }
+
+        const existing = await this.prisma.customer.findUnique({
+          where: { customerCode },
+          select: { id: true },
+        })
+        const oms = await this.findLegacyOmsAccount(customerCode)
+
+        if (!existing) {
+          await this.provisioning.create(payload, { requirePortal: true })
+          created += 1
+        } else {
+          const updatePayload: UpdateCustomerDto = {
+            customerName: payload.customerName,
+            companyName: payload.companyName,
+            contactEmail: payload.contactEmail,
+            contactName: payload.contactName,
+            contactPhone: payload.contactPhone,
+            status: payload.status,
+          }
+          if (!oms?.portalUserId) {
+            updatePayload.portalType = payload.portalType
+            updatePayload.warehouse = payload.warehouse
+            updatePayload.permissionTemplate = payload.permissionTemplate
+            updatePayload.username = payload.username
+            updatePayload.temporaryPassword = payload.temporaryPassword
+          }
+          await this.provisioning.update(Number(existing.id), updatePayload)
+          updated += 1
+        }
+
+        const balance = Number(raw.balance)
+        if (Number.isFinite(balance) && balance < 0) {
+          await this.prisma.customer.update({
+            where: { customerCode },
+            data: { balance },
+          })
+        }
+      } catch (error) {
+        failed += 1
+        errors.push({
+          customerCode,
+          message: error instanceof Error ? error.message : String(error),
+        })
+      }
+    }
+
+    const linkedRows = await this.prisma.$queryRawUnsafe<Array<{ total: bigint | number }>>(
+      `SELECT COUNT(DISTINCT c.code) AS total
+       FROM \`oms_CustomerAccount\` c
+       INNER JOIN \`customer\` e ON e.customer_code = c.code`,
+    )
+    const linked = Number(linkedRows[0]?.total ?? 0)
+    return {
+      file: dataFile,
+      total: rows.length,
+      created,
+      updated,
+      failed,
+      linked,
+      errors: errors.slice(0, 30),
+    }
+  }
+
+  private legacyUsername(raw: Record<string, unknown>, customerCode: string) {
+    const fromFile = String(raw.username || '').trim().toLowerCase()
+    if (/^[a-z0-9._-]{6,50}$/.test(fromFile)) return fromFile
+    const fromCode = customerCode.trim().toLowerCase()
+    if (/^[a-z0-9._-]{6,50}$/.test(fromCode)) return fromCode
+    return `${fromCode}01`.replace(/[^a-z0-9._-]/g, '').slice(0, 50)
+  }
+
+  private async findLegacyOmsAccount(customerCode: string) {
+    const rows = await this.prisma.$queryRawUnsafe<Array<{ id: string; portalUserId: string | null }>>(
+      `SELECT c.id, u.id AS portalUserId
+       FROM \`oms_CustomerAccount\` c
+       LEFT JOIN \`oms_PortalUser\` u ON u.customerId = c.id
+       WHERE c.code = ?
+       LIMIT 1`,
+      customerCode,
+    )
+    return rows[0] || null
   }
 
   async update(id: number, data: UpdateCustomerDto) {

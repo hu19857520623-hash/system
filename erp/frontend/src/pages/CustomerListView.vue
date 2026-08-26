@@ -22,6 +22,7 @@ const route = useRoute()
 type StatusFilter = 'all' | 'active' | 'disabled'
 
 const statusFilter = ref<StatusFilter>('all')
+const portalOnly = ref(false)
 const searchQ = ref('')
 const balanceMin = ref<number | undefined>()
 const balanceMax = ref<number | undefined>()
@@ -235,9 +236,9 @@ function buildParams(extra: Record<string, unknown> = {}) {
   const params: Record<string, unknown> = {
     page: page.value,
     pageSize: pageSize.value,
-    portalOnly: '1',
     ...extra,
   }
+  if (portalOnly.value) params.portalOnly = '1'
   if (statusFilter.value !== 'all') params.status = statusFilter.value
   const q = searchQ.value.trim()
   if (q) params.keyword = q
@@ -249,9 +250,9 @@ function buildParams(extra: Record<string, unknown> = {}) {
 async function refreshCounts() {
   try {
     const [all, active, disabled] = await Promise.all([
-      customerApi.list({ pageSize: 1, portalOnly: '1' }),
-      customerApi.list({ pageSize: 1, portalOnly: '1', status: 'active' }),
-      customerApi.list({ pageSize: 1, portalOnly: '1', status: 'disabled' }),
+      customerApi.list({ pageSize: 1, ...(portalOnly.value ? { portalOnly: '1' } : {}) }),
+      customerApi.list({ pageSize: 1, status: 'active', ...(portalOnly.value ? { portalOnly: '1' } : {}) }),
+      customerApi.list({ pageSize: 1, status: 'disabled', ...(portalOnly.value ? { portalOnly: '1' } : {}) }),
     ])
     statusCounts.value = {
       all: all.total ?? 0,
@@ -282,6 +283,7 @@ async function reloadAll() {
 
 function resetFilters() {
   searchQ.value = ''
+  portalOnly.value = false
   balanceMin.value = undefined
   balanceMax.value = undefined
   page.value = 1
@@ -479,8 +481,8 @@ async function submitEdit() {
   }
 }
 
-watch([statusFilter, page, pageSize], () => load())
-watch(statusFilter, () => { page.value = 1 })
+watch([statusFilter, portalOnly, page, pageSize], () => load())
+watch([statusFilter, portalOnly], () => { page.value = 1 })
 
 onMounted(() => {
   const q = String(route.query.q || '').trim()
@@ -494,9 +496,9 @@ onMounted(() => {
   <section class="customer-page">
     <header class="customer-hero">
       <div>
-        <p class="page-eyebrow">OMS CUSTOMER ACCESS</p>
-        <h1>客户账户</h1>
-        <p class="page-description">管理客户的 OMS 登录、权限、仓库和账户状态。客户无需登录 ERP。</p>
+        <p class="page-eyebrow">CUSTOMER ACCESS</p>
+        <h1>客户列表</h1>
+        <p class="page-description">管理 ERP 客户主数据与 OMS 登录、权限、仓库和账户状态。</p>
       </div>
       <el-button v-if="canCreate" type="primary" class="open-account-button" @click="openCreate">
         开通 OMS 账户
@@ -522,6 +524,7 @@ onMounted(() => {
             @clear="page = 1; load()"
           />
           <el-button type="primary" size="small" @click="page = 1; load()">查询</el-button>
+          <el-checkbox v-model="portalOnly" size="small" @change="page = 1; reloadAll()">仅 OMS 账户</el-checkbox>
           <el-button size="small" @click="resetFilters">重置</el-button>
           <el-button link type="primary" size="small" @click="showMoreFilters = !showMoreFilters">
             {{ showMoreFilters ? '收起余额筛选' : '按余额筛选' }}
@@ -623,7 +626,7 @@ onMounted(() => {
         </el-table-column>
       </el-table>
       </div>
-      <el-empty v-if="!loading && !rows.length" description="暂无 OMS 客户账户" />
+      <el-empty v-if="!loading && !rows.length" :description="portalOnly ? '暂无 OMS 客户账户' : '暂无客户'" />
       <ListPagination v-model:page="page" v-model:page-size="pageSize" :total="listTotal" />
     </el-card>
 

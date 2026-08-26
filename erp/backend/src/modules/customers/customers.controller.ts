@@ -30,6 +30,13 @@ export class CustomersController {
     return this.service.provisionFromOms(body)
   }
 
+  /** 生产部署：读取容器内 customers-import.json，为已有 ERP 客户开通 OMS */
+  @OmsBridge()
+  @Post('oms/import-legacy')
+  importLegacyFromFile() {
+    return this.service.importLegacyFromFile()
+  }
+
   /** OMS server：由内部调用方重置临时密码，且强制首次登录改密。 */
   @OmsBridge()
   @Post('oms/reset-temporary-password')
