@@ -73,10 +73,6 @@ jobs:
           # client references these columns and tables during normal requests.
           docker compose run --rm --no-deps --entrypoint npx erp-api \
             prisma db execute --file prisma/scripts/migrate_outbound_phase1_efficiency.sql
-          docker compose run --rm --no-deps --entrypoint npx erp-api \
-            prisma db execute --file prisma/scripts/migrate_inbound_received_carton_count.sql
-          docker compose run --rm --no-deps --entrypoint npx erp-api \
-            prisma db execute --file prisma/scripts/migrate_wms_management_loop.sql
 
           cd /opt/system/oms
           docker compose up -d --no-deps oms-api oms-web
