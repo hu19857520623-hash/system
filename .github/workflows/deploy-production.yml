@@ -79,6 +79,7 @@ jobs:
           docker compose up -d --no-deps oms-api oms-web
 
           cd /opt/system/erp
+          docker rm -f takealot-monitor >/dev/null 2>&1 || true
           docker compose \
             -f docker-compose.yml \
             -f docker-compose.monitor.override.yml \
