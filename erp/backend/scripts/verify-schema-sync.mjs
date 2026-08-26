@@ -5,7 +5,19 @@
 import { PrismaClient } from '@prisma/client'
 
 const checks = [
-  { table: 'outbound_order', columns: ['cargo_type', 'fba_warehouse', 'seller_store_name', 'appointment_date', 'recipient_json'] },
+  {
+    table: 'outbound_order',
+    columns: [
+      'cargo_type',
+      'fba_warehouse',
+      'seller_store_name',
+      'appointment_date',
+      'recipient_json',
+      'problem_type',
+      'exception_type',
+    ],
+  },
+  { table: 'warehouse', columns: ['required_outbound_files'] },
   { table: 'inbound_order', columns: ['oms_customer_code', 'inbound_type', 'delivery_method', 'reference_no', 'eta'] },
   { table: 'product', columns: ['sea_freight_per_unit', 'domestic_fee_per_unit', 'customer_sku', 'declared_name_en', 'declared_name_cn', 'unit', 'has_battery'] },
   { table: 'product_pricing', columns: ['inbound_qty', 'sold_qty', 'visible_stock_qty'] },

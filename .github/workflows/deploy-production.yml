@@ -66,6 +66,12 @@ jobs:
           cd /opt/system/erp
           docker compose build erp-api erp-web
 
+          # Apply the idempotent outbound schema update before starting the new API.
+          # The API's Prisma client selects these columns even on pages that are not
+          # directly related to outbound orders, so a missing column causes broad 500s.
+          docker compose run --rm --no-deps --entrypoint npx erp-api \
+            prisma db execute --file prisma/scripts/migrate_outbound_phase1_efficiency.sql
+
           cd /opt/system/oms
           docker compose up -d --no-deps oms-api oms-web
 

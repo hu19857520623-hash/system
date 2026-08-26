@@ -47,6 +47,7 @@ COPY --from=builder --chown=erp:erp /app/package.json /app/package-lock.json ./
 COPY --from=builder --chown=erp:erp /app/node_modules ./node_modules
 COPY --from=builder --chown=erp:erp /app/dist ./dist
 COPY --from=builder --chown=erp:erp /app/prisma ./prisma
+COPY --from=builder --chown=erp:erp /app/scripts ./scripts
 COPY --chown=erp:erp backend/docker-entrypoint.sh ./docker-entrypoint.sh
 RUN chmod 755 docker-entrypoint.sh
 
@@ -57,4 +58,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:3000/api/auth/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 ENTRYPOINT ["dumb-init", "--", "./docker-entrypoint.sh"]
-CMD ["node", "dist/main.js"]
+CMD ["npm", "run", "start:prod"]
