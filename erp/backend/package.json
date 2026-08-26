@@ -25,6 +25,7 @@
     "seed": "npm run sync:shared && ts-node -r tsconfig-paths/register prisma/seed.ts",
     "import:leads": "ts-node prisma/import-leads-xlsx.ts",
     "import:local-exports": "ts-node prisma/import-local-exports.ts",
+    "import:customers": "ts-node -r tsconfig-paths/register scripts/import-customers-xlsx.ts",
     "backfill:finance-costs": "ts-node -r tsconfig-paths/register prisma/backfill-finance-cost-ledger.ts",
     "lint": "eslint src prisma scripts --max-warnings=0",
     "test": "jest --runInBand",

@@ -135,6 +135,12 @@ jobs:
           wait_healthy oms-web
           wait_healthy erp-api
           wait_healthy erp-web
+
+          cd /opt/system/erp/backend
+          docker compose exec -T erp-api \
+            npx ts-node -r tsconfig-paths/register scripts/import-customers-xlsx.ts data/customer-info.xlsx --apply \
+            || echo 'Customer import skipped or partially failed; see logs above.'
+
           wait_healthy takealot-monitor
           wait_healthy erp-nginx
 
