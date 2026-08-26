@@ -1,4 +1,4 @@
-import { downloadInboundLabelHtml, type InboundLabelLine, type InboundLabelOrder } from './inboundLabelPrint'
+import { downloadInboundLabels, type InboundLabelLine, type InboundLabelOrder } from './inboundLabelPrint'
 
 function poLineQty(line: { quantity?: number; plannedQty?: number }) {
   return Number(line?.quantity) > 0 ? Number(line.quantity) : Number(line?.plannedQty) || 0
@@ -54,6 +54,6 @@ export function buildPurchaseBoxLabelOrder(po: {
   }
 }
 
-export function downloadPurchaseBoxLabels(po: Parameters<typeof buildPurchaseBoxLabelOrder>[0]) {
-  downloadInboundLabelHtml(buildPurchaseBoxLabelOrder(po), '箱唛')
+export async function downloadPurchaseBoxLabels(po: Parameters<typeof buildPurchaseBoxLabelOrder>[0]) {
+  await downloadInboundLabels(buildPurchaseBoxLabelOrder(po), '箱唛')
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { buildBoxLabelData, buildInboundLabelInputs } from './inboundLabelPrint'
 import { buildPurchaseBoxLabelOrder } from './purchaseBoxLabel'
+import { buildBoxLabelsPdf } from './boxLabelPdf'
 import { buildBoxLabelArticle, buildBoxLabelsHtml, BOX_LABEL_STYLE } from './boxLabelTemplate'
 import {
   BARCODE_LABEL_STYLE,
@@ -8,6 +9,22 @@ import {
   buildBarcodeLabelHtml,
   resolveBarcodeLabelCode,
 } from './barcodeLabelTemplate'
+
+describe('boxLabelPdf', () => {
+  it('builds valid pdf bytes for packing list labels', async () => {
+    const pdf = await buildBoxLabelsPdf([{
+      referenceNo: 'RVAFU0002-260731-0003',
+      boxNo: 1,
+      warehouseCode: 'AAE938',
+      lines: [{ sku: 'AFU0002-9902297558367', qty: 1 }],
+      boxIndex: 1,
+      boxTotal: 1,
+    }])
+    const header = new TextDecoder().decode(pdf.slice(0, 5))
+    expect(header).toBe('%PDF-')
+    expect(pdf.length).toBeGreaterThan(500)
+  })
+})
 
 describe('boxLabelTemplate', () => {
   it('matches 100x100 packing list layout from reference pdf', () => {

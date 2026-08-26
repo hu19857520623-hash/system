@@ -7,10 +7,10 @@ import {
 } from './barcodeLabelTemplate'
 import {
   buildBoxLabelsHtml,
-  downloadBoxLabelsHtml,
   printBoxLabels,
   type BoxLabelData,
 } from './boxLabelTemplate'
+import { downloadBoxLabelsPdf } from './boxLabelPdf'
 
 export type InboundLabelKind = '箱唛' | 'SKU 标签'
 
@@ -121,12 +121,17 @@ export async function printInboundLabels(order: InboundLabelOrder, kind: Inbound
   return printBarcodeLabels(inputs, `${order.inboundNo}-${kind}`)
 }
 
-export function downloadInboundLabelHtml(order: InboundLabelOrder, kind: InboundLabelKind) {
+export async function downloadInboundLabels(order: InboundLabelOrder, kind: InboundLabelKind) {
   if (kind === '箱唛') {
     const labels = buildBoxLabelData(order)
-    downloadBoxLabelsHtml(labels, `${order.inboundNo}-${kind}`)
+    await downloadBoxLabelsPdf(labels, `${order.inboundNo}-${kind}`)
     return
   }
   const inputs = buildInboundLabelInputs(order, kind)
   downloadBarcodeHtml(inputs, `${order.inboundNo}-${kind}`)
+}
+
+/** @deprecated 请使用 downloadInboundLabels */
+export async function downloadInboundLabelHtml(order: InboundLabelOrder, kind: InboundLabelKind) {
+  return downloadInboundLabels(order, kind)
 }

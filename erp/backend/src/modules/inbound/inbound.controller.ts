@@ -107,7 +107,7 @@ export class InboundController {
 
   @RequirePerms('create_inbound.label')
   @Get(':id/labels/outer')
-  @Header('Content-Type', 'text/html;charset=utf-8')
+  @Header('Content-Type', 'application/pdf')
   async outerLabel(@Param('id', ParseIntPipe) id: number, @Res() res: Response) {
     const file = await this.service.getOuterLabel(id)
     res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(file.fileName)}"`)

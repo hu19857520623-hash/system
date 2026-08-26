@@ -12,6 +12,7 @@ import { resolveBillingDimensions } from '../../common/product-dimension.util'
 import { parseInboundQcScanInput } from './inbound-qc-scan.util'
 import { ManagementLoopService } from '../management-loop/management-loop.service'
 import { InventoryMutationService } from '../../common/inventory/inventory-mutation.service'
+import { buildBoxLabelsPdfBuffer, buildInboundBoxLabelData } from '../../common/labels/box-label-pdf.util'
 
 /** 在途，等待到仓扫描 */
 const PENDING_RECEIPT_STATUSES = new Set([
@@ -1480,14 +1481,15 @@ export class InboundService {
 
   async getOuterLabel(id: number) {
     const order = await this.detail(id)
-    const html = this.buildOuterLabelHtml(order)
-    const fileName = `外箱标_${order.inboundNo}.html`
-    this.files.write('labels', fileName, html)
+    const labels = buildInboundBoxLabelData(order)
+    const pdf = await buildBoxLabelsPdfBuffer(labels)
+    const fileName = `外箱标_${order.inboundNo}.pdf`
+    this.files.write('labels', fileName, pdf)
     await this.prisma.inboundOrder.update({
       where: { id: BigInt(id) },
       data: { labelPrintCount: { increment: order.cartons?.length || 1 } },
     })
-    return { fileName, content: Buffer.from(html, 'utf-8'), mimeType: 'text/html;charset=utf-8' }
+    return { fileName, content: pdf, mimeType: 'application/pdf' }
   }
 
   // ───────────── OMS P1：客户预约入库 ASN（不扣中转仓库存） ─────────────

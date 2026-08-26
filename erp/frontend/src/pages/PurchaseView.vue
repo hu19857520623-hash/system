@@ -877,11 +877,15 @@ async function markPoUnpaid(po?: { id: number }) {
   if (ok) await refreshPoAfterPayment(target.id)
 }
 
-function downloadPoBoxLabels(po?: any) {
+async function downloadPoBoxLabels(po?: any) {
   const target = po || selectedPo.value
   if (!target) return
-  downloadPurchaseBoxLabels(target)
-  ElMessage.success(`已下载外箱标 ${target.poNo}-箱唛.html`)
+  try {
+    await downloadPurchaseBoxLabels(target)
+    ElMessage.success(`已下载外箱标 ${target.poNo}-箱唛.pdf`)
+  } catch (e: any) {
+    ElMessage.error(e?.message || '外箱标下载失败')
+  }
 }
 </script>
 
