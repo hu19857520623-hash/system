@@ -64,19 +64,37 @@ jobs:
           docker compose build oms-api oms-web
 
           cd /opt/system/erp
-          docker compose --profile monitor build erp-api erp-web takealot-monitor
+          docker compose build erp-api erp-web
 
-          # Apply the idempotent outbound schema update before starting the new API.
-          # The API's Prisma client selects these columns even on pages that are not
-          # directly related to outbound orders, so a missing column causes broad 500s.
+          cd /opt/system/store-monitor
+          docker build -t takealot/store-monitor:production .
+
+          # Apply idempotent schema updates before starting the new API. The Prisma
+          # client references these columns and tables during normal requests.
           docker compose run --rm --no-deps --entrypoint npx erp-api \
             prisma db execute --file prisma/scripts/migrate_outbound_phase1_efficiency.sql
+          docker compose run --rm --no-deps --entrypoint npx erp-api \
+            prisma db execute --file prisma/scripts/migrate_inbound_received_carton_count.sql
+          docker compose run --rm --no-deps --entrypoint npx erp-api \
+            prisma db execute --file prisma/scripts/migrate_wms_management_loop.sql
 
           cd /opt/system/oms
           docker compose up -d --no-deps oms-api oms-web
 
           cd /opt/system/erp
-          docker compose --profile monitor up -d --no-deps takealot-monitor erp-api erp-web
+          docker compose up -d --no-deps erp-api erp-web
+
+          monitor_network="$(docker inspect --format '{{range $name, $config := .NetworkSettings.Networks}}{{println $name}}{{end}}' erp-api | head -n 1)"
+          test -n "$monitor_network" || { echo 'Cannot resolve ERP Docker network.'; exit 1; }
+          docker rm -f takealot-monitor >/dev/null 2>&1 || true
+          docker run -d \
+            --name takealot-monitor \
+            --restart unless-stopped \
+            --network "$monitor_network" \
+            -e LISTEN_HOST=0.0.0.0 \
+            -e PORT=3456 \
+            takealot/store-monitor:production >/dev/null
+
           docker restart erp-nginx >/dev/null
 
           wait_healthy() {
