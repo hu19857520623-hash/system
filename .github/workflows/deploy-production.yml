@@ -71,6 +71,7 @@ jobs:
 
           # Apply idempotent schema updates before starting the new API. The Prisma
           # client references these columns and tables during normal requests.
+          cd /opt/system/erp
           docker compose run --rm --no-deps --entrypoint npx erp-api \
             prisma db execute --file prisma/scripts/migrate_outbound_phase1_efficiency.sql
 
