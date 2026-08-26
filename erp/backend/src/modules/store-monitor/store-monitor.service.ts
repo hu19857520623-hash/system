@@ -68,9 +68,13 @@ export class StoreMonitorService {
     private permissions: PermissionsService,
     private config: ConfigService,
   ) {
+    const configuredProxy = this.config.get<string>('TAKEALOT_PROXY_URL')?.trim()
+    const isProduction = this.config.get<string>('NODE_ENV') === 'production'
+    const isLegacyLoopback = /^http:\/\/(?:127\.0\.0\.1|localhost):3456\/?$/i.test(configuredProxy || '')
     this.proxyBase = (
-      this.config.get<string>('TAKEALOT_PROXY_URL')
-      || 'http://127.0.0.1:3456'
+      isProduction && (!configuredProxy || isLegacyLoopback)
+        ? 'http://takealot-monitor:3456'
+        : configuredProxy || 'http://127.0.0.1:3456'
     ).replace(/\/+$/, '')
   }
 
