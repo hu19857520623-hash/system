@@ -136,10 +136,12 @@ jobs:
           wait_healthy erp-api
           wait_healthy erp-web
 
-          cd /opt/system/erp/backend
-          docker compose exec -T erp-api \
-            npx ts-node -r tsconfig-paths/register scripts/import-customers-xlsx.ts data/customer-info.xlsx --apply \
-            || echo 'Customer import skipped or partially failed; see logs above.'
+          cd /opt/system/erp
+          test -f backend/data/customers-import.json || { echo 'Missing customers-import.json'; exit 1; }
+          test -f backend/scripts/import-customers-json.mjs || { echo 'Missing import script'; exit 1; }
+          docker compose cp backend/data/customers-import.json erp-api:/app/data/customers-import.json
+          docker compose cp backend/scripts/import-customers-json.mjs erp-api:/app/scripts/import-customers-json.mjs
+          docker compose exec -T erp-api node scripts/import-customers-json.mjs --apply
 
           wait_healthy takealot-monitor
           wait_healthy erp-nginx
