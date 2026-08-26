@@ -29,6 +29,7 @@ import {
   type OmsRole,
 } from './auth.js'
 import { LoginRateLimiter } from './login-rate-limit.js'
+import { ensureConfiguredPortalAdmin, resolvePortalUserForLogin } from './bootstrap-admin.js'
 import {
   refundOutboundPreDeduct,
   settleOutboundFees,
@@ -533,10 +534,7 @@ app.post('/api/auth/login', async (req, res) => {
       }
       throw error
     }
-    const portalUser = await prisma.portalUser.findUnique({
-      where: { username },
-      include: { customerAccount: true },
-    })
+    const portalUser = await resolvePortalUserForLogin(prisma, username)
     if (!portalUser || !OMS_ROLES.includes(portalUser.role as OmsRole) || !isLoginAllowed(
       portalUser.status,
       portalUser.customerAccount?.status,
@@ -680,6 +678,20 @@ app.post(
       res.json(result.data)
     } catch (error) {
       sendErpError(res, error)
+    }
+  },
+)
+
+app.post(
+  '/api/internal/bootstrap-admin/sync',
+  requireInternalToken,
+  async (_req, res) => {
+    try {
+      const result = await ensureConfiguredPortalAdmin(prisma)
+      res.json({ ok: true, ...result })
+    } catch (error) {
+      console.error(error)
+      res.status(500).json({ error: String(error) })
     }
   },
 )
@@ -3357,81 +3369,6 @@ app.put('/api/payment-methods', async (req, res) => {
   }
 })
 
-async function ensureConfiguredPortalAdmin() {
-  const configuredUsername = normalizeUsername(
-    process.env.OMS_PORTAL_ADMIN_USERNAME
-      || process.env.OMS_BOOTSTRAP_ADMIN_USERNAME
-      || process.env.OMS_PORTAL_ADMIN_EMAIL
-      || process.env.OMS_BOOTSTRAP_ADMIN_EMAIL,
-  )
-  const configuredPassword = String(
-    process.env.OMS_PORTAL_ADMIN_PASSWORD
-      || process.env.OMS_BOOTSTRAP_ADMIN_PASSWORD
-      || '',
-  )
-  const allowDevFallback = process.env.NODE_ENV === 'development'
-    && process.env.OMS_ALLOW_INSECURE_DEV_AUTH === 'true'
-  const useDevFallback = !configuredUsername && !configuredPassword && allowDevFallback
-  const mappedConfigured = configuredUsername === 'admin@oms.local'
-    || configuredUsername === 'admin@example.com'
-    || configuredUsername.startsWith('admin@')
-    ? 'omsadmin'
-    : configuredUsername.includes('@')
-      ? normalizeUsername(configuredUsername.split('@')[0])
-      : configuredUsername
-  const username = useDevFallback ? 'omsadmin' : mappedConfigured
-  const password = useDevFallback ? 'DevAdmin123!' : configuredPassword
-  if (!username && !password) return
-  if (!username || !password) {
-    throw new Error(
-      'OMS_BOOTSTRAP_ADMIN_USERNAME and OMS_BOOTSTRAP_ADMIN_PASSWORD must be configured together',
-    )
-  }
-  if (!isValidUsername(username)) {
-    throw new Error('OMS_BOOTSTRAP_ADMIN_USERNAME is invalid')
-  }
-  if (!isStrongPassword(password)) {
-    throw new Error('OMS_BOOTSTRAP_ADMIN_PASSWORD does not meet the password policy')
-  }
-  const existing = await prisma.portalUser.findUnique({ where: { username } })
-  if (existing) {
-    if (existing.role !== 'sys_admin' || existing.customerId !== null) {
-      throw new Error('OMS_BOOTSTRAP_ADMIN_USERNAME is already assigned to a customer identity')
-    }
-    const passwordMatches = await bcrypt.compare(password, existing.passwordHash)
-    if (!passwordMatches) {
-      const now = new Date().toISOString()
-      await prisma.portalUser.update({
-        where: { id: existing.id },
-        data: {
-          passwordHash: await bcrypt.hash(password, 12),
-          updatedAt: now,
-        },
-      })
-      console.log(`Configured OMS portal administrator password synced: ${username}`)
-    }
-    return
-  }
-  const id = String(process.env.OMS_PORTAL_ADMIN_ID || 'portal-admin').trim()
-  if (!id || id.length > 50) throw new Error('OMS_PORTAL_ADMIN_ID is invalid')
-  const now = new Date().toISOString()
-  await prisma.portalUser.create({
-    data: {
-      id,
-      customerId: null,
-      username,
-      passwordHash: await bcrypt.hash(password, 12),
-      role: 'sys_admin',
-      status: 'active',
-      mustChangePassword: useDevFallback
-        || process.env.OMS_PORTAL_ADMIN_MUST_CHANGE_PASSWORD !== 'false',
-      createdAt: now,
-      updatedAt: now,
-    },
-  })
-  console.log(`Configured OMS portal administrator created: ${username}`)
-}
-
 async function start() {
   if (
     process.env.NODE_ENV === 'production'
@@ -3439,7 +3376,7 @@ async function start() {
   ) {
     throw new Error('OMS_INTERNAL_TOKEN must be configured with at least 32 bytes in production')
   }
-  await ensureConfiguredPortalAdmin()
+  await ensureConfiguredPortalAdmin(prisma)
   const listenHost = String(process.env.LISTEN_HOST || '127.0.0.1').trim() || '127.0.0.1'
   app.listen(PORT, listenHost, () => {
     console.log(`OMS API listening on http://${listenHost}:${PORT}`)

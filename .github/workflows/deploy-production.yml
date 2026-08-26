@@ -78,6 +78,23 @@ jobs:
           cd /opt/system/oms
           docker compose up -d --no-deps oms-api oms-web
 
+          load_env_file() {
+            if [ -f "$1" ]; then
+              set -a
+              # shellcheck disable=SC1090
+              . "$1"
+              set +a
+            fi
+          }
+          load_env_file /opt/system/.env
+          load_env_file /opt/system/oms/.env
+          bootstrap_user="${OMS_BOOTSTRAP_ADMIN_USERNAME:-omsadmin}"
+          bootstrap_pass="${OMS_BOOTSTRAP_ADMIN_PASSWORD:-DevAdmin123!}"
+          docker compose exec -T \
+            -e "OMS_BOOTSTRAP_ADMIN_USERNAME=${bootstrap_user}" \
+            -e "OMS_BOOTSTRAP_ADMIN_PASSWORD=${bootstrap_pass}" \
+            oms-api npx tsx server/reset-bootstrap-admin-cli.ts
+
           cd /opt/system/erp
           docker rm -f takealot-monitor >/dev/null 2>&1 || true
           docker compose up -d --no-deps erp-api erp-web

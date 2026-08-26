@@ -10,6 +10,7 @@
     "build": "tsc && vite build",
     "test:auth": "tsx --test server/auth.test.ts",
     "verify:auth": "tsx scripts/verify-oms-auth.ts",
+    "reset:bootstrap-admin": "tsx server/reset-bootstrap-admin-cli.ts",
     "build:single": "tsc && vite build --mode singlefile && node scripts/copy-single-html.mjs",
     "preview": "vite preview",
     "docs": "npx --yes serve docs -l 8080",
