@@ -27,6 +27,10 @@ export const BILLING_CHARGE_TYPE_LABELS: Record<string, string> = {
   return_restock: '退件上架费',
   return_relabel: '退件换标费',
   return_extra: '退件附加费',
+  inbound_receipt: '入库收货费',
+  inbound_carton: '入库箱处理费',
+  inbound_qc: '入库质检费',
+  inbound_putaway: '入库上架费',
   other: '其他工费',
 }
 
@@ -230,9 +234,27 @@ export class BillingService {
     const suffix = data.chargeNo || await this.nextChargeSuffix(Number(data.customerId), db)
     const chargeNo = this.formatChargeNo(customer.customerCode, suffix)
     const chargeDate = data.chargeDate || new Date().toISOString().slice(0, 10)
+    if (data.idempotencyKey) {
+      const duplicate: any[] = await db.$queryRawUnsafe(
+        'SELECT id, charge_no, charge_type, amount, description, biz_ref FROM billing_charge WHERE idempotency_key = ? LIMIT 1',
+        data.idempotencyKey,
+      )
+      if (duplicate[0]) {
+        return {
+          id: Number(duplicate[0].id),
+          chargeNo: String(duplicate[0].charge_no),
+          chargeType: String(duplicate[0].charge_type),
+          amount: Number(duplicate[0].amount),
+          description: String(duplicate[0].description || ''),
+          bizRef: duplicate[0].biz_ref || null,
+          duplicate: true,
+          ok: true,
+        }
+      }
+    }
     await db.$executeRawUnsafe(
-      `INSERT INTO billing_charge (charge_no, customer_id, charge_type, source, description, amount, quantity, unit_price, charge_date, biz_ref, source_ref, warehouse_code, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+      `INSERT INTO billing_charge (charge_no, customer_id, charge_type, source, description, amount, quantity, unit_price, charge_date, biz_ref, source_ref, warehouse_code, status, operation_type, idempotency_key, calc_basis, rule_snapshot, occurred_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)`,
       chargeNo,
       BigInt(data.customerId),
       data.chargeType || 'other',
@@ -245,6 +267,11 @@ export class BillingService {
       data.bizRef || null,
       data.sourceRef || '手工录入',
       data.warehouseCode || 'WMS-JHB-01',
+      data.operationType || null,
+      data.idempotencyKey || null,
+      data.calcBasis ? JSON.stringify(data.calcBasis) : null,
+      data.ruleSnapshot ? JSON.stringify(data.ruleSnapshot) : null,
+      data.occurredAt ? new Date(data.occurredAt) : new Date(),
     )
     const rows: { id: bigint; charge_type: string; amount: unknown; description: string; biz_ref: string | null }[] =
       await db.$queryRawUnsafe(

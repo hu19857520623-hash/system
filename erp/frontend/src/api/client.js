@@ -521,6 +521,24 @@ export const profitApi = {
   detail: (params) => api.get('/profit/detail', params),
 }
 
+export const managementLoopApi = {
+  reportSummary: (params) => api.get('/management-loop/reports/summary', params),
+  inboundReport: (params) => api.get('/management-loop/reports/inbound', params),
+  outboundReport: (params) => api.get('/management-loop/reports/outbound', params),
+  feeRules: () => api.get('/management-loop/inbound-fee-rules'),
+  feePreview: (inboundId) => api.get(`/management-loop/inbound-fees/${inboundId}/preview`),
+  recalculateInboundFee: (inboundId) => api.post(`/management-loop/inbound-fees/${inboundId}/recalculate`, {}),
+  createFeeRule: (data) => api.post('/management-loop/inbound-fee-rules', data),
+  updateFeeRule: (id, data) => api.patch(`/management-loop/inbound-fee-rules/${id}`, data),
+  stocktakes: (params) => api.get('/management-loop/stocktakes', params),
+  stocktake: (id) => api.get(`/management-loop/stocktakes/${id}`),
+  createStocktake: (data) => api.post('/management-loop/stocktakes', data),
+  countStocktake: (id, data) => api.post(`/management-loop/stocktakes/${id}/count`, data),
+  approveStocktake: (id) => api.post(`/management-loop/stocktakes/${id}/approve`, {}),
+  capacity: (params) => api.get('/management-loop/capacity', params),
+  refreshCapacityAlerts: (data) => api.post('/management-loop/capacity/refresh-alerts', data),
+}
+
 export const operatingLedgerApi = {
   list: (params) => api.get('/operating-ledger', params),
   create: (data) => api.post('/operating-ledger', data),

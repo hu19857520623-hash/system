@@ -22,10 +22,18 @@ pda/preview/index.html
 
 真机：用 USB 打开「开发者选项 → USB 调试」，选这台 PDA 再 Run。
 
-登录页服务器：
+服务器地址不在普通仓管登录页显示。生产安装包必须在构建时预置线上 ERP API 地址：
+
+```powershell
+.\gradlew.bat assembleRelease -PPDA_API_BASE_URL=https://erp.example.com/api
+```
+
+地址写入安装包后，首次安装即可登录；登录后只有具备 `inbound.handle_exception`（异常放行）主管权限的账号能在「设置 → 主管设置」中查看和修改服务器。
+
+开发环境默认服务器：
 
 - 模拟器：`http://10.0.2.2:3000/api`
-- 真机：电脑局域网地址，例如 `http://192.168.1.20:3000/api`  
+- 真机调试构建参数可使用电脑局域网地址，例如 `-PPDA_API_BASE_URL=http://192.168.1.20:3000/api`
   同时把 ERP `.env` 的 `LISTEN_HOST` 改成 `0.0.0.0` 后重启后端。
 
 账号与 Web ERP 相同，使用「仓库」角色。

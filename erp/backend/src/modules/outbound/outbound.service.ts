@@ -408,6 +408,12 @@ export class OutboundService {
         oldBarcode: i.oldBarcode || '',
         newBarcode: i.newBarcode || '',
         relabelScannedAt: i.relabelScannedAt ? this.fmtTime(i.relabelScannedAt) : null,
+        pickAllocations: (i.pickAllocations || []).map((a: any) => ({
+          id: Number(a.id),
+          locationCode: a.locationCode,
+          qty: a.qty,
+          status: a.status,
+        })),
       })),
       totalQty: (r.items || []).reduce((s: number, i: any) => s + i.qty, 0),
       skuSummary: summarizeSkus(r.items || []),
@@ -508,7 +514,10 @@ export class OutboundService {
   async detail(id: number) {
     const row = await this.prisma.outboundOrder.findUnique({
       where: { id: BigInt(id) },
-      include: { items: true, attachments: { orderBy: { id: 'asc' } } },
+      include: {
+        items: { include: { pickAllocations: { orderBy: { id: 'asc' } } } },
+        attachments: { orderBy: { id: 'asc' } },
+      },
     })
     if (!row) throw new NotFoundException('出库单不存在')
     const [item] = await this.enrichOrders([row])
@@ -1039,11 +1048,15 @@ export class OutboundService {
       orderBy: [{ locationCode: 'asc' }],
     }).then((locs) => {
       const suggestions: { locationCode: string; pickQty: number; available: number }[] = []
-      let remaining = needQty
+      const byLocation = new Map<string, number>()
       for (const loc of locs) {
+        byLocation.set(loc.locationCode, (byLocation.get(loc.locationCode) || 0) + loc.qty)
+      }
+      let remaining = needQty
+      for (const [locationCode, available] of byLocation) {
         if (remaining <= 0) break
-        const pickQty = Math.min(remaining, loc.qty)
-        suggestions.push({ locationCode: loc.locationCode, pickQty, available: loc.qty })
+        const pickQty = Math.min(remaining, available)
+        suggestions.push({ locationCode, pickQty, available })
         remaining -= pickQty
       }
       const primary = suggestions[0]?.locationCode || ''
@@ -1162,7 +1175,12 @@ th{background:#f5f5f5}
   async pick(
     id: number,
     payload: {
-      items: { id: number; locationCode?: string; pickedQty?: number }[]
+      items: {
+        id: number
+        locationCode?: string
+        pickedQty?: number
+        allocations?: { locationCode: string; qty: number }[]
+      }[]
       pickSource?: PickSource
     },
     operatorId?: number,
@@ -1183,48 +1201,110 @@ th{background:#f5f5f5}
     const pickSource: PickSource = payload.pickSource === 'pda' ? 'pda' : 'pick_list'
     if (!payload.items?.length) throw new BadRequestException('请提交拣货明细')
     const lineMap = new Map(order.items.map((i) => [Number(i.id), i]))
-    const resolvedLines: { id: number; locationCode: string; pickedQty: number }[] = []
+    const submittedIds = new Set<number>()
+    const resolvedLines: {
+      id: number
+      item: (typeof order.items)[number]
+      allocations: { locationCode: string; qty: number }[]
+    }[] = []
     for (const line of payload.items || []) {
-      const item = lineMap.get(Number(line.id))
+      const lineId = Number(line.id)
+      const item = lineMap.get(lineId)
       if (!item) throw new BadRequestException(`明细 ${line.id} 不存在`)
-      const pickQty = line.pickedQty ?? item.qty
-      if (pickQty <= 0 || pickQty > item.qty) throw new BadRequestException(`${item.sku} 拣货数量无效`)
+      if (submittedIds.has(lineId)) throw new BadRequestException(`明细 ${line.id} 重复提交`)
+      submittedIds.add(lineId)
 
-      let locationCode = line.locationCode?.trim() || item.locationCode?.trim() || ''
-      if (!locationCode) {
-        const plan = await this.suggestPickLocations(order.warehouseCode, item.sku, pickQty)
-        locationCode = plan.primary
+      let requested = Array.isArray(line.allocations)
+        ? line.allocations
+        : line.locationCode?.trim()
+          ? [{ locationCode: line.locationCode, qty: line.pickedQty ?? item.qty }]
+          : []
+      if (!requested.length) {
+        const plan = await this.suggestPickLocations(order.warehouseCode, item.sku, item.qty)
+        requested = plan.suggestions.map((s) => ({ locationCode: s.locationCode, qty: s.pickQty }))
       }
-      if (!locationCode) {
+      const aggregated = new Map<string, number>()
+      for (const allocation of requested) {
+        const locationCode = allocation.locationCode?.trim().toUpperCase()
+        const qty = Number(allocation.qty)
+        if (!locationCode || !Number.isInteger(qty) || qty <= 0) {
+          throw new BadRequestException(`${item.sku} 的库位或拣货数量无效`)
+        }
+        aggregated.set(locationCode, (aggregated.get(locationCode) || 0) + qty)
+      }
+      const allocations = [...aggregated].map(([locationCode, qty]) => ({ locationCode, qty }))
+      const pickedQty = allocations.reduce((sum, allocation) => sum + allocation.qty, 0)
+      if (!allocations.length) {
         throw new BadRequestException(`${item.sku} 无可用库位，请先完成上架或库存分配`)
       }
-
-      const loc = await this.prisma.warehouseLocation.findFirst({
-        where: { warehouseCode: order.warehouseCode, locationCode },
-      })
-      if (!loc) throw new BadRequestException(`库位 ${locationCode} 不存在`)
-
-      const invLoc = await this.prisma.inventoryLocation.findFirst({
-        where: { locationId: loc.id, sku: item.sku },
-      })
-      if (!invLoc || invLoc.qty < pickQty) {
-        throw new BadRequestException(`${item.sku} 在库位 ${locationCode} 库存不足（可用 ${invLoc?.qty ?? 0}，需 ${pickQty}）`)
+      if (pickedQty !== item.qty) {
+        throw new BadRequestException(
+          `${item.sku} 必须完整拣货（应拣 ${item.qty}，实拣 ${pickedQty}）；短拣请标记库存短缺异常`,
+        )
       }
-      resolvedLines.push({ id: Number(line.id), locationCode, pickedQty: pickQty })
+      resolvedLines.push({ id: lineId, item, allocations })
+    }
+    if (submittedIds.size !== order.items.length) {
+      const missing = order.items.filter((item) => !submittedIds.has(Number(item.id))).map((item) => item.sku)
+      throw new BadRequestException(`拣货明细不完整，缺少：${missing.join('、')}`)
     }
 
     await this.prisma.$transaction(async (tx) => {
       for (const line of resolvedLines) {
+        for (const allocation of line.allocations) {
+          const loc = await tx.warehouseLocation.findFirst({
+            where: { warehouseCode: order.warehouseCode, locationCode: allocation.locationCode },
+          })
+          if (!loc) throw new BadRequestException(`库位 ${allocation.locationCode} 不存在`)
+
+          const stocks = await tx.inventoryLocation.findMany({
+            where: { locationId: loc.id, sku: line.item.sku, qty: { gt: 0 } },
+            orderBy: { id: 'asc' },
+          })
+          let remaining = allocation.qty
+          const available = stocks.reduce((sum, stock) => sum + stock.qty, 0)
+          if (available < allocation.qty) {
+            throw new BadRequestException(
+              `${line.item.sku} 在库位 ${allocation.locationCode} 库存不足（可用 ${available}，需 ${allocation.qty}）`,
+            )
+          }
+          for (const stock of stocks) {
+            if (remaining <= 0) break
+            const deductQty = Math.min(remaining, stock.qty)
+            const deducted = await tx.inventoryLocation.updateMany({
+              where: { id: stock.id, qty: { gte: deductQty } },
+              data: { qty: { decrement: deductQty } },
+            })
+            if (deducted.count !== 1) {
+              throw new BadRequestException(`${line.item.sku} 库位库存已变化，请刷新拣货任务后重试`)
+            }
+            await tx.outboundPickAllocation.create({
+              data: {
+                outboundId: order.id,
+                outboundItemId: line.item.id,
+                productId: line.item.productId,
+                sku: line.item.sku,
+                warehouseCode: order.warehouseCode,
+                locationId: loc.id,
+                inventoryLocationId: stock.id,
+                locationCode: allocation.locationCode,
+                qty: deductQty,
+                operatorId: operatorId ? BigInt(operatorId) : null,
+              },
+            })
+            remaining -= deductQty
+          }
+        }
         await tx.outboundOrderItem.update({
           where: { id: BigInt(line.id) },
           data: {
-            locationCode: line.locationCode,
-            pickedQty: line.pickedQty,
+            locationCode: line.allocations[0].locationCode,
+            pickedQty: line.item.qty,
           },
         })
       }
-      await tx.outboundOrder.update({
-        where: { id: BigInt(id) },
+      const transitioned = await tx.outboundOrder.updateMany({
+        where: { id: BigInt(id), status: 'picking' },
         data: {
           status: 'picked',
           pickedAt: new Date(),
@@ -1233,6 +1313,22 @@ th{background:#f5f5f5}
           pickingStartedAt: order.pickingStartedAt || new Date(),
         },
       })
+      if (transitioned.count !== 1) {
+        throw new BadRequestException('出库单状态已变化，请刷新后重试')
+      }
+    })
+    await this.opLog.log({
+      operatorId,
+      module: 'outbound',
+      action: 'pick',
+      targetType: 'outbound_order',
+      targetId: order.outboundNo,
+      detail: {
+        pickSource,
+        allocations: resolvedLines.flatMap((line) =>
+          line.allocations.map((allocation) => ({ sku: line.item.sku, ...allocation })),
+        ),
+      },
     })
     return {
       id,
@@ -1401,7 +1497,7 @@ th{background:#f5f5f5}
   async ship(id: number, operatorId?: number, payload?: { trackingNo?: string; carrier?: string; logisticsProduct?: string }) {
     const order = await this.prisma.outboundOrder.findUnique({
       where: { id: BigInt(id) },
-      include: { items: true },
+      include: { items: true, pickAllocations: true },
     })
     if (!order) throw new NotFoundException('出库单不存在')
     if (order.status === 'exception') throw new BadRequestException('异常单已暂停流程，请先解除异常')
@@ -1426,7 +1522,8 @@ th{background:#f5f5f5}
           },
         })
 
-        if (item.locationCode) {
+        // 新拣货流程已在确认拣货时扣减库位库存；这里只为历史订单保留兼容逻辑。
+        if (!order.pickAllocations.length && item.locationCode) {
           const loc = await tx.warehouseLocation.findFirst({
             where: { warehouseCode: order.warehouseCode, locationCode: item.locationCode },
           })
@@ -1464,8 +1561,15 @@ th{background:#f5f5f5}
         })
       }
 
-      await tx.outboundOrder.update({
-        where: { id: BigInt(id) },
+      if (order.pickAllocations.length) {
+        await tx.outboundPickAllocation.updateMany({
+          where: { outboundId: order.id, status: 'picked' },
+          data: { status: 'shipped', shippedAt: new Date() },
+        })
+      }
+
+      const transitioned = await tx.outboundOrder.updateMany({
+        where: { id: BigInt(id), status: 'packed' },
         data: {
           status: 'shipped',
           shippedAt: new Date(),
@@ -1474,6 +1578,9 @@ th{background:#f5f5f5}
           logisticsProduct: payload?.logisticsProduct?.trim() || order.logisticsProduct || undefined,
         },
       })
+      if (transitioned.count !== 1) {
+        throw new BadRequestException('出库单状态已变化，发运操作已回滚，请刷新后重试')
+      }
     })
 
     const shipCharges: Array<{
@@ -1602,7 +1709,7 @@ th{background:#f5f5f5}
   async cancel(id: number) {
     const order = await this.prisma.outboundOrder.findUnique({
       where: { id: BigInt(id) },
-      include: { items: true },
+      include: { items: true, pickAllocations: true },
     })
     if (!order) throw new NotFoundException('出库单不存在')
     if (order.status === 'shipped' || order.status === 'delivered') throw new BadRequestException('已发运不可取消')
@@ -1650,13 +1757,50 @@ th{background:#f5f5f5}
           }
         }
       }
+      // 拣货确认时已扣减库位库存；取消未发运订单时按实际拣货分配原路回补。
+      for (const allocation of order.pickAllocations.filter((row) => row.status === 'picked')) {
+        const existing = await tx.inventoryLocation.findFirst({
+          where: {
+            id: allocation.inventoryLocationId,
+          },
+        })
+        if (existing) {
+          await tx.inventoryLocation.update({
+            where: { id: existing.id },
+            data: { qty: { increment: allocation.qty } },
+          })
+        } else {
+          await tx.inventoryLocation.create({
+            data: {
+              productId: allocation.productId,
+              sku: allocation.sku,
+              warehouseCode: allocation.warehouseCode,
+              locationId: allocation.locationId,
+              locationCode: allocation.locationCode,
+              qty: allocation.qty,
+            },
+          })
+        }
+      }
+      if (order.pickAllocations.length) {
+        await tx.outboundPickAllocation.updateMany({
+          where: { outboundId: order.id, status: 'picked' },
+          data: { status: 'cancelled', cancelledAt: new Date() },
+        })
+      }
       if (preDeductTotal > 0 && order.customerId) {
         await tx.customer.update({
           where: { id: order.customerId },
           data: { balance: { increment: preDeductTotal } },
         })
       }
-      await tx.outboundOrder.update({ where: { id: BigInt(id) }, data: { status: 'cancelled' } })
+      const transitioned = await tx.outboundOrder.updateMany({
+        where: { id: BigInt(id), status: order.status },
+        data: { status: 'cancelled' },
+      })
+      if (transitioned.count !== 1) {
+        throw new BadRequestException('出库单状态已变化，取消操作已回滚，请刷新后重试')
+      }
     })
     await this.pushOutboundStatusToOms(order.outboundNo)
     if (preDeductTotal > 0) {

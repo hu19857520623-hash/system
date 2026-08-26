@@ -628,6 +628,7 @@ model OutboundOrder {
   updatedAt          DateTime           @updatedAt @map("updated_at")
   items              OutboundOrderItem[]
   attachments        OutboundAttachment[]
+  pickAllocations    OutboundPickAllocation[]
 
   @@index([warehouseCode], map: "idx_ob_wh")
   @@index([status], map: "idx_ob_status")
@@ -648,8 +649,35 @@ model OutboundOrderItem {
   newBarcode   String?       @map("new_barcode") @db.VarChar(50)
   relabelScannedAt DateTime? @map("relabel_scanned_at")
   order        OutboundOrder @relation(fields: [outboundId], references: [id], onDelete: Cascade)
+  pickAllocations OutboundPickAllocation[]
 
   @@map("outbound_order_item")
+}
+
+model OutboundPickAllocation {
+  id             BigInt            @id @default(autoincrement())
+  outboundId     BigInt            @map("outbound_id")
+  outboundItemId BigInt            @map("outbound_item_id")
+  productId      BigInt            @map("product_id")
+  sku            String            @db.VarChar(30)
+  warehouseCode  String            @map("warehouse_code") @db.VarChar(30)
+  locationId     BigInt            @map("location_id")
+  inventoryLocationId BigInt       @map("inventory_location_id")
+  locationCode   String            @map("location_code") @db.VarChar(30)
+  qty            Int
+  status         String            @default("picked") @db.VarChar(20)
+  operatorId     BigInt?           @map("operator_id")
+  pickedAt       DateTime          @default(now()) @map("picked_at")
+  shippedAt      DateTime?         @map("shipped_at")
+  cancelledAt    DateTime?         @map("cancelled_at")
+  order          OutboundOrder     @relation(fields: [outboundId], references: [id], onDelete: Cascade)
+  item           OutboundOrderItem @relation(fields: [outboundItemId], references: [id], onDelete: Cascade)
+
+  @@index([outboundId, status], map: "idx_pick_alloc_order_status")
+  @@index([outboundItemId], map: "idx_pick_alloc_item")
+  @@index([locationId, status], map: "idx_pick_alloc_location_status")
+  @@index([inventoryLocationId], map: "idx_pick_alloc_inventory_location")
+  @@map("outbound_pick_allocation")
 }
 
 model OutboundAttachment {
@@ -970,11 +998,99 @@ model BillingCharge {
   warehouseCode String?   @map("warehouse_code") @db.VarChar(30)
   status        String    @default("pending") @db.VarChar(20)
   billingId     BigInt?   @map("billing_id")
+  operationType String?   @map("operation_type") @db.VarChar(30)
+  idempotencyKey String?  @unique @map("idempotency_key") @db.VarChar(160)
+  calcBasis     Json?     @map("calc_basis")
+  ruleSnapshot  Json?     @map("rule_snapshot")
+  reversalOf    BigInt?   @map("reversal_of")
+  occurredAt    DateTime? @map("occurred_at")
   createdAt     DateTime  @default(now()) @map("created_at")
 
   @@index([customerId, chargeDate, id], map: "ix_billing_charge_customer_date")
   @@index([status, chargeDate, id], map: "ix_billing_charge_status_date")
   @@map("billing_charge")
+}
+
+model InboundFeeRule {
+  id                  BigInt    @id @default(autoincrement())
+  ruleName            String    @map("rule_name") @db.VarChar(100)
+  customerId          BigInt?   @map("customer_id")
+  warehouseCode       String?   @map("warehouse_code") @db.VarChar(30)
+  receiveUnitPrice    Decimal   @default(0) @map("receive_unit_price") @db.Decimal(12, 4)
+  receiveCartonPrice  Decimal   @default(0) @map("receive_carton_price") @db.Decimal(12, 4)
+  qcUnitPrice         Decimal   @default(0) @map("qc_unit_price") @db.Decimal(12, 4)
+  putawayUnitPrice    Decimal   @default(0) @map("putaway_unit_price") @db.Decimal(12, 4)
+  enabled             Boolean   @default(true)
+  effectiveFrom       DateTime? @map("effective_from") @db.Date
+  effectiveTo         DateTime? @map("effective_to") @db.Date
+  createdBy           BigInt?   @map("created_by")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  @@index([customerId, warehouseCode, enabled], map: "idx_inbound_fee_rule_scope")
+  @@map("inbound_fee_rule")
+}
+
+model StocktakePlan {
+  id            BigInt          @id @default(autoincrement())
+  stocktakeNo   String          @unique @map("stocktake_no") @db.VarChar(30)
+  warehouseCode String          @map("warehouse_code") @db.VarChar(30)
+  mode          String          @default("location") @db.VarChar(20)
+  status        String          @default("draft") @db.VarChar(20)
+  blindCount    Boolean         @default(true) @map("blind_count")
+  scopeJson     Json?           @map("scope_json")
+  remark        String?         @db.VarChar(500)
+  createdBy     BigInt?         @map("created_by")
+  approvedBy    BigInt?         @map("approved_by")
+  startedAt     DateTime?       @map("started_at")
+  completedAt   DateTime?       @map("completed_at")
+  createdAt     DateTime        @default(now()) @map("created_at")
+  updatedAt     DateTime        @updatedAt @map("updated_at")
+  lines         StocktakeLine[]
+
+  @@index([warehouseCode, status, createdAt], map: "idx_stocktake_plan_wh_status")
+  @@map("stocktake_plan")
+}
+
+model StocktakeLine {
+  id             BigInt        @id @default(autoincrement())
+  planId         BigInt        @map("plan_id")
+  productId      BigInt        @map("product_id")
+  sku            String        @db.VarChar(30)
+  locationId     BigInt        @map("location_id")
+  locationCode   String        @map("location_code") @db.VarChar(30)
+  bookQty        Int           @map("book_qty")
+  firstQty       Int?          @map("first_qty")
+  secondQty      Int?          @map("second_qty")
+  finalQty       Int?          @map("final_qty")
+  varianceQty    Int?          @map("variance_qty")
+  status         String        @default("pending") @db.VarChar(20)
+  firstCountedBy BigInt?       @map("first_counted_by")
+  secondCountedBy BigInt?      @map("second_counted_by")
+  countedAt      DateTime?     @map("counted_at")
+  recountedAt    DateTime?     @map("recounted_at")
+  plan           StocktakePlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  @@unique([planId, productId, locationId], map: "uk_stocktake_line_scope")
+  @@index([planId, status], map: "idx_stocktake_line_status")
+  @@map("stocktake_line")
+}
+
+model CapacityAlert {
+  id            BigInt   @id @default(autoincrement())
+  warehouseCode String   @map("warehouse_code") @db.VarChar(30)
+  locationId    BigInt?  @map("location_id")
+  locationCode  String?  @map("location_code") @db.VarChar(30)
+  alertType     String   @map("alert_type") @db.VarChar(30)
+  alertLevel    String   @map("alert_level") @db.VarChar(20)
+  usageRate     Decimal? @map("usage_rate") @db.Decimal(8, 4)
+  message       String   @db.VarChar(500)
+  status        String   @default("open") @db.VarChar(20)
+  resolvedAt    DateTime? @map("resolved_at")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@index([warehouseCode, status, createdAt], map: "idx_capacity_alert_wh_status")
+  @@map("capacity_alert")
 }
 
 model CustomerRecharge {

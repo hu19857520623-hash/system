@@ -1,5 +1,10 @@
 package com.takealot.pda.ui.home
 
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -18,6 +23,8 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -25,16 +32,20 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.takealot.pda.PdaApp
 import com.takealot.pda.data.Warehouse
 import com.takealot.pda.data.AppLanguage
+import com.takealot.pda.scan.ScanBus
 import com.takealot.pda.ui.i18n.tr
 import com.takealot.pda.ui.theme.PdaAccent
 import com.takealot.pda.ui.theme.PdaMuted
 import com.takealot.pda.ui.theme.PdaInbound
+import com.takealot.pda.ui.theme.PdaErr
+import com.takealot.pda.ui.theme.PdaOk
 import com.takealot.pda.ui.theme.PdaOutbound
 import com.takealot.pda.ui.theme.PdaSurface
 import com.takealot.pda.ui.theme.PdaSurface2
@@ -50,6 +61,8 @@ fun HomeScreen(onInbound: (String) -> Unit, onOutbound: (String) -> Unit, onSett
     var inboundTodo by remember { mutableStateOf(0) }
     var outboundTodo by remember { mutableStateOf(0) }
     var languageMenuOpen by remember { mutableStateOf(false) }
+    val networkOnline = rememberNetworkOnline()
+    val scannerReady by ScanBus.receiverActive.collectAsState()
 
     LaunchedEffect(Unit) {
         runCatching { api.warehouses("overseas") }.onSuccess { list ->
@@ -95,6 +108,19 @@ fun HomeScreen(onInbound: (String) -> Unit, onOutbound: (String) -> Unit, onSett
                 TextButton(onClick = onSettings) { Text(tr("settings"), color = PdaAccent) }
             }
         }
+        Column(
+            Modifier.fillMaxWidth().background(PdaSurface, RoundedCornerShape(12.dp)).border(1.dp, PdaMuted.copy(alpha = 0.25f), RoundedCornerShape(12.dp)).padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                StatusItem("仓库", whLabel, warehouseCode.isNotBlank(), Modifier.weight(1f))
+                StatusItem("账号", session.username.ifBlank { "—" }, session.username.isNotBlank(), Modifier.weight(1f))
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                StatusItem("网络", if (networkOnline) "已连接" else "已断开", networkOnline, Modifier.weight(1f))
+                StatusItem("扫码枪", if (scannerReady) "已就绪" else "未连接", scannerReady, Modifier.weight(1f))
+            }
+        }
         Column {
             Text(tr("work_warehouse"), color = PdaMuted, fontSize = 12.sp)
             Text(whLabel, color = PdaText, fontSize = 16.sp, modifier = Modifier.fillMaxWidth().background(PdaSurface, RoundedCornerShape(10.dp)).clickable { menuOpen = true }.padding(14.dp))
@@ -128,6 +154,41 @@ fun HomeScreen(onInbound: (String) -> Unit, onOutbound: (String) -> Unit, onSett
         Text("${tr("outbound")} · OUTBOUND", color = PdaOutbound, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 8.dp))
         WorkTile(tr("pick"), tr("pick_hint"), PdaOutbound, session.hasPerm("outbound.pick") && warehouseCode.isNotBlank(), warehouseCode.isBlank()) { onOutbound("pick") }
         WorkTile(tr("review"), tr("review_hint"), PdaOutbound, session.hasPerm("outbound.pack") && warehouseCode.isNotBlank(), warehouseCode.isBlank()) { onOutbound("review") }
+    }
+}
+
+@Composable
+private fun rememberNetworkOnline(): Boolean {
+    val context = LocalContext.current
+    val connectivity = remember(context) {
+        context.applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+    }
+    fun currentStatus(): Boolean {
+        val network = connectivity.activeNetwork ?: return false
+        val capabilities = connectivity.getNetworkCapabilities(network) ?: return false
+        return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+    }
+    var online by remember(connectivity) { mutableStateOf(currentStatus()) }
+    DisposableEffect(connectivity) {
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) { online = currentStatus() }
+            override fun onLost(network: Network) { online = currentStatus() }
+            override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                online = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            }
+        }
+        val request = NetworkRequest.Builder().addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET).build()
+        runCatching { connectivity.registerNetworkCallback(request, callback) }
+        onDispose { runCatching { connectivity.unregisterNetworkCallback(callback) } }
+    }
+    return online
+}
+
+@Composable
+private fun StatusItem(label: String, value: String, healthy: Boolean, modifier: Modifier = Modifier) {
+    Column(modifier.background(PdaSurface2, RoundedCornerShape(8.dp)).padding(horizontal = 10.dp, vertical = 8.dp)) {
+        Text(label, color = PdaMuted, fontSize = 11.sp)
+        Text(value, color = if (healthy) PdaOk else PdaErr, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
     }
 }
 

@@ -114,22 +114,33 @@ class OutboundViewModel : ViewModel() {
             if (mode == "review" && order?.statusKey != "reviewing") {
                 throw ErpException("请先确认开始复核")
             }
-            val line = lines.find { it.sku.equals(code, true) }
-            if (line != null) {
-                selectedSku = line.sku
-                val nextQty = if (mode == "pick") (line.scannedQty + 1).coerceAtMost(line.qty) else line.qty
-                lines = lines.map { if (it.id == line.id) it.copy(scannedQty = nextQty) else it }
-                feedback = Feedback(true, "${line.sku} $nextQty/${line.qty}"); scan = ""; saveProgress(); journal.acknowledge(recordId, feedback?.message); return
-            }
-            if (mode == "pick" && selectedSku != null) {
-                val selected = lines.firstOrNull { it.sku == selectedSku } ?: throw ErpException("请先选择拣货 SKU")
-                val location = code.trim().uppercase()
-                val suggested = locationSuggestions[selected.id].orEmpty()
-                if (suggested.isNotEmpty() && location !in suggested) {
-                    throw ErpException("$location 不是 ${selected.sku} 的建议库位（${suggested.joinToString("、")}）")
+            if (mode == "pick") {
+                val normalized = code.trim().uppercase()
+                val locationTask = lines.firstOrNull { !it.done && it.locationCode.uppercase() == normalized }
+                if (locationTask != null) {
+                    selectedSku = locationTask.taskKey
+                    feedback = Feedback(true, "库位 ${locationTask.locationCode}，请扫 ${locationTask.sku}")
+                    scan = ""; saveProgress(); journal.acknowledge(recordId, feedback?.message); return
                 }
-                lines = lines.map { if (it.sku == selectedSku) it.copy(locationCode = location) else it }
-                feedback = Feedback(true, "库位 $code"); scan = ""; saveProgress(); journal.acknowledge(recordId, feedback?.message); return
+                val selected = lines.firstOrNull { it.taskKey == selectedSku }
+                if (selected != null && selected.sku.equals(code, true)) {
+                    val nextQty = (selected.scannedQty + 1).coerceAtMost(selected.qty)
+                    lines = lines.map { if (it.taskKey == selected.taskKey) it.copy(scannedQty = nextQty) else it }
+                    feedback = Feedback(true, "${selected.locationCode} · ${selected.sku} $nextQty/${selected.qty}")
+                    scan = ""; saveProgress(); journal.acknowledge(recordId, feedback?.message); return
+                }
+                val skuTask = lines.firstOrNull { !it.done && it.sku.equals(code, true) }
+                if (skuTask != null) {
+                    throw ErpException("请先扫描库位 ${skuTask.locationCode}，再扫描 ${skuTask.sku}")
+                }
+            } else {
+                val line = lines.find { it.sku.equals(code, true) }
+                if (line != null) {
+                    selectedSku = line.taskKey
+                    lines = lines.map { if (it.taskKey == line.taskKey) it.copy(scannedQty = line.qty) else it }
+                    feedback = Feedback(true, "${line.sku} ${line.qty}/${line.qty}")
+                    scan = ""; saveProgress(); journal.acknowledge(recordId, feedback?.message); return
+                }
             }
             openByCode(code); scan = ""
             journal.acknowledge(recordId, feedback?.message)
@@ -170,10 +181,18 @@ class OutboundViewModel : ViewModel() {
             if (detail.statusKey != "picking") throw ErpException("当前状态「${outboundStatusLabel(detail.statusKey)}」不可拣货")
             nextOrder = detail
             val suggestions = api.pickSuggestions(id).itemList
-            locationSuggestions = suggestions.associate { row -> row.id to row.suggestions.orEmpty().mapNotNull { it.locationCode?.trim()?.uppercase() } }
-            nextLines = suggestions.map {
-                LocalPickLine(it.id, it.sku.orEmpty(), it.productName.orEmpty(), it.qty, it.locationCode.orEmpty(), 0)
+            val shortages = suggestions.filter { it.uncovered > 0 }
+            if (shortages.isNotEmpty()) {
+                throw ErpException("库位库存不足：${shortages.joinToString("、") { "${it.sku} 缺 ${it.uncovered}" }}；请标记库存短缺异常")
             }
+            locationSuggestions = suggestions.associate { row -> row.id to row.suggestions.orEmpty().mapNotNull { it.locationCode?.trim()?.uppercase() } }
+            nextLines = suggestions.flatMap { row ->
+                row.suggestions.orEmpty().filter { it.pickQty > 0 }.map { allocation ->
+                    val location = allocation.locationCode.orEmpty().trim().uppercase()
+                    LocalPickLine(row.id, row.sku.orEmpty(), row.productName.orEmpty(), allocation.pickQty, location, 0, "${row.id}@$location")
+                }
+            }
+            if (nextLines.isEmpty()) throw ErpException("暂无可执行的库位拣货任务，请先完成上架")
         } else {
             nextOrder = when (detail.statusKey) {
                 "picked" -> detail
@@ -182,17 +201,18 @@ class OutboundViewModel : ViewModel() {
             }
             if (nextOrder.omsPreDeduct != null) feedback = Feedback(false, "OMS 单需在电脑端录入外箱尺寸后再复核")
             nextLines = nextOrder.itemList.map {
-                LocalPickLine(it.id, it.sku.orEmpty(), it.productName.orEmpty(), if (it.pickedQty > 0) it.pickedQty else it.qty, it.locationCode.orEmpty(), 0)
+                LocalPickLine(it.id, it.sku.orEmpty(), it.productName.orEmpty(), if (it.pickedQty > 0) it.pickedQty else it.qty, it.locationCode.orEmpty(), 0, "review@${it.id}")
             }
         }
         val saved = PdaApp.instance.workJournal.pickProgress(nextOrder.id, mode)
         order = nextOrder
         lines = nextLines.map { line ->
-            saved?.lines?.firstOrNull { it.id == line.id }?.let { progress ->
+            saved?.lines?.firstOrNull { it.taskKey == line.taskKey || (it.taskKey.isNullOrBlank() && it.id == line.id) }?.let { progress ->
                 line.copy(scannedQty = progress.scannedQty.coerceAtMost(line.qty), locationCode = progress.locationCode)
             } ?: line
         }
-        selectedSku = saved?.selectedSku ?: lines.firstOrNull()?.sku
+        // 每次打开/恢复任务都必须重新扫描实物库位，不能通过点选或历史选择绕过库位校验。
+        selectedSku = null
         PdaApp.instance.workJournal.activate(PdaResumeWork("outbound", mode, nextOrder.id, nextOrder.no))
     }
 
@@ -203,7 +223,7 @@ class OutboundViewModel : ViewModel() {
                 orderId = current.id,
                 mode = mode,
                 selectedSku = selectedSku,
-                lines = lines.map { PdaPickProgressLine(it.id, it.scannedQty, it.locationCode) },
+                lines = lines.map { PdaPickProgressLine(it.id, it.scannedQty, it.locationCode, it.taskKey) },
             ),
         )
     }
@@ -229,11 +249,17 @@ class OutboundViewModel : ViewModel() {
     fun submitPick() {
         val o = order ?: return
         if (lines.any { it.locationCode.isBlank() }) { feedback = Feedback(false, "存在未填库位的 SKU"); return }
-        if (lines.any { it.scannedQty <= 0 }) { feedback = Feedback(false, "请先扫描拣货 SKU"); return }
+        if (lines.any { !it.done }) { feedback = Feedback(false, "仍有未完成的库位任务；短拣请标记库存短缺异常"); return }
         viewModelScope.launch {
             busy = true
             try {
-                api.pick(o.id, lines.map { mapOf("id" to it.id, "locationCode" to it.locationCode, "pickedQty" to it.scannedQty.coerceAtMost(it.qty).coerceAtLeast(1)) })
+                val items = lines.groupBy { it.id }.map { (itemId, tasks) ->
+                    mapOf<String, Any?>(
+                        "id" to itemId,
+                        "allocations" to tasks.map { mapOf("locationCode" to it.locationCode, "qty" to it.qty) },
+                    )
+                }
+                api.pick(o.id, items)
                 feedback = Feedback(true, "${o.no} 拣货完成；下一步：进入复核"); order = null; lines = emptyList(); PdaApp.instance.workJournal.clearPickProgress(o.id, mode); PdaApp.instance.workJournal.clearActive("outbound"); loadList()
             } catch (e: Exception) { feedback = Feedback(false, e.message ?: "拣货失败") }
             finally { busy = false }
@@ -304,16 +330,15 @@ fun OutboundScreen(modeKey: String, onBack: () -> Unit, vm: OutboundViewModel = 
                     sku = line.sku,
                     progress = "${line.scannedQty}/${line.qty}",
                     done = line.done,
-                    selected = line.sku == vm.selectedSku,
-                    onClick = { vm.selectedSku = line.sku },
+                    selected = line.taskKey == vm.selectedSku,
+                    onClick = {},
                 ) {
                     Text(line.productName, color = PdaMuted, fontSize = 12.sp)
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("拣货库位", color = PdaMuted, fontSize = 11.sp)
                         Text(line.locationCode.ifBlank { "未填" }, color = PdaText, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                     }
-                    val suggested = vm.locationSuggestions[line.id].orEmpty()
-                    if (vm.mode == "pick" && suggested.isNotEmpty()) Text("建议 ${suggested.joinToString("、")}", color = PdaAccent, fontSize = 12.sp)
+                    if (vm.mode == "pick") Text("先扫库位，再扫 SKU；本库位应拣 ${line.qty}", color = PdaAccent, fontSize = 12.sp)
                 }
             }
             if (vm.mode == "pick") BigButton("提交拣货", onClick = { vm.submitPick() }, enabled = !vm.busy && vm.lines.isNotEmpty(), color = PdaOk)

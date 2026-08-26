@@ -34,7 +34,6 @@ import kotlinx.coroutines.launch
 fun LoginScreen(onLoggedIn: () -> Unit) {
     val session = PdaApp.instance.session
     val api = PdaApp.instance.api
-    var baseUrl by remember { mutableStateOf(session.baseUrl) }
     var username by remember { mutableStateOf(session.username) }
     var password by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
@@ -43,7 +42,6 @@ fun LoginScreen(onLoggedIn: () -> Unit) {
 
     fun submit() {
         if (busy) return
-        session.baseUrl = baseUrl
         busy = true
         feedback = null
         scope.launch {
@@ -63,11 +61,10 @@ fun LoginScreen(onLoggedIn: () -> Unit) {
     Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(tr("pda_title"), color = PdaText, fontSize = 28.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 28.dp))
         Text(tr("pda_subtitle"), color = PdaMuted, fontSize = 14.sp)
-        OutlinedTextField(value = baseUrl, onValueChange = { baseUrl = it }, label = { Text(tr("server")) }, singleLine = true, modifier = Modifier.padding(top = 12.dp), colors = fieldColors())
-        OutlinedTextField(value = username, onValueChange = { username = it }, label = { Text(tr("username")) }, singleLine = true, colors = fieldColors())
+        OutlinedTextField(value = username, onValueChange = { username = it }, label = { Text(tr("username")) }, singleLine = true, modifier = Modifier.padding(top = 12.dp), colors = fieldColors())
         OutlinedTextField(value = password, onValueChange = { password = it }, label = { Text(tr("password")) }, singleLine = true, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), colors = fieldColors())
         FeedbackBar(feedback)
         BigButton(if (busy) tr("logging_in") else tr("login"), onClick = { submit() }, enabled = !busy && username.isNotBlank() && password.isNotBlank())
-        Text("真机请填局域网地址，例如 http://192.168.1.20:3000/api", color = PdaMuted, fontSize = 12.sp)
+        Text("服务器由主管统一配置。如无法连接，请联系仓库主管。", color = PdaMuted, fontSize = 12.sp)
     }
 }

@@ -92,6 +92,27 @@ export class CreateBillingChargeDto {
   @IsString()
   @MaxLength(30)
   warehouseCode?: string
+
+  @IsOptional()
+  @Transform(trimOptional)
+  @IsString()
+  @MaxLength(30)
+  operationType?: string
+
+  @IsOptional()
+  @Transform(trimOptional)
+  @IsString()
+  @MaxLength(160)
+  idempotencyKey?: string
+
+  @IsOptional()
+  calcBasis?: Record<string, unknown>
+
+  @IsOptional()
+  ruleSnapshot?: Record<string, unknown>
+
+  @IsOptional()
+  occurredAt?: string
 }
 
 export class GenerateBillingDto {

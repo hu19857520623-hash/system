@@ -26,6 +26,7 @@ export const MIGRATION_ORDER = [
   'migrate_runtime_tables.sql',
   'migrate_operation_log.sql',
   'migrate_inbound_oms_customer.sql',
+  'migrate_inbound_received_carton_count.sql',
   'migrate_oms_portal_onboarding.sql',
   'migrate_portal_username.sql',
   'migrate_return_order.sql',
@@ -50,6 +51,8 @@ export const MIGRATION_ORDER = [
   'migrate_takealot_store_api_key.sql',
   'migrate_operating_ledger.sql',
   'migrate_outbound_phase1_efficiency.sql',
+  'migrate_wms_management_loop.sql',
+  'migrate_outbound_pick_allocation_p0.sql',
 ] as const
 
 /**

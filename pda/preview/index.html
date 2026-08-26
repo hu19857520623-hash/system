@@ -136,6 +136,19 @@
       font-size: 14px;
       margin: 10px 0;
     }
+    .device-status {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      padding: 10px;
+      margin: 12px 0;
+      background: var(--surface);
+      border: 1px solid rgba(139,148,158,.25);
+      border-radius: 12px;
+    }
+    .status-item { background: var(--surface2); border-radius: 8px; padding: 8px 10px; }
+    .status-item span { display:block; color:var(--muted); font-size:11px; }
+    .status-item b { display:block; color:var(--ok); font-size:13px; margin-top:2px; }
     .qty { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
     .qty button {
       flex: 1; height: 40px; border: 0; border-radius: 8px;
@@ -170,14 +183,12 @@
     <div id="login" class="screen">
       <h1 style="margin-top:24px">仓库 PDA</h1>
       <p class="sub">入库到仓 / 收货清点 / 上架 / 出库拣货</p>
-      <label>服务器</label>
-      <input value="http://10.0.2.2:3000/api" />
       <label>用户名</label>
       <input value="warehouse" />
       <label>密码</label>
       <input type="password" value="******" />
       <button class="btn" onclick="go('home')">登录</button>
-      <p class="sub" style="margin-top:12px">真机请填局域网地址，例如 http://192.168.1.20:3000/api</p>
+      <p class="sub" style="margin-top:12px">服务器由主管统一配置。如无法连接，请联系仓库主管。</p>
     </div>
 
     <div id="home" class="screen hidden">
@@ -187,6 +198,12 @@
           <p class="sub" style="margin:0">轻量仓库作业</p>
         </div>
         <button class="link" onclick="go('settings')">设置</button>
+      </div>
+      <div class="device-status">
+        <div class="status-item"><span>仓库</span><b>JHB1</b></div>
+        <div class="status-item"><span>账号</span><b>warehouse</b></div>
+        <div class="status-item"><span>网络</span><b>已连接</b></div>
+        <div class="status-item"><span>扫码枪</span><b>已就绪</b></div>
       </div>
       <label>作业仓库</label>
       <select><option>JHB1 约翰内斯堡 (JHB1)</option></select>
@@ -303,10 +320,12 @@
         <div class="kv"><span>账号</span>张仓管</div>
         <div class="kv"><span>用户名</span>warehouse</div>
       </div>
-      <label>服务器</label>
-      <input value="http://10.0.2.2:3000/api" />
-      <label>仓库编码</label>
-      <input value="JHB1" />
+      <div class="card">
+        <strong>主管设置</strong>
+        <label>服务器</label>
+        <input value="http://10.0.2.2:3000/api" />
+        <p class="sub" style="margin:8px 0 0">服务器配置仅主管可查看和修改。</p>
+      </div>
       <button class="btn" onclick="go('home')">保存</button>
       <button class="btn" style="background:#ff6b6b;color:#fff" onclick="go('login')">退出登录</button>
       <button class="btn ghost" onclick="go('home')">返回</button>

@@ -139,6 +139,15 @@ const NAV: NavGroup[] = [
     ],
   },
   {
+    label: '管理闭环',
+    channel: 'overseas_wms',
+    items: [
+      { id: 'wms_reports', name: '作业报表' },
+      { id: 'stocktake', name: '盘点管理' },
+      { id: 'capacity', name: '容量预警' },
+    ],
+  },
+  {
     label: '财务',
     items: [
       { id: 'customers', name: '客户列表' },
@@ -148,6 +157,7 @@ const NAV: NavGroup[] = [
       { id: 'cost', name: '成本台账' },
       { id: 'operating_ledger', name: '经营收支' },
       { id: 'profit_analysis', name: '利润/采购分析' },
+      { id: 'inbound_fees', name: '入库计费' },
     ],
   },
   {
@@ -183,6 +193,10 @@ const NAV_ROUTE_MAP: Record<string, string> = {
   pricing: '/pricing',
   inventory_query: '/inventory',
   sku_query: '/inventory/sku-query',
+  wms_reports: '/wms/reports',
+  stocktake: '/wms/stocktake',
+  capacity: '/wms/capacity',
+  inbound_fees: '/wms/inbound-fees',
   cost: '/cost',
   operating_ledger: '/operating-ledger',
   sync: '/sync',
@@ -385,6 +399,10 @@ export const useAppStore = defineStore('app', {
         pricing: 'pricing.view',
         inventory_query: 'inventory_query.view',
         sku_query: 'inventory_query.view',
+        wms_reports: 'wms_reports.view',
+        stocktake: 'stocktake.view',
+        capacity: 'capacity.view',
+        inbound_fees: 'inbound_fee.view',
         cost: 'cost.view',
         operating_ledger: 'operating_ledger.view',
         sync: 'sync.view',

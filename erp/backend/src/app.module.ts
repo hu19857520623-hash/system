@@ -37,6 +37,7 @@ import { OperationLogModule } from './modules/operation-log/operation-log.module
 import { ReturnsModule } from './modules/returns/returns.module'
 import { MingruiModule } from './modules/mingrui/mingrui.module'
 import { OperatingLedgerModule } from './modules/operating-ledger/operating-ledger.module'
+import { ManagementLoopModule } from './modules/management-loop/management-loop.module'
 import { validateEnvironment } from './config/environment'
 
 @Module({
@@ -73,6 +74,7 @@ import { validateEnvironment } from './config/environment'
     StoreMonitorModule,
     WarehouseLocationModule,
     OperationLogModule,
+    ManagementLoopModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },

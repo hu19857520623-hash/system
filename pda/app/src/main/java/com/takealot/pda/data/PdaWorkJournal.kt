@@ -36,6 +36,7 @@ data class PdaPickProgressLine(
     val id: Int,
     val scannedQty: Int,
     val locationCode: String,
+    val taskKey: String? = null,
 )
 
 data class PdaPickProgress(

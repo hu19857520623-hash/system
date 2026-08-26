@@ -1,6 +1,7 @@
 package com.takealot.pda.data
 
 import android.content.Context
+import com.takealot.pda.BuildConfig
 
 class SessionStore(context: Context) {
     private val prefs = context.getSharedPreferences("pda_session", Context.MODE_PRIVATE)
@@ -47,7 +48,7 @@ class SessionStore(context: Context) {
     }
 
     companion object {
-        const val DEFAULT_BASE = "http://10.0.2.2:3000/api"
+        val DEFAULT_BASE: String = BuildConfig.ERP_API_BASE_URL
         private const val KEY_BASE = "base_url"
         private const val KEY_TOKEN = "token"
         private const val KEY_USER_ID = "user_id"

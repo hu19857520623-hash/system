@@ -1,0 +1,25 @@
+-- 出库 P0：多库位拣货分配与库位库存即时扣减审计
+CREATE TABLE IF NOT EXISTS outbound_pick_allocation (
+  id BIGINT NOT NULL AUTO_INCREMENT,
+  outbound_id BIGINT NOT NULL,
+  outbound_item_id BIGINT NOT NULL,
+  product_id BIGINT NOT NULL,
+  sku VARCHAR(30) NOT NULL,
+  warehouse_code VARCHAR(30) NOT NULL,
+  location_id BIGINT NOT NULL,
+  inventory_location_id BIGINT NOT NULL,
+  location_code VARCHAR(30) NOT NULL,
+  qty INT NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'picked',
+  operator_id BIGINT NULL,
+  picked_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  shipped_at DATETIME NULL,
+  cancelled_at DATETIME NULL,
+  PRIMARY KEY (id),
+  KEY idx_pick_alloc_order_status (outbound_id, status),
+  KEY idx_pick_alloc_item (outbound_item_id),
+  KEY idx_pick_alloc_location_status (location_id, status),
+  KEY idx_pick_alloc_inventory_location (inventory_location_id),
+  CONSTRAINT fk_pick_alloc_order FOREIGN KEY (outbound_id) REFERENCES outbound_order(id) ON DELETE CASCADE,
+  CONSTRAINT fk_pick_alloc_item FOREIGN KEY (outbound_item_id) REFERENCES outbound_order_item(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

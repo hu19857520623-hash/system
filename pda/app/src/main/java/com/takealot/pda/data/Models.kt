@@ -146,6 +146,7 @@ data class LocalPickLine(
     val qty: Int,
     var locationCode: String,
     var scannedQty: Int = 0,
+    val taskKey: String = "$id@$locationCode",
 ) {
     val done get() = scannedQty >= qty
 }

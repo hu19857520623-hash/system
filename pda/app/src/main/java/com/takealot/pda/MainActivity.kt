@@ -20,6 +20,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.takealot.pda.scan.ScanBroadcastReceiver
+import com.takealot.pda.scan.ScanBus
 import com.takealot.pda.ui.home.HomeScreen
 import com.takealot.pda.ui.inbound.InboundScreen
 import com.takealot.pda.ui.login.LoginScreen
@@ -40,9 +41,11 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         ScanBroadcastReceiver.register(this, scanReceiver)
+        ScanBus.setReceiverActive(true)
     }
 
     override fun onPause() {
+        ScanBus.setReceiverActive(false)
         runCatching { unregisterReceiver(scanReceiver) }
         super.onPause()
     }

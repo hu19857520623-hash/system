@@ -8,8 +8,9 @@ import { PricingService } from '../pricing/pricing.service'
 import { notifyOms } from '../../common/oms-notify.util'
 import { fetchOmsInboundRows, mergeInboundPaginate } from './oms-inbound-bridge.util'
 import { buildInboundRemark, parseOmsInboundMeta, stripOmsSystemTags } from '../../common/oms-sync-meta.util'
-import { resolveBillingDimensions, type ProductDimensionFields } from '../../common/product-dimension.util'
+import { resolveBillingDimensions } from '../../common/product-dimension.util'
 import { parseInboundQcScanInput } from './inbound-qc-scan.util'
+import { ManagementLoopService } from '../management-loop/management-loop.service'
 
 /** 在途，等待到仓扫描 */
 const PENDING_RECEIPT_STATUSES = new Set([
@@ -47,6 +48,7 @@ export class InboundService {
     private files: FileStoreService,
     private opLog: OperationLogService,
     private pricing: PricingService,
+    private managementLoop: ManagementLoopService,
   ) {}
 
   async list(q: PaginationDto & { status?: string }) {
@@ -1300,6 +1302,11 @@ export class InboundService {
           await tryMarkOrderableOnOmsForSkus(this.prisma, skus)
         } catch (err) {
           console.warn('[putaway] OMS orderable sync skipped:', err)
+        }
+        try {
+          await this.managementLoop.recordInboundCharges(id)
+        } catch (err) {
+          console.warn('[putaway] inbound billing skipped:', err instanceof Error ? err.message : err)
         }
       }
       for (const group of groups) {

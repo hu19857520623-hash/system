@@ -27,25 +27,30 @@ import com.takealot.pda.ui.i18n.tr
 @Composable
 fun SettingsScreen(onBack: () -> Unit, onLogout: () -> Unit) {
     val session = PdaApp.instance.session
+    val canManageServer = session.hasPerm("inbound.handle_exception")
     var baseUrl by remember { mutableStateOf(session.baseUrl) }
-    var warehouseCode by remember { mutableStateOf(session.warehouseCode) }
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(tr("settings"), color = PdaText, fontSize = 22.sp)
         Panel {
             KeyValue(tr("account"), session.realName.ifBlank { session.username })
             KeyValue(tr("username"), session.username)
         }
-        OutlinedTextField(value = baseUrl, onValueChange = { baseUrl = it }, label = { Text(tr("server")) }, singleLine = true, colors = fieldColors())
-        OutlinedTextField(value = warehouseCode, onValueChange = { warehouseCode = it }, label = { Text(tr("warehouse_code")) }, singleLine = true, colors = fieldColors())
-        Text("PDA 需与后端同一局域网。后端 LISTEN_HOST 需为 0.0.0.0。", color = PdaMuted, fontSize = 12.sp)
-        BigButton(
-            text = tr("save"),
-            onClick = {
-                session.baseUrl = baseUrl
-                session.warehouseCode = warehouseCode.trim()
-                onBack()
-            },
-        )
+        if (canManageServer) {
+            Panel {
+                Text("主管设置", color = PdaText, fontSize = 16.sp)
+                OutlinedTextField(value = baseUrl, onValueChange = { baseUrl = it }, label = { Text(tr("server")) }, singleLine = true, colors = fieldColors())
+                Text("服务器配置影响本机所有仓储作业，请确认地址后保存。", color = PdaMuted, fontSize = 12.sp)
+                BigButton(
+                    text = tr("save"),
+                    onClick = {
+                        session.baseUrl = baseUrl
+                        onBack()
+                    },
+                )
+            }
+        } else {
+            Text("服务器配置仅仓库主管可查看和修改。", color = PdaMuted, fontSize = 12.sp)
+        }
         BigButton(tr("logout"), onClick = { session.logout(); onLogout() }, color = PdaErr)
         BigButton(tr("back"), onClick = onBack, color = PdaMuted)
     }

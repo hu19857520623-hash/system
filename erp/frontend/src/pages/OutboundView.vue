@@ -755,15 +755,24 @@ async function openPick(row: any) {
   pickLoading.value = true
   try {
     const data = await outboundApi.pickSuggestions(row.id)
-    pickLines.value = (data.items || []).map((item: any) => ({
-      id: item.id,
-      sku: item.sku,
-      qty: item.qty,
-      pickedQty: item.pickedQty ?? item.qty,
-      locationCode: item.locationCode || '',
-    }))
-    if (pickLines.value.some((l) => !l.locationCode)) {
-      ElMessage.warning('部分 SKU 暂无可用库位，请确认已上架')
+    const uncovered = (data.items || []).filter((item: any) => Number(item.uncovered) > 0)
+    if (uncovered.length) {
+      const detail = uncovered.map((item: any) => `${item.sku} 缺 ${item.uncovered}`).join('、')
+      throw new Error(`库位库存不足：${detail}；请标记库存短缺异常`)
+    }
+    pickLines.value = (data.items || []).flatMap((item: any) =>
+      (item.suggestions || []).map((allocation: any) => ({
+        key: `${item.id}-${allocation.locationCode}`,
+        itemId: item.id,
+        sku: item.sku,
+        totalQty: item.qty,
+        qty: allocation.pickQty,
+        available: allocation.available,
+        locationCode: allocation.locationCode || '',
+      })),
+    )
+    if (!pickLines.value.length || pickLines.value.some((line) => !line.locationCode)) {
+      throw new Error('部分 SKU 暂无可用库位，请确认已上架')
     }
   } catch (err: any) {
     ElMessage.error(err?.message || '加载拣货库位失败')
@@ -788,16 +797,19 @@ async function submitPick() {
     ElMessage.warning('存在未分配库位的 SKU，请先完成上架')
     return
   }
+  const grouped = new Map<number, { id: number; allocations: { locationCode: string; qty: number }[] }>()
+  for (const line of pickLines.value) {
+    const item: { id: number; allocations: { locationCode: string; qty: number }[] } =
+      grouped.get(line.itemId) || { id: line.itemId, allocations: [] }
+    item.allocations.push({ locationCode: line.locationCode, qty: line.qty })
+    grouped.set(line.itemId, item)
+  }
   pickSubmitting.value = true
   try {
     await withAction(async () => {
       await outboundApi.pick(pickOrder.value.id, {
         pickSource: pickSource.value,
-        items: pickLines.value.map((l) => ({
-          id: l.id,
-          pickedQty: l.pickedQty,
-          locationCode: l.locationCode,
-        })),
+        items: [...grouped.values()],
       })
       pickVisible.value = false
       filterStatus.value = 'picked'
@@ -1453,7 +1465,7 @@ function statusTag(status: string) {
 
     <!-- 完成拣货 -->
     <el-dialog v-model="pickVisible" :title="`完成拣货 · ${pickOrder?.outboundNo || ''}`" width="640px">
-      <div class="pick-hint">系统已按库存自动分配拣货库位，请确认实拣数量即可。</div>
+      <div class="pick-hint">系统已按库位拆分任务，必须全部拣完；短拣请标记库存短缺异常。</div>
       <el-form label-width="80px" style="margin-bottom:12px">
         <el-form-item label="拣货来源">
           <el-radio-group v-model="pickSource" size="small">
@@ -1462,15 +1474,13 @@ function statusTag(status: string) {
           </el-radio-group>
         </el-form-item>
       </el-form>
-      <el-table v-loading="pickLoading" :data="pickLines" size="small" border>
+      <el-table v-loading="pickLoading" :data="pickLines" row-key="key" size="small" border>
         <el-table-column prop="sku" label="SKU" width="120" />
-        <el-table-column label="应拣" width="70" align="right">
-          <template #default="{ row }">{{ row.qty }}</template>
+        <el-table-column label="总应拣" width="75" align="right">
+          <template #default="{ row }">{{ row.totalQty }}</template>
         </el-table-column>
-        <el-table-column label="实拣" width="100">
-          <template #default="{ row }">
-            <el-input-number v-model="row.pickedQty" :min="1" :max="row.qty" size="small" />
-          </template>
+        <el-table-column label="本库位应拣" width="100" align="right">
+          <template #default="{ row }">{{ row.qty }}</template>
         </el-table-column>
         <el-table-column label="拣货库位" min-width="140">
           <template #default="{ row }">
@@ -1478,6 +1488,7 @@ function statusTag(status: string) {
             <span v-else class="loc-empty">待上架</span>
           </template>
         </el-table-column>
+        <el-table-column prop="available" label="库位库存" width="90" align="right" />
       </el-table>
       <template #footer>
         <el-button @click="pickVisible = false">取消</el-button>

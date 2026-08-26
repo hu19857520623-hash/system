@@ -21,7 +21,7 @@ function buildService() {
     read: jest.fn().mockReturnValue(Buffer.from('%PDF-stored')),
     exists: jest.fn().mockReturnValue(true),
   }
-  const service = new OutboundService(prisma, {} as any, files)
+  const service = new OutboundService(prisma, {} as any, files, { log: jest.fn() } as any)
   return { service, prisma, files }
 }
 
@@ -221,7 +221,7 @@ describe('OutboundService.createFromOms transaction', () => {
     const service = new OutboundService(prisma, billing as any, {
       write: jest.fn(),
       read: jest.fn(),
-    } as any)
+    } as any, { log: jest.fn() } as any)
 
     const tx = {
       customerSkuInventory: {
@@ -276,5 +276,77 @@ describe('OutboundService.createFromOms transaction', () => {
     )
     expect(result.idempotent).toBe(false)
     expect((result as { erpId?: number }).erpId).toBe(9)
+  })
+})
+
+describe('OutboundService P0 pick allocation', () => {
+  const order = {
+    id: 1n,
+    outboundNo: 'OUT-P0-1',
+    warehouseCode: 'WMS-JHB-01',
+    status: 'picking',
+    pickerId: 8n,
+    pickingStartedAt: null,
+    items: [{ id: 11n, productId: 21n, sku: 'SKU-P0', productName: 'P0', qty: 5, pickedQty: 0, locationCode: null }],
+  }
+
+  function buildPickService() {
+    const tx: any = {
+      warehouseLocation: {
+        findFirst: jest.fn(({ where }: any) => Promise.resolve({ id: where.locationCode === 'A-01' ? 101n : 102n })),
+      },
+      inventoryLocation: {
+        findMany: jest.fn(({ where }: any) => Promise.resolve([{ id: where.locationId + 1000n, qty: 10 }])),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+      outboundPickAllocation: { create: jest.fn().mockResolvedValue({}) },
+      outboundOrderItem: { update: jest.fn().mockResolvedValue({}) },
+      outboundOrder: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+    }
+    const prisma: any = {
+      outboundOrder: { findUnique: jest.fn().mockResolvedValue(order) },
+      $transaction: jest.fn((work: any) => work(tx)),
+    }
+    const opLog = { log: jest.fn().mockResolvedValue(undefined) }
+    const service = new OutboundService(prisma, {} as any, {} as any, opLog as any)
+    return { service, prisma, tx, opLog }
+  }
+
+  it('rejects a partial pick instead of completing the order', async () => {
+    const { service, prisma } = buildPickService()
+    await expect(service.pick(1, {
+      items: [{ id: 11, allocations: [{ locationCode: 'A-01', qty: 4 }] }],
+    })).rejects.toThrow('必须完整拣货')
+    expect(prisma.$transaction).not.toHaveBeenCalled()
+  })
+
+  it('deducts every allocated location atomically and records the split', async () => {
+    const { service, tx, opLog } = buildPickService()
+    await expect(service.pick(1, {
+      pickSource: 'pda',
+      items: [{
+        id: 11,
+        allocations: [
+          { locationCode: 'a-01', qty: 2 },
+          { locationCode: 'B-01', qty: 3 },
+        ],
+      }],
+    }, 99)).resolves.toMatchObject({ status: 'picked' })
+
+    expect(tx.inventoryLocation.updateMany).toHaveBeenCalledTimes(2)
+    expect(tx.outboundPickAllocation.create).toHaveBeenCalledTimes(2)
+    expect(tx.outboundOrderItem.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ pickedQty: 5, locationCode: 'A-01' }),
+    }))
+    expect(opLog.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'pick' }))
+  })
+
+  it('aborts when another device has already changed the order state', async () => {
+    const { service, tx, opLog } = buildPickService()
+    tx.outboundOrder.updateMany.mockResolvedValueOnce({ count: 0 })
+    await expect(service.pick(1, {
+      items: [{ id: 11, allocations: [{ locationCode: 'A-01', qty: 5 }] }],
+    })).rejects.toThrow('状态已变化')
+    expect(opLog.log).not.toHaveBeenCalled()
   })
 })
