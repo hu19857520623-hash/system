@@ -3398,6 +3398,18 @@ async function ensureConfiguredPortalAdmin() {
     if (existing.role !== 'sys_admin' || existing.customerId !== null) {
       throw new Error('OMS_BOOTSTRAP_ADMIN_USERNAME is already assigned to a customer identity')
     }
+    const passwordMatches = await bcrypt.compare(password, existing.passwordHash)
+    if (!passwordMatches) {
+      const now = new Date().toISOString()
+      await prisma.portalUser.update({
+        where: { id: existing.id },
+        data: {
+          passwordHash: await bcrypt.hash(password, 12),
+          updatedAt: now,
+        },
+      })
+      console.log(`Configured OMS portal administrator password synced: ${username}`)
+    }
     return
   }
   const id = String(process.env.OMS_PORTAL_ADMIN_ID || 'portal-admin').trim()
