@@ -3,6 +3,7 @@ import { ConfigModule } from '@nestjs/config'
 import { APP_GUARD } from '@nestjs/core'
 
 import { PrismaModule } from './common/prisma/prisma.module'
+import { InventoryMutationModule } from './common/inventory/inventory-mutation.module'
 import { PermissionsModule } from './common/permissions/permissions.module'
 import { OmsInternalAuthModule } from './common/oms-internal-auth.module'
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard'
@@ -45,6 +46,7 @@ import { validateEnvironment } from './config/environment'
     ConfigModule.forRoot({ isGlobal: true, validate: validateEnvironment }),
     OmsInternalAuthModule,
     PrismaModule,
+    InventoryMutationModule,
     PermissionsModule,
     AuthModule,
     UsersModule,

@@ -11,19 +11,17 @@ import { PrismaService } from '../../common/prisma/prisma.service'
 import { FileStoreService } from '../../common/file-store.service'
 import { OperationLogService } from '../operation-log/operation-log.service'
 import { BillingService } from '../billing/billing.service'
+import { OutboundBillingService } from './outbound-billing.service'
+import { InventoryMutationService } from '../../common/inventory/inventory-mutation.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
 import { toCsv } from '../../common/csv.util'
 import {
   APPOINTMENT_LABELS,
-  OUTBOUND_SHIP_BASE,
   OUTBOUND_STATUSES,
   OUTBOUND_STATUS_LABELS,
   ORDER_EXCEPTION_LABELS,
-  PACK_UNIT_FEE,
-  PICKING_UNIT_FEE,
   PICKING_PROBLEM_LABELS,
   PICK_SOURCE_LABELS,
-  RELABEL_UNIT_FEE,
   REVIEW_SOURCE_LABELS,
   barcodeMatchesProduct,
   cargoTypeLabel,
@@ -163,6 +161,8 @@ export class OutboundService {
   constructor(
     private prisma: PrismaService,
     private billing: BillingService,
+    private outboundBilling: OutboundBillingService,
+    private inventoryMutation: InventoryMutationService,
     private files: FileStoreService,
     private opLog: OperationLogService,
   ) {}
@@ -1257,27 +1257,12 @@ th{background:#f5f5f5}
           })
           if (!loc) throw new BadRequestException(`库位 ${allocation.locationCode} 不存在`)
 
-          const stocks = await tx.inventoryLocation.findMany({
-            where: { locationId: loc.id, sku: line.item.sku, qty: { gt: 0 } },
-            orderBy: { id: 'asc' },
+          const deductedLines = await this.inventoryMutation.deductLocationQtyFifo(tx, {
+            locationId: loc.id,
+            sku: line.item.sku,
+            qty: allocation.qty,
           })
-          let remaining = allocation.qty
-          const available = stocks.reduce((sum, stock) => sum + stock.qty, 0)
-          if (available < allocation.qty) {
-            throw new BadRequestException(
-              `${line.item.sku} 在库位 ${allocation.locationCode} 库存不足（可用 ${available}，需 ${allocation.qty}）`,
-            )
-          }
-          for (const stock of stocks) {
-            if (remaining <= 0) break
-            const deductQty = Math.min(remaining, stock.qty)
-            const deducted = await tx.inventoryLocation.updateMany({
-              where: { id: stock.id, qty: { gte: deductQty } },
-              data: { qty: { decrement: deductQty } },
-            })
-            if (deducted.count !== 1) {
-              throw new BadRequestException(`${line.item.sku} 库位库存已变化，请刷新拣货任务后重试`)
-            }
+          for (const deducted of deductedLines) {
             await tx.outboundPickAllocation.create({
               data: {
                 outboundId: order.id,
@@ -1286,13 +1271,12 @@ th{background:#f5f5f5}
                 sku: line.item.sku,
                 warehouseCode: order.warehouseCode,
                 locationId: loc.id,
-                inventoryLocationId: stock.id,
+                inventoryLocationId: deducted.inventoryLocationId,
                 locationCode: allocation.locationCode,
-                qty: deductQty,
+                qty: deducted.qty,
                 operatorId: operatorId ? BigInt(operatorId) : null,
               },
             })
-            remaining -= deductQty
           }
         }
         await tx.outboundOrderItem.update({
@@ -1506,20 +1490,14 @@ th{background:#f5f5f5}
     await this.prisma.$transaction(async (tx) => {
       for (const item of order.items) {
         const pickQty = item.pickedQty || item.qty
-        const inv = await tx.inventory.findUnique({
-          where: {
-            productId_warehouseCode: { productId: item.productId, warehouseCode: order.warehouseCode },
-          },
-        })
-        if (!inv || inv.lockedQty < pickQty) {
-          throw new BadRequestException(`${item.sku} 锁定库存不足`)
-        }
-        await tx.inventory.update({
-          where: { id: inv.id },
-          data: {
-            totalQty: inv.totalQty - pickQty,
-            lockedQty: inv.lockedQty - pickQty,
-          },
+        await this.inventoryMutation.shipDeductWarehouse(tx, {
+          productId: item.productId,
+          sku: item.sku,
+          warehouseCode: order.warehouseCode,
+          qty: pickQty,
+          referenceNo: order.outboundNo,
+          operatorId,
+          remark: item.locationCode ? `库位 ${item.locationCode}` : undefined,
         })
 
         // 新拣货流程已在确认拣货时扣减库位库存；这里只为历史订单保留兼容逻辑。
@@ -1544,21 +1522,6 @@ th{background:#f5f5f5}
             }
           }
         }
-
-        await tx.inventoryLog.create({
-          data: {
-            productId: item.productId,
-            sku: item.sku,
-            warehouseCode: order.warehouseCode,
-            changeType: 'outbound',
-            changeQty: -pickQty,
-            beforeQty: inv.totalQty,
-            afterQty: inv.totalQty - pickQty,
-            referenceNo: order.outboundNo,
-            operatorId: operatorId ? BigInt(operatorId) : null,
-            remark: item.locationCode ? `库位 ${item.locationCode}` : undefined,
-          },
-        })
       }
 
       if (order.pickAllocations.length) {
@@ -1583,120 +1546,7 @@ th{background:#f5f5f5}
       }
     })
 
-    const shipCharges: Array<{
-      chargeNo: string
-      id?: number
-      chargeType: string
-      amount: number
-      description: string
-      bizRef?: string | null
-    }> = []
-
-    if (order.customerId) {
-      const actualFees = parseOmsOutboundActualFees(order.remark)
-      const totalQty = order.items.reduce((s, i) => s + (i.pickedQty || i.qty), 0)
-      const existingCharges = await this.billing.listChargesByBizRef(order.outboundNo)
-
-      if (actualFees?.lines?.length && !existingCharges.length) {
-        for (const line of actualFees.lines) {
-          const created = await this.billing.createCharge({
-            customerId: Number(order.customerId),
-            chargeType: (line.chargeType as 'handling' | 'outbound_ship') || 'handling',
-            source: 'erp',
-            description: `${line.label} · ${order.outboundNo} · ${line.detail || '实测计费'}`,
-            amount: line.amount,
-            quantity: 1,
-            unitPrice: line.amount,
-            bizRef: order.outboundNo,
-            sourceRef: order.outboundNo,
-            warehouseCode: order.warehouseCode,
-          })
-          shipCharges.push(created)
-        }
-      } else if (existingCharges.length) {
-        shipCharges.push(...existingCharges)
-      } else {
-        const pickingFee = Math.round(totalQty * PICKING_UNIT_FEE * 100) / 100
-        const packFee = Math.round(totalQty * PACK_UNIT_FEE * 100) / 100
-        shipCharges.push(
-          await this.billing.createCharge({
-            customerId: Number(order.customerId),
-            chargeType: 'picking',
-            source: 'erp',
-            description: `出库拣货 · ${order.outboundNo} · ${totalQty} 件`,
-            amount: pickingFee,
-            quantity: totalQty,
-            unitPrice: PICKING_UNIT_FEE,
-            bizRef: order.outboundNo,
-            sourceRef: order.outboundNo,
-            warehouseCode: order.warehouseCode,
-          }),
-        )
-        shipCharges.push(
-          await this.billing.createCharge({
-            customerId: Number(order.customerId),
-            chargeType: 'handling',
-            source: 'erp',
-            description: `出库打包 · ${order.outboundNo}`,
-            amount: packFee,
-            quantity: totalQty,
-            unitPrice: PACK_UNIT_FEE,
-            bizRef: order.outboundNo,
-            sourceRef: order.outboundNo,
-            warehouseCode: order.warehouseCode,
-          }),
-        )
-        shipCharges.push(
-          await this.billing.createCharge({
-            customerId: Number(order.customerId),
-            chargeType: 'outbound_ship',
-            source: 'erp',
-            description: `出库运费 · ${order.outboundNo} → ${order.destType.toUpperCase()}`,
-            amount: OUTBOUND_SHIP_BASE,
-            quantity: 1,
-            unitPrice: OUTBOUND_SHIP_BASE,
-            bizRef: order.outboundNo,
-            sourceRef: order.outboundNo,
-            warehouseCode: order.warehouseCode,
-          }),
-        )
-      }
-
-      if (order.needsRelabel && !shipCharges.some((c) => c.chargeType === 'relabel')) {
-        const printCount = order.relabelPrintCount > 0
-          ? order.relabelPrintCount
-          : totalQty
-        shipCharges.push(
-          await this.billing.createCharge({
-            customerId: Number(order.customerId),
-            chargeType: 'relabel',
-            source: 'erp',
-            description: `换标作业 · ${order.outboundNo} · 按打印/扫码 ${printCount} 件`,
-            amount: Math.round(printCount * RELABEL_UNIT_FEE * 100) / 100,
-            quantity: printCount,
-            unitPrice: RELABEL_UNIT_FEE,
-            bizRef: order.outboundNo,
-            sourceRef: order.outboundNo,
-            warehouseCode: order.warehouseCode,
-          }),
-        )
-      }
-
-      const preDeductTotal = Math.max(
-        0,
-        Number(parseOmsOutboundPreDeduct(order.remark)?.preDeductTotal) || 0,
-      )
-      const actualGrandTotal =
-        Math.round(shipCharges.reduce((sum, charge) => sum + Number(charge.amount || 0), 0) * 100) / 100
-      const balanceDelta =
-        Math.round((preDeductTotal > 0 ? preDeductTotal - actualGrandTotal : -actualGrandTotal) * 100) / 100
-      if (balanceDelta !== 0) {
-        await this.prisma.customer.update({
-          where: { id: order.customerId },
-          data: { balance: { increment: balanceDelta } },
-        })
-      }
-    }
+    const shipCharges = await this.outboundBilling.recordShipCharges(order)
 
     const detail = await this.detail(id)
     await this.pushOutboundStatusToOms(order.outboundNo)
@@ -1759,28 +1609,15 @@ th{background:#f5f5f5}
       }
       // 拣货确认时已扣减库位库存；取消未发运订单时按实际拣货分配原路回补。
       for (const allocation of order.pickAllocations.filter((row) => row.status === 'picked')) {
-        const existing = await tx.inventoryLocation.findFirst({
-          where: {
-            id: allocation.inventoryLocationId,
-          },
+        await this.inventoryMutation.restoreLocationQty(tx, {
+          productId: allocation.productId,
+          sku: allocation.sku,
+          warehouseCode: allocation.warehouseCode,
+          locationId: allocation.locationId,
+          locationCode: allocation.locationCode,
+          inventoryLocationId: allocation.inventoryLocationId,
+          qty: allocation.qty,
         })
-        if (existing) {
-          await tx.inventoryLocation.update({
-            where: { id: existing.id },
-            data: { qty: { increment: allocation.qty } },
-          })
-        } else {
-          await tx.inventoryLocation.create({
-            data: {
-              productId: allocation.productId,
-              sku: allocation.sku,
-              warehouseCode: allocation.warehouseCode,
-              locationId: allocation.locationId,
-              locationCode: allocation.locationCode,
-              qty: allocation.qty,
-            },
-          })
-        }
       }
       if (order.pickAllocations.length) {
         await tx.outboundPickAllocation.updateMany({

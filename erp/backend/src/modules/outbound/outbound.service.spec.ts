@@ -21,7 +21,14 @@ function buildService() {
     read: jest.fn().mockReturnValue(Buffer.from('%PDF-stored')),
     exists: jest.fn().mockReturnValue(true),
   }
-  const service = new OutboundService(prisma, {} as any, files, { log: jest.fn() } as any)
+  const service = new OutboundService(
+    prisma,
+    {} as any,
+    {} as any,
+    {} as any,
+    files,
+    { log: jest.fn() } as any,
+  )
   return { service, prisma, files }
 }
 
@@ -218,10 +225,21 @@ describe('OutboundService.createFromOms transaction', () => {
       customerSkuInventory: { findUnique: jest.fn() },
       $transaction: jest.fn(),
     }
-    const service = new OutboundService(prisma, billing as any, {
-      write: jest.fn(),
-      read: jest.fn(),
-    } as any, { log: jest.fn() } as any)
+    const service = new OutboundService(
+      prisma,
+      billing as any,
+      {} as any,
+      {
+        deductLocationQtyFifo: jest.fn().mockResolvedValue([{ inventoryLocationId: 1001n, qty: 2 }]),
+        shipDeductWarehouse: jest.fn(),
+        restoreLocationQty: jest.fn(),
+      } as any,
+      {
+        write: jest.fn(),
+        read: jest.fn(),
+      } as any,
+      { log: jest.fn() } as any,
+    )
 
     const tx = {
       customerSkuInventory: {
@@ -308,8 +326,18 @@ describe('OutboundService P0 pick allocation', () => {
       $transaction: jest.fn((work: any) => work(tx)),
     }
     const opLog = { log: jest.fn().mockResolvedValue(undefined) }
-    const service = new OutboundService(prisma, {} as any, {} as any, opLog as any)
-    return { service, prisma, tx, opLog }
+    const inventoryMutation = {
+      deductLocationQtyFifo: jest.fn().mockResolvedValue([{ inventoryLocationId: 1101n, qty: 3 }]),
+    }
+    const service = new OutboundService(
+      prisma,
+      {} as any,
+      {} as any,
+      inventoryMutation as any,
+      {} as any,
+      opLog as any,
+    )
+    return { service, prisma, tx, opLog, inventoryMutation }
   }
 
   it('rejects a partial pick instead of completing the order', async () => {
@@ -321,7 +349,10 @@ describe('OutboundService P0 pick allocation', () => {
   })
 
   it('deducts every allocated location atomically and records the split', async () => {
-    const { service, tx, opLog } = buildPickService()
+    const { service, tx, opLog, inventoryMutation } = buildPickService()
+    inventoryMutation.deductLocationQtyFifo
+      .mockResolvedValueOnce([{ inventoryLocationId: 1101n, qty: 2 }])
+      .mockResolvedValueOnce([{ inventoryLocationId: 1102n, qty: 3 }])
     await expect(service.pick(1, {
       pickSource: 'pda',
       items: [{
@@ -333,7 +364,7 @@ describe('OutboundService P0 pick allocation', () => {
       }],
     }, 99)).resolves.toMatchObject({ status: 'picked' })
 
-    expect(tx.inventoryLocation.updateMany).toHaveBeenCalledTimes(2)
+    expect(inventoryMutation.deductLocationQtyFifo).toHaveBeenCalledTimes(2)
     expect(tx.outboundPickAllocation.create).toHaveBeenCalledTimes(2)
     expect(tx.outboundOrderItem.update).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ pickedQty: 5, locationCode: 'A-01' }),

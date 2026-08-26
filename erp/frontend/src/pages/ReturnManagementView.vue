@@ -1,34 +1,39 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { erpConfirm } from '@/utils/messageBox'
 import { returnsApi, operationLogApi } from '@/api/client.js'
+import { useReturnList } from '@/composables/useReturnList.ts'
 import { useAppStore } from '@/stores/app'
 import ListPagination from '@/components/ListPagination.vue'
 import DetailSheet from '@/components/ui/DetailSheet.vue'
 
 const app = useAppStore()
 
-type StatusFilter = 'all' | 'cancelled' | 'pending_arrival' | 'received' | 'measured' | 'fee_calculated' | 'awaiting_customer' | 'accepted_pending' | 'dispose_pending' | 'completed' | 'issue'
+const {
+  filter,
+  processFilter,
+  customerCode,
+  returnWarehouse,
+  codeField,
+  codeValue,
+  skuFilter,
+  sellerTaxNo,
+  expectedArrivalRange,
+  page,
+  pageSize,
+  listTotal,
+  loading,
+  rows,
+  selectedIds,
+  loadList,
+  search,
+  resetFilters,
+  setStatusFilter,
+  setProcessFilter,
+} = useReturnList()
+
 type CartonForm = { lengthCm: string; widthCm: string; heightCm: string; grossWeightKg: string }
-type CodeField = 'returnNo' | 'orderNo' | 'trackingNo' | 'referenceNo'
-
-const filter = ref<StatusFilter>('all')
-const processFilter = ref('')
-const customerCode = ref('')
-const returnWarehouse = ref('')
-const codeField = ref<CodeField>('returnNo')
-const codeValue = ref('')
-const skuFilter = ref('')
-const sellerTaxNo = ref('')
-const expectedArrivalRange = ref<[string, string] | null>(null)
-
-const page = ref(1)
-const pageSize = ref(20)
-const listTotal = ref(0)
-const loading = ref(false)
-const rows = ref<any[]>([])
-const selectedIds = ref<number[]>([])
 
 const processDialog = ref(false)
 const processTarget = ref<any>(null)
@@ -263,33 +268,6 @@ function warehouseLabel(code?: string | null) {
   return code
 }
 
-function buildParams() {
-  const params: Record<string, unknown> = {
-    page: page.value,
-    pageSize: pageSize.value,
-  }
-  if (filter.value === 'issue') {
-    params.requestedProcess = 'other_issue'
-  } else if (filter.value !== 'all') {
-    params.status = filter.value
-  }
-  if (processFilter.value) params.requestedProcess = processFilter.value
-  const cc = customerCode.value.trim()
-  if (cc) params.customerCode = cc
-  if (returnWarehouse.value) params.returnWarehouse = returnWarehouse.value
-  const code = codeValue.value.trim()
-  if (code) {
-    params[codeField.value] = code
-  }
-  const sku = skuFilter.value.trim()
-  if (sku) params.sku = sku
-  const tax = sellerTaxNo.value.trim()
-  if (tax) params.sellerTaxNo = tax
-  if (expectedArrivalRange.value?.[0]) params.expectedArrivalFrom = expectedArrivalRange.value[0]
-  if (expectedArrivalRange.value?.[1]) params.expectedArrivalTo = expectedArrivalRange.value[1]
-  return params
-}
-
 function itemStats(row: any, item: { quantity: number }) {
   const qty = item.quantity || 0
   const received = ['received', 'measured', 'fee_calculated', 'arrived', 'processing', 'completed'].includes(row.status)
@@ -310,51 +288,6 @@ const tableRows = computed(() =>
     warehouseLabel: warehouseLabel(r.returnWarehouse),
   })),
 )
-
-async function loadList() {
-  loading.value = true
-  try {
-    const res = await returnsApi.list(buildParams())
-    rows.value = res.items || []
-    listTotal.value = res.total || 0
-    selectedIds.value = []
-  } catch (e: any) {
-    ElMessage.error(e?.message || '加载失败')
-  } finally {
-    loading.value = false
-  }
-}
-
-function search() {
-  page.value = 1
-  loadList()
-}
-
-function resetFilters() {
-  filter.value = 'all'
-  processFilter.value = ''
-  customerCode.value = ''
-  returnWarehouse.value = ''
-  codeField.value = 'returnNo'
-  codeValue.value = ''
-  skuFilter.value = ''
-  sellerTaxNo.value = ''
-  expectedArrivalRange.value = null
-  page.value = 1
-  loadList()
-}
-
-function setStatusFilter(v: StatusFilter) {
-  filter.value = v
-  if (v === 'issue') processFilter.value = ''
-  page.value = 1
-}
-
-function setProcessFilter(v: string) {
-  processFilter.value = v
-  if (v) filter.value = 'all'
-  page.value = 1
-}
 
 function toggleSelect(id: number, checked: boolean) {
   if (checked) {
@@ -856,12 +789,8 @@ function exportCsv() {
   URL.revokeObjectURL(url)
 }
 
-watch([filter, processFilter, page, pageSize], () => loadList())
-
 watch(measureCartons, () => scheduleFeePreview(), { deep: true })
 watch(extraFeeLines, () => scheduleFeePreview(), { deep: true })
-
-onMounted(loadList)
 </script>
 
 <template>

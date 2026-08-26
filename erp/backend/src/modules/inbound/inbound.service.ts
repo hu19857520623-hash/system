@@ -11,6 +11,7 @@ import { buildInboundRemark, parseOmsInboundMeta, stripOmsSystemTags } from '../
 import { resolveBillingDimensions } from '../../common/product-dimension.util'
 import { parseInboundQcScanInput } from './inbound-qc-scan.util'
 import { ManagementLoopService } from '../management-loop/management-loop.service'
+import { InventoryMutationService } from '../../common/inventory/inventory-mutation.service'
 
 /** 在途，等待到仓扫描 */
 const PENDING_RECEIPT_STATUSES = new Set([
@@ -49,6 +50,7 @@ export class InboundService {
     private opLog: OperationLogService,
     private pricing: PricingService,
     private managementLoop: ManagementLoopService,
+    private inventoryMutation: InventoryMutationService,
   ) {}
 
   async list(q: PaginationDto & { status?: string }) {
@@ -1185,63 +1187,24 @@ export class InboundService {
             },
           })
 
-          const invLoc = await tx.inventoryLocation.findFirst({
-            where: { productId: item.productId, locationId: loc.id, batchNo: null },
-          })
-          if (invLoc) {
-            await tx.inventoryLocation.update({
-              where: { id: invLoc.id },
-              data: { qty: invLoc.qty + line.qty, inboundNo: order.inboundNo },
-            })
-          } else {
-            await tx.inventoryLocation.create({
-              data: {
-                productId: item.productId,
-                sku: item.sku,
-                warehouseCode: order.warehouseCode,
-                locationId: loc.id,
-                locationCode: loc.locationCode,
-                qty: line.qty,
-                inboundNo: order.inboundNo,
-              },
-            })
-          }
-
-          const whInv = await tx.inventory.findUnique({
-            where: { productId_warehouseCode: { productId: item.productId, warehouseCode: order.warehouseCode } },
-          })
-          const before = whInv?.totalQty ?? 0
-          const after = before + line.qty
-          if (whInv) {
-            await tx.inventory.update({
-              where: { id: whInv.id },
-              data: { totalQty: after, availableQty: whInv.availableQty + line.qty },
-            })
-          } else {
-            await tx.inventory.create({
-              data: {
-                productId: item.productId,
-                sku: item.sku,
-                warehouseCode: order.warehouseCode,
-                totalQty: after,
-                availableQty: after,
-              },
-            })
-          }
-          await tx.inventoryLog.create({
-            data: {
+          await this.inventoryMutation.addLocationStock(
+            tx,
+            {
               productId: item.productId,
               sku: item.sku,
               warehouseCode: order.warehouseCode,
+              locationId: loc.id,
+              locationCode: loc.locationCode,
+              qty: line.qty,
+              inboundNo: order.inboundNo,
+            },
+            {
               changeType: 'putaway',
-              changeQty: line.qty,
-              beforeQty: before,
-              afterQty: after,
+              operatorId,
               referenceNo: order.inboundNo,
-              operatorId: operatorId ? BigInt(operatorId) : undefined,
               remark: loc.locationCode,
             },
-          })
+          )
         }
 
         if (alreadyPutaway + batchQty > targetQty) {

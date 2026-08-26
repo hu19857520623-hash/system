@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, reactive, watch } from 'vue'
+import { ref, computed, onMounted, reactive } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { erpConfirm } from '@/utils/messageBox'
@@ -10,10 +10,13 @@ import {
   triggerBrowserDownload,
 } from '@/api/client.js'
 import { withAction } from '@/composables/useListLoader.ts'
+import { useOutboundList } from '@/composables/useOutboundList.ts'
 import { useAppStore } from '@/stores/app'
 import ListPagination from '@/components/ListPagination.vue'
 import DetailSheet from '@/components/ui/DetailSheet.vue'
 import OutboundLabelPanel from '@/components/outbound/OutboundLabelPanel.vue'
+import OutboundPickDialog from '@/components/outbound/OutboundPickDialog.vue'
+import OutboundShipDialog from '@/components/outbound/OutboundShipDialog.vue'
 import {
   buildOutboundLabelSummary,
   outboundLabelActionKey,
@@ -25,60 +28,39 @@ import { warehouseFilterOptions } from '@/utils/omsWarehouse.ts'
 const app = useAppStore()
 const route = useRoute()
 
-type StatusFilter =
-  | 'all'
-  | 'pending_relabel'
-  | 'pending_pick'
-  | 'picking'
-  | 'picked'
-  | 'reviewing'
-  | 'packed'
-  | 'shipped'
-  | 'delivered'
-  | 'cancelled'
-  | 'exception'
-  | 'problem'
+const {
+  filterStatus,
+  searchQ,
+  filterCustomer,
+  filterDest,
+  filterSku,
+  filterLogisticsProduct,
+  filterPicker,
+  filterNeedsRelabel,
+  filterIsProblem,
+  filterPlatform,
+  filterAppointment,
+  dateRange,
+  appointmentDateRange,
+  page,
+  pageSize,
+  listTotal,
+  loading,
+  orders,
+  statusCounts,
+  reloadAll,
+  search,
+  rowIndex,
+  buildQueryParams,
+} = useOutboundList()
 
-const filterStatus = ref<StatusFilter>('pending_pick')
-const searchQ = ref('')
-const filterCustomer = ref<number | ''>('')
-const filterDest = ref('all')
-const filterSku = ref('')
-const filterLogisticsProduct = ref('all')
-const filterPicker = ref<number | ''>('')
-const filterNeedsRelabel = ref('all')
-const filterIsProblem = ref('all')
-const filterPlatform = ref('all')
-const filterAppointment = ref('all')
-const dateRange = ref<[string, string] | null>(null)
-const appointmentDateRange = ref<[string, string] | null>(null)
+const selectedRows = ref<any[]>([])
+
 const appointmentDateShortcuts = [
   { text: '今天', value: () => { const today = new Date(); return [today, today] } },
   { text: '未来 7 天', value: () => { const start = new Date(); const end = new Date(); end.setDate(end.getDate() + 6); return [start, end] } },
   { text: '未来 30 天', value: () => { const start = new Date(); const end = new Date(); end.setDate(end.getDate() + 29); return [start, end] } },
 ]
-const selectedRows = ref<any[]>([])
-
-const page = ref(1)
-const pageSize = ref(50)
-const listTotal = ref(0)
-const loading = ref(false)
-const orders = ref<any[]>([])
-
-const statusCounts = ref<Record<string, number>>({
-  all: 0,
-  pending_relabel: 0,
-  pending_pick: 0,
-  picking: 0,
-  picked: 0,
-  reviewing: 0,
-  packed: 0,
-  shipped: 0,
-  delivered: 0,
-  cancelled: 0,
-  exception: 0,
-  problem: 0,
-})
 
 const pickVisible = ref(false)
 const shipVisible = ref(false)
@@ -100,16 +82,12 @@ const deliverOrder = ref<any>(null)
 const shipOrder = ref<any>(null)
 const problemOrder = ref<any>(null)
 const exceptionOrder = ref<any>(null)
-const shipTrackingNo = ref('')
-const shipCarrier = ref('')
-const shipLogisticsProduct = ref('')
 const packIsPalletized = ref(false)
 const packPalletInfo = ref('')
 const packReviewSource = ref<'pda' | 'pick_list'>('pick_list')
 const packCartons = ref<{ lengthCm: string; widthCm: string; heightCm: string; grossWeightKg: string }[]>([
   { lengthCm: '', widthCm: '', heightCm: '', grossWeightKg: '' },
 ])
-const pickSource = ref<'pda' | 'pick_list'>('pda')
 const appointmentStatus = ref('')
 const appointmentDate = ref('')
 const deliverPodFile = ref<File | null>(null)
@@ -137,11 +115,8 @@ const exceptionTypeOptions = [
   { value: 'system_sync', label: '系统同步异常' },
   { value: 'other', label: '其他异常' },
 ]
-const pickLines = ref<any[]>([])
-const pickLoading = ref(false)
-const pickSubmitting = ref(false)
-const packDetailLoading = ref(false)
 const labelActionLoading = reactive<Record<string, boolean>>({})
+const packDetailLoading = ref(false)
 const relabelLines = ref<{ id: number; sku: string; productName: string; scannedBarcode: string; newBarcode: string }[]>([])
 
 const customers = ref<{ id: number; code: string; name: string }[]>([])
@@ -185,70 +160,6 @@ const filterTabs = computed(() => [
   { value: 'problem' as const, label: '问题件', count: statusCounts.value.problem },
   { value: 'all' as const, label: '全部', count: statusCounts.value.all },
 ])
-
-function buildQueryParams(skipStatus = false) {
-  const p: Record<string, unknown> = { page: page.value, pageSize: pageSize.value }
-  if (!skipStatus && filterStatus.value !== 'all') {
-    if (filterStatus.value === 'problem') {
-      p.isProblem = 'true'
-    } else if (filterStatus.value === 'exception') {
-      p.status = 'exception'
-    } else {
-      p.status = filterStatus.value
-    }
-  }
-  const kw = searchQ.value.trim()
-  if (kw) p.keyword = kw
-  if (filterCustomer.value) p.customerId = String(filterCustomer.value)
-  if (filterDest.value !== 'all') p.destWarehouse = filterDest.value
-  const sku = filterSku.value.trim()
-  if (sku) p.sku = sku
-  if (dateRange.value?.[0]) p.createdFrom = dateRange.value[0]
-  if (dateRange.value?.[1]) p.createdTo = dateRange.value[1]
-  if (filterLogisticsProduct.value !== 'all') p.logisticsProduct = filterLogisticsProduct.value
-  if (filterPicker.value) p.pickerId = String(filterPicker.value)
-  if (filterNeedsRelabel.value !== 'all') p.needsRelabel = filterNeedsRelabel.value
-  if (filterIsProblem.value !== 'all') p.isProblem = filterIsProblem.value
-  if (filterPlatform.value !== 'all') p.platform = filterPlatform.value
-  if (filterAppointment.value !== 'all') p.appointmentStatus = filterAppointment.value
-  if (appointmentDateRange.value?.[0]) p.appointmentFrom = appointmentDateRange.value[0]
-  if (appointmentDateRange.value?.[1]) p.appointmentTo = appointmentDateRange.value[1]
-  return p
-}
-
-async function refreshCounts() {
-  try {
-    statusCounts.value = await outboundApi.statusCounts(buildQueryParams(true))
-  } catch {
-    // 计数失败不影响列表
-  }
-}
-
-async function load() {
-  loading.value = true
-  try {
-    const res = await outboundApi.list(buildQueryParams())
-    orders.value = res.items || []
-    listTotal.value = res.total ?? orders.value.length
-  } catch (e: any) {
-    ElMessage.error(e?.message || '加载失败')
-  } finally {
-    loading.value = false
-  }
-}
-
-async function reloadAll() {
-  await Promise.all([load(), refreshCounts()])
-}
-
-function search() {
-  page.value = 1
-  reloadAll()
-}
-
-function rowIndex(index: number) {
-  return (page.value - 1) * pageSize.value + index + 1
-}
 
 async function copyText(text: string) {
   if (!text) return
@@ -385,15 +296,6 @@ onMounted(async () => {
     pickerUsers.value = []
   }
   await reloadAll()
-})
-
-watch(filterStatus, () => {
-  page.value = 1
-  reloadAll()
-})
-
-watch([page, pageSize], () => {
-  load()
 })
 
 const canCreate = computed(() => app.hasPerm('outbound.create'))
@@ -743,43 +645,14 @@ async function submitRelabel(allowSkipScan = false) {
   }, `${relabelOrder.value.outboundNo} 换标已确认，进入待发运`)
 }
 
-async function openPick(row: any) {
-  if (row.status !== 'picking' || !row.pickerId) {
-    ElMessage.warning('请先分配拣货员后再完成拣货')
-    return
-  }
+function openPick(row: any) {
   pickOrder.value = row
-  pickSource.value = 'pda'
-  pickLines.value = []
   pickVisible.value = true
-  pickLoading.value = true
-  try {
-    const data = await outboundApi.pickSuggestions(row.id)
-    const uncovered = (data.items || []).filter((item: any) => Number(item.uncovered) > 0)
-    if (uncovered.length) {
-      const detail = uncovered.map((item: any) => `${item.sku} 缺 ${item.uncovered}`).join('、')
-      throw new Error(`库位库存不足：${detail}；请标记库存短缺异常`)
-    }
-    pickLines.value = (data.items || []).flatMap((item: any) =>
-      (item.suggestions || []).map((allocation: any) => ({
-        key: `${item.id}-${allocation.locationCode}`,
-        itemId: item.id,
-        sku: item.sku,
-        totalQty: item.qty,
-        qty: allocation.pickQty,
-        available: allocation.available,
-        locationCode: allocation.locationCode || '',
-      })),
-    )
-    if (!pickLines.value.length || pickLines.value.some((line) => !line.locationCode)) {
-      throw new Error('部分 SKU 暂无可用库位，请确认已上架')
-    }
-  } catch (err: any) {
-    ElMessage.error(err?.message || '加载拣货库位失败')
-    pickVisible.value = false
-  } finally {
-    pickLoading.value = false
-  }
+}
+
+async function onPickSuccess() {
+  filterStatus.value = 'picked'
+  await reloadAll()
 }
 
 async function downloadPickList(row: any) {
@@ -791,33 +664,13 @@ async function downloadPickList(row: any) {
   }
 }
 
-async function submitPick() {
-  if (!pickOrder.value || !canPick.value) return
-  if (pickLines.value.some((l) => !l.locationCode)) {
-    ElMessage.warning('存在未分配库位的 SKU，请先完成上架')
-    return
-  }
-  const grouped = new Map<number, { id: number; allocations: { locationCode: string; qty: number }[] }>()
-  for (const line of pickLines.value) {
-    const item: { id: number; allocations: { locationCode: string; qty: number }[] } =
-      grouped.get(line.itemId) || { id: line.itemId, allocations: [] }
-    item.allocations.push({ locationCode: line.locationCode, qty: line.qty })
-    grouped.set(line.itemId, item)
-  }
-  pickSubmitting.value = true
-  try {
-    await withAction(async () => {
-      await outboundApi.pick(pickOrder.value.id, {
-        pickSource: pickSource.value,
-        items: [...grouped.values()],
-      })
-      pickVisible.value = false
-      filterStatus.value = 'picked'
-      await reloadAll()
-    }, `${pickOrder.value.outboundNo} 已完成拣货`)
-  } finally {
-    pickSubmitting.value = false
-  }
+function openShip(row: any) {
+  shipOrder.value = row
+  shipVisible.value = true
+}
+
+async function onShipSuccess() {
+  await reloadAll()
 }
 
 async function openPack(row: any) {
@@ -978,27 +831,6 @@ function skipPodUpload() {
   podUploadVisible.value = false
   deliverPodFile.value = null
   if (podFileInputRef.value) podFileInputRef.value.value = ''
-}
-
-function openShip(row: any) {
-  shipOrder.value = row
-  shipTrackingNo.value = row.trackingNo || ''
-  shipCarrier.value = row.carrier || ''
-  shipLogisticsProduct.value = row.logisticsProduct || ''
-  shipVisible.value = true
-}
-
-async function submitShip() {
-  if (!shipOrder.value || !canShip.value) return
-  await withAction(async () => {
-    await outboundApi.ship(shipOrder.value.id, {
-      trackingNo: shipTrackingNo.value.trim() || undefined,
-      carrier: shipCarrier.value.trim() || undefined,
-      logisticsProduct: shipLogisticsProduct.value.trim() || undefined,
-    })
-    shipVisible.value = false
-    await reloadAll()
-  }, `${shipOrder.value.outboundNo} 已发运，库存已扣减并生成计费`)
 }
 
 function openAssignPicker(row?: any) {
@@ -1463,38 +1295,12 @@ function statusTag(status: string) {
       </template>
     </el-dialog>
 
-    <!-- 完成拣货 -->
-    <el-dialog v-model="pickVisible" :title="`完成拣货 · ${pickOrder?.outboundNo || ''}`" width="640px">
-      <div class="pick-hint">系统已按库位拆分任务，必须全部拣完；短拣请标记库存短缺异常。</div>
-      <el-form label-width="80px" style="margin-bottom:12px">
-        <el-form-item label="拣货来源">
-          <el-radio-group v-model="pickSource" size="small">
-            <el-radio-button value="pda">PDA</el-radio-button>
-            <el-radio-button value="pick_list">拣货单</el-radio-button>
-          </el-radio-group>
-        </el-form-item>
-      </el-form>
-      <el-table v-loading="pickLoading" :data="pickLines" row-key="key" size="small" border>
-        <el-table-column prop="sku" label="SKU" width="120" />
-        <el-table-column label="总应拣" width="75" align="right">
-          <template #default="{ row }">{{ row.totalQty }}</template>
-        </el-table-column>
-        <el-table-column label="本库位应拣" width="100" align="right">
-          <template #default="{ row }">{{ row.qty }}</template>
-        </el-table-column>
-        <el-table-column label="拣货库位" min-width="140">
-          <template #default="{ row }">
-            <span v-if="row.locationCode" class="mono">{{ row.locationCode }}</span>
-            <span v-else class="loc-empty">待上架</span>
-          </template>
-        </el-table-column>
-        <el-table-column prop="available" label="库位库存" width="90" align="right" />
-      </el-table>
-      <template #footer>
-        <el-button @click="pickVisible = false">取消</el-button>
-        <el-button type="primary" :loading="pickSubmitting" @click="submitPick">完成拣货</el-button>
-      </template>
-    </el-dialog>
+    <OutboundPickDialog
+      v-model="pickVisible"
+      :order="pickOrder"
+      :can-pick="canPick"
+      @success="onPickSuccess"
+    />
 
     <!-- 复核打包 -->
     <el-dialog
@@ -1592,39 +1398,14 @@ function statusTag(status: string) {
       </template>
     </el-dialog>
 
-    <!-- 发运 -->
-    <el-dialog v-model="shipVisible" :title="`发运 · ${shipOrder?.outboundNo || ''}`" width="460px">
-      <div v-if="shipOrder?.omsActualFees" class="pick-hint">
-        实测实算 ¥{{ shipOrder.omsActualFees.actualTotal?.toFixed(2) }}（发运时将按此入账）
-      </div>
-      <div v-else-if="shipOrder?.omsPreDeduct" class="pick-hint" style="color:var(--el-color-warning)">
-        尚未完成实测实算，发运将使用旧版固定单价计费
-      </div>
-      <div v-if="shipOrder?.omsPreDeduct && !shipOrder?.omsActualFees" class="pick-hint">
-        OMS 预扣合计 ¥{{ shipOrder.omsPreDeduct.preDeductTotal?.toFixed(2) }}
-        <template v-if="shipOrder.omsPreDeduct.destRegion"> · 地区 {{ String(shipOrder.omsPreDeduct.destRegion).toUpperCase() }}</template>
-        <template v-if="shipOrder.omsPreDeduct.priceTemplateName"> · 模板 {{ shipOrder.omsPreDeduct.priceTemplateName }}</template>
-      </div>
-      <el-form label-width="80px">
-        <el-form-item label="跟踪号">
-          <el-input v-model="shipTrackingNo" placeholder="物流跟踪号（可选）" clearable />
-        </el-form-item>
-        <el-form-item label="物流产品">
-          <el-select v-model="shipLogisticsProduct" clearable filterable allow-create placeholder="可选" style="width:100%">
-            <el-option v-for="p in LOGISTICS_PRODUCTS" :key="p" :label="p" :value="p" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="承运商">
-          <el-select v-model="shipCarrier" clearable filterable allow-create placeholder="可选" style="width:100%">
-            <el-option v-for="c in CARRIERS" :key="c" :label="c" :value="c" />
-          </el-select>
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="shipVisible = false">取消</el-button>
-        <el-button type="primary" @click="submitShip">确认发运</el-button>
-      </template>
-    </el-dialog>
+    <OutboundShipDialog
+      v-model="shipVisible"
+      :order="shipOrder"
+      :can-ship="canShip"
+      :logistics-products="LOGISTICS_PRODUCTS"
+      :carriers="CARRIERS"
+      @success="onShipSuccess"
+    />
 
     <!-- 分配拣货员 -->
     <el-dialog v-model="assignVisible" title="分配拣货员" width="360px">

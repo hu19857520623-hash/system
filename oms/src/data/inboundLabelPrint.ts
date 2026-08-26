@@ -56,7 +56,7 @@ export function buildBoxLabelData(order: InboundOrder, customerCode?: string): B
   })
 }
 
-export function buildInboundLabelInputs(order: InboundOrder, kind: InboundLabelKind, customerCode?: string): BarcodeLabelInput[] {
+export function buildInboundLabelInputs(order: InboundOrder, _kind: InboundLabelKind, customerCode?: string): BarcodeLabelInput[] {
   const lines = orderLines(order)
   const inputs: BarcodeLabelInput[] = []
 

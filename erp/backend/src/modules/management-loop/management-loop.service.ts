@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
 import { Prisma } from '@prisma/client'
 import { PrismaService } from '../../common/prisma/prisma.service'
+import { InventoryMutationService } from '../../common/inventory/inventory-mutation.service'
 import { OperationLogService } from '../operation-log/operation-log.service'
 import { BillingService } from '../billing/billing.service'
 
@@ -14,9 +15,60 @@ function dateRange(query: { dateFrom?: string; dateTo?: string }) {
   return Object.keys(createdAt).length ? createdAt : undefined
 }
 
+function buildInboundWhere(query: Record<string, unknown>): Prisma.InboundOrderWhereInput {
+  const where: Prisma.InboundOrderWhereInput = {}
+  const createdAt = dateRange(query as { dateFrom?: string; dateTo?: string })
+  if (createdAt) where.createdAt = createdAt
+  if (query.warehouseCode) where.warehouseCode = String(query.warehouseCode)
+  if (query.customerCode) where.omsCustomerCode = String(query.customerCode)
+  if (query.status) where.status = String(query.status)
+  return where
+}
+
+function buildOutboundWhere(query: Record<string, unknown>): Prisma.OutboundOrderWhereInput {
+  const where: Prisma.OutboundOrderWhereInput = {}
+  const createdAt = dateRange(query as { dateFrom?: string; dateTo?: string })
+  if (createdAt) where.createdAt = createdAt
+  if (query.warehouseCode) where.warehouseCode = String(query.warehouseCode)
+  if (query.customerId) where.customerId = BigInt(String(query.customerId))
+  if (query.status) where.status = String(query.status)
+  return where
+}
+
+function inboundSqlFilters(query: Record<string, unknown>): Prisma.Sql[] {
+  const filters: Prisma.Sql[] = []
+  const createdAt = dateRange(query as { dateFrom?: string; dateTo?: string })
+  if (createdAt?.gte) filters.push(Prisma.sql`o.created_at >= ${createdAt.gte}`)
+  if (createdAt?.lte) filters.push(Prisma.sql`o.created_at <= ${createdAt.lte}`)
+  if (query.warehouseCode) filters.push(Prisma.sql`o.warehouse_code = ${String(query.warehouseCode)}`)
+  if (query.customerCode) filters.push(Prisma.sql`o.oms_customer_code = ${String(query.customerCode)}`)
+  if (query.status) filters.push(Prisma.sql`o.status = ${String(query.status)}`)
+  return filters
+}
+
+function outboundSqlFilters(query: Record<string, unknown>): Prisma.Sql[] {
+  const filters: Prisma.Sql[] = []
+  const createdAt = dateRange(query as { dateFrom?: string; dateTo?: string })
+  if (createdAt?.gte) filters.push(Prisma.sql`o.created_at >= ${createdAt.gte}`)
+  if (createdAt?.lte) filters.push(Prisma.sql`o.created_at <= ${createdAt.lte}`)
+  if (query.warehouseCode) filters.push(Prisma.sql`o.warehouse_code = ${String(query.warehouseCode)}`)
+  if (query.customerId) filters.push(Prisma.sql`o.customer_id = ${BigInt(String(query.customerId))}`)
+  if (query.status) filters.push(Prisma.sql`o.status = ${String(query.status)}`)
+  return filters
+}
+
+function sqlWhere(filters: Prisma.Sql[]) {
+  return filters.length ? Prisma.sql`WHERE ${Prisma.join(filters, ' AND ')}` : Prisma.empty
+}
+
 @Injectable()
 export class ManagementLoopService {
-  constructor(private prisma: PrismaService, private opLog: OperationLogService, private billing: BillingService) {}
+  constructor(
+    private prisma: PrismaService,
+    private opLog: OperationLogService,
+    private billing: BillingService,
+    private inventoryMutation: InventoryMutationService,
+  ) {}
 
   private async resolveInboundFeeContext(inboundId: number) {
     const order = await this.prisma.inboundOrder.findUnique({ where: { id: BigInt(inboundId) }, include: { items: true } })
@@ -93,34 +145,49 @@ export class ManagementLoopService {
   async inboundReport(query: any) {
     const page = Math.max(1, Number(query.page) || 1)
     const pageSize = Math.min(200, Math.max(1, Number(query.pageSize) || 20))
-    const where: any = {}
-    const createdAt = dateRange(query)
-    if (createdAt) where.createdAt = createdAt
-    if (query.warehouseCode) where.warehouseCode = query.warehouseCode
-    if (query.customerCode) where.omsCustomerCode = query.customerCode
-    if (query.status) where.status = query.status
-    const [rows, total, all] = await Promise.all([
-      this.prisma.inboundOrder.findMany({
-        where, include: { items: true, cartons: true }, orderBy: { id: 'desc' },
-        skip: (page - 1) * pageSize, take: pageSize,
-      }),
-      this.prisma.inboundOrder.count({ where }),
-      this.prisma.inboundOrder.findMany({ where, include: { items: true }, orderBy: { id: 'desc' } }),
-    ])
-    const ids = all.map((row) => row.inboundNo)
-    const charges = ids.length ? await this.prisma.billingCharge.findMany({ where: { bizRef: { in: ids } } }) : []
+    const where = buildInboundWhere(query)
+    const completedWhere: Prisma.InboundOrderWhereInput = {
+      ...where,
+      status: { in: ['completed', 'confirmed'] },
+    }
+
+    const [rows, total, orderCount, completedCount, statusGroups, itemAgg, feeAmount, cycleRow] =
+      await Promise.all([
+        this.prisma.inboundOrder.findMany({
+          where,
+          include: { items: true, cartons: true },
+          orderBy: { id: 'desc' },
+          skip: (page - 1) * pageSize,
+          take: pageSize,
+        }),
+        this.prisma.inboundOrder.count({ where }),
+        this.prisma.inboundOrder.count({ where }),
+        this.prisma.inboundOrder.count({ where: completedWhere }),
+        this.prisma.inboundOrder.groupBy({ by: ['status'], where, _count: { _all: true } }),
+        this.prisma.inboundOrderItem.aggregate({
+          where: { order: where },
+          _sum: { expectedQty: true, actualQty: true },
+        }),
+        this.aggregateInboundFeeAmount(query),
+        this.aggregateInboundCycleHours(completedWhere),
+      ])
+
+    const pageRefs = rows.map((row) => row.inboundNo)
+    const charges = pageRefs.length
+      ? await this.prisma.billingCharge.findMany({ where: { bizRef: { in: pageRefs } } })
+      : []
     const chargeMap = new Map<string, number>()
-    charges.forEach((charge) => chargeMap.set(charge.bizRef || '', (chargeMap.get(charge.bizRef || '') || 0) + toNumber(charge.amount)))
-    const totalExpectedQty = all.reduce((sum, row) => sum + row.items.reduce((s, item) => s + item.expectedQty, 0), 0)
-    const totalReceivedQty = all.reduce((sum, row) => sum + row.items.reduce((s, item) => s + (item.actualQty ?? 0), 0), 0)
-    const completed = all.filter((row) => ['completed', 'confirmed'].includes(row.status))
-    const durationHours = completed
-      .filter((row) => row.arrivedAt && row.putawayAt)
-      .map((row) => (row.putawayAt!.getTime() - row.arrivedAt!.getTime()) / 3600000)
-    const statusCounts = all.reduce<Record<string, number>>((acc, row) => {
-      acc[row.status] = (acc[row.status] || 0) + 1
+    charges.forEach((charge) =>
+      chargeMap.set(charge.bizRef || '', (chargeMap.get(charge.bizRef || '') || 0) + toNumber(charge.amount)),
+    )
+
+    const totalExpectedQty = itemAgg._sum.expectedQty ?? 0
+    const totalReceivedQty = itemAgg._sum.actualQty ?? 0
+    const statusCounts = statusGroups.reduce<Record<string, number>>((acc, row) => {
+      acc[row.status] = row._count._all
       return acc
     }, {})
+
     return {
       items: rows.map((row) => ({
         id: Number(row.id), inboundNo: row.inboundNo, warehouseCode: row.warehouseCode,
@@ -134,41 +201,95 @@ export class ManagementLoopService {
       })),
       total, page, pageSize,
       summary: {
-        orderCount: all.length, completedCount: completed.length, statusCounts,
-        expectedQty: totalExpectedQty, receivedQty: totalReceivedQty,
+        orderCount,
+        completedCount,
+        statusCounts,
+        expectedQty: totalExpectedQty,
+        receivedQty: totalReceivedQty,
         varianceQty: totalReceivedQty - totalExpectedQty,
-        completionRate: all.length ? round(completed.length / all.length * 100, 1) : 0,
-        avgCycleHours: durationHours.length ? round(durationHours.reduce((a, b) => a + b, 0) / durationHours.length, 1) : 0,
-        feeAmount: round(charges.reduce((sum, charge) => sum + toNumber(charge.amount), 0)),
+        completionRate: orderCount ? round(completedCount / orderCount * 100, 1) : 0,
+        avgCycleHours: cycleRow,
+        feeAmount: round(feeAmount),
       },
     }
+  }
+
+  private async aggregateInboundFeeAmount(query: Record<string, unknown>) {
+    const filters = inboundSqlFilters(query)
+    const rows = await this.prisma.$queryRaw<Array<{ feeAmount: unknown }>>`
+      SELECT COALESCE(SUM(c.amount), 0) AS feeAmount
+      FROM billing_charge c
+      INNER JOIN inbound_order o ON c.biz_ref = o.inbound_no
+      ${sqlWhere(filters)}
+    `
+    return toNumber(rows[0]?.feeAmount)
+  }
+
+  private async aggregateInboundCycleHours(where: Prisma.InboundOrderWhereInput) {
+    const orders = await this.prisma.inboundOrder.findMany({
+      where: {
+        ...where,
+        arrivedAt: { not: null },
+        putawayAt: { not: null },
+      },
+      select: { arrivedAt: true, putawayAt: true },
+    })
+    if (!orders.length) return 0
+    const hours = orders.map((row) => (row.putawayAt!.getTime() - row.arrivedAt!.getTime()) / 3600000)
+    return round(hours.reduce((a, b) => a + b, 0) / hours.length, 1)
   }
 
   async outboundReport(query: any) {
     const page = Math.max(1, Number(query.page) || 1)
     const pageSize = Math.min(200, Math.max(1, Number(query.pageSize) || 20))
-    const where: any = {}
-    const createdAt = dateRange(query)
-    if (createdAt) where.createdAt = createdAt
-    if (query.warehouseCode) where.warehouseCode = query.warehouseCode
-    if (query.customerId) where.customerId = BigInt(query.customerId)
-    if (query.status) where.status = query.status
-    const [rows, total, all] = await Promise.all([
-      this.prisma.outboundOrder.findMany({ where, include: { items: true }, orderBy: { id: 'desc' }, skip: (page - 1) * pageSize, take: pageSize }),
-      this.prisma.outboundOrder.count({ where }),
-      this.prisma.outboundOrder.findMany({ where, include: { items: true }, orderBy: { id: 'desc' } }),
-    ])
-    const refs = all.map((row) => row.outboundNo)
-    const charges = refs.length ? await this.prisma.billingCharge.findMany({ where: { bizRef: { in: refs } } }) : []
+    const where = buildOutboundWhere(query)
+    const completedWhere: Prisma.OutboundOrderWhereInput = {
+      ...where,
+      status: { in: ['shipped', 'delivered'] },
+    }
+
+    const [rows, total, orderCount, completedCount, statusGroups, itemAgg, exceptionCount, feeAmount] =
+      await Promise.all([
+        this.prisma.outboundOrder.findMany({
+          where,
+          include: { items: true },
+          orderBy: { id: 'desc' },
+          skip: (page - 1) * pageSize,
+          take: pageSize,
+        }),
+        this.prisma.outboundOrder.count({ where }),
+        this.prisma.outboundOrder.count({ where }),
+        this.prisma.outboundOrder.count({ where: completedWhere }),
+        this.prisma.outboundOrder.groupBy({ by: ['status'], where, _count: { _all: true } }),
+        this.prisma.outboundOrderItem.aggregate({
+          where: { order: where },
+          _sum: { qty: true, pickedQty: true },
+        }),
+        this.prisma.outboundOrder.count({
+          where: {
+            ...where,
+            OR: [{ isProblem: true }, { exceptionType: { not: null } }],
+          },
+        }),
+        this.aggregateOutboundFeeAmount(query),
+      ])
+
+    const pageRefs = rows.map((row) => row.outboundNo)
+    const charges = pageRefs.length
+      ? await this.prisma.billingCharge.findMany({ where: { bizRef: { in: pageRefs } } })
+      : []
     const chargeMap = new Map<string, number>()
-    charges.forEach((charge) => chargeMap.set(charge.bizRef || '', (chargeMap.get(charge.bizRef || '') || 0) + toNumber(charge.amount)))
-    const completed = all.filter((row) => ['shipped', 'delivered'].includes(row.status))
-    const requestedQty = all.reduce((sum, row) => sum + row.items.reduce((s, item) => s + item.qty, 0), 0)
-    const pickedQty = all.reduce((sum, row) => sum + row.items.reduce((s, item) => s + item.pickedQty, 0), 0)
-    const statusCounts = all.reduce<Record<string, number>>((acc, row) => {
-      acc[row.status] = (acc[row.status] || 0) + 1
+    charges.forEach((charge) =>
+      chargeMap.set(charge.bizRef || '', (chargeMap.get(charge.bizRef || '') || 0) + toNumber(charge.amount)),
+    )
+
+    const requestedQty = itemAgg._sum.qty ?? 0
+    const pickedQty = itemAgg._sum.pickedQty ?? 0
+    const statusCounts = statusGroups.reduce<Record<string, number>>((acc, row) => {
+      acc[row.status] = row._count._all
       return acc
     }, {})
+
     return {
       items: rows.map((row) => ({
         id: Number(row.id), outboundNo: row.outboundNo, warehouseCode: row.warehouseCode,
@@ -181,13 +302,28 @@ export class ManagementLoopService {
       })),
       total, page, pageSize,
       summary: {
-        orderCount: all.length, completedCount: completed.length, statusCounts,
-        requestedQty, pickedQty, shortageQty: Math.max(0, requestedQty - pickedQty),
-        fulfillmentRate: all.length ? round(completed.length / all.length * 100, 1) : 0,
-        exceptionCount: all.filter((row) => row.isProblem || row.exceptionType).length,
-        feeAmount: round(charges.reduce((sum, charge) => sum + toNumber(charge.amount), 0)),
+        orderCount,
+        completedCount,
+        statusCounts,
+        requestedQty,
+        pickedQty,
+        shortageQty: Math.max(0, requestedQty - pickedQty),
+        fulfillmentRate: orderCount ? round(completedCount / orderCount * 100, 1) : 0,
+        exceptionCount,
+        feeAmount: round(feeAmount),
       },
     }
+  }
+
+  private async aggregateOutboundFeeAmount(query: Record<string, unknown>) {
+    const filters = outboundSqlFilters(query)
+    const rows = await this.prisma.$queryRaw<Array<{ feeAmount: unknown }>>`
+      SELECT COALESCE(SUM(c.amount), 0) AS feeAmount
+      FROM billing_charge c
+      INNER JOIN outbound_order o ON c.biz_ref = o.outbound_no
+      ${sqlWhere(filters)}
+    `
+    return toNumber(rows[0]?.feeAmount)
   }
 
   listFeeRules() {
@@ -299,34 +435,16 @@ export class ManagementLoopService {
       for (const line of plan.lines) {
         const finalQty = line.finalQty
         if (finalQty == null) throw new BadRequestException(`${line.sku} 尚未完成盘点`)
-        const currentRows = await tx.inventoryLocation.findMany({
-          where: { productId: line.productId, locationId: line.locationId }, orderBy: { id: 'asc' },
+        await this.inventoryMutation.adjustLocationToTarget(tx, {
+          productId: line.productId,
+          sku: line.sku,
+          warehouseCode: plan.warehouseCode,
+          locationId: line.locationId,
+          locationCode: line.locationCode,
+          targetQty: finalQty,
+          operatorId: userId,
+          referenceNo: plan.stocktakeNo,
         })
-        if (!currentRows.length) throw new BadRequestException(`库位库存 ${line.locationCode}/${line.sku} 已不存在`)
-        const currentQty = currentRows.reduce((sum, row) => sum + row.qty, 0)
-        const delta = finalQty - currentQty
-        if (!delta) continue
-        if (delta > 0) {
-          await tx.inventoryLocation.update({ where: { id: currentRows[0].id }, data: { qty: currentRows[0].qty + delta } })
-        } else {
-          let remaining = -delta
-          for (const row of currentRows) {
-            if (!remaining) break
-            const deduct = Math.min(row.qty, remaining)
-            await tx.inventoryLocation.update({ where: { id: row.id }, data: { qty: row.qty - deduct } })
-            remaining -= deduct
-          }
-        }
-        const warehouseInventory = await tx.inventory.findUnique({ where: { productId_warehouseCode: { productId: line.productId, warehouseCode: plan.warehouseCode } } })
-        if (!warehouseInventory) throw new BadRequestException(`${line.sku} 仓库总库存不存在`)
-        const after = warehouseInventory.totalQty + delta
-        if (after < 0) throw new BadRequestException(`${line.sku} 调整后库存不能为负数`)
-        await tx.inventory.update({ where: { id: warehouseInventory.id }, data: { totalQty: after, availableQty: Math.max(0, warehouseInventory.availableQty + delta) } })
-        await tx.inventoryLog.create({ data: {
-          productId: line.productId, sku: line.sku, warehouseCode: plan.warehouseCode,
-          changeType: 'stocktake', changeQty: delta, beforeQty: warehouseInventory.totalQty, afterQty: after,
-          referenceNo: plan.stocktakeNo, operatorId: userId ? BigInt(userId) : null, remark: `盘点调整 · ${line.locationCode}`,
-        }})
       }
       await tx.stocktakePlan.update({ where: { id: BigInt(id) }, data: { status: 'completed', approvedBy: userId ? BigInt(userId) : null, completedAt: new Date() } })
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable })

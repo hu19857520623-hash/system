@@ -16,6 +16,8 @@
     "migrate:baseline": "ts-node prisma/migrate-all.ts --baseline",
     "migrate:schema": "npx prisma db execute --file prisma/scripts/migrate_schema_full_sync.sql",
     "verify:schema": "node scripts/verify-schema-sync.mjs",
+    "verify:inventory": "ts-node -r tsconfig-paths/register scripts/verify-inventory-consistency.ts",
+    "verify:schema": "node scripts/verify-schema-sync.mjs",
     "sync:shared": "tsc -p ../shared/tsconfig.json",
     "sync:permissions": "npm run sync:shared && ts-node -r tsconfig-paths/register prisma/sync-permissions.ts",
     "sync:java-permissions": "npm run sync:shared && node ../shared/sync-java-permission-constants.mjs",

@@ -25,14 +25,11 @@ import {
   type CartonInput,
 } from './return-measure.util'
 import {
-  ALL_RETURN_CHARGE_TYPES,
-  RETURN_AUTO_CHARGE_TYPES,
-  RETURN_DECISION_CHARGE_TYPES,
-  RETURN_MANUAL_CHARGE_TYPES,
   buildDiscardFeeLines,
   buildKeepFeeLines,
 } from './return-decision-fee.util'
 import { buildMeasurePhaseFeeLines, buildFeePreviewContext, defaultMeasureFeeRules, mapDbTemplateRules, normalizeExtraFeeLines, normalizeTemplateRulesInput, type FeeTemplateRule } from './return-fee-template.util'
+import { ReturnsChargeService } from './returns-charge.service'
 
 function round2Amount(n: number) {
   return Math.round(n * 100) / 100
@@ -63,6 +60,7 @@ export class ReturnsService {
     private opLog: OperationLogService,
     private files: FileStoreService,
     private billing: BillingService,
+    private returnCharges: ReturnsChargeService,
   ) {}
 
   private writeAttachment(fileName: string, contentBase64: string) {
@@ -207,7 +205,7 @@ export class ReturnsService {
     })
     if (!row) throw new NotFoundException('退件单不存在')
     const enriched = this.enrichRow(row)
-    const feeLines = await this.loadFeeLines(row.returnNo)
+    const feeLines = await this.returnCharges.loadFeeLines(row.returnNo)
     return { ...enriched, feeLines }
   }
 
@@ -423,7 +421,7 @@ export class ReturnsService {
     if (receivedQty <= 0) throw new BadRequestException('实收件数须大于 0')
     if (receivedCartonCount <= 0) throw new BadRequestException('实收箱数须大于 0')
 
-    await this.clearPendingReturnCharges(row.returnNo)
+    await this.returnCharges.clearPendingReturnCharges(row.returnNo)
 
     const updated = await this.prisma.$transaction(async (tx) => {
       await tx.returnCartonMeasure.deleteMany({ where: { returnId: row.id } })
@@ -510,7 +508,7 @@ export class ReturnsService {
       })
     })
 
-    await this.clearPendingAutoReturnCharges(row.returnNo)
+    await this.returnCharges.clearPendingAutoReturnCharges(row.returnNo)
     await this.opLog.log({
       module: 'returns',
       action: 'return_measure',
@@ -738,10 +736,10 @@ export class ReturnsService {
     const autoLines = buildMeasurePhaseFeeLines(ctx, rules)
     const estimatedFeeTotal = autoLines.reduce((s, l) => s + l.amount, 0)
 
-    await this.clearPendingAutoReturnCharges(row.returnNo)
-    await this.clearPendingManualExtraCharges(row.returnNo)
+    await this.returnCharges.clearPendingAutoReturnCharges(row.returnNo)
+    await this.returnCharges.clearPendingManualExtraCharges(row.returnNo)
     for (const line of autoLines) {
-      await this.createReturnCharge({
+      await this.returnCharges.createReturnCharge({
         customerId: Number(row.customerId),
         returnNo: row.returnNo,
         warehouseCode: row.returnWarehouse || undefined,
@@ -776,7 +774,7 @@ export class ReturnsService {
     })
     void this.pushReturnStatusToOms(row.returnNo)
     const enriched = this.enrichRow(updated)
-    const loadedFeeLines = await this.loadFeeLines(row.returnNo)
+    const loadedFeeLines = await this.returnCharges.loadFeeLines(row.returnNo)
     return { ...enriched, feeLines: loadedFeeLines }
   }
 
@@ -949,126 +947,6 @@ export class ReturnsService {
     return row
   }
 
-  private async nextChargeSuffix(customerId: number): Promise<string> {
-    const rows: any[] = await this.prisma.$queryRawUnsafe(
-      'SELECT charge_no FROM billing_charge WHERE customer_id = ? ORDER BY id DESC LIMIT 1',
-      customerId,
-    )
-    const last = String(rows[0]?.charge_no || '')
-    const match = last.match(/CHG-(\d+)$/)
-    const next = match ? Number(match[1]) + 1 : 1
-    return `CHG-${String(next).padStart(3, '0')}`
-  }
-
-  private async createReturnCharge(data: {
-    customerId: number
-    returnNo: string
-    warehouseCode?: string
-    source?: 'wms' | 'manual'
-    chargeType: string
-    description: string
-    quantity: number
-    unitPrice: number
-    amount: number
-  }) {
-    const customer = await this.prisma.customer.findUnique({ where: { id: BigInt(data.customerId) } })
-    if (!customer) throw new NotFoundException('客户不存在')
-    const suffix = await this.nextChargeSuffix(data.customerId)
-    const prefix = customer.customerCode ? `${customer.customerCode}-` : ''
-    const chargeNo = `${prefix}${suffix}`
-    const chargeDate = new Date().toISOString().slice(0, 10)
-    await this.prisma.$executeRawUnsafe(
-      `INSERT INTO billing_charge (charge_no, customer_id, charge_type, source, description, amount, quantity, unit_price, charge_date, biz_ref, source_ref, warehouse_code, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
-      chargeNo,
-      BigInt(data.customerId),
-      data.chargeType,
-      data.source || 'wms',
-      data.description,
-      data.amount,
-      data.quantity,
-      data.unitPrice,
-      chargeDate,
-      data.returnNo,
-      data.returnNo,
-      data.warehouseCode || 'WMS-JHB-01',
-    )
-    void this.billing.pushCustomerBillingToOms(data.customerId)
-  }
-
-  private async clearPendingAutoReturnCharges(returnNo: string) {
-    const types = RETURN_AUTO_CHARGE_TYPES.map((t) => `'${t}'`).join(', ')
-    await this.prisma.$executeRawUnsafe(
-      `DELETE FROM billing_charge
-       WHERE biz_ref = ? AND status = 'pending'
-         AND charge_type IN (${types})`,
-      returnNo,
-    )
-  }
-
-  private async clearPendingManualExtraCharges(returnNo: string) {
-    const types = RETURN_MANUAL_CHARGE_TYPES.map((t) => `'${t}'`).join(', ')
-    await this.prisma.$executeRawUnsafe(
-      `DELETE FROM billing_charge
-       WHERE biz_ref = ? AND status = 'pending'
-         AND source = 'manual'
-         AND charge_type IN (${types})`,
-      returnNo,
-    )
-  }
-
-  private async clearPendingReturnCharges(returnNo: string) {
-    const types = ALL_RETURN_CHARGE_TYPES.map((t) => `'${t}'`).join(', ')
-    await this.prisma.$executeRawUnsafe(
-      `DELETE FROM billing_charge
-       WHERE biz_ref = ? AND status = 'pending'
-         AND charge_type IN (${types})`,
-      returnNo,
-    )
-  }
-
-  private async clearPendingDecisionCharges(returnNo: string) {
-    const types = RETURN_DECISION_CHARGE_TYPES.map((t) => `'${t}'`).join(', ')
-    await this.prisma.$executeRawUnsafe(
-      `DELETE FROM billing_charge
-       WHERE biz_ref = ? AND status = 'pending'
-         AND charge_type IN (${types})`,
-      returnNo,
-    )
-  }
-
-  private async refreshEstimatedFeeTotal(returnId: bigint, returnNo: string) {
-    const rows: any[] = await this.prisma.$queryRawUnsafe(
-      `SELECT COALESCE(SUM(amount), 0) as total FROM billing_charge WHERE biz_ref = ? AND status = 'pending'`,
-      returnNo,
-    )
-    const total = Number(rows[0]?.total ?? 0)
-    await this.prisma.returnOrder.update({
-      where: { id: returnId },
-      data: { estimatedFeeTotal: total, feeStatus: total > 0 ? 'estimated' : 'none' },
-    })
-    return total
-  }
-
-  private async loadFeeLines(returnNo: string) {
-    const types = ALL_RETURN_CHARGE_TYPES.map((t) => `'${t}'`).join(', ')
-    const rows: any[] = await this.prisma.$queryRawUnsafe(
-      `SELECT charge_type, description, quantity, unit_price, amount, status
-       FROM billing_charge
-       WHERE biz_ref = ? AND charge_type IN (${types})
-       ORDER BY id ASC`,
-      returnNo,
-    )
-    return rows.map((r) => ({
-      chargeType: r.charge_type,
-      description: r.description,
-      quantity: Number(r.quantity),
-      unitPrice: r.unit_price != null ? Number(r.unit_price) : null,
-      amount: Number(r.amount),
-      status: r.status,
-    }))
-  }
-
   async submitInspection(
     id: number,
     body: {
@@ -1170,7 +1048,7 @@ export class ReturnsService {
     const totalQty = row.receivedQty ?? row.items.reduce((s, i) => s + i.quantity, 0)
     const totalVolumeCbm = Number(row.totalVolumeCbm || 0)
 
-    await this.clearPendingDecisionCharges(no)
+    await this.returnCharges.clearPendingDecisionCharges(no)
 
     let nextStatus: string
     let customerProcessChoice: string | null = null
@@ -1179,7 +1057,7 @@ export class ReturnsService {
       nextStatus = 'dispose_pending'
       const feeLines = buildDiscardFeeLines(totalVolumeCbm)
       for (const line of feeLines) {
-        await this.createReturnCharge({
+        await this.returnCharges.createReturnCharge({
           customerId: Number(row.customerId),
           returnNo: no,
           warehouseCode: row.returnWarehouse || undefined,
@@ -1195,7 +1073,7 @@ export class ReturnsService {
       nextStatus = 'accepted_pending'
       const feeLines = buildKeepFeeLines(processChoice as ReturnProcessMethod, totalQty)
       for (const line of feeLines) {
-        await this.createReturnCharge({
+        await this.returnCharges.createReturnCharge({
           customerId: Number(row.customerId),
           returnNo: no,
           warehouseCode: row.returnWarehouse || undefined,
@@ -1204,7 +1082,7 @@ export class ReturnsService {
       }
     }
 
-    const estimatedFeeTotal = await this.refreshEstimatedFeeTotal(row.id, no)
+    const estimatedFeeTotal = await this.returnCharges.refreshEstimatedFeeTotal(row.id, no)
 
     const updated = await this.prisma.returnOrder.update({
       where: { id: row.id },

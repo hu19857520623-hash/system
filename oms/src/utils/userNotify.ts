@@ -13,7 +13,9 @@ let nextId = 0
 
 export function subscribeUserToast(listener: Listener) {
   listeners.add(listener)
-  return () => listeners.delete(listener)
+  return () => {
+    listeners.delete(listener)
+  }
 }
 
 function publish(kind: UserToastKind, text: string) {

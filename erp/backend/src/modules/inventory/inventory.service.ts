@@ -24,14 +24,17 @@ import {
   numDim,
   resolveBillingDimensions,
 } from '../../common/product-dimension.util'
+import { InventoryMutationService } from '../../common/inventory/inventory-mutation.service'
+import type { InventoryTx } from '../../common/inventory/inventory-mutation.types'
 
-type Tx = Parameters<Parameters<PrismaService['$transaction']>[0]>[0]
+type Tx = InventoryTx
 
 @Injectable()
 export class InventoryService {
   constructor(
     private prisma: PrismaService,
     private opLog: OperationLogService,
+    private inventoryMutation: InventoryMutationService,
   ) {}
 
   async query(
@@ -1231,7 +1234,7 @@ export class InventoryService {
     }))
   }
 
-  private async applyWarehouseQtyDelta(
+  private applyWarehouseQtyDelta(
     tx: Tx,
     productId: bigint,
     sku: string,
@@ -1240,54 +1243,13 @@ export class InventoryService {
     operatorId: number | undefined,
     meta: { changeType: string; remark?: string; referenceNo?: string },
   ) {
-    if (diff === 0) return
-
-    const whInv = await tx.inventory.findUnique({
-      where: { productId_warehouseCode: { productId, warehouseCode } },
-    })
-    const before = whInv?.totalQty ?? 0
-    const after = before + diff
-
-    if (after < 0) throw new BadRequestException('仓库库存不足，无法减少')
-    if (whInv && after < whInv.lockedQty) {
-      throw new BadRequestException(`调整后总量 ${after} 低于锁定数量 ${whInv.lockedQty}`)
-    }
-
-    if (whInv) {
-      await tx.inventory.update({
-        where: { id: whInv.id },
-        data: {
-          totalQty: after,
-          availableQty: whInv.availableQty + diff,
-        },
-      })
-    } else if (diff > 0) {
-      await tx.inventory.create({
-        data: {
-          productId,
-          sku,
-          warehouseCode,
-          totalQty: after,
-          availableQty: after,
-        },
-      })
-    } else {
-      throw new BadRequestException('仓库库存不存在')
-    }
-
-    await tx.inventoryLog.create({
-      data: {
-        productId,
-        sku,
-        warehouseCode,
-        changeType: meta.changeType,
-        changeQty: diff,
-        beforeQty: before,
-        afterQty: after,
-        referenceNo: meta.referenceNo || null,
-        operatorId: operatorId ? BigInt(operatorId) : undefined,
-        remark: meta.remark || null,
-      },
+    return this.inventoryMutation.applyWarehouseQtyDelta(tx, {
+      productId,
+      sku,
+      warehouseCode,
+      diff,
+      operatorId,
+      ...meta,
     })
   }
 
