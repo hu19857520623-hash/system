@@ -1,0 +1,14 @@
+services:
+  erp-api:
+    environment:
+      TAKEALOT_PROXY_URL: http://takealot-monitor:3456
+
+  takealot-monitor:
+    image: takealot/store-monitor:production
+    container_name: takealot-monitor
+    restart: unless-stopped
+    environment:
+      LISTEN_HOST: 0.0.0.0
+      PORT: 3456
+    security_opt:
+      - no-new-privileges:true

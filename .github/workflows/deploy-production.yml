@@ -79,18 +79,10 @@ jobs:
           docker compose up -d --no-deps oms-api oms-web
 
           cd /opt/system/erp
-          docker compose up -d --no-deps erp-api erp-web
-
-          monitor_network="$(docker inspect --format '{{range $name, $config := .NetworkSettings.Networks}}{{println $name}}{{end}}' erp-api | head -n 1)"
-          test -n "$monitor_network" || { echo 'Cannot resolve ERP Docker network.'; exit 1; }
-          docker rm -f takealot-monitor >/dev/null 2>&1 || true
-          docker run -d \
-            --name takealot-monitor \
-            --restart unless-stopped \
-            --network "$monitor_network" \
-            -e LISTEN_HOST=0.0.0.0 \
-            -e PORT=3456 \
-            takealot/store-monitor:production >/dev/null
+          docker compose \
+            -f docker-compose.yml \
+            -f docker-compose.monitor.override.yml \
+            up -d --no-deps takealot-monitor erp-api erp-web
 
           docker restart erp-nginx >/dev/null
 
