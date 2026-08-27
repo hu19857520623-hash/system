@@ -30,7 +30,6 @@ import {
 import { useFeeTemplates, getPriceTemplateForCustomer } from '../data/feeTemplateStore'
 import { preDeductOutboundFees, rollbackPreDeductOutboundFees, useBilling } from '../data/billingStore'
 import { useRole } from '../auth/RoleContext'
-import { useDataScope } from '../auth/useDataScope'
 import { fileToAttachment, todayDateInput } from '../data/fileUtils'
 import {
   describeTakealotParsed,
@@ -115,7 +114,6 @@ export default function Outbound() {
   const outboundOrders = useOutboundOrders()
   const editOrder = editId ? outboundOrders.find(order => order.id === editId && order.status === 'draft') : undefined
   const { role, can } = useRole()
-  const dataScope = useDataScope()
   const [takealotDestWarehouse, setTakealotDestWarehouse] = useState<string>(DEFAULT_TAKEALOT_DEST_WAREHOUSE)
   const [platform, setPlatform] = useState<string>(PLATFORM_OPTIONS[0])
   const [outboundType, setOutboundType] = useState<string>('Takealot入仓')

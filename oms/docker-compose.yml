@@ -1,0 +1,75 @@
+# OMS production stack. It shares takealot-production with ERP, MySQL and nginx.
+
+x-build-args: &build-args
+  DOCKER_REGISTRY: ${DOCKER_REGISTRY:-docker.io/library/}
+  NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
+
+services:
+  oms-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+      args:
+        <<: *build-args
+    image: takealot/oms-api:production
+    container_name: oms-api
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      API_PORT: 3001
+      LISTEN_HOST: 0.0.0.0
+      DATABASE_URL: mysql://root:${ERP_MYSQL_ROOT_PASSWORD:?Set ERP_MYSQL_ROOT_PASSWORD in erp/.env}@mysql:3306/takealot_erp
+      ERP_API_BASE: ${ERP_API_BASE:-http://erp-api:3000/api}
+      ERP_OMS_PROVISION_PATH: ${ERP_OMS_PROVISION_PATH:-/customers/oms/provision}
+      ERP_OMS_UPDATE_PATH: ${ERP_OMS_UPDATE_PATH:-/customers/oms/by-code/:customerCode}
+      ERP_OMS_RESET_PASSWORD_PATH: ${ERP_OMS_RESET_PASSWORD_PATH:-/customers/oms/by-code/:customerCode/portal-password}
+      OMS_INTERNAL_TOKEN: ${OMS_INTERNAL_TOKEN:?Set OMS_INTERNAL_TOKEN in oms/.env}
+      OMS_JWT_SECRET: ${OMS_JWT_SECRET:?Set OMS_JWT_SECRET in oms/.env (at least 32 characters)}
+      OMS_WEBHOOK_SECRET: ${OMS_WEBHOOK_SECRET:?Set OMS_WEBHOOK_SECRET in oms/.env}
+      OMS_CORS_ORIGINS: ${OMS_CORS_ORIGINS:-https://oms.sztekeluo.com,https://www.oms.sztekeluo.com}
+      OMS_ALLOW_INSECURE_DEV_AUTH: "false"
+      OMS_BOOTSTRAP_ADMIN_USERNAME: ${OMS_BOOTSTRAP_ADMIN_USERNAME:-omsadmin}
+      OMS_BOOTSTRAP_ADMIN_PASSWORD: ${OMS_BOOTSTRAP_ADMIN_PASSWORD:-DevAdmin123!}
+    ports:
+      - "127.0.0.1:${OMS_API_PORT:-3001}:3001"
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3001/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 45s
+    networks:
+      - production
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+
+  oms-web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+      args:
+        <<: *build-args
+    image: takealot/oms-web:production
+    container_name: oms-web
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${OMS_WEB_PORT:-5173}:8080"
+    depends_on:
+      oms-api:
+        condition: service_healthy
+    networks:
+      - production
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/cache/nginx
+      - /var/run
+
+networks:
+  production:
+    name: takealot-production
+    external: true

@@ -205,8 +205,6 @@ export default function Inbound() {
         </Link>
       </div>
 
-      </div>
-
       <div className="space-y-4">
         <FormSection num={1} title="入库信息">
           <FormGrid cols={3}>

@@ -41,14 +41,6 @@ jobs:
             --exclude='*/dist/' \
             --exclude='.codex-tmp/' \
             --exclude='tmp/' \
-            --exclude='erp/docker-compose.yml' \
-            --exclude='erp/backend/Dockerfile' \
-            --exclude='erp/frontend/Dockerfile' \
-            --exclude='erp/frontend/nginx.docker.conf' \
-            --exclude='erp/nginx/' \
-            --exclude='oms/docker-compose.yml' \
-            --exclude='oms/Dockerfile.api' \
-            --exclude='oms/Dockerfile.web' \
             -e 'ssh -i ~/.ssh/deploy_key -o BatchMode=yes' \
             ./ ubuntu@175.178.50.202:/opt/system/
 
@@ -69,9 +61,30 @@ jobs:
             fi
           }
 
+          load_env_file /opt/system/.env
+          load_env_file /opt/system/erp/.env
+          load_env_file /opt/system/oms/.env
+          test -n "${ERP_MYSQL_ROOT_PASSWORD:-}" || { echo 'ERP_MYSQL_ROOT_PASSWORD missing on server'; exit 1; }
+          test -n "${OMS_INTERNAL_TOKEN:-}" || { echo 'OMS_INTERNAL_TOKEN missing on server'; exit 1; }
+          test -n "${OMS_WEBHOOK_SECRET:-}" || { echo 'OMS_WEBHOOK_SECRET missing on server'; exit 1; }
+
+          # ERP, OMS, nginx and the monitor resolve each other on one stable
+          # cross-project network. Creation is idempotent across deployments.
+          docker network inspect takealot-production >/dev/null 2>&1 \
+            || docker network create takealot-production >/dev/null
+
           # Apply SQL from the rsynced host files. Do not rely on image COPY cache,
           # which can miss newly added prisma/scripts/*.sql.
           cd /opt/system/erp
+          docker compose up -d mysql
+
+          echo '=== Build OMS ==='
+          cd /opt/system/oms
+          docker compose build oms-api oms-web
+
+          echo '=== Build ERP ==='
+          cd /opt/system/erp
+          docker compose build erp-api erp-web
 
           echo '=== Apply outbound phase1 schema ==='
           docker compose run -T --rm --no-deps --entrypoint npx erp-api \
@@ -80,7 +93,6 @@ jobs:
           echo '=== Repair WMS loop schema ==='
           repair_sql="${PWD}/backend/prisma/scripts/migrate_wms_loop_schema_repair.sql"
           test -f "$repair_sql" || { echo "Missing $repair_sql"; exit 1; }
-          docker compose up -d mysql
           mysql_pw="$(docker compose exec -T mysql printenv MYSQL_ROOT_PASSWORD | tr -d '\r\n')"
           test -n "$mysql_pw" || { echo 'mysql container missing MYSQL_ROOT_PASSWORD'; exit 1; }
           for _ in $(seq 1 30); do
@@ -91,14 +103,6 @@ jobs:
           done
           cat "$repair_sql" | docker compose exec -T mysql mysql -uroot -p"$mysql_pw" --batch takealot_erp
 
-          echo '=== Build OMS ==='
-          cd /opt/system/oms
-          docker compose build oms-api oms-web
-
-          echo '=== Build ERP ==='
-          cd /opt/system/erp
-          docker compose build erp-api erp-web
-
           echo '=== Build store-monitor ==='
           cd /opt/system/store-monitor
           docker build -t takealot/store-monitor:production .
@@ -106,8 +110,6 @@ jobs:
           cd /opt/system/oms
           docker compose up -d --no-deps oms-api oms-web
 
-          load_env_file /opt/system/.env
-          load_env_file /opt/system/oms/.env
           bootstrap_user="${OMS_BOOTSTRAP_ADMIN_USERNAME:-omsadmin}"
           bootstrap_pass="${OMS_BOOTSTRAP_ADMIN_PASSWORD:-DevAdmin123!}"
           docker compose exec -T \
@@ -119,17 +121,18 @@ jobs:
           docker rm -f takealot-monitor >/dev/null 2>&1 || true
           docker compose up -d --no-deps erp-api erp-web
 
-          monitor_network="$(docker inspect --format '{{range $name, $config := .NetworkSettings.Networks}}{{println $name}}{{end}}' erp-api | head -n 1)"
-          test -n "$monitor_network" || { echo 'Cannot resolve ERP Docker network.'; exit 1; }
           docker run -d \
             --name takealot-monitor \
             --restart unless-stopped \
-            --network "$monitor_network" \
+            --network takealot-production \
             -e LISTEN_HOST=0.0.0.0 \
             -e PORT=3456 \
             takealot/store-monitor:production >/dev/null
 
-          docker restart erp-nginx >/dev/null
+          # Replace the legacy entrypoint name and start TLS + renewal from the
+          # version-controlled production Compose configuration.
+          docker rm -f erp-nginx >/dev/null 2>&1 || true
+          docker compose up -d --no-deps nginx certbot
 
           wait_healthy() {
             local container="$1"
@@ -177,7 +180,7 @@ jobs:
           IMPORT_JSON="$import_json" python3 -c "import json,os,sys; payload=json.loads(os.environ['IMPORT_JSON']); data=payload.get('data') or payload; keys=('total','created','updated','failed','linked'); print('import result:', {k: data.get(k) for k in keys}); linked=int(data.get('linked') or 0); sys.exit('OMS linked customers below 200: %s' % linked) if linked < 200 else None"
 
           wait_healthy takealot-monitor
-          wait_healthy erp-nginx
+          wait_healthy nginx
 
           curl --fail --silent --show-error --retry 12 --retry-delay 5 https://www.oms.sztekeluo.com/ >/dev/null
           curl --fail --silent --show-error --retry 12 --retry-delay 5 https://www.erp.sztekeluo.com/api/auth/health >/dev/null
