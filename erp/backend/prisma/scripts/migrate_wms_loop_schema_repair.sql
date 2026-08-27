@@ -66,17 +66,6 @@ PREPARE billing_occurred_at_stmt FROM @sql;
 EXECUTE billing_occurred_at_stmt;
 DEALLOCATE PREPARE billing_occurred_at_stmt;
 
-SET @idx_exists := (
-  SELECT COUNT(*) FROM information_schema.STATISTICS
-  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'billing_charge' AND INDEX_NAME = 'billing_charge_idempotency_key_key'
-);
-SET @sql_idx := IF(@idx_exists = 0,
-  'ALTER TABLE billing_charge ADD UNIQUE KEY billing_charge_idempotency_key_key (idempotency_key)',
-  'SELECT 1');
-PREPARE billing_idempotency_idx_stmt FROM @sql_idx;
-EXECUTE billing_idempotency_idx_stmt;
-DEALLOCATE PREPARE billing_idempotency_idx_stmt;
-
 CREATE TABLE IF NOT EXISTS `stocktake_plan` (
   `id` BIGINT NOT NULL AUTO_INCREMENT,
   `stocktake_no` VARCHAR(30) NOT NULL,
