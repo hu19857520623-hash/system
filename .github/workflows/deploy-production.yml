@@ -69,10 +69,9 @@ jobs:
           echo '=== Repair WMS loop schema ==='
           test -f backend/prisma/scripts/migrate_wms_loop_schema_repair.sql \
             || { echo 'Missing backend/prisma/scripts/migrate_wms_loop_schema_repair.sql'; exit 1; }
-          docker compose run -T --rm --no-deps \
-            --volume /opt/system/erp/backend/prisma/scripts:/mnt/scripts:ro \
-            --entrypoint npx erp-api \
-            prisma db execute --file /mnt/scripts/migrate_wms_loop_schema_repair.sql </dev/null
+          docker compose run -T --rm --no-deps --entrypoint npx erp-api \
+            prisma db execute --stdin \
+            < backend/prisma/scripts/migrate_wms_loop_schema_repair.sql
 
           echo '=== Build OMS ==='
           cd /opt/system/oms

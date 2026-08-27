@@ -1,8 +1,5 @@
--- 补齐仓储闭环表结构：生产曾只部署代码、未执行 migrate_wms_management_loop.sql，
--- 导致 billing_charge 缺列、stocktake/capacity 表不存在，作业报表/盘点接口 500。
--- 可重复执行。
+-- Repair WMS loop schema. Safe to re-run.
 
--- ── billing_charge 扩展列（逐列添加，避免 AFTER 依赖失败导致整段中止）──
 SET @col_exists := (
   SELECT COUNT(*) FROM information_schema.COLUMNS
   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'billing_charge' AND COLUMN_NAME = 'operation_type'
@@ -10,7 +7,9 @@ SET @col_exists := (
 SET @sql := IF(@col_exists = 0,
   'ALTER TABLE billing_charge ADD COLUMN operation_type VARCHAR(30) NULL',
   'SELECT 1');
-PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+PREPARE billing_operation_type_stmt FROM @sql;
+EXECUTE billing_operation_type_stmt;
+DEALLOCATE PREPARE billing_operation_type_stmt;
 
 SET @col_exists := (
   SELECT COUNT(*) FROM information_schema.COLUMNS
@@ -19,7 +18,9 @@ SET @col_exists := (
 SET @sql := IF(@col_exists = 0,
   'ALTER TABLE billing_charge ADD COLUMN idempotency_key VARCHAR(160) NULL',
   'SELECT 1');
-PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+PREPARE billing_idempotency_key_stmt FROM @sql;
+EXECUTE billing_idempotency_key_stmt;
+DEALLOCATE PREPARE billing_idempotency_key_stmt;
 
 SET @col_exists := (
   SELECT COUNT(*) FROM information_schema.COLUMNS
@@ -28,7 +29,9 @@ SET @col_exists := (
 SET @sql := IF(@col_exists = 0,
   'ALTER TABLE billing_charge ADD COLUMN calc_basis JSON NULL',
   'SELECT 1');
-PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+PREPARE billing_calc_basis_stmt FROM @sql;
+EXECUTE billing_calc_basis_stmt;
+DEALLOCATE PREPARE billing_calc_basis_stmt;
 
 SET @col_exists := (
   SELECT COUNT(*) FROM information_schema.COLUMNS
@@ -37,7 +40,9 @@ SET @col_exists := (
 SET @sql := IF(@col_exists = 0,
   'ALTER TABLE billing_charge ADD COLUMN rule_snapshot JSON NULL',
   'SELECT 1');
-PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+PREPARE billing_rule_snapshot_stmt FROM @sql;
+EXECUTE billing_rule_snapshot_stmt;
+DEALLOCATE PREPARE billing_rule_snapshot_stmt;
 
 SET @col_exists := (
   SELECT COUNT(*) FROM information_schema.COLUMNS
@@ -46,7 +51,9 @@ SET @col_exists := (
 SET @sql := IF(@col_exists = 0,
   'ALTER TABLE billing_charge ADD COLUMN reversal_of BIGINT NULL',
   'SELECT 1');
-PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+PREPARE billing_reversal_of_stmt FROM @sql;
+EXECUTE billing_reversal_of_stmt;
+DEALLOCATE PREPARE billing_reversal_of_stmt;
 
 SET @col_exists := (
   SELECT COUNT(*) FROM information_schema.COLUMNS
@@ -55,7 +62,9 @@ SET @col_exists := (
 SET @sql := IF(@col_exists = 0,
   'ALTER TABLE billing_charge ADD COLUMN occurred_at DATETIME(3) NULL',
   'SELECT 1');
-PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+PREPARE billing_occurred_at_stmt FROM @sql;
+EXECUTE billing_occurred_at_stmt;
+DEALLOCATE PREPARE billing_occurred_at_stmt;
 
 SET @idx_exists := (
   SELECT COUNT(*) FROM information_schema.STATISTICS
@@ -64,7 +73,9 @@ SET @idx_exists := (
 SET @sql_idx := IF(@idx_exists = 0,
   'ALTER TABLE billing_charge ADD UNIQUE KEY billing_charge_idempotency_key_key (idempotency_key)',
   'SELECT 1');
-PREPARE stmt FROM @sql_idx; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+PREPARE billing_idempotency_idx_stmt FROM @sql_idx;
+EXECUTE billing_idempotency_idx_stmt;
+DEALLOCATE PREPARE billing_idempotency_idx_stmt;
 
 CREATE TABLE IF NOT EXISTS `stocktake_plan` (
   `id` BIGINT NOT NULL AUTO_INCREMENT,
@@ -124,28 +135,3 @@ CREATE TABLE IF NOT EXISTS `capacity_alert` (
   PRIMARY KEY (`id`),
   KEY `idx_capacity_alert_wh_status` (`warehouse_code`, `status`, `created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-INSERT INTO `sys_permission` (`perm_code`, `perm_name`, `module`) VALUES
-  ('stocktake.view', '盘点管理-查看', 'stocktake'),
-  ('stocktake.create', '盘点管理-创建', 'stocktake'),
-  ('stocktake.count', '盘点管理-初盘/复盘', 'stocktake'),
-  ('stocktake.approve', '盘点管理-审批调整', 'stocktake'),
-  ('capacity.view', '仓库容量-查看', 'capacity'),
-  ('capacity.manage', '仓库容量-刷新预警', 'capacity'),
-  ('wms_reports.view', '仓储作业报表-查看', 'wms_reports')
-ON DUPLICATE KEY UPDATE `perm_name` = VALUES(`perm_name`), `module` = VALUES(`module`);
-
-INSERT IGNORE INTO `sys_role_permission` (`role_code`, `perm_code`)
-SELECT roles.role_code, perms.perm_code
-FROM (
-  SELECT 'admin' AS role_code UNION ALL SELECT 'warehouse'
-) roles
-CROSS JOIN (
-  SELECT 'stocktake.view' AS perm_code UNION ALL SELECT 'stocktake.create' UNION ALL
-  SELECT 'stocktake.count' UNION ALL SELECT 'stocktake.approve' UNION ALL
-  SELECT 'capacity.view' UNION ALL SELECT 'capacity.manage' UNION ALL
-  SELECT 'wms_reports.view'
-) perms;
-
-INSERT IGNORE INTO `sys_role_permission` (`role_code`, `perm_code`) VALUES
-  ('finance', 'wms_reports.view');
