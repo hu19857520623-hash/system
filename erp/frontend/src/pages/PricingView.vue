@@ -748,7 +748,7 @@ async function submitReprice() {
           <span :class="editing.remainingStockQty === 0 ? 'erp-money is-neg' : 'erp-money'">
             {{ editing.remainingStockQty?.toLocaleString?.() ?? '—' }}
           </span>
-          <span class="form-tip">OMS 客户购买后自动累计已售，剩余 = 可见库存 − 已售</span>
+          <span class="form-tip">剩余 = 可见库存 − 已售</span>
         </el-descriptions-item>
         <el-descriptions-item label="仓内可用">{{ editing.warehouseAvailableQty?.toLocaleString?.() ?? 0 }} <span class="form-tip">（海外仓实际上架数量）</span></el-descriptions-item>
         <el-descriptions-item label="持有客户" :span="3">
@@ -829,10 +829,9 @@ async function submitReprice() {
           </el-descriptions-item>
           <el-descriptions-item label="OMS 展示库存">
             <span style="font-weight:600;color:#1f9d92">{{ editing.remainingStockQty?.toLocaleString?.() ?? '—' }}</span>
-            <span class="form-tip">剩余库存同步至 OMS 展示层（`GET /pricing/oms/catalog`）</span>
           </el-descriptions-item>
           <el-descriptions-item label="客户购买">
-            <span class="form-tip">OMS 下单自动扣客户余额，扣款后库存转入客户账号</span>
+            {{ editing.soldQty?.toLocaleString?.() ?? '—' }}
           </el-descriptions-item>
         </el-descriptions>
         <el-alert v-if="editing.pricingStatus === 'synced'" type="success" :closable="false" show-icon>
@@ -841,7 +840,7 @@ async function submitReprice() {
       </template>
 
       <template v-if="editing.priceRecords.length">
-        <el-divider content-position="left">价格变化趋势（陪跑持续调价）</el-divider>
+        <el-divider content-position="left">价格变化</el-divider>
         <el-table :data="editing.priceRecords" size="small" border>
           <el-table-column prop="date" label="日期" width="80" />
           <el-table-column label="市场价(R)" width="100" align="right"><template #default="{ row }">R {{ row.marketPrice }}</template></el-table-column>

@@ -3,7 +3,6 @@ import { Prisma } from '@prisma/client'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { InventoryMutationService } from '../../common/inventory/inventory-mutation.service'
 import { OperationLogService } from '../operation-log/operation-log.service'
-import { BillingService } from '../billing/billing.service'
 
 const toNumber = (value: unknown) => Number(value ?? 0)
 const round = (value: number, digits = 2) => Number(value.toFixed(digits))
@@ -35,17 +34,6 @@ function buildOutboundWhere(query: Record<string, unknown>): Prisma.OutboundOrde
   return where
 }
 
-function inboundSqlFilters(query: Record<string, unknown>): Prisma.Sql[] {
-  const filters: Prisma.Sql[] = []
-  const createdAt = dateRange(query as { dateFrom?: string; dateTo?: string })
-  if (createdAt?.gte) filters.push(Prisma.sql`o.created_at >= ${createdAt.gte}`)
-  if (createdAt?.lte) filters.push(Prisma.sql`o.created_at <= ${createdAt.lte}`)
-  if (query.warehouseCode) filters.push(Prisma.sql`o.warehouse_code = ${String(query.warehouseCode)}`)
-  if (query.customerCode) filters.push(Prisma.sql`o.oms_customer_code = ${String(query.customerCode)}`)
-  if (query.status) filters.push(Prisma.sql`o.status = ${String(query.status)}`)
-  return filters
-}
-
 function outboundSqlFilters(query: Record<string, unknown>): Prisma.Sql[] {
   const filters: Prisma.Sql[] = []
   const createdAt = dateRange(query as { dateFrom?: string; dateTo?: string })
@@ -66,75 +54,8 @@ export class ManagementLoopService {
   constructor(
     private prisma: PrismaService,
     private opLog: OperationLogService,
-    private billing: BillingService,
     private inventoryMutation: InventoryMutationService,
   ) {}
-
-  private async resolveInboundFeeContext(inboundId: number) {
-    const order = await this.prisma.inboundOrder.findUnique({ where: { id: BigInt(inboundId) }, include: { items: true } })
-    if (!order) throw new NotFoundException('入库单不存在')
-    if (!order.omsCustomerCode) return { order, customer: null, rule: null }
-    const customer = await this.prisma.customer.findUnique({ where: { customerCode: order.omsCustomerCode } })
-    if (!customer) return { order, customer: null, rule: null }
-    const now = new Date()
-    const rules = await this.prisma.inboundFeeRule.findMany({ where: {
-      enabled: true,
-      AND: [
-        { OR: [{ customerId: customer.id }, { customerId: null }] },
-        { OR: [{ warehouseCode: order.warehouseCode }, { warehouseCode: null }] },
-        { OR: [{ effectiveFrom: null }, { effectiveFrom: { lte: now } }] },
-        { OR: [{ effectiveTo: null }, { effectiveTo: { gte: now } }] },
-      ],
-    }})
-    rules.sort((a, b) => Number(b.customerId != null) * 2 + Number(b.warehouseCode != null) - (Number(a.customerId != null) * 2 + Number(a.warehouseCode != null)))
-    return { order, customer, rule: rules[0] || null }
-  }
-
-  async previewInboundCharges(inboundId: number) {
-    const { order, customer, rule } = await this.resolveInboundFeeContext(inboundId)
-    if (!customer) return { available: false, reason: '入库单未匹配到客户', lines: [], totalAmount: 0 }
-    if (!rule) return { available: false, reason: '未配置适用的入库计费规则', lines: [], totalAmount: 0 }
-    const receivedQty = order.items.reduce((sum, item) => sum + (item.actualQty ?? 0), 0)
-    const qcQty = order.items.filter((item) => item.qcStatus !== 'pending').reduce((sum, item) => sum + (item.actualQty ?? 0), 0)
-    const putawayQty = order.items.reduce((sum, item) => sum + (item.putawayQty ?? 0), 0)
-    const cartonQty = order.receivedCartonCount ?? 0
-    const specs = [
-      ['inbound_receipt', 'receive', '入库收货费', receivedQty, toNumber(rule.receiveUnitPrice)],
-      ['inbound_carton', 'receive', '入库箱处理费', cartonQty, toNumber(rule.receiveCartonPrice)],
-      ['inbound_qc', 'qc', '入库质检费', qcQty, toNumber(rule.qcUnitPrice)],
-      ['inbound_putaway', 'putaway', '入库上架费', putawayQty, toNumber(rule.putawayUnitPrice)],
-    ] as const
-    const lines = specs.map(([chargeType, operationType, label, quantity, unitPrice]) => ({
-      chargeType, operationType, label, quantity, unitPrice, amount: round(quantity * unitPrice),
-    })).filter((line) => line.amount > 0)
-    return {
-      available: true, customerId: Number(customer.id), customerCode: customer.customerCode,
-      rule: { id: Number(rule.id), ruleName: rule.ruleName }, lines,
-      totalAmount: round(lines.reduce((sum, line) => sum + line.amount, 0)),
-      basis: { receivedQty, cartonQty, qcQty, putawayQty },
-    }
-  }
-
-  async recordInboundCharges(inboundId: number) {
-    const preview = await this.previewInboundCharges(inboundId)
-    if (!preview.available || !preview.customerId || !preview.rule) return preview
-    const order = await this.prisma.inboundOrder.findUnique({ where: { id: BigInt(inboundId) } })
-    if (!order) throw new NotFoundException('入库单不存在')
-    const created: any[] = []
-    for (const line of preview.lines) {
-      created.push(await this.billing.createCharge({
-        customerId: preview.customerId, chargeType: line.chargeType, source: 'erp',
-        description: `${line.label} · ${order.inboundNo} · ${line.quantity} × ${line.unitPrice}`,
-        amount: line.amount, quantity: line.quantity, unitPrice: line.unitPrice,
-        bizRef: order.inboundNo, sourceRef: order.inboundNo, warehouseCode: order.warehouseCode,
-        operationType: line.operationType,
-        idempotencyKey: `inbound:${order.inboundNo}:${line.chargeType}:v1`,
-        calcBasis: { ...preview.basis, quantity: line.quantity },
-        ruleSnapshot: { ...preview.rule, unitPrice: line.unitPrice }, occurredAt: new Date().toISOString(),
-      }))
-    }
-    return { ...preview, created }
-  }
 
   async reportSummary(query: any) {
     const inbound = await this.inboundReport({ ...query, page: 1, pageSize: 1 })
@@ -151,7 +72,7 @@ export class ManagementLoopService {
       status: { in: ['completed', 'confirmed'] },
     }
 
-    const [rows, total, orderCount, completedCount, statusGroups, itemAgg, feeAmount, cycleRow] =
+    const [rows, total, orderCount, completedCount, statusGroups, itemAgg, cycleRow] =
       await Promise.all([
         this.prisma.inboundOrder.findMany({
           where,
@@ -168,18 +89,8 @@ export class ManagementLoopService {
           where: { order: where },
           _sum: { expectedQty: true, actualQty: true },
         }),
-        this.aggregateInboundFeeAmount(query),
         this.aggregateInboundCycleHours(completedWhere),
       ])
-
-    const pageRefs = rows.map((row) => row.inboundNo)
-    const charges = pageRefs.length
-      ? await this.prisma.billingCharge.findMany({ where: { bizRef: { in: pageRefs } } })
-      : []
-    const chargeMap = new Map<string, number>()
-    charges.forEach((charge) =>
-      chargeMap.set(charge.bizRef || '', (chargeMap.get(charge.bizRef || '') || 0) + toNumber(charge.amount)),
-    )
 
     const totalExpectedQty = itemAgg._sum.expectedQty ?? 0
     const totalReceivedQty = itemAgg._sum.actualQty ?? 0
@@ -197,7 +108,6 @@ export class ManagementLoopService {
         receivedQty: row.items.reduce((s, item) => s + (item.actualQty ?? 0), 0),
         putawayQty: row.items.reduce((s, item) => s + (item.putawayQty ?? 0), 0),
         cartonCount: row.receivedCartonCount ?? row.cartons.filter((carton) => carton.status === 'received').length,
-        feeAmount: round(chargeMap.get(row.inboundNo) || 0),
       })),
       total, page, pageSize,
       summary: {
@@ -209,20 +119,8 @@ export class ManagementLoopService {
         varianceQty: totalReceivedQty - totalExpectedQty,
         completionRate: orderCount ? round(completedCount / orderCount * 100, 1) : 0,
         avgCycleHours: cycleRow,
-        feeAmount: round(feeAmount),
       },
     }
-  }
-
-  private async aggregateInboundFeeAmount(query: Record<string, unknown>) {
-    const filters = inboundSqlFilters(query)
-    const rows = await this.prisma.$queryRaw<Array<{ feeAmount: unknown }>>`
-      SELECT COALESCE(SUM(c.amount), 0) AS feeAmount
-      FROM billing_charge c
-      INNER JOIN inbound_order o ON c.biz_ref = o.inbound_no
-      ${sqlWhere(filters)}
-    `
-    return toNumber(rows[0]?.feeAmount)
   }
 
   private async aggregateInboundCycleHours(where: Prisma.InboundOrderWhereInput) {
@@ -276,7 +174,10 @@ export class ManagementLoopService {
 
     const pageRefs = rows.map((row) => row.outboundNo)
     const charges = pageRefs.length
-      ? await this.prisma.billingCharge.findMany({ where: { bizRef: { in: pageRefs } } })
+      ? await this.prisma.billingCharge.findMany({
+          where: { bizRef: { in: pageRefs } },
+          select: { bizRef: true, amount: true },
+        })
       : []
     const chargeMap = new Map<string, number>()
     charges.forEach((charge) =>
@@ -324,37 +225,6 @@ export class ManagementLoopService {
       ${sqlWhere(filters)}
     `
     return toNumber(rows[0]?.feeAmount)
-  }
-
-  listFeeRules() {
-    return this.prisma.inboundFeeRule.findMany({ orderBy: [{ enabled: 'desc' }, { id: 'desc' }] })
-      .then((rows) => rows.map((row) => ({ ...row, id: Number(row.id), customerId: row.customerId ? Number(row.customerId) : null })))
-  }
-
-  createFeeRule(body: any, userId?: number) {
-    if (!String(body.ruleName || '').trim()) throw new BadRequestException('请输入规则名称')
-    return this.prisma.inboundFeeRule.create({ data: {
-      ruleName: String(body.ruleName).trim(), customerId: body.customerId ? BigInt(body.customerId) : null,
-      warehouseCode: body.warehouseCode || null, receiveUnitPrice: toNumber(body.receiveUnitPrice),
-      receiveCartonPrice: toNumber(body.receiveCartonPrice), qcUnitPrice: toNumber(body.qcUnitPrice),
-      putawayUnitPrice: toNumber(body.putawayUnitPrice), enabled: body.enabled !== false,
-      effectiveFrom: body.effectiveFrom ? new Date(body.effectiveFrom) : null,
-      effectiveTo: body.effectiveTo ? new Date(body.effectiveTo) : null,
-      createdBy: userId ? BigInt(userId) : null,
-    }}).then((row) => ({ ...row, id: Number(row.id) }))
-  }
-
-  updateFeeRule(id: number, body: any) {
-    return this.prisma.inboundFeeRule.update({ where: { id: BigInt(id) }, data: {
-      ruleName: body.ruleName !== undefined ? String(body.ruleName).trim() : undefined,
-      customerId: body.customerId !== undefined ? (body.customerId ? BigInt(body.customerId) : null) : undefined,
-      warehouseCode: body.warehouseCode !== undefined ? (body.warehouseCode || null) : undefined,
-      receiveUnitPrice: body.receiveUnitPrice !== undefined ? toNumber(body.receiveUnitPrice) : undefined,
-      receiveCartonPrice: body.receiveCartonPrice !== undefined ? toNumber(body.receiveCartonPrice) : undefined,
-      qcUnitPrice: body.qcUnitPrice !== undefined ? toNumber(body.qcUnitPrice) : undefined,
-      putawayUnitPrice: body.putawayUnitPrice !== undefined ? toNumber(body.putawayUnitPrice) : undefined,
-      enabled: body.enabled !== undefined ? Boolean(body.enabled) : undefined,
-    }}).then((row) => ({ ...row, id: Number(row.id) }))
   }
 
   async listStocktakes(query: any) {

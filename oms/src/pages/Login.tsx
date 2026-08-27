@@ -41,13 +41,6 @@ export default function Login() {
   const [remember, setRemember] = useState(readRememberPreference)
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
-  const [apiOnline, setApiOnline] = useState<boolean | null>(null)
-
-  useEffect(() => {
-    fetch('/api/health')
-      .then((res) => setApiOnline(res.ok))
-      .catch(() => setApiOnline(false))
-  }, [])
 
   useEffect(() => {
     if (!authReady || !isLoggedIn) return
@@ -93,11 +86,6 @@ export default function Login() {
         setError('账号或密码不正确，或账号已停用')
       } else if (status === 429) {
         setError('登录尝试过于频繁，请稍后再试')
-      } else if (
-        (loginError as { code?: string } | null)?.code === 'NETWORK'
-        || loginError instanceof TypeError
-      ) {
-        setError('无法连接 OMS 服务（127.0.0.1:3001）。请运行仓库根目录 dev-local.ps1，或单独启动 oms。')
       } else {
         setError(loginError instanceof Error ? loginError.message : '登录失败，请稍后重试')
       }
@@ -128,12 +116,6 @@ export default function Login() {
               使用 ERP 为您开通的客户账号进入系统
             </p>
           </div>
-
-          {apiOnline === false && (
-            <div className="mb-4 rounded-lg bg-red-50 px-3 py-2.5 text-xs text-red-700 ring-1 ring-red-100">
-              OMS 服务未启动（127.0.0.1:3001）。请运行仓库根目录 dev-local.ps1，或单独启动 oms。
-            </div>
-          )}
 
           <form className="space-y-5" onSubmit={handleSubmit}>
             <FormField label="登录账号" required>

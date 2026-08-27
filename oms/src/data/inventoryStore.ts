@@ -105,7 +105,7 @@ function nextPurchaseNo(): string {
   return `CAT-${date}${seq}`
 }
 
-/** 客户申购货盘商品：本地演示逻辑（无 ERP 时回退） */
+/** 客户申购货盘商品：无 ERP 时的本地回退 */
 export function purchaseCatalogProduct(
   internalSku: string,
   qty: number,

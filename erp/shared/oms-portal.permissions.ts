@@ -58,7 +58,6 @@ export const OMS_PORTAL_PERMISSION_GROUPS: {
   { label: '物流', permissions: ['logistics:read'] },
   { label: '退件', permissions: ['returns:read', 'returns:write'] },
   { label: '费用', permissions: ['billing:read', 'billing:recharge'] },
-  { label: '店铺', permissions: ['store:manage'] },
   { label: '报表', permissions: ['report:read'] },
 ]
 
@@ -82,7 +81,6 @@ const ECOMMERCE_PERMISSIONS: OmsPortalPermission[] = [
   'returns:read',
   'returns:write',
   'billing:read',
-  'store:manage',
   'report:read',
 ]
 

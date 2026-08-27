@@ -52,7 +52,7 @@ export const MODULE_GUIDES: Record<string, ModuleGuide> = {
     title: '编码与绑定',
     desc: '平台商品条码 ↔ 仓库 SKU 映射，以及客户自定义码、箱唛等辅助编码。',
     features: [
-      '平台绑定：Takealot 商品条码、listing、店铺、组合品',
+      '平台绑定：Takealot 商品条码、listing、组合品',
       'Tab：待绑定 / 已绑定 / 条码不一致 / 待审核',
       '同步 Takealot 商品、导入、打印标签',
       '辅助编码：客户码 / 箱唛、版本号与变更申请',
@@ -166,17 +166,6 @@ export const MODULE_GUIDES: Record<string, ModuleGuide> = {
     desc: '参考 OMS 流水账：逐笔扣款/入款明细，可追溯至订单与费用类型。',
     features: ['扣款 / 入款筛选', '账户余额变动', '关联订单号与费用类型', '导出'],
     status: 'planned',
-  },
-  stores: {
-    title: '店铺绑定',
-    desc: '绑定 Takealot / Shopify 店铺，配置 API 授权与订单/库存同步规则（电商客户核心模块）。',
-    features: [
-      '店铺列表：平台、连接状态、同步开关、今日订单量',
-      'Takealot / Shopify OAuth 或 API Key 授权',
-      '订单自动拉取、库存回写、Webhook 回调',
-      '同步异常告警与手动重试（仅管理员）',
-    ],
-    status: 'ready',
   },
   reports: {
     title: '报表中心',

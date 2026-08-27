@@ -85,8 +85,6 @@ export default function PlatformBindingModal({ open, editing, initialValues, cus
 
   if (!open) return null
 
-  const storeOptions = stores.filter(s => s.platform === form.platform && s.status !== 'disabled')
-
   const setLine = (idx: number, patch: Partial<PlatformBindingLine>) => {
     setForm(prev => {
       const lines = [...prev.lines]
@@ -144,11 +142,6 @@ export default function PlatformBindingModal({ open, editing, initialValues, cus
                   <option value="Takealot">Takealot</option>
                   <option value="Shopify">Shopify</option>
                   <option value="Manual">Manual</option>
-                </select>
-              </FormField>
-              <FormField label="平台店铺" required>
-                <select className={formSelect()} value={form.storeId} onChange={e => setForm(prev => ({ ...prev, storeId: e.target.value }))}>
-                  {storeOptions.map(s => <option key={s.id} value={s.id}>{s.name} · {s.storeCode}</option>)}
                 </select>
               </FormField>
               <FormField label="平台商品条码" required>

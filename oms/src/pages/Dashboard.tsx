@@ -4,21 +4,24 @@ import {
   Bell, AlertTriangle, Warehouse, FileText,
 } from 'lucide-react'
 import { Card, CardHeader, Badge, MonoCode } from '../components/ui'
-import { formatCurrency, welcomePending, dashboardStats } from '../data/mockData'
-import { useAnnouncements, useCustomerProfile, useInboundOrders, useOrders } from '../data/entityStore'
+import { formatCurrency, getInventoryStatus } from '../data/mockData'
+import { useAnnouncements, useCustomerProfile, useInboundOrders, useOrders, useSystemMessages } from '../data/entityStore'
 import { useOutboundOrders } from '../data/outboundStore'
+import { useInventoryItems } from '../data/inventoryStore'
 import { useBilling } from '../data/billingStore'
 import { useRole } from '../auth/RoleContext'
 import { useDataScope } from '../auth/useDataScope'
 import { ROLE_LABELS } from '../auth/permissions'
 
-const quickActions = [
+const OUTBOUND_PENDING = new Set(['draft', 'pending', 'locked', 'picking', 'pending_ship', 'processing', 'pending_payment', 'pending_review'])
+
+const quickActionDefs = [
   { to: '/inbound', label: '预约入库', icon: ArrowDownToLine, perm: 'inbound:write' as const, color: 'bg-orange-50 text-orange-700 ring-orange-100' },
   { to: '/outbound', label: '预约发货', icon: ArrowUpFromLine, perm: 'outbound:read' as const, color: 'bg-blue-50 text-blue-700 ring-blue-100' },
   { to: '/inventory', label: '库存查询', icon: Package, perm: 'inventory:read' as const, color: 'bg-emerald-50 text-emerald-700 ring-emerald-100' },
   { to: '/outbound/records', label: '订单与出库', icon: ShoppingCart, perm: 'order:read' as const, color: 'bg-violet-50 text-violet-700 ring-violet-100' },
   { to: '/billing', label: '费用账单', icon: Wallet, perm: 'billing:read' as const, color: 'bg-amber-50 text-amber-700 ring-amber-100' },
-  { to: '/messages', label: '消息中心', icon: Bell, perm: 'dashboard:read' as const, color: 'bg-red-50 text-red-700 ring-red-100', badge: welcomePending.unreadMessages },
+  { to: '/messages', label: '消息中心', icon: Bell, perm: 'dashboard:read' as const, color: 'bg-red-50 text-red-700 ring-red-100', badgeKey: 'unread' as const },
 ]
 
 export default function Dashboard() {
@@ -30,9 +33,23 @@ export default function Dashboard() {
   const announcements = useAnnouncements()
   const customer = useCustomerProfile()
   const { creditBalance } = useBilling()
+  const messages = useSystemMessages()
+  const inventory = useInventoryItems()
   const scopedOrders = dataScope.scope(orders)
-  const { today } = dashboardStats
-  const visibleActions = quickActions.filter(a => can(a.perm))
+  const scopedInbound = dataScope.scope(inboundOrders)
+  const scopedOutbound = dataScope.scopeOutbound(outboundOrders)
+  const scopedInventory = dataScope.scope(inventory)
+  const todayKey = new Date().toISOString().slice(0, 10)
+  const todayOrders = scopedOrders.filter(o => String(o.createdAt || '').startsWith(todayKey)).length
+  const todayExceptions = scopedOrders.filter(o => o.exception).length
+  const inboundOnWay = scopedInbound.filter(o => o.status === 'on_the_way').length
+  const outboundPending = scopedOutbound.filter(o => OUTBOUND_PENDING.has(o.status)).length
+  const inventoryAlerts = scopedInventory.filter(i => getInventoryStatus(i) !== 'normal').length
+  const unreadMessages = messages.filter(m => !m.read).length
+  const visibleActions = quickActionDefs.filter(a => can(a.perm)).map(action => ({
+    ...action,
+    badge: action.badgeKey === 'unread' ? unreadMessages : undefined,
+  }))
   const contact = customer?.contact ?? '客户'
   const customerCode = customer?.code ?? '—'
   const warehouse = customer?.warehouse ?? '—'
@@ -43,7 +60,7 @@ export default function Dashboard() {
       <div className="overflow-hidden rounded-xl bg-gradient-to-r from-[#d32f2f] to-[#b71c1c] text-white shadow-lg">
         <div className="flex flex-col gap-4 p-6 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <p className="text-sm text-white/80">Overseas Warehouse System · 欢迎页</p>
+            <p className="text-sm text-white/80">海外仓协同系统</p>
             <h1 className="mt-1 text-2xl font-semibold">
               {role === 'sys_admin' ? 'OMS 运营后台' : `你好，${contact.split(' ')[0]} 👋`}
             </h1>
@@ -60,12 +77,12 @@ export default function Dashboard() {
             </div>
             <div className="w-px bg-white/20" />
             <div className="text-center">
-              <p className="text-2xl font-bold">{today.newOrders}</p>
+              <p className="text-2xl font-bold">{todayOrders}</p>
               <p className="text-[11px] text-white/70">今日订单</p>
             </div>
             <div className="w-px bg-white/20" />
             <div className="text-center">
-              <p className="text-2xl font-bold text-amber-200">{today.exceptions}</p>
+              <p className="text-2xl font-bold text-amber-200">{todayExceptions}</p>
               <p className="text-[11px] text-white/70">待处理异常</p>
             </div>
           </div>
@@ -100,10 +117,10 @@ export default function Dashboard() {
           } />
           <div className="grid gap-3 p-5 pt-0 sm:grid-cols-2">
             {[
-              { label: '在途入库', count: welcomePending.inboundOnWay, to: '/inbound/records?tab=on_the_way', show: can('inbound:read') },
-              { label: '待发货出库', count: welcomePending.outboundPending, to: '/outbound/records?tab=active', show: can('outbound:read') || can('order:read') },
-              { label: '库存预警', count: welcomePending.inventoryAlerts, to: '/inventory/alerts', show: can('inventory:read'), alert: true },
-              { label: '未读消息', count: welcomePending.unreadMessages, to: '/messages', show: true },
+              { label: '在途入库', count: inboundOnWay, to: '/inbound/records?tab=on_the_way', show: can('inbound:read') },
+              { label: '待发货出库', count: outboundPending, to: '/outbound/records?tab=active', show: can('outbound:read') || can('order:read') },
+              { label: '库存预警', count: inventoryAlerts, to: '/inventory/alerts', show: can('inventory:read'), alert: true },
+              { label: '未读消息', count: unreadMessages, to: '/messages', show: true },
             ].filter(i => i.show).map(item => (
               <Link
                 key={item.label}
@@ -179,8 +196,7 @@ export default function Dashboard() {
             <Warehouse className="h-5 w-5 text-primary-600" />
           </div>
           <div className="flex-1">
-            <p className="text-sm font-semibold text-text-primary">当前默认仓库 · jhb1</p>
-            <p className="text-xs text-text-muted">Johannesburg · TKL Overseas Warehouse · 南非时区 UTC+2</p>
+            <p className="text-sm font-semibold text-text-primary">当前仓库 · {warehouse}</p>
           </div>
         </div>
       </Card>

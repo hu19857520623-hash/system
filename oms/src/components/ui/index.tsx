@@ -1,6 +1,5 @@
 import { X } from 'lucide-react'
 import { statusColors, statusLabels, ExceptionType } from '../../data/mockData'
-import { ModuleGuide, MODULE_GUIDES } from '../../data/moduleGuide'
 
 export function Badge({ status, label }: { status: string; label?: string }) {
   return (
@@ -199,45 +198,12 @@ export function Tabs({ tabs, active, onChange }: { tabs: { id: string; label: st
   )
 }
 
-export function FeatureIntro({ guide, className = '' }: { guide: ModuleGuide; className?: string }) {
-  const statusLabel = guide.status === 'ready' ? '已上线' : guide.status === 'partial' ? '部分可用' : '规划中'
-  const statusColor = guide.status === 'ready'
-    ? 'bg-emerald-50 text-emerald-700 ring-emerald-100'
-    : guide.status === 'partial'
-    ? 'bg-amber-50 text-amber-700 ring-amber-100'
-    : 'bg-surface-muted text-text-muted ring-border-light'
-
-  return (
-    <div className={`rounded-2xl border border-border-light bg-white p-5 shadow-soft ${className}`}>
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <p className="min-w-0 flex-1 text-sm text-text-secondary">{guide.desc}</p>
-        {guide.status && (
-          <span className={`shrink-0 rounded-full px-2.5 py-0.5 text-[11px] font-semibold ring-1 ${statusColor}`}>
-            {statusLabel}
-          </span>
-        )}
-      </div>
-      <ul className="mt-4 grid gap-2 sm:grid-cols-2">
-        {guide.features.map(f => (
-          <li key={f} className="flex items-start gap-2 text-xs text-text-secondary">
-            <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-primary-500" />
-            {f}
-          </li>
-        ))}
-      </ul>
-    </div>
-  )
-}
-
-export function PlaceholderPage({ title, desc, guideKey }: { title: string; desc?: string; guideKey?: string }) {
-  const guide = guideKey ? MODULE_GUIDES[guideKey] : undefined
+export function PlaceholderPage({ title, desc }: { title: string; desc?: string }) {
   return (
     <div className="page-shell">
-      <PageHeader title={title} desc={desc ?? guide?.desc} />
-      {guide && <FeatureIntro guide={guide} className="mb-4" />}
+      <PageHeader title={title} desc={desc} />
       <Card padding className="flex flex-col items-center justify-center py-16 text-center">
-        <p className="text-sm font-medium text-text-secondary">功能框架已就绪</p>
-        <p className="mt-1 text-xs text-text-muted">详细交互将在下一迭代补全</p>
+        <p className="text-sm font-medium text-text-secondary">暂无数据</p>
       </Card>
     </div>
   )

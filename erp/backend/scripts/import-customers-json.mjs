@@ -22,7 +22,7 @@ const HYBRID_PERMISSIONS = JSON.stringify([
   'code:read', 'code:apply', 'code:approve', 'platform:read', 'platform:write',
   'inbound:read', 'inbound:write', 'outbound:read', 'outbound:write',
   'inventory:read', 'logistics:read', 'returns:read', 'returns:write',
-  'billing:read', 'billing:recharge', 'store:manage', 'report:read',
+  'billing:read', 'billing:recharge', 'report:read',
 ])
 
 const prisma = new PrismaClient()

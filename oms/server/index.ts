@@ -1038,7 +1038,6 @@ app.post('/api/erp/purchase', async (req, res) => {
         })
       }
 
-      // 同步默认账单余额（演示页）
       await prisma.billingAccount.updateMany({
         where: { customerId },
         data: { creditBalance: result.balanceAfter ?? 0 },

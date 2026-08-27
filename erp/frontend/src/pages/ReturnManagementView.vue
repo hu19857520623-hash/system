@@ -798,7 +798,7 @@ watch(extraFeeLines, () => scheduleFeePreview(), { deep: true })
     <div class="page-header">
       <div>
         <h1 class="page-title">退件管理</h1>
-        <p class="page-desc">OMS 预约退件 · 仓库收货、清点与处理（参考 WMS 退件作业视图）</p>
+        <p class="page-desc">OMS 预约退件 · 仓库收货、清点与处理</p>
       </div>
     </div>
 

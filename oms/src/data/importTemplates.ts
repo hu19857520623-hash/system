@@ -251,7 +251,6 @@ export function exportInboundOrders(orders: InboundOrder[]) {
 
 export const PLATFORM_BINDING_COLUMNS: CsvColumn[] = [
   { key: 'platform', header: '平台名称', required: true, hint: 'Takealot / Shopify / Manual' },
-  { key: 'storeName', header: '平台店铺', required: true, hint: '店铺名称或店铺编码' },
   { key: 'platformBarcode', header: '平台商品条码', required: true, hint: '990 条码' },
   { key: 'platformTitle', header: '平台商品名称', required: false },
   { key: 'stockSource', header: '库存来源', required: true, hint: '自有库存 / 货盘库存' },
@@ -270,7 +269,7 @@ function parseStockSource(value: string): StockSource | null {
 
 export function downloadPlatformBindingTemplate() {
   downloadTemplate('OMS-平台绑定导入模板.xls', PLATFORM_BINDING_COLUMNS, [
-    ['Takealot', '主店', '6009637110200', 'Wireless Mouse', '自有库存', 'HX6', 'Ergonomic Mouse', '', '自带包装', '1'],
+    ['Takealot', '6009637110200', 'Wireless Mouse', '自有库存', 'HX6', 'Ergonomic Mouse', '', '自带包装', '1'],
   ])
 }
 
@@ -297,13 +296,8 @@ export function parsePlatformBindings(
       errors.push(`第 ${idx + 1} 行：平台名称无效`)
       return
     }
-    const store = stores.find(
-      s => s.name === row.storeName || s.storeCode === row.storeName,
-    )
-    if (!store) {
-      errors.push(`第 ${idx + 1} 行：未找到店铺「${row.storeName}」`)
-      return
-    }
+    const store = stores.find(s => s.platform === platform && s.status !== 'disabled')
+      || stores.find(s => s.platform === platform)
     const stockSource = parseStockSource(row.stockSource)
     if (!stockSource) {
       errors.push(`第 ${idx + 1} 行：库存来源须为「自有库存」或「货盘库存」`)
@@ -315,7 +309,7 @@ export function parsePlatformBindings(
       return
     }
 
-    const key = `${platform}|${store.id}|${row.platformBarcode}|${stockSource}`
+    const key = `${platform}|${store?.id || ''}|${row.platformBarcode}|${stockSource}`
     const prod = findProductByCode(row.internalSku)
     const line = {
       internalSku: row.internalSku,
@@ -328,8 +322,8 @@ export function parsePlatformBindings(
     if (!groups.has(key)) {
       groups.set(key, {
         platform,
-        storeId: store.id,
-        storeName: store.name,
+        storeId: store?.id ?? '',
+        storeName: store?.name ?? '—',
         platformBarcode: row.platformBarcode,
         platformTitle: row.platformTitle || prod?.name || row.platformBarcode,
         stockSource,

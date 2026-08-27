@@ -193,7 +193,7 @@ export const customerAccounts: CustomerAccount[] = [
       'product:read', 'product:write', 'code:read', 'code:apply',
       'inbound:read', 'inbound:write', 'outbound:read', 'outbound:write',
       'inventory:read', 'logistics:read', 'returns:read', 'returns:write',
-      'billing:read', 'store:manage', 'report:read',
+      'billing:read', 'report:read',
     ],
     warehouse: 'jhb1', createdAt: '2025-11-12', lastLoginAt: '2026-07-08 09:30',
     priceTemplateByRegion: { jhb: 'pt-jhb-std', cpt: 'pt-cpt-std', dbn: 'pt-dbn-std' },
@@ -216,7 +216,7 @@ export const customerAccounts: CustomerAccount[] = [
     contact: 'Thabo Mokoena', email: 'thabo@dbn-shop.co.za', status: 'disabled',
     permissions: [
       'dashboard:read', 'order:read', 'order:write', 'product:read',
-      'inventory:read', 'billing:read', 'store:manage',
+      'inventory:read', 'billing:read',
     ],
     warehouse: 'jhb1', createdAt: '2026-03-08', lastLoginAt: '2026-06-15 11:00',
   },
@@ -240,7 +240,7 @@ export const customerAccounts: CustomerAccount[] = [
       'product:read', 'product:write', 'code:read', 'code:apply',
       'inbound:read', 'inbound:write', 'outbound:read', 'outbound:write',
       'inventory:read', 'logistics:read', 'returns:read', 'returns:write',
-      'billing:read', 'store:manage', 'report:read',
+      'billing:read', 'report:read',
     ],
     warehouse: 'jhb1', createdAt: '2026-05-22', lastLoginAt: '2026-07-08 08:15',
   },
@@ -436,27 +436,6 @@ export const feeRecords: FeeRecord[] = [
   },
   { id: '5', date: '2026-06-28', type: 'shipping', refNo: 'OUT-260628015', desc: 'FedEx 国际', amount: -280 },
 ]
-
-export const dashboardStats = {
-  today: { newOrders: 47, shipped: 32, pending: 12, exceptions: 3, gmv: 18200 },
-  funnel: { pending_payment: 5, pending_review: 3, pending_ship: 8, shipped_out: 24, delivered: 18 },
-  exceptions: [
-    { type: 'address_error' as ExceptionType, label: '地址异常', count: 2 },
-    { type: 'stock_short' as ExceptionType, label: '库存不足', count: 1 },
-    { type: 'logistics_fail' as ExceptionType, label: '物流失败', count: 1 },
-    { type: 'sync_fail' as ExceptionType, label: '订单同步失败', count: 0 },
-  ],
-  logistics: { avgDeliveryDays: 4.2, exceptionRate: 2.1, topCountries: [{ code: 'ZA', pct: 82 }, { code: 'US', pct: 12 }] },
-}
-
-/** Buffalo WMS 欢迎页待办统计 */
-export const welcomePending = {
-  inboundOnWay: 4,
-  outboundPending: 3,
-  orderPendingShip: 8,
-  inventoryAlerts: 3,
-  unreadMessages: 2,
-}
 
 export const announcements = [
   { id: '1', title: 'jhb1 仓库 7 月收货时间调整', date: '2026-07-05', type: 'notice' as const },

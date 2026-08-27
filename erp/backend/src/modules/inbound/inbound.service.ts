@@ -10,8 +10,8 @@ import { fetchOmsInboundRows, mergeInboundPaginate } from './oms-inbound-bridge.
 import { buildInboundRemark, parseOmsInboundMeta, stripOmsSystemTags } from '../../common/oms-sync-meta.util'
 import { resolveBillingDimensions } from '../../common/product-dimension.util'
 import { parseInboundQcScanInput } from './inbound-qc-scan.util'
-import { ManagementLoopService } from '../management-loop/management-loop.service'
 import { InventoryMutationService } from '../../common/inventory/inventory-mutation.service'
+import { buildInternalSku } from '../../common/sku-code.util'
 import { buildBoxLabelsPdfBuffer, buildInboundBoxLabelData } from '../../common/labels/box-label-pdf.util'
 
 /** 在途，等待到仓扫描 */
@@ -50,7 +50,6 @@ export class InboundService {
     private files: FileStoreService,
     private opLog: OperationLogService,
     private pricing: PricingService,
-    private managementLoop: ManagementLoopService,
     private inventoryMutation: InventoryMutationService,
   ) {}
 
@@ -230,7 +229,14 @@ export class InboundService {
       return barcode && this.normalizeScanToken(barcode) === token
     })
     if (item) return item
-    return order.items.find((i) => token.endsWith(this.normalizeScanToken(i.sku))) || null
+    const suffixMatches = order.items.filter((i) => token.endsWith(this.normalizeScanToken(i.sku)))
+    if (suffixMatches.length === 1) return suffixMatches[0]
+    if (suffixMatches.length > 1) {
+      throw new BadRequestException(
+        `扫描码「${skuToken}」匹配到入库单内多个 SKU，请扫描完整系统 SKU（含客户代码前缀）或商品条码`,
+      )
+    }
+    return null
   }
 
   async findByInboundNo(inboundNo: string) {
@@ -1267,11 +1273,6 @@ export class InboundService {
         } catch (err) {
           console.warn('[putaway] OMS orderable sync skipped:', err)
         }
-        try {
-          await this.managementLoop.recordInboundCharges(id)
-        } catch (err) {
-          console.warn('[putaway] inbound billing skipped:', err instanceof Error ? err.message : err)
-        }
       }
       for (const group of groups) {
         const lengthCm = Number(group.lengthCm)
@@ -1589,21 +1590,51 @@ export class InboundService {
   private async ensureProductBySku(
     sku: string,
     productName?: string,
+    customerCode?: string,
   ): Promise<{ id: bigint; sku: string; productName: string }> {
     const trimmed = sku.trim()
+    if (!trimmed) throw new BadRequestException('SKU 不能为空')
+
     const existing = await this.prisma.product.findUnique({ where: { sku: trimmed } })
     if (existing) {
       return { id: existing.id, sku: existing.sku, productName: existing.productName }
     }
-    const byCustomerSku = await this.prisma.product.findFirst({ where: { customerSku: trimmed } })
-    if (byCustomerSku) {
-      return { id: byCustomerSku.id, sku: byCustomerSku.sku, productName: byCustomerSku.productName }
+
+    const code = String(customerCode || '').trim().toUpperCase()
+    if (code) {
+      const prefixedSku = buildInternalSku(code, trimmed, [])
+      const byPrefixed = await this.prisma.product.findUnique({ where: { sku: prefixedSku } })
+      if (byPrefixed) {
+        return { id: byPrefixed.id, sku: byPrefixed.sku, productName: byPrefixed.productName }
+      }
+
+      const byCustomerSku = await this.prisma.product.findFirst({
+        where: { customerSku: trimmed, sku: { startsWith: `${code}-` } },
+      })
+      if (byCustomerSku) {
+        return { id: byCustomerSku.id, sku: byCustomerSku.sku, productName: byCustomerSku.productName }
+      }
+    } else {
+      const byCustomerSku = await this.prisma.product.findMany({
+        where: { customerSku: trimmed },
+        take: 2,
+      })
+      if (byCustomerSku.length === 1) {
+        const row = byCustomerSku[0]
+        return { id: row.id, sku: row.sku, productName: row.productName }
+      }
+      if (byCustomerSku.length > 1) {
+        throw new BadRequestException(
+          `客户 SKU「${trimmed}」存在多个匹配，请使用完整系统 SKU（含客户代码前缀）`,
+        )
+      }
     }
-    const omsRows = await this.prisma.$queryRawUnsafe<Array<{ internalSku: string }>>(
-      'SELECT internalSku FROM oms_Product WHERE customerSku = ? OR internalSku = ? LIMIT 1',
-      trimmed,
-      trimmed,
-    )
+
+    const omsSql = code
+      ? 'SELECT internalSku FROM oms_Product WHERE (customerSku = ? OR internalSku = ?) AND customerId IN (SELECT id FROM oms_CustomerAccount WHERE code = ?) LIMIT 1'
+      : 'SELECT internalSku FROM oms_Product WHERE customerSku = ? OR internalSku = ? LIMIT 1'
+    const omsParams = code ? [trimmed, trimmed, code] : [trimmed, trimmed]
+    const omsRows = await this.prisma.$queryRawUnsafe<Array<{ internalSku: string }>>(omsSql, ...omsParams)
     const mappedSku = String(omsRows[0]?.internalSku || '').trim()
     if (mappedSku) {
       const mapped = await this.prisma.product.findUnique({ where: { sku: mappedSku } })
@@ -1611,15 +1642,27 @@ export class InboundService {
         return { id: mapped.id, sku: mapped.sku, productName: mapped.productName }
       }
     }
+
+    let createSku = trimmed.slice(0, 30)
+    let createCustomerSku = trimmed.slice(0, 50)
+    if (code) {
+      const siblings = await this.prisma.product.findMany({
+        where: { sku: { startsWith: `${code}-` } },
+        select: { sku: true },
+      })
+      createSku = buildInternalSku(code, trimmed, siblings.map((row) => row.sku))
+      createCustomerSku = trimmed.slice(0, 50)
+    }
+
     const created = await this.prisma.product.create({
       data: {
-        sku: trimmed.slice(0, 30),
-        customerSku: trimmed.slice(0, 50),
+        sku: createSku,
+        customerSku: createCustomerSku,
         productName: (productName || trimmed).slice(0, 300),
         category: 'OMS',
         status: 'active',
         syncStatus: 'pending',
-        remark: 'OMS 预约入库自动建档',
+        remark: code ? `OMS客户:${code} · OMS 预约入库自动建档` : 'OMS 预约入库自动建档',
       },
     })
     return { id: created.id, sku: created.sku, productName: created.productName }
@@ -1673,7 +1716,7 @@ export class InboundService {
       const sku = String(line.sku || '').trim()
       const qty = Math.floor(Number(line.qty ?? 0))
       if (!sku || qty <= 0) throw new BadRequestException('SKU 与入库数量无效')
-      const product = await this.ensureProductBySku(sku, line.productName)
+      const product = await this.ensureProductBySku(sku, line.productName, customerCode)
       resolved.push({
         productId: product.id,
         sku: product.sku,

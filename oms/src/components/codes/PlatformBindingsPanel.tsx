@@ -266,7 +266,7 @@ export default function PlatformBindingsPanel() {
     return (
       <Card className="p-6 text-sm text-text-secondary">
         <p className="font-medium text-text-primary">货盘客户通常无需绑定平台 SKU</p>
-        <p className="mt-2">请使用货盘选品与内部 SKU 履约。如需开通电商业务并绑定 Takealot 店铺，请联系管理员将账号升级为混合客户。</p>
+        <p className="mt-2">请使用货盘选品与内部 SKU 履约。如需开通电商业务，请联系管理员将账号升级为混合客户。</p>
       </Card>
     )
   }
@@ -328,7 +328,6 @@ export default function PlatformBindingsPanel() {
               {dataScope.isAdmin && <th>客户代码</th>}
               <th className="text-primary-700">平台商品条码</th>
               <th className="min-w-[180px] text-primary-700">平台商品名称</th>
-              <th>平台店铺</th>
               <th>仓库商品编码</th>
               <th>仓库商品名称</th>
               <th>简称</th>
@@ -343,12 +342,6 @@ export default function PlatformBindingsPanel() {
               {dataScope.isAdmin && <th />}
               <th><input className={inputCls} placeholder="筛选" value={filters.barcode} onChange={e => setFilter('barcode', e.target.value)} /></th>
               <th><input className={inputCls} placeholder="筛选" value={filters.platformTitle} onChange={e => setFilter('platformTitle', e.target.value)} /></th>
-              <th>
-                <select className={inputCls} value={filters.storeId} onChange={e => setFilter('storeId', e.target.value)}>
-                  <option value="all">全部店铺</option>
-                  {stores.filter(s => s.platform !== 'Manual').map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                </select>
-              </th>
               <th><input className={inputCls} placeholder="筛选" value={filters.warehouseSku} onChange={e => setFilter('warehouseSku', e.target.value)} /></th>
               <th><input className={inputCls} placeholder="筛选" value={filters.warehouseName} onChange={e => setFilter('warehouseName', e.target.value)} /></th>
               <th colSpan={5} />
@@ -356,7 +349,7 @@ export default function PlatformBindingsPanel() {
           </thead>
           <tbody className="table-body">
             {filtered.length === 0 ? (
-              <tr><td colSpan={dataScope.isAdmin ? 13 : 12} className="table-cell py-10 text-center text-xs text-text-muted">暂无数据</td></tr>
+              <tr><td colSpan={dataScope.isAdmin ? 12 : 11} className="table-cell py-10 text-center text-xs text-text-muted">暂无数据</td></tr>
             ) : filtered.flatMap(row => {
               if (row.lines.length === 0) {
                 return [(
@@ -374,7 +367,6 @@ export default function PlatformBindingsPanel() {
                       <span className="inline-flex items-center font-mono">{row.platformBarcode}<CopyBarcodeButton value={row.platformBarcode} /></span>
                     </td>
                     <td className="table-cell max-w-[200px] truncate text-xs text-primary-700" title={row.platformTitle}>{row.platformTitle}</td>
-                    <td className="table-cell text-xs">{row.storeName}</td>
                     <td className="table-cell text-xs text-text-muted" colSpan={3}>— 待绑定仓库 SKU —</td>
                     <td className="table-cell text-xs">{STOCK_SOURCE_LABELS[row.stockSource]}</td>
                     <td className="table-cell"><span className={`rounded-md px-2 py-0.5 text-[11px] font-semibold ${statusBadge(row.status)}`}>{PLATFORM_BINDING_STATUS_LABELS[row.status]}</span></td>
@@ -402,7 +394,6 @@ export default function PlatformBindingsPanel() {
                         <span className="inline-flex items-center font-mono">{row.platformBarcode}<CopyBarcodeButton value={row.platformBarcode} /></span>
                       </td>
                       <td className="table-cell align-top max-w-[200px] truncate text-xs text-primary-700" rowSpan={row.lines.length} title={row.platformTitle}>{row.platformTitle}</td>
-                      <td className="table-cell align-top text-xs" rowSpan={row.lines.length}>{row.storeName}</td>
                     </>
                   )}
                   <td className="table-cell"><MonoCode>{line.internalSku}</MonoCode>{row.lines.length > 1 && <span className="ml-1 text-[10px] text-violet-600">×{line.qty}</span>}</td>

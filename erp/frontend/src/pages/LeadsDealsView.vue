@@ -69,9 +69,9 @@ const uploadFiles = ref<File[]>([])
 const uploadFileInput = ref<HTMLInputElement | null>(null)
 
 const SOURCE_OPTIONS = ['Takealot', '官网', '展会', '推荐', '小红书', '抖音', '其他']
-const SHOP_TYPE_OPTIONS = ['本土店', '海外仓']
+const SHOP_TYPE_OPTIONS = ['本土店', '跨境店', '海外仓']
 const DEAL_STATUS_OPTIONS = [
-  { value: 'pending', label: '待转客户' },
+  { value: 'pending', label: '待开通' },
   { value: 'confirmed', label: '已开通 OMS' },
 ]
 const DEAL_FILE_ACCEPT = '.pdf,.jpg,.jpeg,.png,.webp,.doc,.docx,.xls,.xlsx,.zip'
@@ -121,7 +121,7 @@ const { loading, items: deals, load } = useListLoader(async () => {
         customerId,
         customerCode: r.customerCode || '',
         erpStatus,
-        erpStatusLabel: customerId ? '已开通 OMS' : '待转客户',
+        erpStatusLabel: customerId ? '已开通 OMS' : '待开通',
         dealCount: dealList.length,
         fileCount,
         deals: dealList,
@@ -494,7 +494,7 @@ onMounted(async () => {
       >
         <el-option v-for="u in salesUsers" :key="u.id" :label="u.name" :value="u.id" />
       </el-select>
-      <el-select v-model="dealStatusFilter" placeholder="转客户状态" clearable size="small" style="width: 130px" @change="applyFilters">
+      <el-select v-model="dealStatusFilter" placeholder="OMS 开户状态" clearable size="small" style="width: 130px" @change="applyFilters">
         <el-option v-for="s in DEAL_STATUS_OPTIONS" :key="s.value" :label="s.label" :value="s.value" />
       </el-select>
       <el-date-picker
@@ -535,7 +535,7 @@ onMounted(async () => {
       <el-table-column prop="channel" label="渠道" width="80" />
       <el-table-column prop="shopType" label="店铺类型" width="100">
         <template #default="{ row }">
-          <el-tag :type="row.shopType === '本土店' ? 'success' : row.shopType === '海外仓' ? 'warning' : 'info'" size="small">{{ row.shopType }}</el-tag>
+          <el-tag :type="row.shopType === '本土店' ? 'success' : row.shopType === '跨境店' ? 'info' : row.shopType === '海外仓' ? 'warning' : 'info'" size="small">{{ row.shopType }}</el-tag>
         </template>
       </el-table-column>
       <el-table-column label="成交次数" width="90" align="center">
@@ -563,7 +563,7 @@ onMounted(async () => {
             size="small"
             @click="toErp(row)"
           >
-            转 ERP/OMS 客户
+            开通 OMS 账号
           </el-button>
           <el-button
             v-else
@@ -597,7 +597,7 @@ onMounted(async () => {
             </div>
           </div>
           <el-tag :type="deal.status === 'confirmed' ? 'success' : 'warning'" size="small">
-            {{ deal.status === 'confirmed' ? '已转客户' : '待转客户' }}
+            {{ deal.status === 'confirmed' ? '已开通 OMS' : '待开通' }}
           </el-tag>
         </div>
         <div v-if="deal.remark" class="deal-remark">备注：{{ deal.remark }}</div>
@@ -683,13 +683,13 @@ onMounted(async () => {
 
   <el-dialog
     v-model="omsDialogVisible"
-    title="转为 ERP 客户并开通 OMS 账号"
+    title="开通 OMS 账号"
     width="640px"
     destroy-on-close
     append-to-body
     :close-on-click-modal="false"
   >
-    <p class="oms-hint">成交后需要同时建立 ERP 客户档案，并填写登录信息帮客户开通 OMS 账号。临时密码仅显示一次，客户首次登录必须修改。</p>
+    <p class="oms-hint">填写登录信息后为该成交客户开通 OMS 账号。临时密码仅显示一次，客户首次登录必须修改。</p>
     <el-form ref="omsFormRef" :model="omsForm" :rules="omsRules" label-width="108px">
       <el-form-item label="客户代码" prop="customerCode" required>
         <el-input v-model="omsForm.customerCode" placeholder="如 CUS-001" maxlength="30" />
@@ -742,12 +742,12 @@ onMounted(async () => {
     </el-form>
     <template #footer>
       <el-button @click="omsDialogVisible = false">取消</el-button>
-      <el-button type="primary" :loading="omsSaving" @click="submitOmsAccount">创建客户并开通 OMS</el-button>
+      <el-button type="primary" :loading="omsSaving" @click="submitOmsAccount">开通 OMS 账号</el-button>
     </template>
   </el-dialog>
 
   <el-dialog v-model="omsSuccessVisible" width="520px" destroy-on-close append-to-body>
-    <el-result icon="success" title="ERP 客户与 OMS 账号已开通" sub-title="请把登录账号和临时密码交给客户，并提醒首次登录必须改密">
+    <el-result icon="success" title="OMS 账号已开通" sub-title="请把登录账号和临时密码交给客户，并提醒首次登录必须改密">
       <template #extra>
         <div v-if="omsSuccess" class="oms-success">
           <div><span>客户代码</span><strong>{{ omsSuccess.customerCode }}</strong></div>

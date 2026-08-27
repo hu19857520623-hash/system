@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { customerApi, locationApi, managementLoopApi, warehouseApi } from '@/api/client.js'
+import { locationApi, managementLoopApi, warehouseApi } from '@/api/client.js'
 import { useAppStore } from '@/stores/app'
 
 const route = useRoute()
@@ -11,14 +11,12 @@ const app = useAppStore()
 const activeTab = computed(() => String(route.meta.tab || 'reports'))
 const loading = ref(false)
 const warehouses = ref<any[]>([])
-const customers = ref<any[]>([])
 const warehouseCode = ref('')
 
 const tabs = [
   { key: 'reports', label: '真实作业报表', path: '/wms/reports', perm: 'wms_reports.view' },
   { key: 'stocktake', label: '多模式盘点', path: '/wms/stocktake', perm: 'stocktake.view' },
   { key: 'capacity', label: '容量与预警', path: '/wms/capacity', perm: 'capacity.view' },
-  { key: 'fees', label: '入库自动计费', path: '/wms/inbound-fees', perm: 'inbound_fee.view' },
 ]
 const visibleTabs = computed(() => tabs.filter((tab) => app.hasPerm(tab.perm) || app.authenticatedUser?.roleCode === 'admin'))
 
@@ -52,37 +50,6 @@ async function loadReports() {
     inboundRows.value = inbound.items || []
     outboundRows.value = outbound.items || []
   } finally { loading.value = false }
-}
-
-const feeRules = ref<any[]>([])
-const feeDialog = ref(false)
-const feeInboundId = ref<number | null>(null)
-const feePreview = ref<any>(null)
-const feeForm = reactive<any>({
-  ruleName: '', customerId: '', warehouseCode: '', receiveUnitPrice: 0,
-  receiveCartonPrice: 0, qcUnitPrice: 0, putawayUnitPrice: 0, enabled: true,
-})
-
-async function loadFeeRules() { feeRules.value = await managementLoopApi.feeRules() }
-async function saveFeeRule() {
-  await managementLoopApi.createFeeRule({ ...feeForm, customerId: feeForm.customerId || null, warehouseCode: feeForm.warehouseCode || null })
-  ElMessage.success('计费规则已保存')
-  feeDialog.value = false
-  Object.assign(feeForm, { ruleName: '', customerId: '', warehouseCode: '', receiveUnitPrice: 0, receiveCartonPrice: 0, qcUnitPrice: 0, putawayUnitPrice: 0, enabled: true })
-  await loadFeeRules()
-}
-async function toggleFeeRule(row: any) {
-  await managementLoopApi.updateFeeRule(row.id, { enabled: row.enabled })
-  ElMessage.success(row.enabled ? '规则已启用' : '规则已停用')
-}
-async function previewFee() {
-  if (!feeInboundId.value) return ElMessage.warning('请输入入库单 ID')
-  feePreview.value = await managementLoopApi.feePreview(feeInboundId.value)
-}
-async function recalculateFee() {
-  if (!feeInboundId.value) return ElMessage.warning('请输入入库单 ID')
-  feePreview.value = await managementLoopApi.recalculateInboundFee(feeInboundId.value)
-  ElMessage.success('计费已执行；已存在的费用会按幂等键跳过')
 }
 
 const stocktakes = ref<any[]>([])
@@ -142,15 +109,11 @@ async function loadCurrent() {
   if (activeTab.value === 'reports') await loadReports()
   if (activeTab.value === 'stocktake') await loadStocktakes()
   if (activeTab.value === 'capacity') await loadCapacity()
-  if (activeTab.value === 'fees') await loadFeeRules()
 }
 
 onMounted(async () => {
-  const [warehouseResult, customerResult] = await Promise.all([
-    warehouseApi.list({ type: 'overseas' }), customerApi.list({ pageSize: 500 }),
-  ])
+  const warehouseResult = await warehouseApi.list({ type: 'overseas' })
   warehouses.value = Array.isArray(warehouseResult) ? warehouseResult : warehouseResult.items || []
-  customers.value = customerResult.items || []
   await loadCurrent()
 })
 watch(() => route.path, loadCurrent)
@@ -161,7 +124,7 @@ watch(warehouseCode, loadCurrent)
   <div class="management-loop-page">
     <el-card class="head-card">
       <div class="page-head">
-        <div><h2>仓储管理闭环</h2><p>计费、报表、盘点和容量使用同一套真实业务数据</p></div>
+        <div><h2>仓储管理闭环</h2><p>报表、盘点和容量使用同一套真实业务数据</p></div>
         <el-select v-model="warehouseCode" clearable placeholder="全部仓库" style="width: 220px">
           <el-option v-for="wh in warehouses" :key="wh.warehouseCode || wh.code" :label="wh.warehouseName || wh.name" :value="wh.warehouseCode || wh.code" />
         </el-select>
@@ -181,7 +144,7 @@ watch(warehouseCode, loadCurrent)
           <div class="metric"><span>入库单</span><strong>{{ reportSummary.inbound?.orderCount || 0 }}</strong><small>完成率 {{ reportSummary.inbound?.completionRate || 0 }}%</small></div>
           <div class="metric"><span>实收入库</span><strong>{{ reportSummary.inbound?.receivedQty || 0 }}</strong><small>差异 {{ reportSummary.inbound?.varianceQty || 0 }}</small></div>
           <div class="metric"><span>出库单</span><strong>{{ reportSummary.outbound?.orderCount || 0 }}</strong><small>履约率 {{ reportSummary.outbound?.fulfillmentRate || 0 }}%</small></div>
-          <div class="metric"><span>作业费用</span><strong>¥ {{ ((reportSummary.inbound?.feeAmount || 0) + (reportSummary.outbound?.feeAmount || 0)).toFixed(2) }}</strong><small>来自 billing_charge</small></div>
+          <div class="metric"><span>出库费用</span><strong>¥ {{ (reportSummary.outbound?.feeAmount || 0).toFixed(2) }}</strong><small>来自 billing_charge</small></div>
         </div>
         <el-tabs>
           <el-tab-pane label="入库真实报表">
@@ -194,7 +157,6 @@ watch(warehouseCode, loadCurrent)
               <el-table-column prop="receivedQty" label="实收" width="90" />
               <el-table-column prop="putawayQty" label="上架" width="90" />
               <el-table-column prop="cartonCount" label="箱数" width="80" />
-              <el-table-column prop="feeAmount" label="费用" width="100"><template #default="s">¥ {{ s.row.feeAmount.toFixed(2) }}</template></el-table-column>
               <el-table-column prop="arrivedAt" label="到仓时间" min-width="170" />
               <el-table-column prop="putawayAt" label="完成时间" min-width="170" />
             </el-table>
@@ -216,26 +178,6 @@ watch(warehouseCode, loadCurrent)
         </el-tabs>
       </el-card>
     </template>
-
-    <el-card v-else-if="activeTab === 'fees'">
-      <div class="toolbar"><div class="hint">入库单完成上架后自动按最具体的客户/仓库规则计费</div><el-button v-if="app.hasPerm('inbound_fee.manage')" type="primary" @click="feeDialog = true">新增计费规则</el-button></div>
-      <div class="fee-check">
-        <el-input-number v-model="feeInboundId" :min="1" placeholder="入库单 ID" />
-        <el-button @click="previewFee">费用预览</el-button>
-        <el-button v-if="app.hasPerm('inbound_fee.manage')" type="primary" @click="recalculateFee">补算/重试</el-button>
-        <span v-if="feePreview" class="hint">{{ feePreview.reason || `预计/已计 ¥ ${Number(feePreview.totalAmount || 0).toFixed(2)}，${feePreview.lines?.length || 0} 项` }}</span>
-      </div>
-      <el-table :data="feeRules" stripe>
-        <el-table-column prop="ruleName" label="规则名称" min-width="160" />
-        <el-table-column label="客户" width="140"><template #default="s">{{ customers.find(c => Number(c.id) === Number(s.row.customerId))?.customerName || '全部客户' }}</template></el-table-column>
-        <el-table-column prop="warehouseCode" label="仓库" width="140"><template #default="s">{{ s.row.warehouseCode || '全部仓库' }}</template></el-table-column>
-        <el-table-column prop="receiveUnitPrice" label="收货/件" width="100" />
-        <el-table-column prop="receiveCartonPrice" label="收货/箱" width="100" />
-        <el-table-column prop="qcUnitPrice" label="质检/件" width="100" />
-        <el-table-column prop="putawayUnitPrice" label="上架/件" width="100" />
-        <el-table-column label="启用" width="90"><template #default="s"><el-switch v-model="s.row.enabled" :disabled="!app.hasPerm('inbound_fee.manage')" @change="toggleFeeRule(s.row)" /></template></el-table-column>
-      </el-table>
-    </el-card>
 
     <el-card v-else-if="activeTab === 'stocktake'">
       <div class="toolbar"><div class="hint">支持全仓、库位、指定 SKU、抽盘，以及盲盘和差异复盘</div><el-button v-if="app.hasPerm('stocktake.create')" type="primary" @click="openCreateStocktake">创建盘点</el-button></div>
@@ -271,17 +213,6 @@ watch(warehouseCode, loadCurrent)
         <el-table-column prop="alertLevel" label="预警级别" width="110"><template #default="s"><el-tag :type="s.row.alertLevel === 'critical' ? 'danger' : s.row.alertLevel === 'normal' ? 'success' : 'warning'">{{ s.row.alertLevel }}</el-tag></template></el-table-column>
       </el-table>
     </el-card>
-
-    <el-dialog v-model="feeDialog" title="新增入库计费规则" width="680px">
-      <el-form :model="feeForm" label-width="110px">
-        <el-form-item label="规则名称"><el-input v-model="feeForm.ruleName" /></el-form-item>
-        <el-form-item label="适用客户"><el-select v-model="feeForm.customerId" clearable style="width:100%"><el-option v-for="c in customers" :key="c.id" :label="c.customerName || c.customerCode" :value="Number(c.id)" /></el-select></el-form-item>
-        <el-form-item label="适用仓库"><el-select v-model="feeForm.warehouseCode" clearable style="width:100%"><el-option v-for="wh in warehouses" :key="wh.warehouseCode || wh.code" :label="wh.warehouseName || wh.name" :value="wh.warehouseCode || wh.code" /></el-select></el-form-item>
-        <el-row :gutter="16"><el-col :span="12"><el-form-item label="收货/件"><el-input-number v-model="feeForm.receiveUnitPrice" :min="0" :precision="4" /></el-form-item></el-col><el-col :span="12"><el-form-item label="收货/箱"><el-input-number v-model="feeForm.receiveCartonPrice" :min="0" :precision="4" /></el-form-item></el-col></el-row>
-        <el-row :gutter="16"><el-col :span="12"><el-form-item label="质检/件"><el-input-number v-model="feeForm.qcUnitPrice" :min="0" :precision="4" /></el-form-item></el-col><el-col :span="12"><el-form-item label="上架/件"><el-input-number v-model="feeForm.putawayUnitPrice" :min="0" :precision="4" /></el-form-item></el-col></el-row>
-      </el-form>
-      <template #footer><el-button @click="feeDialog = false">取消</el-button><el-button type="primary" @click="saveFeeRule">保存</el-button></template>
-    </el-dialog>
 
     <el-dialog v-model="stocktakeDialog" title="创建盘点计划" width="700px">
       <el-form :model="stocktakeForm" label-width="110px">
@@ -326,6 +257,5 @@ watch(warehouseCode, loadCurrent)
 .metric strong { font-size: 24px; color: #1c2944; }
 .form-tip { margin-left: 10px; color: #9099aa; font-size: 12px; }
 .count-cell { display: flex; align-items: center; gap: 6px; }
-.fee-check { display: flex; align-items: center; gap: 10px; margin: 0 0 18px; padding: 12px; background: #f7f9fc; border-radius: 8px; }
 @media (max-width: 900px) { .metrics { grid-template-columns: repeat(2, 1fr); } .page-head { align-items: flex-start; flex-direction: column; } }
 </style>

@@ -2,18 +2,15 @@
 import { ref, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { erpPrompt } from '@/utils/messageBox'
 import { leadApi } from '@/api/client.js'
 import { fmtTime, mapLead } from '@/api/mappers.ts'
 import { useListLoader, withAction } from '@/composables/useListLoader.ts'
 import { useServerPagination } from '@/composables/useTablePagination.ts'
-import { useRowActions } from '@/composables/useRowActions'
 import ListPagination from '@/components/ListPagination.vue'
 import { ROUTE_MAP } from '@/constants/index.js'
 import { useAppStore } from '@/stores/app'
 
 const router = useRouter()
-const { confirmAction } = useRowActions()
 const app = useAppStore()
 const tab = ref('mine')
 const searchQ = ref('')
@@ -26,6 +23,12 @@ const followForm = ref({
   nextPlan: '',
   nextFollowAt: '',
 })
+
+const SHOP_TYPE_OPTIONS = ['本土店', '跨境店', '海外仓']
+const dealDialogVisible = ref(false)
+const dealSaving = ref(false)
+const dealTarget = ref<any>(null)
+const dealShopType = ref('本土店')
 
 const LEAD_STATUS_MAP: Record<string, { label: string; type: string }> = {
   new: { label: '新线索', type: 'info' },
@@ -125,20 +128,32 @@ async function submitFollow() {
   }
 }
 
-async function markDeal(row: any) {
-  if (!(await confirmAction(`确认将「${row.name}」标记为已成交？`, '标记成交'))) return
+function markDeal(row: any) {
+  dealTarget.value = row
+  dealShopType.value = '本土店'
+  dealDialogVisible.value = true
+}
+
+async function submitDeal() {
+  const row = dealTarget.value
+  const shopType = dealShopType.value
+  if (!row?._leadId) return
+  if (!SHOP_TYPE_OPTIONS.includes(shopType)) {
+    ElMessage.warning('请选择店铺类型')
+    return
+  }
+  dealSaving.value = true
   try {
-    const { value } = await erpPrompt('填写店铺类型（可选）', '成交信息', {
-      confirmButtonText: '确认成交',
-      cancelButtonText: '取消',
-      inputValue: '本土店',
-      inputPlaceholder: '例如：本土店、海外仓',
-    })
     const ok = await withAction(async () => {
-      await leadApi.deal(row._leadId, { productDesc: value?.trim() || '本土店' })
+      await leadApi.deal(row._leadId, { productDesc: shopType })
     }, '已标记成交，正在跳转成交管理…')
-    if (ok) await router.push(ROUTE_MAP.leads_deals)
-  } catch { /* cancelled */ }
+    if (ok) {
+      dealDialogVisible.value = false
+      await router.push(ROUTE_MAP.leads_deals)
+    }
+  } finally {
+    dealSaving.value = false
+  }
 }
 
 watch(tab, applyFilters)
@@ -249,6 +264,29 @@ onMounted(load)
     <template #footer>
       <el-button @click="followDialogVisible = false">取消</el-button>
       <el-button type="primary" :loading="followSaving" @click="submitFollow">保存跟进</el-button>
+    </template>
+  </el-dialog>
+
+  <el-dialog
+    v-model="dealDialogVisible"
+    title="成交信息"
+    width="420px"
+    destroy-on-close
+    append-to-body
+  >
+    <el-form label-width="92px">
+      <el-form-item label="客户">
+        <span>{{ dealTarget?.name || '—' }}</span>
+      </el-form-item>
+      <el-form-item label="店铺类型" required>
+        <el-select v-model="dealShopType" placeholder="请选择店铺类型" style="width:100%">
+          <el-option v-for="s in SHOP_TYPE_OPTIONS" :key="s" :label="s" :value="s" />
+        </el-select>
+      </el-form-item>
+    </el-form>
+    <template #footer>
+      <el-button @click="dealDialogVisible = false">取消</el-button>
+      <el-button type="primary" :loading="dealSaving" @click="submitDeal">确认成交</el-button>
     </template>
   </el-dialog>
 </template>

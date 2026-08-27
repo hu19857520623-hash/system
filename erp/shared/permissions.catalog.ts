@@ -120,8 +120,6 @@ export const PERM_GROUPS: PermissionGroup[] = [
       { id: 'billing.view', label: '客户结算-查看' },
       { id: 'billing.generate', label: '客户结算-生成' },
       { id: 'billing.manual', label: '客户结算-手工' },
-      { id: 'inbound_fee.view', label: '入库计费-查看' },
-      { id: 'inbound_fee.manage', label: '入库计费-配置' },
       { id: 'wms_reports.view', label: '仓储作业报表-查看' },
       { id: 'receivable_payable.view', label: '海运账单-查看' },
       { id: 'receivable_payable.manual', label: '海运账单-手工' },
@@ -156,12 +154,16 @@ export const PERM_GROUPS: PermissionGroup[] = [
 export const DEPRECATED_PERM_CODES: readonly string[] = [
   'create_inbound.push',
   'mingrui.order',
+  'inbound_fee.view',
+  'inbound_fee.manage',
 ]
 
 /** 旧码 → 新码；值为 null 表示直接删除 */
 export const PERM_ALIASES: Record<string, string | null> = {
   'create_inbound.push': null,
   'mingrui.order': null,
+  'inbound_fee.view': null,
+  'inbound_fee.manage': null,
 }
 
 /** 角色默认权限模板（按中文角色名） */
@@ -187,7 +189,7 @@ export const ROLE_PERM_TEMPLATES: Record<string, string[]> = {
     'capacity.view', 'capacity.manage',
     'cost.view', 'operating_ledger.view', 'operating_ledger.manage', 'sync.view', 'sync.retry', 'operation_log.view',
     'billing.view', 'billing.generate', 'billing.manual',
-    'inbound_fee.view', 'inbound_fee.manage', 'wms_reports.view',
+    'wms_reports.view',
     'receivable_payable.view', 'receivable_payable.manual',
     'reports.view',
     'profit_analysis.view',
@@ -241,7 +243,7 @@ export const ROLE_PERM_TEMPLATES: Record<string, string[]> = {
     'purchase.view',
     'cost.view', 'operating_ledger.view', 'operating_ledger.manage',
     'billing.view', 'billing.generate', 'billing.manual',
-    'inbound_fee.view', 'inbound_fee.manage', 'wms_reports.view',
+    'wms_reports.view',
     'receivable_payable.view', 'receivable_payable.manual',
     'reports.view', 'profit_analysis.view',
     'budget_credit.view', 'budget_credit.create',
@@ -289,7 +291,7 @@ export const ROLE_PERM_TEMPLATES: Record<string, string[]> = {
     'outbound.view', 'outbound.create', 'outbound.relabel', 'outbound.pick', 'outbound.pack', 'outbound.ship',
     'inventory_query.view', 'inventory_query.detail', 'inventory_query.adjust',
     'stocktake.view', 'stocktake.create', 'stocktake.count', 'stocktake.approve',
-    'capacity.view', 'capacity.manage', 'wms_reports.view', 'inbound_fee.view',
+    'capacity.view', 'capacity.manage', 'wms_reports.view',
     'sync.view', 'sync.retry', 'operation_log.view',
   ],
 }

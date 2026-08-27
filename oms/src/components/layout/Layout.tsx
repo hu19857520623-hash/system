@@ -2,13 +2,13 @@ import { NavLink, Outlet, useLocation, useNavigate, Link } from 'react-router-do
 import { useEffect, useMemo, useState } from 'react'
 import {
   LayoutDashboard, ShoppingCart, Package, AlertTriangle, MapPin,
-  RotateCcw, Receipt, CreditCard, Store, BarChart3, Bell, LogOut,
+  RotateCcw, Receipt, CreditCard, BarChart3, Bell, LogOut,
   Boxes, Link2, ArrowDownToLine, ArrowUpFromLine, Layers, Search, Users,
   ChevronDown, ChevronUp, ClipboardList, FileCheck, Truck, Wallet,
-  UserCircle, MonitorCog,
+  MonitorCog,
 } from 'lucide-react'
 import { formatCurrency, countOrdersByTab, warehouseLabel } from '../../data/mockData'
-import { useCustomerProfile, useOrders, useStores } from '../../data/entityStore'
+import { useCustomerProfile, useOrders } from '../../data/entityStore'
 import { useBilling } from '../../data/billingStore'
 import { useRole } from '../../auth/RoleContext'
 import { useDataScope } from '../../auth/useDataScope'
@@ -90,16 +90,6 @@ const accordionNav: NavAccordion[] = [
     ],
   },
   {
-    id: 'account',
-    label: '账户中心',
-    icon: UserCircle,
-    items: [
-      {
-        to: '/stores', label: '店铺绑定', icon: Store, end: true,
-      },
-    ],
-  },
-  {
     id: 'products',
     label: '商品管理',
     icon: Boxes,
@@ -167,7 +157,6 @@ export default function Layout() {
   const pageTitle = findPageTitle(pathname)
   const [menuSearch, setMenuSearch] = useState('')
   const orders = useOrders()
-  const stores = useStores()
   const customer = useCustomerProfile()
   const { creditBalance } = useBilling()
   const activeAccount = dataScope.activeCustomerId
@@ -195,15 +184,9 @@ export default function Layout() {
           badge: countOrdersByTab('pending_ship', orders) + countOrdersByTab('exception', orders),
         }
       }
-      if (item.to === '/stores') {
-        return {
-          ...item,
-          badge: stores.filter(s => s.status === 'sync_fail').length || undefined,
-        }
-      }
       return item
     }),
-  })), [orders, stores])
+  })), [orders])
 
   const visibleGroups = useMemo(() => navGroups
     .map(group => ({

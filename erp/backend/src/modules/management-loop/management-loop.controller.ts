@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, ParseIntPipe, Patch, Post, Query } from '@nestjs/common'
+import { Body, Controller, Get, Param, ParseIntPipe, Post, Query } from '@nestjs/common'
 import { CurrentUser } from '../../common/decorators/current-user.decorator'
 import { RequireAnyPerm, RequirePerms } from '../../common/decorators/require-perms.decorator'
 import { ManagementLoopService } from './management-loop.service'
@@ -18,34 +18,6 @@ export class ManagementLoopController {
   @RequireAnyPerm('reports.view', 'wms_reports.view')
   @Get('reports/outbound')
   outboundReport(@Query() query: any) { return this.service.outboundReport(query) }
-
-  @RequirePerms('inbound_fee.view')
-  @Get('inbound-fee-rules')
-  feeRules() { return this.service.listFeeRules() }
-
-  @RequirePerms('inbound_fee.view')
-  @Get('inbound-fees/:inboundId/preview')
-  inboundFeePreview(@Param('inboundId', ParseIntPipe) inboundId: number) {
-    return this.service.previewInboundCharges(inboundId)
-  }
-
-  @RequirePerms('inbound_fee.manage')
-  @Post('inbound-fees/:inboundId/recalculate')
-  recalculateInboundFee(@Param('inboundId', ParseIntPipe) inboundId: number) {
-    return this.service.recordInboundCharges(inboundId)
-  }
-
-  @RequirePerms('inbound_fee.manage')
-  @Post('inbound-fee-rules')
-  createFeeRule(@Body() body: any, @CurrentUser('userId') userId: number) {
-    return this.service.createFeeRule(body, userId)
-  }
-
-  @RequirePerms('inbound_fee.manage')
-  @Patch('inbound-fee-rules/:id')
-  updateFeeRule(@Param('id', ParseIntPipe) id: number, @Body() body: any) {
-    return this.service.updateFeeRule(id, body)
-  }
 
   @RequirePerms('stocktake.view')
   @Get('stocktakes')

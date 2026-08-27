@@ -3,8 +3,6 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { Upload, Plus, Trash2, ListOrdered } from 'lucide-react'
 import { Button, Card, MonoCode, Table } from '../components/ui'
 import { FormSection, FormGrid, FormField, formInput, formSelect, formTextarea } from '../components/ui/form'
-import ShipFlowGuide from '../components/flow/ShipFlowGuide'
-import { ECOMMERCE_SHIP_FLOW, CATALOG_SHIP_FLOW } from '../data/customerShipFlows'
 import { findProductByCode } from '../data/platformBindingUtils'
 import { useRole } from '../auth/RoleContext'
 import { getCustomerIdForRole } from '../data/dataScope'
@@ -200,29 +198,14 @@ export default function Inbound() {
     <div className="page-shell pb-24">
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
         <div>
-          <p className="text-[11px] font-medium uppercase tracking-wide text-primary-600">InWhBill · 预约入库</p>
           <h1 className="text-2xl font-semibold tracking-tight text-text-primary">预约入库</h1>
-          <p className="mt-1 text-sm text-text-secondary">填写入库信息并选择货品，提交后可在入库记录中跟踪进度</p>
         </div>
         <Link to="/inbound/records" className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-white px-3 py-2 text-xs font-medium text-text-secondary hover:bg-surface-muted">
           <ListOrdered className="h-3.5 w-3.5" /> 查看入库记录
         </Link>
       </div>
 
-      {role === 'catalog' ? (
-        <div className="mb-4">
-          <ShipFlowGuide title="货盘客户说明" steps={CATALOG_SHIP_FLOW.filter(s => s.id === 'catalog-buy')} kind="catalog" compact />
-        </div>
-      ) : (
-        <div className="mb-4">
-          <ShipFlowGuide
-            title="电商入库阶段"
-            steps={ECOMMERCE_SHIP_FLOW.filter(s => ['inbound-create', 'inbound-labels', 'inbound-receive'].includes(s.id))}
-            activeStepId="inbound-create"
-            compact
-          />
-        </div>
-      )}
+      </div>
 
       <div className="space-y-4">
         <FormSection num={1} title="入库信息">

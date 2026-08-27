@@ -236,7 +236,6 @@ export interface PlatformBindingFilters {
   platformTitle: string
   warehouseSku: string
   warehouseName: string
-  storeId: string
 }
 
 export const defaultPlatformBindingFilters: PlatformBindingFilters = {
@@ -245,7 +244,6 @@ export const defaultPlatformBindingFilters: PlatformBindingFilters = {
   platformTitle: '',
   warehouseSku: '',
   warehouseName: '',
-  storeId: 'all',
 }
 
 export function applyPlatformBindingFilters(
@@ -253,7 +251,6 @@ export function applyPlatformBindingFilters(
   f: PlatformBindingFilters,
 ): PlatformSkuMapping[] {
   return list.filter(m => {
-    if (f.storeId !== 'all' && m.storeId !== f.storeId) return false
     if (f.platform && !m.platform.toLowerCase().includes(f.platform.toLowerCase())) return false
     if (f.barcode && !m.platformBarcode.includes(f.barcode)) return false
     if (f.platformTitle && !m.platformTitle.toLowerCase().includes(f.platformTitle.toLowerCase())) return false

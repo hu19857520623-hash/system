@@ -25,7 +25,6 @@ const Outbound = lazy(() => import('./pages/Outbound'))
 const OutboundRecords = lazy(() => import('./pages/OutboundRecords'))
 const Messages = lazy(() => import('./pages/Messages'))
 const Reports = lazy(() => import('./pages/Reports'))
-const StoresPage = lazy(() => import('./pages/Stores'))
 const Accounts = lazy(() => import('./pages/Accounts'))
 
 function BusinessGate() {
@@ -96,7 +95,7 @@ export default function App() {
         <Route path="system/region-template" element={<RegionTemplates />} />
         <Route path="billing/templates" element={<Navigate to="/system/price-template" replace />} />
         <Route path="billing/regions" element={<Navigate to="/system/region-template" replace />} />
-        <Route path="stores" element={<StoresPage />} />
+        <Route path="stores" element={<Navigate to="/" replace />} />
         <Route path="accounts" element={<Accounts />} />
         <Route path="reports" element={<Reports />} />
       </Route>

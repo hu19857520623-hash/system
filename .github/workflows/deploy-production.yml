@@ -74,6 +74,8 @@ jobs:
           cd /opt/system/erp
           docker compose run -T --rm --no-deps --entrypoint npx erp-api \
             prisma db execute --file prisma/scripts/migrate_outbound_phase1_efficiency.sql </dev/null
+          docker compose run -T --rm --no-deps --entrypoint npx erp-api \
+            prisma db execute --file prisma/scripts/migrate_wms_loop_schema_repair.sql </dev/null
 
           cd /opt/system/oms
           docker compose up -d --no-deps oms-api oms-web

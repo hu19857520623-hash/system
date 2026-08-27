@@ -25,7 +25,9 @@ const checks = [
   { table: 'inbound_carton', columns: ['inbound_id', 'box_code'] },
   { table: 'inbound_carton_item', columns: ['carton_id', 'sku'] },
   { table: 'oms_catalog_order', columns: ['order_no', 'customer_id', 'sku'] },
-  { table: 'billing_charge', columns: ['charge_no', 'customer_id', 'charge_type', 'biz_ref'] },
+  { table: 'billing_charge', columns: ['charge_no', 'customer_id', 'charge_type', 'biz_ref', 'operation_type'] },
+  { table: 'stocktake_plan', columns: ['stocktake_no', 'warehouse_code', 'mode', 'status'] },
+  { table: 'stocktake_line', columns: ['plan_id', 'sku', 'book_qty'] },
   { table: 'inbound_draft', columns: ['draft_no', 'form_data', 'saved_at'] },
   { table: 'inbound_attachment', columns: ['inbound_id', 'file_name', 'file_path'] },
   {

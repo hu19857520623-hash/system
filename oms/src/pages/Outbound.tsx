@@ -3,7 +3,6 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { AlertTriangle, CheckCircle2, Link2, ListOrdered, Plus, Trash2, Upload, XCircle } from 'lucide-react'
 import { Button, Card, MonoCode, Table } from '../components/ui'
 import { FormSection, FormGrid, FormField, formInput, formSelect, formTextarea } from '../components/ui/form'
-import ShipFlowGuide from '../components/flow/ShipFlowGuide'
 import {
   FULFILLMENT_WAREHOUSES, warehouseLabel,
   LOGISTICS_CHANNELS, PLATFORM_OPTIONS, formatCurrency,
@@ -15,7 +14,7 @@ import { getOutboundShippableQty, lockStockForOutbound, rollbackStockForOutbound
 import { addOutboundOrderOrThrow, nextOutboundNo, removeOutboundOrder, submitOutboundToErp, useOutboundOrders } from '../data/outboundStore'
 import { getCustomerCode, getCustomerIdForRole } from '../data/dataScope'
 import {
-  shipFlowForRole, TAKEALOT_DOWNLOAD_ITEMS,
+  TAKEALOT_DOWNLOAD_ITEMS,
 } from '../data/customerShipFlows'
 import {
   findProductByCode,
@@ -166,11 +165,6 @@ export default function Outbound() {
     () => enabledDispatchRules(regionDispatchRules),
     [regionDispatchRules],
   )
-
-  const roleFlows = shipFlowForRole(role)
-  const outboundFlow = roleFlows.find(f => f.kind === 'catalog' && role === 'catalog')
-    ?? roleFlows.find(f => f.kind === 'ecommerce')
-    ?? roleFlows[0]
 
   const isDropship = outboundType === '一件代发'
   const isTakealot = outboundType === 'Takealot入仓'
@@ -1363,18 +1357,6 @@ export default function Outbound() {
           )}
         </div>
       </Card>
-      )}
-
-      {outboundFlow && !dataScope.isAdmin && (
-        <div className="mb-4">
-          <ShipFlowGuide
-            title={outboundFlow.label}
-            steps={outboundFlow.steps}
-            kind={outboundFlow.kind}
-            activeStepId="oms-outbound"
-            compact
-          />
-        </div>
       )}
 
       <div className="space-y-4">

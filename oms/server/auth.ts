@@ -187,7 +187,6 @@ export function requiredWritePermission(method: string, apiPath: string): string
   if (p.startsWith('/accounts') || p.startsWith('/fee-templates') || p.startsWith('/payment-methods')) {
     return 'account:manage'
   }
-  if (p.startsWith('/stores')) return 'store:manage'
   return '__unknown_write__'
 }
 

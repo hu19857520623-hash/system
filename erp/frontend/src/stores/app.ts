@@ -6,8 +6,6 @@ import {
   templatePermsForRoleName,
 } from '@erp/shared/permissions.catalog'
 
-const DEFAULT_PASSWORD = '123456'
-
 function mapRoleCodeToFrontendRole(roleCode: string, roleName?: string): string {
   if (roleName?.includes('开发主管')) return '产品开发主管'
   const map: Record<string, string> = {
@@ -67,16 +65,7 @@ export const NAV_CHANNEL_LABELS: Record<NavChannel, string> = {
   overseas_wms: '海外仓作业',
 }
 
-const ACCOUNTS: Account[] = [
-  { id: 'ACC-001', login: 'admin', name: '系统管理员', role: '系统管理员', status: 'ok', lastLogin: '刚刚' },
-  { id: 'ACC-002', login: 'zhaomin', name: '赵敏', role: '采购主管', status: 'ok', lastLogin: '09:12' },
-  { id: 'ACC-003', login: 'liuyang', name: '刘洋', role: '产品开发主管', status: 'ok', lastLogin: '昨天' },
-  { id: 'ACC-006', login: 'zhoujie', name: '周杰', role: '产品开发', status: 'ok', lastLogin: '06-11' },
-  { id: 'ACC-007', login: 'sunhao', name: '孙浩', role: '采购', status: 'ok', lastLogin: '06-10' },
-  { id: 'ACC-004', login: 'linxinyi', name: '林心仪', role: '销售', status: 'ok', lastLogin: '09:30' },
-  { id: 'ACC-005', login: 'wangfang', name: '王芳', role: '财务', status: 'ok', lastLogin: '06-09' },
-  { id: 'ACC-008', login: 'chenqi', name: '陈琪', role: '陪跑', status: 'ok', lastLogin: '08:45' },
-]
+const ACCOUNTS: Account[] = []
 
 const NAV: NavGroup[] = [
   {
@@ -157,7 +146,6 @@ const NAV: NavGroup[] = [
       { id: 'cost', name: '成本台账' },
       { id: 'operating_ledger', name: '经营收支' },
       { id: 'profit_analysis', name: '利润/采购分析' },
-      { id: 'inbound_fees', name: '入库计费' },
     ],
   },
   {
@@ -196,7 +184,6 @@ const NAV_ROUTE_MAP: Record<string, string> = {
   wms_reports: '/wms/reports',
   stocktake: '/wms/stocktake',
   capacity: '/wms/capacity',
-  inbound_fees: '/wms/inbound-fees',
   cost: '/cost',
   operating_ledger: '/operating-ledger',
   sync: '/sync',
@@ -220,7 +207,7 @@ export const useAppStore = defineStore('app', {
     authReady: false,
     isAuthenticated: false,
     authenticatedUser: null as AuthUser | null,
-    currentAccountId: 'ACC-001',
+    currentAccountId: '',
     accounts: ACCOUNTS,
     nav: NAV,
     navRouteMap: NAV_ROUTE_MAP,
@@ -252,7 +239,14 @@ export const useAppStore = defineStore('app', {
           lastLogin: '刚刚',
         }
       }
-      return state.accounts.find(a => a.id === state.currentAccountId) || state.accounts[0]
+      return {
+        id: '',
+        login: '',
+        name: '',
+        role: '',
+        status: '',
+        lastLogin: '',
+      }
     },
     currentRole(): string {
       return (this as any).currentAccount.role
@@ -341,21 +335,7 @@ export const useAppStore = defineStore('app', {
       clearAccessToken()
       this.authenticatedUser = null
       this.isAuthenticated = false
-      this.currentAccountId = 'ACC-001'
-    },
-    async loginForAccount(accountId?: string) {
-      const id = accountId || this.currentAccountId
-      const acct = this.accounts.find(a => a.id === id)
-      if (!acct?.login) return
-      try {
-        await this.login(acct.login, DEFAULT_PASSWORD)
-      } catch {
-        /* 后端未启动时静默失败 */
-      }
-    },
-    async switchAccount(id: string) {
-      this.currentAccountId = id
-      await this.loginForAccount(id)
+      this.currentAccountId = ''
     },
     hasPerm(permId: string): boolean {
       if (this.authenticatedUser?.roleCode === 'admin') return true
@@ -402,7 +382,6 @@ export const useAppStore = defineStore('app', {
         wms_reports: 'wms_reports.view',
         stocktake: 'stocktake.view',
         capacity: 'capacity.view',
-        inbound_fees: 'inbound_fee.view',
         cost: 'cost.view',
         operating_ledger: 'operating_ledger.view',
         sync: 'sync.view',

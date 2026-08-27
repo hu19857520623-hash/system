@@ -54,8 +54,8 @@ export const ACCOUNT_UPGRADE_PATHS: {
     label: '货盘客户 → 混合客户（开通电商）',
     steps: [
       '账号类型改为「混合客户」',
-      '套用混合模板，或追加：订单、店铺、商品写入、退件等权限',
-      '客户绑定 Takealot / Shopify 店铺',
+      '套用混合模板，或追加：订单、商品写入、退件等权限',
+      '客户同步平台订单后即可预约发货',
       '历史货盘库存仍标记为「货盘库存」，新建商品入库为「自有库存」',
       '发货时可选择来源：平台订单 / 货盘分销 / 手工',
     ],
@@ -75,7 +75,7 @@ export const ACCOUNT_UPGRADE_PATHS: {
 
 /** 客户业务开通说明（管理员创建账号时参考） */
 export const ACCOUNT_TYPE_HINTS: Record<CustomerAccountType, string> = {
-  ecommerce: '绑定店铺、同步平台订单，用自有库存预约发货',
+  ecommerce: '同步平台订单，用自有库存预约发货',
   catalog: '在货盘选品购货，收货后在 OMS 预约发货给下游',
   hybrid: '同时经营自有电商与货盘分销，两套库存与发货来源',
 }
@@ -91,7 +91,6 @@ export const PERMISSION_GROUPS: { label: string; permissions: Permission[] }[] =
   { label: '物流', permissions: ['logistics:read'] },
   { label: '退件', permissions: ['returns:read', 'returns:write'] },
   { label: '费用', permissions: ['billing:read', 'billing:recharge'] },
-  { label: '店铺', permissions: ['store:manage'] },
   { label: '报表', permissions: ['report:read'] },
 ]
 
@@ -114,7 +113,6 @@ const ECOMMERCE_PERMISSIONS: Permission[] = [
   'logistics:read',
   'returns:read', 'returns:write',
   'billing:read',
-  'store:manage',
   'report:read',
 ]
 
@@ -177,7 +175,6 @@ export const ROUTE_PERMISSIONS: Record<string, Permission> = {
   '/billing/recharge': 'billing:recharge',
   '/system/price-template': 'account:manage',
   '/system/region-template': 'account:manage',
-  '/stores': 'store:manage',
   '/reports': 'report:read',
   '/accounts': 'account:manage',
 }

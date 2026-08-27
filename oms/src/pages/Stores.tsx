@@ -2,9 +2,8 @@ import { useState, useMemo } from 'react'
 import { AlertCircle } from 'lucide-react'
 import {
   Badge, Button, Card, PageHeader, SearchInput, MonoCode, StatCard,
-  Table, TableFooter, FeatureIntro, FilterChip, InfoRow, SectionTitle,
+  Table, TableFooter, FilterChip, InfoRow, SectionTitle,
 } from '../components/ui'
-import { MODULE_GUIDES } from '../data/moduleGuide'
 import { StoreAccount, statusLabels } from '../data/mockData'
 import { useStores } from '../data/entityStore'
 
@@ -49,9 +48,7 @@ export default function StoresPage() {
 
   return (
     <div className="page-shell">
-      <PageHeader title="店铺管理" desc={MODULE_GUIDES.stores.desc} />
-
-      <FeatureIntro guide={MODULE_GUIDES.stores} className="mb-4" />
+      <PageHeader title="店铺管理" />
 
       <div className="mb-4 rounded-xl bg-surface-muted px-4 py-3 ring-1 ring-border-light">
         <p className="text-xs text-text-secondary">

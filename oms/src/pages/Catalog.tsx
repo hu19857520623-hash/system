@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { RefreshCw, ShoppingCart, Trash2 } from 'lucide-react'
 import { Badge, Button, Card, Drawer, MonoCode, PageHeader, SearchInput, Tabs } from '../components/ui'
-import ShipFlowGuide from '../components/flow/ShipFlowGuide'
-import { CATALOG_SHIP_FLOW } from '../data/customerShipFlows'
 import { formatCurrency } from '../data/mockData'
 import {
   useProducts,
@@ -281,9 +279,6 @@ export default function Catalog() {
           </div>
         }
       />
-      <div className="mb-4">
-        <ShipFlowGuide title="货盘客户流程" steps={CATALOG_SHIP_FLOW} kind="catalog" activeStepId="catalog-buy" compact />
-      </div>
 
       {msg && (
         <div className={`mb-4 rounded-lg px-4 py-3 text-sm ${msg.type === 'ok' ? 'bg-emerald-50 text-emerald-800 ring-1 ring-emerald-100' : 'bg-red-50 text-red-800 ring-1 ring-red-100'}`}>
