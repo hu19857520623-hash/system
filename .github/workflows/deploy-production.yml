@@ -60,22 +60,31 @@ jobs:
           exec 9>/tmp/system-production-deploy.lock
           flock -n 9 || { echo 'Another production deployment is running.'; exit 1; }
 
+          # Apply SQL from the rsynced host files. Do not rely on image COPY cache,
+          # which can miss newly added prisma/scripts/*.sql.
+          cd /opt/system/erp
+          echo '=== Apply outbound phase1 schema ==='
+          docker compose run -T --rm --no-deps --entrypoint npx erp-api \
+            prisma db execute --file prisma/scripts/migrate_outbound_phase1_efficiency.sql </dev/null
+          echo '=== Repair WMS loop schema ==='
+          test -f backend/prisma/scripts/migrate_wms_loop_schema_repair.sql \
+            || { echo 'Missing backend/prisma/scripts/migrate_wms_loop_schema_repair.sql'; exit 1; }
+          docker compose run -T --rm --no-deps \
+            --volume /opt/system/erp/backend/prisma/scripts:/mnt/scripts:ro \
+            --entrypoint npx erp-api \
+            prisma db execute --file /mnt/scripts/migrate_wms_loop_schema_repair.sql </dev/null
+
+          echo '=== Build OMS ==='
           cd /opt/system/oms
           docker compose build oms-api oms-web
 
+          echo '=== Build ERP ==='
           cd /opt/system/erp
           docker compose build erp-api erp-web
 
+          echo '=== Build store-monitor ==='
           cd /opt/system/store-monitor
           docker build -t takealot/store-monitor:production .
-
-          # Apply idempotent schema updates before starting the new API. The Prisma
-          # client references these columns and tables during normal requests.
-          cd /opt/system/erp
-          docker compose run -T --rm --no-deps --entrypoint npx erp-api \
-            prisma db execute --file prisma/scripts/migrate_outbound_phase1_efficiency.sql </dev/null
-          docker compose run -T --rm --no-deps --entrypoint npx erp-api \
-            prisma db execute --file prisma/scripts/migrate_wms_loop_schema_repair.sql </dev/null
 
           cd /opt/system/oms
           docker compose up -d --no-deps oms-api oms-web
