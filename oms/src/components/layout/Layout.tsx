@@ -257,7 +257,7 @@ export default function Layout() {
       <aside className="flex w-[220px] shrink-0 flex-col border-r border-border bg-white">
         {/* 红色顶栏 — 参考 Buffalo OMS */}
         <div className="flex h-12 items-center gap-2 bg-[#d32f2f] px-4">
-          <div className="flex h-7 w-7 items-center justify-center rounded bg-white/20 text-xs font-bold text-white">Ai</div>
+          <img src="/ketuo-logo.png" alt="特拓洛海外仓" className="h-7 w-7 rounded-full object-cover ring-1 ring-white/30" />
           <p className="text-sm font-semibold text-white">OMS-订单管理系统</p>
         </div>
 
