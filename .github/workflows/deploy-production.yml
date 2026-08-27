@@ -132,7 +132,40 @@ jobs:
           # Replace the legacy entrypoint name and start TLS + renewal from the
           # version-controlled production Compose configuration.
           docker rm -f erp-nginx >/dev/null 2>&1 || true
-          docker compose up -d --no-deps nginx certbot
+          docker compose up -d --no-deps nginx
+
+          certbot_contact=(--register-unsafely-without-email)
+          if [ -n "${CERTBOT_EMAIL:-}" ]; then
+            certbot_contact=(--email "$CERTBOT_EMAIL")
+          fi
+
+          ensure_certificate_domains() {
+            local cert_name="$1"
+            shift
+            local domains=("$@")
+            local domain=''
+            local certbot_domains=()
+
+            for domain in "${domains[@]}"; do
+              certbot_domains+=(-d "$domain")
+              if ! getent ahostsv4 "$domain" | awk '{print $1}' | grep -Fxq '175.178.50.202'; then
+                echo "WARNING: skip certificate expansion; $domain does not resolve to 175.178.50.202"
+                return 0
+              fi
+            done
+
+            docker compose run -T --rm --no-deps --entrypoint certbot certbot \
+              certonly --webroot --webroot-path=/var/www/certbot \
+              --cert-name "$cert_name" --expand --non-interactive --agree-tos \
+              "${certbot_contact[@]}" "${certbot_domains[@]}"
+          }
+
+          ensure_certificate_domains erp.sztekeluo.com \
+            erp.sztekeluo.com www.erp.sztekeluo.com
+          ensure_certificate_domains oms.sztekeluo.com \
+            oms.sztekeluo.com www.oms.sztekeluo.com
+          docker compose exec -T nginx nginx -s reload
+          docker compose up -d --no-deps certbot
 
           wait_healthy() {
             local container="$1"
