@@ -323,7 +323,6 @@ export default function Accounts() {
               <th>权限数</th>
               <th>价格模板（按地区）</th>
               <th>状态</th>
-              <th>登录准备状态</th>
               <th>最近登录</th>
               <th>操作</th>
             </tr>
@@ -373,22 +372,6 @@ export default function Accounts() {
                     status={acc.status === 'active' ? 'available' : 'discarded'}
                     label={acc.status === 'active' ? '启用' : '已禁用'}
                   />
-                </td>
-                <td className="table-cell">
-                  {!acc.portalUser ? (
-                    <Badge status="discarded" label="未开通登录" />
-                  ) : acc.portalUser.status !== 'active' ? (
-                    <Badge status="discarded" label="登录已停用" />
-                  ) : acc.portalUser.mustChangePassword ? (
-                    <Badge status="reviewing" label="待首次改密" />
-                  ) : (
-                    <Badge status="available" label="账号就绪" />
-                  )}
-                  {(acc.portalUser?.username || acc.portalUser?.loginEmail) && (
-                    <p className="mt-1 text-[10px] text-text-muted">
-                      {acc.portalUser.username || acc.portalUser.loginEmail}
-                    </p>
-                  )}
                 </td>
                 <td className="table-cell text-xs text-text-muted whitespace-nowrap">
                   {acc.portalUser?.lastLoginAt
