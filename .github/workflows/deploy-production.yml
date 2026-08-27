@@ -77,6 +77,20 @@ jobs:
           docker compose run -T --rm --no-deps --entrypoint npx erp-api \
             prisma db execute --file prisma/scripts/migrate_outbound_phase1_efficiency.sql </dev/null
 
+          echo '=== Repair WMS loop schema ==='
+          repair_sql="${PWD}/backend/prisma/scripts/migrate_wms_loop_schema_repair.sql"
+          test -f "$repair_sql" || { echo "Missing $repair_sql"; exit 1; }
+          docker compose up -d mysql
+          mysql_pw="$(docker compose exec -T mysql printenv MYSQL_ROOT_PASSWORD | tr -d '\r\n')"
+          test -n "$mysql_pw" || { echo 'mysql container missing MYSQL_ROOT_PASSWORD'; exit 1; }
+          for _ in $(seq 1 30); do
+            if docker compose exec -T mysql mysqladmin ping -h 127.0.0.1 -uroot -p"$mysql_pw" --silent >/dev/null 2>&1; then
+              break
+            fi
+            sleep 2
+          done
+          cat "$repair_sql" | docker compose exec -T mysql mysql -uroot -p"$mysql_pw" --batch takealot_erp
+
           echo '=== Build OMS ==='
           cd /opt/system/oms
           docker compose build oms-api oms-web
@@ -84,10 +98,6 @@ jobs:
           echo '=== Build ERP ==='
           cd /opt/system/erp
           docker compose build erp-api erp-web
-
-          echo '=== Repair WMS loop schema ==='
-          docker compose run -T --rm --no-deps --entrypoint npx erp-api \
-            prisma db execute --file prisma/scripts/migrate_wms_loop_schema_repair.sql </dev/null
 
           echo '=== Build store-monitor ==='
           cd /opt/system/store-monitor
