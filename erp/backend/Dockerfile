@@ -59,4 +59,5 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:3000/api/auth/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 ENTRYPOINT ["dumb-init", "--", "./docker-entrypoint.sh"]
+# start:prod = verify:schema + node dist/main.js；postbuild 把 dist/main.js 指到 Nest 实际入口（dist/app/src/main.js 或 dist/backend/src/main.js）
 CMD ["npm", "run", "start:prod"]

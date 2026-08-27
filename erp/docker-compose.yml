@@ -49,6 +49,10 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+    networks:
+      default:
+        aliases:
+          - erp-api
 
   frontend:
     build:

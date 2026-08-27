@@ -1,14 +1,13 @@
-# ERP Frontend · Vue/Vite → nginx-unprivileged
+# ERP Frontend · Vue/Vite → nginx:alpine
 #
 # build context: ./erp
 #   docker build -f frontend/Dockerfile -t erp-frontend .
 #
-# 国内拉 nginxinc 镜像时可设：
-#   DOCKER_REGISTRY=docker.m.daocloud.io/
+# 国内镜像示例：
+#   DOCKER_REGISTRY=docker.m.daocloud.io/library/
 
 ARG DOCKER_REGISTRY=docker.io/library/
 ARG NODE_VERSION=22-alpine
-ARG NGINX_BASE=docker.io/
 ARG NPM_REGISTRY=https://registry.npmmirror.com
 
 FROM ${DOCKER_REGISTRY}node:${NODE_VERSION} AS builder
@@ -23,14 +22,11 @@ COPY shared/ /shared/
 ENV NODE_ENV=production
 RUN npm run build
 
-FROM ${NGINX_BASE}nginxinc/nginx-unprivileged:1.27-alpine AS runner
-USER root
-RUN rm -f /etc/nginx/conf.d/default.conf
+FROM ${DOCKER_REGISTRY}nginx:alpine AS runner
+RUN apk add --no-cache wget \
+    && rm -f /etc/nginx/conf.d/default.conf
 COPY frontend/nginx.docker.conf /etc/nginx/conf.d/default.conf
 COPY --from=builder /app/dist /usr/share/nginx/html
-RUN chown -R nginx:nginx /usr/share/nginx/html
-
-USER nginx
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \

@@ -12,7 +12,6 @@
 #
 # 国内拉镜像慢：
 #   DOCKER_REGISTRY=docker.m.daocloud.io/library/
-#   NGINX_BASE=docker.m.daocloud.io/
 #
 # 端口（与本地 npm 默认一致）：
 #   ERP Web http://127.0.0.1:5180  API :3000
@@ -23,7 +22,6 @@ name: takealot-dev
 
 x-build-args: &build-args
   DOCKER_REGISTRY: ${DOCKER_REGISTRY:-docker.io/library/}
-  NGINX_BASE: ${NGINX_BASE:-docker.io/}
   NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
 
 services:
@@ -86,7 +84,9 @@ services:
       retries: 5
       start_period: 60s
     networks:
-      - takealot
+      takealot:
+        aliases:
+          - erp-api
     security_opt:
       - no-new-privileges:true
     read_only: false
