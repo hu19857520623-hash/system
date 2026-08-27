@@ -60,23 +60,30 @@ jobs:
           exec 9>/tmp/system-production-deploy.lock
           flock -n 9 || { echo 'Another production deployment is running.'; exit 1; }
 
+          load_env_file() {
+            if [ -f "$1" ]; then
+              set -a
+              # shellcheck disable=SC1090
+              . "$1"
+              set +a
+            fi
+          }
+
           # Apply SQL from the rsynced host files. Do not rely on image COPY cache,
           # which can miss newly added prisma/scripts/*.sql.
           cd /opt/system/erp
-          load_env_file /opt/system/.env
-          load_env_file /opt/system/erp/.env
-          mysql_pw="${MYSQL_ROOT_PASSWORD:-${ERP_MYSQL_ROOT_PASSWORD:-}}"
-          test -n "$mysql_pw" || { echo 'MySQL root password missing in .env'; exit 1; }
+          repair_sql="${PWD}/backend/prisma/scripts/migrate_wms_loop_schema_repair.sql"
 
           echo '=== Apply outbound phase1 schema ==='
           docker compose run -T --rm --no-deps --entrypoint npx erp-api \
             prisma db execute --file prisma/scripts/migrate_outbound_phase1_efficiency.sql </dev/null
 
           echo '=== Repair WMS loop schema ==='
-          test -f backend/prisma/scripts/migrate_wms_loop_schema_repair.sql \
-            || { echo 'Missing backend/prisma/scripts/migrate_wms_loop_schema_repair.sql'; exit 1; }
-          docker compose exec -T mysql mysql -uroot -p"$mysql_pw" takealot_erp \
-            < backend/prisma/scripts/migrate_wms_loop_schema_repair.sql
+          test -f "$repair_sql" || { echo "Missing $repair_sql"; exit 1; }
+          docker compose run -T --rm --no-deps \
+            -v "${repair_sql}:/tmp/migrate_wms_loop_schema_repair.sql:ro" \
+            --entrypoint npx erp-api \
+            prisma db execute --file /tmp/migrate_wms_loop_schema_repair.sql </dev/null
 
           echo '=== Build OMS ==='
           cd /opt/system/oms
@@ -93,14 +100,6 @@ jobs:
           cd /opt/system/oms
           docker compose up -d --no-deps oms-api oms-web
 
-          load_env_file() {
-            if [ -f "$1" ]; then
-              set -a
-              # shellcheck disable=SC1090
-              . "$1"
-              set +a
-            fi
-          }
           load_env_file /opt/system/.env
           load_env_file /opt/system/oms/.env
           bootstrap_user="${OMS_BOOTSTRAP_ADMIN_USERNAME:-omsadmin}"
