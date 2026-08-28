@@ -93,10 +93,10 @@ jobs:
           echo '=== Repair WMS loop schema ==='
           repair_sql="${PWD}/backend/prisma/scripts/migrate_wms_loop_schema_repair.sql"
           test -f "$repair_sql" || { echo "Missing $repair_sql"; exit 1; }
-          mysql_pw="$(docker compose exec -T mysql printenv MYSQL_ROOT_PASSWORD | tr -d '\r\n')"
+          mysql_pw="$(docker compose exec -T mysql printenv MYSQL_ROOT_PASSWORD </dev/null | tr -d '\r\n')"
           test -n "$mysql_pw" || { echo 'mysql container missing MYSQL_ROOT_PASSWORD'; exit 1; }
           for _ in $(seq 1 30); do
-            if docker compose exec -T mysql mysqladmin ping -h 127.0.0.1 -uroot -p"$mysql_pw" --silent >/dev/null 2>&1; then
+            if docker compose exec -T mysql mysqladmin ping -h 127.0.0.1 -uroot -p"$mysql_pw" --silent </dev/null >/dev/null 2>&1; then
               break
             fi
             sleep 2
@@ -115,7 +115,7 @@ jobs:
           docker compose exec -T \
             -e "OMS_BOOTSTRAP_ADMIN_USERNAME=${bootstrap_user}" \
             -e "OMS_BOOTSTRAP_ADMIN_PASSWORD=${bootstrap_pass}" \
-            oms-api npx tsx server/reset-bootstrap-admin-cli.ts
+            oms-api npx tsx server/reset-bootstrap-admin-cli.ts </dev/null
 
           cd /opt/system/erp
           docker rm -f takealot-monitor >/dev/null 2>&1 || true
@@ -153,7 +153,7 @@ jobs:
             docker compose run -T --rm --no-deps --entrypoint certbot certbot \
               certonly --webroot --webroot-path=/var/www/certbot \
               --cert-name "$cert_name" --expand --non-interactive --agree-tos \
-              "${certbot_contact[@]}" "${certbot_domains[@]}"
+              "${certbot_contact[@]}" "${certbot_domains[@]}" </dev/null
           }
 
           ensure_certificate_domains erp.sztekeluo.com \
@@ -197,9 +197,9 @@ jobs:
           test -n "${OMS_INTERNAL_TOKEN:-}" || { echo 'OMS_INTERNAL_TOKEN missing on server'; exit 1; }
           erp_api_cid="$(docker compose ps -q erp-api)"
           test -n "$erp_api_cid" || { echo 'erp-api container not running'; exit 1; }
-          docker exec "$erp_api_cid" mkdir -p /app/data || true
+          docker exec "$erp_api_cid" mkdir -p /app/data </dev/null || true
           docker cp backend/data/customers-import.json "${erp_api_cid}:/app/data/customers-import.json"
-          docker exec -u 0 "$erp_api_cid" chmod 644 /app/data/customers-import.json
+          docker exec -u 0 "$erp_api_cid" chmod 644 /app/data/customers-import.json </dev/null
           import_json="$(
             curl --fail --silent --show-error --max-time 600 \
               -X POST https://www.erp.sztekeluo.com/api/customers/oms/import-legacy \
