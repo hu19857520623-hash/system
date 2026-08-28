@@ -152,7 +152,7 @@ jobs:
 
             docker compose run -T --rm --no-deps --entrypoint certbot certbot \
               certonly --webroot --webroot-path=/var/www/certbot \
-              --cert-name "$cert_name" --expand --non-interactive --agree-tos \
+              --cert-name "$cert_name" --expand --force-renewal --non-interactive --agree-tos \
               "${certbot_contact[@]}" "${certbot_domains[@]}"
           }
 
@@ -214,6 +214,8 @@ jobs:
           curl --fail --silent --show-error --retry 12 --retry-delay 5 https://www.oms.sztekeluo.com/ >/dev/null
           curl --fail --silent --show-error --retry 12 --retry-delay 5 https://www.erp.sztekeluo.com/api/auth/health >/dev/null
           curl --fail --silent --show-error --retry 12 --retry-delay 5 https://www.erp.sztekeluo.com/takealot-monitor/health >/dev/null
+          curl --fail --silent --show-error --retry 12 --retry-delay 5 https://oms.sztekeluo.com/ >/dev/null
+          curl --fail --silent --show-error --retry 12 --retry-delay 5 https://erp.sztekeluo.com/api/auth/health >/dev/null
           REMOTE
 
       - name: Deployment summary
