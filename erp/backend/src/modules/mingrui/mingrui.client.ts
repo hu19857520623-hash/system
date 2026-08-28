@@ -192,7 +192,9 @@ export class MingruiClient {
     const weightKg = toNumber(pick(src, 'weight', 'weightKg', 'grossWeight', 'gw'))
     const volumeCbm = toNumber(pick(src, 'volume', 'volumeCbm', 'cbm', 'measurement', 'vol'))
     const resolvedJob = text(pick(src, 'jobNum', 'jobNo', 'orderNo')) || jobNum
-    const resolvedRef = text(pick(src, 'trackingRef', 'tracking_ref', 'hblNum', 'hbl')) || trackingRef
+    const resolvedRef = text(
+      pick(src, 'trackingRef', 'tracking_ref', 'hblNum', 'hbl', 'trackingNum', 'tracking_num'),
+    ) || trackingRef
     const trackingStatus = statusName || statusCode
     const detail = formatNodes(nodes) || trackingStatus || errors.join('；')
 
@@ -208,10 +210,15 @@ export class MingruiClient {
       trackingNodes: nodes,
       blNo: text(pick(src, 'blNo', 'billNo', 'mblNo', 'hblNo', 'hblNum'))
         || firstRef(src, 'bl', 'bill', 'lading'),
-      containerNo: text(pick(src, 'containerNo', 'cntrNo', 'ctnrNo'))
+      containerNo: text(pick(src, 'containerNo', 'cntrNo', 'ctnrNo', 'ctnr_no'))
+        || firstContainerFromList(pick(src, 'ctnInfoList', 'containerList'))
         || firstRef(src, 'container', 'cntr', 'box'),
-      vesselName: text(pick(src, 'vesselName', 'vessel', 'shipName', 'vsl'))
-        || placeName(pick(src, 'vessel')),
+      vesselName: formatVesselName(
+        text(pick(src, 'vesselName', 'vessel', 'shipName', 'vsl'))
+          || placeName(pick(src, 'vessel')),
+        text(pick(src, 'voy', 'voyage', 'voyageNo')),
+        text(pick(src, 'carrier')),
+      ),
       originCity: origin,
       destPort: destination,
       packages,
@@ -425,6 +432,31 @@ function formatNodes(nodes: MingruiTrackingNode[]): string | undefined {
       .filter(Boolean)
       .join(' · '))
     .join('\n')
+}
+
+function formatVesselName(
+  vessel?: string,
+  voyage?: string,
+  carrier?: string,
+): string | undefined {
+  const name = vessel?.trim()
+  if (!name) return undefined
+  const suffix = voyage?.trim()
+  const line = suffix ? `${name}/${suffix}` : name
+  const owner = carrier?.trim()
+  return owner && !line.toUpperCase().includes(owner.toUpperCase()) ? `${owner} ${line}` : line
+}
+
+function firstContainerFromList(raw: unknown): string | undefined {
+  const list = Array.isArray(raw) ? raw : []
+  for (const row of list) {
+    const record = asRecord(row) || {}
+    const value = text(
+      pick(record, 'ctnrNo', 'containerNo', 'cntrNo', 'container_no', 'no', 'number'),
+    )
+    if (value) return value
+  }
+  return undefined
 }
 
 function firstRef(source: Record<string, unknown>, ...hints: string[]): string | undefined {

@@ -179,4 +179,41 @@ describe('MingruiClient', () => {
     expect(tracking.message).toContain('认证失败')
     expect(fetchImpl).toHaveBeenCalledTimes(1)
   })
+
+  it('maps Mingrui getOneShipment flat payload with ctnrNo and voy', async () => {
+    const fetchImpl = jest.fn(async (url: string) => {
+      if (String(url).includes('getOneShipment')) {
+        return jsonResponse({
+          code: '200',
+          jobNum: 'SEAE260713377',
+          hblNum: 'TKL-F-CCCC',
+          porName: '佛山',
+          podName: 'DURBAN, SOUTH AFRICA',
+          vsl: 'NAVIOS LAPIS',
+          voy: '014W',
+          carrier: 'OOCL',
+          ctnrNo: '',
+          pkgs: 2,
+          gw: 2860,
+          vol: 10.584,
+          etd: '2026-07-27',
+          eta: '2026-08-13',
+        })
+      }
+      return jsonResponse({
+        code: '200',
+        jobNum: 'SEAE260713377',
+        status: 'InTransit',
+        dataList: [{ time: '2026-07-29 17:39', context: '船公司已开船OOCL NAVIOS LAPIS/014W', node: 'atd' }],
+      })
+    })
+    const c = client({ MINGRUI_APP_KEY: 'k', MINGRUI_APP_TOKEN: 't' }, fetchImpl)
+    const tracking = await c.queryTracking({ shipmentNo: 'MR1', mingruiOrderNo: 'SEAE260713377' })
+    expect(tracking.ok).toBe(true)
+    expect(tracking.etd).toBe('2026-07-27')
+    expect(tracking.eta).toBe('2026-08-13')
+    expect(tracking.vesselName).toBe('OOCL NAVIOS LAPIS/014W')
+    expect(tracking.originCity).toBe('佛山')
+    expect(tracking.blNo).toBe('TKL-F-CCCC')
+  })
 })
