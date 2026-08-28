@@ -99,15 +99,6 @@ services:
     image: ${DOCKER_REGISTRY:-docker.io/library/}nginx:alpine
     container_name: nginx
     restart: unless-stopped
-    command:
-      - /bin/sh
-      - -c
-      - |
-        while :; do
-          sleep 12h;
-          nginx -s reload;
-        done &
-        exec nginx -g 'daemon off;'
     ports:
       - "80:80"
       - "443:443"
