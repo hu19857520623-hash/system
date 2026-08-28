@@ -61,9 +61,42 @@ jobs:
             fi
           }
 
+          upsert_env_value() {
+            local env_file="$1"
+            local key="$2"
+            local value="$3"
+            touch "$env_file"
+            if grep -q "^${key}=" "$env_file"; then
+              sed -i "s/^${key}=.*/${key}=${value}/" "$env_file"
+            else
+              printf '%s=%s\n' "$key" "$value" >> "$env_file"
+            fi
+          }
+
           load_env_file /opt/system/.env
           load_env_file /opt/system/erp/.env
+          erp_internal_token="${OMS_INTERNAL_TOKEN:-}"
           load_env_file /opt/system/oms/.env
+          oms_internal_token="${OMS_INTERNAL_TOKEN:-}"
+          oms_jwt_secret_current="${OMS_JWT_SECRET:-}"
+
+          if [ "${#erp_internal_token}" -lt 32 ] \
+            || [ "${#oms_internal_token}" -lt 32 ] \
+            || [ "$erp_internal_token" != "$oms_internal_token" ]; then
+            shared_internal_token="$(openssl rand -hex 32)"
+            upsert_env_value /opt/system/erp/.env OMS_INTERNAL_TOKEN "$shared_internal_token"
+            upsert_env_value /opt/system/oms/.env OMS_INTERNAL_TOKEN "$shared_internal_token"
+            export OMS_INTERNAL_TOKEN="$shared_internal_token"
+            echo 'Rotated and synchronized OMS_INTERNAL_TOKEN.'
+          fi
+
+          if [ "${#oms_jwt_secret_current}" -lt 32 ]; then
+            oms_jwt_secret="$(openssl rand -hex 32)"
+            upsert_env_value /opt/system/oms/.env OMS_JWT_SECRET "$oms_jwt_secret"
+            export OMS_JWT_SECRET="$oms_jwt_secret"
+            echo 'Rotated OMS_JWT_SECRET because the configured value was too short.'
+          fi
+
           test -n "${ERP_MYSQL_ROOT_PASSWORD:-}" || { echo 'ERP_MYSQL_ROOT_PASSWORD missing on server'; exit 1; }
           test -n "${OMS_INTERNAL_TOKEN:-}" || { echo 'OMS_INTERNAL_TOKEN missing on server'; exit 1; }
           test -n "${OMS_WEBHOOK_SECRET:-}" || { echo 'OMS_WEBHOOK_SECRET missing on server'; exit 1; }
@@ -108,7 +141,10 @@ jobs:
           docker build -t takealot/store-monitor:production .
 
           cd /opt/system/oms
-          docker compose up -d --no-deps oms-api oms-web
+          if ! docker compose up -d --no-deps oms-api oms-web; then
+            docker logs --tail 100 oms-api || true
+            exit 1
+          fi
 
           bootstrap_user="${OMS_BOOTSTRAP_ADMIN_USERNAME:-omsadmin}"
           bootstrap_pass="${OMS_BOOTSTRAP_ADMIN_PASSWORD:-DevAdmin123!}"
