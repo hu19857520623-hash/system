@@ -152,7 +152,7 @@ jobs:
 
             docker compose run -T --rm --no-deps --entrypoint certbot certbot \
               certonly --webroot --webroot-path=/var/www/certbot \
-              --cert-name "$cert_name" --expand --force-renewal --non-interactive --agree-tos \
+              --cert-name "$cert_name" --expand --non-interactive --agree-tos \
               "${certbot_contact[@]}" "${certbot_domains[@]}"
           }
 
@@ -160,7 +160,9 @@ jobs:
             erp.sztekeluo.com www.erp.sztekeluo.com
           ensure_certificate_domains oms.sztekeluo.com \
             oms.sztekeluo.com www.oms.sztekeluo.com
-          docker compose exec -T nginx nginx -s reload
+          # Recreate the public TLS process so it opens the renewed certificate
+          # files instead of continuing to serve the certificates loaded at boot.
+          docker compose restart nginx
           docker compose up -d --no-deps certbot
 
           wait_healthy() {
@@ -217,6 +219,39 @@ jobs:
           curl --fail --silent --show-error --retry 12 --retry-delay 5 https://oms.sztekeluo.com/ >/dev/null
           curl --fail --silent --show-error --retry 12 --retry-delay 5 https://erp.sztekeluo.com/api/auth/health >/dev/null
           REMOTE
+
+      - name: Verify public TLS certificates
+        run: |
+          set -Eeuo pipefail
+
+          verify_certificate_sans() {
+            local host="$1"
+            shift
+            local certificate=''
+            local expected_domain=''
+
+            certificate="$(
+              openssl s_client -servername "$host" -connect "${host}:443" </dev/null 2>/dev/null \
+                | openssl x509 -noout -subject -issuer -dates -ext subjectAltName
+            )"
+            printf '%s\n' "=== ${host} ===" "$certificate"
+
+            for expected_domain in "$@"; do
+              grep -Fq "DNS:${expected_domain}" <<<"$certificate" || {
+                echo "Certificate served by ${host} is missing DNS:${expected_domain}" >&2
+                return 1
+              }
+            done
+          }
+
+          curl --fail --silent --show-error --retry 12 --retry-delay 5 \
+            https://erp.sztekeluo.com/api/auth/health >/dev/null
+          curl --fail --silent --show-error --retry 12 --retry-delay 5 \
+            https://oms.sztekeluo.com/ >/dev/null
+          verify_certificate_sans erp.sztekeluo.com \
+            erp.sztekeluo.com www.erp.sztekeluo.com
+          verify_certificate_sans oms.sztekeluo.com \
+            oms.sztekeluo.com www.oms.sztekeluo.com
 
       - name: Deployment summary
         run: |
