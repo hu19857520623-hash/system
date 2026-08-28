@@ -207,10 +207,19 @@ jobs:
               certbot_domains+=(-d "$domain")
             done
 
-            docker compose run -T --rm --no-deps --entrypoint certbot certbot \
-              certonly --webroot --webroot-path=/var/www/certbot \
-              --cert-name "$cert_name" --expand --non-interactive --agree-tos \
-              "${certbot_contact[@]}" "${certbot_domains[@]}" </dev/null
+            for attempt in 1 2 3; do
+              if docker compose run -T --rm --no-deps --entrypoint certbot certbot \
+                certonly --webroot --webroot-path=/var/www/certbot \
+                --cert-name "$cert_name" --expand --non-interactive --agree-tos \
+                "${certbot_contact[@]}" "${certbot_domains[@]}" </dev/null; then
+                return 0
+              fi
+              if [ "$attempt" -eq 3 ]; then
+                return 1
+              fi
+              echo "Certbot attempt ${attempt} failed; retrying after DNS propagation delay."
+              sleep 15
+            done
           }
 
           ensure_certificate_domains www.erp.sztekeluo.com \
