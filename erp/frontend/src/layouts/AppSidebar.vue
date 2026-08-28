@@ -38,7 +38,7 @@ function showChannelHeader(group: NavGroup, index: number): boolean {
   <aside class="sidebar" :class="{ 'is-open': open }">
     <div class="sidebar-brand">
       <div class="sidebar-brand-mark">
-        <img class="sidebar-brand-logo" src="/ketuo-logo.png" alt="特拓洛海外仓" />
+        <img class="sidebar-brand-logo" src="/ketuo-logo.png" alt="特柯洛海外仓" />
         <span class="sidebar-brand-name">
           <strong>TKL</strong><span>海外仓</span>
         </span>

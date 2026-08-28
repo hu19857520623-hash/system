@@ -60,7 +60,7 @@ export default function Dashboard() {
       <div className="overflow-hidden rounded-xl bg-gradient-to-r from-[#d32f2f] to-[#b71c1c] text-white shadow-lg">
         <div className="flex flex-col gap-4 p-6 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <p className="text-sm text-white/80">海外仓协同系统</p>
+            <p className="text-sm text-white/80">特柯洛海外仓</p>
             <h1 className="mt-1 text-2xl font-semibold">
               {role === 'sys_admin' ? 'OMS 运营后台' : `你好，${contact.split(' ')[0]} 👋`}
             </h1>

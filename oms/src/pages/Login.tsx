@@ -100,11 +100,11 @@ export default function Login() {
         <header className="mb-8 flex flex-col items-center text-center">
           <img
             src="/ketuo-logo.png"
-            alt="特拓洛海外仓"
+            alt="特柯洛海外仓"
             className="h-24 w-24 rounded-full object-cover shadow-[0_12px_32px_rgba(15,23,42,0.18)] ring-4 ring-white"
           />
           <h1 className="mt-5 text-[22px] font-semibold tracking-wide text-slate-900">
-            特拓洛海外仓
+            特柯洛海外仓
           </h1>
           <p className="mt-1 text-sm text-slate-500">OMS 客户协同平台</p>
         </header>
