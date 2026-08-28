@@ -101,6 +101,11 @@ jobs:
           test -n "${OMS_INTERNAL_TOKEN:-}" || { echo 'OMS_INTERNAL_TOKEN missing on server'; exit 1; }
           test -n "${OMS_WEBHOOK_SECRET:-}" || { echo 'OMS_WEBHOOK_SECRET missing on server'; exit 1; }
 
+          # rsync intentionally preserves server-only files such as .env, so
+          # remove obsolete nginx snippets from this version-controlled folder.
+          find /opt/system/erp/nginx/conf.d -maxdepth 1 -type f \
+            -name '*.conf' ! -name 'default.conf' -delete
+
           # ERP, OMS, nginx and the monitor resolve each other on one stable
           # cross-project network. Creation is idempotent across deployments.
           docker network inspect takealot-production >/dev/null 2>&1 \
