@@ -192,9 +192,9 @@ jobs:
               "${certbot_contact[@]}" "${certbot_domains[@]}" </dev/null
           }
 
-          ensure_certificate_domains erp.sztekeluo.com \
+          ensure_certificate_domains www.erp.sztekeluo.com \
             erp.sztekeluo.com www.erp.sztekeluo.com
-          ensure_certificate_domains oms.sztekeluo.com \
+          ensure_certificate_domains www.oms.sztekeluo.com \
             oms.sztekeluo.com www.oms.sztekeluo.com
           # Recreate the public TLS process so it opens the renewed certificate
           # files instead of continuing to serve the certificates loaded at boot.
