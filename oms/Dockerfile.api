@@ -36,7 +36,7 @@ RUN --mount=type=cache,target=/root/.npm \
 COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
 
-# ── 3) 运行：仅 server + prisma，不打进前端 src ──
+# ── 3) 运行：server + prisma + 服务端复用的数据模块 ──
 FROM ${DOCKER_REGISTRY}node:${NODE_VERSION} AS runner
 RUN apk add --no-cache openssl dumb-init \
     && addgroup -g 1001 -S oms \
@@ -53,6 +53,7 @@ COPY --from=prod-deps --chown=oms:oms /app/package.json /app/package-lock.json .
 COPY --from=prod-deps --chown=oms:oms /app/node_modules ./node_modules
 COPY --from=builder --chown=oms:oms /app/prisma ./prisma
 COPY --chown=oms:oms server ./server
+COPY --chown=oms:oms src/data/chargeType.ts ./src/data/chargeType.ts
 
 USER oms
 EXPOSE 3001
