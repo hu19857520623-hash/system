@@ -53,6 +53,9 @@ services:
       OMS_WEBHOOK_SECRET: ${OMS_WEBHOOK_SECRET:?Set OMS_WEBHOOK_SECRET in erp/.env}
       OMS_INTERNAL_TOKEN: ${OMS_INTERNAL_TOKEN:?Set OMS_INTERNAL_TOKEN in erp/.env}
       TAKEALOT_PROXY_URL: http://takealot-monitor:3456
+      MINGRUI_API_BASE: ${MINGRUI_API_BASE:-https://ws.ai-ops.vip}
+      MINGRUI_APP_KEY: ${MINGRUI_APP_KEY:-}
+      MINGRUI_APP_TOKEN: ${MINGRUI_APP_TOKEN:-}
     ports:
       - "127.0.0.1:${ERP_BACKEND_PORT:-3000}:3000"
     depends_on:

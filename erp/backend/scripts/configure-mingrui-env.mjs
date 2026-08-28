@@ -24,7 +24,8 @@ if (!entries.MINGRUI_APP_KEY || !entries.MINGRUI_APP_TOKEN) {
 
 let content = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : ''
 for (const [key, value] of Object.entries(entries)) {
-  const line = `${key}=${value}`
+  const escaped = String(value).replace(/\$/g, '$$')
+  const line = `${key}=${escaped}`
   const pattern = new RegExp(`^${key}=.*$`, 'm')
   content = pattern.test(content) ? content.replace(pattern, line) : `${content.trimEnd()}\n${line}\n`
 }
