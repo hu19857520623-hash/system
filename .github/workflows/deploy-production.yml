@@ -148,10 +148,6 @@ jobs:
 
             for domain in "${domains[@]}"; do
               certbot_domains+=(-d "$domain")
-              if ! getent ahostsv4 "$domain" | awk '{print $1}' | grep -Fx '175.178.50.202' >/dev/null; then
-                echo "WARNING: skip certificate expansion; $domain does not resolve to 175.178.50.202"
-                return 0
-              fi
             done
 
             docker compose run -T --rm --no-deps --entrypoint certbot certbot \
