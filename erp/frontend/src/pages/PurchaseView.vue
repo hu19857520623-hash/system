@@ -1102,10 +1102,10 @@ async function downloadPoBoxLabels(po?: any) {
                 :trigger-on-focus="false"
                 popper-class="create-po-sku-popper"
                 style="width:100%"
-                @select="(item) => onCreatePoLineSkuSelect(row, item)"
+                @select="(item: Record<string, unknown>) => onCreatePoLineSkuSelect(row, item)"
                 @blur="onCreatePoLineSkuBlur(row)"
               >
-                <template #default="{ item }">
+                <template #default="{ item }: { item: CreatePoSkuOption }">
                   <div class="sku-suggest-item">
                     <span class="mono">{{ item.sku }}</span>
                     <span class="sku-suggest-name">{{ item.productName }}</span>

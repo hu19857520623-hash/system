@@ -525,7 +525,7 @@ onMounted(async () => {
               <el-checkbox
                 :model-value="isGroupAllChecked(group.perms)"
                 :indeterminate="isGroupIndeterminate(group.perms)"
-                @change="(v) => toggleGroup(group.perms, Boolean(v))"
+                @change="(v: unknown) => toggleGroup(group.perms, Boolean(v))"
               >{{ group.label }}</el-checkbox>
             </div>
             <el-checkbox
@@ -533,7 +533,7 @@ onMounted(async () => {
               :key="p.id"
               :model-value="selectedPerms.includes(p.id)"
               class="perm-item"
-              @change="(v) => togglePerm(p.id, Boolean(v))"
+              @change="(v: unknown) => togglePerm(p.id, Boolean(v))"
             >{{ p.label }}</el-checkbox>
           </div>
         </div>

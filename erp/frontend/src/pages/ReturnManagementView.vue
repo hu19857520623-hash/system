@@ -924,14 +924,14 @@ void _removeExtraFeeLine
           <el-checkbox
             :model-value="tableRows.length > 0 && selectedIds.length === tableRows.length"
             :indeterminate="selectedIds.length > 0 && selectedIds.length < tableRows.length"
-            @change="(v) => toggleSelectAll(Boolean(v))"
+            @change="(v: unknown) => toggleSelectAll(Boolean(v))"
           />
         </template>
         <template #default="{ row }">
           <div class="no-cell">
             <el-checkbox
               :model-value="selectedIds.includes(row.id)"
-              @change="(v) => toggleSelect(row.id, Boolean(v))"
+              @change="(v: unknown) => toggleSelect(row.id, Boolean(v))"
             />
             <span class="row-no">{{ row.rowNo }}</span>
           </div>

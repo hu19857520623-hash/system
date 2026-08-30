@@ -24,10 +24,6 @@ Thumbs.db
 *.swo
 *~
 
-# Frontend generated
-frontend/src/auto-imports.d.ts
-frontend/src/components.d.ts
-
 # Uploads & local data
 backend/uploads/
 takealot-monitor/data/

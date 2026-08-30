@@ -23,10 +23,6 @@ Thumbs.db
 *.swo
 *~
 
-# Frontend generated
-**/auto-imports.d.ts
-**/components.d.ts
-
 # Uploads & local data
 **/uploads/
 store-monitor/data/

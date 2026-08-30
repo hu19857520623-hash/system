@@ -437,10 +437,10 @@ onMounted(async () => {
           </el-table-column>
           <el-table-column prop="productDesc" label="产品/业务" min-width="140" show-overflow-tooltip />
           <el-table-column label="状态" width="90">
-            <template #default="{ row }">{{ DEAL_STATUS_LABELS[row.status] || row.status || '—' }}</template>
+            <template #default="{ row }: { row: { status?: string } }">{{ DEAL_STATUS_LABELS[row.status || ''] || row.status || '—' }}</template>
           </el-table-column>
           <el-table-column label="客户资料" min-width="180">
-            <template #default="{ row }">
+            <template #default="{ row }: { row: { attachments?: { id: number; fileName: string }[] } }">
               <span v-if="!row.attachments?.length">—</span>
               <div v-else class="deal-files">
                 <el-button

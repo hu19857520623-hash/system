@@ -527,7 +527,7 @@ onMounted(async () => {
         <template #default="{ row }">
           <el-checkbox
             :model-value="selectedRow?._leadId === row._leadId"
-            @change="(checked) => toggleSelect(row, Boolean(checked))"
+            @change="(checked: unknown) => toggleSelect(row, Boolean(checked))"
           />
         </template>
       </el-table-column>

@@ -19,5 +19,3 @@ Thumbs.db
 
 # Build
 *.tsbuildinfo
-src/auto-imports.d.ts
-src/components.d.ts
