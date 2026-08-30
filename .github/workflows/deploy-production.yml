@@ -72,12 +72,12 @@ jobs:
             local env_file="$1"
             local key="$2"
             local value="$3"
+            local tmp_file
             touch "$env_file"
-            if grep -q "^${key}=" "$env_file"; then
-              sed -i "s/^${key}=.*/${key}=${value}/" "$env_file"
-            else
-              printf '%s=%s\n' "$key" "$value" >> "$env_file"
-            fi
+            tmp_file="$(mktemp "${env_file}.XXXXXX")"
+            grep -v "^${key}=" "$env_file" > "$tmp_file" || true
+            printf '%s=%s\n' "$key" "$value" >> "$tmp_file"
+            mv "$tmp_file" "$env_file"
           }
 
           load_env_file /opt/system/.env
