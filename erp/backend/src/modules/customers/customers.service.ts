@@ -290,7 +290,7 @@ export class CustomersService {
 
     const linkedRows = await this.prisma.$queryRawUnsafe<Array<{ total: bigint | number }>>(
       `SELECT COUNT(DISTINCT c.code) AS total
-       FROM \`oms_CustomerAccount\` c
+       FROM \`oms_customeraccount\` c
        INNER JOIN \`customer\` e ON e.customer_code = c.code`,
     )
     const linked = Number(linkedRows[0]?.total ?? 0)
@@ -316,8 +316,8 @@ export class CustomersService {
   private async findLegacyOmsAccount(customerCode: string) {
     const rows = await this.prisma.$queryRawUnsafe<Array<{ id: string; portalUserId: string | null }>>(
       `SELECT c.id, u.id AS portalUserId
-       FROM \`oms_CustomerAccount\` c
-       LEFT JOIN \`oms_PortalUser\` u ON u.customerId = c.id
+       FROM \`oms_customeraccount\` c
+       LEFT JOIN \`oms_portaluser\` u ON u.customerId = c.id
        WHERE c.code = ?
        LIMIT 1`,
       customerCode,

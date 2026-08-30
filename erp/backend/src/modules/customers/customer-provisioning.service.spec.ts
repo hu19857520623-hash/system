@@ -107,7 +107,7 @@ describe('CustomerProvisioningService', () => {
     expect(serialized).not.toContain('bcrypt-hash')
 
     const portalWrite = tx.$executeRaw.mock.calls[2]
-    expect(sqlText(portalWrite)).toContain('oms_PortalUser')
+    expect(sqlText(portalWrite)).toContain('oms_portaluser')
     expect(sqlValues(portalWrite)).toContain('acmeportal')
     expect(sqlValues(portalWrite)).toContain('bcrypt-hash')
     expect(sqlValues(portalWrite)).not.toContain(createDto.temporaryPassword)
@@ -223,7 +223,7 @@ describe('CustomerProvisioningService', () => {
       omsStatus: 'disabled',
     })
     const accountWrite = tx.$executeRaw.mock.calls[0]
-    expect(sqlText(accountWrite)).toContain('oms_CustomerAccount')
+    expect(sqlText(accountWrite)).toContain('oms_customeraccount')
     expect(sqlValues(accountWrite)).toContain('["catalog:read"]')
     expect(sqlValues(accountWrite)).toContain('disabled')
   })

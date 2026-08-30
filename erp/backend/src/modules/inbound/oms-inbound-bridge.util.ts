@@ -114,8 +114,8 @@ export async function fetchOmsInboundRows(
 
   const sql = `
     SELECT i.*, c.code AS customerCode, c.name AS customerName
-    FROM oms_InboundOrder i
-    LEFT JOIN oms_CustomerAccount c ON c.id = i.customerId
+    FROM oms_inboundorder i
+    LEFT JOIN oms_customeraccount c ON c.id = i.customerId
     WHERE ${conditions.join(' AND ')}
     ORDER BY i.createdAt DESC
     LIMIT 5000

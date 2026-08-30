@@ -1631,8 +1631,8 @@ export class InboundService {
     }
 
     const omsSql = code
-      ? 'SELECT internalSku FROM oms_Product WHERE (customerSku = ? OR internalSku = ?) AND customerId IN (SELECT id FROM oms_CustomerAccount WHERE code = ?) LIMIT 1'
-      : 'SELECT internalSku FROM oms_Product WHERE customerSku = ? OR internalSku = ? LIMIT 1'
+      ? 'SELECT internalSku FROM oms_product WHERE (customerSku = ? OR internalSku = ?) AND customerId IN (SELECT id FROM oms_customeraccount WHERE code = ?) LIMIT 1'
+      : 'SELECT internalSku FROM oms_product WHERE customerSku = ? OR internalSku = ? LIMIT 1'
     const omsParams = code ? [trimmed, trimmed, code] : [trimmed, trimmed]
     const omsRows = await this.prisma.$queryRawUnsafe<Array<{ internalSku: string }>>(omsSql, ...omsParams)
     const mappedSku = String(omsRows[0]?.internalSku || '').trim()

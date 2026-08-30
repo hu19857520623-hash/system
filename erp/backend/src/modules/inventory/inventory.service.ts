@@ -807,7 +807,7 @@ export class InventoryService {
     try {
       const placeholders = unique.map(() => '?').join(',')
       const omsRows = await this.prisma.$queryRawUnsafe<{ sku: string; available: unknown; locked: unknown }[]>(
-        `SELECT sku, available, locked FROM oms_InventoryItem WHERE sku IN (${placeholders})`,
+        `SELECT sku, available, locked FROM oms_inventoryitem WHERE sku IN (${placeholders})`,
         ...unique,
       )
       for (const r of omsRows) {

@@ -617,7 +617,7 @@ export class BillingService {
     const warehouse = 'jhb1'
 
     await this.prisma.$executeRaw(Prisma.sql`
-      INSERT INTO \`oms_CustomerAccount\`
+      INSERT INTO \`oms_customeraccount\`
         (\`id\`, \`name\`, \`code\`, \`type\`, \`contact\`, \`email\`, \`status\`,
          \`permissions\`, \`warehouse\`, \`createdAt\`, \`lastLoginAt\`,
          \`companyName\`, \`contactPhone\`)
@@ -646,14 +646,14 @@ export class BillingService {
     `)
 
     const accounts = await this.prisma.$queryRaw<Array<{ id: string; warehouse: string | null }>>(
-      Prisma.sql`SELECT id, warehouse FROM \`oms_CustomerAccount\` WHERE code = ${code} LIMIT 1`,
+      Prisma.sql`SELECT id, warehouse FROM \`oms_customeraccount\` WHERE code = ${code} LIMIT 1`,
     )
     const resolvedId = accounts[0]?.id
     if (!resolvedId) throw new Error(`OMS customer account missing after upsert: ${code}`)
     const resolvedWarehouse = accounts[0]?.warehouse || warehouse
 
     await this.prisma.$executeRaw(Prisma.sql`
-      INSERT INTO \`oms_BillingAccount\`
+      INSERT INTO \`oms_billingaccount\`
         (\`id\`, \`customerId\`, \`name\`, \`code\`, \`contact\`, \`warehouse\`,
          \`creditBalance\`, \`monthlySpent\`, \`pendingBill\`, \`budgetUsed\`)
       VALUES (

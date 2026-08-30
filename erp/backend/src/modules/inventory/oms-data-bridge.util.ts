@@ -360,9 +360,9 @@ export async function fetchOmsInventoryRows(prisma: PrismaService, filters: Merg
            i.pendingOutbound, i.defective, i.warningQty, i.price,
            c.code AS customerCode, c.name AS customerName,
            p.customerSku AS customerSku
-    FROM oms_InventoryItem i
-    LEFT JOIN oms_CustomerAccount c ON c.id = i.customerId
-    LEFT JOIN oms_Product p ON p.internalSku = i.sku AND (p.customerId = i.customerId OR p.customerId IS NULL)
+    FROM oms_inventoryitem i
+    LEFT JOIN oms_customeraccount c ON c.id = i.customerId
+    LEFT JOIN oms_product p ON p.internalSku = i.sku AND (p.customerId = i.customerId OR p.customerId IS NULL)
     WHERE ${conditions.join(' AND ')}
     ORDER BY i.sku ASC
     LIMIT 5000
@@ -392,7 +392,7 @@ async function resolveErpCustomersByKeyword(prisma: PrismaService, keyword: stri
   const codes = new Set(erpCustomers.map((c) => c.customerCode))
   try {
     const omsRows = await prisma.$queryRawUnsafe<{ code: string }[]>(
-      'SELECT code FROM oms_CustomerAccount WHERE code LIKE ? OR name LIKE ? LIMIT 100',
+      'SELECT code FROM oms_customeraccount WHERE code LIKE ? OR name LIKE ? LIMIT 100',
       likeParam(kw),
       likeParam(kw),
     )
@@ -553,8 +553,8 @@ export async function fetchOmsProductRows(prisma: PrismaService, filters: Merged
 
   const sql = `
     SELECT p.*, c.code AS customerCode, c.name AS customerName
-    FROM oms_Product p
-    LEFT JOIN oms_CustomerAccount c ON c.id = p.customerId
+    FROM oms_product p
+    LEFT JOIN oms_customeraccount c ON c.id = p.customerId
     WHERE ${conditions.join(' AND ')}
     ORDER BY p.internalSku ASC
     LIMIT 5000

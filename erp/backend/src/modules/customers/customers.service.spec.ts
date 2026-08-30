@@ -113,11 +113,11 @@ describe('CustomerProvisioningService unified ERP/OMS provisioning', () => {
     expect(serialized).not.toContain('bcrypt-hash')
 
     const accountInsert = tx.$executeRaw.mock.calls[0]
-    expect(rawText(accountInsert)).toContain('oms_CustomerAccount')
+    expect(rawText(accountInsert)).toContain('oms_customeraccount')
     expect(rawValues(accountInsert)).toContain('erp-customer-cus-042')
 
     const portalInsert = tx.$executeRaw.mock.calls[2]
-    expect(rawText(portalInsert)).toContain('oms_PortalUser')
+    expect(rawText(portalInsert)).toContain('oms_portaluser')
     expect(rawValues(portalInsert)).toContain('erp-portal-cus-042')
     expect(rawValues(portalInsert)).toContain('acmeportal')
     expect(rawValues(portalInsert)).toContain('bcrypt-hash')
@@ -211,7 +211,7 @@ describe('CustomerProvisioningService unified ERP/OMS provisioning', () => {
       '["catalog:read"]',
     ]))
     const portalUpdate = tx.$executeRaw.mock.calls[2]
-    expect(rawText(portalUpdate)).toContain('oms_PortalUser')
+    expect(rawText(portalUpdate)).toContain('oms_portaluser')
     expect(rawValues(portalUpdate)).toEqual(expect.arrayContaining([
       'hybrid',
       'disabled',

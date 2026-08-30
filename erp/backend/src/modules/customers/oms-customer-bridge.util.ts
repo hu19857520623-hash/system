@@ -1,3 +1,4 @@
+import { OMS_TABLE } from '../../common/oms-table-names'
 import { PrismaService } from '../../common/prisma/prisma.service'
 
 export type OmsCustomerRow = {
@@ -113,9 +114,9 @@ export async function fetchOmsCustomerRows(prisma: PrismaService): Promise<OmsCu
       u.status AS portalStatus,
       u.mustChangePassword,
       u.lastLoginAt AS portalLastLoginAt
-    FROM oms_CustomerAccount c
-    LEFT JOIN oms_BillingAccount b ON b.customerId = c.id
-    LEFT JOIN oms_PortalUser u ON u.customerId = c.id
+    FROM ${OMS_TABLE.customerAccount} c
+    LEFT JOIN ${OMS_TABLE.billingAccount} b ON b.customerId = c.id
+    LEFT JOIN ${OMS_TABLE.portalUser} u ON u.customerId = c.id
     ORDER BY c.createdAt DESC`,
   )
 

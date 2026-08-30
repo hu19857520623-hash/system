@@ -249,7 +249,19 @@ onMounted(loadSession)
       </div>
     </header>
 
-    <div v-if="serviceState === 'offline'" class="setup-callout">
+    <div v-if="serviceState === 'degraded'" class="setup-callout setup-callout--warn">
+      <div>
+        <strong>Takealot 接口通道不可用（{{ channelCount }}/3）</strong>
+        <span>
+          服务器访问 Takealot 常被 Cloudflare 拦截；生产 Docker 内也没有 Chrome 转发通道。
+          建议在<strong>本机 Windows</strong>运行 <code>store-monitor/启动.bat</code>（需 Chrome）做本地监控；
+          或换南非/欧美 VPN 后点击「修复浏览器通道」。
+        </span>
+      </div>
+      <el-button type="primary" plain @click="checkService">重新检测</el-button>
+    </div>
+
+    <div v-else-if="serviceState === 'offline'" class="setup-callout">
       <div>
         <strong>Takealot 代理未启动（127.0.0.1:3456）</strong>
         <span>店铺看板依赖本机 Chrome 通道。请运行仓库根目录 dev-local.ps1，或单独启动 store-monitor。</span>
@@ -549,6 +561,18 @@ onMounted(loadSession)
 
 .setup-callout div { display: flex; gap: 10px; align-items: baseline; }
 .setup-callout span { color: #89691e; font-size: 12px; }
+.setup-callout--warn {
+  background: #fff1f0;
+  border-color: #ffccc7;
+  color: #a8071a;
+}
+.setup-callout--warn span { color: #cf1322; }
+.setup-callout code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.06);
+  font-size: 11px;
+}
 
 .monitor-shell {
   display: flex;

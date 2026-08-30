@@ -193,7 +193,7 @@ export class CustomerProvisioningService {
         const status = this.toOmsStatus(customer.status)
 
         await tx.$executeRaw(Prisma.sql`
-          UPDATE \`oms_CustomerAccount\`
+          UPDATE \`oms_customeraccount\`
           SET \`name\` = ${customer.customerName},
               \`companyName\` = ${customer.companyName},
               \`contact\` = ${customer.contactName || ''},
@@ -218,7 +218,7 @@ export class CustomerProvisioningService {
           const now = new Date().toISOString()
           if (passwordHash) {
             await tx.$executeRaw(Prisma.sql`
-              UPDATE \`oms_PortalUser\`
+              UPDATE \`oms_portaluser\`
               SET \`username\` = COALESCE(${normalizedUsername || null}, \`username\`),
                   \`passwordHash\` = ${passwordHash},
                   \`role\` = ${portalType},
@@ -230,7 +230,7 @@ export class CustomerProvisioningService {
             mustChangePassword = true
           } else {
             await tx.$executeRaw(Prisma.sql`
-              UPDATE \`oms_PortalUser\`
+              UPDATE \`oms_portaluser\`
               SET \`username\` = COALESCE(${normalizedUsername || null}, \`username\`),
                   \`role\` = ${portalType},
                   \`status\` = ${status},
@@ -463,7 +463,7 @@ export class CustomerProvisioningService {
     const accountId = this.stableOmsId('customer', customer.customerCode)
     const status = this.toOmsStatus(customer.status)
     await tx.$executeRaw(Prisma.sql`
-      INSERT INTO \`oms_CustomerAccount\`
+      INSERT INTO \`oms_customeraccount\`
         (\`id\`, \`name\`, \`code\`, \`type\`, \`contact\`, \`email\`, \`status\`,
          \`permissions\`, \`warehouse\`, \`createdAt\`, \`lastLoginAt\`,
          \`companyName\`, \`contactPhone\`)
@@ -534,7 +534,7 @@ export class CustomerProvisioningService {
   ): Promise<void> {
     const billingId = this.stableOmsId('billing', customer.customerCode)
     await tx.$executeRaw(Prisma.sql`
-      INSERT INTO \`oms_BillingAccount\`
+      INSERT INTO \`oms_billingaccount\`
         (\`id\`, \`customerId\`, \`name\`, \`code\`, \`contact\`, \`warehouse\`,
          \`creditBalance\`, \`monthlySpent\`, \`pendingBill\`, \`budgetUsed\`)
       VALUES (
@@ -571,7 +571,7 @@ export class CustomerProvisioningService {
     const now = new Date().toISOString()
     if (existingPortalUserId) {
       await tx.$executeRaw(Prisma.sql`
-        UPDATE \`oms_PortalUser\`
+        UPDATE \`oms_portaluser\`
         SET \`username\` = ${username},
             \`passwordHash\` = ${passwordHash},
             \`role\` = ${portalType},
@@ -585,7 +585,7 @@ export class CustomerProvisioningService {
 
     const portalUserId = this.stableOmsId('portal', customerCode)
     await tx.$executeRaw(Prisma.sql`
-      INSERT INTO \`oms_PortalUser\`
+      INSERT INTO \`oms_portaluser\`
         (\`id\`, \`customerId\`, \`username\`, \`passwordHash\`, \`role\`, \`status\`,
          \`mustChangePassword\`, \`createdAt\`, \`updatedAt\`, \`lastLoginAt\`)
       VALUES (
@@ -614,8 +614,8 @@ export class CustomerProvisioningService {
              u.\`username\` AS \`portalUsername\`,
              u.\`username\` AS \`portalLoginEmail\`,
              u.\`mustChangePassword\` AS \`portalMustChangePassword\`
-      FROM \`oms_CustomerAccount\` c
-      LEFT JOIN \`oms_PortalUser\` u ON u.\`customerId\` = c.\`id\`
+      FROM \`oms_customeraccount\` c
+      LEFT JOIN \`oms_portaluser\` u ON u.\`customerId\` = c.\`id\`
       WHERE c.\`code\` = ${customerCode}
       LIMIT 1
     `)
@@ -629,7 +629,7 @@ export class CustomerProvisioningService {
   ): Promise<void> {
     const rows = await tx.$queryRaw<PortalUserLookupRow[]>(Prisma.sql`
       SELECT \`id\`, \`customerId\`, \`username\`
-      FROM \`oms_PortalUser\`
+      FROM \`oms_portaluser\`
       WHERE \`username\` = ${username}
         AND (${currentAccountId || null} IS NULL OR \`customerId\` <> ${currentAccountId || null})
       LIMIT 1

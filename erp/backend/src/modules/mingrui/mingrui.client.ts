@@ -153,10 +153,11 @@ export class MingruiClient {
     }
 
     if (!shipment && !tracking) {
+      const uniqueErrors = [...new Set(errors.filter(Boolean))]
       return {
         ok: false,
         configured: true,
-        message: errors.join('；') || '明瑞物流查询无结果',
+        message: uniqueErrors.join('；') || '明瑞物流查询无结果',
         raw: { jobNum, trackingRef },
       }
     }
@@ -269,10 +270,14 @@ export class MingruiClient {
           }
           if (!shouldRetry(res.status) || attempt === MAX_ATTEMPTS) return last
         } else if (!isBizOk(parsed)) {
+          const code = text(pick(asRecord(parsed), 'code'))
+          const mapped = code === '403' || code === '401'
+            ? '明瑞物流认证失败，请检查 APP_KEY / APP_TOKEN 是否完整（含 $ 等特殊字符）'
+            : (bizMessage || '明瑞物流查询失败')
           return {
             ok: false,
             httpStatus: res.status,
-            message: bizMessage || '明瑞物流查询失败',
+            message: mapped,
             data: asRecord(unwrapData(parsed)),
             raw: parsed,
           }
@@ -357,13 +362,14 @@ function isBizOk(json: unknown): boolean {
   if ('code' in record) {
     const code = String(record.code).trim().toLowerCase()
     if (code === '0' || code === '200' || code === 'ok' || code === 'success') return true
+    if (code === '401' || code === '403') return false
   }
   return record.data != null || record.result != null || record.jobNum != null || record.dataList != null
 }
 
 function bizMsg(json: unknown): string | undefined {
   const record = asRecord(json)
-  return text(pick(record || {}, 'message', 'msg', 'error', 'errorMessage'))
+  return text(pick(record || {}, 'message', 'msg', 'error', 'errorMessage', 'description'))
 }
 
 function httpErrorMessage(status: number): string {

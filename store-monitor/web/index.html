@@ -11,6 +11,9 @@
   <script>
     if (new URLSearchParams(location.search).has('erp')) {
       document.documentElement.classList.add('erp-embed');
+      const base = document.createElement('base');
+      base.href = '/takealot-monitor/';
+      document.head.prepend(base);
       document.addEventListener('DOMContentLoaded', () => {
         const title = document.getElementById('brandTitle');
         const sub = document.getElementById('brandSubtitle');
