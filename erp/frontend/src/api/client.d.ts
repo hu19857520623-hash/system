@@ -106,6 +106,12 @@ export interface FileDownload {
   fileName: string
 }
 
+export function triggerBrowserDownload(
+  blob: Blob,
+  fileName?: string,
+  options?: { preferNewTab?: boolean },
+): 'tab' | 'download'
+
 export interface OutboundApi extends ApiGroup {
   detail(id: number | string): Promise<any>
   downloadSkuLabels(id: number | string): Promise<FileDownload>
@@ -145,6 +151,7 @@ export const productDevApi: ApiGroup
 export const supplierApi: ApiGroup
 export const purchaseApi: ApiGroup
 export const inboundApi: ApiGroup
+export const returnsApi: ApiGroup
 export const inventoryApi: ApiGroup
 export const outboundApi: OutboundApi
 export const warehouseApi: ApiGroup

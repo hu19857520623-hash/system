@@ -396,7 +396,7 @@ function buildMeasureCartonPayload() {
   }))
 }
 
-function buildExtraFeePayload() {
+function _buildExtraFeePayload() {
   return extraFeeLines.value
     .map(l => ({ description: l.description.trim(), amount: Number(l.amount) }))
     .filter(l => l.description && l.amount > 0)
@@ -426,11 +426,11 @@ function scheduleFeePreview() {
   feePreviewTimer = setTimeout(() => void refreshFeePreview(), 280)
 }
 
-function addExtraFeeLine() {
+function _addExtraFeeLine() {
   extraFeeLines.value.push({ description: '', amount: '' })
 }
 
-function removeExtraFeeLine(index: number) {
+function _removeExtraFeeLine(index: number) {
   extraFeeLines.value.splice(index, 1)
   scheduleFeePreview()
 }
@@ -791,6 +791,10 @@ function exportCsv() {
 
 watch(measureCartons, () => scheduleFeePreview(), { deep: true })
 watch(extraFeeLines, () => scheduleFeePreview(), { deep: true })
+
+void _buildExtraFeePayload
+void _addExtraFeeLine
+void _removeExtraFeeLine
 </script>
 
 <template>
@@ -920,14 +924,14 @@ watch(extraFeeLines, () => scheduleFeePreview(), { deep: true })
           <el-checkbox
             :model-value="tableRows.length > 0 && selectedIds.length === tableRows.length"
             :indeterminate="selectedIds.length > 0 && selectedIds.length < tableRows.length"
-            @change="(v: boolean) => toggleSelectAll(v)"
+            @change="(v) => toggleSelectAll(Boolean(v))"
           />
         </template>
         <template #default="{ row }">
           <div class="no-cell">
             <el-checkbox
               :model-value="selectedIds.includes(row.id)"
-              @change="(v: boolean) => toggleSelect(row.id, v)"
+              @change="(v) => toggleSelect(row.id, Boolean(v))"
             />
             <span class="row-no">{{ row.rowNo }}</span>
           </div>

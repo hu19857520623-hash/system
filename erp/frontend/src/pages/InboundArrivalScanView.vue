@@ -3,7 +3,7 @@ import { ref, computed, onMounted, nextTick, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { inboundApi, warehouseApi, locationApi } from '@/api/client.js'
-import { mapWarehouse, fmtTime } from '@/api/mappers.ts'
+import { mapWarehouse } from '@/api/mappers.ts'
 import { useAppStore } from '@/stores/app'
 import { INBOUND_STATUS } from '@/constants/index.js'
 import { withAction } from '@/composables/useListLoader.ts'
@@ -116,9 +116,6 @@ function syncManualCartonCount(order?: any) {
 }
 
 const hasOuterCartons = computed(() => (activeOrder.value?.cartons?.length ?? 0) > 0)
-const pendingCartons = computed(() =>
-  (activeOrder.value?.cartons || []).filter((c: any) => c.status === 'pending'),
-)
 const receivedCartons = computed(() =>
   (activeOrder.value?.cartons || []).filter((c: any) => c.status === 'received'),
 )
@@ -218,18 +215,6 @@ function buildPutawayDraft(order: any) {
 
 function buildPutawayDraftFromActive() {
   if (activeOrder.value) buildPutawayDraft(activeOrder.value)
-}
-
-function parseCustomerRemark(remark?: string | null) {
-  const raw = remark || ''
-  return raw
-    .replace(/\[.*?\]/g, '')
-    .replace(/入仓:[^\s]+/g, '')
-    .replace(/到货:\d{4}-\d{2}-\d{2}/g, '')
-    .replace(/海运:[^\s]+/g, '')
-    .replace(/承运:[^\s]+/g, '')
-    .replace(/运单:[^\s]+/g, '')
-    .trim() || '—'
 }
 
 function statusTagType(status: string) {
@@ -977,7 +962,7 @@ onMounted(async () => {
           <el-table-column label="箱内明细" min-width="200">
             <template #default="{ row }">
               <span v-for="(it, idx) in row.items" :key="idx" class="carton-item-tag">
-                {{ it.sku }}×{{ it.qty }}<span v-if="idx < row.items.length - 1">；</span>
+                {{ it.sku }}×{{ it.qty }}<span v-if="Number(idx) < row.items.length - 1">；</span>
               </span>
             </template>
           </el-table-column>

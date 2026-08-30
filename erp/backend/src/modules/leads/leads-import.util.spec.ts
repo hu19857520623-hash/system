@@ -3,7 +3,7 @@ import { parseLeadsImportCsv } from './leads-import.util'
 describe('parseLeadsImportCsv', () => {
   it('parses columns aligned with manual lead creation form', () => {
     const csv = [
-      '线索编号,客户名称,联系方式,电话,来源,归属销售,备注',
+      '线索编号,客户名称,联系方式,电话,来源,归属运营,备注',
       ',示例公司,张三,13800138000,Takealot,sales01,',
       'LD-001,开普敦贸易,李四,0821234567,展会,,重点',
     ].join('\n')

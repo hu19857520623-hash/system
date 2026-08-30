@@ -147,6 +147,29 @@ services:
     security_opt:
       - no-new-privileges:true
 
+  mysql-backup:
+    image: ${DOCKER_REGISTRY:-docker.io/library/}mysql:8.0
+    container_name: erp-mysql-backup
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${ERP_MYSQL_ROOT_PASSWORD:?Set ERP_MYSQL_ROOT_PASSWORD in erp/.env}
+      MYSQL_HOST: mysql
+      MYSQL_DATABASE: takealot_erp
+      BACKUP_DIR: /backups
+      BACKUP_KEEP_DAYS: ${ERP_BACKUP_KEEP_DAYS:-14}
+      TZ: Asia/Shanghai
+    volumes:
+      - ./scripts/backup-mysql.sh:/usr/local/bin/backup-mysql.sh:ro
+      - ${ERP_BACKUP_DIR:-./backups}:/backups
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - production
+    entrypoint: ["/bin/sh", "/usr/local/bin/backup-mysql.sh"]
+    security_opt:
+      - no-new-privileges:true
+
 networks:
   production:
     name: takealot-production

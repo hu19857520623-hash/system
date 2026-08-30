@@ -1,9 +1,9 @@
 /** OMS ↔ ERP remark 元数据标签，保证 OMS 独有字段在 ERP 也有存储 */
 
 const META_RE = /\[oms_meta:([^\]]+)\]/i
-const PRE_DEDUCT_RE = /\[oms_pre_deduct:([^\]]+)\]/i
-const MEASURE_RE = /\[oms_measure:([^\]]+)\]/i
-const ACTUAL_FEES_RE = /\[oms_actual_fees:([^\]]+)\]/i
+const _PRE_DEDUCT_RE = /\[oms_pre_deduct:([^\]]+)\]/i
+const _MEASURE_RE = /\[oms_measure:([^\]]+)\]/i
+const _ACTUAL_FEES_RE = /\[oms_actual_fees:([^\]]+)\]/i
 const STOCK_RE = /\[stock:(catalog|owned)\]/i
 const OMS_CODE_RE = /\[OMS:([^\]]+)\]/
 const OMS_CUSTOMER_LABEL_RE = /OMS客户:([^\s·]+)/

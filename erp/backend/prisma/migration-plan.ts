@@ -65,6 +65,7 @@ export const MANUAL_SQL_SCRIPTS = [
   'add_product_measured_dims.sql',
   'add_supplier_freight_bill_po_link.sql',
   'migrate_customer_company_email.sql',
+  'migrate_oms_table_name_views.sql',
   'migrate_outbound_enhance.sql',
   'migrate_pre_purchase_confirmation.sql',
   'migrate_supplier_default_payment.sql',

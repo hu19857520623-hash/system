@@ -23,6 +23,8 @@ const canAdjust = computed(() => app.hasPerm('inventory_query.adjust'))
 
 const JHB_WAREHOUSE_CODE = 'WMS-JHB-01'
 const tableRef = ref<TableInstance>()
+void tableRef
+void tableRef
 const loading = ref(false)
 const rows = ref<any[]>([])
 const listTotal = ref(0)

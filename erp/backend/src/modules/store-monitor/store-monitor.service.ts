@@ -126,7 +126,7 @@ export class StoreMonitorService {
         signal: controller.signal,
       })
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
+      const _message = error instanceof Error ? error.message : String(error)
       if (controller.signal.aborted) {
         throw new ServiceUnavailableException('店铺监控代理响应超时，请检查本地代理服务')
       }

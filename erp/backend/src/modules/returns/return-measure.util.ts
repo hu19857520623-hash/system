@@ -73,7 +73,7 @@ export function buildReturnFeeLines(
   )
 }
 
-function round2(n: number) {
+function _round2(n: number) {
   return Math.round(n * 100) / 100
 }
 

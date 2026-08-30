@@ -14,7 +14,12 @@ permissions:
   contents: read
 
 jobs:
+  verify:
+    name: Quality gates
+    uses: ./.github/workflows/verify.yml
+
   deploy:
+    needs: verify
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -115,6 +120,12 @@ jobs:
           # which can miss newly added prisma/scripts/*.sql.
           cd /opt/system/erp
           docker compose up -d mysql
+
+          export ERP_BACKUP_DIR="${ERP_BACKUP_DIR:-/opt/system/backups}"
+          mkdir -p "$ERP_BACKUP_DIR"
+          chmod 700 "$ERP_BACKUP_DIR"
+          upsert_env_value /opt/system/erp/.env ERP_BACKUP_DIR "$ERP_BACKUP_DIR"
+          docker compose up -d --no-deps mysql-backup
 
           echo '=== Build OMS ==='
           cd /opt/system/oms
@@ -255,6 +266,7 @@ jobs:
           wait_healthy oms-web
           wait_healthy erp-api
           wait_healthy erp-web
+          wait_healthy erp-mysql-backup
 
           cd /opt/system/erp
           echo '=== Best-effort customer import via running erp-api ==='
@@ -289,6 +301,21 @@ jobs:
           curl --fail --silent --show-error --retry 12 --retry-delay 5 https://www.erp.sztekeluo.com/takealot-monitor/health >/dev/null
           curl --fail --silent --show-error --retry 12 --retry-delay 5 https://oms.sztekeluo.com/ >/dev/null
           curl --fail --silent --show-error --retry 12 --retry-delay 5 https://erp.sztekeluo.com/api/auth/health >/dev/null
+
+          latest_backup=""
+          for _ in $(seq 1 30); do
+            latest_backup="$(ls -1t "${ERP_BACKUP_DIR}"/takealot_erp-*.sql.gz 2>/dev/null | head -n 1 || true)"
+            if [ -n "$latest_backup" ] && [ -s "$latest_backup" ]; then
+              break
+            fi
+            sleep 2
+          done
+          if [ -z "$latest_backup" ] || [ ! -s "$latest_backup" ]; then
+            docker logs --tail 80 erp-mysql-backup || true
+            echo 'Scheduled MySQL backup has not produced a dump yet.' >&2
+            exit 1
+          fi
+          echo "Latest MySQL backup: ${latest_backup} ($(wc -c < "$latest_backup") bytes)"
           REMOTE
 
       - name: Verify public TLS certificates
@@ -330,3 +357,4 @@ jobs:
           echo "- Commit: \`$GITHUB_SHA\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- ERP: https://www.erp.sztekeluo.com/" >> "$GITHUB_STEP_SUMMARY"
           echo "- OMS: https://www.oms.sztekeluo.com/" >> "$GITHUB_STEP_SUMMARY"
+          echo "- MySQL backup: daily dump under \`/opt/system/backups\` (14-day retention)" >> "$GITHUB_STEP_SUMMARY"

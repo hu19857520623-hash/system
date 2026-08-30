@@ -1,5 +1,5 @@
 import type { PrismaService } from '../../common/prisma/prisma.service'
-import { toCatalogInternalSku, catalogBaseSkuFromInternal } from '../../common/catalog-customer.util'
+import { toCatalogInternalSku } from '../../common/catalog-customer.util'
 
 function num(v: unknown, fallback = 0): number {
   if (v == null || v === '') return fallback

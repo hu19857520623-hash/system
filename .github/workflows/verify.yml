@@ -1,0 +1,71 @@
+name: Verify
+
+on:
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  erp-node:
+    name: ERP lint / type-check / test / build
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: erp/.node-version
+          cache: npm
+          cache-dependency-path: |
+            erp/backend/package-lock.json
+            erp/frontend/package-lock.json
+      - name: Install backend
+        run: npm ci
+        working-directory: erp/backend
+      - name: Install frontend
+        run: npm ci
+        working-directory: erp/frontend
+      - name: Backend lint
+        run: npm run lint
+        working-directory: erp/backend
+      - name: Backend test
+        run: npm test
+        working-directory: erp/backend
+      - name: Backend build
+        run: npm run build
+        working-directory: erp/backend
+      - name: Frontend lint
+        run: npm run lint
+        working-directory: erp/frontend
+      - name: Frontend type-check
+        run: npm run type-check
+        working-directory: erp/frontend
+      - name: Frontend test
+        run: npm test
+        working-directory: erp/frontend
+      - name: Frontend build
+        run: npm run build
+        working-directory: erp/frontend
+
+  erp-spring:
+    name: ERP Java tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - name: Maven test
+        run: |
+          chmod +x ./mvnw
+          ./mvnw test --batch-mode
+        working-directory: erp/services

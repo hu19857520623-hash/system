@@ -112,7 +112,7 @@ export async function buildBoxLabelsPdf(labels: BoxLabelData[]): Promise<Uint8Ar
 
 export async function downloadBoxLabelsPdf(labels: BoxLabelData[], filename: string) {
   const bytes = await buildBoxLabelsPdf(labels)
-  const blob = new Blob([bytes], { type: 'application/pdf' })
+  const blob = new Blob([bytes as BlobPart], { type: 'application/pdf' })
   const url = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
   anchor.href = url

@@ -671,7 +671,7 @@ async function submitReprice() {
         </el-table-column>
         <el-table-column label="购买笔数" width="88" align="center">
           <template #default="{ row }">
-            <el-button link type="primary" size="small" @click="openCatalogPurchases(row)">
+            <el-button link type="primary" size="small" @click="openCatalogPurchases(row as HoldingRow)">
               {{ row.purchaseOrderCount ?? 0 }}
             </el-button>
           </template>
@@ -684,8 +684,8 @@ async function submitReprice() {
         </el-table-column>
         <el-table-column label="操作" width="160" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" size="small" @click="openCatalogPurchases(row)">购买明细</el-button>
-            <el-button v-if="canReclaim && isReclaimableRow(row)" link type="danger" size="small" @click="openReclaim(row)">收回持有</el-button>
+            <el-button link type="primary" size="small" @click="openCatalogPurchases(row as HoldingRow)">购买明细</el-button>
+            <el-button v-if="canReclaim && isReclaimableRow(row as HoldingRow)" link type="danger" size="small" @click="openReclaim(row as HoldingRow)">收回持有</el-button>
           </template>
         </el-table-column>
       </el-table>

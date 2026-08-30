@@ -1,5 +1,4 @@
 import { DashboardService } from './dashboard.service'
-import { AnnouncementService } from '../announcement/announcement.service'
 
 function createPrismaMock() {
   return {

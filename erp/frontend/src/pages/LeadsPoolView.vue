@@ -142,7 +142,7 @@ async function submitNewLead() {
     return
   }
   if (!newLead.value.assigneeId) {
-    ElMessage.warning('请选择归属销售')
+    ElMessage.warning('请选择归属运营')
     return
   }
   const ok = await withAction(async () => {
@@ -301,7 +301,7 @@ onMounted(async () => {
         </el-select>
         <el-select
           v-model="assigneeFilter"
-          placeholder="全部归属销售"
+          placeholder="全部归属运营"
           clearable
           filterable
           class="filter-assignee"
@@ -350,7 +350,7 @@ onMounted(async () => {
             </div>
           </template>
         </el-table-column>
-        <el-table-column prop="assignee" label="归属销售" width="100" />
+        <el-table-column prop="assignee" label="归属运营" width="100" />
         <el-table-column prop="time" label="创建时间" width="120" />
         <el-table-column label="操作" width="120" fixed="right">
           <template #default="{ row }">
@@ -387,7 +387,7 @@ onMounted(async () => {
             {{ LEAD_STATUS_LABELS[detailData.status] || detailData.status || '—' }}
           </el-descriptions-item>
           <el-descriptions-item label="客户名称">{{ detailData.companyName || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="归属销售">{{ detailData.assigneeName || '未分配' }}</el-descriptions-item>
+          <el-descriptions-item label="归属运营">{{ detailData.assigneeName || '未分配' }}</el-descriptions-item>
           <el-descriptions-item label="联系方式">{{ detailData.contactName || '—' }}</el-descriptions-item>
           <el-descriptions-item label="电话">{{ detailData.contactPhone || '—' }}</el-descriptions-item>
           <el-descriptions-item label="邮箱">{{ detailData.email || '—' }}</el-descriptions-item>
@@ -483,10 +483,10 @@ onMounted(async () => {
           <el-option label="其他" value="其他" />
         </el-select>
       </el-form-item>
-      <el-form-item label="归属销售" required>
+      <el-form-item label="归属运营" required>
         <el-select
           v-model="newLead.assigneeId"
-          placeholder="选择负责跟进的销售"
+          placeholder="选择负责跟进的运营"
           style="width:100%"
           filterable
           :disabled="currentUserIsSales"
@@ -499,7 +499,7 @@ onMounted(async () => {
           />
         </el-select>
         <div v-if="currentUserIsSales" style="font-size:11px;color:#909399;margin-top:4px">
-          销售账号新建线索时自动归属当前登录人
+          运营账号新建线索时自动归属当前登录人
         </div>
       </el-form-item>
       <el-form-item label="备注">

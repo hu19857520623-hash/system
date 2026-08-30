@@ -7,7 +7,7 @@ export const LEADS_IMPORT_HEADERS = [
   '联系方式',
   '电话',
   '来源',
-  '归属销售',
+  '归属运营',
   '备注',
 ] as const
 
@@ -38,7 +38,7 @@ export function parseLeadsImportCsv(content: string): ParsedLeadImportRow[] {
   const contactIdx = colIdx(header, ['联系方式', '联系人', 'contact', 'contactName'])
   const phoneIdx = colIdx(header, ['电话', '联系电话', 'phone', 'contact_phone', 'contactPhone'])
   const sourceIdx = colIdx(header, ['来源', 'source'])
-  const assigneeIdx = colIdx(header, ['归属销售', 'assignee', '销售', 'assigneeName'])
+  const assigneeIdx = colIdx(header, ['归属运营', '归属销售', 'assignee', '销售', 'assigneeName'])
   const remarkIdx = colIdx(header, ['备注', 'remark'])
   if (nameIdx < 0) throw new Error('CSV 需包含「客户名称」列')
 

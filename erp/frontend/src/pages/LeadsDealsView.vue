@@ -61,12 +61,15 @@ const dealForm = ref({
 })
 const dealFiles = ref<File[]>([])
 const dealFileInput = ref<HTMLInputElement | null>(null)
+void dealFileInput
+void dealFileInput
 
 const uploadDialogVisible = ref(false)
 const uploadSaving = ref(false)
 const uploadTarget = ref<{ leadId: number; deal: DealRecord; customer: string } | null>(null)
 const uploadFiles = ref<File[]>([])
 const uploadFileInput = ref<HTMLInputElement | null>(null)
+void uploadFileInput
 
 const SOURCE_OPTIONS = ['Takealot', '官网', '展会', '推荐', '小红书', '抖音', '其他']
 const SHOP_TYPE_OPTIONS = ['本土店', '跨境店', '海外仓']

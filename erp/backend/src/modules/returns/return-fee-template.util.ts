@@ -1,5 +1,4 @@
 import {
-  RETURN_FEE_RATES,
   getReturnLogisticsRates,
   returnLogisticsRateLabel,
   isValidFeeCalcMode,

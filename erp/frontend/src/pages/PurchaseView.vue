@@ -1020,8 +1020,8 @@ async function downloadPoBoxLabels(po?: any) {
               {{ (canSetActualQty && row.statusKey === 'pending_actual_qty') ? '核定数量' : (canPoAudit && row.statusKey === 'pending_po_audit') ? '去审核' : '详情' }}
             </el-button>
             <template v-if="canMarkPaid && canShowPayment(row.statusKey)">
-              <el-button v-if="row.paymentStatus !== 'paid'" link type="success" size="small" @click="markPoPaid(row)">标记已打款</el-button>
-              <el-button v-else link type="warning" size="small" @click="markPoUnpaid(row)">标记未打款</el-button>
+              <el-button v-if="row.paymentStatus !== 'paid'" link type="success" size="small" @click="markPoPaid(row as { id: number })">标记已打款</el-button>
+              <el-button v-else link type="warning" size="small" @click="markPoUnpaid(row as { id: number })">标记未打款</el-button>
             </template>
             <el-button v-if="showPoLogisticsActions() && canBoxLabel && canShowPayment(row.statusKey)" link type="primary" size="small" @click="downloadPoBoxLabels(row)">下载外箱标</el-button>
           </template>

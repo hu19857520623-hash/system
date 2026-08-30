@@ -1236,7 +1236,7 @@ async function handleAttachmentFile(e: Event) {
                   <el-input-number v-model="line.qty" :min="1" size="small" controls-position="right" style="width:100px;margin-left:6px" />
                   <el-button v-if="row.items.length > 1" link type="danger" size="small" @click="row.items.splice(li, 1)">删</el-button>
                 </div>
-                <el-button link type="primary" size="small" @click="addCartonLine(row)">+ SKU</el-button>
+                <el-button link type="primary" size="small" @click="addCartonLine(row as CartonForm)">+ SKU</el-button>
               </template>
             </el-table-column>
             <el-table-column label="操作" width="70" align="center">

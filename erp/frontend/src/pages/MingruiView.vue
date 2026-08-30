@@ -33,7 +33,7 @@ const STATUS_MAP: Record<string, { label: string; tone: string }> = {
 
 const statusFilter = ref('')
 const keyword = ref('')
-const apiMeta = ref<{ configured?: boolean; message?: string }>({})
+const apiMeta = ref<{ configured?: boolean; queryConfigured?: boolean; message?: string }>({})
 const dialogVisible = ref(false)
 const detailVisible = ref(false)
 const selected = ref<any>(null)
@@ -78,10 +78,11 @@ function statusMeta(status: string) {
 
 function fmtDate(v: unknown) {
   if (!v) return '—'
+  if (typeof v !== 'string' && !(v instanceof Date)) return '—'
   return String(fmtTime(v)).split(' ')[0]
 }
 
-async function loadLookups() {
+async function _loadLookups() {
   const [pos, wh] = await Promise.all([
     mingruiApi.eligiblePos().catch(() => []),
     warehouseApi.list({ type: 'overseas' }).catch(() => []),
@@ -94,7 +95,7 @@ async function loadLookups() {
   }
 }
 
-function openCreate(poNo?: string) {
+function _openCreate(poNo?: string) {
   form.value = emptyForm()
   const dest = warehouses.value.find((w) => String(w.warehouseCode || '').includes('JHB')) || warehouses.value[0]
   if (dest) form.value.destWarehouse = dest.warehouseCode
@@ -166,7 +167,7 @@ async function openDetail(row: any) {
   detailVisible.value = true
 }
 
-async function submitExisting() {
+async function _submitExisting() {
   if (!selected.value) return
   if (!queryJobNum.value && !queryTrackingRef.value) {
     ElMessage.warning('请先填写明瑞工作号或跟踪参考号')
@@ -196,7 +197,7 @@ async function syncLogistics() {
   if (ok && selected.value?.apiResult?.message) ElMessage.info(selected.value.apiResult.message)
 }
 
-async function cancelShipment() {
+async function _cancelShipment() {
   if (!selected.value) return
   await erpConfirm(`确认取消运单 ${selected.value.shipmentNo}？`, '取消下单', { type: 'warning' })
   const ok = await withAction(async () => {
@@ -221,6 +222,11 @@ onMounted(async () => {
     router.replace({ path: '/mingrui', query: {} })
   }
 })
+
+void _loadLookups
+void _openCreate
+void _submitExisting
+void _cancelShipment
 </script>
 
 <template>

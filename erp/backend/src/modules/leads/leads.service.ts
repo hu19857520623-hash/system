@@ -242,7 +242,7 @@ export class LeadsService {
     if (operator && LEAD_SELF_ASSIGN_ROLE_CODES.includes(operator.roleCode as typeof LEAD_SELF_ASSIGN_ROLE_CODES[number])) {
       targetAssigneeId = Number(operator.id)
     }
-    if (!targetAssigneeId) throw new BadRequestException('请选择归属销售')
+    if (!targetAssigneeId) throw new BadRequestException('请选择归属运营')
     const assignee = await this.prisma.sysUser.findUnique({
       where: { id: BigInt(targetAssigneeId) },
       select: { id: true, roleCode: true, status: true },
@@ -252,7 +252,7 @@ export class LeadsService {
       assignee.status !== 1 ||
       !LEAD_ASSIGNEE_ROLE_CODES.includes(assignee.roleCode as typeof LEAD_ASSIGNEE_ROLE_CODES[number])
     ) {
-      throw new BadRequestException('归属销售无效或已停用')
+      throw new BadRequestException('归属运营无效或已停用')
     }
     return this.prisma.lead.create({
       data: {
