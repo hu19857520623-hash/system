@@ -3,7 +3,7 @@ import { ref, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { leadApi } from '@/api/client.js'
-import { fmtTime, mapLead } from '@/api/mappers.ts'
+import { mapLead } from '@/api/mappers.ts'
 import { useListLoader, withAction } from '@/composables/useListLoader.ts'
 import { useServerPagination } from '@/composables/useTablePagination.ts'
 import ListPagination from '@/components/ListPagination.vue'
@@ -64,7 +64,6 @@ const { loading, items: leads, load } = useListLoader(async () => {
   return {
     items: (res.items || []).map((r: any) => {
       const m = mapLead(r)
-      const latestFollow = r.followUps?.[0]
       return {
         id: m.leadNo,
         name: m.company,
@@ -73,12 +72,12 @@ const { loading, items: leads, load } = useListLoader(async () => {
         ownerId: m.assigneeId,
         contact: [r.contactName, r.contactPhone].filter(Boolean).join(' / ') || '—',
         status: r.status || 'following',
-        situation: latestFollow?.content || r.remark || '—',
+        situation: m.situation,
         remark: r.remark || '—',
         inquiryAt: m.time?.split(' ')[0] || '—',
-        latestFollowAt: latestFollow?.createdAt ? fmtTime(latestFollow.createdAt) : '—',
-        nextFollowAt: latestFollow?.nextFollowAt ? fmtTime(latestFollow.nextFollowAt) : '—',
-        latestFollow,
+        latestFollowAt: m.latestFollowAt || '—',
+        nextFollowAt: m.nextFollowAt || '—',
+        latestFollow: r.followUps?.[0],
         _leadId: r.id,
       }
     }),

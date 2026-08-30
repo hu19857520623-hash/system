@@ -210,6 +210,21 @@ const DEAL_STATUS_LABELS: Record<string, string> = {
   lost: '未成交',
 }
 
+function followSituationTitle(row: { situation?: string; latestFollowAt?: string; nextPlan?: string }) {
+  return [row.situation, row.latestFollowAt, row.nextPlan ? `下一步：${row.nextPlan}` : '']
+    .filter(Boolean)
+    .join('\n')
+}
+
+const detailFollowSituation = computed(() => {
+  const latest = detailData.value?.followUps?.[0]
+  if (!latest?.content) return '暂无跟进'
+  const parts = [String(latest.content).trim()]
+  if (latest.nextPlan) parts.push(`下一步：${latest.nextPlan}`)
+  if (latest.createdAt) parts.push(fmtTime(latest.createdAt))
+  return parts.filter(Boolean).join(' · ')
+})
+
 function money(value: unknown) {
   if (value == null || value === '') return '—'
   const amount = Number(value)
@@ -325,6 +340,16 @@ onMounted(async () => {
             </el-tag>
           </template>
         </el-table-column>
+        <el-table-column label="跟进情况" min-width="200">
+          <template #default="{ row }">
+            <div class="follow-situation" :title="followSituationTitle(row)">
+              <div class="follow-situation-text">{{ row.situation }}</div>
+              <div v-if="row.latestFollowAt" class="follow-situation-meta">
+                {{ row.latestFollowAt }}<template v-if="row.nextPlan"> · {{ row.nextPlan }}</template>
+              </div>
+            </div>
+          </template>
+        </el-table-column>
         <el-table-column prop="assignee" label="归属销售" width="100" />
         <el-table-column prop="time" label="创建时间" width="120" />
         <el-table-column label="操作" width="120" fixed="right">
@@ -370,6 +395,7 @@ onMounted(async () => {
           <el-descriptions-item label="创建时间">{{ fmtTime(detailData.createdAt) || '—' }}</el-descriptions-item>
           <el-descriptions-item label="更新时间">{{ fmtTime(detailData.updatedAt) || '—' }}</el-descriptions-item>
           <el-descriptions-item label="备注" :span="2">{{ detailData.remark || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="跟进情况" :span="2">{{ detailFollowSituation }}</el-descriptions-item>
         </el-descriptions>
 
         <div class="detail-section-title">跟进记录（{{ detailData.followUps?.length || 0 }}）</div>
@@ -530,5 +556,22 @@ onMounted(async () => {
 }
 .follow-head span,
 .follow-secondary { color: var(--el-text-color-secondary); }
+.follow-situation {
+  line-height: 1.4;
+  min-width: 0;
+}
+.follow-situation-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.follow-situation-meta {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--el-text-color-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .deal-files { display:flex; flex-direction:column; align-items:flex-start; gap:2px; }
 </style>

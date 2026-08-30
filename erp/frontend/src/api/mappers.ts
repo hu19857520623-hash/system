@@ -294,6 +294,9 @@ export function mapLead(row: any) {
     deal: '已成交',
     lost: '已流失',
   }
+  const latestFollow = Array.isArray(row.followUps) ? row.followUps[0] : null
+  const latestFollowContent = String(latestFollow?.content || '').trim()
+  const nextPlan = String(latestFollow?.nextPlan || '').trim()
   return {
     id: row.id,
     leadNo: row.leadNo,
@@ -306,6 +309,11 @@ export function mapLead(row: any) {
     owner: row.assigneeName || row.ownerName || '—',
     assigneeId: row.assigneeId != null ? Number(row.assigneeId) : null,
     time: fmtTime(row.createdAt),
+    latestFollowContent,
+    latestFollowAt: latestFollow?.createdAt ? fmtTime(latestFollow.createdAt) : '',
+    nextPlan,
+    nextFollowAt: latestFollow?.nextFollowAt ? fmtTime(latestFollow.nextFollowAt) : '',
+    situation: latestFollowContent || '暂无跟进',
     _raw: row,
   }
 }
