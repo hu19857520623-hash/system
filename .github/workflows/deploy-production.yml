@@ -51,8 +51,10 @@ jobs:
 
       - name: Build and restart ERP and OMS
         run: |
-          ssh -i ~/.ssh/deploy_key -o BatchMode=yes ubuntu@175.178.50.202 'bash -s' <<'REMOTE'
+          ssh -i ~/.ssh/deploy_key -o BatchMode=yes ubuntu@175.178.50.202 \
+            'cat > /tmp/system-production-deploy.sh && bash /tmp/system-production-deploy.sh' <<'REMOTE'
           set -Eeuo pipefail
+          trap 'echo "DEPLOY_FAIL line=$LINENO cmd=$BASH_COMMAND status=$?" >&2' ERR
 
           exec 9>/tmp/system-production-deploy.lock
           flock -n 9 || { echo 'Another production deployment is running.'; exit 1; }
@@ -119,21 +121,21 @@ jobs:
           # Apply SQL from the rsynced host files. Do not rely on image COPY cache,
           # which can miss newly added prisma/scripts/*.sql.
           cd /opt/system/erp
-          docker compose up -d mysql
+          docker compose up -d mysql </dev/null
 
           export ERP_BACKUP_DIR="${ERP_BACKUP_DIR:-/opt/system/backups}"
           mkdir -p "$ERP_BACKUP_DIR"
           chmod 700 "$ERP_BACKUP_DIR"
           upsert_env_value /opt/system/erp/.env ERP_BACKUP_DIR "$ERP_BACKUP_DIR"
-          docker compose up -d --no-deps mysql-backup
+          docker compose up -d --no-deps mysql-backup </dev/null
 
           echo '=== Build OMS ==='
           cd /opt/system/oms
-          docker compose build oms-api oms-web
+          docker compose build oms-api oms-web </dev/null
 
           echo '=== Build ERP ==='
           cd /opt/system/erp
-          docker compose build erp-api erp-web
+          docker compose build erp-api erp-web </dev/null
 
           echo '=== Apply outbound phase1 schema ==='
           docker compose run -T --rm --no-deps --entrypoint npx erp-api \
@@ -154,10 +156,10 @@ jobs:
 
           echo '=== Build store-monitor ==='
           cd /opt/system/store-monitor
-          docker build -t takealot/store-monitor:production .
+          docker build -t takealot/store-monitor:production . </dev/null
 
           cd /opt/system/oms
-          if ! docker compose up -d --no-deps oms-api oms-web; then
+          if ! docker compose up -d --no-deps oms-api oms-web </dev/null; then
             docker logs --tail 100 oms-api || true
             exit 1
           fi
@@ -171,7 +173,7 @@ jobs:
 
           cd /opt/system/erp
           docker rm -f takealot-monitor >/dev/null 2>&1 || true
-          docker compose up -d --no-deps erp-api erp-web
+          docker compose up -d --no-deps erp-api erp-web </dev/null
 
           docker run -d \
             --name takealot-monitor \
@@ -184,7 +186,7 @@ jobs:
           # Replace the legacy entrypoint name and start TLS + renewal from the
           # version-controlled production Compose configuration.
           docker rm -f erp-nginx >/dev/null 2>&1 || true
-          docker compose up -d --no-deps nginx
+          docker compose up -d --no-deps nginx </dev/null
 
           nginx_ready=false
           for _ in $(seq 1 12); do
@@ -239,8 +241,8 @@ jobs:
             oms.sztekeluo.com www.oms.sztekeluo.com
           # Recreate the public TLS process so it opens the renewed certificate
           # files instead of continuing to serve the certificates loaded at boot.
-          docker compose restart nginx
-          docker compose up -d --no-deps certbot
+          docker compose restart nginx </dev/null
+          docker compose up -d --no-deps certbot </dev/null
 
           wait_healthy() {
             local container="$1"
