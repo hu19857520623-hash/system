@@ -6,6 +6,8 @@ import { getCustomerSkuDisplay } from '../../data/skuCode'
 import type { Product } from '../../data/mockData'
 
 type SkuFuzzyPickerProps = {
+  id?: string
+  'aria-describedby'?: string
   value: string
   onChange: (value: string) => void
   onSelect?: (product: Product) => void
@@ -15,6 +17,8 @@ type SkuFuzzyPickerProps = {
 }
 
 export default function SkuFuzzyPicker({
+  id,
+  'aria-describedby': ariaDescribedBy,
   value,
   onChange,
   onSelect,
@@ -76,6 +80,8 @@ export default function SkuFuzzyPicker({
       <div className="relative">
         <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-text-muted" />
         <input
+          id={id}
+          aria-describedby={ariaDescribedBy}
           value={value}
           onChange={e => {
             onChange(e.target.value)

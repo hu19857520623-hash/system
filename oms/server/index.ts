@@ -34,8 +34,8 @@ import {
   refundOutboundPreDeduct,
   settleOutboundFees,
   type OutboundFeesPayload,
-} from './outbound-settlement.util'
-import { applyErpBillingChanged, openPreDeductTotal, type ErpBillingChangedPayload } from './billing-sync.util'
+} from './outbound-settlement.util.js'
+import { applyErpBillingChanged, openPreDeductTotal, type ErpBillingChangedPayload } from './billing-sync.util.js'
 import {
   ErpApiError,
   createErpInboundAsn,
@@ -1472,7 +1472,7 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
             receivedQty,
             status,
             createdAt: new Date().toISOString().slice(0, 10),
-            warehouse: toOmsWarehouseCode(inbound.warehouseCode, existing?.warehouse || 'jhb1'),
+            warehouse: toOmsWarehouseCode(inbound.warehouseCode, 'jhb1'),
             referenceNo: inbound.referenceNo,
             eta: inbound.eta,
             contact: inbound.contact,
@@ -1663,7 +1663,6 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
           qty: i.quantity,
         })),
       )
-      const totalQty = ret.totalQty ?? (ret.items || []).reduce((s, i) => s + i.quantity, 0)
       const payload = {
         orderNo: ret.orderNo,
         referenceNo: ret.referenceNo || null,
