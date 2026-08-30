@@ -71,6 +71,12 @@ export class LeadsController {
     return this.service.addFollowUp(id, body, userId)
   }
 
+  @RequirePerms('leads_follow.edit')
+  @Post(':id/recall')
+  recallToPool(@Param('id', ParseIntPipe) id: number, @CurrentUser('userId') userId: number) {
+    return this.service.recallToPool(id, userId)
+  }
+
   @RequirePerms('leads_deals.edit')
   @Post(':id/deal')
   addDeal(@Param('id', ParseIntPipe) id: number, @Body() body: any) {

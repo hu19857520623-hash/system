@@ -53,13 +53,16 @@ const leads = computed(() =>
     id: l.leadNo,
     assignee: l.owner,
     phone: l.phone || l._raw?.contactPhone || '',
-    tone: l.statusKey === 'deal' ? 'ok' : l.statusKey === 'following' ? 'warn' : 'info',
+    tone: l.statusKey === 'deal' ? 'ok' : l.statusKey === 'following' || l.statusKey === 'recall' ? 'warn' : 'info',
   })),
 )
 
 const statusOptions = [
   { value: 'new', label: '新线索' },
   { value: 'following', label: '跟进中' },
+  { value: 'recall', label: '需要再次跟进' },
+  { value: 'hot', label: '意向高' },
+  { value: 'nurture', label: '暂无意向' },
   { value: 'deal', label: '已成交' },
   { value: 'lost', label: '已流失' },
 ]
@@ -192,6 +195,9 @@ function resetFilters() {
 const LEAD_STATUS_LABELS: Record<string, string> = {
   new: '新线索',
   following: '跟进中',
+  recall: '需要再次跟进',
+  hot: '意向高',
+  nurture: '暂无意向',
   deal: '已成交',
   lost: '已流失',
 }
@@ -333,7 +339,7 @@ onMounted(async () => {
         <el-table-column prop="contact" label="联系方式" width="120" />
         <el-table-column prop="phone" label="电话" width="160" />
         <el-table-column prop="source" label="来源" width="80" />
-        <el-table-column prop="status" label="状态" width="90">
+        <el-table-column prop="status" label="状态" width="120">
           <template #default="{ row }">
             <el-tag :type="row.tone === 'ok' ? 'success' : row.tone === 'warn' ? 'warning' : 'info'" size="small">
               {{ row.status }}

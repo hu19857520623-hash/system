@@ -303,6 +303,25 @@ export class LeadsService {
     return fu
   }
 
+  async recallToPool(id: number, operatorId?: number) {
+    const lead = await this.detail(id)
+    if (lead.status === 'deal') {
+      throw new BadRequestException('已成交线索不能退回线索池')
+    }
+    await this.prisma.leadFollowUp.create({
+      data: {
+        leadId: BigInt(id),
+        followType: 'other',
+        content: '标记为需要再次跟进，已退回线索池',
+        operatorId: operatorId ? BigInt(operatorId) : undefined,
+      },
+    })
+    return this.prisma.lead.update({
+      where: { id: BigInt(id) },
+      data: { status: 'recall', assigneeId: null },
+    })
+  }
+
   async addDeal(id: number, data: any) {
     const lead = await this.detail(id)
     const deal = await this.prisma.leadDeal.create({

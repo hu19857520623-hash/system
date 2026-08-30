@@ -5,6 +5,7 @@ import { ElMessage } from 'element-plus'
 import { leadApi } from '@/api/client.js'
 import { mapLead } from '@/api/mappers.ts'
 import { useListLoader, withAction } from '@/composables/useListLoader.ts'
+import { erpConfirm } from '@/utils/messageBox.ts'
 import { useServerPagination } from '@/composables/useTablePagination.ts'
 import ListPagination from '@/components/ListPagination.vue'
 import { ROUTE_MAP } from '@/constants/index.js'
@@ -33,7 +34,7 @@ const dealShopType = ref('本土店')
 const LEAD_STATUS_MAP: Record<string, { label: string; type: string }> = {
   new: { label: '新线索', type: 'info' },
   following: { label: '跟进中', type: 'info' },
-  recall: { label: '需再次跟进', type: 'warning' },
+  recall: { label: '需要再次跟进', type: 'warning' },
   hot: { label: '意向高', type: 'success' },
   deal: { label: '成交', type: 'success' },
   won: { label: '成交', type: 'success' },
@@ -155,6 +156,22 @@ async function submitDeal() {
   }
 }
 
+async function markRecall(row: any) {
+  if (!row?._leadId) {
+    ElMessage.error('线索 ID 缺失，请刷新后重试')
+    return
+  }
+  try {
+    await erpConfirm(`将「${row.name}」标记为需要再次跟进并退回线索池？`, '需要再次跟进')
+  } catch {
+    return
+  }
+  await withAction(async () => {
+    await leadApi.recall(row._leadId)
+    await load()
+  }, '已退回线索池，状态为需要再次跟进')
+}
+
 watch(tab, applyFilters)
 watch([page, pageSize], load)
 onMounted(load)
@@ -187,7 +204,7 @@ onMounted(load)
       <el-table-column prop="name" label="客户名" width="120" />
       <el-table-column prop="channel" label="渠道" width="80" />
       <el-table-column prop="contact" label="联系方式" width="130" />
-      <el-table-column prop="status" label="状态" width="110">
+      <el-table-column prop="status" label="状态" width="120">
         <template #default="{ row }">
           <el-tag :type="(LEAD_STATUS_MAP[row.status]?.type as any) || 'info'" size="small">{{ LEAD_STATUS_MAP[row.status]?.label || row.status }}</el-tag>
         </template>
@@ -197,9 +214,10 @@ onMounted(load)
       <el-table-column prop="latestFollowAt" label="最近跟进" width="150" />
       <el-table-column prop="nextFollowAt" label="下次跟进" width="150" />
       <el-table-column prop="inquiryAt" label="询盘日期" width="110" />
-      <el-table-column label="操作" width="150" fixed="right">
+      <el-table-column label="操作" width="240" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" size="small" @click="writeFollow(row)">写跟进</el-button>
+          <el-button link type="warning" size="small" @click="markRecall(row)">需要再次跟进</el-button>
           <el-button link type="success" size="small" @click="markDeal(row)">成交</el-button>
         </template>
       </el-table-column>

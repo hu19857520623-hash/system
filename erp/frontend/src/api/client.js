@@ -221,6 +221,7 @@ export const leadApi = {
   update: (id, data) => api.put(`/leads/${id}`, data),
   remove: (id) => api.delete(`/leads/${id}`),
   followUp: (id, data) => api.post(`/leads/${id}/follow-up`, data),
+  recall: (id) => api.post(`/leads/${id}/recall`),
   deal: (id, data) => api.post(`/leads/${id}/deal`, data),
   confirmToErp: (id, data) => api.post(`/leads/${id}/to-erp`, data),
   uploadDealAttachments: (id, dealId, attachments) =>

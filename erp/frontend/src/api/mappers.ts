@@ -291,6 +291,9 @@ export function mapLead(row: any) {
   const statusMap: Record<string, string> = {
     new: '新线索',
     following: '跟进中',
+    recall: '需要再次跟进',
+    hot: '意向高',
+    nurture: '暂无意向',
     deal: '已成交',
     lost: '已流失',
   }
