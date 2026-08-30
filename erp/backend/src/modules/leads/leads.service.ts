@@ -4,6 +4,7 @@ import { PrismaService } from '../../common/prisma/prisma.service'
 import { FileStoreService } from '../../common/file-store.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
 import { parseLeadsImportCsv } from './leads-import.util'
+import { resolveFollowSales } from './leads-follow-sales.util'
 import {
   LEAD_ASSIGNEE_ROLE_CODES,
   LEAD_SELF_ASSIGN_ROLE_CODES,
@@ -54,6 +55,7 @@ export class LeadsService {
       nextFollowAtTo?: string
       latestFollowAtFrom?: string
       latestFollowAtTo?: string
+      followSales?: string
     },
   ) {
     const { page, pageSize } = getPagination(q)
@@ -67,6 +69,13 @@ export class LeadsService {
     else if (q.status) where.status = q.status
     if (q.assigneeId) where.assigneeId = BigInt(q.assigneeId)
     if (q.source) where.source = q.source
+    if (q.followSales === '__empty__') {
+      and.push({
+        OR: [{ followSales: null }, { followSales: '' }],
+      })
+    } else if (q.followSales) {
+      where.followSales = q.followSales
+    }
     const createdAt = toDayRange(q.createdAtFrom, q.createdAtTo)
     if (createdAt) where.createdAt = createdAt
     const nextFollowAt = toDayRange(q.nextFollowAtFrom, q.nextFollowAtTo)
@@ -158,6 +167,7 @@ export class LeadsService {
       const customer = r.customerId ? customerMap.get(Number(r.customerId)) : null
       return {
         ...r,
+        followSales: resolveFollowSales(r.followSales, r.remark),
         assigneeName: r.assigneeId ? nameMap.get(Number(r.assigneeId)) ?? null : null,
         customerCode: customer?.customerCode ?? null,
         customerName: customer?.customerName ?? null,
@@ -201,6 +211,19 @@ export class LeadsService {
     return { items, currentUserId }
   }
 
+  async listFollowSales() {
+    const rows = await this.prisma.lead.groupBy({
+      by: ['followSales'],
+      where: { followSales: { not: null } },
+      _count: { _all: true },
+    })
+    const items = rows
+      .map((row) => String(row.followSales || '').trim())
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b, 'zh-CN'))
+    return { items }
+  }
+
   async detail(id: number) {
     const row = await this.prisma.lead.findUnique({
       where: { id: BigInt(id) },
@@ -233,6 +256,7 @@ export class LeadsService {
     )
     return {
       ...row,
+      followSales: resolveFollowSales(row.followSales, row.remark),
       assigneeName: row.assigneeId ? userNameMap.get(row.assigneeId.toString()) ?? null : null,
       followUps: row.followUps.map((item) => ({
         ...item,
@@ -277,6 +301,7 @@ export class LeadsService {
         status: data.status || 'new',
         remark: data.remark,
         assigneeId: assignee.id,
+        followSales: String(data.followSales || '').trim() || undefined,
       },
     })
   }
@@ -522,6 +547,7 @@ export class LeadsService {
           source: row.source,
           remark: row.remark,
           assigneeId: Number(assigneeId),
+          followSales: row.followSales,
         })
         ok++
       } catch {

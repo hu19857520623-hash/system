@@ -714,6 +714,7 @@ model Lead {
   source       String?        @db.VarChar(30)
   status       String         @default("new") @db.VarChar(20)
   assigneeId   BigInt?        @map("assignee_id")
+  followSales  String?        @map("follow_sales") @db.VarChar(50)
   remark       String?        @db.Text
   customerId   BigInt?        @map("customer_id")
   createdAt    DateTime       @default(now()) @map("created_at")
@@ -723,6 +724,7 @@ model Lead {
 
   @@index([status], map: "idx_lead_status")
   @@index([assigneeId], map: "idx_lead_assignee")
+  @@index([followSales], map: "idx_lead_follow_sales")
   @@index([customerId], map: "idx_lead_customer")
   @@map("lead")
 }

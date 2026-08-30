@@ -54,6 +54,7 @@ export const MIGRATION_ORDER = [
   'migrate_wms_management_loop.sql',
   'migrate_wms_loop_schema_repair.sql',
   'migrate_outbound_pick_allocation_p0.sql',
+  'migrate_lead_follow_sales.sql',
 ] as const
 
 /**

@@ -69,14 +69,15 @@ export const LEADS_IMPORT_FIELDS: ImportFieldDef[] = [
   { key: 'phone', label: '电话', required: false },
   { key: 'source', label: '来源', required: false, hint: '默认 Takealot' },
   { key: 'assignee', label: '归属运营', required: false, hint: '用户名或姓名；留空则当前登录用户' },
+  { key: 'followSales', label: '跟进销售', required: false, hint: '跟进该线索的销售姓名' },
   { key: 'remark', label: '备注', required: false },
 ]
 
 export const LEADS_IMPORT_HEADERS = LEADS_IMPORT_FIELDS.map((f) => f.label)
 
 export const LEADS_IMPORT_SAMPLE_ROWS: unknown[][] = [
-  ['', '示例科技有限公司', '张三', '13800138000', 'Takealot', 'sales01', ''],
-  ['LD-XHS-0099', '开普敦贸易', '李四', '0821234567', '展会', '', '重点客户'],
+  ['', '示例科技有限公司', '张三', '13800138000', 'Takealot', 'sales01', '陈琪珍', ''],
+  ['LD-XHS-0099', '开普敦贸易', '李四', '0821234567', '展会', '', '', '重点客户'],
 ]
 
 export function downloadLeadsImportTemplate() {

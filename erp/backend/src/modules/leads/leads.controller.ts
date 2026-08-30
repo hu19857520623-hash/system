@@ -34,6 +34,12 @@ export class LeadsController {
     return this.service.listAssignees(userId)
   }
 
+  @RequireAnyPerm('leads_pool.view', 'leads_follow.view')
+  @Get('follow-sales')
+  followSales() {
+    return this.service.listFollowSales()
+  }
+
   @RequireAnyPerm('leads_deals.view', 'leads_pool.view')
   @Get(':id/deals/:dealId/attachments/:attachmentId')
   async downloadDealAttachment(

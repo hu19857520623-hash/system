@@ -3,9 +3,9 @@ import { parseLeadsImportCsv } from './leads-import.util'
 describe('parseLeadsImportCsv', () => {
   it('parses columns aligned with manual lead creation form', () => {
     const csv = [
-      '线索编号,客户名称,联系方式,电话,来源,归属运营,备注',
-      ',示例公司,张三,13800138000,Takealot,sales01,',
-      'LD-001,开普敦贸易,李四,0821234567,展会,,重点',
+      '线索编号,客户名称,联系方式,电话,来源,归属运营,跟进销售,备注',
+      ',示例公司,张三,13800138000,Takealot,sales01,陈琪珍,',
+      'LD-001,开普敦贸易,李四,0821234567,展会,,,重点',
     ].join('\n')
     const rows = parseLeadsImportCsv(csv)
     expect(rows).toHaveLength(2)
@@ -15,6 +15,7 @@ describe('parseLeadsImportCsv', () => {
       contactPhone: '13800138000',
       source: 'Takealot',
       assigneeKey: 'sales01',
+      followSales: '陈琪珍',
     })
     expect(rows[1]).toMatchObject({
       leadNo: 'LD-001',

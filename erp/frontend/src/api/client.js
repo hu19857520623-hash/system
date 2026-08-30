@@ -216,6 +216,7 @@ export const permissionsApi = {
 export const leadApi = {
   list: (params) => api.get('/leads', params),
   assignees: () => api.get('/leads/assignees'),
+  followSales: () => api.get('/leads/follow-sales'),
   detail: (id) => api.get(`/leads/${id}`),
   create: (data) => api.post('/leads', data),
   update: (id, data) => api.put(`/leads/${id}`, data),

@@ -4,6 +4,15 @@
 
 import { CATALOG_CUSTOMER_CODE, catalogBaseSkuFromInternal } from '@/constants/catalog.ts'
 
+function parseFollowSalesFromRemark(remark?: string | null): string {
+  const text = String(remark || '')
+  const again = text.match(/再对接:([^|]+)/)
+  if (again?.[1]?.trim()) return again[1].trim()
+  const first = text.match(/(?<!再)对接:([^|]+)/)
+  if (first?.[1]?.trim()) return first[1].trim()
+  return ''
+}
+
 export function fmtTime(d: string | Date | null | undefined): string {
   if (!d) return ''
   const dt = typeof d === 'string' ? new Date(d) : d
@@ -311,6 +320,7 @@ export function mapLead(row: any) {
     statusKey: row.status,
     owner: row.assigneeName || row.ownerName || '—',
     assigneeId: row.assigneeId != null ? Number(row.assigneeId) : null,
+    followSales: String(row.followSales || '').trim() || parseFollowSalesFromRemark(row.remark),
     time: fmtTime(row.createdAt),
     latestFollowContent,
     latestFollowAt: latestFollow?.createdAt ? fmtTime(latestFollow.createdAt) : '',

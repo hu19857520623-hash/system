@@ -27,9 +27,11 @@ interface SalesUser {
 const statusFilter = ref('')
 const sourceFilter = ref('')
 const assigneeFilter = ref<number | ''>('')
+const followSalesFilter = ref('')
 const createdRange = ref<[string, string] | null>(null)
 const searchQ = ref('')
 const salesUsers = ref<SalesUser[]>([])
+const followSalesOptions = ref<string[]>([])
 const { page, pageSize, total, resetPage } = useServerPagination()
 
 const { loading, items: rawItems, load } = useListLoader(async () => {
@@ -37,6 +39,7 @@ const { loading, items: rawItems, load } = useListLoader(async () => {
   if (statusFilter.value) params.status = statusFilter.value
   if (sourceFilter.value) params.source = sourceFilter.value
   if (assigneeFilter.value !== '') params.assigneeId = assigneeFilter.value
+  if (followSalesFilter.value) params.followSales = followSalesFilter.value
   if (createdRange.value?.length === 2) {
     params.createdAtFrom = createdRange.value[0]
     params.createdAtTo = createdRange.value[1]
@@ -82,6 +85,7 @@ const newLead = ref({
   phone: '',
   source: 'Takealot',
   assigneeId: null as number | null,
+  followSales: '',
   remark: '',
 })
 
@@ -100,6 +104,15 @@ async function loadSalesUsers() {
     salesUsers.value = current && LEAD_SELF_ASSIGN_ROLE_CODES.includes(current.roleCode as typeof LEAD_SELF_ASSIGN_ROLE_CODES[number])
       ? [{ id: current.id, name: current.realName || current.username, username: current.username, isCurrent: true }]
       : []
+  }
+}
+
+async function loadFollowSalesOptions() {
+  try {
+    const res = await leadApi.followSales()
+    followSalesOptions.value = res.items || []
+  } catch {
+    followSalesOptions.value = []
   }
 }
 
@@ -134,6 +147,7 @@ function openNewLead() {
     phone: '',
     source: 'Takealot',
     assigneeId: defaultAssigneeId(),
+    followSales: '',
     remark: '',
   }
   dialogVisible.value = true
@@ -155,12 +169,13 @@ async function submitNewLead() {
       contactPhone: newLead.value.phone,
       source: newLead.value.source,
       assigneeId: newLead.value.assigneeId,
+      followSales: newLead.value.followSales.trim() || undefined,
       remark: newLead.value.remark,
     }
     const leadNo = newLead.value.leadNo.trim()
     if (leadNo) payload.leadNo = leadNo
     await leadApi.create(payload)
-    await load()
+    await Promise.all([load(), loadFollowSalesOptions()])
   }, '线索已创建')
   if (ok) dialogVisible.value = false
 }
@@ -188,6 +203,7 @@ function resetFilters() {
   statusFilter.value = ''
   sourceFilter.value = ''
   assigneeFilter.value = ''
+  followSalesFilter.value = ''
   createdRange.value = null
   applyFilters()
 }
@@ -270,8 +286,16 @@ async function detail(row: any) {
 }
 
 watch([page, pageSize], load)
+const createFollowSalesOptions = computed(() => {
+  const names = new Set(followSalesOptions.value)
+  for (const user of salesUsers.value) {
+    if (user.name) names.add(user.name)
+  }
+  return [...names].sort((a, b) => a.localeCompare(b, 'zh-CN'))
+})
+
 onMounted(async () => {
-  await loadSalesUsers()
+  await Promise.all([loadSalesUsers(), loadFollowSalesOptions()])
   await load()
 })
 </script>
@@ -315,6 +339,17 @@ onMounted(async () => {
         >
           <el-option v-for="user in salesUsers" :key="user.id" :label="user.name" :value="user.id" />
         </el-select>
+        <el-select
+          v-model="followSalesFilter"
+          placeholder="全部跟进销售"
+          clearable
+          filterable
+          class="filter-assignee"
+          @change="applyFilters"
+        >
+          <el-option label="未填写" value="__empty__" />
+          <el-option v-for="name in followSalesOptions" :key="name" :label="name" :value="name" />
+        </el-select>
         <el-date-picker
           v-model="createdRange"
           type="daterange"
@@ -357,6 +392,9 @@ onMounted(async () => {
           </template>
         </el-table-column>
         <el-table-column prop="assignee" label="归属运营" width="100" />
+        <el-table-column label="跟进销售" width="110">
+          <template #default="{ row }">{{ row.followSales || '—' }}</template>
+        </el-table-column>
         <el-table-column prop="time" label="创建时间" width="120" />
         <el-table-column label="操作" width="120" fixed="right">
           <template #default="{ row }">
@@ -394,6 +432,7 @@ onMounted(async () => {
           </el-descriptions-item>
           <el-descriptions-item label="客户名称">{{ detailData.companyName || '—' }}</el-descriptions-item>
           <el-descriptions-item label="归属运营">{{ detailData.assigneeName || '未分配' }}</el-descriptions-item>
+          <el-descriptions-item label="跟进销售">{{ detailData.followSales || '—' }}</el-descriptions-item>
           <el-descriptions-item label="联系方式">{{ detailData.contactName || '—' }}</el-descriptions-item>
           <el-descriptions-item label="电话">{{ detailData.contactPhone || '—' }}</el-descriptions-item>
           <el-descriptions-item label="邮箱">{{ detailData.email || '—' }}</el-descriptions-item>
@@ -507,6 +546,19 @@ onMounted(async () => {
         <div v-if="currentUserIsSales" style="font-size:11px;color:#909399;margin-top:4px">
           运营账号新建线索时自动归属当前登录人
         </div>
+      </el-form-item>
+      <el-form-item label="跟进销售">
+        <el-select
+          v-model="newLead.followSales"
+          placeholder="选择或输入跟进销售"
+          style="width:100%"
+          filterable
+          allow-create
+          default-first-option
+          clearable
+        >
+          <el-option v-for="name in createFollowSalesOptions" :key="name" :label="name" :value="name" />
+        </el-select>
       </el-form-item>
       <el-form-item label="备注">
         <el-input v-model="newLead.remark" type="textarea" :rows="2" placeholder="备注信息" />
