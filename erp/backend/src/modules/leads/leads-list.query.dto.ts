@@ -47,4 +47,20 @@ export class LeadsListQueryDto extends PaginationDto {
   @IsOptional()
   @IsString()
   createdAtTo?: string
+
+  @IsOptional()
+  @IsString()
+  nextFollowAtFrom?: string
+
+  @IsOptional()
+  @IsString()
+  nextFollowAtTo?: string
+
+  @IsOptional()
+  @IsString()
+  latestFollowAtFrom?: string
+
+  @IsOptional()
+  @IsString()
+  latestFollowAtTo?: string
 }

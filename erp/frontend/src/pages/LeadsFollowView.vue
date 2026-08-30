@@ -15,6 +15,34 @@ const router = useRouter()
 const app = useAppStore()
 const tab = ref('mine')
 const searchQ = ref('')
+const followTimeField = ref<'inquiry' | 'latestFollow' | 'nextFollow'>('inquiry')
+const followDateRange = ref<[string, string] | null>(null)
+
+const followDateShortcuts = [
+  {
+    text: '今天',
+    value: () => {
+      const today = new Date()
+      return [today, today]
+    },
+  },
+  {
+    text: '近7天',
+    value: () => {
+      const end = new Date()
+      const start = new Date()
+      start.setDate(end.getDate() - 6)
+      return [start, end]
+    },
+  },
+  {
+    text: '本月',
+    value: () => {
+      const now = new Date()
+      return [new Date(now.getFullYear(), now.getMonth(), 1), now]
+    },
+  },
+]
 const followDialogVisible = ref(false)
 const followSaving = ref(false)
 const followTarget = ref<any>(null)
@@ -57,8 +85,23 @@ const { loading, items: leads, load } = useListLoader(async () => {
   const canViewAll = app.hasPerm('leads_pool.view_all')
   if (tab.value === 'mine' && userId) params.assigneeId = userId
   if (tab.value === 'follow') {
-    params.followDue = '1'
     if (!canViewAll && userId) params.assigneeId = userId
+    const range = followDateRange.value
+    const hasFollowDate = Boolean(range && range.length === 2)
+    if (followTimeField.value !== 'nextFollow' || !hasFollowDate) params.followDue = '1'
+    if (range && range.length === 2) {
+      const [from, to] = range
+      if (followTimeField.value === 'nextFollow') {
+        params.nextFollowAtFrom = from
+        params.nextFollowAtTo = to
+      } else if (followTimeField.value === 'latestFollow') {
+        params.latestFollowAtFrom = from
+        params.latestFollowAtTo = to
+      } else {
+        params.createdAtFrom = from
+        params.createdAtTo = to
+      }
+    }
   }
   const res = await leadApi.list(params)
   total.value = res.total ?? 0
@@ -88,6 +131,12 @@ const { loading, items: leads, load } = useListLoader(async () => {
 function applyFilters() {
   resetPage()
   load()
+}
+
+function resetFollowFilters() {
+  followTimeField.value = 'inquiry'
+  followDateRange.value = null
+  applyFilters()
 }
 
 function writeFollow(row: any) {
@@ -197,6 +246,29 @@ onMounted(load)
       <el-tab-pane label="我的线索" name="mine" />
       <el-tab-pane label="待跟进" name="follow" />
     </el-tabs>
+    <div v-if="tab === 'follow'" class="filter-bar">
+      <el-select v-model="followTimeField" size="small" class="filter-time-field" @change="applyFilters">
+        <el-option label="询盘日期" value="inquiry" />
+        <el-option label="最近跟进" value="latestFollow" />
+        <el-option label="下次跟进" value="nextFollow" />
+      </el-select>
+      <el-date-picker
+        v-model="followDateRange"
+        type="daterange"
+        unlink-panels
+        range-separator="至"
+        start-placeholder="开始日期"
+        end-placeholder="结束日期"
+        value-format="YYYY-MM-DD"
+        :shortcuts="followDateShortcuts"
+        clearable
+        size="small"
+        class="filter-date"
+        @change="applyFilters"
+      />
+      <el-button type="primary" size="small" @click="applyFilters">查询</el-button>
+      <el-button size="small" @click="resetFollowFilters">重置</el-button>
+    </div>
     <el-table :data="leads" stripe border size="small">
       <el-table-column prop="id" label="线索编号" width="140">
         <template #default="{ row }"><span style="font-family:var(--font-mono);font-size:12px">{{ row.id }}</span></template>
@@ -224,7 +296,7 @@ onMounted(load)
     </el-table>
     <el-empty
       v-if="!loading && !leads.length"
-      :description="tab === 'follow' ? '暂无到期待跟进线索' : '当前账号没有归属线索，可在线索池领取后跟进'"
+      :description="tab === 'follow' ? (followDateRange ? '该时间范围内暂无待跟进线索' : '暂无到期待跟进线索') : '当前账号没有归属线索，可在线索池领取后跟进'"
     />
     <ListPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
   </el-card>
@@ -311,4 +383,13 @@ onMounted(load)
 <style scoped>
 .page-header { display:flex; align-items:center; justify-content:space-between; }
 .page-title { font-weight:600; font-size:15px; }
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+.filter-time-field { width: 120px; }
+.filter-date { width: 260px; }
 </style>

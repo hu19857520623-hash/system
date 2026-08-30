@@ -17,6 +17,18 @@ const DEAL_FILE_EXTS = new Set([
   '.pdf', '.jpg', '.jpeg', '.png', '.webp', '.doc', '.docx', '.xls', '.xlsx', '.zip',
 ])
 
+function toDayRange(from?: string, to?: string) {
+  if (!from && !to) return undefined
+  const range: Record<string, Date> = {}
+  if (from) range.gte = new Date(from)
+  if (to) {
+    const end = new Date(to)
+    end.setHours(23, 59, 59, 999)
+    range.lte = end
+  }
+  return range
+}
+
 @Injectable()
 export class LeadsService {
   constructor(
@@ -38,6 +50,10 @@ export class LeadsService {
       dealDateTo?: string
       createdAtFrom?: string
       createdAtTo?: string
+      nextFollowAtFrom?: string
+      nextFollowAtTo?: string
+      latestFollowAtFrom?: string
+      latestFollowAtTo?: string
     },
   ) {
     const { page, pageSize } = getPagination(q)
@@ -51,16 +67,12 @@ export class LeadsService {
     else if (q.status) where.status = q.status
     if (q.assigneeId) where.assigneeId = BigInt(q.assigneeId)
     if (q.source) where.source = q.source
-    if (q.createdAtFrom || q.createdAtTo) {
-      const createdAt: Record<string, Date> = {}
-      if (q.createdAtFrom) createdAt.gte = new Date(q.createdAtFrom)
-      if (q.createdAtTo) {
-        const end = new Date(q.createdAtTo)
-        end.setHours(23, 59, 59, 999)
-        createdAt.lte = end
-      }
-      where.createdAt = createdAt
-    }
+    const createdAt = toDayRange(q.createdAtFrom, q.createdAtTo)
+    if (createdAt) where.createdAt = createdAt
+    const nextFollowAt = toDayRange(q.nextFollowAtFrom, q.nextFollowAtTo)
+    if (nextFollowAt) and.push({ followUps: { some: { nextFollowAt } } })
+    const latestFollowAt = toDayRange(q.latestFollowAtFrom, q.latestFollowAtTo)
+    if (latestFollowAt) and.push({ followUps: { some: { createdAt: latestFollowAt } } })
     if (q.keyword) {
       and.push({
         OR: [
