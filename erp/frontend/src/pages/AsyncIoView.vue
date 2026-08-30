@@ -6,8 +6,7 @@ import { useListLoader } from '@/composables/useListLoader.ts'
 import { useTablePagination } from '@/composables/useTablePagination.ts'
 import { useRowActions } from '@/composables/useRowActions'
 import { useAsyncIo } from '@/composables/useAsyncIo'
-import { downloadLeadsImportTemplate, downloadProductImportTemplate, LEADS_IMPORT_FIELDS, PRODUCT_IMPORT_FIELDS } from '@/constants/importTemplates.ts'
-import ImportFieldLegend from '@/components/ImportFieldLegend.vue'
+import { downloadLeadsImportTemplate, downloadProductImportTemplate } from '@/constants/importTemplates.ts'
 import ListPagination from '@/components/ListPagination.vue'
 
 const { showDetail } = useRowActions()
@@ -90,8 +89,6 @@ onMounted(load)
     </el-tabs>
 
     <template v-if="tab === 'import'">
-      <ImportFieldLegend title="线索导入字段" :fields="LEADS_IMPORT_FIELDS" compact />
-      <ImportFieldLegend title="商品主数据导入字段" :fields="PRODUCT_IMPORT_FIELDS" compact />
       <div style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap">
         <el-button type="primary" size="small" @click="handleImport">上传模板导入线索</el-button>
         <el-button size="small" link type="primary" @click="downloadLeadsImportTemplate">下载线索导入模板</el-button>

@@ -8,10 +8,8 @@ import { mapWarehouse } from '@/api/mappers.ts'
 import { withAction } from '@/composables/useListLoader.ts'
 import { useAppStore } from '@/stores/app'
 import ListPagination from '@/components/ListPagination.vue'
-import ImportFieldLegend from '@/components/ImportFieldLegend.vue'
 import {
   downloadInventoryAdjustTemplate,
-  INVENTORY_ADJUST_IMPORT_FIELDS,
   parseInventoryAdjustCsvClient,
   type InventoryAdjustImportRow,
 } from '@/constants/importTemplates.ts'
@@ -734,7 +732,6 @@ watch([page, pageSize], () => load())
             <el-button size="small" @click="triggerBatchImport">上传模板</el-button>
             <span v-if="batchPreviewRows.length" class="batch-count">已解析 {{ batchPreviewRows.length }} 行</span>
           </div>
-          <ImportFieldLegend title="批量导入字段" :fields="INVENTORY_ADJUST_IMPORT_FIELDS" compact />
           <el-table v-if="batchPreviewRows.length" :data="batchPreviewRows" border size="small" max-height="280" class="batch-preview">
             <el-table-column prop="customerCode" label="客户代码" width="96" />
             <el-table-column prop="sku" label="SKU" min-width="110" />

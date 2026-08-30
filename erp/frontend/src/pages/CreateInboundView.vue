@@ -20,11 +20,9 @@ import {
 import {
   downloadInboundSkuTemplate,
   resolveInboundSkuColumns,
-  INBOUND_SKU_IMPORT_FIELDS,
   validateInboundSkuImportRow,
 } from '@/constants/importTemplates.ts'
 import { normalizeImportFileText, parseCsvLine } from '@/utils/csv.ts'
-import ImportFieldLegend from '@/components/ImportFieldLegend.vue'
 
 const DRAFT_KEY = 'erp-inbound-drafts' // legacy localStorage key — migrated to API
 
@@ -111,30 +109,82 @@ const logisticsWarehouses = ref<any[]>([])
 const overseasWarehouses = ref<any[]>([])
 const warehouseSkus = ref<WhSku[]>([])
 const productDimMap = ref<Map<string, { lengthCm: number; widthCm: number; heightCm: number; weightKg: number }>>(new Map())
+const productDimMapLoaded = ref(false)
 const createLoading = ref(false)
 const skuLoading = ref(false)
 const editingDraftId = ref<string | null>(null)
 const skuFileInputRef = ref<HTMLInputElement | null>(null)
 const attachmentInputRef = ref<HTMLInputElement | null>(null)
 
-async function loadProductDimMap() {
-  if (productDimMap.value.size) return productDimMap.value
-  try {
-    const res = await productApi.list({ pageSize: 500 })
-    const map = new Map<string, { lengthCm: number; widthCm: number; heightCm: number; weightKg: number }>()
-    ;(res.items || res || []).forEach((p: any) => {
-      map.set(p.sku, {
-        lengthCm: Number(p.lengthCm) || 0,
-        widthCm: Number(p.widthCm) || 0,
-        heightCm: Number(p.heightCm) || 0,
-        weightKg: Number(p.weightKg) || 0,
-      })
-    })
-    productDimMap.value = map
-    return map
-  } catch {
-    return productDimMap.value
+function numDim(v: unknown): number {
+  if (v == null || v === '') return 0
+  const n = Number(v)
+  return Number.isFinite(n) ? n : 0
+}
+
+function extractProductDims(p: {
+  lengthCm?: unknown
+  widthCm?: unknown
+  heightCm?: unknown
+  weightKg?: unknown
+  measuredLengthCm?: unknown
+  measuredWidthCm?: unknown
+  measuredHeightCm?: unknown
+  measuredWeightKg?: unknown
+}) {
+  return {
+    lengthCm: numDim(p.measuredLengthCm ?? p.lengthCm),
+    widthCm: numDim(p.measuredWidthCm ?? p.widthCm),
+    heightCm: numDim(p.measuredHeightCm ?? p.heightCm),
+    weightKg: numDim(p.measuredWeightKg ?? p.weightKg),
   }
+}
+
+async function loadProductDimMap(force = false) {
+  if (productDimMapLoaded.value && !force) return productDimMap.value
+  const map = new Map(productDimMap.value)
+  try {
+    let page = 1
+    while (true) {
+      const res = await productApi.list({ pageSize: 200, page })
+      const items = res.items || res || []
+      items.forEach((p: any) => {
+        map.set(p.sku, extractProductDims(p))
+      })
+      const total = Number(res.total ?? items.length)
+      if (items.length < 200 || page * 200 >= total) break
+      page += 1
+    }
+    productDimMap.value = map
+    productDimMapLoaded.value = true
+  } catch {
+    /* 保留已加载的部分 */
+  }
+  return productDimMap.value
+}
+
+function skuOptionLabel(s: WhSku) {
+  const name = s.productName ? ` · ${s.productName}` : ''
+  return `${s.sku}${name} · 可发 ${s.available}`
+}
+
+async function hydrateWarehouseSkuDims(rows: WhSku[]) {
+  const missing = rows.filter((row) => row.productId && !row.lengthCm && !row.widthCm && !row.heightCm)
+  if (!missing.length) return
+  await Promise.all(missing.map(async (row) => {
+    try {
+      const detail = await productApi.detail(row.productId)
+      const dims = extractProductDims(detail)
+      if (!dims.lengthCm && !dims.widthCm && !dims.heightCm && !dims.weightKg) return
+      productDimMap.value.set(row.sku, dims)
+      row.lengthCm = dims.lengthCm
+      row.widthCm = dims.widthCm
+      row.heightCm = dims.heightCm
+      row.weightKg = dims.weightKg
+    } catch {
+      /* 单条失败不影响其余 SKU */
+    }
+  }))
 }
 
 function parseInboundMeta(remark?: string) {
@@ -364,29 +414,49 @@ async function loadLogisticsStock(code: string) {
   skuLoading.value = true
   try {
     await loadProductDimMap()
-    const invRes = await inventoryApi.query({ warehouseCode: code, pageSize: 200 })
-
-    warehouseSkus.value = (invRes.items || [])
-      .filter((r: any) => (r.availableQty ?? 0) > 0)
-      .map((r: any) => {
-    const dim = productDimMap.value.get(r.sku) || {
-      lengthCm: 0,
-      widthCm: 0,
-      heightCm: 0,
-      weightKg: 0,
+    const allItems: any[] = []
+    let page = 1
+    while (true) {
+      const invRes = await inventoryApi.query({
+        warehouseCode: code,
+        pageSize: 200,
+        page,
+        onlyAvailable: '1',
+      })
+      const batch = invRes.items || []
+      allItems.push(...batch)
+      const total = Number(invRes.total ?? batch.length)
+      if (batch.length < 200 || allItems.length >= total) break
+      page += 1
     }
+
+    warehouseSkus.value = allItems
+      .filter((r: any) => numDim(r.availableQty ?? r.available) > 0)
+      .map((r: any) => {
+        const dim = productDimMap.value.get(r.sku) || {
+          lengthCm: 0,
+          widthCm: 0,
+          heightCm: 0,
+          weightKg: 0,
+        }
         return {
           sku: r.sku,
           productName: r.productName || '',
           spec: r.spec || '',
           productId: Number(r.productId),
-          available: r.availableQty ?? 0,
+          available: numDim(r.availableQty ?? r.available),
           lengthCm: dim.lengthCm || 0,
           widthCm: dim.widthCm || 0,
           heightCm: dim.heightCm || 0,
           weightKg: dim.weightKg || 0,
         }
       })
+
+    await hydrateWarehouseSkuDims(warehouseSkus.value)
+
+    for (const line of createForm.value.lines) {
+      if (line.sku) onLineSkuPick(line, line.sku)
+    }
   } catch {
     warehouseSkus.value = []
   } finally {
@@ -925,8 +995,8 @@ async function handleAttachmentFile(e: Event) {
           <p class="section-desc">选择运输方式并填写本票海运费总额，系统按各行 SKU 体积占比自动分摊到每个 SKU 及单件运费</p>
           <div class="sea-mode-row">
             <el-radio-group v-model="createForm.seaFreightMode" size="small">
-              <el-radio-button label="lcl">拼柜 (LCL)</el-radio-button>
-              <el-radio-button label="fcl">整柜 (FCL)</el-radio-button>
+              <el-radio-button value="lcl">拼柜 (LCL)</el-radio-button>
+              <el-radio-button value="fcl">整柜 (FCL)</el-radio-button>
             </el-radio-group>
           </div>
           <el-row :gutter="20">
@@ -1022,7 +1092,6 @@ async function handleAttachmentFile(e: Event) {
               <el-button type="primary" size="small" :disabled="!createForm.logisticsWhCode" @click="addLine">+ 添加 SKU</el-button>
             </div>
           </div>
-          <ImportFieldLegend title="批量导入字段（与手动添加 SKU 行一致）" :fields="INBOUND_SKU_IMPORT_FIELDS" compact />
           <input ref="skuFileInputRef" type="file" accept=".csv,.xls,.txt" style="display:none" @change="handleSkuImportFile" />
           <input ref="attachmentInputRef" type="file" style="display:none" @change="handleAttachmentFile" />
           <p v-if="createForm.logisticsWhCode" class="sku-hint">
@@ -1030,26 +1099,38 @@ async function handleAttachmentFile(e: Event) {
             当前可发 SKU <strong>{{ warehouseSkus.length }}</strong> 个
             <span v-if="skuLoading">（加载中…）</span>
             · 选择 SKU 后请填写<strong>单件长、宽、高（cm）</strong>、<strong>重量（kg）</strong>；入库数量不可超过本仓可发库存
+            · 表格列较多时可<strong>横向滚动</strong>查看尺寸与海运费分摊
           </p>
-          <el-table v-if="createForm.lines.length" v-loading="skuLoading" :data="createForm.lines" border size="small" class="lines-table">
-            <el-table-column label="SKU" width="150">
+          <div v-if="createForm.lines.length" class="lines-table-wrap">
+          <el-table v-loading="skuLoading" :data="createForm.lines" border size="small" class="lines-table">
+            <el-table-column label="SKU" min-width="200" fixed="left">
               <template #default="{ row }">
                 <el-select
                   v-model="row.sku"
                   filterable
+                  :fit-input-width="false"
+                  popper-class="inbound-sku-select-popper"
                   placeholder="选择 SKU"
                   size="small"
                   style="width:100%"
                   @change="(v: string) => onLineSkuPick(row, v)"
                 >
-                  <el-option v-for="s in warehouseSkus" :key="s.sku" :label="s.sku" :value="s.sku">
-                    <span class="mono">{{ s.sku }}</span>
-                    <span style="color:#999;margin-left:6px">可发 {{ s.available }}</span>
+                  <el-option
+                    v-for="s in warehouseSkus"
+                    :key="s.sku"
+                    :label="skuOptionLabel(s)"
+                    :value="s.sku"
+                  >
+                    <div class="sku-option-row">
+                      <span class="mono sku-option-code">{{ s.sku }}</span>
+                      <span class="sku-option-name">{{ s.productName || '—' }}</span>
+                      <span class="sku-option-qty">可发 {{ s.available }}</span>
+                    </div>
                   </el-option>
                 </el-select>
               </template>
             </el-table-column>
-            <el-table-column prop="productName" label="商品名" min-width="120" />
+            <el-table-column prop="productName" label="商品名" min-width="140" show-overflow-tooltip />
             <el-table-column label="入库数量" width="148" align="center">
               <template #default="{ row }">
                 <div class="num-cell">
@@ -1066,22 +1147,22 @@ async function handleAttachmentFile(e: Event) {
                 </div>
               </template>
             </el-table-column>
-            <el-table-column label="长(cm)" width="118" align="center">
+            <el-table-column label="长(cm)" width="128" align="center">
               <template #default="{ row }">
                 <el-input-number v-model="row.lengthCm" :min="0" :precision="1" :step="0.1" size="small" controls-position="right" class="line-num-input" placeholder="长" />
               </template>
             </el-table-column>
-            <el-table-column label="宽(cm)" width="118" align="center">
+            <el-table-column label="宽(cm)" width="128" align="center">
               <template #default="{ row }">
-                <el-input-number v-model="row.widthCm" :min="0" :precision="1" :step="0.1" size="small" controls-position="right" class="line-num-input" placeholder="长" />
+                <el-input-number v-model="row.widthCm" :min="0" :precision="1" :step="0.1" size="small" controls-position="right" class="line-num-input" placeholder="宽" />
               </template>
             </el-table-column>
-            <el-table-column label="高(cm)" width="118" align="center">
+            <el-table-column label="高(cm)" width="128" align="center">
               <template #default="{ row }">
-                <el-input-number v-model="row.heightCm" :min="0" :precision="1" :step="0.1" size="small" controls-position="right" class="line-num-input" placeholder="长" />
+                <el-input-number v-model="row.heightCm" :min="0" :precision="1" :step="0.1" size="small" controls-position="right" class="line-num-input" placeholder="高" />
               </template>
             </el-table-column>
-            <el-table-column label="重量(kg)" width="118" align="center">
+            <el-table-column label="重量(kg)" width="128" align="center">
               <template #default="{ row }">
                 <el-input-number v-model="row.weightKg" :min="0" :precision="3" :step="0.01" size="small" controls-position="right" class="line-num-input" placeholder="重量" />
               </template>
@@ -1112,6 +1193,7 @@ async function handleAttachmentFile(e: Event) {
               </template>
             </el-table-column>
           </el-table>
+          </div>
           <el-empty v-else :description="createForm.logisticsWhCode ? '点击「+ 添加 SKU」从本仓可发库存选择' : '请先选择始发物流仓'" :image-size="64" />
 
           <div class="inbound-summary">
@@ -1472,13 +1554,34 @@ async function handleAttachmentFile(e: Event) {
 }
 
 .sku-hint { font-size: 12px; color: #8b95a8; margin: 0 0 10px; }
-.lines-table { width: 100%; }
+.lines-table-wrap {
+  overflow-x: auto;
+  margin-bottom: 4px;
+}
+.lines-table { width: 100%; min-width: 1580px; }
 .num-cell { display: flex; flex-direction: column; align-items: stretch; gap: 4px; }
 .qty-cap-hint { font-size: 11px; color: #a39a8c; line-height: 1.2; }
-.lines-table :deep(.line-num-input) { width: 100%; min-width: 104px; }
-.lines-table :deep(.line-num-input .el-input__wrapper) { padding-left: 8px; padding-right: 32px; }
-.lines-table :deep(.line-num-input .el-input__inner) { text-align: left; }
+.lines-table :deep(.line-num-input) { width: 100%; min-width: 112px; }
+.lines-table :deep(.line-num-input .el-input__wrapper) { padding-left: 8px; padding-right: 36px; }
+.lines-table :deep(.line-num-input .el-input__inner) { text-align: left; min-width: 64px; }
 .lines-table :deep(.el-table__cell) { padding: 8px 6px; }
+.inbound-sku-select-popper { min-width: 420px !important; }
+.sku-option-row {
+  display: grid;
+  grid-template-columns: minmax(96px, auto) minmax(120px, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  line-height: 1.4;
+}
+.sku-option-code { font-weight: 600; color: #2b2b2b; }
+.sku-option-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #5c5348;
+  font-size: 12px;
+}
+.sku-option-qty { color: #8b95a8; font-size: 12px; white-space: nowrap; }
 .carton-line-row { display: flex; align-items: center; gap: 4px; margin-bottom: 6px; flex-wrap: wrap; }
 
 .inbound-summary {

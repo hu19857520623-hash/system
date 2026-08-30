@@ -7,8 +7,7 @@ import { fmtTime, mapLead } from '@/api/mappers.ts'
 import { useListLoader, withAction } from '@/composables/useListLoader.ts'
 import { useServerPagination } from '@/composables/useTablePagination.ts'
 import { useAsyncIo } from '@/composables/useAsyncIo'
-import { downloadLeadsImportTemplate, LEADS_IMPORT_FIELDS } from '@/constants/importTemplates.ts'
-import ImportFieldLegend from '@/components/ImportFieldLegend.vue'
+import { downloadLeadsImportTemplate } from '@/constants/importTemplates.ts'
 import ListPagination from '@/components/ListPagination.vue'
 import DetailSheet from '@/components/ui/DetailSheet.vue'
 import { useAppStore } from '@/stores/app'
@@ -269,8 +268,6 @@ onMounted(async () => {
           </div>
         </div>
       </template>
-
-      <ImportFieldLegend title="线索导入字段" :fields="LEADS_IMPORT_FIELDS" compact />
 
       <div class="filter-bar">
         <el-input

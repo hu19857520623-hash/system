@@ -12,8 +12,7 @@ import { useAppStore } from '@/stores/app'
 import ListPagination from '@/components/ListPagination.vue'
 import DetailSheet from '@/components/ui/DetailSheet.vue'
 import { useAsyncIo } from '@/composables/useAsyncIo'
-import { downloadProductImportTemplate, PRODUCT_IMPORT_FIELDS } from '@/constants/importTemplates.ts'
-import ImportFieldLegend from '@/components/ImportFieldLegend.vue'
+import { downloadProductImportTemplate } from '@/constants/importTemplates.ts'
 import { printProductSkuLabels } from '@/features/labels/productLabelPrint.ts'
 
 const app = useAppStore()
@@ -425,8 +424,6 @@ async function printSkuLabels(items: Array<{ sku?: string; name?: string; barcod
           </div>
         </div>
       </template>
-
-      <ImportFieldLegend v-if="app.hasPerm('products.edit')" title="商品导入字段" :fields="PRODUCT_IMPORT_FIELDS" compact />
 
       <el-tabs v-model="filter" type="card">
         <el-tab-pane v-for="f in filters" :key="f.id" :label="f.label" :name="f.id" />
