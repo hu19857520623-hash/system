@@ -77,15 +77,15 @@ const { loading, items: leads, load } = useListLoader(async () => {
   const params: Record<string, string | number> = {
     page: page.value,
     pageSize: pageSize.value,
-    statuses: 'new,following',
   }
   const keyword = searchQ.value.trim()
   if (keyword) params.keyword = keyword
   const userId = app.authenticatedUser?.id
   const canViewAll = app.hasPerm('leads_pool.view_all')
-  if (tab.value === 'mine' && userId) params.assigneeId = userId
+  if (tab.value === 'mine' && userId) params.mine = '1'
   if (tab.value === 'follow') {
-    if (!canViewAll && userId) params.assigneeId = userId
+    params.statuses = 'new,following'
+    if (!canViewAll && userId) params.mine = '1'
     const range = followDateRange.value
     const hasFollowDate = Boolean(range && range.length === 2)
     if (followTimeField.value !== 'nextFollow' || !hasFollowDate) params.followDue = '1'
@@ -114,6 +114,7 @@ const { loading, items: leads, load } = useListLoader(async () => {
         channel: m.source || '—',
         owner: m.owner,
         ownerId: m.assigneeId,
+        followSales: m.followSales || '—',
         contact: m.contact || '—',
         status: r.status || 'following',
         situation: m.situation,
@@ -276,6 +277,7 @@ onMounted(load)
       <el-table-column prop="name" label="客户名" width="120" />
       <el-table-column prop="channel" label="渠道" width="80" />
       <el-table-column prop="contact" label="联系方式" width="130" />
+      <el-table-column prop="followSales" label="跟进销售" width="130" />
       <el-table-column prop="status" label="状态" width="120">
         <template #default="{ row }">
           <el-tag :type="(LEAD_STATUS_MAP[row.status]?.type as any) || 'info'" size="small">{{ LEAD_STATUS_MAP[row.status]?.label || row.status }}</el-tag>
@@ -296,7 +298,7 @@ onMounted(load)
     </el-table>
     <el-empty
       v-if="!loading && !leads.length"
-      :description="tab === 'follow' ? (followDateRange ? '该时间范围内暂无待跟进线索' : '暂无到期待跟进线索') : '当前账号没有归属线索，可在线索池领取后跟进'"
+      :description="tab === 'follow' ? (followDateRange ? '该时间范围内暂无待跟进线索' : '暂无到期待跟进线索') : '当前账号没有可跟进的线索'"
     />
     <ListPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
   </el-card>

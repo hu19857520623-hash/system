@@ -2,7 +2,7 @@ import { Body, Controller, Delete, Get, Param, ParseIntPipe, Post, Put, Query, R
 import type { Response } from 'express'
 import { LeadsService } from './leads.service'
 import { LeadsListQueryDto } from './leads-list.query.dto'
-import { CurrentUser } from '../../common/decorators/current-user.decorator'
+import { CurrentUser, type AuthUser } from '../../common/decorators/current-user.decorator'
 import { RequireAnyPerm, RequirePerms } from '../../common/decorators/require-perms.decorator'
 import { CreateCustomerDto } from '../customers/dto/customer.dto'
 
@@ -18,8 +18,8 @@ export class LeadsController {
 
   @RequireAnyPerm('leads_pool.view', 'leads_deals.view', 'leads_follow.view')
   @Get()
-  list(@Query() q: LeadsListQueryDto) {
-    return this.service.list(q)
+  list(@Query() q: LeadsListQueryDto, @CurrentUser() user: AuthUser) {
+    return this.service.list(q, user)
   }
 
   @RequirePerms('leads_pool.create')

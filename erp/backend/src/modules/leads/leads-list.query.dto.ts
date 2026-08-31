@@ -67,4 +67,9 @@ export class LeadsListQueryDto extends PaginationDto {
   @IsOptional()
   @IsString()
   followSales?: string
+
+  /** 我的跟进：归属我 或 跟进销售匹配当前登录用户（服务端按 JWT 计算，忽略客户端 assigneeId） */
+  @IsOptional()
+  @IsString()
+  mine?: string
 }

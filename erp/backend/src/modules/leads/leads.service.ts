@@ -4,7 +4,8 @@ import { PrismaService } from '../../common/prisma/prisma.service'
 import { FileStoreService } from '../../common/file-store.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
 import { parseLeadsImportCsv } from './leads-import.util'
-import { resolveFollowSales } from './leads-follow-sales.util'
+import { followSalesMatchTokens, resolveFollowSales } from './leads-follow-sales.util'
+import type { AuthUser } from '../../common/decorators/current-user.decorator'
 import {
   LEAD_ASSIGNEE_ROLE_CODES,
   LEAD_SELF_ASSIGN_ROLE_CODES,
@@ -56,7 +57,9 @@ export class LeadsService {
       latestFollowAtFrom?: string
       latestFollowAtTo?: string
       followSales?: string
+      mine?: string
     },
+    currentUser?: AuthUser,
   ) {
     const { page, pageSize } = getPagination(q)
     const where: any = {}
@@ -67,7 +70,19 @@ export class LeadsService {
       .filter(Boolean)
     if (statuses.length) where.status = { in: statuses }
     else if (q.status) where.status = q.status
-    if (q.assigneeId) where.assigneeId = BigInt(q.assigneeId)
+    const mine = q.mine === '1' || q.mine === 'true'
+    if (mine) {
+      if (!currentUser?.userId) throw new BadRequestException('未登录')
+      const tokens = followSalesMatchTokens(currentUser)
+      and.push({
+        OR: [
+          { assigneeId: BigInt(currentUser.userId) },
+          ...tokens.map((token) => ({ followSales: { contains: token } })),
+        ],
+      })
+    } else if (q.assigneeId) {
+      where.assigneeId = BigInt(q.assigneeId)
+    }
     if (q.source) where.source = q.source
     if (q.followSales === '__empty__') {
       and.push({

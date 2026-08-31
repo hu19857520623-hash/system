@@ -11,3 +11,39 @@ export function parseFollowSalesFromRemark(remark?: string | null): string {
 export function resolveFollowSales(followSales?: string | null, remark?: string | null): string {
   return String(followSales || '').trim() || parseFollowSalesFromRemark(remark)
 }
+
+const MIN_ASCII_TOKEN_LEN = 3
+const MIN_TOKEN_LEN = 2
+
+/** 用当前用户的姓名/账号去匹配「跟进销售」字段（含「尚彩云, Ronan(Ronan)」这类多人写法）。 */
+export function followSalesMatchTokens(user: {
+  username?: string | null
+  realName?: string | null
+}): string[] {
+  const seen = new Set<string>()
+  const tokens: string[] = []
+  for (const raw of [user.realName, user.username]) {
+    const token = String(raw || '').trim()
+    if (!isUsableFollowSalesToken(token)) continue
+    const key = token.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    tokens.push(token)
+  }
+  return tokens
+}
+
+export function followSalesMatchesUser(
+  followSales: string | null | undefined,
+  user: { username?: string | null; realName?: string | null },
+): boolean {
+  const text = String(followSales || '').toLowerCase()
+  if (!text) return false
+  return followSalesMatchTokens(user).some((token) => text.includes(token.toLowerCase()))
+}
+
+function isUsableFollowSalesToken(token: string): boolean {
+  if (token.length < MIN_TOKEN_LEN) return false
+  if (/^[a-zA-Z0-9._-]+$/.test(token) && token.length < MIN_ASCII_TOKEN_LEN) return false
+  return true
+}
