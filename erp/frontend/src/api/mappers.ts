@@ -13,6 +13,32 @@ function parseFollowSalesFromRemark(remark?: string | null): string {
   return ''
 }
 
+export function looksLikeLeadPhone(raw?: string | null): boolean {
+  const digits = String(raw || '').replace(/[\s\-()+]/g, '')
+  return /^1[3-9]\d{9}$/.test(digits) || /^0\d{10,11}$/.test(digits) || /^\+?27\d{8,10}$/.test(digits)
+}
+
+/** 线索池把姓名 / 微信 / 电话合成一列展示，避免和客户名称重复。 */
+export function formatLeadContact(row: {
+  contactName?: string | null
+  contactPhone?: string | null
+  companyName?: string | null
+  company?: string | null
+}): string {
+  const company = String(row.companyName || row.company || '').trim()
+  const uniq: string[] = []
+  for (const raw of [row.contactName, row.contactPhone]) {
+    const value = String(raw || '').trim()
+    if (!value || uniq.includes(value)) continue
+    uniq.push(value)
+  }
+  if (uniq.length > 1) {
+    const withoutCompany = uniq.filter((value) => value !== company)
+    if (withoutCompany.length) return withoutCompany.join(' / ')
+  }
+  return uniq.join(' / ')
+}
+
 export function fmtTime(d: string | Date | null | undefined): string {
   if (!d) return ''
   const dt = typeof d === 'string' ? new Date(d) : d
@@ -313,7 +339,7 @@ export function mapLead(row: any) {
     id: row.id,
     leadNo: row.leadNo,
     company: row.companyName,
-    contact: row.contactName || '',
+    contact: formatLeadContact(row),
     phone: row.contactPhone || row.phone || '',
     source: row.source || '',
     status: statusMap[row.status] || row.status,

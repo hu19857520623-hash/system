@@ -3,7 +3,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { leadApi } from '@/api/client.js'
-import { fmtTime, mapLead } from '@/api/mappers.ts'
+import { fmtTime, mapLead, formatLeadContact, looksLikeLeadPhone } from '@/api/mappers.ts'
 import { useListLoader, withAction } from '@/composables/useListLoader.ts'
 import { useServerPagination } from '@/composables/useTablePagination.ts'
 import { useAsyncIo } from '@/composables/useAsyncIo'
@@ -55,7 +55,6 @@ const leads = computed(() =>
     ...l,
     id: l.leadNo,
     assignee: l.owner,
-    phone: l.phone || l._raw?.contactPhone || '',
     tone: l.statusKey === 'deal' ? 'ok' : l.statusKey === 'following' || l.statusKey === 'recall' ? 'warn' : 'info',
   })),
 )
@@ -82,7 +81,6 @@ const newLead = ref({
   leadNo: '',
   company: '',
   contact: '',
-  phone: '',
   source: 'Takealot',
   assigneeId: null as number | null,
   followSales: '',
@@ -144,7 +142,6 @@ function openNewLead() {
     leadNo: '',
     company: '',
     contact: '',
-    phone: '',
     source: 'Takealot',
     assigneeId: defaultAssigneeId(),
     followSales: '',
@@ -163,10 +160,11 @@ async function submitNewLead() {
     return
   }
   const ok = await withAction(async () => {
+    const contact = newLead.value.contact.trim()
     const payload: Record<string, unknown> = {
       companyName: newLead.value.company,
-      contactName: newLead.value.contact,
-      contactPhone: newLead.value.phone,
+      contactName: contact,
+      contactPhone: looksLikeLeadPhone(contact) ? contact : undefined,
       source: newLead.value.source,
       assigneeId: newLead.value.assigneeId,
       followSales: newLead.value.followSales.trim() || undefined,
@@ -371,8 +369,9 @@ onMounted(async () => {
           </template>
         </el-table-column>
         <el-table-column prop="company" label="客户名称" min-width="180" />
-        <el-table-column prop="contact" label="联系方式" width="120" />
-        <el-table-column prop="phone" label="电话" width="160" />
+        <el-table-column label="联系方式" min-width="160">
+          <template #default="{ row }">{{ row.contact || '—' }}</template>
+        </el-table-column>
         <el-table-column prop="source" label="来源" width="80" />
         <el-table-column prop="status" label="状态" width="120">
           <template #default="{ row }">
@@ -419,7 +418,7 @@ onMounted(async () => {
         <DetailSheet
           :kicker="detailData.leadNo"
           :title="detailData.companyName || '未命名客户'"
-          :subtitle="[detailData.contactName, detailData.contactPhone, detailData.source].filter(Boolean).join(' · ')"
+          :subtitle="[formatLeadContact(detailData), detailData.source].filter(Boolean).join(' · ')"
         >
           <template #status>
             <el-tag size="small">{{ LEAD_STATUS_LABELS[detailData.status] || detailData.status || '—' }}</el-tag>
@@ -433,8 +432,7 @@ onMounted(async () => {
           <el-descriptions-item label="客户名称">{{ detailData.companyName || '—' }}</el-descriptions-item>
           <el-descriptions-item label="归属运营">{{ detailData.assigneeName || '未分配' }}</el-descriptions-item>
           <el-descriptions-item label="跟进销售">{{ detailData.followSales || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="联系方式">{{ detailData.contactName || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="电话">{{ detailData.contactPhone || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="联系方式">{{ formatLeadContact(detailData) || '—' }}</el-descriptions-item>
           <el-descriptions-item label="邮箱">{{ detailData.email || '—' }}</el-descriptions-item>
           <el-descriptions-item label="来源">{{ detailData.source || '—' }}</el-descriptions-item>
           <el-descriptions-item label="创建时间">{{ fmtTime(detailData.createdAt) || '—' }}</el-descriptions-item>
@@ -513,9 +511,6 @@ onMounted(async () => {
       </el-form-item>
       <el-form-item label="联系方式" required>
         <el-input v-model="newLead.contact" placeholder="姓名 / 微信 / 手机均可" />
-      </el-form-item>
-      <el-form-item label="电话（选填）">
-        <el-input v-model="newLead.phone" placeholder="可再填一个电话号码" />
       </el-form-item>
       <el-form-item label="来源">
         <el-select v-model="newLead.source" style="width:100%">

@@ -708,7 +708,7 @@ model Lead {
   id           BigInt         @id @default(autoincrement())
   leadNo       String         @unique @map("lead_no") @db.VarChar(30)
   companyName  String         @map("company_name") @db.VarChar(200)
-  contactName  String?        @map("contact_name") @db.VarChar(50)
+  contactName  String?        @map("contact_name") @db.VarChar(100)
   contactPhone String?        @map("contact_phone") @db.VarChar(30)
   email        String?        @db.VarChar(100)
   source       String?        @db.VarChar(30)

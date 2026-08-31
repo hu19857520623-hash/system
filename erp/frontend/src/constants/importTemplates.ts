@@ -66,7 +66,7 @@ export const LEADS_IMPORT_FIELDS: ImportFieldDef[] = [
   { key: 'leadNo', label: '线索编号', required: false, hint: '留空自动生成' },
   { key: 'company', label: '客户名称', required: true },
   { key: 'contact', label: '联系方式', required: true, hint: '姓名 / 微信 / 手机均可；兼容旧表头「联系人」' },
-  { key: 'phone', label: '电话', required: false },
+  { key: 'phone', label: '电话', required: false, hint: '可选；与联系方式重复时可留空' },
   { key: 'source', label: '来源', required: false, hint: '默认 Takealot' },
   { key: 'assignee', label: '归属运营', required: false, hint: '用户名或姓名；留空则当前登录用户' },
   { key: 'followSales', label: '跟进销售', required: false, hint: '跟进该线索的销售姓名' },

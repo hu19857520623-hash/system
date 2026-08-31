@@ -114,7 +114,7 @@ const { loading, items: leads, load } = useListLoader(async () => {
         channel: m.source || '—',
         owner: m.owner,
         ownerId: m.assigneeId,
-        contact: [r.contactName, r.contactPhone].filter(Boolean).join(' / ') || '—',
+        contact: m.contact || '—',
         status: r.status || 'following',
         situation: m.situation,
         remark: r.remark || '—',
