@@ -133,13 +133,13 @@ export class LeadsService {
 
     const includeDeals =
       q.status === 'deal' || Boolean(q.dealStatus || q.shopType || q.dealDateFrom || q.dealDateTo)
-    const findArgs: Parameters<typeof this.prisma.lead.findMany>[0] = {
+    const findArgs = {
       where,
       skip: (page - 1) * pageSize,
       take: pageSize,
-      orderBy: { id: 'desc' },
+      orderBy: { id: 'desc' as const },
       include: {
-        followUps: { orderBy: { id: 'desc' }, take: 1 },
+        followUps: { orderBy: { id: 'desc' as const }, take: 1 },
         ...(includeDeals
           ? {
               deals: {
