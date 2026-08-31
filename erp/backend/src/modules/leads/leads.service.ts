@@ -58,6 +58,7 @@ export class LeadsService {
       latestFollowAtTo?: string
       followSales?: string
       mine?: string
+      followMine?: string
     },
     currentUser?: AuthUser,
   ) {
@@ -71,20 +72,24 @@ export class LeadsService {
     if (statuses.length) where.status = { in: statuses }
     else if (q.status) where.status = q.status
     const mine = q.mine === '1' || q.mine === 'true'
+    const followMine = q.followMine === '1' || q.followMine === 'true'
     if (mine) {
       if (!currentUser?.userId) throw new BadRequestException('未登录')
-      const tokens = followSalesMatchTokens(currentUser)
-      and.push({
-        OR: [
-          { assigneeId: BigInt(currentUser.userId) },
-          ...tokens.map((token) => ({ followSales: { contains: token } })),
-        ],
-      })
+      where.assigneeId = BigInt(currentUser.userId)
     } else if (q.assigneeId) {
       where.assigneeId = BigInt(q.assigneeId)
     }
     if (q.source) where.source = q.source
-    if (q.followSales === '__empty__') {
+    if (followMine) {
+      if (!currentUser?.userId) throw new BadRequestException('未登录')
+      const tokens = followSalesMatchTokens(currentUser)
+      if (!tokens.length) and.push({ id: BigInt(0) })
+      else {
+        and.push({
+          OR: tokens.map((token) => ({ followSales: { contains: token } })),
+        })
+      }
+    } else if (q.followSales === '__empty__') {
       and.push({
         OR: [{ followSales: null }, { followSales: '' }],
       })

@@ -13,6 +13,11 @@ function parseFollowSalesFromRemark(remark?: string | null): string {
   return ''
 }
 
+function parseLeadAcqFromRemark(remark?: string | null): string {
+  const matched = String(remark || '').match(/获客:([^|]+)/)
+  return matched?.[1]?.trim() || ''
+}
+
 export function looksLikeLeadPhone(raw?: string | null): boolean {
   const digits = String(raw || '').replace(/[\s\-()+]/g, '')
   return /^1[3-9]\d{9}$/.test(digits) || /^0\d{10,11}$/.test(digits) || /^\+?27\d{8,10}$/.test(digits)
@@ -342,6 +347,7 @@ export function mapLead(row: any) {
     contact: formatLeadContact(row),
     phone: row.contactPhone || row.phone || '',
     source: row.source || '',
+    acq: parseLeadAcqFromRemark(row.remark),
     status: statusMap[row.status] || row.status,
     statusKey: row.status,
     owner: row.assigneeName || row.ownerName || '—',
