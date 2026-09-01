@@ -5,6 +5,14 @@ import { FileStoreService } from '../../common/file-store.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
 import { parseLeadsImportCsv } from './leads-import.util'
 import { followSalesMatchTokens, resolveFollowSales } from './leads-follow-sales.util'
+import {
+  buildLeadContactIndex,
+  collectLeadContactKeys,
+  findIndexedLeadContactConflict,
+  leadContactDuplicateMessage,
+  rememberLeadContacts,
+  type LeadContactOwner,
+} from './leads-contact.util'
 import type { AuthUser } from '../../common/decorators/current-user.decorator'
 import {
   LEAD_ASSIGNEE_ROLE_CODES,
@@ -287,7 +295,7 @@ export class LeadsService {
     }
   }
 
-  async create(data: any, operatorId?: number) {
+  async create(data: any, operatorId?: number, contactIndex?: Map<string, LeadContactOwner>) {
     const operator = operatorId
       ? await this.prisma.sysUser.findUnique({
           where: { id: BigInt(operatorId) },
@@ -310,12 +318,19 @@ export class LeadsService {
     ) {
       throw new BadRequestException('归属运营无效或已停用')
     }
-    return this.prisma.lead.create({
+    const contactName = String(data.contactName || '').trim()
+    const contactPhone = String(data.contactPhone || '').trim()
+    if (!collectLeadContactKeys(contactName, contactPhone).length) {
+      throw new BadRequestException('请填写联系方式')
+    }
+    await this.assertLeadContactUnique({ contactName, contactPhone, index: contactIndex })
+    const leadNo = data.leadNo || 'LD-' + Date.now().toString().slice(-8)
+    const created = await this.prisma.lead.create({
       data: {
-        leadNo: data.leadNo || 'LD-' + Date.now().toString().slice(-8),
+        leadNo,
         companyName: data.companyName,
-        contactName: data.contactName,
-        contactPhone: data.contactPhone,
+        contactName,
+        contactPhone: contactPhone || undefined,
         email: data.email,
         source: data.source,
         status: data.status || 'new',
@@ -324,11 +339,29 @@ export class LeadsService {
         followSales: String(data.followSales || '').trim() || undefined,
       },
     })
+    if (contactIndex) {
+      rememberLeadContacts(contactIndex, contactName, contactPhone, {
+        leadNo: created.leadNo,
+        companyName: created.companyName,
+      })
+    }
+    return created
   }
 
   async update(id: number, data: any) {
-    await this.detail(id)
+    const existing = await this.detail(id)
     const { followUps: _followUps, deals: _deals, ...rest } = data
+    if (rest.contactName !== undefined || rest.contactPhone !== undefined) {
+      const contactName =
+        rest.contactName !== undefined ? String(rest.contactName || '').trim() : existing.contactName
+      const contactPhone =
+        rest.contactPhone !== undefined ? String(rest.contactPhone || '').trim() : existing.contactPhone
+      if (collectLeadContactKeys(contactName, contactPhone).length) {
+        await this.assertLeadContactUnique({ contactName, contactPhone, excludeId: id })
+      }
+      if (rest.contactName !== undefined) rest.contactName = contactName || null
+      if (rest.contactPhone !== undefined) rest.contactPhone = contactPhone || null
+    }
     return this.prisma.lead.update({ where: { id: BigInt(id) }, data: rest })
   }
 
@@ -542,10 +575,19 @@ export class LeadsService {
       if (u.realName) assigneeByKey.set(u.realName.toLowerCase(), u.id)
     }
 
+    const existingContacts = await this.prisma.lead.findMany({
+      select: { contactName: true, contactPhone: true, leadNo: true, companyName: true },
+    })
+    const contactIndex = buildLeadContactIndex(existingContacts)
+
     let ok = 0
     let fail = 0
     for (const row of parsed) {
       try {
+        if (findIndexedLeadContactConflict(contactIndex, row.contactName, row.contactPhone)) {
+          fail++
+          continue
+        }
         let assigneeId: bigint | undefined
         if (row.assigneeKey) {
           assigneeId = assigneeByKey.get(row.assigneeKey.toLowerCase())
@@ -559,22 +601,51 @@ export class LeadsService {
           fail++
           continue
         }
-        await this.create({
-          leadNo: row.leadNo,
-          companyName: row.companyName,
-          contactName: row.contactName,
-          contactPhone: row.contactPhone,
-          source: row.source,
-          remark: row.remark,
-          assigneeId: Number(assigneeId),
-          followSales: row.followSales,
-        })
+        await this.create(
+          {
+            leadNo: row.leadNo,
+            companyName: row.companyName,
+            contactName: row.contactName,
+            contactPhone: row.contactPhone,
+            source: row.source,
+            remark: row.remark,
+            assigneeId: Number(assigneeId),
+            followSales: row.followSales,
+          },
+          defaultAssigneeId,
+          contactIndex,
+        )
         ok++
       } catch {
         fail++
       }
     }
     return { imported: ok, failed: fail }
+  }
+
+  private async assertLeadContactUnique(opts: {
+    contactName?: string | null
+    contactPhone?: string | null
+    excludeId?: number
+    index?: Map<string, LeadContactOwner>
+  }) {
+    const keys = collectLeadContactKeys(opts.contactName, opts.contactPhone)
+    if (!keys.length) return
+    if (opts.index) {
+      const conflict = findIndexedLeadContactConflict(opts.index, opts.contactName, opts.contactPhone)
+      if (conflict) throw new BadRequestException(leadContactDuplicateMessage(conflict))
+      return
+    }
+    const rows = await this.prisma.lead.findMany({
+      where: opts.excludeId ? { id: { not: BigInt(opts.excludeId) } } : undefined,
+      select: { contactName: true, contactPhone: true, leadNo: true, companyName: true },
+    })
+    const conflict = findIndexedLeadContactConflict(
+      buildLeadContactIndex(rows),
+      opts.contactName,
+      opts.contactPhone,
+    )
+    if (conflict) throw new BadRequestException(leadContactDuplicateMessage(conflict))
   }
 
   /** 获客报表汇总 */

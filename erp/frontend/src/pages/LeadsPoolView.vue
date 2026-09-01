@@ -510,7 +510,7 @@ onMounted(async () => {
         <el-input v-model="newLead.company" placeholder="输入客户名称" />
       </el-form-item>
       <el-form-item label="联系方式" required>
-        <el-input v-model="newLead.contact" placeholder="姓名 / 微信 / 手机均可" />
+        <el-input v-model="newLead.contact" maxlength="100" placeholder="姓名 / 微信 / 手机，不可与已有线索重复" />
       </el-form-item>
       <el-form-item label="来源">
         <el-select v-model="newLead.source" style="width:100%">
