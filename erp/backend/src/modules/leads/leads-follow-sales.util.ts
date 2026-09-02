@@ -1,3 +1,17 @@
+/** 跟进销售展示名：姓名与账号不同时写成「姓名(账号)」。 */
+export function formatFollowSalesLabel(user: {
+  username?: string | null
+  realName?: string | null
+  name?: string | null
+}): string {
+  const real = String(user.realName || user.name || '').trim()
+  const username = String(user.username || '').trim()
+  if (real && username && real.toLowerCase() !== username.toLowerCase()) {
+    return `${real}(${username})`
+  }
+  return real || username
+}
+
 /** 从导入备注解析跟进销售：优先「再对接」，否则「对接」。 */
 export function parseFollowSalesFromRemark(remark?: string | null): string {
   const text = String(remark || '')
@@ -59,4 +73,43 @@ function isUsableFollowSalesToken(token: string): boolean {
   if (token.length < MIN_TOKEN_LEN) return false
   if (/^[a-zA-Z0-9._-]+$/.test(token) && token.length < MIN_ASCII_TOKEN_LEN) return false
   return true
+}
+
+function followSalesAliasSet(user: {
+  username?: string | null
+  realName?: string | null
+  name?: string | null
+}): Set<string> {
+  const real = String(user.realName || user.name || '').trim()
+  const username = String(user.username || '').trim()
+  const label = formatFollowSalesLabel(user)
+  return new Set(
+    [label, real, username, real ? `${real}@微信` : '', username ? `${username}@微信` : '']
+      .map((item) => item.trim().toLowerCase())
+      .filter(Boolean),
+  )
+}
+
+/** 把同一系统账号的跟进销售别名收成「姓名(账号)」。多人写法保持原样。 */
+export function canonicalizeFollowSales(
+  followSales: string | null | undefined,
+  users: { username?: string | null; realName?: string | null; name?: string | null }[],
+): string {
+  const text = String(followSales || '').trim()
+  if (!text) return ''
+  if (/[,，]/.test(text)) return text
+  const lower = text.toLowerCase()
+  for (const user of users) {
+    if (followSalesAliasSet(user).has(lower)) return formatFollowSalesLabel(user) || text
+  }
+  const wrapped = text.match(/^(.+?)\((.+)\)$/)
+  if (wrapped) {
+    const name = wrapped[1].trim().toLowerCase()
+    const matched = users.filter((user) => {
+      const real = String(user.realName || user.name || '').trim().toLowerCase()
+      return Boolean(real) && real === name
+    })
+    if (matched.length === 1) return formatFollowSalesLabel(matched[0]) || text
+  }
+  return text
 }

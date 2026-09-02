@@ -169,6 +169,11 @@ jobs:
           test -f "$follow_sales_sql" || { echo "Missing $follow_sales_sql"; exit 1; }
           cat "$follow_sales_sql" | docker compose exec -T mysql mysql -uroot -p"$mysql_pw" --default-character-set=utf8mb4 --batch takealot_erp
 
+          echo '=== Unify lead follow-sales aliases ==='
+          unify_sales_sql="${PWD}/backend/prisma/scripts/unify_lead_follow_sales_aliases.sql"
+          test -f "$unify_sales_sql" || { echo "Missing $unify_sales_sql"; exit 1; }
+          cat "$unify_sales_sql" | docker compose exec -T mysql mysql -uroot -p"$mysql_pw" --default-character-set=utf8mb4 --batch takealot_erp
+
           echo '=== Build store-monitor ==='
           cd /opt/system/store-monitor
           docker build -t takealot/store-monitor:production . </dev/null

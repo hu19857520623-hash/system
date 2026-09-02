@@ -28,6 +28,16 @@ function canFollowFromPool(statusKey: string, followSales?: string) {
   return statusKey === 'following' && !String(followSales || '').trim()
 }
 
+function formatFollowSalesLabel(user?: { name?: string | null; realName?: string | null; username?: string | null } | null) {
+  if (!user) return ''
+  const real = String(user.realName || user.name || '').trim()
+  const username = String(user.username || '').trim()
+  if (real && username && real.toLowerCase() !== username.toLowerCase()) {
+    return `${real}(${username})`
+  }
+  return real || username
+}
+
 const app = useAppStore()
 const router = useRouter()
 const { importCsv } = useAsyncIo()
@@ -202,12 +212,55 @@ async function submitNewLead() {
   if (ok) dialogVisible.value = false
 }
 
+function currentFollowSalesLabel() {
+  const current = app.authenticatedUser
+  if (!current) return ''
+  return formatFollowSalesLabel({
+    name: current.realName || current.username,
+    username: current.username,
+  })
+}
+
+function canonicalizeFollowSalesOption(value: string) {
+  const text = String(value || '').trim()
+  if (!text || /[,，]/.test(text)) return text
+  const lower = text.toLowerCase()
+  const current = app.authenticatedUser
+  const users = [
+    ...salesUsers.value,
+    ...(current
+      ? [{ name: current.realName || current.username, username: current.username }]
+      : []),
+  ]
+  for (const user of users) {
+    const label = formatFollowSalesLabel(user)
+    const aliases = [label, user.name, user.username, user.name ? `${user.name}@微信` : '', user.username ? `${user.username}@微信` : '']
+      .map((item) => String(item || '').trim().toLowerCase())
+      .filter(Boolean)
+    if (aliases.includes(lower)) return label || text
+  }
+  const wrapped = text.match(/^(.+?)\((.+)\)$/)
+  if (wrapped) {
+    const name = wrapped[1].trim().toLowerCase()
+    const matched = users.filter((user) => String(user.name || '').trim().toLowerCase() === name)
+    if (matched.length === 1) return formatFollowSalesLabel(matched[0]) || text
+  }
+  return text
+}
+
+function previousFollowSalesOf(row: any) {
+  const value = String(row?.followSales || '').trim()
+  return value && value !== '—' ? value : ''
+}
+
 async function openFollow(row: any) {
   followTarget.value = row
+  const currentLabel = currentFollowSalesLabel()
+  const previous = previousFollowSalesOf(row)
   followForm.value = {
-    followSales: row.followSales && row.followSales !== '—' ? row.followSales : '',
+    followSales: currentLabel || previous,
     followType: 'phone',
-    content: '开始跟进',
+    content: row.statusKey === 'recall' ? '再次跟进' : '开始跟进',
   }
   followDialogVisible.value = true
 }
@@ -218,7 +271,8 @@ async function submitPoolFollow() {
     ElMessage.warning('请选择或填写跟进销售')
     return
   }
-  const content = followForm.value.content.trim() || '开始跟进'
+  const content = followForm.value.content.trim()
+    || (followTarget.value?.statusKey === 'recall' ? '再次跟进' : '开始跟进')
   const leadId = followTarget.value?._raw?.id ?? followTarget.value?.id
   if (leadId == null) {
     ElMessage.error('线索 ID 缺失，请刷新后重试')
@@ -233,7 +287,7 @@ async function submitPoolFollow() {
         followSales,
       })
       await Promise.all([load(), loadFollowSalesOptions()])
-    }, `已开始跟进「${followTarget.value?.company || ''}」，正在打开待跟进`)
+    }, `已改由 ${followSales} 跟进「${followTarget.value?.company || ''}」，正在打开待跟进`)
     if (ok) {
       followDialogVisible.value = false
       await router.push('/leads/follow')
@@ -341,12 +395,24 @@ async function detail(row: any) {
 }
 
 watch([page, pageSize], load)
+const previousFollowSales = computed(() => previousFollowSalesOf(followTarget.value))
 const createFollowSalesOptions = computed(() => {
-  const names = new Set(followSalesOptions.value)
+  const names = new Set<string>()
+  const currentLabel = currentFollowSalesLabel()
+  if (currentLabel) names.add(currentLabel)
   for (const user of salesUsers.value) {
-    if (user.name) names.add(user.name)
+    const label = formatFollowSalesLabel(user)
+    if (label) names.add(label)
   }
-  return [...names].sort((a, b) => a.localeCompare(b, 'zh-CN'))
+  for (const raw of followSalesOptions.value) {
+    const name = canonicalizeFollowSalesOption(raw)
+    if (name) names.add(name)
+  }
+  const previous = canonicalizeFollowSalesOption(previousFollowSales.value) || previousFollowSales.value
+  if (previous) names.add(previous)
+  const sorted = [...names].sort((a, b) => a.localeCompare(b, 'zh-CN'))
+  if (!currentLabel) return sorted
+  return [currentLabel, ...sorted.filter((name) => name !== currentLabel)]
 })
 
 onMounted(async () => {
@@ -403,7 +469,7 @@ onMounted(async () => {
           @change="applyFilters"
         >
           <el-option label="未填写" value="__empty__" />
-          <el-option v-for="name in followSalesOptions" :key="name" :label="name" :value="name" />
+          <el-option v-for="name in createFollowSalesOptions" :key="name" :label="name" :value="name" />
         </el-select>
         <el-date-picker
           v-model="createdRange"
@@ -560,16 +626,19 @@ onMounted(async () => {
 
   <el-dialog
     v-model="followDialogVisible"
-    :title="`开始跟进 · ${followTarget?.company || ''}`"
+    :title="`${followTarget?.statusKey === 'recall' ? '再次跟进' : '开始跟进'} · ${followTarget?.company || ''}`"
     width="480px"
     destroy-on-close
     append-to-body
   >
     <el-form label-width="92px">
+      <el-form-item v-if="previousFollowSales && previousFollowSales !== followForm.followSales" label="上次销售">
+        <span class="follow-previous-sales">{{ previousFollowSales }}</span>
+      </el-form-item>
       <el-form-item label="跟进销售" required>
         <el-select
           v-model="followForm.followSales"
-          placeholder="请选择或输入跟进销售"
+          placeholder="请选择本次跟进的销售"
           style="width:100%"
           filterable
           allow-create
@@ -577,6 +646,7 @@ onMounted(async () => {
         >
           <el-option v-for="name in createFollowSalesOptions" :key="name" :label="name" :value="name" />
         </el-select>
+        <p class="follow-sales-hint">换账号跟进请改成当前销售，确认后线索进入该销售的待跟进</p>
       </el-form-item>
       <el-form-item label="跟进方式">
         <el-radio-group v-model="followForm.followType">
@@ -594,7 +664,7 @@ onMounted(async () => {
           :rows="3"
           maxlength="1000"
           show-word-limit
-          placeholder="默认：开始跟进"
+          :placeholder="followTarget?.statusKey === 'recall' ? '默认：再次跟进' : '默认：开始跟进'"
         />
       </el-form-item>
     </el-form>
@@ -720,6 +790,15 @@ onMounted(async () => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.follow-previous-sales {
+  color: var(--el-text-color-regular);
+}
+.follow-sales-hint {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--el-text-color-secondary);
 }
 .follow-situation-meta {
   margin-top: 2px;

@@ -5,7 +5,9 @@ import { FileStoreService } from '../../common/file-store.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
 import { parseLeadsImportCsv } from './leads-import.util'
 import {
+  canonicalizeFollowSales,
   followSalesMatchTokens,
+  formatFollowSalesLabel,
   resolveAssigneeIdByFollowSales,
   resolveFollowSales,
 } from './leads-follow-sales.util'
@@ -255,7 +257,7 @@ export class LeadsService {
     const items = salesUsers.map(user => ({
       id: Number(user.id),
       username: user.username,
-      name: user.realName || user.username,
+      name: formatFollowSalesLabel(user) || user.realName || user.username,
       roleCode: user.roleCode,
       isCurrent: Number(user.id) === currentUserId,
     }))
@@ -267,7 +269,7 @@ export class LeadsService {
       items.unshift({
         id: currentUserId,
         username: currentUser.username,
-        name: currentUser.realName || currentUser.username,
+        name: formatFollowSalesLabel(currentUser) || currentUser.realName || currentUser.username,
         roleCode: currentUser.roleCode,
         isCurrent: true,
       })
@@ -276,15 +278,22 @@ export class LeadsService {
   }
 
   async listFollowSales() {
-    const rows = await this.prisma.lead.groupBy({
-      by: ['followSales'],
-      where: { followSales: { not: null } },
-      _count: { _all: true },
-    })
-    const items = rows
-      .map((row) => String(row.followSales || '').trim())
-      .filter(Boolean)
-      .sort((a, b) => a.localeCompare(b, 'zh-CN'))
+    const [rows, users] = await Promise.all([
+      this.prisma.lead.groupBy({
+        by: ['followSales'],
+        where: { followSales: { not: null } },
+        _count: { _all: true },
+      }),
+      this.prisma.sysUser.findMany({
+        where: { status: 1 },
+        select: { username: true, realName: true },
+      }),
+    ])
+    const items = [...new Set(
+      rows
+        .map((row) => canonicalizeFollowSales(row.followSales, users))
+        .filter(Boolean),
+    )].sort((a, b) => a.localeCompare(b, 'zh-CN'))
     return { items }
   }
 
@@ -362,6 +371,11 @@ export class LeadsService {
     }
     await this.assertLeadContactUnique({ contactName, contactPhone, index: contactIndex })
     const leadNo = data.leadNo || 'LD-' + Date.now().toString().slice(-8)
+    const followSalesUsers = await this.prisma.sysUser.findMany({
+      where: { status: 1 },
+      select: { username: true, realName: true },
+    })
+    const followSales = canonicalizeFollowSales(String(data.followSales || '').trim(), followSalesUsers) || undefined
     const created = await this.prisma.lead.create({
       data: {
         leadNo,
@@ -373,7 +387,7 @@ export class LeadsService {
         status: data.status || 'new',
         remark: data.remark,
         assigneeId: assignee.id,
-        followSales: String(data.followSales || '').trim() || undefined,
+        followSales,
       },
     })
     if (contactIndex) {
@@ -415,8 +429,16 @@ export class LeadsService {
       throw new BadRequestException('下次跟进时间格式无效')
     }
     const storedFollowSales = resolveFollowSales(lead.followSales, lead.remark)
-    const followSales = String(data.followSales || '').trim() || storedFollowSales
+    const users = await this.prisma.sysUser.findMany({
+      where: { status: 1 },
+      select: { id: true, username: true, realName: true, roleCode: true },
+    })
+    const followSales = canonicalizeFollowSales(
+      String(data.followSales || '').trim() || storedFollowSales,
+      users,
+    )
     if (!followSales) throw new BadRequestException('请填写跟进销售')
+    const followSalesChanged = followSales !== storedFollowSales
 
     const followUpStatuses = new Set(['recall', 'lost', 'nurture', 'hot', 'following'])
     const requestedStatus = String(data.status || '').trim() || 'following'
@@ -440,17 +462,14 @@ export class LeadsService {
     }
     if (requestedStatus === 'recall') {
       patch.assigneeId = null
-    } else if (!lead.assigneeId) {
-      if (data.assigneeId) {
-        patch.assigneeId = BigInt(Number(data.assigneeId))
-      } else {
-        const assignees = await this.prisma.sysUser.findMany({
-          where: { status: 1, roleCode: { in: [...LEAD_ASSIGNEE_ROLE_CODES] } },
-          select: { id: true, username: true, realName: true },
-        })
-        const matchedAssignee = resolveAssigneeIdByFollowSales(followSales, assignees)
-        if (matchedAssignee) patch.assigneeId = matchedAssignee
-      }
+    } else if (data.assigneeId) {
+      patch.assigneeId = BigInt(Number(data.assigneeId))
+    } else if (!lead.assigneeId || followSalesChanged) {
+      const assignees = users.filter((user) =>
+        LEAD_ASSIGNEE_ROLE_CODES.includes(user.roleCode as typeof LEAD_ASSIGNEE_ROLE_CODES[number]),
+      )
+      const matchedAssignee = resolveAssigneeIdByFollowSales(followSales, assignees)
+      if (matchedAssignee) patch.assigneeId = matchedAssignee
     }
     await this.prisma.lead.update({ where: { id: BigInt(id) }, data: patch })
     return fu
