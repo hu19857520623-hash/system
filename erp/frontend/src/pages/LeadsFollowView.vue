@@ -67,6 +67,7 @@ const followForm = ref({
 })
 
 const FOLLOW_STATUS_OPTIONS = [
+  { value: 'following', label: '跟进中' },
   { value: 'recall', label: '再次跟进' },
   { value: 'lost', label: '已流失' },
   { value: 'nurture', label: '暂无意向' },
@@ -157,11 +158,11 @@ function resetFollowFilters() {
   applyFilters()
 }
 
-function defaultFollowStatus(row: { status?: string }): FollowStatusValue | '' {
+function defaultFollowStatus(row: { status?: string }): FollowStatusValue {
   const current = row.status || ''
   return FOLLOW_STATUS_OPTIONS.some((item) => item.value === current)
     ? (current as FollowStatusValue)
-    : ''
+    : 'following'
 }
 
 function writeFollow(row: any) {
@@ -361,6 +362,7 @@ onMounted(load)
             {{ item.label }}
           </el-radio>
         </el-radio-group>
+        <p class="follow-status-hint">选「跟进中」留在待跟进；选「再次跟进」才退回线索池</p>
       </el-form-item>
       <el-form-item label="下一步计划">
         <el-input
@@ -426,4 +428,10 @@ onMounted(load)
 }
 .filter-status-field { width: 130px; }
 .filter-date { width: 260px; }
+.follow-status-hint {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--el-text-color-secondary);
+}
 </style>
