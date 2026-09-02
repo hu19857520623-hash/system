@@ -8,7 +8,6 @@ import {
   canonicalizeFollowSales,
   followSalesMatchTokens,
   formatFollowSalesLabel,
-  resolveAssigneeIdByFollowSales,
   resolveFollowSales,
 } from './leads-follow-sales.util'
 import { stripLeadRemarkImportPrefix } from './leads-remark.util'
@@ -411,7 +410,7 @@ export class LeadsService {
 
   async update(id: number, data: any) {
     const existing = await this.detail(id)
-    const { followUps: _followUps, deals: _deals, ...rest } = data
+    const { followUps: _followUps, deals: _deals, assigneeId: _assigneeId, ...rest } = data
     if (rest.contactName !== undefined || rest.contactPhone !== undefined) {
       const contactName =
         rest.contactName !== undefined ? String(rest.contactName || '').trim() : existing.contactName
@@ -448,7 +447,6 @@ export class LeadsService {
       users,
     )
     if (!followSales) throw new BadRequestException('请填写跟进销售')
-    const followSalesChanged = followSales !== storedFollowSales
 
     const followUpStatuses = new Set(['recall', 'lost', 'nurture', 'hot', 'following'])
     const requestedStatus = String(data.status || '').trim() || 'following'
@@ -466,22 +464,11 @@ export class LeadsService {
         operatorId: operatorId ? BigInt(operatorId) : undefined,
       },
     })
-    const patch: { status: string; assigneeId?: bigint | null; followSales: string } = {
-      status: requestedStatus,
-      followSales,
-    }
-    if (requestedStatus === 'recall') {
-      patch.assigneeId = null
-    } else if (data.assigneeId) {
-      patch.assigneeId = BigInt(Number(data.assigneeId))
-    } else if (!lead.assigneeId || followSalesChanged) {
-      const assignees = users.filter((user) =>
-        LEAD_ASSIGNEE_ROLE_CODES.includes(user.roleCode as typeof LEAD_ASSIGNEE_ROLE_CODES[number]),
-      )
-      const matchedAssignee = resolveAssigneeIdByFollowSales(followSales, assignees)
-      if (matchedAssignee) patch.assigneeId = matchedAssignee
-    }
-    await this.prisma.lead.update({ where: { id: BigInt(id) }, data: patch })
+    // 归属运营仅在创建时确定；写跟进/再次跟进只更新状态与跟进销售
+    await this.prisma.lead.update({
+      where: { id: BigInt(id) },
+      data: { status: requestedStatus, followSales },
+    })
     return fu
   }
 
@@ -500,7 +487,7 @@ export class LeadsService {
     })
     return this.prisma.lead.update({
       where: { id: BigInt(id) },
-      data: { status: 'recall', assigneeId: null },
+      data: { status: 'recall' },
     })
   }
 

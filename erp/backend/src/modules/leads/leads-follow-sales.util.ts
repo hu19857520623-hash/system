@@ -56,7 +56,7 @@ export function followSalesMatchesUser(
   return followSalesMatchTokens(user).some((token) => text.includes(token.toLowerCase()))
 }
 
-/** 按跟进销售姓名反查归属运营（用于认领线索时自动填 assigneeId）。 */
+/** 按跟进销售姓名反查系统用户（导入/工具脚本用，写跟进不会改归属运营）。 */
 export function resolveAssigneeIdByFollowSales(
   followSales: string | null | undefined,
   assignees: { id: bigint | number; username?: string | null; realName?: string | null }[],
