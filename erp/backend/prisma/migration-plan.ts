@@ -70,6 +70,7 @@ export const MANUAL_SQL_SCRIPTS = [
   'add_supplier_freight_bill_po_link.sql',
   'fix_lead_assignee_chenqizhen.sql',
   'fix_lead_empty_follow_sales.sql',
+  'fix_lead_missing_assignee.sql',
   'unify_lead_follow_sales_aliases.sql',
   'strip_lead_remark_import_prefix.sql',
   'migrate_customer_company_email.sql',
