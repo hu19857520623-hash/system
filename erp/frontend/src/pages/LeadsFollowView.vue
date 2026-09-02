@@ -103,7 +103,6 @@ const { loading, items: leads, load } = useListLoader(async () => {
   const keyword = searchQ.value.trim()
   if (keyword) params.keyword = keyword
   const userId = app.authenticatedUser?.id
-  const canViewAll = app.hasPerm('leads_pool.view_all')
   if (mode.value === 'mine' && userId) {
     // 我的线索：归属运营、尚未进入销售跟进（new）
     params.mine = '1'
@@ -112,7 +111,7 @@ const { loading, items: leads, load } = useListLoader(async () => {
   if (mode.value === 'follow') {
     const status = followStatusFilter.value
     params.statuses = status === 'deal' ? 'deal,won' : status || FOLLOW_LIST_STATUS_ALL
-    if (!canViewAll && userId) params.followMine = '1'
+    if (userId) params.followMine = '1'
     const range = followDateRange.value
     if (range && range.length === 2) {
       const [from, to] = range

@@ -105,11 +105,14 @@ export function canonicalizeFollowSales(
   const wrapped = text.match(/^(.+?)\((.+)\)$/)
   if (wrapped) {
     const name = wrapped[1].trim().toLowerCase()
-    const matched = users.filter((user) => {
+    const nick = wrapped[2].trim().toLowerCase()
+    const matchedByRealName = users.filter((user) => {
       const real = String(user.realName || user.name || '').trim().toLowerCase()
       return Boolean(real) && real === name
     })
-    if (matched.length === 1) return formatFollowSalesLabel(matched[0]) || text
+    if (matchedByRealName.length === 1) return formatFollowSalesLabel(matchedByRealName[0]) || text
+    const matchedByUsername = users.filter((user) => String(user.username || '').trim().toLowerCase() === nick)
+    if (matchedByUsername.length === 1) return formatFollowSalesLabel(matchedByUsername[0]) || text
   }
   return text
 }

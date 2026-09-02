@@ -109,13 +109,7 @@ export class LeadsService {
     if (q.source) where.source = q.source
     if (followMine) {
       if (!currentUser?.userId) throw new BadRequestException('未登录')
-      const tokens = followSalesMatchTokens(currentUser)
-      if (!tokens.length) and.push({ id: BigInt(0) })
-      else {
-        and.push({
-          OR: tokens.map((token) => ({ followSales: { contains: token } })),
-        })
-      }
+      and.push(await this.followSalesScope(currentUser.userId, currentUser))
     } else if (!mine && !q.assigneeId && currentUser?.userId && !canViewAllLeads) {
       // 销售待跟进列表：无 view_all 时强制按跟进销售隔离
       const activeFollowStatuses = new Set(['new', 'following', 'hot', 'nurture'])
@@ -126,13 +120,7 @@ export class LeadsService {
           : Boolean(q.followDue)
       if (scopedFollowList) {
         followMine = true
-        const tokens = followSalesMatchTokens(currentUser)
-        if (!tokens.length) and.push({ id: BigInt(0) })
-        else {
-          and.push({
-            OR: tokens.map((token) => ({ followSales: { contains: token } })),
-          })
-        }
+        and.push(await this.followSalesScope(currentUser.userId, currentUser))
       }
     } else if (q.followSales === '__empty__') {
       and.push({
@@ -206,33 +194,30 @@ export class LeadsService {
       },
     }
 
-    const [rows, total] = await Promise.all([
+    const [rows, total, followSalesUsers] = await Promise.all([
       this.prisma.lead.findMany(findArgs),
       this.prisma.lead.count({ where }),
+      this.prisma.sysUser.findMany({
+        where: { status: 1 },
+        select: { id: true, username: true, realName: true },
+      }),
     ])
-    const assigneeIds = [...new Set(rows.map((r) => r.assigneeId).filter(Boolean))] as bigint[]
     const customerIds = [...new Set(rows.map((r) => r.customerId).filter(Boolean))] as bigint[]
-    const [users, customerRows] = await Promise.all([
-      assigneeIds.length
-        ? this.prisma.sysUser.findMany({
-            where: { id: { in: assigneeIds } },
-            select: { id: true, realName: true, username: true },
-          })
-        : Promise.resolve([] as { id: bigint; realName: string | null; username: string }[]),
-      customerIds.length
-        ? this.prisma.customer.findMany({
-            where: { id: { in: customerIds } },
-            select: { id: true, customerCode: true, customerName: true },
-          })
-        : Promise.resolve([] as { id: bigint; customerCode: string; customerName: string }[]),
-    ])
-    const nameMap = new Map<number, string>(users.map((u) => [Number(u.id), u.realName || u.username]))
+    const customerRows = customerIds.length
+      ? await this.prisma.customer.findMany({
+          where: { id: { in: customerIds } },
+          select: { id: true, customerCode: true, customerName: true },
+        })
+      : []
+    const nameMap = new Map<number, string>(
+      followSalesUsers.map((u) => [Number(u.id), u.realName || u.username]),
+    )
     const customerMap = new Map(customerRows.map((c) => [Number(c.id), c] as const))
     const items = rows.map((r) => {
       const customer = r.customerId ? customerMap.get(Number(r.customerId)) : null
       return {
         ...r,
-        followSales: resolveFollowSales(r.followSales, r.remark),
+        followSales: canonicalizeFollowSales(resolveFollowSales(r.followSales, r.remark), followSalesUsers),
         assigneeName: r.assigneeId ? nameMap.get(Number(r.assigneeId)) ?? null : null,
         remark: stripLeadRemarkImportPrefix(r.remark) || null,
         customerCode: customer?.customerCode ?? null,
@@ -240,6 +225,25 @@ export class LeadsService {
       }
     })
     return { items, total, page, pageSize }
+  }
+
+  private async followSalesScope(
+    userId: number,
+    fallback: { username?: string | null; realName?: string | null },
+  ) {
+    const dbUser = await this.prisma.sysUser.findUnique({
+      where: { id: BigInt(userId) },
+      select: { username: true, realName: true },
+    })
+    const user = dbUser || fallback
+    const or: Array<{ followSales: string } | { followSales: { contains: string } }> = []
+    const label = formatFollowSalesLabel(user)
+    if (label) or.push({ followSales: label })
+    for (const token of followSalesMatchTokens(user)) {
+      or.push({ followSales: { contains: token } })
+    }
+    if (!or.length) return { id: BigInt(0) }
+    return { OR: or }
   }
 
   async listAssignees(currentUserId: number) {
@@ -329,7 +333,13 @@ export class LeadsService {
     )
     return {
       ...row,
-      followSales: resolveFollowSales(row.followSales, row.remark),
+      followSales: canonicalizeFollowSales(
+        resolveFollowSales(row.followSales, row.remark),
+        await this.prisma.sysUser.findMany({
+          where: { status: 1 },
+          select: { username: true, realName: true },
+        }),
+      ),
       assigneeName: row.assigneeId ? userNameMap.get(row.assigneeId.toString()) ?? null : null,
       remark: stripLeadRemarkImportPrefix(row.remark) || null,
       followUps: row.followUps.map((item) => ({

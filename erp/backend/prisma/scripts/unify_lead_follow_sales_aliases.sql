@@ -54,3 +54,24 @@ WHERE l.follow_sales IS NOT NULL
   AND TRIM(l.follow_sales) <> ''
   AND l.follow_sales NOT LIKE '%,%'
   AND l.follow_sales NOT LIKE '%，%';
+
+-- 括号内是系统用户名时，收成该账号展示名：Ronan(Ronan) → 邱张源(ronan)
+UPDATE `lead` l
+INNER JOIN sys_user u ON u.status = 1
+  AND TRIM(l.follow_sales) LIKE '%(%)'
+  AND RIGHT(TRIM(l.follow_sales), 1) = ')'
+  AND LOWER(TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(TRIM(l.follow_sales), ')', 1), '(', -1))) = LOWER(TRIM(u.username))
+SET l.follow_sales = LEFT(
+  CASE
+    WHEN TRIM(IFNULL(u.real_name, '')) <> ''
+         AND TRIM(IFNULL(u.username, '')) <> ''
+         AND LOWER(TRIM(u.real_name)) <> LOWER(TRIM(u.username))
+      THEN CONCAT(TRIM(u.real_name), '(', TRIM(u.username), ')')
+    WHEN TRIM(IFNULL(u.real_name, '')) <> '' THEN TRIM(u.real_name)
+    ELSE TRIM(u.username)
+  END
+, 50)
+WHERE l.follow_sales IS NOT NULL
+  AND TRIM(l.follow_sales) <> ''
+  AND l.follow_sales NOT LIKE '%,%'
+  AND l.follow_sales NOT LIKE '%，%';

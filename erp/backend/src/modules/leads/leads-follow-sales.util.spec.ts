@@ -91,6 +91,12 @@ describe('canonicalizeFollowSales', () => {
     expect(canonicalizeFollowSales('陈琪珍(chenqizhen)', withChen)).toBe('陈琪珍(chenqizhen)')
   })
 
+  it('merges Ronan(Ronan) onto the system account label', () => {
+    const withRonan = [...users, { username: 'ronan', realName: '邱张源' }]
+    expect(canonicalizeFollowSales('Ronan(Ronan)', withRonan)).toBe('邱张源(ronan)')
+    expect(canonicalizeFollowSales('ronan', withRonan)).toBe('邱张源(ronan)')
+  })
+
   it('keeps combined sales names', () => {
     expect(canonicalizeFollowSales('尚彩云, Ronan(Ronan)', users)).toBe('尚彩云, Ronan(Ronan)')
   })
