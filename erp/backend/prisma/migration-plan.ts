@@ -56,6 +56,7 @@ export const MIGRATION_ORDER = [
   'migrate_outbound_pick_allocation_p0.sql',
   'migrate_lead_follow_sales.sql',
   'migrate_lead_contact_name_len.sql',
+  'migrate_anheng_wcs.sql',
 ] as const
 
 /**

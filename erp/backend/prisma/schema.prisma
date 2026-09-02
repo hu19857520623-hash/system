@@ -1404,3 +1404,59 @@ model MingruiShipment {
   @@index([createdAt], map: "idx_mingrui_created")
   @@map("mingrui_shipment")
 }
+
+// ───────────── 安衡 / WCS 称重联调 ─────────────
+
+model WcsWeighEvent {
+  id          BigInt   @id @default(autoincrement())
+  ticketsNum  String   @default("") @map("tickets_num") @db.VarChar(80)
+  weightKg    String   @default("") @map("weight_kg") @db.VarChar(40)
+  lengthMm    String   @default("") @map("length_mm") @db.VarChar(40)
+  widthMm     String   @default("") @map("width_mm") @db.VarChar(40)
+  heightMm    String   @default("") @map("height_mm") @db.VarChar(40)
+  volumeMm3   String   @default("") @map("volume_mm3") @db.VarChar(40)
+  machine     String   @default("") @db.VarChar(80)
+  memberNo    String?  @map("member_no") @db.VarChar(80)
+  warehouse   String?  @db.VarChar(80)
+  goodsName   String?  @map("goods_name") @db.VarChar(200)
+  goodsNum    String?  @map("goods_num") @db.VarChar(40)
+  expressName String?  @map("express_name") @db.VarChar(80)
+  remarks     String?  @db.VarChar(500)
+  rawJson     Json     @map("raw_json")
+  result      String   @db.VarChar(10)
+  message     String   @db.VarChar(200)
+  source      String   @default("device") @db.VarChar(20)
+  clientIp    String?  @map("client_ip") @db.VarChar(64)
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt], map: "idx_wcs_weigh_created")
+  @@index([ticketsNum], map: "idx_wcs_weigh_tickets")
+  @@map("wcs_weigh_event")
+}
+
+model WcsWeighPhoto {
+  id        BigInt   @id @default(autoincrement())
+  expressNo String   @map("express_no") @db.VarChar(80)
+  filePath  String   @map("file_path") @db.VarChar(500)
+  fileSize  Int      @default(0) @map("file_size")
+  isOk      Int      @default(1) @map("is_ok") @db.TinyInt
+  source    String   @default("device") @db.VarChar(20)
+  clientIp  String?  @map("client_ip") @db.VarChar(64)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt], map: "idx_wcs_photo_created")
+  @@index([expressNo], map: "idx_wcs_photo_express")
+  @@map("wcs_weigh_photo")
+}
+
+model WcsDeviceConfig {
+  id              Int      @id
+  enabled         Boolean  @default(true)
+  deviceKey       String?  @map("device_key") @db.VarChar(80)
+  chuteMessage    String   @default("") @map("chute_message") @db.VarChar(80)
+  requireMemberId Boolean  @default(false) @map("require_member_id")
+  printData       String?  @map("print_data") @db.VarChar(2000)
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@map("wcs_device_config")
+}

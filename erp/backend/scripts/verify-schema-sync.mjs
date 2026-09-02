@@ -50,6 +50,9 @@ const checks = [
   { table: 'mingrui_shipment', columns: ['shipment_no', 'status', 'mingrui_order_no', 'api_status'] },
   { table: 'takealot_store', columns: ['api_key', 'coach_role', 'store_name'] },
   { table: 'operating_ledger', columns: ['entry_no', 'direction', 'category', 'amount', 'currency', 'occurred_on'] },
+  { table: 'wcs_weigh_event', columns: ['tickets_num', 'weight_kg', 'raw_json', 'result', 'message'] },
+  { table: 'wcs_weigh_photo', columns: ['express_no', 'file_path', 'is_ok'] },
+  { table: 'wcs_device_config', columns: ['enabled', 'device_key', 'chute_message', 'require_member_id'] },
 ]
 
 const prisma = new PrismaClient()

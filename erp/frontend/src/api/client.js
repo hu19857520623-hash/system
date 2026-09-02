@@ -565,4 +565,15 @@ export const asyncIoApi = {
   download: (id) => downloadRequest(`/async-io/${id}/download`),
 }
 
+export const anhengApi = {
+  config: () => api.get('/anheng/config'),
+  saveConfig: (data) => api.put('/anheng/config', data),
+  events: (params) => api.get('/anheng/events', params),
+  photos: (params) => api.get('/anheng/photos', params),
+  photoFile: (id) => downloadRequest(`/anheng/photos/${id}/file`),
+  simulateWeigh: (data) => api.post('/anheng/simulate/weigh', data),
+  simulateImage: (data) => api.post('/anheng/simulate/image', data),
+  clearEvents: () => api.delete('/anheng/events'),
+}
+
 export default api

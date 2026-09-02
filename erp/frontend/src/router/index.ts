@@ -39,6 +39,7 @@ const routes: RouteRecordRaw[] = [
       { path: 'pricing', name: 'Pricing', component: () => import('@/pages/PricingView.vue'), meta: { title: '货盘库存', section: '运营' } },
       { path: 'inventory', name: 'InventoryQuery', component: () => import('@/pages/InventoryQueryView.vue'), meta: { title: '库存查询', section: '海外仓 · 仓储作业' } },
       { path: 'inventory/sku-query', name: 'SkuQuery', component: () => import('@/pages/SkuQueryView.vue'), meta: { title: 'SKU 查询', section: '海外仓 · 仓储作业' } },
+      { path: 'warehouse/anheng', name: 'AnhengScale', component: () => import('@/pages/AnhengScaleView.vue'), meta: { title: '安衡测量仪', section: '海外仓 · 仓储作业' } },
       { path: 'wms/reports', name: 'WmsReports', component: () => import('@/pages/ManagementLoopView.vue'), meta: { title: '作业报表', section: '海外仓 · 管理闭环', tab: 'reports' } },
       { path: 'wms/stocktake', name: 'Stocktake', component: () => import('@/pages/ManagementLoopView.vue'), meta: { title: '盘点管理', section: '海外仓 · 管理闭环', tab: 'stocktake' } },
       { path: 'wms/capacity', name: 'Capacity', component: () => import('@/pages/ManagementLoopView.vue'), meta: { title: '容量预警', section: '海外仓 · 管理闭环', tab: 'capacity' } },

@@ -41,15 +41,17 @@ public final class PermissionConstants {
                     "warehouse_location.view", "warehouse_location.edit", "warehouse_location.batch_create", "inbound.view",
                     "inbound.arrival_scan", "inbound.receive", "inbound.qc", "inbound.putaway",
                     "inbound.handle_exception", "inbound.confirm_diff", "return.view", "return.receive",
-                    "return.process", "outbound.view", "outbound.create", "outbound.relabel",
-                    "outbound.pick", "outbound.pack", "outbound.ship", "inventory_query.view",
-                    "inventory_query.detail", "inventory_query.adjust", "cost.view", "operating_ledger.view",
+                    "return.process", "anheng.view", "anheng.test", "outbound.view",
+                    "outbound.create", "outbound.relabel", "outbound.pick", "outbound.pack",
+                    "outbound.ship", "inventory_query.view", "inventory_query.detail", "inventory_query.adjust",
+                    "stocktake.view", "stocktake.create", "stocktake.count", "stocktake.approve",
+                    "capacity.view", "capacity.manage", "cost.view", "operating_ledger.view",
                     "operating_ledger.manage", "sync.view", "sync.retry", "operation_log.view",
-                    "billing.view", "billing.generate", "billing.manual", "receivable_payable.view",
-                    "receivable_payable.manual", "reports.view", "profit_analysis.view", "budget_credit.view",
-                    "budget_credit.create", "async_io.import", "async_io.export", "permissions.view",
-                    "permissions.manage", "announcement.manage", "store_monitor.view", "store_monitor.view_all",
-                    "store_monitor.manage", "store_monitor.assign"
+                    "billing.view", "billing.generate", "billing.manual", "wms_reports.view",
+                    "receivable_payable.view", "receivable_payable.manual", "reports.view", "profit_analysis.view",
+                    "budget_credit.view", "budget_credit.create", "async_io.import", "async_io.export",
+                    "permissions.view", "permissions.manage", "announcement.manage", "store_monitor.view",
+                    "store_monitor.view_all", "store_monitor.manage", "store_monitor.assign"
             )),
             Map.entry("采购主管", List.of(
                     "products.view", "suppliers.view", "suppliers.edit", "pricing.view",
@@ -59,10 +61,11 @@ public final class PermissionConstants {
                     "create_inbound.label", "mingrui.view", "warehouse_location.view", "warehouse_location.edit",
                     "warehouse_location.batch_create", "inbound.view", "inbound.arrival_scan", "inbound.receive",
                     "inbound.qc", "inbound.putaway", "inbound.handle_exception", "inbound.confirm_diff",
-                    "outbound.view", "outbound.create", "outbound.relabel", "outbound.pick",
-                    "outbound.pack", "outbound.ship", "inventory_query.view", "inventory_query.detail",
-                    "inventory_query.adjust", "cost.view", "sync.view", "sync.retry",
-                    "operation_log.view", "profit_analysis.view", "async_io.import", "async_io.export"
+                    "anheng.view", "anheng.test", "outbound.view", "outbound.create",
+                    "outbound.relabel", "outbound.pick", "outbound.pack", "outbound.ship",
+                    "inventory_query.view", "inventory_query.detail", "inventory_query.adjust", "cost.view",
+                    "sync.view", "sync.retry", "operation_log.view", "profit_analysis.view",
+                    "async_io.import", "async_io.export"
             )),
             Map.entry("采购", List.of(
                     "products.view", "suppliers.view", "pricing.view", "pricing.freight_callback",
@@ -84,8 +87,8 @@ public final class PermissionConstants {
             Map.entry("财务", List.of(
                     "products.view", "purchase.view", "cost.view", "operating_ledger.view",
                     "operating_ledger.manage", "billing.view", "billing.generate", "billing.manual",
-                    "receivable_payable.view", "receivable_payable.manual", "reports.view", "profit_analysis.view",
-                    "budget_credit.view", "budget_credit.create", "async_io.export"
+                    "wms_reports.view", "receivable_payable.view", "receivable_payable.manual", "reports.view",
+                    "profit_analysis.view", "budget_credit.view", "budget_credit.create", "async_io.export"
             )),
             Map.entry("产品开发主管", List.of(
                     "products.view", "products.edit", "products.import", "products.print_label",
@@ -117,10 +120,12 @@ public final class PermissionConstants {
                     "logistics_wh.manage", "create_inbound.view", "create_inbound.create", "create_inbound.label",
                     "warehouse_location.view", "warehouse_location.edit", "warehouse_location.batch_create", "inbound.view",
                     "inbound.arrival_scan", "inbound.receive", "inbound.qc", "inbound.putaway",
-                    "inbound.confirm_diff", "outbound.view", "outbound.create", "outbound.relabel",
-                    "outbound.pick", "outbound.pack", "outbound.ship", "inventory_query.view",
-                    "inventory_query.detail", "inventory_query.adjust", "sync.view", "sync.retry",
-                    "operation_log.view"
+                    "inbound.confirm_diff", "anheng.view", "anheng.test", "outbound.view",
+                    "outbound.create", "outbound.relabel", "outbound.pick", "outbound.pack",
+                    "outbound.ship", "inventory_query.view", "inventory_query.detail", "inventory_query.adjust",
+                    "stocktake.view", "stocktake.create", "stocktake.count", "stocktake.approve",
+                    "capacity.view", "capacity.manage", "wms_reports.view", "sync.view",
+                    "sync.retry", "operation_log.view"
             ))
     );
 

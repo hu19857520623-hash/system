@@ -208,6 +208,14 @@
         {
           "id": "return.process",
           "label": "退件管理-处理完成"
+        },
+        {
+          "id": "anheng.view",
+          "label": "安衡测量仪-查看"
+        },
+        {
+          "id": "anheng.test",
+          "label": "安衡测量仪-联调"
         }
       ]
     },
@@ -270,6 +278,30 @@
         {
           "id": "inventory_query.adjust",
           "label": "库存查询-调整库位"
+        },
+        {
+          "id": "stocktake.view",
+          "label": "盘点管理-查看"
+        },
+        {
+          "id": "stocktake.create",
+          "label": "盘点管理-创建"
+        },
+        {
+          "id": "stocktake.count",
+          "label": "盘点管理-初盘/复盘"
+        },
+        {
+          "id": "stocktake.approve",
+          "label": "盘点管理-审批调整"
+        },
+        {
+          "id": "capacity.view",
+          "label": "仓库容量-查看"
+        },
+        {
+          "id": "capacity.manage",
+          "label": "仓库容量-刷新预警"
         }
       ]
     },
@@ -311,6 +343,10 @@
         {
           "id": "billing.manual",
           "label": "客户结算-手工"
+        },
+        {
+          "id": "wms_reports.view",
+          "label": "仓储作业报表-查看"
         },
         {
           "id": "receivable_payable.view",
@@ -528,6 +564,8 @@
       "return.view",
       "return.receive",
       "return.process",
+      "anheng.view",
+      "anheng.test",
       "outbound.view",
       "outbound.create",
       "outbound.relabel",
@@ -537,6 +575,12 @@
       "inventory_query.view",
       "inventory_query.detail",
       "inventory_query.adjust",
+      "stocktake.view",
+      "stocktake.create",
+      "stocktake.count",
+      "stocktake.approve",
+      "capacity.view",
+      "capacity.manage",
       "cost.view",
       "operating_ledger.view",
       "operating_ledger.manage",
@@ -546,6 +590,7 @@
       "billing.view",
       "billing.generate",
       "billing.manual",
+      "wms_reports.view",
       "receivable_payable.view",
       "receivable_payable.manual",
       "reports.view",
@@ -591,6 +636,8 @@
       "inbound.putaway",
       "inbound.handle_exception",
       "inbound.confirm_diff",
+      "anheng.view",
+      "anheng.test",
       "outbound.view",
       "outbound.create",
       "outbound.relabel",
@@ -662,6 +709,7 @@
       "billing.view",
       "billing.generate",
       "billing.manual",
+      "wms_reports.view",
       "receivable_payable.view",
       "receivable_payable.manual",
       "reports.view",
@@ -747,6 +795,8 @@
       "inbound.qc",
       "inbound.putaway",
       "inbound.confirm_diff",
+      "anheng.view",
+      "anheng.test",
       "outbound.view",
       "outbound.create",
       "outbound.relabel",
@@ -756,6 +806,13 @@
       "inventory_query.view",
       "inventory_query.detail",
       "inventory_query.adjust",
+      "stocktake.view",
+      "stocktake.create",
+      "stocktake.count",
+      "stocktake.approve",
+      "capacity.view",
+      "capacity.manage",
+      "wms_reports.view",
       "sync.view",
       "sync.retry",
       "operation_log.view"
@@ -763,11 +820,15 @@
   },
   "deprecated": [
     "create_inbound.push",
-    "mingrui.order"
+    "mingrui.order",
+    "inbound_fee.view",
+    "inbound_fee.manage"
   ],
   "aliases": {
     "create_inbound.push": null,
-    "mingrui.order": null
+    "mingrui.order": null,
+    "inbound_fee.view": null,
+    "inbound_fee.manage": null
   },
   "allPermCodes": [
     "leads_pool.view",
@@ -819,6 +880,8 @@
     "return.view",
     "return.receive",
     "return.process",
+    "anheng.view",
+    "anheng.test",
     "outbound.view",
     "outbound.create",
     "outbound.relabel",
@@ -832,6 +895,12 @@
     "inventory_query.view",
     "inventory_query.detail",
     "inventory_query.adjust",
+    "stocktake.view",
+    "stocktake.create",
+    "stocktake.count",
+    "stocktake.approve",
+    "capacity.view",
+    "capacity.manage",
     "cost.view",
     "operating_ledger.view",
     "operating_ledger.manage",
@@ -841,6 +910,7 @@
     "billing.view",
     "billing.generate",
     "billing.manual",
+    "wms_reports.view",
     "receivable_payable.view",
     "receivable_payable.manual",
     "reports.view",

@@ -171,5 +171,6 @@ export const profitApi: ApiGroup
 export const operatingLedgerApi: ApiGroup
 export const announcementApi: ApiGroup
 export const asyncIoApi: ApiGroup
+export const anhengApi: ApiGroup
 
 export default api

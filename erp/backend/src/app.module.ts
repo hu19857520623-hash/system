@@ -39,6 +39,7 @@ import { ReturnsModule } from './modules/returns/returns.module'
 import { MingruiModule } from './modules/mingrui/mingrui.module'
 import { OperatingLedgerModule } from './modules/operating-ledger/operating-ledger.module'
 import { ManagementLoopModule } from './modules/management-loop/management-loop.module'
+import { AnhengModule } from './modules/anheng/anheng.module'
 import { validateEnvironment } from './config/environment'
 
 @Module({
@@ -77,6 +78,7 @@ import { validateEnvironment } from './config/environment'
     WarehouseLocationModule,
     OperationLogModule,
     ManagementLoopModule,
+    AnhengModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },

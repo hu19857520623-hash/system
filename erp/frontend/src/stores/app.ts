@@ -118,6 +118,7 @@ const NAV: NavGroup[] = [
       { id: 'outbound', name: '出库单管理', badgeKey: 'outbound' },
       { id: 'inventory_query', name: '库存查询' },
       { id: 'sku_query', name: 'SKU 查询' },
+      { id: 'anheng', name: '安衡测量仪' },
     ],
   },
   {
@@ -181,6 +182,7 @@ const NAV_ROUTE_MAP: Record<string, string> = {
   pricing: '/pricing',
   inventory_query: '/inventory',
   sku_query: '/inventory/sku-query',
+  anheng: '/warehouse/anheng',
   wms_reports: '/wms/reports',
   stocktake: '/wms/stocktake',
   capacity: '/wms/capacity',
@@ -379,6 +381,7 @@ export const useAppStore = defineStore('app', {
         pricing: 'pricing.view',
         inventory_query: 'inventory_query.view',
         sku_query: 'inventory_query.view',
+        anheng: 'anheng.view',
         wms_reports: 'wms_reports.view',
         stocktake: 'stocktake.view',
         capacity: 'capacity.view',
