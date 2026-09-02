@@ -61,10 +61,10 @@ import com.takealot.pda.ui.i18n.tr
 import kotlinx.coroutines.launch
 
 enum class InboundMode(val key: String, val title: String, val scanLabel: String) {
-    Arrival("arrival", "到仓扫描", "扫入库单 / 跟踪号"),
+    Arrival("arrival", "到仓扫描", "扫入库单号"),
     Receive("receive", "确认箱数", "扫外箱标"),
     Qc("qc", "清点", "扫 SKU"),
-    Putaway("putaway", "上架", "扫 SKU 或库位");
+    Putaway("putaway", "上架", "扫 SKU / 条码或库位");
     companion object { fun from(key: String) = entries.find { it.key == key } ?: Arrival }
 }
 
@@ -166,7 +166,7 @@ class InboundViewModel : ViewModel() {
 
     private suspend fun handlePutawayScan(code: String) {
         val current = order ?: ensureOrder(code) ?: return
-        val skuHit = current.itemList.find { it.skuCode.equals(code, true) }
+        val skuHit = current.itemList.find { it.matchesScan(code) }
         if (skuHit != null) {
             selectedItemId = skuHit.id
             putawayQty = skuHit.remainingPutaway.coerceAtLeast(1)

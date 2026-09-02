@@ -37,7 +37,7 @@
 
   .table-head {
 
-    @apply border-b border-border-light bg-surface-muted/70 text-left text-[11px] font-semibold uppercase tracking-wide text-text-muted;
+    @apply border-b border-border-light bg-surface-muted/70 text-left text-[11px] font-semibold text-text-muted;
 
   }
 
@@ -45,7 +45,7 @@
 
   .table-head th {
 
-    @apply px-4 py-3 font-semibold;
+    @apply whitespace-nowrap px-4 py-3 font-semibold;
 
   }
 

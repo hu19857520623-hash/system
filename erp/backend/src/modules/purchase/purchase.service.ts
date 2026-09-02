@@ -4,6 +4,7 @@ import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
 import { OperationLogService } from '../operation-log/operation-log.service'
 import { allocatePoDomesticFreight } from '../../common/po-domestic-freight.util'
 import { computePoFinanceApprovalCosts } from '../../common/po-finance-cost.util'
+import { catalogSkuLookupKeys, toCatalogInternalSku } from '../../common/catalog-customer.util'
 
 function fmtTime(d: Date | null | undefined): string {
   if (!d) return ''
@@ -844,13 +845,16 @@ export class PurchaseService {
         poNo: po.poNo,
         domesticFee: domesticPerUnit,
       }
-      const existing = await tx.productPricing.findUnique({ where: { sku: line.sku } })
+      const catalogSku = toCatalogInternalSku(line.sku)
+      const existing = await tx.productPricing.findFirst({
+        where: { sku: { in: catalogSkuLookupKeys(line.sku) } },
+      })
       if (existing) {
-        await tx.productPricing.update({ where: { sku: line.sku }, data: pricingData })
+        await tx.productPricing.update({ where: { sku: existing.sku }, data: pricingData })
       } else {
         await tx.productPricing.create({
           data: {
-            sku: line.sku,
+            sku: catalogSku,
             ...pricingData,
             pricingStatus: 'waiting_freight',
             exchangeRate: 2.5,

@@ -67,6 +67,8 @@ export const MANUAL_SQL_SCRIPTS = [
   'add_catalog_customer_tkl.sql',
   'add_product_measured_dims.sql',
   'add_supplier_freight_bill_po_link.sql',
+  'fix_lead_assignee_chenqizhen.sql',
+  'strip_lead_remark_import_prefix.sql',
   'migrate_customer_company_email.sql',
   'migrate_oms_table_name_views.sql',
   'migrate_outbound_enhance.sql',

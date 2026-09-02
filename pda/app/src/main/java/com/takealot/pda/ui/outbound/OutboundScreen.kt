@@ -123,23 +123,30 @@ class OutboundViewModel : ViewModel() {
                     scan = ""; saveProgress(); journal.acknowledge(recordId, feedback?.message); return
                 }
                 val selected = lines.firstOrNull { it.taskKey == selectedSku }
-                if (selected != null && selected.sku.equals(code, true)) {
+                if (selected != null && selected.matchesScan(code)) {
                     val nextQty = (selected.scannedQty + 1).coerceAtMost(selected.qty)
                     lines = lines.map { if (it.taskKey == selected.taskKey) it.copy(scannedQty = nextQty) else it }
                     feedback = Feedback(true, "${selected.locationCode} · ${selected.sku} $nextQty/${selected.qty}")
                     scan = ""; saveProgress(); journal.acknowledge(recordId, feedback?.message); return
                 }
-                val skuTask = lines.firstOrNull { !it.done && it.sku.equals(code, true) }
+                val skuTask = lines.firstOrNull { !it.done && it.matchesScan(code) }
                 if (skuTask != null) {
                     throw ErpException("请先扫描库位 ${skuTask.locationCode}，再扫描 ${skuTask.sku}")
                 }
+                if (lines.any { it.matchesScan(code) }) {
+                    throw ErpException("该 SKU 本单已拣完，请扫描下一件或提交拣货")
+                }
             } else {
-                val line = lines.find { it.sku.equals(code, true) }
+                val line = lines.firstOrNull { !it.done && it.matchesScan(code) }
                 if (line != null) {
+                    val nextQty = (line.scannedQty + 1).coerceAtMost(line.qty)
                     selectedSku = line.taskKey
-                    lines = lines.map { if (it.taskKey == line.taskKey) it.copy(scannedQty = line.qty) else it }
-                    feedback = Feedback(true, "${line.sku} ${line.qty}/${line.qty}")
+                    lines = lines.map { if (it.taskKey == line.taskKey) it.copy(scannedQty = nextQty) else it }
+                    feedback = Feedback(true, "${line.sku} $nextQty/${line.qty}")
                     scan = ""; saveProgress(); journal.acknowledge(recordId, feedback?.message); return
+                }
+                if (lines.any { it.matchesScan(code) }) {
+                    throw ErpException("该 SKU 已复核完成，请扫描下一件")
                 }
             }
             openByCode(code); scan = ""
@@ -189,7 +196,7 @@ class OutboundViewModel : ViewModel() {
             nextLines = suggestions.flatMap { row ->
                 row.suggestions.orEmpty().filter { it.pickQty > 0 }.map { allocation ->
                     val location = allocation.locationCode.orEmpty().trim().uppercase()
-                    LocalPickLine(row.id, row.sku.orEmpty(), row.productName.orEmpty(), allocation.pickQty, location, 0, "${row.id}@$location")
+                    LocalPickLine(row.id, row.sku.orEmpty(), row.productName.orEmpty(), allocation.pickQty, location, 0, "${row.id}@$location", row.barcode.orEmpty())
                 }
             }
             if (nextLines.isEmpty()) throw ErpException("暂无可执行的库位拣货任务，请先完成上架")
@@ -201,7 +208,7 @@ class OutboundViewModel : ViewModel() {
             }
             if (nextOrder.omsPreDeduct != null) feedback = Feedback(false, "OMS 单需在电脑端录入外箱尺寸后再复核")
             nextLines = nextOrder.itemList.map {
-                LocalPickLine(it.id, it.sku.orEmpty(), it.productName.orEmpty(), if (it.pickedQty > 0) it.pickedQty else it.qty, it.locationCode.orEmpty(), 0, "review@${it.id}")
+                LocalPickLine(it.id, it.sku.orEmpty(), it.productName.orEmpty(), if (it.pickedQty > 0) it.pickedQty else it.qty, it.locationCode.orEmpty(), 0, "review@${it.id}", it.barcode.orEmpty())
             }
         }
         val saved = PdaApp.instance.workJournal.pickProgress(nextOrder.id, mode)
@@ -239,7 +246,7 @@ class OutboundViewModel : ViewModel() {
             busy = true; feedback = null
             try {
                 order = api.startReview(current.id)
-                feedback = Feedback(true, "已开始复核，请逐项扫描 SKU")
+                feedback = Feedback(true, "已开始复核，请逐件扫描 SKU 或条码")
                 order?.let { PdaApp.instance.workJournal.activate(PdaResumeWork("outbound", mode, it.id, it.no)) }
             } catch (e: Exception) { feedback = Feedback(false, e.message ?: "开始复核失败") }
             finally { busy = false }
@@ -338,7 +345,8 @@ fun OutboundScreen(modeKey: String, onBack: () -> Unit, vm: OutboundViewModel = 
                         Text("拣货库位", color = PdaMuted, fontSize = 11.sp)
                         Text(line.locationCode.ifBlank { "未填" }, color = PdaText, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                     }
-                    if (vm.mode == "pick") Text("先扫库位，再扫 SKU；本库位应拣 ${line.qty}", color = PdaAccent, fontSize = 12.sp)
+                    if (vm.mode == "pick") Text("先扫库位，再扫 SKU 或条码；本库位应拣 ${line.qty}", color = PdaAccent, fontSize = 12.sp)
+                    else Text("逐件扫描 SKU 或条码，扫满 ${line.qty} 件", color = PdaAccent, fontSize = 12.sp)
                 }
             }
             if (vm.mode == "pick") BigButton("提交拣货", onClick = { vm.submitPick() }, enabled = !vm.busy && vm.lines.isNotEmpty(), color = PdaOk)

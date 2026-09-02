@@ -10,7 +10,7 @@ import {
   pushCatalogStockToOms,
 } from './oms-catalog-sync.util'
 import { catalogStockPool, remainingCatalogStock } from './catalog-stock.util'
-import { CATALOG_CUSTOMER_CODE, catalogBaseSkuFromInternal } from '../../common/catalog-customer.util'
+import { CATALOG_CUSTOMER_CODE, catalogBaseSkuFromInternal, catalogSkuLookupKeys, toCatalogInternalSku } from '../../common/catalog-customer.util'
 
 function num(v: any, fallback = 0): number {
   if (v == null) return fallback
@@ -90,8 +90,9 @@ export class PricingService {
 
   private async loadCatalogHoldersBySku(skus: string[]) {
     if (!skus.length) return new Map<string, { customerCode: string; customerName: string; quantity: number }[]>()
+    const lookup = [...new Set(skus.flatMap((sku) => catalogSkuLookupKeys(sku)))]
     const rows = await this.prisma.customerSkuInventory.findMany({
-      where: { sku: { in: skus }, quantity: { gt: 0 } },
+      where: { sku: { in: lookup }, quantity: { gt: 0 } },
       select: { sku: true, quantity: true, customerId: true },
     })
     if (!rows.length) return new Map()
@@ -102,20 +103,26 @@ export class PricingService {
     })
     const customerMap = new Map(customers.map((c) => [Number(c.id), c]))
     const map = new Map<string, { customerCode: string; customerName: string; quantity: number }[]>()
+    const holdersByLookupSku = new Map<string, { customerCode: string; customerName: string; quantity: number }[]>()
 
     for (const row of rows) {
       const customer = customerMap.get(Number(row.customerId))
       if (!customer) continue
-      const list = map.get(row.sku) || []
+      const list = holdersByLookupSku.get(row.sku) || []
       list.push({
         customerCode: customer.customerCode,
         customerName: customer.customerName,
         quantity: row.quantity,
       })
-      map.set(row.sku, list)
+      holdersByLookupSku.set(row.sku, list)
     }
-    for (const list of map.values()) {
-      list.sort((a, b) => b.quantity - a.quantity)
+    for (const sku of skus) {
+      const merged: { customerCode: string; customerName: string; quantity: number }[] = []
+      for (const key of catalogSkuLookupKeys(sku)) {
+        merged.push(...(holdersByLookupSku.get(key) || []))
+      }
+      merged.sort((a, b) => b.quantity - a.quantity)
+      map.set(sku, merged)
     }
     return map
   }
@@ -145,13 +152,20 @@ export class PricingService {
     ).map((w) => w.warehouseCode)
     if (!wmsCodes.length) return new Map<string, number>()
 
+    const lookup = [...new Set(skus.flatMap((sku) => catalogSkuLookupKeys(sku)))]
     const rows = await this.prisma.inventory.findMany({
-      where: { sku: { in: skus }, warehouseCode: { in: wmsCodes } },
+      where: { sku: { in: lookup }, warehouseCode: { in: wmsCodes } },
       select: { sku: true, availableQty: true },
     })
-    const map = new Map<string, number>()
+    const invBySku = new Map<string, number>()
     for (const row of rows) {
-      map.set(row.sku, (map.get(row.sku) || 0) + row.availableQty)
+      invBySku.set(row.sku, (invBySku.get(row.sku) || 0) + row.availableQty)
+    }
+    const map = new Map<string, number>()
+    for (const sku of skus) {
+      let qty = 0
+      for (const key of catalogSkuLookupKeys(sku)) qty += invBySku.get(key) || 0
+      map.set(sku, qty)
     }
     return map
   }
@@ -240,7 +254,7 @@ export class PricingService {
   async create(data: any) {
     return this.prisma.productPricing.create({
       data: {
-        sku: data.sku,
+        sku: toCatalogInternalSku(data.sku),
         productName: data.productName || data.name,
         spec: data.spec,
         costRmb: data.costRmb ?? data.cost ?? 0,
@@ -274,10 +288,11 @@ export class PricingService {
       },
     })
 
-    const product = await this.prisma.product.findUnique({ where: { sku: row.sku } })
+    const productKeys = catalogSkuLookupKeys(row.sku)
+    const product = await this.prisma.product.findFirst({ where: { sku: { in: productKeys } } })
     if (product) {
       await this.prisma.product.update({
-        where: { sku: row.sku },
+        where: { sku: product.sku },
         data: {
           seaFreightPerUnit: seaFreight,
           domesticFeePerUnit: domesticFee,

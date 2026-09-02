@@ -1,17 +1,17 @@
 import type { PrismaService } from '../../common/prisma/prisma.service'
 import { remainingCatalogStock } from './catalog-stock.util'
 import { pushCatalogStockToOms } from './oms-catalog-sync.util'
-import { catalogBaseSkuFromInternal } from '../../common/catalog-customer.util'
+import { catalogSkuLookupKeys } from '../../common/catalog-customer.util'
 
 /** 海外仓有可用库存、货盘已对 OMS 可见且仍有可售剩余时，标记为可下单 */
 export async function tryMarkOrderableOnOms(prisma: PrismaService, sku: string): Promise<boolean> {
-  const pricing = await prisma.productPricing.findUnique({ where: { sku } })
+  const pricing = await prisma.productPricing.findFirst({ where: { sku: { in: catalogSkuLookupKeys(sku) } } })
   if (!pricing?.visibleOnOms || pricing.orderableOnOms) return Boolean(pricing?.orderableOnOms)
 
   if (remainingCatalogStock(pricing) <= 0) return false
 
-  const product = await prisma.product.findUnique({
-    where: { sku: catalogBaseSkuFromInternal(sku) },
+  const product = await prisma.product.findFirst({
+    where: { sku: { in: catalogSkuLookupKeys(sku) } },
     select: { id: true },
   })
   if (!product) return false
@@ -36,7 +36,7 @@ export async function tryMarkOrderableOnOms(prisma: PrismaService, sku: string):
 
   const now = new Date()
   await prisma.productPricing.update({
-    where: { sku },
+    where: { sku: pricing.sku },
     data: { orderableOnOms: true, orderableOnOmsAt: now },
   })
   await prisma.productPricingHistory.create({

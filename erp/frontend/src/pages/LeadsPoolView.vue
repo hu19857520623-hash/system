@@ -12,6 +12,20 @@ import ListPagination from '@/components/ListPagination.vue'
 import DetailSheet from '@/components/ui/DetailSheet.vue'
 import { useAppStore } from '@/stores/app'
 import { LEAD_SELF_ASSIGN_ROLE_CODES } from '@erp/shared/permissions.catalog'
+import { LEAD_STATUS } from '@/constants/index.js'
+
+const POOL_FOLLOWABLE_STATUSES = new Set(['lost', 'nurture', 'recall'])
+
+function leadPoolStatusTagType(statusKey: string): 'success' | 'warning' | 'info' | 'danger' {
+  const meta = LEAD_STATUS[statusKey as keyof typeof LEAD_STATUS]
+  const type = meta?.type
+  if (type === 'success' || type === 'warning' || type === 'info' || type === 'danger') return type
+  return 'info'
+}
+
+function canFollowFromPool(statusKey: string) {
+  return POOL_FOLLOWABLE_STATUSES.has(statusKey)
+}
 
 const app = useAppStore()
 const router = useRouter()
@@ -55,7 +69,8 @@ const leads = computed(() =>
     ...l,
     id: l.leadNo,
     assignee: l.owner,
-    tone: l.statusKey === 'deal' ? 'ok' : l.statusKey === 'following' || l.statusKey === 'recall' ? 'warn' : 'info',
+    statusTagType: leadPoolStatusTagType(l.statusKey),
+    canFollow: canFollowFromPool(l.statusKey),
   })),
 )
 
@@ -74,6 +89,14 @@ const sourceOptions = [
 ]
 
 const dialogVisible = ref(false)
+const followDialogVisible = ref(false)
+const followSaving = ref(false)
+const followTarget = ref<any>(null)
+const followForm = ref({
+  followSales: '',
+  followType: 'phone',
+  content: '开始跟进',
+})
 const detailVisible = ref(false)
 const detailLoading = ref(false)
 const detailData = ref<any>(null)
@@ -178,12 +201,45 @@ async function submitNewLead() {
   if (ok) dialogVisible.value = false
 }
 
-async function follow(row: any) {
-  const leadId = row._raw?.id ?? row.id
-  const ok = await withAction(async () => {
-    await leadApi.followUp(leadId, { content: '开始跟进', followType: 'phone' })
-  }, `已开始跟进「${row.company}」，正在打开我的跟进`)
-  if (ok) await router.push('/leads/follow')
+async function openFollow(row: any) {
+  followTarget.value = row
+  followForm.value = {
+    followSales: row.followSales && row.followSales !== '—' ? row.followSales : '',
+    followType: 'phone',
+    content: '开始跟进',
+  }
+  followDialogVisible.value = true
+}
+
+async function submitPoolFollow() {
+  const followSales = followForm.value.followSales.trim()
+  if (!followSales) {
+    ElMessage.warning('请选择或填写跟进销售')
+    return
+  }
+  const content = followForm.value.content.trim() || '开始跟进'
+  const leadId = followTarget.value?._raw?.id ?? followTarget.value?.id
+  if (leadId == null) {
+    ElMessage.error('线索 ID 缺失，请刷新后重试')
+    return
+  }
+  followSaving.value = true
+  try {
+    const ok = await withAction(async () => {
+      await leadApi.followUp(leadId, {
+        followType: followForm.value.followType,
+        content,
+        followSales,
+      })
+      await Promise.all([load(), loadFollowSalesOptions()])
+    }, `已开始跟进「${followTarget.value?.company || ''}」，正在打开我的跟进`)
+    if (ok) {
+      followDialogVisible.value = false
+      await router.push('/leads/follow')
+    }
+  } finally {
+    followSaving.value = false
+  }
 }
 
 async function importLeads() {
@@ -375,7 +431,7 @@ onMounted(async () => {
         <el-table-column prop="source" label="来源" width="80" />
         <el-table-column prop="status" label="状态" width="120">
           <template #default="{ row }">
-            <el-tag :type="row.tone === 'ok' ? 'success' : row.tone === 'warn' ? 'warning' : 'info'" size="small">
+            <el-tag :type="row.statusTagType" size="small">
               {{ row.status }}
             </el-tag>
           </template>
@@ -397,7 +453,7 @@ onMounted(async () => {
         <el-table-column prop="time" label="创建时间" width="120" />
         <el-table-column label="操作" width="120" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" size="small" @click="follow(row)">跟进</el-button>
+            <el-button v-if="row.canFollow" link type="primary" size="small" @click="openFollow(row)">跟进</el-button>
             <el-button link type="primary" size="small" @click="detail(row)">详情</el-button>
           </template>
         </el-table-column>
@@ -498,6 +554,52 @@ onMounted(async () => {
     </div>
     <template #footer>
       <el-button @click="detailVisible = false">关闭</el-button>
+    </template>
+  </el-dialog>
+
+  <el-dialog
+    v-model="followDialogVisible"
+    :title="`开始跟进 · ${followTarget?.company || ''}`"
+    width="480px"
+    destroy-on-close
+    append-to-body
+  >
+    <el-form label-width="92px">
+      <el-form-item label="跟进销售" required>
+        <el-select
+          v-model="followForm.followSales"
+          placeholder="请选择或输入跟进销售"
+          style="width:100%"
+          filterable
+          allow-create
+          default-first-option
+        >
+          <el-option v-for="name in createFollowSalesOptions" :key="name" :label="name" :value="name" />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="跟进方式">
+        <el-radio-group v-model="followForm.followType">
+          <el-radio value="phone">电话</el-radio>
+          <el-radio value="wechat">微信</el-radio>
+          <el-radio value="email">邮件</el-radio>
+          <el-radio value="visit">拜访</el-radio>
+          <el-radio value="other">其他</el-radio>
+        </el-radio-group>
+      </el-form-item>
+      <el-form-item label="跟进内容">
+        <el-input
+          v-model="followForm.content"
+          type="textarea"
+          :rows="3"
+          maxlength="1000"
+          show-word-limit
+          placeholder="默认：开始跟进"
+        />
+      </el-form-item>
+    </el-form>
+    <template #footer>
+      <el-button @click="followDialogVisible = false">取消</el-button>
+      <el-button type="primary" :loading="followSaving" @click="submitPoolFollow">确认跟进</el-button>
     </template>
   </el-dialog>
 

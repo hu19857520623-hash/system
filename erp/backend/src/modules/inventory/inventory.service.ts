@@ -18,7 +18,7 @@ import { parseInventoryAdjustCsv, type InventoryAdjustImportRow } from './invent
 import { notifyOms } from '../../common/oms-notify.util'
 import { pushCatalogStockToOms } from '../pricing/oms-catalog-sync.util'
 import { remainingCatalogStock } from '../pricing/catalog-stock.util'
-import { CATALOG_CUSTOMER_CODE } from '../../common/catalog-customer.util'
+import { CATALOG_CUSTOMER_CODE, catalogSkuLookupKeys } from '../../common/catalog-customer.util'
 import {
   formatDimLabel,
   numDim,
@@ -212,12 +212,21 @@ export class InventoryService {
         ? this.prisma.supplier.findMany({ where: { id: { in: supplierIds } }, select: { id: true, supplierCode: true, supplierName: true } })
         : [],
       skus.length
-        ? this.prisma.productPricing.findMany({ where: { sku: { in: skus } }, select: { sku: true, finalPrice: true } })
+        ? this.prisma.productPricing.findMany({
+            where: { sku: { in: [...new Set(skus.flatMap((sku) => catalogSkuLookupKeys(sku)))] } },
+            select: { sku: true, finalPrice: true },
+          })
         : [],
       this.loadPipelineQtyMap(whList.length ? whList : whCodes),
     ])
     const supMap = new Map(suppliers.map((s) => [Number(s.id), s] as [number, typeof s]))
-    const priceMap = new Map(pricingRows.map((p) => [p.sku, p] as [string, typeof p]))
+    const priceMap = new Map<string, (typeof pricingRows)[number]>()
+    for (const p of pricingRows) {
+      for (const key of catalogSkuLookupKeys(p.sku)) {
+        const current = priceMap.get(key)
+        if (!current || p.sku.toUpperCase().startsWith(`${CATALOG_CUSTOMER_CODE}-`)) priceMap.set(key, p)
+      }
+    }
 
     const customerCodesToResolve = new Set<string>()
     for (const r of rows) {
@@ -1008,8 +1017,8 @@ export class InventoryService {
     if (!customer) throw new NotFoundException(`客户 ${customerCode} 不存在`)
     if (customer.status !== 1) throw new BadRequestException(`客户 ${customerCode} 已停用`)
 
-    const holding = await this.prisma.customerSkuInventory.findUnique({
-      where: { customerId_sku: { customerId: customer.id, sku } },
+    const holding = await this.prisma.customerSkuInventory.findFirst({
+      where: { customerId: customer.id, sku: { in: catalogSkuLookupKeys(sku) }, quantity: { gt: 0 } },
     })
     if (!holding || holding.quantity < quantity) {
       throw new BadRequestException(
@@ -1017,7 +1026,7 @@ export class InventoryService {
       )
     }
 
-    const pricing = await this.prisma.productPricing.findUnique({ where: { sku } })
+    const pricing = await this.prisma.productPricing.findFirst({ where: { sku: { in: catalogSkuLookupKeys(sku) } } })
     if (!pricing) throw new NotFoundException(`SKU ${sku} 不在货盘定价池中`)
 
     const refNo = `RCL-${Date.now()}`

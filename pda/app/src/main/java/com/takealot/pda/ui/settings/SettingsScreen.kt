@@ -17,6 +17,7 @@ import androidx.compose.ui.unit.sp
 import com.takealot.pda.PdaApp
 import com.takealot.pda.ui.components.BigButton
 import com.takealot.pda.ui.components.KeyValue
+import com.takealot.pda.ui.components.LanguageSwitcher
 import com.takealot.pda.ui.components.Panel
 import com.takealot.pda.ui.components.fieldColors
 import com.takealot.pda.ui.theme.PdaErr
@@ -26,11 +27,16 @@ import com.takealot.pda.ui.i18n.tr
 
 @Composable
 fun SettingsScreen(onBack: () -> Unit, onLogout: () -> Unit) {
+    val currentLang = PdaApp.instance.language.language
     val session = PdaApp.instance.session
     val canManageServer = session.hasPerm("inbound.handle_exception")
     var baseUrl by remember { mutableStateOf(session.baseUrl) }
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(tr("settings"), color = PdaText, fontSize = 22.sp)
+        Panel {
+            Text(tr("language"), color = PdaText, fontSize = 16.sp)
+            LanguageSwitcher()
+        }
         Panel {
             KeyValue(tr("account"), session.realName.ifBlank { session.username })
             KeyValue(tr("username"), session.username)

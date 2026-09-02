@@ -3,6 +3,7 @@ import { PrismaService } from '../../common/prisma/prisma.service'
 import { BillingService } from '../billing/billing.service'
 import { catalogStockPool, remainingCatalogStock } from './catalog-stock.util'
 import { pushCatalogStockToOms } from './oms-catalog-sync.util'
+import { catalogSkuLookupKeys } from '../../common/catalog-customer.util'
 
 function num(v: unknown, fallback = 0): number {
   if (v == null || v === '') return fallback
@@ -57,7 +58,7 @@ export class OmsPurchaseService {
     if (existing) {
       const pricing = existing.pricingId
         ? await this.prisma.productPricing.findUnique({ where: { id: existing.pricingId } })
-        : await this.prisma.productPricing.findUnique({ where: { sku: existing.sku } })
+        : await this.prisma.productPricing.findFirst({ where: { sku: { in: catalogSkuLookupKeys(existing.sku) } } })
       return this.buildPurchaseResult(existing, {
         soldQty: pricing?.soldQty ?? 0,
         remainingStockQty: pricing ? remainingCatalogStock(pricing) : 0,
@@ -82,7 +83,7 @@ export class OmsPurchaseService {
     if (!customer) throw new NotFoundException('客户不存在')
     if (customer.status !== 1) throw new BadRequestException('客户已停用，无法下单')
 
-    const pricing = await this.prisma.productPricing.findUnique({ where: { sku } })
+    const pricing = await this.prisma.productPricing.findFirst({ where: { sku: { in: catalogSkuLookupKeys(sku) } } })
     if (!pricing) throw new NotFoundException(`SKU ${sku} 不在货盘库存中`)
     if (!pricing.visibleOnOms) throw new BadRequestException(`SKU ${sku} 尚未同步至 OMS`)
     if (!pricing.orderableOnOms) throw new BadRequestException(`SKU ${sku} 当前不可下单（待海外仓库存或已售罄）`)

@@ -81,11 +81,11 @@ export function getInboundStatusMeta(status) {
 export const LEAD_STATUS = {
   new: { label: '新线索', type: 'info' },
   following: { label: '跟进中', type: 'warning' },
-  recall: { label: '需要再次跟进', type: 'warning' },
+  recall: { label: '需要再次跟进', type: 'danger' },
   hot: { label: '意向高', type: 'success' },
-  nurture: { label: '暂无意向', type: 'info' },
+  nurture: { label: '暂无意向', type: 'warning' },
   deal: { label: '已成交', type: 'success' },
-  lost: { label: '已流失', type: 'danger' },
+  lost: { label: '已流失', type: 'info' },
 }
 
 /** 选品状态 */

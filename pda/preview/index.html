@@ -94,12 +94,12 @@
     .btn.ok { background: var(--ok); }
     .btn.ghost { background: var(--surface2); color: var(--text); }
     .btn.warn { background: var(--warn); }
-    .row {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 8px;
+    .lang-row { display:flex; gap:8px; margin: 8px 0 4px; }
+    .lang-btn {
+      flex:1; height:40px; border:0; border-radius:10px;
+      background: var(--surface2); color: var(--text); font-size:13px; cursor:pointer;
     }
+    .lang-btn.on { background: var(--accent); color:#1a1204; font-weight:600; }
     .link { background: none; border: 0; color: var(--accent); font-size: 14px; cursor: pointer; }
     .tile, .card, .line {
       background: var(--surface);
@@ -181,13 +181,18 @@
     <div class="status-bar"><span>9:41</span><span>PDA · 仓库</span></div>
 
     <div id="login" class="screen">
-      <h1 style="margin-top:24px">仓库 PDA</h1>
-      <p class="sub">入库到仓 / 收货清点 / 上架 / 出库拣货</p>
-      <label>用户名</label>
+      <div class="lang-row">
+        <button class="lang-btn on" data-lang="zh">中文</button>
+        <button class="lang-btn" data-lang="en">English</button>
+        <button class="lang-btn" data-lang="af">Afrikaans</button>
+      </div>
+      <h1 style="margin-top:16px" data-i18n="title">仓库 PDA</h1>
+      <p class="sub" data-i18n="subtitle">入库到仓 / 收货清点 / 上架 / 出库拣货</p>
+      <label data-i18n="user">用户名</label>
       <input value="warehouse" />
-      <label>密码</label>
+      <label data-i18n="pass">密码</label>
       <input type="password" value="******" />
-      <button class="btn" onclick="go('home')">登录</button>
+      <button class="btn" onclick="go('home')" data-i18n="login">登录</button>
       <p class="sub" style="margin-top:12px">服务器由主管统一配置。如无法连接，请联系仓库主管。</p>
     </div>
 
@@ -199,6 +204,11 @@
         </div>
         <button class="link" onclick="go('settings')">设置</button>
       </div>
+      <div class="lang-row">
+        <button class="lang-btn on" data-lang="zh">中文</button>
+        <button class="lang-btn" data-lang="en">English</button>
+        <button class="lang-btn" data-lang="af">Afrikaans</button>
+      </div>
       <div class="device-status">
         <div class="status-item"><span>仓库</span><b>JHB1</b></div>
         <div class="status-item"><span>账号</span><b>warehouse</b></div>
@@ -208,7 +218,7 @@
       <label>作业仓库</label>
       <select><option>JHB1 约翰内斯堡 (JHB1)</option></select>
       <div class="sec inbound">入库 · INBOUND</div>
-      <div class="tile inbound" onclick="go('arrival')"><div class="t">到仓扫描</div><div class="d">扫入库单 / 跟踪号</div></div>
+      <div class="tile inbound" onclick="go('arrival')"><div class="t">到仓扫描</div><div class="d">只扫入库单号</div></div>
       <div class="tile inbound" onclick="go('receive')"><div class="t">扫箱收货</div><div class="d">扫外箱标或 SKU</div></div>
       <div class="tile inbound" onclick="go('qc')"><div class="t">清点</div><div class="d">扫 SKU 累加实收</div></div>
       <div class="tile inbound" onclick="go('putaway')"><div class="t">上架</div><div class="d">扫 SKU 再扫库位</div></div>
@@ -219,7 +229,7 @@
 
     <div id="arrival" class="screen hidden">
       <div class="row"><h2>到仓扫描</h2><button class="link" onclick="go('home')">返回</button></div>
-      <label>扫入库单 / 跟踪号</label>
+      <label>扫入库单号</label>
       <input value="IN-20260819-0012" />
       <button class="btn" onclick="document.getElementById('arr-ok').style.display='block'">提交扫描</button>
       <div id="arr-ok" class="banner" style="display:none">IN-20260819-0012 到仓扫描成功</div>
@@ -316,6 +326,11 @@
 
     <div id="settings" class="screen hidden">
       <h2>设置</h2>
+      <div class="lang-row">
+        <button class="lang-btn on" data-lang="zh">中文</button>
+        <button class="lang-btn" data-lang="en">English</button>
+        <button class="lang-btn" data-lang="af">Afrikaans</button>
+      </div>
       <div class="card">
         <div class="kv"><span>账号</span>张仓管</div>
         <div class="kv"><span>用户名</span>warehouse</div>
@@ -333,6 +348,24 @@
   </div>
 
   <script>
+    const i18n = {
+      zh: { title: '仓库 PDA', subtitle: '入库到仓 / 收货清点 / 上架 / 出库拣货', user: '用户名', pass: '密码', login: '登录' },
+      en: { title: 'Warehouse PDA', subtitle: 'Arrival / receiving / putaway / picking', user: 'Username', pass: 'Password', login: 'Sign in' },
+      af: { title: 'Pakhuis PDA', subtitle: 'Aankoms / ontvangs / wegpak / pluk', user: 'Gebruikersnaam', pass: 'Wagwoord', login: 'Meld aan' },
+    };
+    function setLang(code) {
+      document.querySelectorAll('.lang-btn').forEach((btn) => {
+        btn.classList.toggle('on', btn.getAttribute('data-lang') === code);
+      });
+      const t = i18n[code] || i18n.zh;
+      document.querySelectorAll('[data-i18n]').forEach((el) => {
+        const key = el.getAttribute('data-i18n');
+        if (t[key]) el.textContent = t[key];
+      });
+    }
+    document.querySelectorAll('.lang-btn').forEach((btn) => {
+      btn.addEventListener('click', () => setLang(btn.getAttribute('data-lang')));
+    });
     function go(id) {
       document.querySelectorAll('.screen').forEach((el) => el.classList.add('hidden'));
       document.getElementById(id).classList.remove('hidden');

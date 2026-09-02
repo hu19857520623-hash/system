@@ -289,22 +289,22 @@ export default function InventoryPage({ alertsOnly }: InventoryPageProps) {
         <Table>
           <thead className="table-head">
             <tr>
-              <th className="min-w-[220px]">商品</th>
-              <th>实测体积</th>
-              <th>SKU</th>
-              <th>自定义编号</th>
-              <th>仓库</th>
-              <th>库存来源</th>
-              {showCatalogHoldColumn && <th className="text-right">货盘持有</th>}
-              <th className="text-right">可用</th>
-              <th className="text-right">待上架</th>
-              <th className="text-right">待出库</th>
-              <th className="text-right">锁定</th>
-              <th className="text-right">在途</th>
-              <th className="text-right">不良品</th>
-              <th className="text-right">已出库</th>
-              <th>状态</th>
-              <th className="text-right">操作</th>
+              <th className="min-w-[220px] whitespace-nowrap">商品</th>
+              <th className="whitespace-nowrap">实测体积</th>
+              <th className="whitespace-nowrap">SKU</th>
+              <th className="whitespace-nowrap">自定义编号</th>
+              <th className="whitespace-nowrap">仓库</th>
+              <th className="whitespace-nowrap">库存来源</th>
+              {showCatalogHoldColumn && <th className="whitespace-nowrap text-right">货盘持有</th>}
+              <th className="whitespace-nowrap text-right">可用</th>
+              <th className="whitespace-nowrap text-right">待上架</th>
+              <th className="whitespace-nowrap text-right">待出库</th>
+              <th className="whitespace-nowrap text-right">锁定</th>
+              <th className="whitespace-nowrap text-right">在途</th>
+              <th className="whitespace-nowrap text-right">不良品</th>
+              <th className="whitespace-nowrap text-right">已出库</th>
+              <th className="whitespace-nowrap">状态</th>
+              <th className="whitespace-nowrap text-right">操作</th>
             </tr>
           </thead>
           <tbody className="table-body">

@@ -2,6 +2,7 @@ import {
   followSalesMatchesUser,
   followSalesMatchTokens,
   parseFollowSalesFromRemark,
+  resolveAssigneeIdByFollowSales,
   resolveFollowSales,
 } from './leads-follow-sales.util'
 
@@ -57,5 +58,20 @@ describe('followSalesMatchesUser', () => {
 
   it('matches 陈琪珍(kiki) by real name', () => {
     expect(followSalesMatchesUser('陈琪珍(kiki)', { username: 'chenqizhen', realName: '陈琪珍' })).toBe(true)
+  })
+})
+
+describe('resolveAssigneeIdByFollowSales', () => {
+  const assignees = [
+    { id: 19, username: 'chenqizhen', realName: '陈琪珍' },
+    { id: 22, username: 'caiyun', realName: '尚彩云' },
+  ]
+
+  it('resolves 陈琪珍(kiki) to chenqizhen', () => {
+    expect(resolveAssigneeIdByFollowSales('陈琪珍(kiki)', assignees)).toBe(19n)
+  })
+
+  it('returns null when no assignee matches', () => {
+    expect(resolveAssigneeIdByFollowSales('ohhh bys@微信', assignees)).toBeNull()
   })
 })

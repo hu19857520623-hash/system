@@ -10,6 +10,7 @@ import { fetchOmsInboundRows, mergeInboundPaginate } from './oms-inbound-bridge.
 import { buildInboundRemark, parseOmsInboundMeta, stripOmsSystemTags } from '../../common/oms-sync-meta.util'
 import { resolveBillingDimensions } from '../../common/product-dimension.util'
 import { parseInboundQcScanInput } from './inbound-qc-scan.util'
+import { findInboundItemByScan as matchInboundItemByScan } from './inbound-item-scan.util'
 import { InventoryMutationService } from '../../common/inventory/inventory-mutation.service'
 import { buildInternalSku } from '../../common/sku-code.util'
 import { buildBoxLabelsPdfBuffer, buildInboundBoxLabelData } from '../../common/labels/box-label-pdf.util'
@@ -213,6 +214,7 @@ export class InboundService {
       widthCm: billing.widthCm,
       heightCm: billing.heightCm,
       dimensionsSource: billing.source === 'none' ? null : billing.source,
+      barcode: prod?.barcode || '',
     }
   }
 
@@ -221,22 +223,9 @@ export class InboundService {
     skuToken: string,
     prodMap: Map<number, { barcode?: string | null }>,
   ) {
-    const token = this.normalizeScanToken(skuToken)
-    let item = order.items.find((i) => this.normalizeScanToken(i.sku) === token)
-    if (item) return item
-    item = order.items.find((i) => {
-      const barcode = prodMap.get(Number(i.productId))?.barcode
-      return barcode && this.normalizeScanToken(barcode) === token
-    })
-    if (item) return item
-    const suffixMatches = order.items.filter((i) => token.endsWith(this.normalizeScanToken(i.sku)))
-    if (suffixMatches.length === 1) return suffixMatches[0]
-    if (suffixMatches.length > 1) {
-      throw new BadRequestException(
-        `扫描码「${skuToken}」匹配到入库单内多个 SKU，请扫描完整系统 SKU（含客户代码前缀）或商品条码`,
-      )
-    }
-    return null
+    const barcodes = new Map<number, string | null | undefined>()
+    for (const [id, product] of prodMap.entries()) barcodes.set(id, product.barcode)
+    return matchInboundItemByScan(order.items, skuToken, barcodes)
   }
 
   async findByInboundNo(inboundNo: string) {
@@ -864,19 +853,15 @@ export class InboundService {
     const order = await this.prisma.inboundOrder.findFirst({
       where: {
         warehouseCode,
-        OR: [
-          { inboundNo: scanCode },
-          { warehouseNo: scanCode },
-          { trackingNo: scanCode },
-        ],
+        inboundNo: scanCode,
       },
       include: { items: true },
     })
-    if (!order) throw new NotFoundException(`未找到匹配入库单：${scanCode}`)
+    if (!order) {
+      throw new NotFoundException(`未找到入库单号 ${scanCode}。到仓扫描只接受入库单号，不支持入仓号或跟踪号`)
+    }
 
-    let scanType = 'inbound_no'
-    if (order.warehouseNo === scanCode) scanType = 'warehouse_no'
-    else if (order.trackingNo === scanCode) scanType = 'tracking_no'
+    const scanType = 'inbound_no'
 
     if (order.status === 'arrived') {
       return {

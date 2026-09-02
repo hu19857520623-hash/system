@@ -239,21 +239,21 @@ export default function OutboundRecords() {
         <Table>
           <thead className="table-head">
             <tr>
-              <th>出库单号</th>
-              <th>参考号</th>
-              <th>跟踪号/运单号</th>
-              <th>物流渠道</th>
-              <th>发货来源</th>
-              <th>平台</th>
-              <th>店铺</th>
-              <th>仓库</th>
-              <th>履约状态</th>
-              <th>物流状态</th>
-              <th>签收单</th>
-              <th>费用对账</th>
-              <th className="text-right">金额</th>
-              <th>时间</th>
-              <th className="w-[76px]">操作</th>
+              <th className="whitespace-nowrap">出库单号</th>
+              <th className="whitespace-nowrap">参考号</th>
+              <th className="whitespace-nowrap">跟踪号/运单号</th>
+              <th className="whitespace-nowrap">物流渠道</th>
+              <th className="whitespace-nowrap">发货来源</th>
+              <th className="whitespace-nowrap">平台</th>
+              <th className="whitespace-nowrap">店铺</th>
+              <th className="whitespace-nowrap">仓库</th>
+              <th className="whitespace-nowrap">履约状态</th>
+              <th className="whitespace-nowrap">物流状态</th>
+              <th className="whitespace-nowrap">签收单</th>
+              <th className="whitespace-nowrap">费用对账</th>
+              <th className="whitespace-nowrap text-right">金额</th>
+              <th className="whitespace-nowrap">时间</th>
+              <th className="w-[76px] whitespace-nowrap">操作</th>
             </tr>
           </thead>
           <tbody className="table-body">

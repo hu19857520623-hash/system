@@ -212,7 +212,7 @@ export function PlaceholderPage({ title, desc }: { title: string; desc?: string 
 export function Table({ children, className = '' }: { children: React.ReactNode; className?: string }) {
   return (
     <div className={`overflow-x-auto ${className}`}>
-      <table className="w-full text-sm">{children}</table>
+      <table className="w-full min-w-max text-sm">{children}</table>
     </div>
   )
 }

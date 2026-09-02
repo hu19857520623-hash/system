@@ -1,6 +1,6 @@
 import type { PrismaService } from '../../common/prisma/prisma.service'
 import { catalogStockPool, remainingCatalogStock } from './catalog-stock.util'
-import { CATALOG_CUSTOMER_CODE, catalogBaseSkuFromInternal } from '../../common/catalog-customer.util'
+import { CATALOG_CUSTOMER_CODE, catalogBaseSkuFromInternal, catalogSkuLookupKeys } from '../../common/catalog-customer.util'
 
 function num(v: unknown, fallback = 0): number {
   if (v == null || v === '') return fallback
@@ -104,9 +104,9 @@ export async function pushCatalogStockToOms(
   prisma: PrismaService,
   sku: string,
 ): Promise<OmsCatalogStockPayload | null> {
-  const pricing = await prisma.productPricing.findUnique({ where: { sku } })
+  const pricing = await prisma.productPricing.findFirst({ where: { sku: { in: catalogSkuLookupKeys(sku) } } })
   if (!pricing?.visibleOnOms) return null
-  const product = await prisma.product.findUnique({ where: { sku } })
+  const product = await prisma.product.findFirst({ where: { sku: { in: catalogSkuLookupKeys(sku) } } })
 
   const payload = buildOmsCatalogPayload(mergeProductDimensions(pricing, product))
   await prisma.syncLog.create({
@@ -129,18 +129,23 @@ export async function listOmsCatalogForDisplay(prisma: PrismaService): Promise<O
     orderBy: { id: 'desc' },
   })
   const products = rows.length
-    ? await prisma.product.findMany({ where: { sku: { in: rows.map(row => row.sku) } } })
+    ? await prisma.product.findMany({
+        where: { sku: { in: [...new Set(rows.flatMap((row) => catalogSkuLookupKeys(row.sku)))] } },
+      })
     : []
   const productBySku = new Map(products.map(product => [product.sku, product]))
-  return rows.map(row => buildOmsCatalogPayload(mergeProductDimensions(row, productBySku.get(row.sku))))
+  return rows.map(row => {
+    const product = catalogSkuLookupKeys(row.sku).map((key) => productBySku.get(key)).find(Boolean)
+    return buildOmsCatalogPayload(mergeProductDimensions(row, product))
+  })
 }
 
 export async function getOmsCatalogSkuForDisplay(
   prisma: PrismaService,
   sku: string,
 ): Promise<OmsCatalogStockPayload | null> {
-  const pricing = await prisma.productPricing.findUnique({ where: { sku } })
+  const pricing = await prisma.productPricing.findFirst({ where: { sku: { in: catalogSkuLookupKeys(sku) } } })
   if (!pricing?.visibleOnOms) return null
-  const product = await prisma.product.findUnique({ where: { sku } })
+  const product = await prisma.product.findFirst({ where: { sku: { in: catalogSkuLookupKeys(sku) } } })
   return buildOmsCatalogPayload(mergeProductDimensions(pricing, product))
 }

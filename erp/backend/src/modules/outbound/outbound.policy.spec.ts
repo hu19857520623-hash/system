@@ -14,6 +14,7 @@ describe('outbound display policy', () => {
     expect(barcodeMatchesProduct('abc-1', { sku: 'ABC-1', barcode: null })).toBe(true)
     expect(barcodeMatchesProduct(' 999 ', { sku: 'ABC-1', barcode: '999' })).toBe(true)
     expect(barcodeMatchesProduct('nope', { sku: 'ABC-1', barcode: '999' })).toBe(false)
+    expect(barcodeMatchesProduct('690123', { sku: '123', barcode: null })).toBe(false)
   })
 
   it('parses and formats work dates', () => {

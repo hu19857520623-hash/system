@@ -333,6 +333,13 @@ export class OutboundService {
       ]),
     )
     const userMap = new Map(users.map((u) => [Number(u.id), u.realName || u.username]))
+    const productIds = [...new Set(
+      rows.flatMap((r) => (r.items || []).map((i: any) => i.productId).filter(Boolean)),
+    )] as bigint[]
+    const products = productIds.length
+      ? await this.prisma.product.findMany({ where: { id: { in: productIds } } })
+      : []
+    const productMap = new Map(products.map((p) => [Number(p.id), p]))
     return rows.map((r) => ({
       id: Number(r.id),
       outboundNo: r.outboundNo,
@@ -401,6 +408,7 @@ export class OutboundService {
         id: Number(i.id),
         productId: Number(i.productId),
         sku: i.sku,
+        barcode: productMap.get(Number(i.productId))?.barcode || '',
         productName: i.productName || '',
         qty: i.qty,
         pickedQty: i.pickedQty ?? 0,
@@ -1149,6 +1157,11 @@ th{background:#f5f5f5}
       throw new BadRequestException('当前状态不可拣货')
     }
 
+    const productIds = [...new Set(order.items.map((item) => item.productId))]
+    const products = productIds.length
+      ? await this.prisma.product.findMany({ where: { id: { in: productIds } } })
+      : []
+    const productMap = new Map(products.map((p) => [Number(p.id), p]))
     const items = await Promise.all(
       order.items.map(async (item) => {
         const pickQty = item.pickedQty && item.pickedQty > 0 ? item.pickedQty : item.qty
@@ -1156,6 +1169,7 @@ th{background:#f5f5f5}
         return {
           id: Number(item.id),
           sku: item.sku,
+          barcode: productMap.get(Number(item.productId))?.barcode || '',
           productName: item.productName || '',
           qty: item.qty,
           pickedQty: pickQty,

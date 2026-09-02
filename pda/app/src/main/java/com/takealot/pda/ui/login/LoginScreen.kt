@@ -24,6 +24,7 @@ import com.takealot.pda.data.ErpException
 import com.takealot.pda.ui.components.BigButton
 import com.takealot.pda.ui.components.Feedback
 import com.takealot.pda.ui.components.FeedbackBar
+import com.takealot.pda.ui.components.LanguageSwitcher
 import com.takealot.pda.ui.components.fieldColors
 import com.takealot.pda.ui.theme.PdaMuted
 import com.takealot.pda.ui.theme.PdaText
@@ -58,13 +59,15 @@ fun LoginScreen(onLoggedIn: () -> Unit) {
         }
     }
 
+    val currentLang = PdaApp.instance.language.language
     Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text(tr("pda_title"), color = PdaText, fontSize = 28.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 28.dp))
+        LanguageSwitcher()
+        Text(tr("pda_title"), color = PdaText, fontSize = 28.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 12.dp))
         Text(tr("pda_subtitle"), color = PdaMuted, fontSize = 14.sp)
         OutlinedTextField(value = username, onValueChange = { username = it }, label = { Text(tr("username")) }, singleLine = true, modifier = Modifier.padding(top = 12.dp), colors = fieldColors())
         OutlinedTextField(value = password, onValueChange = { password = it }, label = { Text(tr("password")) }, singleLine = true, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), colors = fieldColors())
         FeedbackBar(feedback)
         BigButton(if (busy) tr("logging_in") else tr("login"), onClick = { submit() }, enabled = !busy && username.isNotBlank() && password.isNotBlank())
-        Text("服务器由主管统一配置。如无法连接，请联系仓库主管。", color = PdaMuted, fontSize = 12.sp)
+        Text(tr("server_hint"), color = PdaMuted, fontSize = 12.sp)
     }
 }

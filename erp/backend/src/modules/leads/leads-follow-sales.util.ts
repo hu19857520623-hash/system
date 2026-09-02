@@ -42,6 +42,19 @@ export function followSalesMatchesUser(
   return followSalesMatchTokens(user).some((token) => text.includes(token.toLowerCase()))
 }
 
+/** 按跟进销售姓名反查归属运营（用于认领线索时自动填 assigneeId）。 */
+export function resolveAssigneeIdByFollowSales(
+  followSales: string | null | undefined,
+  assignees: { id: bigint | number; username?: string | null; realName?: string | null }[],
+): bigint | null {
+  const text = String(followSales || '').trim()
+  if (!text) return null
+  for (const user of assignees) {
+    if (followSalesMatchesUser(text, user)) return BigInt(user.id)
+  }
+  return null
+}
+
 function isUsableFollowSalesToken(token: string): boolean {
   if (token.length < MIN_TOKEN_LEN) return false
   if (/^[a-zA-Z0-9._-]+$/.test(token) && token.length < MIN_ASCII_TOKEN_LEN) return false

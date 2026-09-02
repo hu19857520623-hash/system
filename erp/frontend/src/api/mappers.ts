@@ -18,6 +18,15 @@ function parseLeadAcqFromRemark(remark?: string | null): string {
   return matched?.[1]?.trim() || ''
 }
 
+/** 去掉 remark 开头的导入元数据（留资/获客/对接等），与后端 leads-remark.util 保持一致。 */
+export function stripLeadRemarkImportPrefix(remark?: string | null): string {
+  let text = String(remark || '').trim()
+  if (!text) return ''
+  text = text.replace(/^(?:(?:\s*(?:留资|前端|获客|对接|再对接|销售情况):[^|]*)\s*(?:\|\s*)?)+/u, '').trim()
+  text = text.replace(/^备注:\s*/u, '').trim()
+  return text
+}
+
 export function looksLikeLeadPhone(raw?: string | null): boolean {
   const digits = String(raw || '').replace(/[\s\-()+]/g, '')
   return /^1[3-9]\d{9}$/.test(digits) || /^0\d{10,11}$/.test(digits) || /^\+?27\d{8,10}$/.test(digits)

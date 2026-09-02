@@ -38,7 +38,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.takealot.pda.PdaApp
 import com.takealot.pda.data.Warehouse
-import com.takealot.pda.data.AppLanguage
+import com.takealot.pda.ui.components.LanguageSwitcher
 import com.takealot.pda.scan.ScanBus
 import com.takealot.pda.ui.i18n.tr
 import com.takealot.pda.ui.theme.PdaAccent
@@ -60,7 +60,6 @@ fun HomeScreen(onInbound: (String) -> Unit, onOutbound: (String) -> Unit, onSett
     var warehouseCode by remember { mutableStateOf(session.warehouseCode) }
     var inboundTodo by remember { mutableStateOf(0) }
     var outboundTodo by remember { mutableStateOf(0) }
-    var languageMenuOpen by remember { mutableStateOf(false) }
     val networkOnline = rememberNetworkOnline()
     val scannerReady by ScanBus.receiverActive.collectAsState()
 
@@ -89,25 +88,19 @@ fun HomeScreen(onInbound: (String) -> Unit, onOutbound: (String) -> Unit, onSett
         }
     }
 
+    val currentLang = PdaApp.instance.language.language
     val currentWh = warehouses.find { it.code == warehouseCode }
     val whLabel = currentWh?.let { "${it.title} (${it.code})" } ?: warehouseCode.ifBlank { tr("no_warehouse") }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Column {
+            Column(Modifier.weight(1f)) {
                 Text(tr("greeting", session.realName.ifBlank { session.username }), color = PdaText, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
                 Text(tr("light_work"), color = PdaMuted, fontSize = 13.sp)
             }
-            Row {
-                TextButton(onClick = { languageMenuOpen = true }) { Text(PdaApp.instance.language.language.label, color = PdaAccent) }
-                DropdownMenu(expanded = languageMenuOpen, onDismissRequest = { languageMenuOpen = false }) {
-                    AppLanguage.entries.forEach { language ->
-                        DropdownMenuItem(text = { Text(language.label) }, onClick = { PdaApp.instance.language.set(language); languageMenuOpen = false })
-                    }
-                }
-                TextButton(onClick = onSettings) { Text(tr("settings"), color = PdaAccent) }
-            }
+            TextButton(onClick = onSettings) { Text(tr("settings"), color = PdaAccent) }
         }
+        LanguageSwitcher()
         Column(
             Modifier.fillMaxWidth().background(PdaSurface, RoundedCornerShape(12.dp)).border(1.dp, PdaMuted.copy(alpha = 0.25f), RoundedCornerShape(12.dp)).padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),

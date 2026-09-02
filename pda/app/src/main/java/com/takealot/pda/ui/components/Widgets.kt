@@ -40,6 +40,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.takealot.pda.PdaApp
+import com.takealot.pda.data.AppLanguage
 import com.takealot.pda.ui.theme.PdaAccent
 import com.takealot.pda.ui.theme.PdaErr
 import com.takealot.pda.ui.theme.PdaMuted
@@ -78,6 +80,29 @@ fun fieldColors() = OutlinedTextFieldDefaults.colors(
     focusedLabelColor = PdaAccent, cursorColor = PdaAccent,
     focusedTextColor = PdaText, unfocusedTextColor = PdaText,
 )
+
+@Composable
+fun LanguageSwitcher() {
+    val current = PdaApp.instance.language.language
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        AppLanguage.entries.forEach { language ->
+            val selected = current == language
+            Box(
+                Modifier.weight(1f).height(44.dp)
+                    .background(if (selected) PdaAccent else PdaSurface2, RoundedCornerShape(10.dp))
+                    .clickable { PdaApp.instance.language.set(language) },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    language.label,
+                    color = if (selected) Color(0xFF1A1204) else PdaText,
+                    fontSize = 13.sp,
+                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                )
+            }
+        }
+    }
+}
 
 @Composable
 fun BigButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, color: Color = PdaAccent) {

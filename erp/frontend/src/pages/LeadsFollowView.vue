@@ -5,7 +5,6 @@ import { ElMessage } from 'element-plus'
 import { leadApi } from '@/api/client.js'
 import { mapLead } from '@/api/mappers.ts'
 import { useListLoader, withAction } from '@/composables/useListLoader.ts'
-import { erpConfirm } from '@/utils/messageBox.ts'
 import { useServerPagination } from '@/composables/useTablePagination.ts'
 import ListPagination from '@/components/ListPagination.vue'
 import { ROUTE_MAP } from '@/constants/index.js'
@@ -15,8 +14,18 @@ const router = useRouter()
 const app = useAppStore()
 const tab = ref('mine')
 const searchQ = ref('')
-const followTimeField = ref<'inquiry' | 'latestFollow' | 'nextFollow'>('inquiry')
+const followStatusFilter = ref('')
 const followDateRange = ref<[string, string] | null>(null)
+
+const FOLLOW_LIST_STATUS_OPTIONS = [
+  { value: 'following', label: '跟进中' },
+  { value: 'hot', label: '意向高' },
+  { value: 'nurture', label: '暂无意向' },
+  { value: 'lost', label: '已流失' },
+  { value: 'deal', label: '成交' },
+] as const
+
+const FOLLOW_LIST_STATUS_ALL = FOLLOW_LIST_STATUS_OPTIONS.map((item) => item.value).join(',')
 
 const followDateShortcuts = [
   {
@@ -49,9 +58,19 @@ const followTarget = ref<any>(null)
 const followForm = ref({
   followType: 'phone',
   content: '',
+  status: '' as FollowStatusValue | '',
   nextPlan: '',
   nextFollowAt: '',
 })
+
+const FOLLOW_STATUS_OPTIONS = [
+  { value: 'recall', label: '再次跟进' },
+  { value: 'lost', label: '已流失' },
+  { value: 'nurture', label: '暂无意向' },
+  { value: 'hot', label: '意向高' },
+] as const
+
+type FollowStatusValue = (typeof FOLLOW_STATUS_OPTIONS)[number]['value']
 
 const SHOP_TYPE_OPTIONS = ['本土店', '跨境店', '海外仓']
 const dealDialogVisible = ref(false)
@@ -62,13 +81,13 @@ const dealShopType = ref('本土店')
 const LEAD_STATUS_MAP: Record<string, { label: string; type: string }> = {
   new: { label: '新线索', type: 'info' },
   following: { label: '跟进中', type: 'info' },
-  recall: { label: '需要再次跟进', type: 'warning' },
+  recall: { label: '需要再次跟进', type: 'danger' },
   hot: { label: '意向高', type: 'success' },
   deal: { label: '成交', type: 'success' },
   won: { label: '成交', type: 'success' },
   invalid: { label: '无效客户', type: 'info' },
   lost: { label: '已流失', type: 'info' },
-  nurture: { label: '暂无意向', type: 'info' },
+  nurture: { label: '暂无意向', type: 'warning' },
 }
 
 const { page, pageSize, total, resetPage } = useServerPagination()
@@ -87,23 +106,14 @@ const { loading, items: leads, load } = useListLoader(async () => {
     params.statuses = 'new,following'
   }
   if (tab.value === 'follow') {
+    const status = followStatusFilter.value
+    params.statuses = status === 'deal' ? 'deal,won' : status || FOLLOW_LIST_STATUS_ALL
     if (!canViewAll && userId) params.followMine = '1'
-    else params.statuses = 'new,following'
     const range = followDateRange.value
-    const hasFollowDate = Boolean(range && range.length === 2)
-    if (canViewAll && (followTimeField.value !== 'nextFollow' || !hasFollowDate)) params.followDue = '1'
     if (range && range.length === 2) {
       const [from, to] = range
-      if (followTimeField.value === 'nextFollow') {
-        params.nextFollowAtFrom = from
-        params.nextFollowAtTo = to
-      } else if (followTimeField.value === 'latestFollow') {
-        params.latestFollowAtFrom = from
-        params.latestFollowAtTo = to
-      } else {
-        params.createdAtFrom = from
-        params.createdAtTo = to
-      }
+      params.latestFollowAtFrom = from
+      params.latestFollowAtTo = to
     }
   }
   const res = await leadApi.list(params)
@@ -139,9 +149,16 @@ function applyFilters() {
 }
 
 function resetFollowFilters() {
-  followTimeField.value = 'inquiry'
+  followStatusFilter.value = ''
   followDateRange.value = null
   applyFilters()
+}
+
+function defaultFollowStatus(row: { status?: string }): FollowStatusValue | '' {
+  const current = row.status || ''
+  return FOLLOW_STATUS_OPTIONS.some((item) => item.value === current)
+    ? (current as FollowStatusValue)
+    : ''
 }
 
 function writeFollow(row: any) {
@@ -149,6 +166,7 @@ function writeFollow(row: any) {
   followForm.value = {
     followType: row.latestFollow?.followType || 'phone',
     content: '',
+    status: defaultFollowStatus(row),
     nextPlan: '',
     nextFollowAt: '',
   }
@@ -161,6 +179,10 @@ async function submitFollow() {
     ElMessage.warning('请填写本次跟进内容')
     return
   }
+  if (!followForm.value.status) {
+    ElMessage.warning('请选择客户状态')
+    return
+  }
   if (followTarget.value?._leadId == null) {
     ElMessage.error('线索 ID 缺失，请刷新后重试')
     return
@@ -171,6 +193,7 @@ async function submitFollow() {
       await leadApi.followUp(followTarget.value._leadId, {
         followType: followForm.value.followType || 'phone',
         content,
+        status: followForm.value.status,
         nextPlan: followForm.value.nextPlan.trim() || undefined,
         nextFollowAt: followForm.value.nextFollowAt || undefined,
       })
@@ -210,22 +233,6 @@ async function submitDeal() {
   }
 }
 
-async function markRecall(row: any) {
-  if (!row?._leadId) {
-    ElMessage.error('线索 ID 缺失，请刷新后重试')
-    return
-  }
-  try {
-    await erpConfirm(`将「${row.name}」标记为需要再次跟进并退回线索池？`, '需要再次跟进')
-  } catch {
-    return
-  }
-  await withAction(async () => {
-    await leadApi.recall(row._leadId)
-    await load()
-  }, '已退回线索池，状态为需要再次跟进')
-}
-
 watch(tab, applyFilters)
 watch([page, pageSize], load)
 onMounted(load)
@@ -252,10 +259,20 @@ onMounted(load)
       <el-tab-pane label="待跟进" name="follow" />
     </el-tabs>
     <div v-if="tab === 'follow'" class="filter-bar">
-      <el-select v-model="followTimeField" size="small" class="filter-time-field" @change="applyFilters">
-        <el-option label="询盘日期" value="inquiry" />
-        <el-option label="最近跟进" value="latestFollow" />
-        <el-option label="下次跟进" value="nextFollow" />
+      <el-select
+        v-model="followStatusFilter"
+        size="small"
+        class="filter-status-field"
+        placeholder="全部状态"
+        clearable
+        @change="applyFilters"
+      >
+        <el-option
+          v-for="item in FOLLOW_LIST_STATUS_OPTIONS"
+          :key="item.value"
+          :label="item.label"
+          :value="item.value"
+        />
       </el-select>
       <el-date-picker
         v-model="followDateRange"
@@ -293,17 +310,16 @@ onMounted(load)
       <el-table-column prop="latestFollowAt" label="最近跟进" width="150" />
       <el-table-column prop="nextFollowAt" label="下次跟进" width="150" />
       <el-table-column prop="inquiryAt" label="询盘日期" width="110" />
-      <el-table-column label="操作" width="240" fixed="right">
+      <el-table-column label="操作" width="160" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" size="small" @click="writeFollow(row)">写跟进</el-button>
-          <el-button link type="warning" size="small" @click="markRecall(row)">需要再次跟进</el-button>
           <el-button link type="success" size="small" @click="markDeal(row)">成交</el-button>
         </template>
       </el-table-column>
     </el-table>
     <el-empty
       v-if="!loading && !leads.length"
-      :description="tab === 'follow' ? (followDateRange ? '该时间范围内暂无待跟进线索' : '暂无待跟进线索') : '当前账号没有归属线索'"
+      :description="tab === 'follow' ? (followStatusFilter || followDateRange ? '暂无符合条件的线索' : '暂无待跟进线索') : '当前账号没有归属线索'"
     />
     <ListPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
   </el-card>
@@ -334,6 +350,13 @@ onMounted(load)
           show-word-limit
           placeholder="填写本次沟通情况、客户反馈等"
         />
+      </el-form-item>
+      <el-form-item label="客户状态" required>
+        <el-radio-group v-model="followForm.status">
+          <el-radio v-for="item in FOLLOW_STATUS_OPTIONS" :key="item.value" :value="item.value">
+            {{ item.label }}
+          </el-radio>
+        </el-radio-group>
       </el-form-item>
       <el-form-item label="下一步计划">
         <el-input
@@ -397,6 +420,6 @@ onMounted(load)
   gap: 8px;
   margin: 0 0 12px;
 }
-.filter-time-field { width: 120px; }
+.filter-status-field { width: 130px; }
 .filter-date { width: 260px; }
 </style>

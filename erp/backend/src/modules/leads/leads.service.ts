@@ -4,7 +4,12 @@ import { PrismaService } from '../../common/prisma/prisma.service'
 import { FileStoreService } from '../../common/file-store.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
 import { parseLeadsImportCsv } from './leads-import.util'
-import { followSalesMatchTokens, resolveFollowSales } from './leads-follow-sales.util'
+import {
+  followSalesMatchTokens,
+  resolveAssigneeIdByFollowSales,
+  resolveFollowSales,
+} from './leads-follow-sales.util'
+import { stripLeadRemarkImportPrefix } from './leads-remark.util'
 import {
   buildLeadContactIndex,
   collectLeadContactKeys,
@@ -77,10 +82,14 @@ export class LeadsService {
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean)
+    const followMine = q.followMine === '1' || q.followMine === 'true'
     if (statuses.length) where.status = { in: statuses }
     else if (q.status) where.status = q.status
+    else if (followMine) {
+      // 销售「待跟进」：按跟进销售匹配，且默认不含已退回线索池的 recall
+      where.status = { in: ['new', 'following'] }
+    }
     const mine = q.mine === '1' || q.mine === 'true'
-    const followMine = q.followMine === '1' || q.followMine === 'true'
     if (mine) {
       if (!currentUser?.userId) throw new BadRequestException('未登录')
       where.assigneeId = BigInt(currentUser.userId)
@@ -197,6 +206,7 @@ export class LeadsService {
         ...r,
         followSales: resolveFollowSales(r.followSales, r.remark),
         assigneeName: r.assigneeId ? nameMap.get(Number(r.assigneeId)) ?? null : null,
+        remark: stripLeadRemarkImportPrefix(r.remark) || null,
         customerCode: customer?.customerCode ?? null,
         customerName: customer?.customerName ?? null,
       }
@@ -286,6 +296,7 @@ export class LeadsService {
       ...row,
       followSales: resolveFollowSales(row.followSales, row.remark),
       assigneeName: row.assigneeId ? userNameMap.get(row.assigneeId.toString()) ?? null : null,
+      remark: stripLeadRemarkImportPrefix(row.remark) || null,
       followUps: row.followUps.map((item) => ({
         ...item,
         operatorName: item.operatorId
@@ -377,6 +388,16 @@ export class LeadsService {
     if (nextFollowAt && Number.isNaN(nextFollowAt.getTime())) {
       throw new BadRequestException('下次跟进时间格式无效')
     }
+    const storedFollowSales = resolveFollowSales(lead.followSales, lead.remark)
+    const followSales = String(data.followSales || '').trim() || storedFollowSales
+    if (!followSales) throw new BadRequestException('请填写跟进销售')
+
+    const followUpStatuses = new Set(['recall', 'lost', 'nurture', 'hot', 'following'])
+    const requestedStatus = String(data.status || '').trim() || 'following'
+    if (!followUpStatuses.has(requestedStatus)) {
+      throw new BadRequestException('请选择有效的客户状态')
+    }
+
     const fu = await this.prisma.leadFollowUp.create({
       data: {
         leadId: BigInt(id),
@@ -387,8 +408,25 @@ export class LeadsService {
         operatorId: operatorId ? BigInt(operatorId) : undefined,
       },
     })
-    const patch: { status: string; assigneeId?: bigint } = { status: 'following' }
-    if (operatorId && !lead.assigneeId) patch.assigneeId = BigInt(operatorId)
+    const patch: { status: string; assigneeId?: bigint | null; followSales: string } = {
+      status: requestedStatus,
+      followSales,
+    }
+    if (requestedStatus === 'recall') {
+      patch.assigneeId = null
+    } else if (!lead.assigneeId) {
+      if (data.assigneeId) {
+        patch.assigneeId = BigInt(Number(data.assigneeId))
+      } else {
+        const assignees = await this.prisma.sysUser.findMany({
+          where: { status: 1, roleCode: { in: [...LEAD_ASSIGNEE_ROLE_CODES] } },
+          select: { id: true, username: true, realName: true },
+        })
+        const matchedAssignee = resolveAssigneeIdByFollowSales(followSales, assignees)
+        if (matchedAssignee) patch.assigneeId = matchedAssignee
+        else if (operatorId) patch.assigneeId = BigInt(operatorId)
+      }
+    }
     await this.prisma.lead.update({ where: { id: BigInt(id) }, data: patch })
     return fu
   }

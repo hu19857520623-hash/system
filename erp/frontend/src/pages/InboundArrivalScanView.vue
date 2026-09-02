@@ -856,7 +856,7 @@ onMounted(async () => {
             <el-input
               ref="scanInputRef"
               v-model="scanCode"
-              placeholder="入库单号 / 入仓号 / 跟踪号"
+              placeholder="只扫入库单号"
               clearable
               :disabled="!canScan || scanning"
               @keyup.enter="submitArrivalScan"

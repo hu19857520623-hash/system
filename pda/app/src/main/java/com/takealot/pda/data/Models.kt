@@ -50,6 +50,7 @@ data class InboundOrder(
 data class InboundItem(
     val id: Int = 0,
     val sku: String? = "",
+    val barcode: String? = "",
     val productName: String? = "",
     val expectedQty: Int = 0,
     val actualQty: Int? = null,
@@ -62,6 +63,7 @@ data class InboundItem(
 ) {
     val skuCode get() = sku.orEmpty()
     val remainingPutaway get() = ((actualQty ?: expectedQty) - (putawayQty ?: 0)).coerceAtLeast(0)
+    fun matchesScan(code: String) = scanMatchesProduct(code, skuCode, barcode)
     fun hasMeasuredDims(): Boolean {
         val treatAsMeasured = dimensionsSource == "measured" || dimensionsSource == null
         return treatAsMeasured && (lengthCm ?: 0.0) > 0 && (widthCm ?: 0.0) > 0 && (heightCm ?: 0.0) > 0
@@ -108,6 +110,7 @@ data class OutboundOrder(
 data class OutboundItem(
     val id: Int = 0,
     val sku: String? = "",
+    val barcode: String? = "",
     val productName: String? = "",
     val qty: Int = 0,
     val pickedQty: Int = 0,
@@ -117,6 +120,7 @@ data class OutboundItem(
 data class PickSuggestionLine(
     val id: Int = 0,
     val sku: String? = "",
+    val barcode: String? = "",
     val productName: String? = "",
     val qty: Int = 0,
     val pickedQty: Int = 0,
@@ -147,8 +151,17 @@ data class LocalPickLine(
     var locationCode: String,
     var scannedQty: Int = 0,
     val taskKey: String = "$id@$locationCode",
+    val barcode: String = "",
 ) {
     val done get() = scannedQty >= qty
+    fun matchesScan(code: String) = scanMatchesProduct(code, sku, barcode)
+}
+
+fun scanMatchesProduct(code: String, sku: String, barcode: String? = null): Boolean {
+    val token = code.trim()
+    if (token.isEmpty()) return false
+    if (sku.equals(token, ignoreCase = true)) return true
+    return !barcode.isNullOrBlank() && barcode.equals(token, ignoreCase = true)
 }
 
 class ErpException(message: String, val code: Int = -1) : RuntimeException(message)

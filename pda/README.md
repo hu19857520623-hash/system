@@ -58,7 +58,7 @@ pda/preview/index.html
 
 | 模块 | PDA 做什么 | 对接接口 |
 |---|---|---|
-| 入库-到仓 | 扫入库单号 / 跟踪号 / 仓单号 | `POST /api/inbound/arrival-scan` |
+| 入库-到仓 | 只扫入库单号 | `POST /api/inbound/arrival-scan` |
 | 入库-收货 | 扫外箱标或 SKU | `POST /api/inbound/:id/receive-box` |
 | 入库-清点 | 扫 SKU 累加实收，提交清点 | `POST /api/inbound/:id/scan-qc`、`/qc` |
 | 入库-上架 | 扫 SKU → 扫库位 | `POST /api/inbound/:id/putaway` |
