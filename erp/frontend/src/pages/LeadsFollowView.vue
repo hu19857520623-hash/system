@@ -20,6 +20,7 @@ const followStatusFilter = ref('')
 const followDateRange = ref<[string, string] | null>(null)
 
 const FOLLOW_LIST_STATUS_OPTIONS = [
+  { value: 'new', label: '新线索' },
   { value: 'following', label: '跟进中' },
   { value: 'hot', label: '意向高' },
   { value: 'nurture', label: '暂无意向' },
@@ -27,7 +28,7 @@ const FOLLOW_LIST_STATUS_OPTIONS = [
   { value: 'deal', label: '成交' },
 ] as const
 
-/** 待跟进默认：进行中的销售跟进状态（不含已流失/成交，需手动筛选） */
+/** 我的线索 / 待跟进默认：进行中状态（不含已流失/成交，需手动筛选） */
 const FOLLOW_LIST_STATUS_ALL = 'new,following,hot,nurture'
 
 const followDateShortcuts = [
@@ -104,21 +105,20 @@ const { loading, items: leads, load } = useListLoader(async () => {
   const keyword = searchQ.value.trim()
   if (keyword) params.keyword = keyword
   const userId = app.authenticatedUser?.id
-  if (mode.value === 'mine' && userId) {
-    // 我的线索：归属运营、尚未进入销售跟进（new）
-    params.mine = '1'
-    params.statuses = 'new'
+  const status = followStatusFilter.value
+  params.statuses = status === 'deal' ? 'deal,won' : status || FOLLOW_LIST_STATUS_ALL
+  const range = followDateRange.value
+  if (range && range.length === 2) {
+    const [from, to] = range
+    params.latestFollowAtFrom = from
+    params.latestFollowAtTo = to
   }
-  if (mode.value === 'follow') {
-    const status = followStatusFilter.value
-    params.statuses = status === 'deal' ? 'deal,won' : status || FOLLOW_LIST_STATUS_ALL
-    if (userId) params.followMine = '1'
-    const range = followDateRange.value
-    if (range && range.length === 2) {
-      const [from, to] = range
-      params.latestFollowAtFrom = from
-      params.latestFollowAtTo = to
-    }
+  if (mode.value === 'mine' && userId) {
+    // 我的线索：当前账号作为归属运营的进行中线索（不按跟进销售）
+    params.mine = '1'
+  }
+  if (mode.value === 'follow' && userId) {
+    params.followMine = '1'
   }
   const res = await leadApi.list(params)
   total.value = res.total ?? 0
@@ -263,7 +263,7 @@ onMounted(load)
         />
       </div>
     </template>
-    <div v-if="mode === 'follow'" class="filter-bar">
+    <div class="filter-bar">
       <el-select
         v-model="followStatusFilter"
         size="small"
@@ -324,7 +324,7 @@ onMounted(load)
     </el-table>
     <el-empty
       v-if="!loading && !leads.length"
-      :description="mode === 'follow' ? (followStatusFilter || followDateRange ? '暂无符合条件的线索' : '暂无待跟进线索') : '当前账号没有待分配的新线索'"
+      :description="followStatusFilter || followDateRange ? '暂无符合条件的线索' : (mode === 'follow' ? '暂无待跟进线索' : '当前账号没有归属的线索')"
     />
     <ListPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
   </el-card>

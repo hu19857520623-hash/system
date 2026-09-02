@@ -97,8 +97,8 @@ export class LeadsService {
     }
     if (statuses.length) where.status = { in: statuses }
     else if (q.status) where.status = q.status
-    else if (followMine) {
-      where.status = { in: ['new', 'following'] }
+    else if (mine || followMine) {
+      where.status = { in: ['new', 'following', 'hot', 'nurture'] }
     }
     if (mine) {
       if (!currentUser?.userId) throw new BadRequestException('未登录')
