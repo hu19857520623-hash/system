@@ -14,7 +14,7 @@ import { useAppStore } from '@/stores/app'
 import { LEAD_SELF_ASSIGN_ROLE_CODES } from '@erp/shared/permissions.catalog'
 import { LEAD_STATUS } from '@/constants/index.js'
 
-const POOL_FOLLOWABLE_STATUSES = new Set(['lost', 'nurture', 'recall'])
+const POOL_FOLLOWABLE_STATUSES = new Set(['new', 'lost', 'nurture', 'recall'])
 
 function leadPoolStatusTagType(statusKey: string): 'success' | 'warning' | 'info' | 'danger' {
   const meta = LEAD_STATUS[statusKey as keyof typeof LEAD_STATUS]
@@ -190,7 +190,7 @@ function openNewLead() {
     contact: '',
     source: 'Takealot',
     assigneeId: defaultAssigneeId(),
-    followSales: '',
+    followSales: currentUserIsSales.value ? currentFollowSalesLabel() : '',
     remark: '',
   }
   dialogVisible.value = true

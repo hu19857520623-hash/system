@@ -355,7 +355,7 @@ export class LeadsService {
     const operator = operatorId
       ? await this.prisma.sysUser.findUnique({
           where: { id: BigInt(operatorId) },
-          select: { id: true, roleCode: true, status: true },
+          select: { id: true, roleCode: true, status: true, username: true, realName: true },
         })
       : null
     let targetAssigneeId = data.assigneeId ? Number(data.assigneeId) : operatorId
@@ -385,7 +385,14 @@ export class LeadsService {
       where: { status: 1 },
       select: { username: true, realName: true },
     })
-    const followSales = canonicalizeFollowSales(String(data.followSales || '').trim(), followSalesUsers) || undefined
+    let followSales = canonicalizeFollowSales(String(data.followSales || '').trim(), followSalesUsers) || undefined
+    if (
+      !followSales
+      && operator
+      && LEAD_SELF_ASSIGN_ROLE_CODES.includes(operator.roleCode as typeof LEAD_SELF_ASSIGN_ROLE_CODES[number])
+    ) {
+      followSales = formatFollowSalesLabel(operator) || undefined
+    }
     const created = await this.prisma.lead.create({
       data: {
         leadNo,
