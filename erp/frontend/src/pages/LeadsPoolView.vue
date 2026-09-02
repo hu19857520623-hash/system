@@ -23,8 +23,9 @@ function leadPoolStatusTagType(statusKey: string): 'success' | 'warning' | 'info
   return 'info'
 }
 
-function canFollowFromPool(statusKey: string) {
-  return POOL_FOLLOWABLE_STATUSES.has(statusKey)
+function canFollowFromPool(statusKey: string, followSales?: string) {
+  if (POOL_FOLLOWABLE_STATUSES.has(statusKey)) return true
+  return statusKey === 'following' && !String(followSales || '').trim()
 }
 
 const app = useAppStore()
@@ -70,7 +71,7 @@ const leads = computed(() =>
     id: l.leadNo,
     assignee: l.owner,
     statusTagType: leadPoolStatusTagType(l.statusKey),
-    canFollow: canFollowFromPool(l.statusKey),
+    canFollow: canFollowFromPool(l.statusKey, l.followSales),
   })),
 )
 
