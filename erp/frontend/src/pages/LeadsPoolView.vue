@@ -30,12 +30,24 @@ function canFollowFromPool(statusKey: string, followSales?: string) {
 
 function formatFollowSalesLabel(user?: { name?: string | null; realName?: string | null; username?: string | null } | null) {
   if (!user) return ''
-  const real = String(user.realName || user.name || '').trim()
   const username = String(user.username || '').trim()
-  if (real && username && real.toLowerCase() !== username.toLowerCase()) {
-    return `${real}(${username})`
+  const realName = String(user.realName || '').trim()
+  const name = String(user.name || '').trim()
+  const alreadyWrapped = (value: string) =>
+    Boolean(username) && value.toLowerCase().endsWith(`(${username.toLowerCase()})`)
+
+  if (realName) {
+    if (username && realName.toLowerCase() !== username.toLowerCase() && !alreadyWrapped(realName)) {
+      return `${realName}(${username})`
+    }
+    return realName
   }
-  return real || username
+  if (name) {
+    if (alreadyWrapped(name)) return name
+    if (username && name.toLowerCase() !== username.toLowerCase()) return `${name}(${username})`
+    return name
+  }
+  return username
 }
 
 const app = useAppStore()
@@ -404,15 +416,21 @@ const createFollowSalesOptions = computed(() => {
     const label = formatFollowSalesLabel(user)
     if (label) names.add(label)
   }
-  for (const raw of followSalesOptions.value) {
-    const name = canonicalizeFollowSalesOption(raw)
-    if (name) names.add(name)
-  }
-  const previous = canonicalizeFollowSalesOption(previousFollowSales.value) || previousFollowSales.value
-  if (previous) names.add(previous)
   const sorted = [...names].sort((a, b) => a.localeCompare(b, 'zh-CN'))
   if (!currentLabel) return sorted
   return [currentLabel, ...sorted.filter((name) => name !== currentLabel)]
+})
+const filterFollowSalesOptions = computed(() => {
+  const system = new Set(createFollowSalesOptions.value)
+  const extras = new Set<string>()
+  for (const raw of followSalesOptions.value) {
+    const name = canonicalizeFollowSalesOption(raw)
+    if (name && !system.has(name)) extras.add(name)
+  }
+  return [
+    ...createFollowSalesOptions.value,
+    ...[...extras].sort((a, b) => a.localeCompare(b, 'zh-CN')),
+  ]
 })
 
 onMounted(async () => {
@@ -469,7 +487,7 @@ onMounted(async () => {
           @change="applyFilters"
         >
           <el-option label="未填写" value="__empty__" />
-          <el-option v-for="name in createFollowSalesOptions" :key="name" :label="name" :value="name" />
+          <el-option v-for="name in filterFollowSalesOptions" :key="name" :label="name" :value="name" />
         </el-select>
         <el-date-picker
           v-model="createdRange"
