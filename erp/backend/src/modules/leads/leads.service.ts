@@ -25,6 +25,7 @@ import {
 } from '@erp/shared/permissions.catalog'
 import { CustomersService } from '../customers/customers.service'
 import { CreateCustomerDto } from '../customers/dto/customer.dto'
+import { PermissionsService } from '../../common/permissions/permissions.service'
 
 const DEAL_FILE_MAX_BYTES = 10 * 1024 * 1024
 const DEAL_FILE_MAX_COUNT = 30
@@ -50,6 +51,7 @@ export class LeadsService {
     private prisma: PrismaService,
     private files: FileStoreService,
     private customers: CustomersService,
+    private permissions: PermissionsService,
   ) {}
 
   async list(
@@ -82,14 +84,20 @@ export class LeadsService {
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean)
-    const followMine = q.followMine === '1' || q.followMine === 'true'
+    const followMineRequested = q.followMine === '1' || q.followMine === 'true'
+    let followMine = followMineRequested
+    const mine = q.mine === '1' || q.mine === 'true'
+    let canViewAllLeads = false
+    if (currentUser?.userId) {
+      canViewAllLeads =
+        currentUser.roleCode === 'admin' ||
+        (await this.permissions.userHasAnyPerm(currentUser.userId, currentUser.roleCode, ['leads_pool.view_all']))
+    }
     if (statuses.length) where.status = { in: statuses }
     else if (q.status) where.status = q.status
     else if (followMine) {
-      // 销售「待跟进」：按跟进销售匹配，且默认不含已退回线索池的 recall
       where.status = { in: ['new', 'following'] }
     }
-    const mine = q.mine === '1' || q.mine === 'true'
     if (mine) {
       if (!currentUser?.userId) throw new BadRequestException('未登录')
       where.assigneeId = BigInt(currentUser.userId)
@@ -105,6 +113,24 @@ export class LeadsService {
         and.push({
           OR: tokens.map((token) => ({ followSales: { contains: token } })),
         })
+      }
+    } else if (!mine && !q.assigneeId && currentUser?.userId && !canViewAllLeads) {
+      // 销售待跟进列表：无 view_all 时强制按跟进销售隔离
+      const activeFollowStatuses = new Set(['new', 'following', 'hot', 'nurture'])
+      const statusList = statuses.length ? statuses : q.status ? [q.status] : []
+      const scopedFollowList =
+        statusList.length > 0
+          ? statusList.some((s) => activeFollowStatuses.has(s))
+          : Boolean(q.followDue)
+      if (scopedFollowList) {
+        followMine = true
+        const tokens = followSalesMatchTokens(currentUser)
+        if (!tokens.length) and.push({ id: BigInt(0) })
+        else {
+          and.push({
+            OR: tokens.map((token) => ({ followSales: { contains: token } })),
+          })
+        }
       }
     } else if (q.followSales === '__empty__') {
       and.push({
@@ -424,7 +450,6 @@ export class LeadsService {
         })
         const matchedAssignee = resolveAssigneeIdByFollowSales(followSales, assignees)
         if (matchedAssignee) patch.assigneeId = matchedAssignee
-        else if (operatorId) patch.assigneeId = BigInt(operatorId)
       }
     }
     await this.prisma.lead.update({ where: { id: BigInt(id) }, data: patch })

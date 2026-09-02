@@ -26,6 +26,7 @@ export const ROUTE_MAP = {
   customers: '/customers',
   supplier_sea_freight_bill: '/supplier-sea-freight-bill',
   leads_pool: '/leads/pool',
+  leads_mine: '/leads/mine',
   leads_follow: '/leads/follow',
   leads_deals: '/leads/deals',
   leads_reports: '/leads/reports',

@@ -51,7 +51,7 @@ export class PricingController {
     return this.service.create(body)
   }
 
-  @RequirePerms('pricing.freight_callback')
+  @RequirePerms('pricing.set')
   @Post(':id/freight-callback')
   freightCallback(
     @Param('id', ParseIntPipe) id: number,

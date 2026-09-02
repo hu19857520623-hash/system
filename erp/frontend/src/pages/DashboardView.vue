@@ -7,6 +7,14 @@ import { dashboardApi, announcementApi } from '@/api/client.js'
 import { fmtTime } from '@/api/mappers.ts'
 import MetricCard from '@/components/ui/MetricCard.vue'
 import DashboardTrendChart from '@/components/ui/DashboardTrendChart.vue'
+import {
+  DASHBOARD_KPI_LABELS,
+  DASHBOARD_KPI_PERM_MAP,
+  DASHBOARD_PIPELINE_DOMESTIC_PERM,
+  DASHBOARD_PIPELINE_OVERSEAS_PERM,
+  DASHBOARD_TRENDS_PERM,
+  type DashboardKpiKey,
+} from '@erp/shared/dashboard-widgets'
 
 const app = useAppStore()
 const router = useRouter()
@@ -20,19 +28,21 @@ const greetName = computed(() => {
   return `${time}，${app.currentAccount.name}`
 })
 
-const kpis = ref([
-  { value: '—', label: '可用库存', tone: '' },
-  { value: '—', label: '商品 SKU', tone: '' },
-  { value: '—', label: '活跃供应商', tone: '' },
-  { value: '—', label: '线索总数', tone: '' },
-  { value: '—', label: '待审 PO', tone: 'warn' },
-  { value: '—', label: '待审选品', tone: 'warn' },
-  { value: '—', label: '同步失败', tone: 'warn' },
-])
+const kpis = ref<{ value: string; label: string; tone: string; key: DashboardKpiKey }[]>([])
+
+const visibleKpis = computed(() =>
+  kpis.value.filter((kpi) => app.hasPerm(DASHBOARD_KPI_PERM_MAP[kpi.key])),
+)
+
+const showTrendChart = computed(() => app.hasPerm(DASHBOARD_TRENDS_PERM))
+const showPipelineDomestic = computed(() => app.hasPerm(DASHBOARD_PIPELINE_DOMESTIC_PERM))
+const showPipelineOverseas = computed(() => app.hasPerm(DASHBOARD_PIPELINE_OVERSEAS_PERM))
+const showPipelineSection = computed(() => showPipelineDomestic.value || showPipelineOverseas.value)
 
 const quickEntries = ref([
   { id: 'leads_pool', icon: 'leads_pool', label: '线索池' },
-  { id: 'leads_follow', icon: 'leads_pool', label: '我的跟进' },
+  { id: 'leads_mine', icon: 'leads_mine', label: '我的线索' },
+  { id: 'leads_follow', icon: 'leads_follow', label: '待跟进' },
   { id: 'products', icon: 'products', label: '商品主数据' },
   { id: 'purchase', icon: 'purchase', label: '采购订单' },
   { id: 'create_inbound', icon: 'inbound', label: '发运海外仓' },
@@ -155,6 +165,10 @@ function announcementScheduleHint(ann: { displayPhase: string; scheduledAt?: str
 }
 
 async function loadTrends() {
+  if (!showTrendChart.value) {
+    trendSeries.value = []
+    return
+  }
   trendLoading.value = true
   try {
     const res = await dashboardApi.trends(7)
@@ -177,28 +191,36 @@ async function loadDashboard() {
         : Promise.resolve({ items: [] }),
       dashboardApi.notifications().catch(() => ({ items: [], badges: {} })),
     ])
-    kpis.value = [
-      { value: String(stats.inventoryAvailable ?? 0), label: '可用库存', tone: '' },
-      { value: String(stats.products ?? 0), label: '商品 SKU', tone: '' },
-      { value: String(stats.suppliers ?? 0), label: '活跃供应商', tone: '' },
-      { value: String(stats.leads ?? 0), label: '线索总数', tone: '' },
-      { value: String(stats.pendingPo ?? 0), label: '待审 PO', tone: 'warn' },
-      { value: String(stats.pendingAudit ?? 0), label: '待审选品', tone: 'warn' },
-      { value: String(stats.syncFailed ?? 0), label: '同步失败', tone: stats.syncFailed ? 'warn' : '' },
-    ]
+    const statsKeys = Object.keys(DASHBOARD_KPI_PERM_MAP) as DashboardKpiKey[]
+    kpis.value = statsKeys
+      .filter((key) => stats[key] != null && app.hasPerm(DASHBOARD_KPI_PERM_MAP[key]))
+      .map((key) => ({
+        key,
+        value: String(stats[key] ?? 0),
+        label: DASHBOARD_KPI_LABELS[key],
+        tone: key === 'syncFailed' && stats[key] ? 'warn' : key === 'pendingPo' || key === 'pendingAudit' ? (stats[key] ? 'warn' : '') : '',
+      }))
 
     const badge = notif.badges || {}
-    pipelineDomestic.value = [
-      { label: '选品审核', count: `${stats.pendingAudit ?? 0} 待审`, cls: stats.pendingAudit ? 'warn' : '' },
-      { label: '采购审核', count: `${stats.pendingPo ?? 0} PO`, cls: stats.pendingPo ? 'warn' : '' },
-      { label: '中转仓收货', count: `${badge.logistics_wh ?? 0} PO`, cls: badge.logistics_wh ? 'warn' : '' },
-    ]
-    pipelineOverseas.value = [
-      { label: '在途待扫描', count: `${badge.inbound_in_transit ?? 0} 单`, cls: badge.inbound_in_transit ? 'warn' : '' },
-      { label: '已到仓待收', count: `${badge.inbound_arrived ?? 0} 单`, cls: badge.inbound_arrived ? 'warn' : '' },
-      { label: '待上架', count: `${badge.inbound_putaway ?? 0} 单`, cls: badge.inbound_putaway ? 'warn' : '' },
-      { label: '待出库', count: `${badge.outbound ?? 0} 单`, cls: badge.outbound ? 'warn' : '' },
-    ]
+    if (showPipelineDomestic.value) {
+      pipelineDomestic.value = [
+        { label: '选品审核', count: `${stats.pendingAudit ?? 0} 待审`, cls: stats.pendingAudit ? 'warn' : '' },
+        { label: '采购审核', count: `${stats.pendingPo ?? 0} PO`, cls: stats.pendingPo ? 'warn' : '' },
+        { label: '中转仓收货', count: `${badge.logistics_wh ?? 0} PO`, cls: badge.logistics_wh ? 'warn' : '' },
+      ]
+    } else {
+      pipelineDomestic.value = []
+    }
+    if (showPipelineOverseas.value) {
+      pipelineOverseas.value = [
+        { label: '在途待扫描', count: `${badge.inbound_in_transit ?? 0} 单`, cls: badge.inbound_in_transit ? 'warn' : '' },
+        { label: '已到仓待收', count: `${badge.inbound_arrived ?? 0} 单`, cls: badge.inbound_arrived ? 'warn' : '' },
+        { label: '待上架', count: `${badge.inbound_putaway ?? 0} 单`, cls: badge.inbound_putaway ? 'warn' : '' },
+        { label: '待出库', count: `${badge.outbound ?? 0} 单`, cls: badge.outbound ? 'warn' : '' },
+      ]
+    } else {
+      pipelineOverseas.value = []
+    }
 
     todos.value = (notif.items || [])
       .filter((item: any) => item.count > 0 && app.canViewScreen(item.screenId))
@@ -307,6 +329,7 @@ async function deleteAnnouncement(ann: { id: string }) {
 
 const ICONS: Record<string, string> = {
   leads_pool: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+  leads_mine: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M9 12h6M9 16h6"/></svg>',
   leads_follow: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg>',
   products: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M21 8.5 12 3 3 8.5v7L12 21l9-5.5v-7z"/><path d="M3 8.5 12 14l9-5.5M12 14v7"/></svg>',
   purchase: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M9 5H5a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-4"/><path d="M9 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v0a2 2 0 0 1-2 2h-2a2 2 0 0 1-2-2z"/><path d="M9 12h6M9 16h4"/></svg>',
@@ -343,10 +366,10 @@ onMounted(() => {
       </div>
     </div>
 
-    <div class="kpi-strip">
+    <div v-if="visibleKpis.length" class="kpi-strip">
       <MetricCard
-        v-for="(kpi, index) in kpis"
-        :key="kpi.label"
+        v-for="(kpi, index) in visibleKpis"
+        :key="kpi.key"
         :value="kpi.value"
         :label="kpi.label"
         :tone="kpi.tone"
@@ -354,7 +377,7 @@ onMounted(() => {
       />
     </div>
 
-    <DashboardTrendChart :series="trendSeries" :loading="trendLoading" />
+    <DashboardTrendChart v-if="showTrendChart" :series="trendSeries" :loading="trendLoading" />
 
     <div class="section-title">快捷入口</div>
     <div class="quick-grid">
@@ -370,9 +393,9 @@ onMounted(() => {
       </div>
     </div>
 
-    <div class="section-title">业务流水线</div>
-    <div class="pipeline-grid">
-      <div class="pipeline-block">
+    <div v-if="showPipelineSection" class="section-title">业务流水线</div>
+    <div v-if="showPipelineSection" class="pipeline-grid">
+      <div v-if="showPipelineDomestic" class="pipeline-block">
         <div class="pipeline-block-head">
           <span class="pipeline-block-title">国内供应链</span>
           <span class="pipeline-block-desc">选品 → 实际采购同步成本 → 中转仓</span>
@@ -386,7 +409,7 @@ onMounted(() => {
           </div>
         </div>
       </div>
-      <div class="pipeline-block">
+      <div v-if="showPipelineOverseas" class="pipeline-block">
         <div class="pipeline-block-head">
           <span class="pipeline-block-title">海外仓作业</span>
           <span class="pipeline-block-desc">发运 → 海运回传 → 定价 → OMS</span>

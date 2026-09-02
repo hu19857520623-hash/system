@@ -50,7 +50,7 @@ function goNotify(item: { route: string }) {
 
 function openHelp() {
   erpAlert(
-    '获客：线索池领取 → 我的跟进写跟进 → 成交管理上传资料并转 ERP。仓储：到仓扫描 → 入库收货 → 上架 → 出库。财务：客户充值、结算与海运账单。',
+    '获客：线索池领取 → 待跟进写跟进 → 成交管理上传资料并转 ERP。仓储：到仓扫描 → 入库收货 → 上架 → 出库。财务：客户充值、结算与海运账单。',
     '操作指引',
     { confirmButtonText: '知道了' },
   )

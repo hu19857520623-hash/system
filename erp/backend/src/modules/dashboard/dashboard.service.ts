@@ -1,7 +1,15 @@
 import { Injectable } from '@nestjs/common'
 import { Prisma } from '@prisma/client'
 import { PrismaService } from '../../common/prisma/prisma.service'
+import { PermissionsService } from '../../common/permissions/permissions.service'
 import { AnnouncementService } from '../announcement/announcement.service'
+import {
+  DASHBOARD_KPI_PERM_MAP,
+  DASHBOARD_PIPELINE_DOMESTIC_PERM,
+  DASHBOARD_PIPELINE_OVERSEAS_PERM,
+  DASHBOARD_TRENDS_PERM,
+  filterDashboardStats,
+} from '@erp/shared/dashboard-widgets'
 import { dayRangeUtc, mergeTrendCounts } from './dashboard.utils'
 
 const SYNC_FAILED_WHERE: Prisma.SyncLogWhereInput = {
@@ -14,9 +22,24 @@ export class DashboardService {
   constructor(
     private prisma: PrismaService,
     private announcementService: AnnouncementService,
+    private permissions: PermissionsService,
   ) {}
 
-  async stats() {
+  private async dashboardPermSet(userId?: number, roleCode?: string) {
+    const widgetPerms = [
+      ...Object.values(DASHBOARD_KPI_PERM_MAP),
+      DASHBOARD_TRENDS_PERM,
+      DASHBOARD_PIPELINE_DOMESTIC_PERM,
+      DASHBOARD_PIPELINE_OVERSEAS_PERM,
+    ]
+    if (!userId || roleCode === 'admin') {
+      return new Set(widgetPerms)
+    }
+    const codes = await this.permissions.getUserPermissions(userId, roleCode || '')
+    return new Set(codes)
+  }
+
+  async stats(userId?: number, roleCode?: string) {
     const [products, suppliers, leads, pendingPo, pendingAudit, syncFailed] = await Promise.all([
       this.prisma.product.count(),
       this.prisma.supplier.count({ where: { status: 1 } }),
@@ -26,7 +49,7 @@ export class DashboardService {
       this.prisma.syncLog.count({ where: SYNC_FAILED_WHERE }),
     ])
     const invAgg = await this.prisma.inventory.aggregate({ _sum: { availableQty: true } })
-    return {
+    const raw = {
       products,
       suppliers,
       leads,
@@ -35,13 +58,19 @@ export class DashboardService {
       syncFailed,
       inventoryAvailable: invAgg._sum.availableQty ?? 0,
     }
+    const allowed = await this.dashboardPermSet(userId, roleCode)
+    return filterDashboardStats(raw, allowed)
   }
 
   announcements() {
     return this.announcementService.listVisibleForErp(10)
   }
 
-  async trends(days: number) {
+  async trends(days: number, userId?: number, roleCode?: string) {
+    const allowed = await this.dashboardPermSet(userId, roleCode)
+    if (!allowed.has(DASHBOARD_TRENDS_PERM)) {
+      return { days: 0, series: [] }
+    }
     const clamped = Math.min(30, Math.max(1, days))
     const ranges = dayRangeUtc(clamped)
     const receipts: number[] = []

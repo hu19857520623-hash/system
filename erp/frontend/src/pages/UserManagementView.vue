@@ -24,7 +24,26 @@ interface PermGroup {
 type StatusFilter = 'all' | 'active' | 'disabled'
 
 const permGroupsUI = ref<PermGroup[]>([...FALLBACK_PERM_GROUPS])
+const permSearch = ref('')
+const permCollapseActive = ref<string[]>(FALLBACK_PERM_GROUPS.map((g) => g.label))
 const ALL_PERM_IDS = computed(() => permGroupsUI.value.flatMap((g) => g.perms.map((p) => p.id)))
+
+const filteredPermGroups = computed(() => {
+  const q = permSearch.value.trim().toLowerCase()
+  if (!q) return permGroupsUI.value
+  return permGroupsUI.value
+    .map((group) => ({
+      ...group,
+      perms: group.perms.filter(
+        (p) => p.label.toLowerCase().includes(q) || p.id.toLowerCase().includes(q),
+      ),
+    }))
+    .filter((group) => group.perms.length > 0)
+})
+
+function groupSelectedCount(perms: { id: string }[]) {
+  return perms.filter((p) => selectedPerms.value.includes(p.id)).length
+}
 
 const statusFilter = ref<StatusFilter>('all')
 const roleFilter = ref('all')
@@ -307,7 +326,10 @@ async function removeUser(row: any) {
 async function loadCatalog() {
   try {
     const data = await permissionsApi.catalog()
-    if (Array.isArray(data?.groups) && data.groups.length) permGroupsUI.value = data.groups
+    if (Array.isArray(data?.groups) && data.groups.length) {
+      permGroupsUI.value = data.groups
+      permCollapseActive.value = data.groups.map((g: PermGroup) => g.label)
+    }
     if (Array.isArray(data?.roleDefinitions) && data.roleDefinitions.length && !backendRoles.value.length) {
       backendRoles.value = data.roleDefinitions.map((r: any) => ({
         roleCode: r.roleCode,
@@ -512,31 +534,53 @@ onMounted(async () => {
 
       <div class="perm-section">
         <div class="perm-toolbar">
-          <span class="perm-title">岗位权限（已选 {{ selectedPerms.length }} 项）</span>
+          <span class="perm-title">岗位权限（已选 {{ selectedPerms.length }} / {{ ALL_PERM_IDS.length }} 项）</span>
           <div class="perm-actions">
             <el-button link type="primary" size="small" @click="applyRoleTemplate">加载角色默认</el-button>
             <el-button link type="primary" size="small" @click="selectAllPerms">全选</el-button>
             <el-button link size="small" @click="clearAllPerms">清空</el-button>
           </div>
         </div>
-        <div class="perm-grid">
-          <div v-for="group in permGroupsUI" :key="group.label" class="perm-group">
-            <div class="perm-group-head">
+        <el-input
+          v-model="permSearch"
+          placeholder="搜索权限名称或编码"
+          clearable
+          size="small"
+          class="perm-search"
+        />
+        <el-collapse v-model="permCollapseActive" class="perm-collapse">
+          <el-collapse-item
+            v-for="group in filteredPermGroups"
+            :key="group.label"
+            :name="group.label"
+          >
+            <template #title>
+              <div class="perm-group-title">
+                <el-checkbox
+                  :model-value="isGroupAllChecked(group.perms)"
+                  :indeterminate="isGroupIndeterminate(group.perms)"
+                  @click.stop
+                  @change="(v: unknown) => toggleGroup(group.perms, Boolean(v))"
+                />
+                <span>{{ group.label }}</span>
+                <span class="perm-group-count">{{ groupSelectedCount(group.perms) }}/{{ group.perms.length }}</span>
+              </div>
+            </template>
+            <div class="perm-grid">
               <el-checkbox
-                :model-value="isGroupAllChecked(group.perms)"
-                :indeterminate="isGroupIndeterminate(group.perms)"
-                @change="(v: unknown) => toggleGroup(group.perms, Boolean(v))"
-              >{{ group.label }}</el-checkbox>
+                v-for="p in group.perms"
+                :key="p.id"
+                :model-value="selectedPerms.includes(p.id)"
+                class="perm-item"
+                @change="(v: unknown) => togglePerm(p.id, Boolean(v))"
+              >
+                <span class="perm-label">{{ p.label }}</span>
+                <span class="perm-code">{{ p.id }}</span>
+              </el-checkbox>
             </div>
-            <el-checkbox
-              v-for="p in group.perms"
-              :key="p.id"
-              :model-value="selectedPerms.includes(p.id)"
-              class="perm-item"
-              @change="(v: unknown) => togglePerm(p.id, Boolean(v))"
-            >{{ p.label }}</el-checkbox>
-          </div>
-        </div>
+          </el-collapse-item>
+        </el-collapse>
+        <el-empty v-if="!filteredPermGroups.length" description="没有匹配的权限项" :image-size="48" />
       </div>
 
       <template #footer>
@@ -580,18 +624,31 @@ onMounted(async () => {
   flex-wrap:wrap;
 }
 .perm-section { margin-top:8px; border-top:1px solid var(--el-border-color-lighter); padding-top:12px; }
-.perm-toolbar { display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; }
+.perm-toolbar { display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; gap:8px; flex-wrap:wrap; }
 .perm-title { font-weight:600; font-size:13px; }
+.perm-search { margin-bottom:10px; max-width:360px; }
+.perm-collapse {
+  border:none;
+  max-height:420px;
+  overflow-y:auto;
+}
+.perm-collapse :deep(.el-collapse-item__header) {
+  height:auto; min-height:40px; line-height:1.4; padding:6px 0; border-bottom:1px solid var(--el-border-color-lighter);
+}
+.perm-collapse :deep(.el-collapse-item__wrap) { border-bottom:none; }
+.perm-group-title { display:flex; align-items:center; gap:8px; width:100%; font-weight:600; font-size:13px; }
+.perm-group-count { margin-left:auto; font-size:12px; color:var(--el-text-color-secondary); font-weight:500; }
 .perm-grid {
   display:grid;
   grid-template-columns:repeat(2,1fr);
-  gap:10px;
-  max-height:360px;
-  overflow-y:auto;
+  gap:6px 12px;
+  padding:4px 0 8px 28px;
 }
 @media (min-width:900px) { .perm-grid { grid-template-columns:repeat(3,1fr); } }
-.perm-group { border:1px solid var(--el-border-color-lighter); border-radius:8px; padding:8px 10px; background:#fafafa; }
-.perm-group-head { font-weight:600; margin-bottom:4px; padding-bottom:4px; border-bottom:1px dashed var(--el-border-color-lighter); }
-.perm-item { display:flex; margin:0; height:26px; }
-.perm-item :deep(.el-checkbox__label) { font-size:12px; }
+.perm-item { display:flex; align-items:flex-start; margin:0; height:auto; min-height:28px; }
+.perm-item :deep(.el-checkbox__label) {
+  display:flex; flex-direction:column; gap:1px; white-space:normal; line-height:1.35; padding-bottom:2px;
+}
+.perm-label { font-size:12px; color:var(--el-text-color-primary); }
+.perm-code { font-size:10px; color:var(--el-text-color-secondary); font-family:var(--font-mono,Consolas,monospace); }
 </style>

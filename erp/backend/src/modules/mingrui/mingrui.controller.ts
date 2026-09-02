@@ -26,19 +26,19 @@ export class MingruiController {
     return this.service.detail(id)
   }
 
-  @RequirePerms('mingrui.order')
+  @RequirePerms('mingrui.manage')
   @Post()
   create(@Body() body: CreateMingruiShipmentDto, @CurrentUser('userId') userId: number) {
     return this.service.create(body, userId)
   }
 
-  @RequirePerms('mingrui.order')
+  @RequirePerms('mingrui.manage')
   @Patch(':id')
   update(@Param('id', ParseIntPipe) id: number, @Body() body: UpdateMingruiShipmentDto) {
     return this.service.update(id, body)
   }
 
-  @RequirePerms('mingrui.order')
+  @RequirePerms('mingrui.manage')
   @Post(':id/submit')
   submit(@Param('id', ParseIntPipe) id: number) {
     return this.service.submit(id)
@@ -50,7 +50,7 @@ export class MingruiController {
     return this.service.sync(id, body)
   }
 
-  @RequirePerms('mingrui.order')
+  @RequirePerms('mingrui.manage')
   @Post(':id/cancel')
   cancel(@Param('id', ParseIntPipe) id: number) {
     return this.service.cancel(id)

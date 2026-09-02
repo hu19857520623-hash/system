@@ -16,7 +16,8 @@ const routes: RouteRecordRaw[] = [
       { path: 'dashboard', name: 'Dashboard', component: () => import('@/pages/DashboardView.vue'), meta: { title: '工作台', section: '概览' } },
       // 获客与销售
       { path: 'leads/pool', name: 'LeadsPool', component: () => import('@/pages/LeadsPoolView.vue'), meta: { title: '线索池', section: '获客与销售' } },
-      { path: 'leads/follow', name: 'LeadsFollow', component: () => import('@/pages/LeadsFollowView.vue'), meta: { title: '我的跟进', section: '获客与销售' } },
+      { path: 'leads/mine', name: 'LeadsMine', component: () => import('@/pages/LeadsFollowView.vue'), meta: { title: '我的线索', section: '获客与销售', leadsMode: 'mine' } },
+      { path: 'leads/follow', name: 'LeadsFollow', component: () => import('@/pages/LeadsFollowView.vue'), meta: { title: '待跟进', section: '获客与销售', leadsMode: 'follow' } },
       { path: 'leads/deals', name: 'LeadsDeals', component: () => import('@/pages/LeadsDealsView.vue'), meta: { title: '成交管理', section: '获客与销售' } },
       { path: 'leads/reports', name: 'LeadsReports', component: () => import('@/pages/LeadsReportsView.vue'), meta: { title: '获客报表', section: '获客与销售' } },
       // 主链路

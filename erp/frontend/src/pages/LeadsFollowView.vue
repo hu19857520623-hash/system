@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, computed, onMounted, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { leadApi } from '@/api/client.js'
 import { mapLead } from '@/api/mappers.ts'
@@ -11,8 +11,10 @@ import { ROUTE_MAP } from '@/constants/index.js'
 import { useAppStore } from '@/stores/app'
 
 const router = useRouter()
+const route = useRoute()
 const app = useAppStore()
-const tab = ref('mine')
+const mode = computed(() => (route.meta.leadsMode === 'mine' ? 'mine' : 'follow'))
+const pageTitle = computed(() => (mode.value === 'mine' ? '我的线索' : '待跟进'))
 const searchQ = ref('')
 const followStatusFilter = ref('')
 const followDateRange = ref<[string, string] | null>(null)
@@ -25,7 +27,8 @@ const FOLLOW_LIST_STATUS_OPTIONS = [
   { value: 'deal', label: '成交' },
 ] as const
 
-const FOLLOW_LIST_STATUS_ALL = FOLLOW_LIST_STATUS_OPTIONS.map((item) => item.value).join(',')
+/** 待跟进默认：进行中的销售跟进状态（不含已流失/成交，需手动筛选） */
+const FOLLOW_LIST_STATUS_ALL = 'new,following,hot,nurture'
 
 const followDateShortcuts = [
   {
@@ -101,11 +104,12 @@ const { loading, items: leads, load } = useListLoader(async () => {
   if (keyword) params.keyword = keyword
   const userId = app.authenticatedUser?.id
   const canViewAll = app.hasPerm('leads_pool.view_all')
-  if (tab.value === 'mine' && userId) {
+  if (mode.value === 'mine' && userId) {
+    // 我的线索：归属运营、尚未进入销售跟进（new）
     params.mine = '1'
-    params.statuses = 'new,following'
+    params.statuses = 'new'
   }
-  if (tab.value === 'follow') {
+  if (mode.value === 'follow') {
     const status = followStatusFilter.value
     params.statuses = status === 'deal' ? 'deal,won' : status || FOLLOW_LIST_STATUS_ALL
     if (!canViewAll && userId) params.followMine = '1'
@@ -233,7 +237,12 @@ async function submitDeal() {
   }
 }
 
-watch(tab, applyFilters)
+watch(() => route.path, () => {
+  followStatusFilter.value = ''
+  followDateRange.value = null
+  resetPage()
+  load()
+})
 watch([page, pageSize], load)
 onMounted(load)
 </script>
@@ -242,7 +251,7 @@ onMounted(load)
   <el-card v-loading="loading">
     <template #header>
       <div class="page-header">
-        <span class="page-title">我的跟进</span>
+        <span class="page-title">{{ pageTitle }}</span>
         <el-input
           v-model="searchQ"
           placeholder="搜索线索"
@@ -254,11 +263,7 @@ onMounted(load)
         />
       </div>
     </template>
-    <el-tabs v-model="tab" type="card">
-      <el-tab-pane label="我的线索" name="mine" />
-      <el-tab-pane label="待跟进" name="follow" />
-    </el-tabs>
-    <div v-if="tab === 'follow'" class="filter-bar">
+    <div v-if="mode === 'follow'" class="filter-bar">
       <el-select
         v-model="followStatusFilter"
         size="small"
@@ -319,7 +324,7 @@ onMounted(load)
     </el-table>
     <el-empty
       v-if="!loading && !leads.length"
-      :description="tab === 'follow' ? (followStatusFilter || followDateRange ? '暂无符合条件的线索' : '暂无待跟进线索') : '当前账号没有归属线索'"
+      :description="mode === 'follow' ? (followStatusFilter || followDateRange ? '暂无符合条件的线索' : '暂无待跟进线索') : '当前账号没有待分配的新线索'"
     />
     <ListPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
   </el-card>

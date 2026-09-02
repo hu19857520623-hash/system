@@ -232,7 +232,7 @@ async function submitPoolFollow() {
         followSales,
       })
       await Promise.all([load(), loadFollowSalesOptions()])
-    }, `已开始跟进「${followTarget.value?.company || ''}」，正在打开我的跟进`)
+    }, `已开始跟进「${followTarget.value?.company || ''}」，正在打开待跟进`)
     if (ok) {
       followDialogVisible.value = false
       await router.push('/leads/follow')

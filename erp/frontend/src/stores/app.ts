@@ -76,7 +76,8 @@ const NAV: NavGroup[] = [
     label: '获客与销售',
     items: [
       { id: 'leads_pool', name: '线索池' },
-      { id: 'leads_follow', name: '我的跟进', badgeKey: 'leads_follow' },
+      { id: 'leads_mine', name: '我的线索' },
+      { id: 'leads_follow', name: '待跟进', badgeKey: 'leads_follow' },
       { id: 'leads_deals', name: '成交管理' },
       { id: 'leads_reports', name: '获客报表' },
     ],
@@ -161,6 +162,7 @@ const NAV: NavGroup[] = [
 const NAV_ROUTE_MAP: Record<string, string> = {
   dashboard: '/dashboard',
   leads_pool: '/leads/pool',
+  leads_mine: '/leads/mine',
   leads_follow: '/leads/follow',
   leads_deals: '/leads/deals',
   leads_reports: '/leads/reports',
@@ -360,6 +362,7 @@ export const useAppStore = defineStore('app', {
       if (this.authenticatedUser?.roleCode === 'admin') return true
       const permMap: Record<string, string | string[]> = {
         leads_pool: 'leads_pool.view',
+        leads_mine: 'leads_follow.view',
         leads_follow: 'leads_follow.view',
         leads_deals: 'leads_deals.view',
         leads_reports: 'leads_reports.view',
