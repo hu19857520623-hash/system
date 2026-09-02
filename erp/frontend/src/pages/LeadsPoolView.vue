@@ -190,7 +190,7 @@ function openNewLead() {
     contact: '',
     source: 'Takealot',
     assigneeId: defaultAssigneeId(),
-    followSales: currentUserIsSales.value ? currentFollowSalesLabel() : '',
+    followSales: '',
     remark: '',
   }
   dialogVisible.value = true
