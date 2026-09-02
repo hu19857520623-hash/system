@@ -1,4 +1,6 @@
--- 工作台 widget 权限 + 明瑞下单权限迁移
+-- 工作台 widget 权限 + 明瑞下单权限迁移（可重复执行）
+SET NAMES utf8mb4;
+
 -- 1) 登记新权限码
 INSERT INTO sys_permission (perm_code, perm_name, module) VALUES
   ('dashboard.view', '工作台 · 访问', 'dashboard'),
@@ -15,30 +17,29 @@ INSERT INTO sys_permission (perm_code, perm_name, module) VALUES
   ('mingrui.manage', '明瑞物流 · 下单/改单', 'mingrui')
 ON DUPLICATE KEY UPDATE perm_name = VALUES(perm_name), module = VALUES(module);
 
--- 2) 旧码别名
-INSERT INTO sys_role_permission (role_code, perm_code)
-SELECT role_code, 'mingrui.manage' FROM sys_role_permission WHERE perm_code = 'mingrui.order'
-ON DUPLICATE KEY UPDATE perm_code = perm_code;
-INSERT INTO sys_user_permission (user_id, perm_code)
-SELECT user_id, 'mingrui.manage' FROM sys_user_permission WHERE perm_code = 'mingrui.order'
-ON DUPLICATE KEY UPDATE perm_code = perm_code;
+-- 2) 旧码别名（子查询避免同表 INSERT SELECT 报 1093）
+INSERT IGNORE INTO sys_role_permission (role_code, perm_code)
+SELECT role_code, 'mingrui.manage' FROM (
+  SELECT role_code FROM sys_role_permission WHERE perm_code = 'mingrui.order'
+) AS src;
+
+INSERT IGNORE INTO sys_user_permission (user_id, perm_code)
+SELECT user_id, 'mingrui.manage' FROM (
+  SELECT user_id FROM sys_user_permission WHERE perm_code = 'mingrui.order'
+) AS src;
 
 DELETE FROM sys_user_permission WHERE perm_code IN ('mingrui.order', 'pricing.freight_callback', 'create_inbound.push', 'inbound_fee.view', 'inbound_fee.manage');
 DELETE FROM sys_role_permission WHERE perm_code IN ('mingrui.order', 'pricing.freight_callback', 'create_inbound.push', 'inbound_fee.view', 'inbound_fee.manage');
 DELETE FROM sys_permission WHERE perm_code IN ('mingrui.order', 'pricing.freight_callback', 'create_inbound.push', 'inbound_fee.view', 'inbound_fee.manage');
 
--- 3) 角色默认：所有角色都能进工作台
-INSERT INTO sys_role_permission (role_code, perm_code)
-SELECT r.role_code, 'dashboard.view' FROM sys_role r
-ON DUPLICATE KEY UPDATE perm_code = perm_code;
+-- 3) 角色默认
+INSERT IGNORE INTO sys_role_permission (role_code, perm_code)
+SELECT role_code, 'dashboard.view' FROM sys_role;
 
--- 销售 / 销售主管：仅线索指标
-INSERT INTO sys_role_permission (role_code, perm_code)
-SELECT role_code, 'dashboard.kpi_leads' FROM sys_role WHERE role_code IN ('cs', 'sales_manager', 'sales')
-ON DUPLICATE KEY UPDATE perm_code = perm_code;
+INSERT IGNORE INTO sys_role_permission (role_code, perm_code)
+SELECT role_code, 'dashboard.kpi_leads' FROM sys_role WHERE role_code IN ('cs', 'sales_manager', 'sales');
 
--- 采购 / 采购主管
-INSERT INTO sys_role_permission (role_code, perm_code)
+INSERT IGNORE INTO sys_role_permission (role_code, perm_code)
 SELECT r.role_code, p.perm_code
 FROM sys_role r
 JOIN (
@@ -47,10 +48,9 @@ JOIN (
   SELECT 'dashboard.kpi_purchase' UNION ALL
   SELECT 'dashboard.pipeline_domestic'
 ) p
-WHERE r.role_code IN ('purchaser', 'ops_manager')
-ON DUPLICATE KEY UPDATE perm_code = perm_code;
+WHERE r.role_code IN ('purchaser', 'ops_manager');
 
-INSERT INTO sys_role_permission (role_code, perm_code)
+INSERT IGNORE INTO sys_role_permission (role_code, perm_code)
 SELECT r.role_code, p.perm_code
 FROM sys_role r
 JOIN (
@@ -60,11 +60,9 @@ JOIN (
   SELECT 'dashboard.trends_logistics' UNION ALL
   SELECT 'dashboard.pipeline_overseas'
 ) p
-WHERE r.role_code = 'ops_manager'
-ON DUPLICATE KEY UPDATE perm_code = perm_code;
+WHERE r.role_code = 'ops_manager';
 
--- 仓库
-INSERT INTO sys_role_permission (role_code, perm_code)
+INSERT IGNORE INTO sys_role_permission (role_code, perm_code)
 SELECT r.role_code, p.perm_code
 FROM sys_role r
 JOIN (
@@ -74,11 +72,9 @@ JOIN (
   SELECT 'dashboard.trends_logistics' UNION ALL
   SELECT 'dashboard.pipeline_overseas'
 ) p
-WHERE r.role_code = 'warehouse'
-ON DUPLICATE KEY UPDATE perm_code = perm_code;
+WHERE r.role_code = 'warehouse';
 
--- 财务
-INSERT INTO sys_role_permission (role_code, perm_code)
+INSERT IGNORE INTO sys_role_permission (role_code, perm_code)
 SELECT r.role_code, p.perm_code
 FROM sys_role r
 JOIN (
@@ -86,28 +82,23 @@ JOIN (
   SELECT 'dashboard.kpi_sync' UNION ALL
   SELECT 'dashboard.pipeline_domestic'
 ) p
-WHERE r.role_code = 'finance'
-ON DUPLICATE KEY UPDATE perm_code = perm_code;
+WHERE r.role_code = 'finance';
 
--- 产品开发 / 陪跑
-INSERT INTO sys_role_permission (role_code, perm_code)
-SELECT r.role_code, 'dashboard.kpi_products'
-FROM sys_role r
-WHERE r.role_code IN ('viewer', 'dev_manager', 'coach', 'coach1', 'coach2')
-ON DUPLICATE KEY UPDATE perm_code = perm_code;
+INSERT IGNORE INTO sys_role_permission (role_code, perm_code)
+SELECT role_code, 'dashboard.kpi_products'
+FROM sys_role
+WHERE role_code IN ('viewer', 'dev_manager', 'coach', 'coach1', 'coach2');
 
-INSERT INTO sys_role_permission (role_code, perm_code)
+INSERT IGNORE INTO sys_role_permission (role_code, perm_code)
 SELECT r.role_code, p.perm_code
 FROM sys_role r
 JOIN (
   SELECT 'dashboard.kpi_audit' AS perm_code UNION ALL
   SELECT 'dashboard.pipeline_domestic'
 ) p
-WHERE r.role_code = 'dev_manager'
-ON DUPLICATE KEY UPDATE perm_code = perm_code;
+WHERE r.role_code = 'dev_manager';
 
--- 管理员：全部工作台 widget
-INSERT INTO sys_role_permission (role_code, perm_code)
+INSERT IGNORE INTO sys_role_permission (role_code, perm_code)
 SELECT r.role_code, p.perm_code
 FROM sys_role r
 JOIN (
@@ -123,70 +114,70 @@ JOIN (
   SELECT 'dashboard.pipeline_overseas' UNION ALL
   SELECT 'mingrui.manage'
 ) p
-WHERE r.role_code = 'admin'
-ON DUPLICATE KEY UPDATE perm_code = perm_code;
+WHERE r.role_code = 'admin';
 
--- 4) 已自定义权限的账号：按现有业务权限补工作台 widget，避免销售仍看到库存
-INSERT INTO sys_user_permission (user_id, perm_code)
-SELECT DISTINCT user_id, 'dashboard.view' FROM sys_user_permission
-ON DUPLICATE KEY UPDATE perm_code = perm_code;
+-- 4) 已自定义权限的账号：按现有业务权限补工作台 widget
+INSERT IGNORE INTO sys_user_permission (user_id, perm_code)
+SELECT user_id, 'dashboard.view' FROM (
+  SELECT DISTINCT user_id FROM sys_user_permission
+) AS src;
 
-INSERT INTO sys_user_permission (user_id, perm_code)
-SELECT DISTINCT user_id, 'dashboard.kpi_leads'
-FROM sys_user_permission
-WHERE perm_code IN ('leads_pool.view', 'leads_follow.view', 'leads_deals.view', 'leads_reports.view')
-ON DUPLICATE KEY UPDATE perm_code = perm_code;
+INSERT IGNORE INTO sys_user_permission (user_id, perm_code)
+SELECT user_id, 'dashboard.kpi_leads' FROM (
+  SELECT DISTINCT user_id FROM sys_user_permission
+  WHERE perm_code IN ('leads_pool.view', 'leads_follow.view', 'leads_deals.view', 'leads_reports.view')
+) AS src;
 
-INSERT INTO sys_user_permission (user_id, perm_code)
-SELECT DISTINCT user_id, 'dashboard.kpi_inventory'
-FROM sys_user_permission
-WHERE perm_code IN ('inventory_query.view', 'inbound.view', 'inbound.arrival_scan')
-ON DUPLICATE KEY UPDATE perm_code = perm_code;
+INSERT IGNORE INTO sys_user_permission (user_id, perm_code)
+SELECT user_id, 'dashboard.kpi_inventory' FROM (
+  SELECT DISTINCT user_id FROM sys_user_permission
+  WHERE perm_code IN ('inventory_query.view', 'inbound.view', 'inbound.arrival_scan')
+) AS src;
 
-INSERT INTO sys_user_permission (user_id, perm_code)
-SELECT DISTINCT user_id, 'dashboard.kpi_products'
-FROM sys_user_permission
-WHERE perm_code IN ('products.view', 'product_dev.view', 'pricing.view')
-ON DUPLICATE KEY UPDATE perm_code = perm_code;
+INSERT IGNORE INTO sys_user_permission (user_id, perm_code)
+SELECT user_id, 'dashboard.kpi_products' FROM (
+  SELECT DISTINCT user_id FROM sys_user_permission
+  WHERE perm_code IN ('products.view', 'product_dev.view', 'pricing.view')
+) AS src;
 
-INSERT INTO sys_user_permission (user_id, perm_code)
-SELECT DISTINCT user_id, 'dashboard.kpi_suppliers'
-FROM sys_user_permission
-WHERE perm_code = 'suppliers.view'
-ON DUPLICATE KEY UPDATE perm_code = perm_code;
+INSERT IGNORE INTO sys_user_permission (user_id, perm_code)
+SELECT user_id, 'dashboard.kpi_suppliers' FROM (
+  SELECT DISTINCT user_id FROM sys_user_permission
+  WHERE perm_code = 'suppliers.view'
+) AS src;
 
-INSERT INTO sys_user_permission (user_id, perm_code)
-SELECT DISTINCT user_id, 'dashboard.kpi_purchase'
-FROM sys_user_permission
-WHERE perm_code IN ('purchase.view', 'purchase.po_audit')
-ON DUPLICATE KEY UPDATE perm_code = perm_code;
+INSERT IGNORE INTO sys_user_permission (user_id, perm_code)
+SELECT user_id, 'dashboard.kpi_purchase' FROM (
+  SELECT DISTINCT user_id FROM sys_user_permission
+  WHERE perm_code IN ('purchase.view', 'purchase.po_audit')
+) AS src;
 
-INSERT INTO sys_user_permission (user_id, perm_code)
-SELECT DISTINCT user_id, 'dashboard.kpi_audit'
-FROM sys_user_permission
-WHERE perm_code IN ('product_audit.view', 'product_audit.approve')
-ON DUPLICATE KEY UPDATE perm_code = perm_code;
+INSERT IGNORE INTO sys_user_permission (user_id, perm_code)
+SELECT user_id, 'dashboard.kpi_audit' FROM (
+  SELECT DISTINCT user_id FROM sys_user_permission
+  WHERE perm_code IN ('product_audit.view', 'product_audit.approve')
+) AS src;
 
-INSERT INTO sys_user_permission (user_id, perm_code)
-SELECT DISTINCT user_id, 'dashboard.kpi_sync'
-FROM sys_user_permission
-WHERE perm_code IN ('sync.view', 'sync.retry')
-ON DUPLICATE KEY UPDATE perm_code = perm_code;
+INSERT IGNORE INTO sys_user_permission (user_id, perm_code)
+SELECT user_id, 'dashboard.kpi_sync' FROM (
+  SELECT DISTINCT user_id FROM sys_user_permission
+  WHERE perm_code IN ('sync.view', 'sync.retry')
+) AS src;
 
-INSERT INTO sys_user_permission (user_id, perm_code)
-SELECT DISTINCT user_id, 'dashboard.trends_logistics'
-FROM sys_user_permission
-WHERE perm_code IN ('logistics_wh.view', 'logistics_wh.receive')
-ON DUPLICATE KEY UPDATE perm_code = perm_code;
+INSERT IGNORE INTO sys_user_permission (user_id, perm_code)
+SELECT user_id, 'dashboard.trends_logistics' FROM (
+  SELECT DISTINCT user_id FROM sys_user_permission
+  WHERE perm_code IN ('logistics_wh.view', 'logistics_wh.receive')
+) AS src;
 
-INSERT INTO sys_user_permission (user_id, perm_code)
-SELECT DISTINCT user_id, 'dashboard.pipeline_domestic'
-FROM sys_user_permission
-WHERE perm_code IN ('purchase.view', 'logistics_wh.view', 'product_audit.view')
-ON DUPLICATE KEY UPDATE perm_code = perm_code;
+INSERT IGNORE INTO sys_user_permission (user_id, perm_code)
+SELECT user_id, 'dashboard.pipeline_domestic' FROM (
+  SELECT DISTINCT user_id FROM sys_user_permission
+  WHERE perm_code IN ('purchase.view', 'logistics_wh.view', 'product_audit.view')
+) AS src;
 
-INSERT INTO sys_user_permission (user_id, perm_code)
-SELECT DISTINCT user_id, 'dashboard.pipeline_overseas'
-FROM sys_user_permission
-WHERE perm_code IN ('inbound.view', 'outbound.view', 'inbound.arrival_scan')
-ON DUPLICATE KEY UPDATE perm_code = perm_code;
+INSERT IGNORE INTO sys_user_permission (user_id, perm_code)
+SELECT user_id, 'dashboard.pipeline_overseas' FROM (
+  SELECT DISTINCT user_id FROM sys_user_permission
+  WHERE perm_code IN ('inbound.view', 'outbound.view', 'inbound.arrival_scan')
+) AS src;
