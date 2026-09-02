@@ -47,14 +47,14 @@ public final class PermissionConstants {
                     "outbound.pick", "outbound.pack", "outbound.ship", "anheng.view",
                     "anheng.test", "inventory_query.view", "inventory_query.detail", "inventory_query.adjust",
                     "stocktake.view", "stocktake.create", "stocktake.count", "stocktake.approve",
-                    "capacity.view", "capacity.manage", "wms_reports.view", "pricing.view",
-                    "pricing.set", "pricing.sync_oms", "store_monitor.view", "store_monitor.view_all",
-                    "store_monitor.manage", "store_monitor.assign", "cost.view", "operating_ledger.view",
-                    "operating_ledger.manage", "billing.view", "billing.generate", "billing.manual",
-                    "receivable_payable.view", "receivable_payable.manual", "budget_credit.view", "budget_credit.create",
-                    "profit_analysis.view", "reports.view", "sync.view", "sync.retry",
-                    "operation_log.view", "async_io.import", "async_io.export", "permissions.view",
-                    "permissions.manage", "announcement.manage"
+                    "capacity.view", "capacity.manage", "wms_reports.view", "inbound_fee.view",
+                    "inbound_fee.manage", "pricing.view", "pricing.set", "pricing.sync_oms",
+                    "store_monitor.view", "store_monitor.view_all", "store_monitor.manage", "store_monitor.assign",
+                    "cost.view", "operating_ledger.view", "operating_ledger.manage", "billing.view",
+                    "billing.generate", "billing.manual", "receivable_payable.view", "receivable_payable.manual",
+                    "budget_credit.view", "budget_credit.create", "profit_analysis.view", "reports.view",
+                    "sync.view", "sync.retry", "operation_log.view", "async_io.import",
+                    "async_io.export", "permissions.view", "permissions.manage", "announcement.manage"
             )),
             Map.entry("采购主管", List.of(
                     "dashboard.view", "dashboard.kpi_inventory", "dashboard.kpi_products", "dashboard.kpi_suppliers",
@@ -97,8 +97,9 @@ public final class PermissionConstants {
                     "dashboard.view", "dashboard.kpi_purchase", "dashboard.kpi_sync", "dashboard.pipeline_domestic",
                     "products.view", "purchase.view", "cost.view", "operating_ledger.view",
                     "operating_ledger.manage", "billing.view", "billing.generate", "billing.manual",
-                    "wms_reports.view", "receivable_payable.view", "receivable_payable.manual", "reports.view",
-                    "profit_analysis.view", "budget_credit.view", "budget_credit.create", "async_io.export"
+                    "wms_reports.view", "inbound_fee.view", "inbound_fee.manage", "receivable_payable.view",
+                    "receivable_payable.manual", "reports.view", "profit_analysis.view", "budget_credit.view",
+                    "budget_credit.create", "async_io.export"
             )),
             Map.entry("产品开发主管", List.of(
                     "dashboard.view", "dashboard.kpi_products", "dashboard.kpi_audit", "dashboard.pipeline_domestic",

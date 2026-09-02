@@ -158,6 +158,7 @@ export const warehouseApi: ApiGroup
 export const warehouseZoneApi: ApiGroup
 export const locationApi: ApiGroup
 export const managementLoopApi: ApiGroup
+export const inboundFeeApi: ApiGroup
 export const logisticsReceiptApi: ApiGroup
 export const pricingApi: ApiGroup
 export const costApi: ApiGroup

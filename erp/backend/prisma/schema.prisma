@@ -1021,6 +1021,8 @@ model InboundFeeRule {
   receiveUnitPrice    Decimal   @default(0) @map("receive_unit_price") @db.Decimal(12, 4)
   receiveCartonPrice  Decimal   @default(0) @map("receive_carton_price") @db.Decimal(12, 4)
   qcUnitPrice         Decimal   @default(0) @map("qc_unit_price") @db.Decimal(12, 4)
+  measureUnitPrice    Decimal   @default(0) @map("measure_unit_price") @db.Decimal(12, 4)
+  labelUnitPrice      Decimal   @default(0) @map("label_unit_price") @db.Decimal(12, 4)
   putawayUnitPrice    Decimal   @default(0) @map("putaway_unit_price") @db.Decimal(12, 4)
   enabled             Boolean   @default(true)
   effectiveFrom       DateTime? @map("effective_from") @db.Date

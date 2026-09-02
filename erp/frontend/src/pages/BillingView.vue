@@ -100,6 +100,14 @@ const CHARGE_TYPES = [
 
   { value: 'inspection', label: '质检' },
 
+  { value: 'inbound_qc', label: '入库清点费' },
+
+  { value: 'inbound_measure', label: '入库测量费' },
+
+  { value: 'inbound_label', label: '入库贴标费' },
+
+  { value: 'inbound_putaway', label: '入库上架费' },
+
   { value: 'return_logistics', label: '退件物流费' },
 
   { value: 'return_handling', label: '退件操作费' },

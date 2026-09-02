@@ -147,6 +147,8 @@ exports.PERM_GROUPS = [
             { id: 'billing.view', label: '客户结算 · 查看' },
             { id: 'billing.generate', label: '客户结算 · 生成' },
             { id: 'billing.manual', label: '客户结算 · 手工入账' },
+            { id: 'inbound_fee.view', label: '入库计费 · 查看' },
+            { id: 'inbound_fee.manage', label: '入库计费 · 配置' },
             { id: 'receivable_payable.view', label: '海运账单 · 查看' },
             { id: 'receivable_payable.manual', label: '海运账单 · 手工' },
             { id: 'budget_credit.view', label: '客户充值 · 查看' },
@@ -178,16 +180,12 @@ exports.PERM_GROUPS = [
 exports.DEPRECATED_PERM_CODES = [
     'create_inbound.push',
     'mingrui.order',
-    'inbound_fee.view',
-    'inbound_fee.manage',
     'pricing.freight_callback',
 ];
 /** 旧码 → 新码；值为 null 表示直接删除 */
 exports.PERM_ALIASES = {
     'create_inbound.push': null,
     'mingrui.order': 'mingrui.manage',
-    'inbound_fee.view': null,
-    'inbound_fee.manage': null,
     'pricing.freight_callback': null,
 };
 /** 角色默认权限模板（按中文角色名） */
@@ -214,6 +212,7 @@ exports.ROLE_PERM_TEMPLATES = {
         'inventory_query.view', 'inventory_query.detail', 'inventory_query.adjust',
         'stocktake.view', 'stocktake.create', 'stocktake.count', 'stocktake.approve',
         'capacity.view', 'capacity.manage', 'wms_reports.view',
+        'inbound_fee.view', 'inbound_fee.manage',
         'pricing.view', 'pricing.set', 'pricing.sync_oms',
         'store_monitor.view', 'store_monitor.view_all', 'store_monitor.manage', 'store_monitor.assign',
         'cost.view', 'operating_ledger.view', 'operating_ledger.manage',
@@ -279,6 +278,7 @@ exports.ROLE_PERM_TEMPLATES = {
         'cost.view', 'operating_ledger.view', 'operating_ledger.manage',
         'billing.view', 'billing.generate', 'billing.manual',
         'wms_reports.view',
+        'inbound_fee.view', 'inbound_fee.manage',
         'receivable_payable.view', 'receivable_payable.manual',
         'reports.view', 'profit_analysis.view',
         'budget_credit.view', 'budget_credit.create',

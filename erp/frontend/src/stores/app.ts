@@ -134,6 +134,7 @@ const NAV: NavGroup[] = [
     channel: 'overseas_wms',
     items: [
       { id: 'wms_reports', name: '作业报表' },
+      { id: 'inbound_fees', name: '入库计费' },
       { id: 'stocktake', name: '盘点管理' },
       { id: 'capacity', name: '容量预警' },
     ],
@@ -186,6 +187,7 @@ const NAV_ROUTE_MAP: Record<string, string> = {
   sku_query: '/inventory/sku-query',
   anheng: '/warehouse/anheng',
   wms_reports: '/wms/reports',
+  inbound_fees: '/wms/inbound-fees',
   stocktake: '/wms/stocktake',
   capacity: '/wms/capacity',
   cost: '/cost',
@@ -386,6 +388,7 @@ export const useAppStore = defineStore('app', {
         sku_query: 'inventory_query.view',
         anheng: 'anheng.view',
         wms_reports: 'wms_reports.view',
+        inbound_fees: 'inbound_fee.view',
         stocktake: 'stocktake.view',
         capacity: 'capacity.view',
         cost: 'cost.view',

@@ -44,7 +44,7 @@ const routes: RouteRecordRaw[] = [
       { path: 'wms/reports', name: 'WmsReports', component: () => import('@/pages/ManagementLoopView.vue'), meta: { title: '作业报表', section: '海外仓 · 管理闭环', tab: 'reports' } },
       { path: 'wms/stocktake', name: 'Stocktake', component: () => import('@/pages/ManagementLoopView.vue'), meta: { title: '盘点管理', section: '海外仓 · 管理闭环', tab: 'stocktake' } },
       { path: 'wms/capacity', name: 'Capacity', component: () => import('@/pages/ManagementLoopView.vue'), meta: { title: '容量预警', section: '海外仓 · 管理闭环', tab: 'capacity' } },
-      { path: 'wms/inbound-fees', redirect: '/wms/reports' },
+      { path: 'wms/inbound-fees', name: 'InboundFees', component: () => import('@/pages/InboundFeeRulesView.vue'), meta: { title: '入库计费', section: '海外仓 · 管理闭环' } },
       { path: 'cost', name: 'CostLedger', component: () => import('@/pages/CostLedgerView.vue'), meta: { title: '成本台账', section: '财务' } },
       { path: 'operating-ledger', name: 'OperatingLedger', component: () => import('@/pages/OperatingLedgerView.vue'), meta: { title: '经营收支', section: '财务' } },
       { path: 'sync', name: 'SyncLog', component: () => import('@/pages/SyncLogView.vue'), meta: { title: '同步日志', section: '同步' } },

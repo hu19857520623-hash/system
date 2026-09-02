@@ -29,7 +29,9 @@ export const BILLING_CHARGE_TYPE_LABELS: Record<string, string> = {
   return_extra: '退件附加费',
   inbound_receipt: '入库收货费',
   inbound_carton: '入库箱处理费',
-  inbound_qc: '入库质检费',
+  inbound_qc: '入库清点费',
+  inbound_measure: '入库测量费',
+  inbound_label: '入库贴标费',
   inbound_putaway: '入库上架费',
   other: '其他工费',
 }

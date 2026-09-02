@@ -536,6 +536,13 @@ export const managementLoopApi = {
   refreshCapacityAlerts: (data) => api.post('/management-loop/capacity/refresh-alerts', data),
 }
 
+export const inboundFeeApi = {
+  list: () => api.get('/inbound-fee-rules'),
+  options: () => api.get('/inbound-fee-rules/options'),
+  create: (data) => api.post('/inbound-fee-rules', data),
+  update: (id, data) => api.patch(`/inbound-fee-rules/${id}`, data),
+}
+
 export const operatingLedgerApi = {
   list: (params) => api.get('/operating-ledger', params),
   create: (data) => api.post('/operating-ledger', data),

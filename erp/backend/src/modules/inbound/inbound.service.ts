@@ -14,6 +14,7 @@ import { findInboundItemByScan as matchInboundItemByScan } from './inbound-item-
 import { InventoryMutationService } from '../../common/inventory/inventory-mutation.service'
 import { buildInternalSku } from '../../common/sku-code.util'
 import { buildBoxLabelsPdfBuffer, buildInboundBoxLabelData } from '../../common/labels/box-label-pdf.util'
+import { InboundFeeService } from './inbound-fee.service'
 
 /** 在途，等待到仓扫描 */
 const PENDING_RECEIPT_STATUSES = new Set([
@@ -37,6 +38,13 @@ const LEGACY_CONFIRM_STATUSES = new Set([
 
 const TERMINAL_STATUSES = new Set(['completed', 'confirmed'])
 
+function pieceQty(items: Array<{ actualQty?: number | null; expectedQty?: number; putawayQty?: number | null }>, field?: 'putawayQty') {
+  return (items || []).reduce((sum, item) => {
+    if (field === 'putawayQty') return sum + Number(item.putawayQty ?? item.actualQty ?? item.expectedQty ?? 0)
+    return sum + Number(item.actualQty ?? item.expectedQty ?? 0)
+  }, 0)
+}
+
 /** 旧 WMS 推送态 → 当前流程展示态 */
 function normalizeInboundStatus(status: string): string {
   if (PENDING_RECEIPT_STATUSES.has(status)) return 'pending_receipt'
@@ -52,6 +60,7 @@ export class InboundService {
     private opLog: OperationLogService,
     private pricing: PricingService,
     private inventoryMutation: InventoryMutationService,
+    private inboundFee: InboundFeeService,
   ) {}
 
   async list(q: PaginationDto & { status?: string }) {
@@ -1029,6 +1038,7 @@ export class InboundService {
       targetId: order.inboundNo,
       detail: { statusAfter: nextStatus, acceptDiff },
     })
+    await this.inboundFee.recordOperation(updated, 'qc', pieceQty(updated.items))
     return { ...updated, id: Number(updated.id) }
   }
 
@@ -1115,6 +1125,10 @@ export class InboundService {
       })
     }
 
+    const measuredItems = groups
+      .map((group: any) => itemMap.get(Number(group.inboundItemId ?? group.id)))
+      .filter(Boolean)
+    await this.inboundFee.recordOperation(order, 'measure', measuredItems.length || pieceQty(order.items))
     return this.detail(id)
   }
 
@@ -1290,6 +1304,9 @@ export class InboundService {
         targetId: order.inboundNo,
         detail: { allDone: result.allDone, lineCount: groups.length },
       })
+      if (result.allDone) {
+        await this.inboundFee.recordOperation(result, 'putaway', pieceQty(result.items, 'putawayQty'))
+      }
       await this.pushInboundStatusToOms(order.inboundNo)
       return result
     })
@@ -1462,6 +1479,7 @@ export class InboundService {
       where: { id: BigInt(id) },
       data: { labelPrintCount: { increment: Math.max(printDelta, 1) } },
     })
+    await this.inboundFee.recordOperation(order, 'label', Math.max(printDelta, 1))
     return { fileName, content: Buffer.from(html, 'utf-8'), mimeType: 'text/html;charset=utf-8' }
   }
 
@@ -1475,6 +1493,7 @@ export class InboundService {
       where: { id: BigInt(id) },
       data: { labelPrintCount: { increment: order.cartons?.length || 1 } },
     })
+    await this.inboundFee.recordOperation(order, 'label', order.cartons?.length || pieceQty(order.items) || 1)
     return { fileName, content: pdf, mimeType: 'application/pdf' }
   }
 
