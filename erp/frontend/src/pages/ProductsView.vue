@@ -438,6 +438,7 @@ async function printSkuLabels(items: Array<{ sku?: string; name?: string; barcod
         v-loading="loading"
         :data="pagedItems"
         :row-key="(row) => row.id"
+        class="products-table"
         stripe
         border
         style="width: 100%"
@@ -466,8 +467,8 @@ async function printSkuLabels(items: Array<{ sku?: string; name?: string; barcod
             <span v-else class="no-thumb">—</span>
           </template>
         </el-table-column>
-        <el-table-column prop="name" label="商品名称" min-width="150" />
-        <el-table-column prop="spec" label="规格" width="80" />
+        <el-table-column prop="name" label="商品名称" min-width="140" show-overflow-tooltip />
+        <el-table-column prop="spec" label="规格" min-width="120" show-overflow-tooltip />
         <el-table-column prop="cost" label="综合成本 (RMB)" width="120" align="right">
           <template #default="{ row }">
             <span title="采购 + 海运 + 国内运费">¥ {{ formatMoney(row.totalCost || row.cost) }}</span>
@@ -475,7 +476,7 @@ async function printSkuLabels(items: Array<{ sku?: string; name?: string; barcod
         </el-table-column>
         <el-table-column prop="developer" label="开发人" width="80" />
         <el-table-column prop="purchaser" label="采购员" width="80" />
-        <el-table-column prop="supplier" label="供应商" min-width="130" />
+        <el-table-column prop="supplier" label="供应商" min-width="130" show-overflow-tooltip />
         <el-table-column prop="status" label="状态" width="90">
           <template #default="{ row }">
             <el-tag :type="row.tone === 'ok' ? 'success' : row.tone === 'danger' ? 'danger' : row.tone === 'neutral' ? 'info' : 'warning'" size="small">
@@ -764,6 +765,11 @@ async function printSkuLabels(items: Array<{ sku?: string; name?: string; barcod
 .page-title { font-weight: 600; font-size: 15px; }
 .header-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .sel-count { font-size: 12px; color: var(--cyan); white-space: nowrap; }
+.products-table :deep(.el-table__body td.el-table__cell .cell) {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .product-thumb { width: 40px; height: 40px; border-radius: 4px; border: 1px solid var(--border); }
 .thumb-wrap { position: relative; display: inline-block; }
 .img-count {
