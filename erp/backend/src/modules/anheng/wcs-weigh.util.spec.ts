@@ -3,6 +3,7 @@ import {
   buildWcsWeighReply,
   decodeJpegBase64,
   deviceKeyAccepted,
+  extractWcsImagePayload,
   normalizeWcsWeighBody,
   previewWmsOutputs,
   validateWcsWeighItem,
@@ -92,6 +93,23 @@ describe('deviceKeyAccepted', () => {
     expect(deviceKeyAccepted('secret', 'secret')).toBe(true)
     expect(deviceKeyAccepted('secret', 'other')).toBe(false)
     expect(deviceKeyAccepted('secret', '')).toBe(false)
+  })
+})
+
+describe('extractWcsImagePayload', () => {
+  it('reads document fields and common aliases', () => {
+    expect(extractWcsImagePayload({ expressNo: 'A1', file: 'abc' })).toEqual({
+      expressNo: 'A1',
+      file: 'abc',
+    })
+    expect(extractWcsImagePayload({ ExpressNo: 'B2', File: 'xyz' })).toEqual({
+      expressNo: 'B2',
+      file: 'xyz',
+    })
+    expect(extractWcsImagePayload([{ ticketsNum: 'C3', img: 'p' }])).toEqual({
+      expressNo: 'C3',
+      file: 'p',
+    })
   })
 })
 

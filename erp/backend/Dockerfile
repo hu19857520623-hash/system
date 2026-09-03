@@ -50,7 +50,9 @@ COPY --from=builder --chown=erp:erp /app/prisma ./prisma
 COPY --from=builder --chown=erp:erp /app/scripts ./scripts
 COPY --from=builder --chown=erp:erp /app/data ./data
 COPY --chown=erp:erp backend/docker-entrypoint.sh ./docker-entrypoint.sh
-RUN chmod 755 docker-entrypoint.sh
+RUN chmod 755 docker-entrypoint.sh \
+    && mkdir -p /app/uploads/wcs-photos \
+    && chown -R erp:erp /app/uploads
 
 USER erp
 EXPOSE 3000

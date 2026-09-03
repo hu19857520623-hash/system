@@ -136,6 +136,25 @@ export function deviceKeyAccepted(configured: string | null | undefined, present
   return presented === expected
 }
 
+export function extractWcsImagePayload(body: unknown): { expressNo: string; file: unknown } {
+  const row =
+    body && typeof body === 'object'
+      ? Array.isArray(body)
+        ? body[0]
+        : body
+      : null
+  if (!row || typeof row !== 'object' || Array.isArray(row)) {
+    return { expressNo: '', file: '' }
+  }
+  const o = row as Record<string, unknown>
+  return {
+    expressNo: asWcsString(
+      o.expressNo ?? o.expressno ?? o.express_no ?? o.ticketsNum ?? o.tickets_num ?? o.ExpressNo,
+    ).slice(0, 80),
+    file: o.file ?? o.File ?? o.img ?? o.image ?? o.pic ?? o.photo ?? o.fileData ?? o.FileData ?? '',
+  }
+}
+
 export function stripBase64Prefix(file: unknown): string {
   const raw = String(file ?? '').replace(/\s/g, '')
   const marker = 'base64,'

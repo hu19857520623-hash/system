@@ -58,6 +58,8 @@ services:
       MINGRUI_APP_TOKEN: ${MINGRUI_APP_TOKEN:-}
     ports:
       - "127.0.0.1:${ERP_BACKEND_PORT:-3000}:3000"
+    volumes:
+      - erp_api_uploads:/app/uploads
     depends_on:
       mysql:
         condition: service_healthy
@@ -177,3 +179,4 @@ networks:
 
 volumes:
   erp_mysql_data:
+  erp_api_uploads:

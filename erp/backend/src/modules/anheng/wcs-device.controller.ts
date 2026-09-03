@@ -4,6 +4,28 @@ import { Public } from '../../common/decorators/public.decorator'
 import { AnhengService } from './anheng.service'
 import { clientIpFromRequest } from './wcs-weigh.util'
 
+async function replyWcsImage(
+  service: AnhengService,
+  res: Response,
+  body: unknown,
+  queryKey: string | undefined,
+  deviceKey: string | undefined,
+  req: Request,
+) {
+  try {
+    const reply = await service.handleImage(body, {
+      deviceKey,
+      queryKey,
+      body,
+      ip: clientIpFromRequest(req),
+      source: 'device',
+    })
+    res.status(200).json(reply)
+  } catch {
+    res.status(200).json({ isOk: 0 })
+  }
+}
+
 /** 设备回调：必须返回裸 JSON，不能走 ERP 统一 { code, data } 包装 */
 @Public()
 @Controller('wcs')
@@ -36,14 +58,7 @@ export class WcsDeviceController {
     @Req() req: Request,
     @Res() res: Response,
   ) {
-    const reply = await this.service.handleImage(body, {
-      deviceKey,
-      queryKey,
-      body,
-      ip: clientIpFromRequest(req),
-      source: 'device',
-    })
-    res.status(200).json(reply)
+    await replyWcsImage(this.service, res, body, queryKey, deviceKey, req)
   }
 }
 
@@ -86,13 +101,6 @@ export class WcsImageUploadController {
     @Req() req: Request,
     @Res() res: Response,
   ) {
-    const reply = await this.service.handleImage(body, {
-      deviceKey,
-      queryKey,
-      body,
-      ip: clientIpFromRequest(req),
-      source: 'device',
-    })
-    res.status(200).json(reply)
+    await replyWcsImage(this.service, res, body, queryKey, deviceKey, req)
   }
 }

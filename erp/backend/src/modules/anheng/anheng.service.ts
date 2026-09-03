@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common'
+import { Injectable, Logger, NotFoundException } from '@nestjs/common'
 import { Prisma } from '@prisma/client'
 import { FileStoreService } from '../../common/file-store.service'
 import { PrismaService } from '../../common/prisma/prisma.service'
@@ -10,6 +10,7 @@ import {
   buildWcsWeighReply,
   decodeJpegBase64,
   deviceKeyAccepted,
+  extractWcsImagePayload,
   extractPresentedDeviceKey,
   normalizeWcsWeighBody,
   previewWmsOutputs,
@@ -32,6 +33,8 @@ export type WcsCallContext = {
 
 @Injectable()
 export class AnhengService {
+  private readonly logger = new Logger(AnhengService.name)
+
   constructor(
     private prisma: PrismaService,
     private files: FileStoreService,
@@ -132,38 +135,51 @@ export class AnhengService {
   }
 
   async handleImage(body: unknown, ctx: WcsCallContext): Promise<{ isOk: number }> {
-    const config = await this.loadConfigRow()
-    if (ctx.source !== 'simulate') {
-      const presented = extractPresentedDeviceKey({
-        header: ctx.deviceKey,
-        query: ctx.queryKey,
-        body,
-      })
-      if (!deviceKeyAccepted(config.deviceKey, presented) || !config.enabled) {
+    try {
+      const config = await this.loadConfigRow()
+      if (ctx.source !== 'simulate') {
+        const presented = extractPresentedDeviceKey({
+          header: ctx.deviceKey,
+          query: ctx.queryKey,
+          body,
+        })
+        if (!deviceKeyAccepted(config.deviceKey, presented) || !config.enabled) {
+          this.logger.warn(`wcs image rejected: device key or receiver disabled ip=${asWcsString(ctx.ip)}`)
+          return { isOk: 0 }
+        }
+      }
+
+      const payload = extractWcsImagePayload(body)
+      if (!payload.expressNo) {
+        this.logger.warn(`wcs image rejected: missing expressNo ip=${asWcsString(ctx.ip)}`)
         return { isOk: 0 }
       }
+
+      const decoded = decodeJpegBase64(payload.file)
+      if (decoded.error || decoded.buffer.length > MAX_PHOTO_BYTES) {
+        this.logger.warn(
+          `wcs image rejected: ${decoded.error || 'file too large'} expressNo=${payload.expressNo} bytes=${decoded.buffer.length}`,
+        )
+        return { isOk: 0 }
+      }
+
+      const fileName = `${Date.now()}-${payload.expressNo.replace(/[^\w.-]/g, '_')}.jpg`
+      const stored = this.files.write(PHOTO_DIR, fileName, decoded.buffer)
+      await this.prisma.wcsWeighPhoto.create({
+        data: {
+          expressNo: payload.expressNo,
+          filePath: stored.relativePath,
+          fileSize: decoded.buffer.length,
+          isOk: WCS_IMAGE_OK.isOk,
+          source: ctx.source,
+          clientIp: asWcsString(ctx.ip).slice(0, 64) || null,
+        },
+      })
+      return { ...WCS_IMAGE_OK }
+    } catch (err) {
+      this.logger.error(`wcs image failed: ${err instanceof Error ? err.message : String(err)}`)
+      return { isOk: 0 }
     }
-
-    const payload = body && typeof body === 'object' && !Array.isArray(body) ? (body as Record<string, unknown>) : {}
-    const expressNo = asWcsString(payload.expressNo ?? payload.expressno ?? payload.ticketsNum).slice(0, 80)
-    if (!expressNo) return { isOk: 0 }
-
-    const decoded = decodeJpegBase64(payload.file)
-    if (decoded.error || decoded.buffer.length > MAX_PHOTO_BYTES) return { isOk: 0 }
-
-    const fileName = `${Date.now()}-${expressNo.replace(/[^\w.-]/g, '_')}.jpg`
-    const stored = this.files.write(PHOTO_DIR, fileName, decoded.buffer)
-    await this.prisma.wcsWeighPhoto.create({
-      data: {
-        expressNo,
-        filePath: stored.relativePath,
-        fileSize: decoded.buffer.length,
-        isOk: WCS_IMAGE_OK.isOk,
-        source: ctx.source,
-        clientIp: asWcsString(ctx.ip).slice(0, 64) || null,
-      },
-    })
-    return { ...WCS_IMAGE_OK }
   }
 
   async listEvents(query: { page?: unknown; pageSize?: unknown; keyword?: string }): Promise<PageResult<unknown>> {
