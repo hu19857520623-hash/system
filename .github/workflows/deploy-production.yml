@@ -169,6 +169,16 @@ jobs:
           test -f "$anheng_sql" || { echo "Missing $anheng_sql"; exit 1; }
           cat "$anheng_sql" | docker compose exec -T mysql mysql -uroot -p"$mysql_pw" --batch takealot_erp
 
+          echo '=== Apply user workstation ==='
+          workstation_sql="${PWD}/backend/prisma/scripts/migrate_user_workstation.sql"
+          test -f "$workstation_sql" || { echo "Missing $workstation_sql"; exit 1; }
+          cat "$workstation_sql" | docker compose exec -T mysql mysql -uroot -p"$mysql_pw" --default-character-set=utf8mb4 --batch takealot_erp
+
+          echo '=== Apply warehouse total volume ==='
+          volume_sql="${PWD}/backend/prisma/scripts/migrate_warehouse_total_volume.sql"
+          test -f "$volume_sql" || { echo "Missing $volume_sql"; exit 1; }
+          cat "$volume_sql" | docker compose exec -T mysql mysql -uroot -p"$mysql_pw" --batch takealot_erp
+
           echo '=== Sync dashboard and role permissions ==='
           dash_perm_sql="${PWD}/backend/prisma/scripts/migrate_dashboard_permissions.sql"
           test -f "$dash_perm_sql" || { echo "Missing $dash_perm_sql"; exit 1; }
