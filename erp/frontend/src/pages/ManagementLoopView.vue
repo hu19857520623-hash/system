@@ -183,7 +183,7 @@ async function openCreateStocktake() {
 }
 async function createStocktake() {
   const skus = stocktakeForm.skusText.split(/[\s,，]+/).map((v: string) => v.trim()).filter(Boolean)
-  const { inboundDateRange, skusText, ...payload } = stocktakeForm
+  const { inboundDateRange, skusText: _skusText, ...payload } = stocktakeForm
   const result = await managementLoopApi.createStocktake({
     ...payload,
     skus,
