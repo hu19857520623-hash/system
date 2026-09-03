@@ -154,6 +154,16 @@ jobs:
           done
           cat "$repair_sql" | docker compose exec -T mysql mysql -uroot -p"$mysql_pw" --batch takealot_erp
 
+          echo '=== Apply WMS management loop schema ==='
+          wms_mgmt_sql="${PWD}/backend/prisma/scripts/migrate_wms_management_loop.sql"
+          test -f "$wms_mgmt_sql" || { echo "Missing $wms_mgmt_sql"; exit 1; }
+          cat "$wms_mgmt_sql" | docker compose exec -T mysql mysql -uroot -p"$mysql_pw" --batch takealot_erp
+
+          echo '=== Restore inbound fee rule columns ==='
+          inbound_fee_sql="${PWD}/backend/prisma/scripts/migrate_inbound_fee_restore.sql"
+          test -f "$inbound_fee_sql" || { echo "Missing $inbound_fee_sql"; exit 1; }
+          cat "$inbound_fee_sql" | docker compose exec -T mysql mysql -uroot -p"$mysql_pw" --batch takealot_erp
+
           echo '=== Apply Anheng WCS schema ==='
           anheng_sql="${PWD}/backend/prisma/scripts/migrate_anheng_wcs.sql"
           test -f "$anheng_sql" || { echo "Missing $anheng_sql"; exit 1; }
