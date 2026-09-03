@@ -12,6 +12,7 @@
       --accent: #f5a623;
       --inbound: #4da3ff;
       --outbound: #ff9f43;
+      --stocktake: #5eead4;
       --sku: #67d4e8;
       --ok: #3ddc97;
       --err: #ff6b6b;
@@ -100,6 +101,11 @@
       background: var(--surface2); color: var(--text); font-size:13px; cursor:pointer;
     }
     .lang-btn.on { background: var(--accent); color:#1a1204; font-weight:600; }
+    .mode-btn {
+      flex: 1; height: 32px; border: 0; border-radius: 8px;
+      background: var(--surface2); color: var(--muted); font-size: 13px; cursor: pointer;
+    }
+    .mode-btn.on { background: var(--accent); color:#1a1204; font-weight:600; }
     .link { background: none; border: 0; color: var(--accent); font-size: 14px; cursor: pointer; }
     .tile, .card, .line {
       background: var(--surface);
@@ -113,11 +119,14 @@
     .tile .d { font-size: 12px; color: var(--muted); margin-top: 2px; }
     .tile.inbound { border: 1px solid rgba(77,163,255,.28); border-left: 5px solid var(--inbound); }
     .tile.outbound { border: 1px solid rgba(255,159,67,.28); border-left: 5px solid var(--outbound); }
+    .tile.stocktake { border: 1px solid rgba(94,234,212,.28); border-left: 5px solid var(--stocktake); }
     .tile.inbound .t { color: var(--inbound); }
     .tile.outbound .t { color: var(--outbound); }
+    .tile.stocktake .t { color: var(--stocktake); }
     .sec { color: var(--muted); font-size: 12px; margin: 14px 0 6px; }
     .sec.inbound { color: var(--inbound); font-weight: 700; letter-spacing: .08em; }
     .sec.outbound { color: var(--outbound); font-weight: 700; letter-spacing: .08em; }
+    .sec.stocktake { color: var(--stocktake); font-weight: 700; letter-spacing: .08em; }
     .chip {
       font-size: 12px;
       padding: 3px 8px;
@@ -160,6 +169,7 @@
     .doc-card::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 5px; background: currentColor; }
     .doc-card.inbound { color: var(--inbound); border-color: rgba(77,163,255,.35); }
     .doc-card.outbound { color: var(--outbound); border-color: rgba(255,159,67,.35); }
+    .doc-card.stocktake { color: var(--stocktake); border-color: rgba(94,234,212,.35); }
     .entity-type { color: currentColor; font-size: 10px; font-weight: 800; letter-spacing: .12em; margin-bottom: 2px; }
     .doc-number { color: var(--text); font-size: 17px; font-weight: 700; letter-spacing: .01em; }
     .doc-card .kv { color: var(--text); }
@@ -174,7 +184,7 @@
 <body>
   <p class="hint">
     这是 <strong>仓库 PDA</strong> 的界面预览，布局与 Android App 一致。<br />
-    点按钮可在登录 / 首页 / 入库 / 出库之间切换。要跑真机请用 Android Studio 打开 <code>pda/</code>。
+    点按钮可在登录 / 首页 / 入库 / 出库 / 盘点之间切换。要跑真机请用 Android Studio 打开 <code>pda/</code>。
   </p>
 
   <div class="phone">
@@ -187,7 +197,7 @@
         <button class="lang-btn" data-lang="af">Afrikaans</button>
       </div>
       <h1 style="margin-top:16px" data-i18n="title">仓库 PDA</h1>
-      <p class="sub" data-i18n="subtitle">入库到仓 / 收货清点 / 上架 / 出库拣货</p>
+      <p class="sub" data-i18n="subtitle">入库到仓 / 收货清点 / 上架 / 出库拣货 / 盘点</p>
       <label data-i18n="user">用户名</label>
       <input value="warehouse" />
       <label data-i18n="pass">密码</label>
@@ -214,6 +224,7 @@
         <div class="status-item"><span>账号</span><b>warehouse</b></div>
         <div class="status-item"><span>网络</span><b>已连接</b></div>
         <div class="status-item"><span>扫码枪</span><b>已就绪</b></div>
+        <div class="status-item"><span>工位</span><b>工位A</b></div>
       </div>
       <label>作业仓库</label>
       <select><option>JHB1 约翰内斯堡 (JHB1)</option></select>
@@ -223,8 +234,10 @@
       <div class="tile inbound" onclick="go('qc')"><div class="t">清点</div><div class="d">扫 SKU 累加实收</div></div>
       <div class="tile inbound" onclick="go('putaway')"><div class="t">上架</div><div class="d">扫 SKU 再扫库位</div></div>
       <div class="sec outbound">出库 · OUTBOUND</div>
-      <div class="tile outbound" onclick="go('pick')"><div class="t">拣货</div><div class="d">扫出库单，按库位拣货</div></div>
+      <div class="tile outbound" onclick="go('pick')"><div class="t">拣货</div><div class="d">仅扫本工位已分配的单，可按箱扫</div></div>
       <div class="tile outbound" onclick="go('review')"><div class="t">复核</div><div class="d">扫 SKU 核对后提交</div></div>
+      <div class="sec stocktake">在库 · STOCKTAKE</div>
+      <div class="tile stocktake" onclick="go('stocktake')"><div class="t">盘点</div><div class="d">扫盘点单，按库位清点</div></div>
     </div>
 
     <div id="arrival" class="screen hidden">
@@ -295,15 +308,22 @@
     <div id="pick" class="screen hidden">
       <div class="row"><h2>拣货</h2><button class="link" onclick="go('home')">返回</button></div>
       <label>扫 SKU 或库位</label>
-      <input placeholder="扫出库单号，或扫 SKU / 库位" />
+      <input placeholder="扫已分配给出库单号，或扫 SKU / 库位" />
       <div class="card doc-card outbound">
         <div class="row"><div><div class="entity-type">拣货单</div><div class="doc-number">OUT-20260819-0088</div></div><span class="chip">拣货中</span></div>
         <div class="kv"><span>客户</span>Acme</div>
         <div class="kv"><span>仓库</span>JHB1</div>
+        <div class="kv"><span>工位</span>工位A · 张仓管</div>
       </div>
+      <div class="lang-row" style="margin:8px 0">
+        <button class="mode-btn on">按箱扫</button>
+        <button class="mode-btn">逐件扫</button>
+      </div>
+      <p class="sub" style="margin:0 0 8px">扫一次 SKU 记本库位剩余件数，不必逐件</p>
       <div class="sku-card sel">
         <div class="row"><div><div class="sku-type">SKU · 当前</div><div class="sku-code">SKU-A</div></div><span class="chip ok">2/2</span></div>
         <div class="location-row"><span>拣货库位</span><b>A-01-03</b></div>
+        <p class="sub" style="margin:6px 0 0">先扫库位，再扫 SKU；按箱一次记满 2</p>
       </div>
       <div class="sku-card">
         <div class="row"><div><div class="sku-type">SKU</div><div class="sku-code">SKU-B</div></div><span class="chip">0/4</span></div>
@@ -324,6 +344,32 @@
       <button class="btn ok">提交复核</button>
     </div>
 
+    <div id="stocktake" class="screen hidden">
+      <div class="row"><h2>盘点</h2><button class="link" onclick="go('home')">返回</button></div>
+      <label>扫盘点单号 / 库位 / SKU</label>
+      <input value="PD-20260903-0012" />
+      <div class="card doc-card stocktake">
+        <div class="row"><div><div class="entity-type">盘点单</div><div class="doc-number">PD-20260903-0012</div></div><span class="chip">盘点中</span></div>
+        <div class="kv"><span>仓库</span>JHB1</div>
+        <div class="kv"><span>范围</span>客户 ACME · 入库 2026-09-01 ~ 2026-09-03</div>
+        <div class="kv"><span>待盘</span>1 / 2</div>
+      </div>
+      <div class="sku-card sel">
+        <div class="row"><div><div class="sku-type">SKU · 当前</div><div class="sku-code">SKU-A</div></div><span class="chip">待盘</span></div>
+        <div class="location-row"><span>库位</span><b>A-01-03</b></div>
+      </div>
+      <div class="sku-card">
+        <div class="row"><div><div class="sku-type">SKU</div><div class="sku-code">SKU-B</div></div><span class="chip ok">已盘</span></div>
+        <div class="location-row"><span>库位</span><b>B-02-11</b></div>
+      </div>
+      <div class="qty">
+        <button>−</button>
+        <div class="n"><span class="sub" style="margin:0">实盘数量</span><b>12</b></div>
+        <button>+</button>
+      </div>
+      <button class="btn ok">提交实盘</button>
+    </div>
+
     <div id="settings" class="screen hidden">
       <h2>设置</h2>
       <div class="lang-row">
@@ -334,6 +380,13 @@
       <div class="card">
         <div class="kv"><span>账号</span>张仓管</div>
         <div class="kv"><span>用户名</span>warehouse</div>
+        <div class="kv"><span>账号工位</span>工位A</div>
+      </div>
+      <div class="card">
+        <strong>本机工位</strong>
+        <label>设备工位</label>
+        <input value="工位A" maxlength="30" />
+        <p class="sub" style="margin:8px 0 0">共享 PDA 可在此标注。账号已绑工位时以账号为准。</p>
       </div>
       <div class="card">
         <strong>主管设置</strong>
@@ -349,9 +402,9 @@
 
   <script>
     const i18n = {
-      zh: { title: '仓库 PDA', subtitle: '入库到仓 / 收货清点 / 上架 / 出库拣货', user: '用户名', pass: '密码', login: '登录' },
-      en: { title: 'Warehouse PDA', subtitle: 'Arrival / receiving / putaway / picking', user: 'Username', pass: 'Password', login: 'Sign in' },
-      af: { title: 'Pakhuis PDA', subtitle: 'Aankoms / ontvangs / wegpak / pluk', user: 'Gebruikersnaam', pass: 'Wagwoord', login: 'Meld aan' },
+      zh: { title: '仓库 PDA', subtitle: '入库到仓 / 收货清点 / 上架 / 出库拣货 / 盘点', user: '用户名', pass: '密码', login: '登录' },
+      en: { title: 'Warehouse PDA', subtitle: 'Arrival / receiving / putaway / picking / stocktake', user: 'Username', pass: 'Password', login: 'Sign in' },
+      af: { title: 'Pakhuis PDA', subtitle: 'Aankoms / ontvangs / wegpak / pluk / telling', user: 'Gebruikersnaam', pass: 'Wagwoord', login: 'Meld aan' },
     };
     function setLang(code) {
       document.querySelectorAll('.lang-btn').forEach((btn) => {

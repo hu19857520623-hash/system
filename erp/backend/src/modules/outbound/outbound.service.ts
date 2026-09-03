@@ -24,10 +24,16 @@ import {
   PICK_SOURCE_LABELS,
   REVIEW_SOURCE_LABELS,
   barcodeMatchesProduct,
+  canApplyDeliveryOutcome,
   cargoTypeLabel,
+  formatPickerStationLabel,
   formatWorkDate,
+  isPostShipStatus,
   normalizeScanCode,
+  outboundPickBlockedReason,
+  parseDeliveryOutcome,
   parseWorkDate,
+  pdaPickerMismatchReason,
   resolveCargoType,
   summarizeRemark,
   summarizeSkus,
@@ -36,7 +42,7 @@ import {
 } from './outbound.policy'
 import { notifyOms } from '../../common/oms-notify.util'
 import { erpFbaCodesForOmsWarehouse, outboundDestinationLabel } from './oms-warehouse.util'
-import { toOmsOutboundStatus } from './oms-status.util'
+import { toOmsLogisticsStatus, toOmsOutboundStatus } from './oms-status.util'
 import {
   buildOutboundRemark,
   parseOmsOutboundMeta,
@@ -332,7 +338,12 @@ export class OutboundService {
         { name: c.customerName || c.customerCode, code: c.customerCode },
       ]),
     )
-    const userMap = new Map(users.map((u) => [Number(u.id), u.realName || u.username]))
+    const userMap = new Map(
+      users.map((u) => [
+        Number(u.id),
+        { name: u.realName || u.username, workstation: u.workstation || '' },
+      ]),
+    )
     const productIds = [...new Set(
       rows.flatMap((r) => (r.items || []).map((i: any) => i.productId).filter(Boolean)),
     )] as bigint[]
@@ -362,14 +373,15 @@ export class OutboundService {
       cargoTypeLabel: cargoTypeLabel(r.cargoType),
       fbaWarehouse: r.fbaWarehouse || '',
       pickerId: r.pickerId ? Number(r.pickerId) : null,
-      pickerName: r.pickerId ? userMap.get(Number(r.pickerId)) || '—' : '',
+      pickerName: r.pickerId ? userMap.get(Number(r.pickerId))?.name || '—' : '',
+      pickerWorkstation: r.pickerId ? userMap.get(Number(r.pickerId))?.workstation || '' : '',
       batchNo: r.batchNo || '',
       platform: r.platform || '',
       appointmentStatus: r.appointmentStatus || '',
       appointmentStatusLabel: APPOINTMENT_LABELS[r.appointmentStatus || ''] || r.appointmentStatus || '—',
       appointmentDate: formatWorkDate(r.appointmentDate),
       reviewerId: r.reviewerId ? Number(r.reviewerId) : null,
-      reviewerName: r.reviewerId ? userMap.get(Number(r.reviewerId)) || '—' : '',
+      reviewerName: r.reviewerId ? userMap.get(Number(r.reviewerId))?.name || '—' : '',
       reviewedAt: r.reviewedAt ? this.fmtTime(r.reviewedAt) : null,
       reviewSource: r.reviewSource || '',
       reviewSourceLabel: REVIEW_SOURCE_LABELS[r.reviewSource || ''] || '',
@@ -500,7 +512,7 @@ export class OutboundService {
       OUTBOUND_STATUS_LABELS[r.status] || r.status,
       r.logisticsProduct,
       r.carrier,
-      r.pickerName,
+      r.pickerName ? formatPickerStationLabel(r.pickerName, r.pickerWorkstation) : '',
       r.pickSourceLabel || '',
       r.reviewerName,
       r.reviewSourceLabel || '',
@@ -771,7 +783,7 @@ export class OutboundService {
     if (!order) throw new NotFoundException('出库单不存在')
     if (order.status === 'cancelled') throw new BadRequestException('已取消不可上传附件')
     const fileType = attachment.fileType
-    if (fileType !== 'pod' && ['shipped', 'delivered'].includes(order.status)) {
+    if (fileType !== 'pod' && isPostShipStatus(order.status)) {
       throw new BadRequestException('当前状态不可上传该类型附件')
     }
     await this.prisma.$transaction(async (tx) => {
@@ -961,7 +973,12 @@ export class OutboundService {
         pickingStartedAt: new Date(),
       },
     })
-    return { updated: ids.length, pickerId, pickerName: picker.realName || picker.username }
+    return {
+      updated: ids.length,
+      pickerId,
+      pickerName: picker.realName || picker.username,
+      pickerWorkstation: picker.workstation || null,
+    }
   }
 
   async setProblem(
@@ -986,7 +1003,7 @@ export class OutboundService {
     }
     if (!markType) throw new BadRequestException('请指定 markType')
 
-    const blocked = ['shipped', 'delivered', 'cancelled']
+    const blocked = ['shipped', 'delivered', 'partial_delivered', 'delivery_failed', 'cancelled']
 
     switch (markType) {
       case 'problem':
@@ -1080,9 +1097,11 @@ export class OutboundService {
     if (!order) throw new NotFoundException('出库单不存在')
 
     let pickerName = ''
+    let pickerWorkstation = ''
     if (order.pickerId) {
       const picker = await this.prisma.sysUser.findUnique({ where: { id: order.pickerId } })
       pickerName = picker?.realName || picker?.username || ''
+      pickerWorkstation = picker?.workstation || ''
     }
 
     const lines = await Promise.all(
@@ -1127,7 +1146,7 @@ th{background:#f5f5f5}
 <div class="meta">
   出库单：<strong>${order.outboundNo}</strong><br/>
   仓库：${order.warehouseCode} · 状态：${OUTBOUND_STATUS_LABELS[order.status] || order.status}<br/>
-  拣货员：${pickerName || '—'} · 打印时间：${new Date().toLocaleString('zh-CN')}
+  拣货员：${formatPickerStationLabel(pickerName, pickerWorkstation)} · 打印时间：${new Date().toLocaleString('zh-CN')}
 </div>
 <table>
   <thead><tr><th>SKU</th><th>品名</th><th>应拣</th><th>拣货库位（建议）</th></tr></thead>
@@ -1150,12 +1169,8 @@ th{background:#f5f5f5}
       include: { items: true },
     })
     if (!order) throw new NotFoundException('出库单不存在')
-    if (order.status === 'pending_pick' || !order.pickerId) {
-      throw new BadRequestException('请先分配拣货员后再完成拣货')
-    }
-    if (order.status !== 'picking') {
-      throw new BadRequestException('当前状态不可拣货')
-    }
+    const blocked = outboundPickBlockedReason(order)
+    if (blocked) throw new BadRequestException(blocked)
 
     const productIds = [...new Set(order.items.map((item) => item.productId))]
     const products = productIds.length
@@ -1205,14 +1220,14 @@ th{background:#f5f5f5}
     })
     if (!order) throw new NotFoundException('出库单不存在')
     if (order.status === 'exception') throw new BadRequestException('异常单已暂停流程，请先解除异常')
-    if (order.status === 'pending_pick' || !order.pickerId) {
-      throw new BadRequestException('请先分配拣货员后再完成拣货')
-    }
-    if (order.status !== 'picking') {
-      throw new BadRequestException('当前状态不可拣货')
-    }
+    const blocked = outboundPickBlockedReason(order)
+    if (blocked) throw new BadRequestException(blocked)
 
     const pickSource: PickSource = payload.pickSource === 'pda' ? 'pda' : 'pick_list'
+    if (pickSource === 'pda') {
+      const mismatch = pdaPickerMismatchReason(order.pickerId, operatorId)
+      if (mismatch) throw new BadRequestException(mismatch)
+    }
     if (!payload.items?.length) throw new BadRequestException('请提交拣货明细')
     const lineMap = new Map(order.items.map((i) => [Number(i.id), i]))
     const submittedIds = new Set<number>()
@@ -1475,15 +1490,23 @@ th{background:#f5f5f5}
     return this.detail(id)
   }
 
-  async deliver(id: number, payload?: { podCode?: string }) {
+  async deliver(id: number, payload?: { podCode?: string; outcome?: string }) {
     const order = await this.prisma.outboundOrder.findUnique({ where: { id: BigInt(id) } })
     if (!order) throw new NotFoundException('出库单不存在')
-    if (order.status !== 'shipped') throw new BadRequestException('仅已发运单可确认送达')
+    const outcome = parseDeliveryOutcome(payload?.outcome)
+    if (!outcome) throw new BadRequestException('派送结果无效，请使用已送达、部分签收或派送失败')
+    if (!canApplyDeliveryOutcome(order.status, outcome)) {
+      throw new BadRequestException(
+        order.status === outcome
+          ? '出库单已是该派送状态'
+          : '仅已发运、部分签收或派送失败的出库单可更新派送结果',
+      )
+    }
     await this.prisma.outboundOrder.update({
       where: { id: BigInt(id) },
       data: {
-        status: 'delivered',
-        deliveredAt: new Date(),
+        status: outcome,
+        deliveredAt: outcome === 'delivery_failed' ? order.deliveredAt : new Date(),
         podCode: payload?.podCode?.trim().slice(0, 80) || undefined,
       },
     })
@@ -1576,7 +1599,7 @@ th{background:#f5f5f5}
       include: { items: true, pickAllocations: true },
     })
     if (!order) throw new NotFoundException('出库单不存在')
-    if (order.status === 'shipped' || order.status === 'delivered') throw new BadRequestException('已发运不可取消')
+    if (isPostShipStatus(order.status)) throw new BadRequestException('已发运不可取消')
     if (order.status === 'cancelled') throw new BadRequestException('出库单已取消')
     const stockSource = parseStockSourceFromRemark(order.remark)
     const preDeduct = parseOmsOutboundPreDeduct(order.remark)
@@ -2021,19 +2044,6 @@ th{background:#f5f5f5}
     const customer = await this.prisma.customer.findUnique({ where: { customerCode: code } })
     if (!customer) throw new NotFoundException(`客户代码 ${code} 不存在`)
 
-    const STATUS_LABEL: Record<string, string> = {
-      pending_pick: '待拣货',
-      picking: '拣货中',
-      picked: '已拣货',
-      reviewing: '复核中',
-      pending_relabel: '待换标',
-      packed: '待发运',
-      shipped: '已发运',
-      delivered: '已送达',
-      cancelled: '已取消',
-      exception: '异常',
-    }
-
     const rows = await this.prisma.outboundOrder.findMany({
       where: {
         customerId: customer.id,
@@ -2055,7 +2065,7 @@ th{background:#f5f5f5}
           qty: line?.pickedQty || line?.qty || 0,
           status: o.status,
           omsStatus,
-          statusLabel: STATUS_LABEL[o.status] || omsStatus,
+          statusLabel: OUTBOUND_STATUS_LABELS[o.status] || omsStatus,
           refNo: o.fbaNo || null,
           fbaNo: o.fbaNo,
           fbaWarehouse: o.fbaWarehouse,
@@ -2228,7 +2238,7 @@ th{background:#f5f5f5}
         mapped.customerCode,
         mapped as unknown as Record<string, unknown>,
       )
-      if (mapped.status === 'shipped' || mapped.status === 'delivered' || mapped.status === 'exception') {
+      if (isPostShipStatus(mapped.status) || mapped.status === 'exception') {
         const row = await this.prisma.outboundOrder.findUnique({
           where: { outboundNo },
           include: { attachments: { where: { fileType: 'pod' }, orderBy: { id: 'desc' }, take: 1 } },
@@ -2241,12 +2251,7 @@ th{background:#f5f5f5}
           outboundNo: mapped.outboundNo,
           carrier: mapped.carrier || mapped.logisticsProduct || '—',
           trackingNo: mapped.trackingNo || '—',
-          status:
-            mapped.status === 'delivered'
-              ? 'delivered'
-              : mapped.status === 'exception'
-                ? 'exception'
-                : 'in_transit',
+          status: toOmsLogisticsStatus(mapped.status),
           destination: mapped.platform || '—',
           updatedAt: new Date().toISOString(),
           podStatus,
@@ -2278,7 +2283,7 @@ th{background:#f5f5f5}
     const rows = await this.prisma.outboundOrder.findMany({
       where: {
         customerId: customer.id,
-        status: { in: ['shipped', 'delivered', 'exception'] },
+        status: { in: ['shipped', 'delivered', 'partial_delivered', 'delivery_failed', 'exception'] },
       },
       include: { attachments: { where: { fileType: 'pod' }, take: 1 } },
       orderBy: { updatedAt: 'desc' },
@@ -2293,12 +2298,7 @@ th{background:#f5f5f5}
         outboundNo: r.outboundNo,
         carrier: r.carrier || r.logisticsProduct || '—',
         trackingNo: r.trackingNo || '—',
-        status:
-          r.status === 'delivered'
-            ? 'delivered'
-            : r.status === 'exception'
-              ? 'exception'
-              : 'in_transit',
+        status: toOmsLogisticsStatus(r.status),
         destination: r.fbaWarehouse || r.platform || r.destType || '—',
         updatedAt: (r.deliveredAt || r.shippedAt || r.updatedAt).toISOString(),
         podStatus: await this.resolvePodStatus(r),

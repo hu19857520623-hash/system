@@ -120,8 +120,15 @@ const packDetailLoading = ref(false)
 const relabelLines = ref<{ id: number; sku: string; productName: string; scannedBarcode: string; newBarcode: string }[]>([])
 
 const customers = ref<{ id: number; code: string; name: string }[]>([])
-const pickerUsers = ref<{ id: number; name: string }[]>([])
+const pickerUsers = ref<{ id: number; name: string; workstation: string; label: string }[]>([])
 const destWarehouseOptions = warehouseFilterOptions()
+
+function formatPickerLabel(name?: string | null, workstation?: string | null) {
+  const display = String(name || '').trim()
+  const station = String(workstation || '').trim()
+  if (!display && !station) return ''
+  return station ? `${station} · ${display || '—'}` : display
+}
 
 const LOGISTICS_PRODUCTS = ['CPT', 'JHB', 'CPT-JHB', 'FBA-TRANSIT', 'LOCAL']
 const CARRIERS = ['本地车队', 'DHL', 'FedEx', '自提', 'Other']
@@ -142,6 +149,8 @@ const STATUS_MAP: Record<string, { label: string; tag: string }> = {
   packed: { label: '待发运', tag: 'success' },
   shipped: { label: '已发运', tag: 'info' },
   delivered: { label: '已送达', tag: 'success' },
+  partial_delivered: { label: '部分签收', tag: 'warning' },
+  delivery_failed: { label: '派送失败', tag: 'danger' },
   exception: { label: '异常', tag: 'danger' },
   cancelled: { label: '已取消', tag: 'info' },
 }
@@ -155,6 +164,8 @@ const filterTabs = computed(() => [
   { value: 'packed' as const, label: '待发运', count: statusCounts.value.packed },
   { value: 'shipped' as const, label: '已发货', count: statusCounts.value.shipped },
   { value: 'delivered' as const, label: '已送达', count: statusCounts.value.delivered },
+  { value: 'partial_delivered' as const, label: '部分签收', count: statusCounts.value.partial_delivered },
+  { value: 'delivery_failed' as const, label: '派送失败', count: statusCounts.value.delivery_failed },
   { value: 'exception' as const, label: '异常', count: statusCounts.value.exception },
   { value: 'cancelled' as const, label: '已作废', count: statusCounts.value.cancelled },
   { value: 'problem' as const, label: '问题件', count: statusCounts.value.problem },
@@ -214,7 +225,13 @@ function handleRowCommand(command: string, row: any) {
       openShip(row)
       break
     case 'deliver':
-      openDeliver(row)
+      openDeliver(row, 'delivered')
+      break
+    case 'partialDeliver':
+      openDeliver(row, 'partial_delivered')
+      break
+    case 'deliveryFailed':
+      openDeliver(row, 'delivery_failed')
       break
     case 'uploadPod':
       openPodUpload(row)
@@ -288,10 +305,14 @@ onMounted(async () => {
     customers.value = []
   }
   try {
-    const uRes = await usersApi.list({ pageSize: 100, status: 1 })
+    const uRes = await usersApi.list({ pageSize: 100, status: 'active' })
     pickerUsers.value = (uRes.items || [])
       .filter((u: any) => u.status === 1)
-      .map((u: any) => ({ id: u.id, name: u.realName || u.username }))
+      .map((u: any) => {
+        const name = u.realName || u.username || ''
+        const workstation = u.workstation || ''
+        return { id: u.id, name, workstation, label: formatPickerLabel(name, workstation) }
+      })
   } catch {
     pickerUsers.value = []
   }
@@ -397,10 +418,12 @@ function rowCommands(row: any): RowAction[] {
   if (status === 'packed' && canShip.value) {
     cmds.push({ key: 'ship', command: 'ship', label: '发运' })
   }
-  if (status === 'shipped' && canShip.value) {
-    cmds.push({ key: 'deliver', command: 'deliver', label: '确认送达' })
+  if (['shipped', 'partial_delivered', 'delivery_failed'].includes(status) && canShip.value) {
+    if (status !== 'delivered') cmds.push({ key: 'deliver', command: 'deliver', label: status === 'partial_delivered' ? '确认全部签收' : '确认送达' })
+    if (status !== 'partial_delivered') cmds.push({ key: 'partialDeliver', command: 'partialDeliver', label: '部分签收' })
+    if (status !== 'delivery_failed') cmds.push({ key: 'deliveryFailed', command: 'deliveryFailed', label: '派送失败' })
   }
-  if (status === 'delivered' && canCreate.value && !rowHasPod(row)) {
+  if (['delivered', 'partial_delivered'].includes(status) && canCreate.value && !rowHasPod(row)) {
     cmds.push({ key: 'uploadPod', command: 'uploadPod', label: '上传POD签收单' })
   }
   if (canCreate.value && row.destType === 'fba' && status !== 'cancelled') {
@@ -417,7 +440,7 @@ function rowCommands(row: any): RowAction[] {
     })
   }
 
-  if (canCreate.value && !['cancelled', 'shipped', 'delivered'].includes(status)) {
+  if (canCreate.value && !['cancelled', 'shipped', 'delivered', 'partial_delivered', 'delivery_failed'].includes(status)) {
     cmds.push({
       key: 'problem',
       command: 'problem',
@@ -425,7 +448,7 @@ function rowCommands(row: any): RowAction[] {
       divided: cmds.length > 0,
     })
   }
-  if (canCreate.value && status !== 'exception' && !['cancelled', 'shipped', 'delivered'].includes(status)) {
+  if (canCreate.value && status !== 'exception' && !['cancelled', 'shipped', 'delivered', 'partial_delivered', 'delivery_failed'].includes(status)) {
     cmds.push({ key: 'exception', command: 'exception', label: '标记异常（暂停流程）' })
   }
   if (canCreate.value && row.isProblem && status !== 'cancelled') {
@@ -434,7 +457,7 @@ function rowCommands(row: any): RowAction[] {
   if (canCreate.value && status === 'exception') {
     cmds.push({ key: 'clearException', command: 'clearException', label: '解除异常' })
   }
-  if (canCreate.value && !['shipped', 'delivered', 'cancelled'].includes(status)) {
+  if (canCreate.value && !['shipped', 'delivered', 'partial_delivered', 'delivery_failed', 'cancelled'].includes(status)) {
     cmds.push({ key: 'cancel', command: 'cancel', label: '取消出库单' })
   }
 
@@ -772,24 +795,46 @@ async function readFileAsBase64(file: File): Promise<string> {
   return btoa(binary)
 }
 
-async function openDeliver(row: any) {
+async function openDeliver(row: any, outcome: 'delivered' | 'partial_delivered' | 'delivery_failed' = 'delivered') {
   if (!canShip.value) return
+  const copy = {
+    delivered: {
+      title: '确认送达',
+      confirm: `确认出库单 ${row.outboundNo} 已全部送达平台仓？\n送达后请上传 POD 签收单文件（无需扫描 POD 码）。`,
+      success: `${row.outboundNo} 已确认送达`,
+      askPod: true,
+    },
+    partial_delivered: {
+      title: '部分签收',
+      confirm: `确认出库单 ${row.outboundNo} 仅为部分签收？\n便于后续跟踪未签收件数，可稍后补传 POD。`,
+      success: `${row.outboundNo} 已标记部分签收`,
+      askPod: true,
+    },
+    delivery_failed: {
+      title: '派送失败',
+      confirm: `确认出库单 ${row.outboundNo} 派送失败？\n该单将进入派送失败节点，OMS 物流异常 Tab 可同步查看。`,
+      success: `${row.outboundNo} 已标记派送失败`,
+      askPod: false,
+    },
+  }[outcome]
   try {
-    await erpConfirm(
-      `确认出库单 ${row.outboundNo} 已送达平台仓？\n送达后请上传 POD 签收单文件（无需扫描 POD 码）。`,
-      '确认送达',
-      { confirmButtonText: '确认送达', cancelButtonText: '取消', type: 'info' },
-    )
+    await erpConfirm(copy.confirm, copy.title, {
+      confirmButtonText: copy.title,
+      cancelButtonText: '取消',
+      type: outcome === 'delivery_failed' ? 'warning' : 'info',
+    })
   } catch {
     return
   }
   await withAction(async () => {
-    await outboundApi.deliver(row.id, {})
-    deliverOrder.value = row
-    deliverPodFile.value = null
-    podUploadVisible.value = true
+    await outboundApi.deliver(row.id, { outcome })
+    if (copy.askPod) {
+      deliverOrder.value = row
+      deliverPodFile.value = null
+      podUploadVisible.value = true
+    }
     await reloadAll()
-  }, `${row.outboundNo} 已确认送达`)
+  }, copy.success)
 }
 
 function openPodUpload(row: any) {
@@ -972,7 +1017,7 @@ th{background:#f5f5f5}
 </tr></thead><tbody>
 ${rows.map((r) => `<tr>
 <td>${r.outboundNo}</td><td>${r.customerName || '—'}</td><td>${r.warehouseCode}</td>
-<td>${r.skuSummary}</td><td>${r.totalQty}</td><td>${r.pickerName || '—'}</td><td>${r.remarkSummary || '—'}</td>
+<td>${r.skuSummary}</td><td>${r.totalQty}</td><td>${formatPickerLabel(r.pickerName, r.pickerWorkstation) || '—'}</td><td>${r.remarkSummary || '—'}</td>
 </tr>`).join('')}
 </tbody></table>
 <script>window.onload=function(){window.print()}<\/script>
@@ -1081,7 +1126,7 @@ function statusTag(status: string) {
           <div class="filter-item">
             <label>拣货员</label>
             <el-select v-model="filterPicker" clearable placeholder="全部" size="small" style="width:100%">
-              <el-option v-for="u in pickerUsers" :key="u.id" :label="u.name" :value="u.id" />
+              <el-option v-for="u in pickerUsers" :key="u.id" :label="u.label" :value="u.id" />
             </el-select>
           </div>
           <div class="filter-item">
@@ -1214,6 +1259,11 @@ function statusTag(status: string) {
             <el-tag v-if="row.isProblem && row.status !== 'exception'" size="small" type="danger" class="problem-tag">
               问题
             </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="拣货员" min-width="130" show-overflow-tooltip>
+          <template #default="{ row }">
+            {{ row.pickerId ? formatPickerLabel(row.pickerName, row.pickerWorkstation) : '—' }}
           </template>
         </el-table-column>
         <el-table-column label="操作" width="88" fixed="right" align="center">
@@ -1409,9 +1459,9 @@ function statusTag(status: string) {
 
     <!-- 分配拣货员 -->
     <el-dialog v-model="assignVisible" title="分配拣货员" width="360px">
-      <p class="dialog-hint">已选 {{ assignTargetIds.length }} 单（仅待拣货）</p>
-      <el-select v-model="assignPickerId" placeholder="选择拣货员" style="width:100%">
-        <el-option v-for="u in pickerUsers" :key="u.id" :label="u.name" :value="u.id" />
+      <p class="dialog-hint">已选 {{ assignTargetIds.length }} 单（仅待拣货）。未分配拣货员的出库单不能在 PDA 扫描。</p>
+      <el-select v-model="assignPickerId" placeholder="选择工位 / 拣货员" filterable style="width:100%">
+        <el-option v-for="u in pickerUsers" :key="u.id" :label="u.label" :value="u.id" />
       </el-select>
       <template #footer>
         <el-button @click="assignVisible = false">取消</el-button>
@@ -1483,6 +1533,9 @@ function statusTag(status: string) {
             <el-descriptions-item label="跟踪号">{{ detailOrder.trackingNo || '—' }}</el-descriptions-item>
             <el-descriptions-item label="箱货类型">{{ cargoTypeLabel(detailOrder) }}</el-descriptions-item>
             <el-descriptions-item label="件数">{{ detailOrder.totalQty ?? '—' }}</el-descriptions-item>
+            <el-descriptions-item label="拣货员">
+              {{ detailOrder.pickerId ? formatPickerLabel(detailOrder.pickerName, detailOrder.pickerWorkstation) : '未分配' }}
+            </el-descriptions-item>
             <el-descriptions-item label="创建时间">{{ detailOrder.createdAt || '—' }}</el-descriptions-item>
             <el-descriptions-item label="客户备注" :span="3">
               <span class="remark-text">{{ detailCustomerRemark }}</span>

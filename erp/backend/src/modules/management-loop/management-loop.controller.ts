@@ -19,11 +19,17 @@ export class ManagementLoopController {
   @Get('reports/outbound')
   outboundReport(@Query() query: any) { return this.service.outboundReport(query) }
 
-  @RequirePerms('stocktake.view')
+  @RequireAnyPerm('stocktake.view', 'stocktake.count')
   @Get('stocktakes')
   stocktakes(@Query() query: any) { return this.service.listStocktakes(query) }
 
-  @RequirePerms('stocktake.view')
+  @RequirePerms('stocktake.create')
+  @Get('stocktake-options')
+  stocktakeOptions(@Query('warehouseCode') warehouseCode?: string) {
+    return this.service.stocktakeOptions(warehouseCode)
+  }
+
+  @RequireAnyPerm('stocktake.view', 'stocktake.count')
   @Get('stocktakes/:id')
   stocktake(@Param('id', ParseIntPipe) id: number) { return this.service.stocktakeDetail(id) }
 

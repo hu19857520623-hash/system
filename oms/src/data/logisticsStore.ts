@@ -76,7 +76,9 @@ export async function uploadPodReceipt(
     podFileName: fileName,
     podFileUrl: fileUrl,
     podUploadedAt: uploadedAt,
-    status: target.status === 'exception' ? target.status : 'delivered',
+    status: ['exception', 'delivery_failed', 'partial_delivered'].includes(target.status)
+      ? target.status
+      : 'delivered',
     updatedAt: uploadedAt,
   }
 

@@ -45,7 +45,7 @@ const SOURCE_TABS: { id: string; label: string; source?: ShipmentSource }[] = [
 
 const STATUS_FILTER_OPTIONS = [
   'pending_payment', 'pending_review', 'pending_ship', 'processing',
-  'shipped_out', 'in_transit', 'delivered', 'exception', 'cancelled',
+  'shipped_out', 'in_transit', 'delivered', 'partial_delivered', 'delivery_failed', 'exception', 'cancelled',
   'draft', 'pending', 'locked', 'picking', 'shipped',
 ]
 

@@ -36,6 +36,25 @@ const usedPartitionLetters = ref<string[]>([])
 const canEdit = computed(() => app.hasPerm('warehouse_location.edit'))
 const canBatch = computed(() => app.hasPerm('warehouse_location.batch_create'))
 const canView = computed(() => app.hasPerm('warehouse_location.view'))
+const canSetCapacity = computed(() => app.hasPerm('logistics_wh.manage') || app.hasPerm('capacity.manage'))
+const currentWarehouse = computed(() => warehouses.value.find((wh) => (wh.code || wh.warehouseCode) === selectedWarehouse.value) || null)
+const capDialog = ref(false)
+const capValue = ref<number | null>(null)
+
+function openWarehouseCap() {
+  if (!currentWarehouse.value?.id) return ElMessage.warning('请先选择仓库')
+  capValue.value = currentWarehouse.value.totalVolumeCbm != null ? Number(currentWarehouse.value.totalVolumeCbm) : null
+  capDialog.value = true
+}
+
+async function saveWarehouseCap() {
+  if (!currentWarehouse.value?.id) return
+  const ok = await withAction(async () => {
+    await warehouseApi.updateCapacity(currentWarehouse.value.id, { totalVolumeCbm: capValue.value })
+    await loadWarehouses()
+  }, '仓级上限已保存')
+  if (ok) capDialog.value = false
+}
 
 function warehouseShortCode(code: string) {
   const parts = code.split('-').filter(Boolean)
@@ -440,6 +459,9 @@ async function printCurrentZone() {
           :value="wh.code"
         />
       </el-select>
+      <span class="filter-label">仓级上限</span>
+      <strong>{{ currentWarehouse?.totalVolumeCbm != null ? `${currentWarehouse.totalVolumeCbm} m³` : '未设置' }}</strong>
+      <el-button v-if="canSetCapacity" size="small" @click="openWarehouseCap">设置</el-button>
     </div>
 
     <div v-if="zones.length" class="zone-panel">
@@ -641,6 +663,20 @@ async function printCurrentZone() {
         <el-table-column prop="inboundNo" label="来源入库单" min-width="120" />
       </el-table>
       <el-empty v-else description="该库位暂无库存" :image-size="64" />
+    </el-dialog>
+
+    <el-dialog v-model="capDialog" title="仓级总库容" width="440px">
+      <el-form label-width="110px">
+        <el-form-item label="仓库">{{ currentWarehouse?.name }} ({{ selectedWarehouse }})</el-form-item>
+        <el-form-item label="总库容 m³">
+          <el-input-number v-model="capValue" :min="0" :precision="4" :step="10" controls-position="right" style="width:100%" />
+          <span class="field-hint">容量预警按此上限，不按库位加总。</span>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="capDialog = false">取消</el-button>
+        <el-button type="primary" @click="saveWarehouseCap">保存</el-button>
+      </template>
     </el-dialog>
   </el-card>
 </template>

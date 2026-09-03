@@ -362,7 +362,7 @@ describe('OutboundService P0 pick allocation', () => {
           { locationCode: 'B-01', qty: 3 },
         ],
       }],
-    }, 99)).resolves.toMatchObject({ status: 'picked' })
+    }, 8)).resolves.toMatchObject({ status: 'picked' })
 
     expect(inventoryMutation.deductLocationQtyFifo).toHaveBeenCalledTimes(2)
     expect(tx.outboundPickAllocation.create).toHaveBeenCalledTimes(2)
@@ -372,6 +372,15 @@ describe('OutboundService P0 pick allocation', () => {
     expect(opLog.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'pick' }))
   })
 
+  it('rejects PDA pick when the operator is not the assigned picker', async () => {
+    const { service, prisma } = buildPickService()
+    await expect(service.pick(1, {
+      pickSource: 'pda',
+      items: [{ id: 11, allocations: [{ locationCode: 'A-01', qty: 5 }] }],
+    }, 99)).rejects.toThrow('该出库单已分配给其他拣货员，不能扫描')
+    expect(prisma.$transaction).not.toHaveBeenCalled()
+  })
+
   it('aborts when another device has already changed the order state', async () => {
     const { service, tx, opLog } = buildPickService()
     tx.outboundOrder.updateMany.mockResolvedValueOnce({ count: 0 })
@@ -379,5 +388,21 @@ describe('OutboundService P0 pick allocation', () => {
       items: [{ id: 11, allocations: [{ locationCode: 'A-01', qty: 5 }] }],
     })).rejects.toThrow('状态已变化')
     expect(opLog.log).not.toHaveBeenCalled()
+  })
+})
+
+describe('OutboundService delivery outcomes', () => {
+  it('rejects delivery updates before the order is shipped', async () => {
+    const prisma: any = {
+      outboundOrder: {
+        findUnique: jest.fn().mockResolvedValue({ id: 1n, status: 'packed', outboundNo: 'OUT-1' }),
+        update: jest.fn(),
+      },
+    }
+    const service = new OutboundService(prisma, {} as any, {} as any, {} as any, {} as any, {} as any)
+    await expect(service.deliver(1, { outcome: 'delivery_failed' })).rejects.toThrow(
+      '仅已发运、部分签收或派送失败的出库单可更新派送结果',
+    )
+    expect(prisma.outboundOrder.update).not.toHaveBeenCalled()
   })
 })

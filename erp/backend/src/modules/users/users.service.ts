@@ -4,10 +4,11 @@ import { PrismaService } from '../../common/prisma/prisma.service'
 import { PermissionsService } from '../../common/permissions/permissions.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
 import { CreateUserDto, UpdateUserDto } from './dto/user.dto'
+import { normalizeWorkstation } from '../outbound/outbound.policy'
 
 const SELECT = {
   id: true, username: true, realName: true, phone: true, email: true,
-  avatarUrl: true, roleCode: true, status: true, lastLoginAt: true, createdAt: true,
+  avatarUrl: true, roleCode: true, workstation: true, status: true, lastLoginAt: true, createdAt: true,
 }
 
 @Injectable()
@@ -24,6 +25,7 @@ export class UsersService {
       where.OR = [
         { username: { contains: q.keyword } },
         { realName: { contains: q.keyword } },
+        { workstation: { contains: q.keyword } },
       ]
     }
     if (q.roleCode) where.roleCode = q.roleCode
@@ -61,6 +63,7 @@ export class UsersService {
       data: {
         username: dto.username, passwordHash, realName: dto.realName,
         roleCode: dto.roleCode, phone: dto.phone, email: dto.email,
+        workstation: normalizeWorkstation(dto.workstation),
         status: dto.status ?? 1,
       },
       select: SELECT,
@@ -73,6 +76,9 @@ export class UsersService {
     if (dto.password) {
       data.passwordHash = await bcrypt.hash(dto.password, 10)
       delete data.password
+    }
+    if (dto.workstation !== undefined) {
+      data.workstation = normalizeWorkstation(dto.workstation)
     }
     return this.prisma.sysUser.update({ where: { id: BigInt(id) }, data, select: SELECT })
   }

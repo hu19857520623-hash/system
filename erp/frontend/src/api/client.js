@@ -408,6 +408,7 @@ export const warehouseApi = {
   detail: (id) => api.get(`/warehouses/${id}`),
   create: (data) => api.post('/warehouses', data),
   update: (id, data) => api.patch(`/warehouses/${id}`, data),
+  updateCapacity: (id, data) => api.patch(`/warehouses/${id}/capacity`, data),
 }
 
 export const warehouseZoneApi = {
@@ -529,6 +530,7 @@ export const managementLoopApi = {
   outboundReport: (params) => api.get('/management-loop/reports/outbound', params),
   stocktakes: (params) => api.get('/management-loop/stocktakes', params),
   stocktake: (id) => api.get(`/management-loop/stocktakes/${id}`),
+  stocktakeOptions: (params) => api.get('/management-loop/stocktake-options', params),
   createStocktake: (data) => api.post('/management-loop/stocktakes', data),
   countStocktake: (id, data) => api.post(`/management-loop/stocktakes/${id}/count`, data),
   approveStocktake: (id) => api.post(`/management-loop/stocktakes/${id}/approve`, {}),

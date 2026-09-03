@@ -56,6 +56,7 @@ export class AuthService {
     username: string
     realName: string
     roleCode: string
+    workstation?: string | null
     avatarUrl: string | null
   }) {
     const permissions = await this.permissions.getUserPermissions(Number(user.id), user.roleCode)
@@ -72,6 +73,7 @@ export class AuthService {
         username: user.username,
         realName: user.realName,
         roleCode: user.roleCode,
+        workstation: user.workstation || null,
         avatarUrl: user.avatarUrl,
         permissions,
       },
@@ -92,6 +94,7 @@ export class AuthService {
       avatarUrl: user.avatarUrl,
       roleCode: user.roleCode,
       roleName: role?.roleName ?? user.roleCode,
+      workstation: user.workstation || null,
       lastLoginAt: user.lastLoginAt,
       permissions,
     }

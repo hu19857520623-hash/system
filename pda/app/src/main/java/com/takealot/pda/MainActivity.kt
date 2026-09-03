@@ -26,6 +26,7 @@ import com.takealot.pda.ui.inbound.InboundScreen
 import com.takealot.pda.ui.login.LoginScreen
 import com.takealot.pda.ui.outbound.OutboundScreen
 import com.takealot.pda.ui.settings.SettingsScreen
+import com.takealot.pda.ui.stocktake.StocktakeScreen
 import com.takealot.pda.ui.theme.PdaBg
 import com.takealot.pda.ui.theme.PdaTheme
 
@@ -69,6 +70,7 @@ private fun PdaNav(onLogout: () -> Unit) {
             HomeScreen(
                 onInbound = { nav.navigate("inbound/$it") },
                 onOutbound = { nav.navigate("outbound/$it") },
+                onStocktake = { nav.navigate("stocktake") },
                 onSettings = { nav.navigate("settings") },
             )
         }
@@ -77,6 +79,9 @@ private fun PdaNav(onLogout: () -> Unit) {
         }
         composable("outbound/{mode}", arguments = listOf(navArgument("mode") { type = NavType.StringType })) {
             OutboundScreen(modeKey = it.arguments?.getString("mode") ?: "pick", onBack = { nav.popBackStack() })
+        }
+        composable("stocktake") {
+            StocktakeScreen(onBack = { nav.popBackStack() })
         }
         composable("settings") {
             SettingsScreen(onBack = { nav.popBackStack() }, onLogout = { nav.popBackStack(); onLogout() })

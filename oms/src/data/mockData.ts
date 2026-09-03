@@ -467,7 +467,7 @@ export interface LogisticsRecord {
   outboundNo: string
   carrier: string
   trackingNo: string
-  status: 'in_transit' | 'delivered' | 'exception'
+  status: 'in_transit' | 'delivered' | 'exception' | 'partial_delivered' | 'delivery_failed'
   destination: string
   updatedAt: string
   /** 送达平台仓后的签收单回传 */
@@ -522,6 +522,7 @@ export const statusLabels: Record<string, string> = {
   pending_payment: '待付款', pending_review: '待审核', pending_ship: '待发货',
   processing: '仓库处理中', shipped_out: '已出库', in_transit: '运输中',
   delivered: '已签收', exception: '异常', cancelled: '已取消',
+  partial_delivered: '部分签收', delivery_failed: '派送失败',
   stock_short: '库存不足', address_error: '地址异常',
   logistics_fail: '物流失败', sync_fail: '同步失败',
   low: '低库存', out: '断货', normal: '正常',
@@ -554,6 +555,8 @@ export const statusColors: Record<string, string> = {
   locked: 'bg-sky-100 text-sky-800',
   picking: 'bg-violet-100 text-violet-800',
   shipped: 'bg-cyan-100 text-cyan-800',
+  partial_delivered: 'bg-amber-100 text-amber-800',
+  delivery_failed: 'bg-red-100 text-red-800',
   draft: 'bg-slate-100 text-slate-600',
   receiving: 'bg-violet-100 text-violet-800',
   partial: 'bg-amber-100 text-amber-800',
@@ -619,7 +622,7 @@ export function countOrdersByTab(tab: string, orderList: Order[] = orders): numb
 
 // ─── 原项目：商品 / 入库 / 发货出库 / 编码 ─────────────────────────
 
-export type LegacyOrderStatus = 'draft' | 'pending' | 'locked' | 'picking' | 'shipped' | 'delivered' | 'cancelled' | 'exception'
+export type LegacyOrderStatus = 'draft' | 'pending' | 'locked' | 'picking' | 'shipped' | 'delivered' | 'partial_delivered' | 'delivery_failed' | 'cancelled' | 'exception'
 export type InboundStatus = 'draft' | 'receiving' | 'partial' | 'completed' | 'exception' | 'on_the_way' | 'shelved'
 export type OutboundType = 'dropship' | 'takealot'
 export type CodeStatus = 'active' | 'pending_review' | 'deprecated'
@@ -1276,6 +1279,7 @@ export const takealotWarehouses = [
 
 Object.assign(statusLabels, {
   pending: '待处理', locked: '已锁库存', picking: '拣货中', shipped: '已发货',
+  partial_delivered: '部分签收', delivery_failed: '派送失败',
   draft: '草稿', receiving: '收货中', partial: '部分收货', completed: '收货完成', shelved: '上架完成',
   on_the_way: '在途',
   deprecated: '已停用', unpaid: '待支付', paid: '已支付', overdue: '已逾期',

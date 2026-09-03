@@ -41,6 +41,9 @@ function storeForRow(order: Order | undefined): string {
 }
 
 function statusForRow(outbound: OutboundOrder, order: Order | undefined): { key: string; label: string } {
+  if (['partial_delivered', 'delivery_failed', 'exception', 'cancelled'].includes(outbound.status)) {
+    return { key: outbound.status, label: statusLabels[outbound.status] ?? outbound.status }
+  }
   if (order && ['pending_ship', 'pending_review', 'pending_payment'].includes(order.status)) {
     return { key: order.status, label: statusLabels[order.status] ?? order.status }
   }
@@ -194,6 +197,16 @@ export function applyFulfillmentFilters(rows: FulfillmentRow[], f: FulfillmentFi
   })
 }
 
+export function isLogisticsExceptionRow(r: FulfillmentRow): boolean {
+  const logisticsStatus = r.logistics?.status
+  const outboundStatus = r.outbound?.status || r.statusKey
+  return logisticsStatus === 'exception'
+    || logisticsStatus === 'delivery_failed'
+    || logisticsStatus === 'partial_delivered'
+    || outboundStatus === 'delivery_failed'
+    || outboundStatus === 'partial_delivered'
+}
+
 export function filterFulfillmentRows(
   rows: FulfillmentRow[],
   tab: string,
@@ -205,7 +218,7 @@ export function filterFulfillmentRows(
       || (tab === 'active' && ['pending', 'locked', 'picking', 'pending_ship', 'processing'].includes(r.statusKey))
       || (tab === 'in_transit' && r.logistics?.status === 'in_transit')
       || (tab === 'delivered' && r.logistics?.status === 'delivered')
-      || (tab === 'logistics_exception' && r.logistics?.status === 'exception')
+      || (tab === 'logistics_exception' && isLogisticsExceptionRow(r))
       || (tab === 'pod_pending' && r.logistics?.podStatus === 'pending')
       || r.source === tab
     return matchTab

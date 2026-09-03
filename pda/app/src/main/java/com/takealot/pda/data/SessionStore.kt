@@ -30,7 +30,17 @@ class SessionStore(context: Context) {
     var warehouseName: String
         get() = prefs.getString(KEY_WH_NAME, "") ?: ""
         set(value) { prefs.edit().putString(KEY_WH_NAME, value).apply() }
+    var userWorkstation: String
+        get() = prefs.getString(KEY_USER_STATION, "") ?: ""
+        set(value) { prefs.edit().putString(KEY_USER_STATION, value).apply() }
+    var deviceWorkstation: String
+        get() = prefs.getString(KEY_DEVICE_STATION, "") ?: ""
+        set(value) { prefs.edit().putString(KEY_DEVICE_STATION, value.trim()).apply() }
+    var pickScanMode: String
+        get() = prefs.getString(KEY_PICK_SCAN, "carton") ?: "carton"
+        set(value) { prefs.edit().putString(KEY_PICK_SCAN, if (value == "piece") "piece" else "carton").apply() }
 
+    val workstation: String get() = userWorkstation.ifBlank { deviceWorkstation }
     val isLoggedIn: Boolean get() = token.isNotBlank()
     fun hasPerm(id: String) = permissionsCsv.split(',').any { it.trim() == id }
 
@@ -39,12 +49,13 @@ class SessionStore(context: Context) {
         userId = user.id
         username = user.username.orEmpty()
         realName = user.name
+        userWorkstation = user.workstation.orEmpty().trim()
         permissionsCsv = user.permSet.joinToString(",")
     }
 
     fun logout() {
         prefs.edit().remove(KEY_TOKEN).remove(KEY_USER_ID).remove(KEY_USERNAME)
-            .remove(KEY_REAL_NAME).remove(KEY_PERMS).apply()
+            .remove(KEY_REAL_NAME).remove(KEY_PERMS).remove(KEY_USER_STATION).apply()
     }
 
     companion object {
@@ -57,5 +68,8 @@ class SessionStore(context: Context) {
         private const val KEY_PERMS = "perms"
         private const val KEY_WH = "warehouse_code"
         private const val KEY_WH_NAME = "warehouse_name"
+        private const val KEY_USER_STATION = "user_workstation"
+        private const val KEY_DEVICE_STATION = "device_workstation"
+        private const val KEY_PICK_SCAN = "pick_scan_mode"
     }
 }

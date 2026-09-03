@@ -96,7 +96,7 @@ export function resetOutboundOrders(seed: OutboundOrder[]) {
 }
 
 function mapErpOutboundStatus(omsStatus: string): LegacyOrderStatus {
-  const allowed: LegacyOrderStatus[] = ['pending', 'locked', 'picking', 'shipped', 'delivered', 'cancelled', 'exception']
+  const allowed: LegacyOrderStatus[] = ['pending', 'locked', 'picking', 'shipped', 'delivered', 'partial_delivered', 'delivery_failed', 'cancelled', 'exception']
   return (allowed.includes(omsStatus as LegacyOrderStatus) ? omsStatus : 'locked') as LegacyOrderStatus
 }
 

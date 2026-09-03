@@ -16,6 +16,8 @@ export class WarehouseController {
     'inbound.view',
     'inbound.arrival_scan',
     'mingrui.view',
+    'capacity.view',
+    'capacity.manage',
   )
   @Get()
   list(@Query('type') type?: string) {
@@ -32,6 +34,12 @@ export class WarehouseController {
   @Post()
   create(@Body() body: any) {
     return this.service.create(body)
+  }
+
+  @RequireAnyPerm('logistics_wh.manage', 'capacity.manage')
+  @Patch(':id/capacity')
+  updateCapacity(@Param('id', ParseIntPipe) id: number, @Body() body: { totalVolumeCbm?: number | null }) {
+    return this.service.updateCapacity(id, body?.totalVolumeCbm)
   }
 
   @RequirePerms('logistics_wh.manage')

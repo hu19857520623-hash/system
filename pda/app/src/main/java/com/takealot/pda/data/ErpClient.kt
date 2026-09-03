@@ -134,6 +134,27 @@ class ErpClient(private val session: SessionStore) {
         postJson("/outbound/$id/pack", mapOf("reviewSource" to "pda"))
     }
 
+    suspend fun stocktakes(warehouseCode: String? = null, status: String? = null, stocktakeNo: String? = null): List<StocktakePlan> =
+        withContext(Dispatchers.IO) {
+            val q = buildString {
+                append("/management-loop/stocktakes?")
+                if (!warehouseCode.isNullOrBlank()) append("warehouseCode=$warehouseCode&")
+                if (!status.isNullOrBlank()) append("status=$status&")
+                if (!stocktakeNo.isNullOrBlank()) append("stocktakeNo=${stocktakeNo.encodeUrl()}&")
+            }.trimEnd('&', '?')
+            val data = get(q)
+            if (data.isJsonArray) gson.fromJson(data, object : TypeToken<List<StocktakePlan>>() {}.type)
+            else emptyList()
+        }
+
+    suspend fun stocktake(id: Int): StocktakePlan = withContext(Dispatchers.IO) {
+        gson.fromJson(get("/management-loop/stocktakes/$id"), StocktakePlan::class.java)
+    }
+
+    suspend fun stocktakeCount(id: Int, lineId: Int, qty: Int): StocktakePlan = withContext(Dispatchers.IO) {
+        gson.fromJson(postJson("/management-loop/stocktakes/$id/count", mapOf("lineId" to lineId, "qty" to qty)), StocktakePlan::class.java)
+    }
+
     private fun get(path: String): JsonElement = execute(request(path).get().build())
 
     private fun postJson(path: String, body: Any, auth: Boolean = true): JsonElement {

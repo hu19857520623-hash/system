@@ -22,6 +22,7 @@ model SysUser {
   email        String?   @db.VarChar(100)
   avatarUrl    String?   @map("avatar_url") @db.VarChar(500)
   roleCode     String    @default("viewer") @map("role_code") @db.VarChar(30)
+  workstation  String?   @db.VarChar(30)
   status       Int       @default(1) @db.TinyInt
   lastLoginAt  DateTime? @map("last_login_at")
   createdAt    DateTime  @default(now()) @map("created_at")
@@ -322,6 +323,7 @@ model Warehouse {
   contactName   String?  @map("contact_name") @db.VarChar(50)
   contactPhone  String?  @map("contact_phone") @db.VarChar(30)
   requiredOutboundFiles String? @map("required_outbound_files") @db.Text
+  totalVolumeCbm Decimal? @map("total_volume_cbm") @db.Decimal(12, 4)
   status        Int      @default(1) @db.TinyInt
   createdAt     DateTime @default(now()) @map("created_at")
 

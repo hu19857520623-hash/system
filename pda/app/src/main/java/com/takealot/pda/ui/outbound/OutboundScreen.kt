@@ -64,11 +64,13 @@ class OutboundViewModel : ViewModel() {
     var lines by mutableStateOf<List<LocalPickLine>>(emptyList())
     var locationSuggestions by mutableStateOf<Map<Int, List<String>>>(emptyMap())
     var selectedSku by mutableStateOf<String?>(null)
+    var pickScanMode by mutableStateOf("carton")
     var feedback by mutableStateOf<Feedback?>(null)
     var busy by mutableStateOf(false)
 
     fun bindMode(key: String) {
         mode = if (key == "review") "review" else "pick"
+        pickScanMode = session.pickScanMode
         feedback = null; scan = ""; order = null; lines = emptyList(); loadList()
         val resume = PdaApp.instance.workJournal.active("outbound", mode) ?: return
         viewModelScope.launch {
@@ -124,9 +126,10 @@ class OutboundViewModel : ViewModel() {
                 }
                 val selected = lines.firstOrNull { it.taskKey == selectedSku }
                 if (selected != null && selected.matchesScan(code)) {
-                    val nextQty = (selected.scannedQty + 1).coerceAtMost(selected.qty)
+                    val nextQty = nextPickQty(selected.scannedQty, selected.qty)
                     lines = lines.map { if (it.taskKey == selected.taskKey) it.copy(scannedQty = nextQty) else it }
-                    feedback = Feedback(true, "${selected.locationCode} · ${selected.sku} $nextQty/${selected.qty}")
+                    val modeHint = if (pickScanMode == "carton") "按箱" else "逐件"
+                    feedback = Feedback(true, "$modeHint ${selected.locationCode} · ${selected.sku} $nextQty/${selected.qty}")
                     scan = ""; saveProgress(); journal.acknowledge(recordId, feedback?.message); return
                 }
                 val skuTask = lines.firstOrNull { !it.done && it.matchesScan(code) }
@@ -163,6 +166,7 @@ class OutboundViewModel : ViewModel() {
         val page = api.outboundList(keyword = code, warehouseCode = session.warehouseCode.ifBlank { null }, pageSize = 20)
         val match = page.items.orEmpty().firstOrNull { it.no.equals(code, true) }
             ?: throw ErpException("未找到出库单 $code")
+        if (mode == "pick") assertPickerAssigned(match)
         loadOrder(match.id)
     }
 
@@ -184,7 +188,7 @@ class OutboundViewModel : ViewModel() {
         val nextOrder: OutboundOrder
         val nextLines: List<LocalPickLine>
         if (mode == "pick") {
-            if (detail.statusKey == "pending_pick" || detail.pickerId == null) throw ErpException("请先在电脑端分配拣货员")
+            assertPickerAssigned(detail)
             if (detail.statusKey != "picking") throw ErpException("当前状态「${outboundStatusLabel(detail.statusKey)}」不可拣货")
             nextOrder = detail
             val suggestions = api.pickSuggestions(id).itemList
@@ -221,6 +225,26 @@ class OutboundViewModel : ViewModel() {
         // 每次打开/恢复任务都必须重新扫描实物库位，不能通过点选或历史选择绕过库位校验。
         selectedSku = null
         PdaApp.instance.workJournal.activate(PdaResumeWork("outbound", mode, nextOrder.id, nextOrder.no))
+    }
+
+    private fun assertPickerAssigned(order: OutboundOrder) {
+        if (order.statusKey == "pending_pick" || order.pickerId == null) {
+            throw ErpException("请先在电脑端分配拣货员，未分配不能扫")
+        }
+        if (order.pickerId != session.userId) {
+            val who = order.pickerWorkstation.orEmpty().ifBlank { order.pickerName.orEmpty() }.ifBlank { "其他工位" }
+            throw ErpException("该单已分配给 $who，不能扫")
+        }
+    }
+
+    private fun nextPickQty(current: Int, target: Int): Int {
+        if (target <= 0) return 0
+        return if (pickScanMode == "carton") target else minOf(target, current + 1)
+    }
+
+    fun setPickScanMode(mode: String) {
+        pickScanMode = if (mode == "piece") "piece" else "carton"
+        session.pickScanMode = pickScanMode
     }
 
     private fun saveProgress() {
@@ -304,7 +328,11 @@ fun OutboundScreen(modeKey: String, onBack: () -> Unit, vm: OutboundViewModel = 
         val order = vm.order
         if (order == null) {
             Text("待作业", color = PdaMuted, fontSize = 13.sp)
-            if (vm.list.isEmpty()) Text("暂无任务，可直接扫描出库单号", color = PdaMuted, fontSize = 13.sp)
+            if (vm.list.isEmpty()) Text(
+                if (vm.mode == "pick") "没有分配给你的拣货任务，请先在电脑端分配拣货员" else "暂无任务，可直接扫描出库单号",
+                color = PdaMuted,
+                fontSize = 13.sp,
+            )
             vm.list.forEach { row ->
                 DocumentCard(
                     typeLabel = if (vm.mode == "pick") "拣货单" else "复核单",
@@ -331,6 +359,29 @@ fun OutboundScreen(modeKey: String, onBack: () -> Unit, vm: OutboundViewModel = 
                 Text("该单已拣货。确认实物与单据一致后，再开始复核；开始后会记录复核人。", color = PdaWarn, fontSize = 13.sp)
                 BigButton("开始复核", onClick = { vm.startReview() }, enabled = !vm.busy, color = PdaWarn)
             }
+            if (vm.mode == "pick") {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(
+                        onClick = { vm.setPickScanMode("carton") },
+                        modifier = Modifier.weight(1f).background(
+                            if (vm.pickScanMode == "carton") PdaAccent.copy(alpha = 0.25f) else PdaSurface2,
+                            RoundedCornerShape(8.dp),
+                        ),
+                    ) { Text("按箱扫", color = if (vm.pickScanMode == "carton") PdaAccent else PdaMuted) }
+                    TextButton(
+                        onClick = { vm.setPickScanMode("piece") },
+                        modifier = Modifier.weight(1f).background(
+                            if (vm.pickScanMode == "piece") PdaAccent.copy(alpha = 0.25f) else PdaSurface2,
+                            RoundedCornerShape(8.dp),
+                        ),
+                    ) { Text("逐件扫", color = if (vm.pickScanMode == "piece") PdaAccent else PdaMuted) }
+                }
+                Text(
+                    if (vm.pickScanMode == "carton") "扫一次 SKU 记本库位剩余件数，不必逐件" else "每扫一次 SKU +1",
+                    color = PdaMuted,
+                    fontSize = 12.sp,
+                )
+            }
             Text("SKU 明细", color = PdaOutbound, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
             vm.lines.forEach { line ->
                 SkuCard(
@@ -345,7 +396,11 @@ fun OutboundScreen(modeKey: String, onBack: () -> Unit, vm: OutboundViewModel = 
                         Text("拣货库位", color = PdaMuted, fontSize = 11.sp)
                         Text(line.locationCode.ifBlank { "未填" }, color = PdaText, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                     }
-                    if (vm.mode == "pick") Text("先扫库位，再扫 SKU 或条码；本库位应拣 ${line.qty}", color = PdaAccent, fontSize = 12.sp)
+                    if (vm.mode == "pick") Text(
+                        if (vm.pickScanMode == "carton") "先扫库位，再扫 SKU；按箱一次记满 ${line.qty}" else "先扫库位，再扫 SKU；逐件扫满 ${line.qty}",
+                        color = PdaAccent,
+                        fontSize = 12.sp,
+                    )
                     else Text("逐件扫描 SKU 或条码，扫满 ${line.qty} 件", color = PdaAccent, fontSize = 12.sp)
                 }
             }

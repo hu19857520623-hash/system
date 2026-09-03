@@ -3,9 +3,26 @@ import { Prisma } from '@prisma/client'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { InventoryMutationService } from '../../common/inventory/inventory-mutation.service'
 import { OperationLogService } from '../operation-log/operation-log.service'
+import {
+  PRODUCT_DIM_SELECT,
+  accumulateChargeAmounts,
+  inboundReportQty,
+  outboundReportQty,
+  sumReportCbm,
+  userDisplayName,
+} from './management-loop-report.util'
+import {
+  hasInboundScopeFilter,
+  inboundOccurredAtRange,
+  parseStocktakeScope,
+  stocktakeScopeLabel,
+  stocktakeScopeSnapshot,
+} from './management-loop-stocktake.util'
+import { capacityAlertLevel, summarizeWarehouseCapacity } from './management-loop-capacity.util'
 
 const toNumber = (value: unknown) => Number(value ?? 0)
 const round = (value: number, digits = 2) => Number(value.toFixed(digits))
+const REPORT_PAGE_SIZE_MAX = 5000
 
 function dateRange(query: { dateFrom?: string; dateTo?: string }) {
   const createdAt: { gte?: Date; lte?: Date } = {}
@@ -32,6 +49,17 @@ function buildOutboundWhere(query: Record<string, unknown>): Prisma.OutboundOrde
   if (query.customerId) where.customerId = BigInt(String(query.customerId))
   if (query.status) where.status = String(query.status)
   return where
+}
+
+function inboundSqlFilters(query: Record<string, unknown>): Prisma.Sql[] {
+  const filters: Prisma.Sql[] = []
+  const createdAt = dateRange(query as { dateFrom?: string; dateTo?: string })
+  if (createdAt?.gte) filters.push(Prisma.sql`o.created_at >= ${createdAt.gte}`)
+  if (createdAt?.lte) filters.push(Prisma.sql`o.created_at <= ${createdAt.lte}`)
+  if (query.warehouseCode) filters.push(Prisma.sql`o.warehouse_code = ${String(query.warehouseCode)}`)
+  if (query.customerCode) filters.push(Prisma.sql`o.oms_customer_code = ${String(query.customerCode)}`)
+  if (query.status) filters.push(Prisma.sql`o.status = ${String(query.status)}`)
+  return filters
 }
 
 function outboundSqlFilters(query: Record<string, unknown>): Prisma.Sql[] {
@@ -65,14 +93,14 @@ export class ManagementLoopService {
 
   async inboundReport(query: any) {
     const page = Math.max(1, Number(query.page) || 1)
-    const pageSize = Math.min(200, Math.max(1, Number(query.pageSize) || 20))
+    const pageSize = Math.min(REPORT_PAGE_SIZE_MAX, Math.max(1, Number(query.pageSize) || 20))
     const where = buildInboundWhere(query)
     const completedWhere: Prisma.InboundOrderWhereInput = {
       ...where,
       status: { in: ['completed', 'confirmed'] },
     }
 
-    const [rows, total, orderCount, completedCount, statusGroups, itemAgg, cycleRow] =
+    const [rows, total, orderCount, completedCount, statusGroups, itemAgg, cycleRow, feeAmount, volumeItems] =
       await Promise.all([
         this.prisma.inboundOrder.findMany({
           where,
@@ -90,7 +118,24 @@ export class ManagementLoopService {
           _sum: { expectedQty: true, actualQty: true },
         }),
         this.aggregateInboundCycleHours(completedWhere),
+        this.aggregateFeeAmount('inbound_order', inboundSqlFilters(query)),
+        this.prisma.inboundOrderItem.findMany({
+          where: { order: where },
+          select: { inboundId: true, productId: true, expectedQty: true, actualQty: true },
+        }),
       ])
+
+    const productIds = [
+      ...new Set([
+        ...rows.flatMap((row) => row.items.map((item) => item.productId)),
+        ...volumeItems.map((item) => item.productId),
+      ]),
+    ]
+    const [productMap, chargeMap, userMap] = await Promise.all([
+      this.loadProductDimMap(productIds),
+      this.loadChargeMap(rows.map((row) => row.inboundNo)),
+      this.loadUserNames(rows.flatMap((row) => [row.receivedBy, row.qcBy])),
+    ])
 
     const totalExpectedQty = itemAgg._sum.expectedQty ?? 0
     const totalReceivedQty = itemAgg._sum.actualQty ?? 0
@@ -108,6 +153,15 @@ export class ManagementLoopService {
         receivedQty: row.items.reduce((s, item) => s + (item.actualQty ?? 0), 0),
         putawayQty: row.items.reduce((s, item) => s + (item.putawayQty ?? 0), 0),
         cartonCount: row.receivedCartonCount ?? row.cartons.filter((carton) => carton.status === 'received').length,
+        cbm: sumReportCbm(
+          row.items.map((item) => ({ productId: item.productId, qty: inboundReportQty(item) })),
+          productMap,
+        ),
+        feeAmount: round(chargeMap.get(row.inboundNo) || 0),
+        receivedBy: row.receivedBy ? Number(row.receivedBy) : null,
+        receivedByName: userMap.get(String(row.receivedBy || '')) || '',
+        qcBy: row.qcBy ? Number(row.qcBy) : null,
+        qcByName: userMap.get(String(row.qcBy || '')) || '',
       })),
       total, page, pageSize,
       summary: {
@@ -119,6 +173,11 @@ export class ManagementLoopService {
         varianceQty: totalReceivedQty - totalExpectedQty,
         completionRate: orderCount ? round(completedCount / orderCount * 100, 1) : 0,
         avgCycleHours: cycleRow,
+        cbm: sumReportCbm(
+          volumeItems.map((item) => ({ productId: item.productId, qty: inboundReportQty(item) })),
+          productMap,
+        ),
+        feeAmount: round(feeAmount),
       },
     }
   }
@@ -139,14 +198,14 @@ export class ManagementLoopService {
 
   async outboundReport(query: any) {
     const page = Math.max(1, Number(query.page) || 1)
-    const pageSize = Math.min(200, Math.max(1, Number(query.pageSize) || 20))
+    const pageSize = Math.min(REPORT_PAGE_SIZE_MAX, Math.max(1, Number(query.pageSize) || 20))
     const where = buildOutboundWhere(query)
     const completedWhere: Prisma.OutboundOrderWhereInput = {
       ...where,
       status: { in: ['shipped', 'delivered'] },
     }
 
-    const [rows, total, orderCount, completedCount, statusGroups, itemAgg, exceptionCount, feeAmount] =
+    const [rows, total, orderCount, completedCount, statusGroups, itemAgg, exceptionCount, feeAmount, volumeItems] =
       await Promise.all([
         this.prisma.outboundOrder.findMany({
           where,
@@ -169,20 +228,24 @@ export class ManagementLoopService {
             OR: [{ isProblem: true }, { exceptionType: { not: null } }],
           },
         }),
-        this.aggregateOutboundFeeAmount(query),
+        this.aggregateFeeAmount('outbound_order', outboundSqlFilters(query)),
+        this.prisma.outboundOrderItem.findMany({
+          where: { order: where },
+          select: { outboundId: true, productId: true, qty: true, pickedQty: true },
+        }),
       ])
 
-    const pageRefs = rows.map((row) => row.outboundNo)
-    const charges = pageRefs.length
-      ? await this.prisma.billingCharge.findMany({
-          where: { bizRef: { in: pageRefs } },
-          select: { bizRef: true, amount: true },
-        })
-      : []
-    const chargeMap = new Map<string, number>()
-    charges.forEach((charge) =>
-      chargeMap.set(charge.bizRef || '', (chargeMap.get(charge.bizRef || '') || 0) + toNumber(charge.amount)),
-    )
+    const productIds = [
+      ...new Set([
+        ...rows.flatMap((row) => row.items.map((item) => item.productId)),
+        ...volumeItems.map((item) => item.productId),
+      ]),
+    ]
+    const [productMap, chargeMap, userMap] = await Promise.all([
+      this.loadProductDimMap(productIds),
+      this.loadChargeMap(rows.map((row) => row.outboundNo)),
+      this.loadUserNames(rows.flatMap((row) => [row.pickerId, row.reviewerId])),
+    ])
 
     const requestedQty = itemAgg._sum.qty ?? 0
     const pickedQty = itemAgg._sum.pickedQty ?? 0
@@ -199,7 +262,15 @@ export class ManagementLoopService {
         qty: row.items.reduce((s, item) => s + item.qty, 0),
         pickedQty: row.items.reduce((s, item) => s + item.pickedQty, 0),
         exceptionType: row.exceptionType || row.problemType,
+        cbm: sumReportCbm(
+          row.items.map((item) => ({ productId: item.productId, qty: outboundReportQty(item) })),
+          productMap,
+        ),
         feeAmount: round(chargeMap.get(row.outboundNo) || 0),
+        pickerId: row.pickerId ? Number(row.pickerId) : null,
+        pickerName: userMap.get(String(row.pickerId || '')) || '',
+        reviewerId: row.reviewerId ? Number(row.reviewerId) : null,
+        reviewerName: userMap.get(String(row.reviewerId || '')) || '',
       })),
       total, page, pageSize,
       summary: {
@@ -211,71 +282,184 @@ export class ManagementLoopService {
         shortageQty: Math.max(0, requestedQty - pickedQty),
         fulfillmentRate: orderCount ? round(completedCount / orderCount * 100, 1) : 0,
         exceptionCount,
+        cbm: sumReportCbm(
+          volumeItems.map((item) => ({ productId: item.productId, qty: outboundReportQty(item) })),
+          productMap,
+        ),
         feeAmount: round(feeAmount),
       },
     }
   }
 
-  private async aggregateOutboundFeeAmount(query: Record<string, unknown>) {
-    const filters = outboundSqlFilters(query)
-    const rows = await this.prisma.$queryRaw<Array<{ feeAmount: unknown }>>`
-      SELECT COALESCE(SUM(c.amount), 0) AS feeAmount
-      FROM billing_charge c
-      INNER JOIN outbound_order o ON c.biz_ref = o.outbound_no
-      ${sqlWhere(filters)}
-    `
+  private async aggregateFeeAmount(
+    orderTable: 'inbound_order' | 'outbound_order',
+    filters: Prisma.Sql[],
+  ) {
+    const where = sqlWhere([...filters, Prisma.sql`c.status <> 'cancelled'`])
+    const rows = orderTable === 'inbound_order'
+      ? await this.prisma.$queryRaw<Array<{ feeAmount: unknown }>>`
+          SELECT COALESCE(SUM(c.amount), 0) AS feeAmount
+          FROM billing_charge c
+          INNER JOIN inbound_order o ON c.biz_ref = o.inbound_no
+          ${where}
+        `
+      : await this.prisma.$queryRaw<Array<{ feeAmount: unknown }>>`
+          SELECT COALESCE(SUM(c.amount), 0) AS feeAmount
+          FROM billing_charge c
+          INNER JOIN outbound_order o ON c.biz_ref = o.outbound_no
+          ${where}
+        `
     return toNumber(rows[0]?.feeAmount)
   }
 
+  private async loadProductDimMap(productIds: bigint[]) {
+    const unique = [...new Set(productIds)]
+    if (!unique.length) return new Map()
+    const products = await this.prisma.product.findMany({
+      where: { id: { in: unique } },
+      select: PRODUCT_DIM_SELECT,
+    })
+    return new Map(products.map((product) => [String(product.id), product]))
+  }
+
+  private async loadChargeMap(refs: string[]) {
+    if (!refs.length) return new Map<string, number>()
+    const charges = await this.prisma.billingCharge.findMany({
+      where: { bizRef: { in: refs }, status: { not: 'cancelled' } },
+      select: { bizRef: true, amount: true, status: true },
+    })
+    return accumulateChargeAmounts(charges)
+  }
+
+  private async loadUserNames(ids: Array<bigint | null | undefined>) {
+    const unique = [...new Set(ids.filter((id): id is bigint => id != null))]
+    if (!unique.length) return new Map<string, string>()
+    const users = await this.prisma.sysUser.findMany({
+      where: { id: { in: unique } },
+      select: { id: true, realName: true, username: true },
+    })
+    return new Map(users.map((user) => [String(user.id), userDisplayName(user)]))
+  }
+
   async listStocktakes(query: any) {
-    const where: any = {}
-    if (query.warehouseCode) where.warehouseCode = query.warehouseCode
-    if (query.status) where.status = query.status
+    const where: Prisma.StocktakePlanWhereInput = {}
+    if (query.warehouseCode) where.warehouseCode = String(query.warehouseCode)
+    if (query.status) where.status = String(query.status)
+    if (query.stocktakeNo) where.stocktakeNo = String(query.stocktakeNo).trim()
     const rows = await this.prisma.stocktakePlan.findMany({ where, include: { _count: { select: { lines: true } } }, orderBy: { id: 'desc' } })
-    return rows.map((row) => ({ ...row, id: Number(row.id), lineCount: row._count.lines }))
+    return rows.map((row) => {
+      const scope = (row.scopeJson || {}) as Record<string, unknown>
+      return {
+        ...row,
+        id: Number(row.id),
+        lineCount: row._count.lines,
+        scope,
+        scopeLabel: stocktakeScopeLabel(scope as any),
+      }
+    })
+  }
+
+  async stocktakeOptions(warehouseCode?: string) {
+    const where: Prisma.InboundOrderWhereInput = {
+      omsCustomerCode: { not: null },
+    }
+    if (warehouseCode) where.warehouseCode = warehouseCode
+    const rows = await this.prisma.inboundOrder.findMany({
+      where,
+      distinct: ['omsCustomerCode'],
+      select: { omsCustomerCode: true },
+      orderBy: { omsCustomerCode: 'asc' },
+      take: 400,
+    })
+    return {
+      customers: rows
+        .map((row) => String(row.omsCustomerCode || '').trim())
+        .filter(Boolean)
+        .map((customerCode) => ({ customerCode })),
+    }
   }
 
   async stocktakeDetail(id: number) {
     const plan = await this.prisma.stocktakePlan.findUnique({ where: { id: BigInt(id) }, include: { lines: { orderBy: [{ locationCode: 'asc' }, { sku: 'asc' }] } } })
     if (!plan) throw new NotFoundException('盘点单不存在')
     const hideBookQty = plan.blindCount && plan.status === 'counting'
-    return { ...plan, id: Number(plan.id), lines: plan.lines.map((line) => ({ ...line, bookQty: hideBookQty ? null : line.bookQty, id: Number(line.id), planId: Number(line.planId), productId: Number(line.productId), locationId: Number(line.locationId) })) }
+    const scope = (plan.scopeJson || {}) as Record<string, unknown>
+    return {
+      ...plan,
+      id: Number(plan.id),
+      scope,
+      scopeLabel: stocktakeScopeLabel(scope as any),
+      lines: plan.lines.map((line) => ({
+        ...line,
+        bookQty: hideBookQty ? null : line.bookQty,
+        id: Number(line.id),
+        planId: Number(line.planId),
+        productId: Number(line.productId),
+        locationId: Number(line.locationId),
+      })),
+    }
   }
 
   async createStocktake(body: any, userId?: number) {
-    const warehouseCode = String(body.warehouseCode || '').trim()
-    if (!warehouseCode) throw new BadRequestException('请选择仓库')
-    const mode = String(body.mode || 'location')
-    if (mode === 'location' && (!Array.isArray(body.locationIds) || !body.locationIds.length)) {
+    const scope = parseStocktakeScope(body)
+    if (!scope.warehouseCode) throw new BadRequestException('请选择仓库')
+    if (scope.mode === 'location' && !scope.locationIds.length) {
       throw new BadRequestException('库位盘点至少选择一个库位')
     }
-    if (mode === 'sku' && (!Array.isArray(body.skus) || !body.skus.length)) {
+    if (scope.mode === 'sku' && !scope.skus.length) {
       throw new BadRequestException('指定 SKU 盘点至少填写一个 SKU')
     }
-    const where: any = { warehouseCode, qty: { gt: 0 } }
-    if (Array.isArray(body.locationIds) && body.locationIds.length) where.locationId = { in: body.locationIds.map((id: any) => BigInt(id)) }
-    if (Array.isArray(body.skus) && body.skus.length) where.sku = { in: body.skus.map(String) }
+    const where: Prisma.InventoryLocationWhereInput = { warehouseCode: scope.warehouseCode, qty: { gt: 0 } }
+    if (scope.locationIds.length) where.locationId = { in: scope.locationIds.map((id) => BigInt(id)) }
+    if (scope.skus.length) where.sku = { in: scope.skus }
+    if (hasInboundScopeFilter(scope)) {
+      const inboundNos = await this.resolveStocktakeInboundNos(scope)
+      if (!inboundNos.length) throw new BadRequestException('所选客户/入库范围没有可盘库存')
+      where.inboundNo = { in: inboundNos }
+    }
     let inventory = (await this.prisma.inventoryLocation.groupBy({
       by: ['productId', 'sku', 'locationId', 'locationCode'], where,
       _sum: { qty: true }, orderBy: [{ locationCode: 'asc' }, { sku: 'asc' }],
     })).map((item) => ({ ...item, qty: item._sum.qty ?? 0 }))
-    if (mode === 'spot') {
-      const size = Math.max(1, Math.min(inventory.length, Number(body.sampleSize) || 20))
+    if (scope.mode === 'spot') {
+      const size = Math.max(1, Math.min(inventory.length, scope.sampleSize))
       inventory = inventory.sort(() => Math.random() - 0.5).slice(0, size)
     }
     if (!inventory.length) throw new BadRequestException('所选范围没有可盘库存')
     const stocktakeNo = `PD-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${String(Date.now()).slice(-6)}`
     const plan = await this.prisma.stocktakePlan.create({ data: {
-      stocktakeNo, warehouseCode, mode, blindCount: body.blindCount !== false,
-      status: 'counting', scopeJson: { locationIds: body.locationIds || [], skus: body.skus || [], sampleSize: body.sampleSize || null },
+      stocktakeNo, warehouseCode: scope.warehouseCode, mode: scope.mode, blindCount: body.blindCount !== false,
+      status: 'counting', scopeJson: stocktakeScopeSnapshot(scope),
       remark: body.remark || null, createdBy: userId ? BigInt(userId) : null, startedAt: new Date(),
       lines: { create: inventory.map((item) => ({ productId: item.productId, sku: item.sku, locationId: item.locationId, locationCode: item.locationCode, bookQty: item.qty })) },
     }})
-    await this.opLog.log({ operatorId: userId, module: 'stocktake', action: 'create', targetType: 'stocktake_plan', targetId: stocktakeNo, detail: { mode, warehouseCode, lineCount: inventory.length } })
+    await this.opLog.log({
+      operatorId: userId, module: 'stocktake', action: 'create', targetType: 'stocktake_plan', targetId: stocktakeNo,
+      detail: { mode: scope.mode, warehouseCode: scope.warehouseCode, customerCode: scope.customerCode || null, inboundNo: scope.inboundNo || null, lineCount: inventory.length },
+    })
     return this.stocktakeDetail(Number(plan.id))
   }
 
+  private async resolveStocktakeInboundNos(scope: ReturnType<typeof parseStocktakeScope>) {
+    const occurredAt = inboundOccurredAtRange(scope.inboundDateFrom, scope.inboundDateTo)
+    const where: Prisma.InboundOrderWhereInput = { warehouseCode: scope.warehouseCode }
+    if (scope.inboundNo) where.inboundNo = scope.inboundNo
+    if (scope.customerCode) where.omsCustomerCode = scope.customerCode
+    if (occurredAt) {
+      where.OR = [
+        { putawayAt: occurredAt },
+        { AND: [{ putawayAt: null }, { receivedAt: occurredAt }] },
+        { AND: [{ putawayAt: null }, { receivedAt: null }, { createdAt: occurredAt }] },
+      ]
+    }
+    const rows = await this.prisma.inboundOrder.findMany({ where, select: { inboundNo: true } })
+    return [...new Set(rows.map((row) => row.inboundNo))]
+  }
+
   async submitCount(planId: number, body: any, userId?: number) {
+    const plan = await this.prisma.stocktakePlan.findUnique({ where: { id: BigInt(planId) } })
+    if (!plan) throw new NotFoundException('盘点单不存在')
+    if (plan.status !== 'counting') throw new BadRequestException('盘点单已结束，不能继续录入')
     const line = await this.prisma.stocktakeLine.findFirst({ where: {
       planId: BigInt(planId),
       ...(body.lineId ? { id: BigInt(body.lineId) } : { sku: String(body.sku || ''), locationCode: String(body.locationCode || '') }),
@@ -360,41 +544,92 @@ export class ManagementLoopService {
     const pendingWhere: any = { status: { notIn: ['completed', 'confirmed', 'cancelled'] } }
     if (warehouseCode) pendingWhere.warehouseCode = warehouseCode
     const pending = await this.prisma.inboundOrder.findMany({ where: pendingWhere, include: { items: true } })
-    const pendingQty = pending.reduce((sum, order) => sum + order.items.reduce((s, item) => s + Math.max(0, item.expectedQty - (item.putawayQty ?? 0)), 0), 0)
     const pendingProductIds = [...new Set(pending.flatMap((order) => order.items.map((item) => item.productId)))]
     const pendingProducts = pendingProductIds.length ? await this.prisma.product.findMany({
       where: { id: { in: pendingProductIds } },
       select: { id: true, lengthCm: true, widthCm: true, heightCm: true, measuredLengthCm: true, measuredWidthCm: true, measuredHeightCm: true },
     }) : []
     const pendingProductMap = new Map(pendingProducts.map((product) => [String(product.id), product]))
-    let pendingVolumeCbm = 0
+    const pendingByWarehouse = new Map<string, { qty: number; volumeCbm: number }>()
     for (const order of pending) {
+      const bucket = pendingByWarehouse.get(order.warehouseCode) || { qty: 0, volumeCbm: 0 }
       for (const item of order.items) {
         const qty = Math.max(0, item.expectedQty - (item.putawayQty ?? 0))
+        bucket.qty += qty
         const product = pendingProductMap.get(String(item.productId))
         const length = toNumber(product?.measuredLengthCm ?? product?.lengthCm)
         const width = toNumber(product?.measuredWidthCm ?? product?.widthCm)
         const height = toNumber(product?.measuredHeightCm ?? product?.heightCm)
-        if (length > 0 && width > 0 && height > 0) pendingVolumeCbm += length * width * height / 1000000 * qty
+        if (length > 0 && width > 0 && height > 0) bucket.volumeCbm += length * width * height / 1000000 * qty
       }
+      pendingByWarehouse.set(order.warehouseCode, bucket)
     }
-    const totalMaxVolume = items.reduce((s, item) => s + item.maxVolumeCbm, 0)
-    const totalUsedVolume = items.reduce((s, item) => s + item.usedVolumeCbm, 0)
+    const locationCodes = [...new Set(items.map((item) => item.warehouseCode))]
+    const warehouseWhere: Prisma.WarehouseWhereInput = warehouseCode
+      ? { warehouseCode }
+      : locationCodes.length ? { warehouseCode: { in: locationCodes } } : { warehouseType: 'wms' }
+    const warehouseRows = await this.prisma.warehouse.findMany({ where: warehouseWhere, orderBy: { id: 'asc' } })
+    const warehouses = warehouseRows.map((warehouse) => {
+      const locItems = items.filter((item) => item.warehouseCode === warehouse.warehouseCode)
+      const pendingBucket = pendingByWarehouse.get(warehouse.warehouseCode) || { qty: 0, volumeCbm: 0 }
+      return {
+        id: warehouse.id,
+        ...summarizeWarehouseCapacity({
+          warehouseCode: warehouse.warehouseCode,
+          warehouseName: warehouse.warehouseName,
+          totalVolumeCbm: warehouse.totalVolumeCbm,
+          usedVolumeCbm: locItems.reduce((sum, item) => sum + item.usedVolumeCbm, 0),
+          pendingVolumeCbm: pendingBucket.volumeCbm,
+          locationCount: locItems.length,
+          locationMaxVolumeCbm: locItems.reduce((sum, item) => sum + item.maxVolumeCbm, 0),
+          unknownDimensionQty: locItems.reduce((sum, item) => sum + item.unknownDimensionQty, 0),
+        }),
+      }
+    })
+    const pendingQty = [...pendingByWarehouse.values()].reduce((sum, bucket) => sum + bucket.qty, 0)
+    const pendingVolumeCbm = [...pendingByWarehouse.values()].reduce((sum, bucket) => sum + bucket.volumeCbm, 0)
+    const totalUsedVolume = warehouses.reduce((sum, row) => sum + row.usedVolumeCbm, 0)
+    const warehouseCap = warehouses.reduce((sum, row) => sum + row.totalVolumeCbm, 0)
+    const locationMaxVolume = items.reduce((sum, item) => sum + item.maxVolumeCbm, 0)
+    const summarySource = warehouses.length === 1 ? warehouses[0] : summarizeWarehouseCapacity({
+      warehouseCode: warehouseCode || 'ALL',
+      warehouseName: '全部仓库',
+      totalVolumeCbm: warehouseCap,
+      usedVolumeCbm: totalUsedVolume,
+      pendingVolumeCbm,
+      locationCount: items.length,
+      locationMaxVolumeCbm: locationMaxVolume,
+      unknownDimensionQty: items.reduce((sum, item) => sum + item.unknownDimensionQty, 0),
+    })
     return {
       items,
+      warehouses,
       summary: {
-        locationCount: items.length, warningCount: items.filter((item) => item.alertLevel !== 'normal').length,
-        unknownDimensionQty: items.reduce((s, item) => s + item.unknownDimensionQty, 0), pendingInboundQty: pendingQty,
-        pendingVolumeCbm: round(pendingVolumeCbm, 4), projectedVolumeCbm: round(totalUsedVolume + pendingVolumeCbm, 4),
-        projectedRate: totalMaxVolume > 0 ? round((totalUsedVolume + pendingVolumeCbm) / totalMaxVolume * 100, 1) : 0,
-        maxVolumeCbm: round(totalMaxVolume, 4), usedVolumeCbm: round(totalUsedVolume, 4),
+        locationCount: items.length,
+        warningCount: items.filter((item) => item.alertLevel !== 'normal').length
+          + warehouses.filter((row) => row.alertLevel !== 'normal').length,
+        unknownDimensionQty: summarySource.unknownDimensionQty,
+        pendingInboundQty: pendingQty,
+        pendingVolumeCbm: round(pendingVolumeCbm, 4),
+        projectedVolumeCbm: summarySource.projectedVolumeCbm,
+        projectedRate: summarySource.projectedRate,
+        usageRate: summarySource.usageRate,
+        maxVolumeCbm: summarySource.totalVolumeCbm,
+        usedVolumeCbm: round(totalUsedVolume, 4),
+        locationMaxVolumeCbm: round(locationMaxVolume, 4),
+        capacitySet: summarySource.capacitySet,
+        capacitySource: summarySource.capacitySet ? 'warehouse' : 'unset',
+        alertLevel: summarySource.alertLevel,
       },
     }
   }
 
   async refreshCapacityAlerts(warehouseCode?: string) {
     const overview = await this.capacityOverview(warehouseCode)
-    const codes = [...new Set(overview.items.map((item) => item.warehouseCode))]
+    const codes = [...new Set([
+      ...overview.warehouses.map((row) => row.warehouseCode),
+      ...overview.items.map((item) => item.warehouseCode),
+    ])].filter((code) => code && code !== 'ALL')
     if (codes.length) await this.prisma.capacityAlert.updateMany({ where: { warehouseCode: { in: codes }, status: 'open' }, data: { status: 'resolved', resolvedAt: new Date() } })
     const alerts = overview.items.filter((item) => item.alertLevel !== 'normal' || item.unknownDimensionQty > 0)
     const alertRows: any[] = alerts.map((item) => ({
@@ -402,13 +637,24 @@ export class ManagementLoopService {
       alertType: item.unknownDimensionQty > 0 ? 'missing_dimensions' : 'capacity', alertLevel: item.unknownDimensionQty > 0 ? 'warning' : item.alertLevel,
       usageRate: item.usageRate / 100, message: item.unknownDimensionQty > 0 ? `${item.locationCode} 有 ${item.unknownDimensionQty} 件商品缺少尺寸` : `${item.locationCode} 容量使用率 ${item.usageRate}%`,
     }))
-    if (overview.summary.projectedRate >= 80 && codes.length === 1) {
-      alertRows.push({
-        warehouseCode: codes[0], locationId: null, locationCode: null, alertType: 'projected_capacity',
-        alertLevel: overview.summary.projectedRate >= 95 ? 'critical' : overview.summary.projectedRate >= 90 ? 'high' : 'warning',
-        usageRate: overview.summary.projectedRate / 100,
-        message: `计入待入库后，仓库预计容量使用率 ${overview.summary.projectedRate}%`,
-      })
+    for (const warehouse of overview.warehouses) {
+      if (!warehouse.capacitySet) continue
+      if (warehouse.usageRate >= 80) {
+        alertRows.push({
+          warehouseCode: warehouse.warehouseCode, locationId: null, locationCode: null, alertType: 'capacity',
+          alertLevel: capacityAlertLevel(warehouse.usageRate / 100),
+          usageRate: warehouse.usageRate / 100,
+          message: `${warehouse.warehouseName} 仓级容量使用率 ${warehouse.usageRate}%（上限 ${warehouse.totalVolumeCbm} m³）`,
+        })
+      }
+      if (warehouse.projectedRate >= 80 && warehouse.pendingVolumeCbm > 0) {
+        alertRows.push({
+          warehouseCode: warehouse.warehouseCode, locationId: null, locationCode: null, alertType: 'projected_capacity',
+          alertLevel: capacityAlertLevel(warehouse.projectedRate / 100),
+          usageRate: warehouse.projectedRate / 100,
+          message: `计入待入库后，${warehouse.warehouseName} 预计仓级容量使用率 ${warehouse.projectedRate}%（上限 ${warehouse.totalVolumeCbm} m³）`,
+        })
+      }
     }
     if (alertRows.length) await this.prisma.capacityAlert.createMany({ data: alertRows })
     return { refreshed: alertRows.length, alerts: alertRows }

@@ -5,6 +5,7 @@ data class AuthUser(
     val username: String? = "",
     val realName: String? = "",
     val roleCode: String? = "",
+    val workstation: String? = "",
     val permissions: List<String>? = emptyList(),
 ) {
     val permSet: List<String> get() = permissions.orEmpty()
@@ -96,6 +97,7 @@ data class OutboundOrder(
     val status: String? = "",
     val pickerId: Int? = null,
     val pickerName: String? = "",
+    val pickerWorkstation: String? = "",
     val customerName: String? = "",
     val skuSummary: String? = "",
     val totalQty: Int = 0,
@@ -166,6 +168,41 @@ fun scanMatchesProduct(code: String, sku: String, barcode: String? = null): Bool
 
 class ErpException(message: String, val code: Int = -1) : RuntimeException(message)
 
+data class StocktakePlan(
+    val id: Int = 0,
+    val stocktakeNo: String? = "",
+    val warehouseCode: String? = "",
+    val mode: String? = "",
+    val status: String? = "",
+    val blindCount: Boolean = true,
+    val lineCount: Int = 0,
+    val remark: String? = "",
+    val scopeLabel: String? = "",
+    val lines: List<StocktakeLine>? = emptyList(),
+) {
+    val no get() = stocktakeNo.orEmpty()
+    val statusKey get() = status.orEmpty()
+    val lineList get() = lines.orEmpty()
+    val pendingCount get() = lineList.count { it.isOpen }
+}
+
+data class StocktakeLine(
+    val id: Int = 0,
+    val sku: String? = "",
+    val locationCode: String? = "",
+    val bookQty: Int? = null,
+    val firstQty: Int? = null,
+    val secondQty: Int? = null,
+    val status: String? = "",
+) {
+    val skuCode get() = sku.orEmpty()
+    val loc get() = locationCode.orEmpty()
+    val statusKey get() = status.orEmpty()
+    val isOpen get() = statusKey == "pending" || statusKey == "recount"
+    val countedQty get() = secondQty ?: firstQty
+    fun matchesScan(code: String) = scanMatchesProduct(code, skuCode)
+}
+
 fun inboundStatusLabel(status: String) = when (status) {
     "oms_draft" -> "OMS草稿"
     "pending_receipt", "pending_push", "push_failed", "pushed" -> "在途"
@@ -174,6 +211,17 @@ fun inboundStatusLabel(status: String) = when (status) {
     "pending_putaway" -> "待上架"
     "completed", "confirmed" -> "已入库"
     "exception" -> "异常"
+    else -> status.ifBlank { "—" }
+}
+
+fun stocktakeStatusLabel(status: String) = when (status) {
+    "counting" -> "盘点中"
+    "pending_approval" -> "待审批"
+    "completed" -> "已完成"
+    "pending" -> "待盘"
+    "recount" -> "待复盘"
+    "matched" -> "已盘"
+    "variance" -> "有差异"
     else -> status.ifBlank { "—" }
 }
 
@@ -186,6 +234,8 @@ fun outboundStatusLabel(status: String) = when (status) {
     "packed" -> "待发运"
     "shipped" -> "已发运"
     "delivered" -> "已送达"
+    "partial_delivered" -> "部分签收"
+    "delivery_failed" -> "派送失败"
     "exception" -> "异常"
     "cancelled" -> "已取消"
     else -> status.ifBlank { "—" }

@@ -133,6 +133,7 @@ const createForm = ref({
   roleCode: 'cs',
   phone: '',
   email: '',
+  workstation: '',
   status: 1,
 })
 
@@ -144,6 +145,7 @@ function openCreate() {
     roleCode: backendRoles.value[0]?.roleCode || 'cs',
     phone: '',
     email: '',
+    workstation: '',
     status: 1,
   }
   createVisible.value = true
@@ -163,6 +165,7 @@ async function submitCreate() {
       roleCode: f.roleCode,
       phone: f.phone || undefined,
       email: f.email || undefined,
+      workstation: f.workstation.trim() || null,
       status: f.status,
     })
     const roleName = resolveRoleName(f.roleCode)
@@ -182,6 +185,7 @@ const editForm = ref({
   roleCode: '',
   phone: '',
   email: '',
+  workstation: '',
   status: 1,
   password: '',
 })
@@ -196,6 +200,7 @@ async function openEdit(row: any) {
     roleCode: row.roleCode || row._raw?.roleCode || '',
     phone: row.phone || '',
     email: row.email || '',
+    workstation: row.workstation || row._raw?.workstation || '',
     status: row.statusCode ?? (row.status === 'ok' ? 1 : 0),
     password: '',
   }
@@ -275,6 +280,7 @@ async function submitEdit() {
       roleCode: editForm.value.roleCode,
       phone: editForm.value.phone || undefined,
       email: editForm.value.email || undefined,
+      workstation: editForm.value.workstation.trim() || null,
       status: editForm.value.status,
     }
     if (editForm.value.password) payload.password = editForm.value.password
@@ -403,7 +409,7 @@ onMounted(async () => {
           v-model="searchQ"
           size="small"
           clearable
-          placeholder="登录名 / 姓名"
+          placeholder="登录名 / 姓名 / 工位"
           style="width:200px"
           @keyup.enter="page = 1; load()"
         />
@@ -424,6 +430,9 @@ onMounted(async () => {
         </template>
       </el-table-column>
       <el-table-column prop="name" label="用户名" width="100" />
+      <el-table-column label="工位" width="110">
+        <template #default="{ row }">{{ row.workstation || '—' }}</template>
+      </el-table-column>
       <el-table-column prop="phone" label="手机" width="120">
         <template #default="{ row }">{{ row.phone || '—' }}</template>
       </el-table-column>
@@ -477,6 +486,9 @@ onMounted(async () => {
         </el-form-item>
         <el-form-item label="手机"><el-input v-model="createForm.phone" /></el-form-item>
         <el-form-item label="邮箱"><el-input v-model="createForm.email" /></el-form-item>
+        <el-form-item label="工位">
+          <el-input v-model="createForm.workstation" maxlength="30" placeholder="如 工位A，PDA 拣货绑定用" />
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="createVisible = false">取消</el-button>
@@ -524,6 +536,11 @@ onMounted(async () => {
           </el-col>
           <el-col :span="12"><el-form-item label="手机"><el-input v-model="editForm.phone" /></el-form-item></el-col>
           <el-col :span="12"><el-form-item label="邮箱"><el-input v-model="editForm.email" /></el-form-item></el-col>
+          <el-col :span="12">
+            <el-form-item label="工位">
+              <el-input v-model="editForm.workstation" maxlength="30" placeholder="如 工位A" />
+            </el-form-item>
+          </el-col>
           <el-col :span="24">
             <el-form-item label="重置密码">
               <el-input v-model="editForm.password" type="password" show-password placeholder="留空不修改" style="max-width:280px" />

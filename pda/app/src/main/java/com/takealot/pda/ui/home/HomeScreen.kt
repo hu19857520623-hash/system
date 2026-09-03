@@ -47,12 +47,13 @@ import com.takealot.pda.ui.theme.PdaInbound
 import com.takealot.pda.ui.theme.PdaErr
 import com.takealot.pda.ui.theme.PdaOk
 import com.takealot.pda.ui.theme.PdaOutbound
+import com.takealot.pda.ui.theme.PdaStocktake
 import com.takealot.pda.ui.theme.PdaSurface
 import com.takealot.pda.ui.theme.PdaSurface2
 import com.takealot.pda.ui.theme.PdaText
 
 @Composable
-fun HomeScreen(onInbound: (String) -> Unit, onOutbound: (String) -> Unit, onSettings: () -> Unit) {
+fun HomeScreen(onInbound: (String) -> Unit, onOutbound: (String) -> Unit, onStocktake: () -> Unit, onSettings: () -> Unit) {
     val session = PdaApp.instance.session
     val api = PdaApp.instance.api
     var warehouses by remember { mutableStateOf<List<Warehouse>>(emptyList()) }
@@ -60,6 +61,7 @@ fun HomeScreen(onInbound: (String) -> Unit, onOutbound: (String) -> Unit, onSett
     var warehouseCode by remember { mutableStateOf(session.warehouseCode) }
     var inboundTodo by remember { mutableStateOf(0) }
     var outboundTodo by remember { mutableStateOf(0) }
+    var stocktakeTodo by remember { mutableStateOf(0) }
     val networkOnline = rememberNetworkOnline()
     val scannerReady by ScanBus.receiverActive.collectAsState()
 
@@ -83,8 +85,10 @@ fun HomeScreen(onInbound: (String) -> Unit, onOutbound: (String) -> Unit, onSett
             val outbound = listOf("picking", "picked", "reviewing").sumOf { status ->
                 api.outboundList(status = status, warehouseCode = warehouseCode, pageSize = 100).items.orEmpty().size
             }
+            val stocktake = api.stocktakes(warehouseCode = warehouseCode, status = "counting").size
             inboundTodo = inbound
             outboundTodo = outbound
+            stocktakeTodo = stocktake
         }
     }
 
@@ -113,6 +117,9 @@ fun HomeScreen(onInbound: (String) -> Unit, onOutbound: (String) -> Unit, onSett
                 StatusItem("网络", if (networkOnline) "已连接" else "已断开", networkOnline, Modifier.weight(1f))
                 StatusItem("扫码枪", if (scannerReady) "已就绪" else "未连接", scannerReady, Modifier.weight(1f))
             }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                StatusItem("工位", session.workstation.ifBlank { "未设置" }, session.workstation.isNotBlank(), Modifier.weight(1f))
+            }
         }
         Column {
             Text(tr("work_warehouse"), color = PdaMuted, fontSize = 12.sp)
@@ -131,13 +138,20 @@ fun HomeScreen(onInbound: (String) -> Unit, onOutbound: (String) -> Unit, onSett
         val active = PdaApp.instance.workJournal.latestActive()
         if (active != null) {
             WorkTile(tr("resume"), "${active.orderNo} · ${active.mode}", PdaAccent, true) {
-                if (active.module == "inbound") onInbound(active.mode) else onOutbound(active.mode)
+                when (active.module) {
+                    "inbound" -> onInbound(active.mode)
+                    "outbound" -> onOutbound(active.mode)
+                    else -> onStocktake()
+                }
             }
         }
         Text(tr("my_todo"), color = PdaMuted, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             TodoTile(tr("inbound_todo"), inboundTodo, PdaInbound, Modifier.weight(1f)) { onInbound("receive") }
             TodoTile(tr("outbound_todo"), outboundTodo, PdaOutbound, Modifier.weight(1f)) { onOutbound("pick") }
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TodoTile(tr("stocktake_todo"), stocktakeTodo, PdaStocktake, Modifier.weight(1f)) { onStocktake() }
         }
         Text("${tr("inbound")} · INBOUND", color = PdaInbound, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 8.dp))
         WorkTile(tr("arrival"), tr("arrival_hint"), PdaInbound, session.hasPerm("inbound.arrival_scan") && warehouseCode.isNotBlank(), warehouseCode.isBlank()) { onInbound("arrival") }
@@ -147,6 +161,8 @@ fun HomeScreen(onInbound: (String) -> Unit, onOutbound: (String) -> Unit, onSett
         Text("${tr("outbound")} · OUTBOUND", color = PdaOutbound, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 8.dp))
         WorkTile(tr("pick"), tr("pick_hint"), PdaOutbound, session.hasPerm("outbound.pick") && warehouseCode.isNotBlank(), warehouseCode.isBlank()) { onOutbound("pick") }
         WorkTile(tr("review"), tr("review_hint"), PdaOutbound, session.hasPerm("outbound.pack") && warehouseCode.isNotBlank(), warehouseCode.isBlank()) { onOutbound("review") }
+        Text("${tr("stocktake")} · STOCKTAKE", color = PdaStocktake, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 8.dp))
+        WorkTile(tr("stocktake"), tr("stocktake_hint"), PdaStocktake, session.hasPerm("stocktake.count") && warehouseCode.isNotBlank(), warehouseCode.isBlank()) { onStocktake() }
     }
 }
 

@@ -59,6 +59,8 @@ export const MIGRATION_ORDER = [
   'migrate_anheng_wcs.sql',
   'migrate_dashboard_permissions.sql',
   'migrate_inbound_fee_restore.sql',
+  'migrate_warehouse_total_volume.sql',
+  'migrate_user_workstation.sql',
 ] as const
 
 /**

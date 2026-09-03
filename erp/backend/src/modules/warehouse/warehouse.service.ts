@@ -5,6 +5,13 @@ import { PrismaService } from '../../common/prisma/prisma.service'
 export class WarehouseService {
   constructor(private prisma: PrismaService) {}
 
+  private parseVolumeCbm(value: unknown): number | null {
+    if (value == null || value === '') return null
+    const n = Number(value)
+    if (!Number.isFinite(n) || n < 0) return null
+    return Math.round(n * 10000) / 10000
+  }
+
   private normalizeRequiredFiles(value: unknown): string[] {
     let values: unknown[] = []
     if (Array.isArray(value)) values = value
@@ -19,8 +26,12 @@ export class WarehouseService {
     return JSON.stringify(this.normalizeRequiredFiles(value))
   }
 
-  private present<T extends { requiredOutboundFiles?: string | null }>(row: T) {
-    return { ...row, requiredOutboundFiles: this.normalizeRequiredFiles(row.requiredOutboundFiles) }
+  private present<T extends { requiredOutboundFiles?: string | null; totalVolumeCbm?: unknown }>(row: T) {
+    return {
+      ...row,
+      requiredOutboundFiles: this.normalizeRequiredFiles(row.requiredOutboundFiles),
+      totalVolumeCbm: this.parseVolumeCbm(row.totalVolumeCbm),
+    }
   }
 
   async list(type?: string) {
@@ -51,6 +62,7 @@ export class WarehouseService {
         contactName: data.contactName,
         contactPhone: data.contactPhone,
         requiredOutboundFiles: this.serializeRequiredFiles(data.requiredOutboundFiles),
+        totalVolumeCbm: this.parseVolumeCbm(data.totalVolumeCbm),
       },
     })
     return this.present(row)
@@ -61,18 +73,23 @@ export class WarehouseService {
     const row = await this.prisma.warehouse.update({
       where: { id },
       data: {
-        warehouseName: data.warehouseName,
-        address: data.address,
-        city: data.city,
-        country: data.country,
-        contactName: data.contactName,
-        contactPhone: data.contactPhone,
-        status: data.status,
+        ...(data.warehouseName !== undefined ? { warehouseName: data.warehouseName } : {}),
+        ...(data.address !== undefined ? { address: data.address } : {}),
+        ...(data.city !== undefined ? { city: data.city } : {}),
+        ...(data.country !== undefined ? { country: data.country } : {}),
+        ...(data.contactName !== undefined ? { contactName: data.contactName } : {}),
+        ...(data.contactPhone !== undefined ? { contactPhone: data.contactPhone } : {}),
+        ...(data.status !== undefined ? { status: data.status } : {}),
         ...(data.requiredOutboundFiles !== undefined
           ? { requiredOutboundFiles: this.serializeRequiredFiles(data.requiredOutboundFiles) }
           : {}),
+        ...(data.totalVolumeCbm !== undefined ? { totalVolumeCbm: this.parseVolumeCbm(data.totalVolumeCbm) } : {}),
       },
     })
     return this.present(row)
+  }
+
+  async updateCapacity(id: number, totalVolumeCbm: unknown) {
+    return this.update(id, { totalVolumeCbm })
   }
 }

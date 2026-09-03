@@ -13,6 +13,8 @@ export const OUTBOUND_STATUSES = [
   'packed',
   'shipped',
   'delivered',
+  'partial_delivered',
+  'delivery_failed',
   'exception',
   'cancelled',
 ] as const
@@ -26,8 +28,33 @@ export const OUTBOUND_STATUS_LABELS: Record<string, string> = {
   packed: '待发运',
   shipped: '已发运',
   delivered: '已送达',
+  partial_delivered: '部分签收',
+  delivery_failed: '派送失败',
   exception: '异常',
   cancelled: '已取消',
+}
+
+export const POST_SHIP_STATUSES = ['shipped', 'delivered', 'partial_delivered', 'delivery_failed'] as const
+export type PostShipStatus = (typeof POST_SHIP_STATUSES)[number]
+
+export const DELIVERY_OUTCOMES = ['delivered', 'partial_delivered', 'delivery_failed'] as const
+export type DeliveryOutcome = (typeof DELIVERY_OUTCOMES)[number]
+
+export function parseDeliveryOutcome(value?: string | null): DeliveryOutcome | null {
+  const raw = String(value || 'delivered').trim()
+  return (DELIVERY_OUTCOMES as readonly string[]).includes(raw) ? (raw as DeliveryOutcome) : null
+}
+
+export function isPostShipStatus(status: string): boolean {
+  return (POST_SHIP_STATUSES as readonly string[]).includes(status)
+}
+
+export function canApplyDeliveryOutcome(currentStatus: string, outcome: DeliveryOutcome): boolean {
+  if (currentStatus === outcome) return false
+  if (currentStatus === 'shipped') return true
+  if (currentStatus === 'partial_delivered') return outcome === 'delivered' || outcome === 'delivery_failed'
+  if (currentStatus === 'delivery_failed') return outcome === 'delivered' || outcome === 'partial_delivered'
+  return false
 }
 
 /** 箱货类型：独立字段 cargo_type 的展示文案 */
@@ -154,4 +181,45 @@ export function summarizeRemark(remark: string | null | undefined): string {
   const value = remark?.trim()
   if (!value) return ''
   return value.length > 40 ? `${value.slice(0, 40)}…` : value
+}
+
+export function normalizeWorkstation(value?: string | null): string | null {
+  const station = String(value ?? '').trim()
+  if (!station) return null
+  return station.slice(0, 30)
+}
+
+export function formatPickerStationLabel(name: string, workstation?: string | null): string {
+  const display = String(name || '').trim() || '—'
+  const station = normalizeWorkstation(workstation)
+  return station ? `${station} · ${display}` : display
+}
+
+export function outboundPickBlockedReason(order: {
+  status: string
+  pickerId?: bigint | number | null
+}): string | null {
+  if (order.status === 'pending_pick' || !order.pickerId) {
+    return '请先分配拣货员后再完成拣货'
+  }
+  if (order.status !== 'picking') return '当前状态不可拣货'
+  return null
+}
+
+export function pdaPickerMismatchReason(
+  pickerId: bigint | number | null | undefined,
+  operatorId?: number,
+): string | null {
+  const assigned = Number(pickerId || 0)
+  if (!assigned) return '请先分配拣货员后再完成拣货'
+  if (!operatorId || assigned !== Number(operatorId)) {
+    return '该出库单已分配给其他拣货员，不能扫描'
+  }
+  return null
+}
+
+export function pickScanNextQty(current: number, target: number, mode: 'piece' | 'carton'): number {
+  if (target <= 0) return 0
+  if (mode === 'carton') return target
+  return Math.min(target, Math.max(0, current) + 1)
 }

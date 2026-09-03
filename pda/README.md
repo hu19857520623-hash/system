@@ -11,7 +11,7 @@ pda/preview/index.html
 ```
 
 在 Cursor 里：资源管理器找到该文件 → 右键 Open Preview / 用浏览器打开。  
-这是和 App 同布局的交互预览：登录、首页、到仓、收货、清点、上架、拣货、复核。
+这是和 App 同布局的交互预览：登录、首页、到仓、收货、清点、上架、拣货、复核、盘点。
 
 ## 看真正的安卓 App
 
@@ -62,5 +62,6 @@ pda/preview/index.html
 | 入库-收货 | 扫外箱标或 SKU | `POST /api/inbound/:id/receive-box` |
 | 入库-清点 | 扫 SKU 累加实收，提交清点 | `POST /api/inbound/:id/scan-qc`、`/qc` |
 | 入库-上架 | 扫 SKU → 扫库位 | `POST /api/inbound/:id/putaway` |
-| 出库-拣货 | 扫出库单，按建议库位拣货 | `GET /api/outbound/:id/pick-suggestions`、`POST /api/outbound/:id/pick` |
+| 出库-拣货 | 仅扫已分配给本工位/账号的出库单；默认按箱扫（一次记满库位件数），可切逐件 | `GET /api/outbound/:id/pick-suggestions`、`POST /api/outbound/:id/pick` |
 | 出库-复核 | 扫 SKU 复核后提交 | `POST /api/outbound/:id/start-review`、`/pack` |
+| 在库-盘点 | 扫盘点单，按库位/SKU 提交实盘 | `GET /api/management-loop/stocktakes`、`POST /api/management-loop/stocktakes/:id/count` |

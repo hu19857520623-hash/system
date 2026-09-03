@@ -2628,7 +2628,7 @@ app.put('/api/outbound-orders', async (req, res) => {
           items: Number(o.items),
           totalQty: Number(o.totalQty),
           status:
-            preserved && ['shipped', 'delivered', 'cancelled', 'exception'].includes(preserved.status)
+            preserved && ['shipped', 'delivered', 'partial_delivered', 'delivery_failed', 'cancelled', 'exception'].includes(preserved.status)
               ? preserved.status
               : String(o.status),
           destination: String(o.destination),

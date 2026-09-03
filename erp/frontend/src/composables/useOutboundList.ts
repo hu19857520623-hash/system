@@ -12,6 +12,8 @@ export type OutboundStatusFilter =
   | 'packed'
   | 'shipped'
   | 'delivered'
+  | 'partial_delivered'
+  | 'delivery_failed'
   | 'cancelled'
   | 'exception'
   | 'problem'
@@ -44,6 +46,8 @@ const EMPTY_COUNTS: Record<string, number> = {
   packed: 0,
   shipped: 0,
   delivered: 0,
+  partial_delivered: 0,
+  delivery_failed: 0,
   cancelled: 0,
   exception: 0,
   problem: 0,

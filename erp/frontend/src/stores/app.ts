@@ -34,6 +34,7 @@ export interface AuthUser {
   phone?: string | null
   email?: string | null
   permissions?: string[]
+  workstation?: string | null
 }
 
 export interface Account {
@@ -295,6 +296,7 @@ export const useAppStore = defineStore('app', {
       phone?: string | null
       email?: string | null
       permissions?: string[]
+      workstation?: string | null
     }) {
       this.applyAuthUser({
         id: profile.id,
@@ -305,6 +307,7 @@ export const useAppStore = defineStore('app', {
         phone: profile.phone,
         email: profile.email,
         permissions: profile.permissions,
+        workstation: profile.workstation,
       })
     },
     async initAuth() {

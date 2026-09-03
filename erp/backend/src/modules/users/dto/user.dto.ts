@@ -1,4 +1,4 @@
-import { IsInt, IsOptional, IsString, MinLength } from 'class-validator'
+import { IsInt, IsOptional, IsString, MaxLength, MinLength } from 'class-validator'
 
 export class CreateUserDto {
   @IsString()
@@ -16,6 +16,7 @@ export class CreateUserDto {
 
   @IsOptional() @IsString() phone?: string
   @IsOptional() @IsString() email?: string
+  @IsOptional() @IsString() @MaxLength(30) workstation?: string
   @IsOptional() @IsInt() status?: number
 }
 
@@ -24,6 +25,7 @@ export class UpdateUserDto {
   @IsOptional() @IsString() roleCode?: string
   @IsOptional() @IsString() phone?: string
   @IsOptional() @IsString() email?: string
+  @IsOptional() @IsString() @MaxLength(30) workstation?: string
   @IsOptional() @IsInt() status?: number
   @IsOptional() @IsString() @MinLength(6) password?: string
 }

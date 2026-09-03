@@ -31,6 +31,7 @@ fun SettingsScreen(onBack: () -> Unit, onLogout: () -> Unit) {
     val session = PdaApp.instance.session
     val canManageServer = session.hasPerm("inbound.handle_exception")
     var baseUrl by remember { mutableStateOf(session.baseUrl) }
+    var deviceStation by remember { mutableStateOf(session.deviceWorkstation) }
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(tr("settings"), color = PdaText, fontSize = 22.sp)
         Panel {
@@ -40,6 +41,26 @@ fun SettingsScreen(onBack: () -> Unit, onLogout: () -> Unit) {
         Panel {
             KeyValue(tr("account"), session.realName.ifBlank { session.username })
             KeyValue(tr("username"), session.username)
+            KeyValue("账号工位", session.userWorkstation.ifBlank { "未绑定" })
+        }
+        Panel {
+            Text("本机工位", color = PdaText, fontSize = 16.sp)
+            OutlinedTextField(
+                value = deviceStation,
+                onValueChange = { deviceStation = it.take(30) },
+                label = { Text("设备工位") },
+                placeholder = { Text("账号工位优先，未绑定时用本机") },
+                singleLine = true,
+                colors = fieldColors(),
+            )
+            Text("共享 PDA 可在此标注工位。登录账号若已绑工位，以账号为准。", color = PdaMuted, fontSize = 12.sp)
+            BigButton(
+                text = tr("save"),
+                onClick = {
+                    session.deviceWorkstation = deviceStation
+                    onBack()
+                },
+            )
         }
         if (canManageServer) {
             Panel {

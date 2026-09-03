@@ -96,6 +96,7 @@ const whForm = ref({
   contactName: '',
   contactPhone: '',
   requiredOutboundFiles: [] as string[],
+  totalVolumeCbm: null as number | null,
 })
 
 const outboundFileOptions = [
@@ -107,7 +108,7 @@ const outboundFileOptions = [
 
 function openAddWarehouse() {
   whEditingId.value = null
-  whForm.value = { warehouseCode: '', warehouseName: '', city: '', address: '', contactName: '', contactPhone: '', requiredOutboundFiles: [] }
+  whForm.value = { warehouseCode: '', warehouseName: '', city: '', address: '', contactName: '', contactPhone: '', requiredOutboundFiles: [], totalVolumeCbm: null }
   whDialogVisible.value = true
 }
 
@@ -121,6 +122,7 @@ function openEditWarehouse(row: any) {
     contactName: row.contactName,
     contactPhone: row.contactPhone,
     requiredOutboundFiles: [...(row.requiredOutboundFiles || [])],
+    totalVolumeCbm: row.totalVolumeCbm != null ? Number(row.totalVolumeCbm) : null,
   }
   whDialogVisible.value = true
 }
@@ -139,6 +141,7 @@ async function submitWarehouse() {
         contactName: whForm.value.contactName.trim() || undefined,
         contactPhone: whForm.value.contactPhone.trim() || undefined,
         requiredOutboundFiles: whForm.value.requiredOutboundFiles,
+        totalVolumeCbm: whForm.value.totalVolumeCbm,
       })
     } else {
       await warehouseApi.create({
@@ -151,6 +154,7 @@ async function submitWarehouse() {
         contactPhone: whForm.value.contactPhone.trim() || undefined,
         requiredOutboundFiles: whForm.value.requiredOutboundFiles,
         country: 'China',
+        totalVolumeCbm: whForm.value.totalVolumeCbm,
       })
     }
     await loadWarehouses()
@@ -307,6 +311,9 @@ const warehouseOptions = computed(() => warehouses.value.filter(w => w.statusCod
         <el-table-column prop="address" label="地址" min-width="160" show-overflow-tooltip />
         <el-table-column prop="contactName" label="联系人" width="90" />
         <el-table-column prop="contactPhone" label="电话" width="120" />
+        <el-table-column label="总库容 m³" width="110">
+          <template #default="{ row }">{{ row.totalVolumeCbm != null ? row.totalVolumeCbm : '未设置' }}</template>
+        </el-table-column>
         <el-table-column label="出库必传文件" min-width="190">
           <template #default="{ row }">
             <span v-if="!row.requiredOutboundFiles?.length">不限制</span>
@@ -340,6 +347,9 @@ const warehouseOptions = computed(() => warehouses.value.filter(w => w.statusCod
         <el-table-column prop="code" label="仓库编码" width="140" />
         <el-table-column prop="name" label="仓库名称" min-width="150" />
         <el-table-column prop="type" label="类型" width="100" />
+        <el-table-column label="总库容 m³" width="110">
+          <template #default="{ row }">{{ row.totalVolumeCbm != null ? row.totalVolumeCbm : '未设置' }}</template>
+        </el-table-column>
         <el-table-column label="必传文件" min-width="280">
           <template #default="{ row }">
             <span v-if="!row.requiredOutboundFiles?.length">不限制</span>
@@ -474,6 +484,10 @@ const warehouseOptions = computed(() => warehouses.value.filter(w => w.statusCod
       <el-form-item label="地址"><el-input v-model="whForm.address" placeholder="详细地址" /></el-form-item>
       <el-form-item label="联系人"><el-input v-model="whForm.contactName" /></el-form-item>
       <el-form-item label="联系电话"><el-input v-model="whForm.contactPhone" /></el-form-item>
+      <el-form-item label="总库容 m³">
+        <el-input-number v-model="whForm.totalVolumeCbm" :min="0" :precision="4" :step="10" controls-position="right" style="width:100%" />
+        <div style="color:#8b95a8;font-size:12px;line-height:18px">仓级上限，容量预警按此计算，不按库位加总。</div>
+      </el-form-item>
       <el-form-item label="出库必传">
         <el-checkbox-group v-model="whForm.requiredOutboundFiles">
           <el-checkbox v-for="item in outboundFileOptions" :key="item.value" :value="item.value">
