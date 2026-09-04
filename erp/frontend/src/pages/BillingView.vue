@@ -28,6 +28,8 @@ const filterSource = ref('all')
 
 const filterType = ref('all')
 
+const filterDestination = ref('')
+
 const dateFrom = ref('')
 
 const dateTo = ref('')
@@ -39,6 +41,10 @@ const generateVisible = ref(false)
 const generatePreview = ref({ chargeCount: 0, totalAmount: 0, customerCount: 0 })
 
 const chargeDialogVisible = ref(false)
+
+const chargeDetailVisible = ref(false)
+
+const chargeDetailRow = ref<any>(null)
 
 const customers = ref<{ id: number; code: string; name: string; label: string }[]>([])
 
@@ -132,6 +138,28 @@ const SOURCE_OPTIONS = [
 
 
 
+const DESTINATION_OPTIONS = [
+
+  { value: 'jhb1', label: 'jhb1 · 约翰内斯堡' },
+
+  { value: 'jhb3', label: 'jhb3 · 约翰内斯堡' },
+
+  { value: 'cpt1', label: 'cpt1 · 开普敦' },
+
+  { value: 'cpt2', label: 'cpt2 · 开普敦' },
+
+  { value: 'dbn', label: 'dbn · 德班' },
+
+  { value: 'cpt', label: 'CPT 自提' },
+
+  { value: 'fba', label: 'FBA 转运' },
+
+  { value: 'local', label: '本地配送' },
+
+]
+
+
+
 const STATUS_MAP: Record<string, { label: string; tone: string }> = {
 
   pending: { label: '待入账', tone: 'warn' },
@@ -182,7 +210,9 @@ function mapCharge(row: any) {
 
     quantity: Number(row.quantity ?? 1),
 
-    unitPrice: row.unitPrice != null ? num(row.unitPrice) : null,
+    destination: row.destination || row.warehouseCode || '—',
+
+    skuItems: Array.isArray(row.skuItems) ? row.skuItems : [],
 
     chargeTypeCode: row.chargeType || '',
 
@@ -254,6 +284,8 @@ const chargeParams = computed(() => ({
 
   chargeType: filterType.value === 'all' ? undefined : filterType.value,
 
+  destination: filterDestination.value.trim() || undefined,
+
   dateFrom: dateFrom.value || undefined,
 
   dateTo: dateTo.value || undefined,
@@ -290,7 +322,7 @@ const selectedRows = ref<any[]>([])
 
 const { page, pageSize, total, pagedItems, resetPage } = useTablePagination(rawCharges)
 
-watch([filterCustomerId, filterCustomerCode, filterSource, filterType, dateFrom, dateTo], () => {
+watch([filterCustomerId, filterCustomerCode, filterSource, filterType, filterDestination, dateFrom, dateTo], () => {
 
   resetPage()
 
@@ -551,6 +583,8 @@ function resetFilters() {
 
   filterType.value = 'all'
 
+  filterDestination.value = ''
+
   dateFrom.value = ''
 
   dateTo.value = ''
@@ -561,19 +595,9 @@ function resetFilters() {
 
 function chargeDetail(row: any) {
 
-  showDetail(`费用明细 · ${row.id}`, [
+  chargeDetailRow.value = row
 
-    ['费用编号', row.id], ['客户', row.customer], ['客户代码', row.customerCode], ['类型', row.type], ['来源', row.source],
-
-    ['类型原码', row.chargeTypeCode || '—'], ['数量', row.quantity],
-
-    ['单价 (RMB)', row.unitPrice != null ? `¥ ${row.unitPrice.toLocaleString()}` : '—'],
-
-    ['金额 (RMB)', `¥ ${row.amount}`], ['扣费日期', row.date], ['状态', row.status],
-
-    ['业务单号', row.bizRef], ['来源单号', row.sourceRef], ['说明', row.desc],
-
-  ])
+  chargeDetailVisible.value = true
 
 }
 
@@ -629,13 +653,15 @@ function exportCharges(rows = selectedRows.value) {
 
   }
 
-  const headers = ['费用编号', '客户代码', '客户', '费用类型', '来源', '说明', '数量', '单价', '金额', '扣费日期', '状态', '业务单号']
+  const headers = ['费用编号', '客户代码', '客户', '费用类型', '来源', '说明', '送达地点', '金额', '扣费日期', '状态', '业务单号', 'SKU明细']
 
   const lines = list.map(r => [
 
     r.id, r.customerCode, r.customer, r.type, r.source, r.desc,
 
-    r.quantity, r.unitPrice ?? '', r.amount.replace(/,/g, ''), r.date, r.status, r.bizRef,
+    r.destination, r.amount.replace(/,/g, ''), r.date, r.status, r.bizRef,
+
+    (r.skuItems || []).map((item: any) => `${item.sku}×${item.quantity}`).join('；'),
 
   ].map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(','))
 
@@ -773,6 +799,30 @@ onMounted(async () => {
 
         </el-select>
 
+        <el-select
+
+          v-model="filterDestination"
+
+          size="small"
+
+          clearable
+
+          filterable
+
+          allow-create
+
+          default-first-option
+
+          placeholder="送达地点"
+
+          style="width: 180px"
+
+        >
+
+          <el-option v-for="d in DESTINATION_OPTIONS" :key="d.value" :label="d.label" :value="d.value" />
+
+        </el-select>
+
         <el-date-picker v-model="dateFrom" type="date" value-format="YYYY-MM-DD" placeholder="开始日期" size="small" clearable style="width: 130px" />
 
         <el-date-picker v-model="dateTo" type="date" value-format="YYYY-MM-DD" placeholder="结束日期" size="small" clearable style="width: 130px" />
@@ -827,11 +877,9 @@ onMounted(async () => {
 
         <el-table-column prop="desc" label="说明" min-width="160" show-overflow-tooltip />
 
-        <el-table-column prop="quantity" label="数量" width="68" align="right" />
+        <el-table-column label="送达地点" min-width="160" show-overflow-tooltip>
 
-        <el-table-column label="单价" width="96" align="right">
-
-          <template #default="{ row }">{{ row.unitPrice != null ? `¥ ${row.unitPrice.toLocaleString()}` : '—' }}</template>
+          <template #default="{ row }">{{ row.destination || '—' }}</template>
 
         </el-table-column>
 
@@ -932,6 +980,42 @@ onMounted(async () => {
     </el-card>
 
 
+
+    <el-dialog
+      v-model="chargeDetailVisible"
+      :title="chargeDetailRow ? `费用明细 · ${chargeDetailRow.id}` : '费用明细'"
+      width="720px"
+      class="erp-detail"
+    >
+      <template v-if="chargeDetailRow">
+        <el-descriptions :column="2" border size="small">
+          <el-descriptions-item label="客户">{{ chargeDetailRow.customer }}</el-descriptions-item>
+          <el-descriptions-item label="客户代码"><span class="mono">{{ chargeDetailRow.customerCode }}</span></el-descriptions-item>
+          <el-descriptions-item label="费用类型">{{ chargeDetailRow.type }}</el-descriptions-item>
+          <el-descriptions-item label="来源">{{ chargeDetailRow.source }}</el-descriptions-item>
+          <el-descriptions-item label="送达地点" :span="2">{{ chargeDetailRow.destination || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="金额">¥ {{ chargeDetailRow.amount }}</el-descriptions-item>
+          <el-descriptions-item label="扣费日期">{{ chargeDetailRow.date }}</el-descriptions-item>
+          <el-descriptions-item label="状态">{{ chargeDetailRow.status }}</el-descriptions-item>
+          <el-descriptions-item label="业务单号"><span class="mono">{{ chargeDetailRow.bizRef }}</span></el-descriptions-item>
+          <el-descriptions-item label="说明" :span="2">{{ chargeDetailRow.desc }}</el-descriptions-item>
+        </el-descriptions>
+        <div class="sku-detail-head">SKU 明细</div>
+        <el-table :data="chargeDetailRow.skuItems || []" border size="small" max-height="280">
+          <el-table-column prop="sku" label="SKU" min-width="140">
+            <template #default="{ row }"><span class="mono">{{ row.sku }}</span></template>
+          </el-table-column>
+          <el-table-column prop="productName" label="商品" min-width="180">
+            <template #default="{ row }">{{ row.productName || '—' }}</template>
+          </el-table-column>
+          <el-table-column prop="quantity" label="数量" width="88" align="right" />
+        </el-table>
+        <el-empty v-if="!(chargeDetailRow.skuItems || []).length" description="该费用没有关联 SKU 明细" :image-size="56" />
+      </template>
+      <template #footer>
+        <el-button @click="chargeDetailVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
 
     <el-dialog v-model="generateVisible" title="生成账单" width="520px">
 
@@ -1108,5 +1192,7 @@ onMounted(async () => {
 .range-sep { color: #94a3b8; flex-shrink: 0; }
 
 .amount-highlight { font-family: var(--font-mono); color: #dc2626; font-weight: 600; }
+
+.sku-detail-head { margin: 16px 0 8px; font-size: 13px; font-weight: 600; color: #334155; }
 
 </style>

@@ -31,6 +31,15 @@ export function erpFbaCodesForOmsWarehouse(omsId: string): string[] | null {
   return OMS_TO_ERP_FBA[key] ?? null
 }
 
+export function destinationHubCityNeedles(omsId: string): string[] {
+  const city = OMS_WH_CITY[omsId.trim().toLowerCase()]
+  if (!city) return []
+  if (city === '约翰内斯堡') return [city, 'Johannesburg']
+  if (city === '开普敦') return [city, 'Cape Town']
+  if (city === '德班') return [city, 'Durban']
+  return [city]
+}
+
 export function outboundDestinationLabel(row: {
   fbaWarehouse?: string | null
   platform?: string | null

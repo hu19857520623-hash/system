@@ -5,6 +5,15 @@ import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
 import { notifyOms } from '../../common/oms-notify.util'
 import { parseOmsOutboundPreDeduct } from '../../common/oms-sync-meta.util'
 import { CreateBillingChargeDto, CreateBillingOrderDto, GenerateBillingDto } from './dto/billing.dto'
+import {
+  applyDestinationSqlFilter,
+  DESTINATION_JOIN_SQL,
+  inboundChargeFulfillment,
+  outboundChargeFulfillment,
+  resolveDestinationFilter,
+  returnChargeFulfillment,
+  type ChargeFulfillment,
+} from './billing-charge-fulfillment.util'
 
 export const BILLING_CHARGE_TYPE_LABELS: Record<string, string> = {
   wms_outbound: 'WMS出库单',
@@ -162,7 +171,7 @@ export class BillingService {
     return { where: conds.join(' AND '), params }
   }
 
-  async listCharges(q: PaginationDto & { customerId?: number; customerCode?: string; chargeType?: string; source?: string; status?: string; dateFrom?: string; dateTo?: string }) {
+  async listCharges(q: PaginationDto & { customerId?: number; customerCode?: string; chargeType?: string; source?: string; status?: string; dateFrom?: string; dateTo?: string; destination?: string }) {
     await this.backfillOutboundCharges()
     const { page, pageSize } = getPagination(q)
     const conds: string[] = ['1=1']
@@ -177,18 +186,30 @@ export class BillingService {
     if (q.status) { conds.push('c.status = ?'); params.push(q.status) }
     if (q.dateFrom) { conds.push('c.charge_date >= ?'); params.push(q.dateFrom) }
     if (q.dateTo) { conds.push('c.charge_date <= ?'); params.push(q.dateTo) }
-    const fromSql = 'billing_charge c LEFT JOIN customer cust ON cust.id = c.customer_id'
+    const destinationJoins = q.destination?.trim() ? DESTINATION_JOIN_SQL : ''
+    if (q.destination?.trim()) {
+      applyDestinationSqlFilter(
+        conds,
+        params,
+        q.destination,
+        [
+          ...await this.matchReturnNosByDestination(q.destination),
+          ...await this.matchOutboundNosByDestination(q.destination),
+        ],
+      )
+    }
+    const fromSql = `billing_charge c LEFT JOIN customer cust ON cust.id = c.customer_id ${destinationJoins}`
     if (q.keyword) {
       conds.push('(c.charge_no LIKE ? OR c.description LIKE ? OR c.biz_ref LIKE ? OR cust.customer_code LIKE ? OR cust.customer_name LIKE ?)')
       const kw = `%${q.keyword}%`
       params.push(kw, kw, kw, kw, kw)
     }
     const where = conds.join(' AND ')
-    const countRows: any[] = await this.prisma.$queryRawUnsafe(`SELECT COUNT(*) as cnt FROM ${fromSql} WHERE ${where}`, ...params)
+    const countRows: any[] = await this.prisma.$queryRawUnsafe(`SELECT COUNT(DISTINCT c.id) as cnt FROM ${fromSql} WHERE ${where}`, ...params)
     const total = Number(countRows[0]?.cnt ?? 0)
     const offset = (page - 1) * pageSize
     const rows: any[] = await this.prisma.$queryRawUnsafe(
-      `SELECT c.* FROM ${fromSql} WHERE ${where} ORDER BY c.charge_date DESC, c.id DESC LIMIT ? OFFSET ?`,
+      `SELECT DISTINCT c.* FROM ${fromSql} WHERE ${where} ORDER BY c.charge_date DESC, c.id DESC LIMIT ? OFFSET ?`,
       ...params,
       pageSize,
       offset,
@@ -224,7 +245,153 @@ export class BillingService {
       billingId: r.billing_id ? Number(r.billing_id) : null,
     }
     })
-    return { items, total, page, pageSize }
+    const fulfillmentByRef = await this.loadChargeFulfillment(
+      items.map((item) => String(item.bizRef || '').trim()).filter(Boolean),
+    )
+    const warehouseCodes = [...new Set(items.map((item) => String(item.warehouseCode || '').trim()).filter(Boolean))]
+    const warehouses = warehouseCodes.length
+      ? await this.prisma.warehouse.findMany({
+          where: { warehouseCode: { in: warehouseCodes } },
+          select: { warehouseCode: true, warehouseName: true, city: true },
+        })
+      : []
+    const warehouseMap = new Map(warehouses.map((row) => [row.warehouseCode, row]))
+    return {
+      items: items.map((item) => {
+        const extra = fulfillmentByRef.get(String(item.bizRef || ''))
+        const warehouse = warehouseMap.get(String(item.warehouseCode || ''))
+        const warehousePlace = [warehouse?.warehouseName || item.warehouseCode, warehouse?.city]
+          .map((part) => String(part || '').trim())
+          .filter(Boolean)
+          .join(' · ')
+        return {
+          ...item,
+          destination: extra?.destination || warehousePlace || '—',
+          skuItems: extra?.skuItems || [],
+        }
+      }),
+      total,
+      page,
+      pageSize,
+    }
+  }
+
+  private async loadChargeFulfillment(refs: string[]): Promise<Map<string, ChargeFulfillment>> {
+    const unique = [...new Set(refs.filter(Boolean))]
+    const result = new Map<string, ChargeFulfillment>()
+    if (!unique.length) return result
+    const [outbounds, inbounds] = await Promise.all([
+      this.prisma.outboundOrder.findMany({
+        where: { outboundNo: { in: unique } },
+        select: {
+          outboundNo: true,
+          fbaWarehouse: true,
+          platform: true,
+          destType: true,
+          recipientJson: true,
+          warehouseCode: true,
+          items: { select: { sku: true, productName: true, qty: true, pickedQty: true } },
+        },
+      }),
+      this.prisma.inboundOrder.findMany({
+        where: { inboundNo: { in: unique } },
+        select: {
+          inboundNo: true,
+          warehouseCode: true,
+          items: { select: { sku: true, expectedQty: true, actualQty: true } },
+        },
+      }),
+    ])
+    let returns: Array<{
+      returnNo: string
+      returnWarehouse: string | null
+      items: Array<{ sku: string; productName: string; quantity: number }>
+    }> = []
+    try {
+      returns = await this.prisma.returnOrder.findMany({
+        where: { returnNo: { in: unique } },
+        select: {
+          returnNo: true,
+          returnWarehouse: true,
+          items: { select: { sku: true, productName: true, quantity: true } },
+        },
+      })
+    } catch {
+      returns = []
+    }
+    const warehouseCodes = [...new Set([
+      ...inbounds.map((row) => row.warehouseCode).filter(Boolean),
+      ...returns.map((row) => row.returnWarehouse).filter(Boolean),
+    ])] as string[]
+    const warehouses = warehouseCodes.length
+      ? await this.prisma.warehouse.findMany({
+          where: { warehouseCode: { in: warehouseCodes } },
+          select: { warehouseCode: true, warehouseName: true, city: true },
+        })
+      : []
+    const warehouseMap = new Map(warehouses.map((row) => [row.warehouseCode, row]))
+    for (const order of outbounds) {
+      result.set(order.outboundNo, outboundChargeFulfillment(order))
+    }
+    for (const order of inbounds) {
+      const warehouse = warehouseMap.get(order.warehouseCode)
+      result.set(order.inboundNo, inboundChargeFulfillment({
+        warehouseCode: order.warehouseCode,
+        warehouseName: warehouse?.warehouseName,
+        warehouseCity: warehouse?.city,
+        items: order.items,
+      }))
+    }
+    for (const order of returns) {
+      const warehouse = order.returnWarehouse ? warehouseMap.get(order.returnWarehouse) : undefined
+      result.set(order.returnNo, returnChargeFulfillment({
+        returnWarehouse: order.returnWarehouse,
+        warehouseName: warehouse?.warehouseName,
+        items: order.items,
+      }))
+    }
+    return result
+  }
+
+  private async matchOutboundNosByDestination(destination: string): Promise<string[]> {
+    const resolved = resolveDestinationFilter(destination)
+    if (!resolved) return []
+    try {
+      const clauses: Array<Record<string, unknown>> = []
+      for (const like of resolved.likes) {
+        clauses.push({ recipientJson: { contains: like } })
+      }
+      if (!clauses.length) return []
+      const rows = await this.prisma.outboundOrder.findMany({
+        where: { OR: clauses as any },
+        select: { outboundNo: true },
+        take: 500,
+      })
+      return [...new Set(rows.map((row) => row.outboundNo).filter(Boolean))]
+    } catch {
+      return []
+    }
+  }
+
+  private async matchReturnNosByDestination(destination: string): Promise<string[]> {
+    const resolved = resolveDestinationFilter(destination)
+    if (!resolved) return []
+    try {
+      const clauses: Array<Record<string, unknown>> = []
+      if (resolved.fbaCodes.length) clauses.push({ returnWarehouse: { in: resolved.fbaCodes } })
+      for (const like of resolved.likes) {
+        clauses.push({ returnWarehouse: { contains: like } })
+      }
+      if (!clauses.length) return []
+      const rows = await this.prisma.returnOrder.findMany({
+        where: { OR: clauses as any },
+        select: { returnNo: true },
+        take: 500,
+      })
+      return [...new Set(rows.map((row) => row.returnNo).filter(Boolean))]
+    } catch {
+      return []
+    }
   }
 
   async createCharge(data: CreateBillingChargeDto, tx?: Prisma.TransactionClient) {
