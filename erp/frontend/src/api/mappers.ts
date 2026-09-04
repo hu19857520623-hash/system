@@ -3,6 +3,7 @@
  */
 
 import { CATALOG_CUSTOMER_CODE, catalogBaseSkuFromInternal } from '@/constants/catalog.ts'
+import { catalogRoleName, roleSide } from '@erp/shared/permissions.catalog'
 
 function parseFollowSalesFromRemark(remark?: string | null): string {
   const text = String(remark || '')
@@ -505,18 +506,8 @@ export function mapCostLedger(row: any) {
 }
 
 export function mapUser(row: any) {
-  const roleLabels: Record<string, string> = {
-    admin: '系统管理员',
-    ops_manager: '运营主管',
-    purchaser: '采购',
-    warehouse: '仓库管理员',
-    finance: '财务',
-    cs: '销售',
-    sales_manager: '销售主管',
-    coach: '陪跑',
-    viewer: '访客',
-  }
-  const roleLabel = row.roleName || roleLabels[row.roleCode] || row.roleCode
+  const roleLabel = row.roleName || catalogRoleName(row.roleCode)
+  const side = row.roleSide || roleSide(row.roleCode)
   return {
     id: row.id,
     login: row.username,
@@ -524,6 +515,7 @@ export function mapUser(row: any) {
     role: roleLabel,
     roleCode: row.roleCode,
     roleName: roleLabel,
+    roleSide: side,
     phone: row.phone || '',
     email: row.email || '',
     workstation: row.workstation || '',

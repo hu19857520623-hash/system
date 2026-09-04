@@ -17,12 +17,18 @@ const DEFAULT_PASSWORD = '123456'
 
 const ROLE_DEFS: Record<string, { roleName: string; description: string }> = {
   admin: { roleName: '系统管理员', description: '拥有全部权限' },
-  ops_manager: { roleName: '采购主管', description: '采购审核与分配' },
+  ops_manager: { roleName: '运营主管', description: '运营协调与店铺分配' },
+  purchase_manager: { roleName: '采购主管', description: '采购审核与分配' },
   purchaser: { roleName: '采购', description: '采购下单' },
   finance: { roleName: '财务', description: '财务审核与结算' },
   viewer: { roleName: '产品开发', description: '选品与开发' },
   dev_manager: { roleName: '产品开发主管', description: '产品审核' },
-  warehouse: { roleName: '仓库', description: '入库与库存' },
+  warehouse_manager: { roleName: '仓库主管', description: '仓内作业管理' },
+  warehouse: { roleName: '仓库操作', description: '入库与出库作业' },
+  inbound_clerk: { roleName: '入库员', description: '到仓收货上架' },
+  outbound_clerk: { roleName: '出库员', description: '拣货打包发运' },
+  returns_clerk: { roleName: '退货员', description: '退件处理' },
+  warehouse_reviewer: { roleName: '复核员', description: '出库复核' },
   cs: { roleName: '销售', description: '线索跟进' },
   sales_manager: { roleName: '销售主管', description: '线索分配与团队管理' },
   coach: { roleName: '陪跑', description: '定价与 OMS' },
@@ -44,9 +50,15 @@ function mapRole(roleRaw: string): string {
   const s = cellStr(roleRaw)
   if (!s) return 'viewer'
   if (s.includes('开发管理') || (s.includes('产品开发') && s.includes('管理'))) return 'dev_manager'
-  if (s === '管理' || (s.includes('管理') && !s.includes('采购') && !s.includes('开发'))) return 'admin'
-  if (s.includes('采购管理') || s.includes('采购主管')) return 'ops_manager'
+  if (s.includes('采购管理') || s.includes('采购主管')) return 'purchase_manager'
+  if (s.includes('运营主管') || s.includes('运营管理')) return 'ops_manager'
   if (s.includes('销售主管') || s.includes('销售管理')) return 'sales_manager'
+  if (s.includes('仓库主管')) return 'warehouse_manager'
+  if (s.includes('入库员') || s.includes('入库')) return 'inbound_clerk'
+  if (s.includes('出库员') || s.includes('出库') || s.includes('拣货')) return 'outbound_clerk'
+  if (s.includes('退货') || s.includes('退件')) return 'returns_clerk'
+  if (s.includes('复核')) return 'warehouse_reviewer'
+  if (s === '管理' || (s.includes('管理') && !s.includes('采购') && !s.includes('开发') && !s.includes('仓库'))) return 'admin'
   if (s.includes('财务')) return 'finance'
   if (s.includes('美工')) return 'viewer'
   if (s.includes('产品开发')) return 'viewer'

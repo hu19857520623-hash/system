@@ -406,3 +406,46 @@ describe('OutboundService delivery outcomes', () => {
     expect(prisma.outboundOrder.update).not.toHaveBeenCalled()
   })
 })
+
+describe('OutboundService.assignPicker', () => {
+  function serviceWithUsers() {
+    const prisma: any = {
+      sysUser: { findUnique: jest.fn() },
+      outboundOrder: { findMany: jest.fn(), updateMany: jest.fn() },
+    }
+    const service = new OutboundService(prisma, {} as any, {} as any, {} as any, {} as any, {} as any)
+    return { service, prisma }
+  }
+
+  it('rejects office jobs such as ops manager', async () => {
+    const { service, prisma } = serviceWithUsers()
+    prisma.sysUser.findUnique.mockResolvedValue({
+      id: 3n,
+      status: 1,
+      roleCode: 'ops_manager',
+      realName: '赵敏',
+      username: 'zhaomin',
+    })
+    await expect(service.assignPicker([1], 3)).rejects.toThrow('仓储职位')
+    expect(prisma.outboundOrder.updateMany).not.toHaveBeenCalled()
+  })
+
+  it('allows warehouse staff', async () => {
+    const { service, prisma } = serviceWithUsers()
+    prisma.sysUser.findUnique.mockResolvedValue({
+      id: 8n,
+      status: 1,
+      roleCode: 'warehouse',
+      realName: '张仓管',
+      username: 'warehouse',
+      workstation: '工位A',
+    })
+    prisma.outboundOrder.findMany.mockResolvedValue([{ id: 1n, outboundNo: 'OB1', status: 'pending_pick' }])
+    prisma.outboundOrder.updateMany.mockResolvedValue({ count: 1 })
+    await expect(service.assignPicker([1], 8)).resolves.toMatchObject({
+      pickerId: 8,
+      pickerName: '张仓管',
+      pickerWorkstation: '工位A',
+    })
+  })
+})

@@ -40,6 +40,7 @@ import {
   type PickSource,
   type ReviewSource,
 } from './outbound.policy'
+import { isWarehouseStaffRole } from '@erp/shared/permissions.catalog'
 import { notifyOms } from '../../common/oms-notify.util'
 import { erpFbaCodesForOmsWarehouse, outboundDestinationLabel } from './oms-warehouse.util'
 import { toOmsLogisticsStatus, toOmsOutboundStatus } from './oms-status.util'
@@ -955,6 +956,9 @@ export class OutboundService {
     if (!ids?.length) throw new BadRequestException('请选择出库单')
     const picker = await this.prisma.sysUser.findUnique({ where: { id: BigInt(pickerId) } })
     if (!picker || picker.status !== 1) throw new BadRequestException('拣货员不存在或已停用')
+    if (!isWarehouseStaffRole(picker.roleCode)) {
+      throw new BadRequestException('只能分配仓储职位的拣货员，运营/销售等办公职位不能作为仓内岗位')
+    }
 
     const orders = await this.prisma.outboundOrder.findMany({
       where: { id: { in: ids.map((id) => BigInt(id)) } },

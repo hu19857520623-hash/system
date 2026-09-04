@@ -13,8 +13,10 @@ public final class PermissionConstants {
 
     public static final Map<String, String> ROLE_CODE_TEMPLATE = Map.ofEntries(
             Map.entry("admin", "系统管理员"),
-            Map.entry("ops_manager", "采购主管"),
+            Map.entry("ops", "运营"),
+            Map.entry("ops_manager", "运营主管"),
             Map.entry("purchaser", "采购"),
+            Map.entry("purchase_manager", "采购主管"),
             Map.entry("finance", "财务"),
             Map.entry("cs", "销售"),
             Map.entry("sales_manager", "销售主管"),
@@ -22,7 +24,12 @@ public final class PermissionConstants {
             Map.entry("coach1", "陪跑1"),
             Map.entry("coach2", "陪跑2"),
             Map.entry("viewer", "产品开发"),
-            Map.entry("warehouse", "仓库"),
+            Map.entry("warehouse", "仓库操作"),
+            Map.entry("warehouse_manager", "仓库主管"),
+            Map.entry("inbound_clerk", "入库员"),
+            Map.entry("outbound_clerk", "出库员"),
+            Map.entry("returns_clerk", "退货员"),
+            Map.entry("warehouse_reviewer", "复核员"),
             Map.entry("dev_manager", "产品开发主管")
     );
 
@@ -127,6 +134,19 @@ public final class PermissionConstants {
                     "dashboard.view", "dashboard.kpi_products", "products.view", "pricing.view",
                     "pricing.set", "pricing.sync_oms", "inventory_query.view", "store_monitor.view"
             )),
+            Map.entry("运营", List.of(
+                    "dashboard.view", "dashboard.kpi_inventory", "dashboard.kpi_products", "dashboard.pipeline_overseas",
+                    "products.view", "pricing.view", "pricing.set", "pricing.sync_oms",
+                    "store_monitor.view", "store_monitor.view_all", "inventory_query.view", "inventory_query.detail",
+                    "inbound.view", "outbound.view"
+            )),
+            Map.entry("运营主管", List.of(
+                    "dashboard.view", "dashboard.kpi_inventory", "dashboard.kpi_products", "dashboard.pipeline_overseas",
+                    "products.view", "pricing.view", "pricing.set", "pricing.sync_oms",
+                    "store_monitor.view", "store_monitor.view_all", "store_monitor.assign", "store_monitor.manage",
+                    "inventory_query.view", "inventory_query.detail", "inbound.view", "outbound.view",
+                    "operation_log.view", "async_io.export"
+            )),
             Map.entry("仓库", List.of(
                     "dashboard.view", "dashboard.kpi_inventory", "dashboard.kpi_products", "dashboard.kpi_sync",
                     "dashboard.trends_logistics", "dashboard.pipeline_overseas", "products.view", "products.print_label",
@@ -140,6 +160,53 @@ public final class PermissionConstants {
                     "inventory_query.adjust", "stocktake.view", "stocktake.create", "stocktake.count",
                     "stocktake.approve", "capacity.view", "capacity.manage", "wms_reports.view",
                     "sync.view", "sync.retry", "operation_log.view"
+            )),
+            Map.entry("仓库操作", List.of(
+                    "dashboard.view", "dashboard.kpi_inventory", "dashboard.kpi_products", "dashboard.kpi_sync",
+                    "dashboard.trends_logistics", "dashboard.pipeline_overseas", "products.view", "products.print_label",
+                    "logistics_wh.view", "logistics_wh.receive", "logistics_wh.manage", "create_inbound.view",
+                    "create_inbound.create", "create_inbound.label", "warehouse_location.view", "warehouse_location.edit",
+                    "warehouse_location.batch_create", "inbound.view", "inbound.arrival_scan", "inbound.receive",
+                    "inbound.qc", "inbound.putaway", "inbound.confirm_diff", "return.view",
+                    "return.receive", "return.process", "anheng.view", "anheng.test",
+                    "outbound.view", "outbound.create", "outbound.relabel", "outbound.pick",
+                    "outbound.pack", "outbound.ship", "inventory_query.view", "inventory_query.detail",
+                    "inventory_query.adjust", "stocktake.view", "stocktake.create", "stocktake.count",
+                    "capacity.view", "wms_reports.view", "sync.view"
+            )),
+            Map.entry("仓库主管", List.of(
+                    "dashboard.view", "dashboard.kpi_inventory", "dashboard.kpi_products", "dashboard.kpi_sync",
+                    "dashboard.trends_logistics", "dashboard.pipeline_overseas", "products.view", "products.print_label",
+                    "logistics_wh.view", "logistics_wh.receive", "logistics_wh.manage", "create_inbound.view",
+                    "create_inbound.create", "create_inbound.label", "warehouse_location.view", "warehouse_location.edit",
+                    "warehouse_location.batch_create", "inbound.view", "inbound.arrival_scan", "inbound.receive",
+                    "inbound.qc", "inbound.putaway", "inbound.handle_exception", "inbound.confirm_diff",
+                    "return.view", "return.receive", "return.process", "anheng.view",
+                    "anheng.test", "outbound.view", "outbound.create", "outbound.relabel",
+                    "outbound.pick", "outbound.pack", "outbound.ship", "inventory_query.view",
+                    "inventory_query.detail", "inventory_query.adjust", "stocktake.view", "stocktake.create",
+                    "stocktake.count", "stocktake.approve", "capacity.view", "capacity.manage",
+                    "wms_reports.view", "sync.view", "sync.retry", "operation_log.view"
+            )),
+            Map.entry("入库员", List.of(
+                    "dashboard.view", "dashboard.kpi_inventory", "dashboard.pipeline_overseas", "products.view",
+                    "products.print_label", "warehouse_location.view", "inbound.view", "inbound.arrival_scan",
+                    "inbound.receive", "inbound.qc", "inbound.putaway", "anheng.view",
+                    "anheng.test", "inventory_query.view", "inventory_query.detail"
+            )),
+            Map.entry("出库员", List.of(
+                    "dashboard.view", "dashboard.kpi_inventory", "dashboard.pipeline_overseas", "products.view",
+                    "outbound.view", "outbound.relabel", "outbound.pick", "outbound.pack",
+                    "outbound.ship", "inventory_query.view", "inventory_query.detail"
+            )),
+            Map.entry("退货员", List.of(
+                    "dashboard.view", "dashboard.kpi_inventory", "products.view", "warehouse_location.view",
+                    "return.view", "return.receive", "return.process", "inbound.view",
+                    "inventory_query.view", "inventory_query.detail"
+            )),
+            Map.entry("复核员", List.of(
+                    "dashboard.view", "dashboard.kpi_inventory", "products.view", "outbound.view",
+                    "outbound.pack", "inventory_query.view"
             ))
     );
 

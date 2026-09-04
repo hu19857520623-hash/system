@@ -5,11 +5,27 @@ data class AuthUser(
     val username: String? = "",
     val realName: String? = "",
     val roleCode: String? = "",
+    val roleName: String? = "",
+    val roleSide: String? = "",
     val workstation: String? = "",
     val permissions: List<String>? = emptyList(),
 ) {
     val permSet: List<String> get() = permissions.orEmpty()
     val name: String get() = realName.orEmpty().ifBlank { username.orEmpty() }
+
+    fun canUsePda(): Boolean {
+        val side = roleSide.orEmpty().lowercase()
+        if (side == "office") return false
+        if (side == "warehouse" || side == "system") return true
+        val code = roleCode.orEmpty()
+        return code == "admin" ||
+            code == "warehouse" ||
+            code == "warehouse_manager" ||
+            code == "inbound_clerk" ||
+            code == "outbound_clerk" ||
+            code == "returns_clerk" ||
+            code == "warehouse_reviewer"
+    }
 }
 
 data class Warehouse(

@@ -21,7 +21,7 @@ private val translations = mapOf(
         "scan_stocktake" to "扫盘点单号 / 库位 / SKU",
         "login" to "登录", "logging_in" to "登录中…", "server" to "服务器", "username" to "用户名", "password" to "密码",
         "pda_title" to "仓库 PDA", "pda_subtitle" to "入库到仓 / 收货清点 / 上架 / 出库拣货 / 盘点", "account" to "账号", "warehouse_code" to "仓库编码",
-        "save" to "保存", "logout" to "退出登录", "back" to "返回", "server_hint" to "服务器由主管统一配置。如无法连接，请联系仓库主管。",
+        "save" to "保存", "logout" to "退出登录", "back" to "返回", "server_hint" to "仅仓库职位可登录。运营、销售等办公账号请使用电脑端。",
         "scan_inbound" to "扫入库单号", "scan_carton" to "扫外箱标", "scan_sku" to "扫 SKU 或条码", "scan_sku_location" to "扫 SKU / 条码或库位", "scan_outbound" to "扫出库单号",
     ),
     "en" to mapOf(
@@ -36,7 +36,7 @@ private val translations = mapOf(
         "scan_stocktake" to "Scan plan / location / SKU",
         "login" to "Sign in", "logging_in" to "Signing in…", "server" to "Server", "username" to "Username", "password" to "Password",
         "pda_title" to "Warehouse PDA", "pda_subtitle" to "Arrival / receiving / putaway / picking", "account" to "Account", "warehouse_code" to "Warehouse code",
-        "save" to "Save", "logout" to "Sign out", "back" to "Back", "server_hint" to "The server is set by a supervisor. Contact warehouse supervisor if you cannot connect.",
+        "save" to "Save", "logout" to "Sign out", "back" to "Back", "server_hint" to "Warehouse roles only. Office accounts such as operations or sales should use the desktop app.",
         "scan_inbound" to "Scan inbound order no.", "scan_carton" to "Scan outer-carton label", "scan_sku" to "Scan SKU or barcode", "scan_sku_location" to "Scan SKU, barcode or location", "scan_outbound" to "Scan outbound order no.",
     ),
     "af" to mapOf(
@@ -51,7 +51,7 @@ private val translations = mapOf(
         "scan_stocktake" to "Skandeer telling / ligging / SKU",
         "login" to "Meld aan", "logging_in" to "Meld aan…", "server" to "Bediener", "username" to "Gebruikersnaam", "password" to "Wagwoord",
         "pda_title" to "Pakhuis PDA", "pda_subtitle" to "Aankoms / ontvangs / wegpak / pluk", "account" to "Rekening", "warehouse_code" to "Pakhuis-kode",
-        "save" to "Stoor", "logout" to "Meld af", "back" to "Terug", "server_hint" to "Die bediener word deur 'n toesighouer gestel. Kontak die toesighouer as jy nie kan koppel nie.",
+        "save" to "Stoor", "logout" to "Meld af", "back" to "Terug", "server_hint" to "Slegs pakhuisrolle. Kantoorrekeninge soos bedryf of verkope moet die rekenaar-app gebruik.",
         "scan_inbound" to "Skandeer inkomende bestellingnommer", "scan_carton" to "Skandeer kartonetiket", "scan_sku" to "Skandeer SKU", "scan_sku_location" to "Skandeer SKU of ligging", "scan_outbound" to "Skandeer uitgaande bestellingnommer",
     ),
 )

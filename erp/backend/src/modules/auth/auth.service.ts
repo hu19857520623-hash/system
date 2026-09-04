@@ -7,6 +7,7 @@ import { LoginDto } from './dto/login.dto'
 import { UpdateProfileDto } from './dto/update-profile.dto'
 import { ChangePasswordDto } from './dto/change-password.dto'
 import { LoginRateLimiter } from './login-rate-limit'
+import { catalogRoleName, roleSide } from '@erp/shared/permissions.catalog'
 
 @Injectable()
 export class AuthService {
@@ -73,6 +74,8 @@ export class AuthService {
         username: user.username,
         realName: user.realName,
         roleCode: user.roleCode,
+        roleName: catalogRoleName(user.roleCode),
+        roleSide: roleSide(user.roleCode),
         workstation: user.workstation || null,
         avatarUrl: user.avatarUrl,
         permissions,
@@ -93,7 +96,8 @@ export class AuthService {
       email: user.email,
       avatarUrl: user.avatarUrl,
       roleCode: user.roleCode,
-      roleName: role?.roleName ?? user.roleCode,
+      roleName: catalogRoleName(user.roleCode, role?.roleName),
+      roleSide: roleSide(user.roleCode),
       workstation: user.workstation || null,
       lastLoginAt: user.lastLoginAt,
       permissions,

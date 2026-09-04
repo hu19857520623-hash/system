@@ -10,8 +10,10 @@ function mapRoleCodeToFrontendRole(roleCode: string, roleName?: string): string 
   if (roleName?.includes('开发主管')) return '产品开发主管'
   const map: Record<string, string> = {
     admin: '系统管理员',
-    ops_manager: '采购主管',
+    ops: '运营',
+    ops_manager: '运营主管',
     purchaser: '采购',
+    purchase_manager: '采购主管',
     finance: '财务',
     cs: '销售',
     sales_manager: '销售主管',
@@ -19,7 +21,12 @@ function mapRoleCodeToFrontendRole(roleCode: string, roleName?: string): string 
     coach1: '陪跑1',
     coach2: '陪跑2',
     viewer: '产品开发',
-    warehouse: '仓库',
+    warehouse: '仓库操作',
+    warehouse_manager: '仓库主管',
+    inbound_clerk: '入库员',
+    outbound_clerk: '出库员',
+    returns_clerk: '退货员',
+    warehouse_reviewer: '复核员',
     dev_manager: '产品开发主管',
   }
   return map[roleCode] || roleName || '系统管理员'
@@ -31,6 +38,7 @@ export interface AuthUser {
   realName: string
   roleCode: string
   roleName?: string
+  roleSide?: 'office' | 'warehouse' | 'system'
   phone?: string | null
   email?: string | null
   permissions?: string[]
@@ -293,6 +301,7 @@ export const useAppStore = defineStore('app', {
       realName: string
       roleCode: string
       roleName?: string
+      roleSide?: 'office' | 'warehouse' | 'system'
       phone?: string | null
       email?: string | null
       permissions?: string[]
@@ -304,6 +313,7 @@ export const useAppStore = defineStore('app', {
         realName: profile.realName,
         roleCode: profile.roleCode,
         roleName: profile.roleName,
+        roleSide: profile.roleSide,
         phone: profile.phone,
         email: profile.email,
         permissions: profile.permissions,

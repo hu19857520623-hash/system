@@ -7,13 +7,14 @@ import { mapUser } from '@/api/mappers.ts'
 import { withAction } from '@/composables/useListLoader.ts'
 import { useAppStore } from '@/stores/app'
 import ListPagination from '@/components/ListPagination.vue'
-import { PERM_GROUPS as FALLBACK_PERM_GROUPS } from '@erp/shared/permissions.catalog'
+import { PERM_GROUPS as FALLBACK_PERM_GROUPS, ROLE_DEFINITIONS, ROLE_SIDE_LABELS, isWarehouseStaffRole, type RoleSide } from '@erp/shared/permissions.catalog'
 
 const app = useAppStore()
 
 interface BackendRole {
   roleCode: string
   roleName: string
+  side?: RoleSide
 }
 
 interface PermGroup {
@@ -54,6 +55,40 @@ const listTotal = ref(0)
 const loading = ref(false)
 const rows = ref<ReturnType<typeof mapUser>[]>([])
 const backendRoles = ref<BackendRole[]>([])
+const FALLBACK_ROLES: BackendRole[] = ROLE_DEFINITIONS.map((r) => ({
+  roleCode: r.roleCode,
+  roleName: r.roleName,
+  side: r.side,
+}))
+
+const roleGroups = computed(() => {
+  const groups: { side: RoleSide; label: string; roles: BackendRole[] }[] = [
+    { side: 'office', label: ROLE_SIDE_LABELS.office, roles: [] },
+    { side: 'warehouse', label: ROLE_SIDE_LABELS.warehouse, roles: [] },
+    { side: 'system', label: ROLE_SIDE_LABELS.system, roles: [] },
+  ]
+  for (const role of backendRoles.value) {
+    const side = role.side || (isWarehouseStaffRole(role.roleCode) ? 'warehouse' : role.roleCode === 'admin' ? 'system' : 'office')
+    const group = groups.find((g) => g.side === side)
+    if (group) group.roles.push({ ...role, side })
+  }
+  return groups.filter((g) => g.roles.length)
+})
+
+function resolveRoleSide(roleCode: string): RoleSide {
+  return backendRoles.value.find((r) => r.roleCode === roleCode)?.side
+    || (isWarehouseStaffRole(roleCode) ? 'warehouse' : roleCode === 'admin' ? 'system' : 'office')
+}
+
+function isWarehouseJob(roleCode: string) {
+  return resolveRoleSide(roleCode) === 'warehouse'
+}
+
+function sideTagType(side: RoleSide) {
+  if (side === 'warehouse') return 'success'
+  if (side === 'system') return 'danger'
+  return 'info'
+}
 
 const statusCounts = ref({ all: 0, active: 0, disabled: 0 })
 
@@ -65,13 +100,16 @@ const filterTabs = computed(() => [
   { value: 'disabled' as const, label: '停用', count: statusCounts.value.disabled },
 ])
 
-const roleOptions = computed(() => [
-  { value: 'all', label: '全部角色' },
-  ...backendRoles.value.map((r) => ({ value: r.roleCode, label: r.roleName })),
-])
-
 function resolveRoleName(roleCode: string) {
   return backendRoles.value.find((r) => r.roleCode === roleCode)?.roleName || roleCode
+}
+
+function onJobChange(roleCode: string, form: { workstation: string }) {
+  if (!isWarehouseJob(roleCode)) form.workstation = ''
+}
+
+function onCreateJobChange(roleCode: string) {
+  onJobChange(roleCode, createForm.value)
 }
 
 function buildParams(extra: Record<string, unknown> = {}) {
@@ -137,12 +175,18 @@ const createForm = ref({
   status: 1,
 })
 
+function defaultOfficeJob() {
+  return backendRoles.value.find((r) => r.roleCode === 'cs')?.roleCode
+    || backendRoles.value.find((r) => (r.side || resolveRoleSide(r.roleCode)) === 'office')?.roleCode
+    || 'cs'
+}
+
 function openCreate() {
   createForm.value = {
     username: '',
     password: '123456',
     realName: '',
-    roleCode: backendRoles.value[0]?.roleCode || 'cs',
+    roleCode: defaultOfficeJob(),
     phone: '',
     email: '',
     workstation: '',
@@ -154,7 +198,7 @@ function openCreate() {
 async function submitCreate() {
   const f = createForm.value
   if (!f.username || !f.password || !f.realName || !f.roleCode) {
-    ElMessage.warning('请填写登录名、密码、姓名和角色')
+    ElMessage.warning('请填写登录名、密码、姓名和职位')
     return
   }
   const ok = await withAction(async () => {
@@ -171,7 +215,7 @@ async function submitCreate() {
     const roleName = resolveRoleName(f.roleCode)
     await usersApi.setPermissions(user.id, app.templatePermsForRole(roleName))
     await reloadAll()
-  }, '用户已创建，已绑定角色默认权限')
+  }, '用户已创建，已绑定职位默认权限')
   if (ok) createVisible.value = false
 }
 
@@ -216,10 +260,11 @@ async function openEdit(row: any) {
 }
 
 function onRoleChange(roleCode: string) {
+  onJobChange(roleCode, editForm.value)
   const roleName = resolveRoleName(roleCode)
   selectedPerms.value = [...app.templatePermsForRole(roleName)]
   permSource.value = 'role'
-  ElMessage.info(`已切换为「${roleName}」默认权限，可继续手动勾选调整`)
+  ElMessage.info(`已切换为「${roleName}」默认权限，可继续在权限细分中勾选`)
 }
 
 function applyRoleTemplate() {
@@ -266,7 +311,7 @@ function clearAllPerms() {
 async function submitEdit() {
   if (!editingId.value) return
   if (!editForm.value.realName || !editForm.value.roleCode) {
-    ElMessage.warning('请填写姓名和角色')
+    ElMessage.warning('请填写姓名和职位')
     return
   }
   if (editingId.value === app.authenticatedUser?.id && editForm.value.status === 0) {
@@ -289,7 +334,7 @@ async function submitEdit() {
     if (app.authenticatedUser?.id === editingId.value) {
       await app.refreshProfile()
     }
-    ElMessage.success('用户信息与岗位权限已保存')
+    ElMessage.success('职位与权限细分已保存')
     editVisible.value = false
     await reloadAll()
   } catch (e: any) {
@@ -340,6 +385,7 @@ async function loadCatalog() {
       backendRoles.value = data.roleDefinitions.map((r: any) => ({
         roleCode: r.roleCode,
         roleName: r.roleName,
+        side: r.side,
       }))
     }
   } catch {
@@ -351,20 +397,7 @@ async function loadRoles() {
   try {
     backendRoles.value = await usersApi.roles()
   } catch {
-    backendRoles.value = [
-      { roleCode: 'admin', roleName: '系统管理员' },
-      { roleCode: 'ops_manager', roleName: '采购主管' },
-      { roleCode: 'purchaser', roleName: '采购' },
-      { roleCode: 'warehouse', roleName: '仓库' },
-      { roleCode: 'finance', roleName: '财务' },
-      { roleCode: 'cs', roleName: '销售' },
-      { roleCode: 'sales_manager', roleName: '销售主管' },
-      { roleCode: 'dev_manager', roleName: '产品开发主管' },
-      { roleCode: 'viewer', roleName: '产品开发' },
-      { roleCode: 'coach', roleName: '陪跑' },
-      { roleCode: 'coach1', roleName: '陪跑1' },
-      { roleCode: 'coach2', roleName: '陪跑2' },
-    ]
+    backendRoles.value = FALLBACK_ROLES
   }
 }
 
@@ -400,9 +433,12 @@ onMounted(async () => {
 
     <div class="filter-panel">
       <div class="filter-line">
-        <span class="filter-label">系统角色</span>
-        <el-select v-model="roleFilter" size="small" style="width:140px">
-          <el-option v-for="r in roleOptions" :key="r.value" :label="r.label" :value="r.value" />
+        <span class="filter-label">职位</span>
+        <el-select v-model="roleFilter" size="small" style="width:180px">
+          <el-option label="全部职位" value="all" />
+          <el-option-group v-for="group in roleGroups" :key="group.side" :label="group.label">
+            <el-option v-for="r in group.roles" :key="r.roleCode" :label="r.roleName" :value="r.roleCode" />
+          </el-option-group>
         </el-select>
         <span class="filter-label ml">用户账号</span>
         <el-input
@@ -424,15 +460,16 @@ onMounted(async () => {
         <template #default="{ row }">
           <div class="cell-stack">
             <span class="mono primary">{{ row.login }}</span>
-            <span class="sub">系统角色: {{ row.role }}</span>
+            <span class="sub">职位: {{ row.role }}</span>
+            <el-tag size="small" :type="sideTagType(row.roleSide)" class="mini-tag">{{ ROLE_SIDE_LABELS[row.roleSide] || '办公职位' }}</el-tag>
             <el-tag v-if="row._raw?.hasCustomPermissions" size="small" type="warning" class="mini-tag">已自定义权限</el-tag>
           </div>
         </template>
       </el-table-column>
       <el-table-column prop="name" label="用户名" width="100" />
-      <el-table-column label="工位" width="110">
-        <template #default="{ row }">{{ row.workstation || '—' }}</template>
-      </el-table-column>
+        <el-table-column label="工位" width="110">
+          <template #default="{ row }">{{ row.roleSide === 'warehouse' ? (row.workstation || '—') : '—' }}</template>
+        </el-table-column>
       <el-table-column prop="phone" label="手机" width="120">
         <template #default="{ row }">{{ row.phone || '—' }}</template>
       </el-table-column>
@@ -479,14 +516,16 @@ onMounted(async () => {
         <el-form-item label="姓名" required>
           <el-input v-model="createForm.realName" />
         </el-form-item>
-        <el-form-item label="系统角色" required>
-          <el-select v-model="createForm.roleCode" style="width:100%">
-            <el-option v-for="r in backendRoles" :key="r.roleCode" :label="r.roleName" :value="r.roleCode" />
+        <el-form-item label="职位" required>
+          <el-select v-model="createForm.roleCode" style="width:100%" @change="onCreateJobChange">
+            <el-option-group v-for="group in roleGroups" :key="group.side" :label="group.label">
+              <el-option v-for="r in group.roles" :key="r.roleCode" :label="r.roleName" :value="r.roleCode" />
+            </el-option-group>
           </el-select>
         </el-form-item>
         <el-form-item label="手机"><el-input v-model="createForm.phone" /></el-form-item>
         <el-form-item label="邮箱"><el-input v-model="createForm.email" /></el-form-item>
-        <el-form-item label="工位">
+        <el-form-item v-if="isWarehouseJob(createForm.roleCode)" label="工位">
           <el-input v-model="createForm.workstation" maxlength="30" placeholder="如 工位A，PDA 拣货绑定用" />
         </el-form-item>
       </el-form>
@@ -496,7 +535,7 @@ onMounted(async () => {
       </template>
     </el-dialog>
 
-    <!-- 编辑：账号 + 岗位权限直接绑定 -->
+    <!-- 编辑：职位 + 权限细分 -->
     <el-dialog
       v-model="editVisible"
       :title="`编辑用户 · ${editForm.realName}`"
@@ -506,54 +545,60 @@ onMounted(async () => {
       class="edit-dialog"
     >
       <div class="edit-hint">
-        权限直接绑定到该账号。切换「系统角色」会加载岗位默认权限，之后可手动勾选各模块权限并保存。
+        职位决定账号属于办公还是仓储。出库拣货员、工位和 PDA 只能使用仓储职位，运营/销售等办公职位不会出现在仓储端。
+        权限细分是该账号可访问的模块，切换职位会加载默认权限，之后可再勾选调整。
         <el-tag v-if="permSource === 'custom'" size="small" type="warning">当前为自定义权限</el-tag>
-        <el-tag v-else size="small" type="info">跟随角色模板</el-tag>
+        <el-tag v-else size="small" type="info">跟随职位默认</el-tag>
       </div>
 
-      <el-form label-width="88px" size="small" class="edit-form">
-        <el-row :gutter="12">
-          <el-col :span="12">
-            <el-form-item label="登录名"><el-input v-model="editForm.login" disabled /></el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="姓名" required><el-input v-model="editForm.realName" /></el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="系统角色" required>
-              <el-select v-model="editForm.roleCode" style="width:100%" @change="onRoleChange">
-                <el-option v-for="r in backendRoles" :key="r.roleCode" :label="r.roleName" :value="r.roleCode" />
-              </el-select>
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="状态">
-              <el-radio-group v-model="editForm.status">
-                <el-radio :value="1">正常</el-radio>
-                <el-radio :value="0">停用</el-radio>
-              </el-radio-group>
-            </el-form-item>
-          </el-col>
-          <el-col :span="12"><el-form-item label="手机"><el-input v-model="editForm.phone" /></el-form-item></el-col>
-          <el-col :span="12"><el-form-item label="邮箱"><el-input v-model="editForm.email" /></el-form-item></el-col>
-          <el-col :span="12">
-            <el-form-item label="工位">
-              <el-input v-model="editForm.workstation" maxlength="30" placeholder="如 工位A" />
-            </el-form-item>
-          </el-col>
-          <el-col :span="24">
-            <el-form-item label="重置密码">
-              <el-input v-model="editForm.password" type="password" show-password placeholder="留空不修改" style="max-width:280px" />
-            </el-form-item>
-          </el-col>
-        </el-row>
-      </el-form>
+      <div class="edit-section">
+        <div class="edit-section-title">1. 职位</div>
+        <el-form label-width="88px" size="small" class="edit-form">
+          <el-row :gutter="12">
+            <el-col :span="12">
+              <el-form-item label="登录名"><el-input v-model="editForm.login" disabled /></el-form-item>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item label="姓名" required><el-input v-model="editForm.realName" /></el-form-item>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item label="职位" required>
+                <el-select v-model="editForm.roleCode" style="width:100%" @change="onRoleChange">
+                  <el-option-group v-for="group in roleGroups" :key="group.side" :label="group.label">
+                    <el-option v-for="r in group.roles" :key="r.roleCode" :label="r.roleName" :value="r.roleCode" />
+                  </el-option-group>
+                </el-select>
+              </el-form-item>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item label="状态">
+                <el-radio-group v-model="editForm.status">
+                  <el-radio :value="1">正常</el-radio>
+                  <el-radio :value="0">停用</el-radio>
+                </el-radio-group>
+              </el-form-item>
+            </el-col>
+            <el-col :span="12"><el-form-item label="手机"><el-input v-model="editForm.phone" /></el-form-item></el-col>
+            <el-col :span="12"><el-form-item label="邮箱"><el-input v-model="editForm.email" /></el-form-item></el-col>
+            <el-col v-if="isWarehouseJob(editForm.roleCode)" :span="12">
+              <el-form-item label="工位">
+                <el-input v-model="editForm.workstation" maxlength="30" placeholder="如 工位A" />
+              </el-form-item>
+            </el-col>
+            <el-col :span="24">
+              <el-form-item label="重置密码">
+                <el-input v-model="editForm.password" type="password" show-password placeholder="留空不修改" style="max-width:280px" />
+              </el-form-item>
+            </el-col>
+          </el-row>
+        </el-form>
+      </div>
 
       <div class="perm-section">
         <div class="perm-toolbar">
-          <span class="perm-title">岗位权限（已选 {{ selectedPerms.length }} / {{ ALL_PERM_IDS.length }} 项）</span>
+          <span class="perm-title">2. 权限细分（已选 {{ selectedPerms.length }} / {{ ALL_PERM_IDS.length }} 项）</span>
           <div class="perm-actions">
-            <el-button link type="primary" size="small" @click="applyRoleTemplate">加载角色默认</el-button>
+            <el-button link type="primary" size="small" @click="applyRoleTemplate">加载职位默认</el-button>
             <el-button link type="primary" size="small" @click="selectAllPerms">全选</el-button>
             <el-button link size="small" @click="clearAllPerms">清空</el-button>
           </div>
@@ -602,7 +647,7 @@ onMounted(async () => {
 
       <template #footer>
         <el-button @click="editVisible = false">取消</el-button>
-        <el-button type="primary" :loading="editSaving" @click="submitEdit">保存权限绑定</el-button>
+        <el-button type="primary" :loading="editSaving" @click="submitEdit">保存</el-button>
       </template>
     </el-dialog>
   </el-card>
@@ -641,6 +686,8 @@ onMounted(async () => {
   flex-wrap:wrap;
 }
 .perm-section { margin-top:8px; border-top:1px solid var(--el-border-color-lighter); padding-top:12px; }
+.edit-section { margin-bottom:4px; }
+.edit-section-title { font-weight:600; font-size:13px; margin-bottom:10px; }
 .perm-toolbar { display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; gap:8px; flex-wrap:wrap; }
 .perm-title { font-weight:600; font-size:13px; }
 .perm-search { margin-bottom:10px; max-width:360px; }

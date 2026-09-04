@@ -4,12 +4,19 @@
  * 后端、Java auth-service、用户管理页均由此导出；改分组/标签后请跑 sync:java-permissions + sync:permissions
  */
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.STORE_MONITOR_ASSIGN_PERM = exports.ALL_PERM_CODES = exports.LEAD_SELF_ASSIGN_ROLE_CODES = exports.LEAD_ASSIGNEE_ROLE_CODES = exports.ROLE_DEFINITIONS = exports.ROLE_CODE_TEMPLATE = exports.ROLE_PERM_TEMPLATES = exports.PERM_ALIASES = exports.DEPRECATED_PERM_CODES = exports.PERM_GROUPS = void 0;
+exports.OFFICE_ROLE_CODES = exports.WAREHOUSE_STAFF_ROLE_CODES = exports.STORE_MONITOR_ASSIGN_PERM = exports.ALL_PERM_CODES = exports.LEAD_SELF_ASSIGN_ROLE_CODES = exports.LEAD_ASSIGNEE_ROLE_CODES = exports.ROLE_DEFINITIONS = exports.ROLE_SIDE_LABELS = exports.ROLE_CODE_TEMPLATE = exports.ROLE_PERM_TEMPLATES = exports.PERM_ALIASES = exports.DEPRECATED_PERM_CODES = exports.PERM_GROUPS = void 0;
 exports.permLabel = permLabel;
 exports.permModule = permModule;
 exports.normalizePermCodes = normalizePermCodes;
 exports.defaultPermsForRoleCode = defaultPermsForRoleCode;
 exports.templatePermsForRoleName = templatePermsForRoleName;
+exports.roleDefinition = roleDefinition;
+exports.roleSide = roleSide;
+exports.catalogRoleName = catalogRoleName;
+exports.isKnownRoleCode = isKnownRoleCode;
+exports.isWarehouseStaffRole = isWarehouseStaffRole;
+exports.canUseWarehouseClient = canUseWarehouseClient;
+exports.roleCodesBySide = roleCodesBySide;
 /** 按业务模块分组的权限（用户管理勾选 UI + sys_permission 中文名） */
 exports.PERM_GROUPS = [
     {
@@ -322,6 +329,23 @@ exports.ROLE_PERM_TEMPLATES = {
         'inventory_query.view',
         'store_monitor.view',
     ],
+    运营: [
+        'dashboard.view', 'dashboard.kpi_inventory', 'dashboard.kpi_products', 'dashboard.pipeline_overseas',
+        'products.view',
+        'pricing.view', 'pricing.set', 'pricing.sync_oms',
+        'store_monitor.view', 'store_monitor.view_all',
+        'inventory_query.view', 'inventory_query.detail',
+        'inbound.view', 'outbound.view',
+    ],
+    运营主管: [
+        'dashboard.view', 'dashboard.kpi_inventory', 'dashboard.kpi_products', 'dashboard.pipeline_overseas',
+        'products.view',
+        'pricing.view', 'pricing.set', 'pricing.sync_oms',
+        'store_monitor.view', 'store_monitor.view_all', 'store_monitor.assign', 'store_monitor.manage',
+        'inventory_query.view', 'inventory_query.detail',
+        'inbound.view', 'outbound.view',
+        'operation_log.view', 'async_io.export',
+    ],
     仓库: [
         'dashboard.view', 'dashboard.kpi_inventory', 'dashboard.kpi_products', 'dashboard.kpi_sync',
         'dashboard.trends_logistics', 'dashboard.pipeline_overseas',
@@ -338,12 +362,74 @@ exports.ROLE_PERM_TEMPLATES = {
         'capacity.view', 'capacity.manage', 'wms_reports.view',
         'sync.view', 'sync.retry', 'operation_log.view',
     ],
+    仓库操作: [
+        'dashboard.view', 'dashboard.kpi_inventory', 'dashboard.kpi_products', 'dashboard.kpi_sync',
+        'dashboard.trends_logistics', 'dashboard.pipeline_overseas',
+        'products.view', 'products.print_label',
+        'logistics_wh.view', 'logistics_wh.receive', 'logistics_wh.manage',
+        'create_inbound.view', 'create_inbound.create', 'create_inbound.label',
+        'warehouse_location.view', 'warehouse_location.edit', 'warehouse_location.batch_create',
+        'inbound.view', 'inbound.arrival_scan', 'inbound.receive', 'inbound.qc', 'inbound.putaway', 'inbound.confirm_diff',
+        'return.view', 'return.receive', 'return.process',
+        'anheng.view', 'anheng.test',
+        'outbound.view', 'outbound.create', 'outbound.relabel', 'outbound.pick', 'outbound.pack', 'outbound.ship',
+        'inventory_query.view', 'inventory_query.detail', 'inventory_query.adjust',
+        'stocktake.view', 'stocktake.create', 'stocktake.count',
+        'capacity.view', 'wms_reports.view',
+        'sync.view',
+    ],
+    仓库主管: [
+        'dashboard.view', 'dashboard.kpi_inventory', 'dashboard.kpi_products', 'dashboard.kpi_sync',
+        'dashboard.trends_logistics', 'dashboard.pipeline_overseas',
+        'products.view', 'products.print_label',
+        'logistics_wh.view', 'logistics_wh.receive', 'logistics_wh.manage',
+        'create_inbound.view', 'create_inbound.create', 'create_inbound.label',
+        'warehouse_location.view', 'warehouse_location.edit', 'warehouse_location.batch_create',
+        'inbound.view', 'inbound.arrival_scan', 'inbound.receive', 'inbound.qc', 'inbound.putaway', 'inbound.handle_exception', 'inbound.confirm_diff',
+        'return.view', 'return.receive', 'return.process',
+        'anheng.view', 'anheng.test',
+        'outbound.view', 'outbound.create', 'outbound.relabel', 'outbound.pick', 'outbound.pack', 'outbound.ship',
+        'inventory_query.view', 'inventory_query.detail', 'inventory_query.adjust',
+        'stocktake.view', 'stocktake.create', 'stocktake.count', 'stocktake.approve',
+        'capacity.view', 'capacity.manage', 'wms_reports.view',
+        'sync.view', 'sync.retry', 'operation_log.view',
+    ],
+    入库员: [
+        'dashboard.view', 'dashboard.kpi_inventory', 'dashboard.pipeline_overseas',
+        'products.view', 'products.print_label',
+        'warehouse_location.view',
+        'inbound.view', 'inbound.arrival_scan', 'inbound.receive', 'inbound.qc', 'inbound.putaway',
+        'anheng.view', 'anheng.test',
+        'inventory_query.view', 'inventory_query.detail',
+    ],
+    出库员: [
+        'dashboard.view', 'dashboard.kpi_inventory', 'dashboard.pipeline_overseas',
+        'products.view',
+        'outbound.view', 'outbound.relabel', 'outbound.pick', 'outbound.pack', 'outbound.ship',
+        'inventory_query.view', 'inventory_query.detail',
+    ],
+    退货员: [
+        'dashboard.view', 'dashboard.kpi_inventory',
+        'products.view',
+        'warehouse_location.view',
+        'return.view', 'return.receive', 'return.process',
+        'inbound.view',
+        'inventory_query.view', 'inventory_query.detail',
+    ],
+    复核员: [
+        'dashboard.view', 'dashboard.kpi_inventory',
+        'products.view',
+        'outbound.view', 'outbound.pack',
+        'inventory_query.view',
+    ],
 };
 /** 后端 roleCode → 权限模板名 */
 exports.ROLE_CODE_TEMPLATE = {
     admin: '系统管理员',
-    ops_manager: '采购主管',
+    ops: '运营',
+    ops_manager: '运营主管',
     purchaser: '采购',
+    purchase_manager: '采购主管',
     finance: '财务',
     cs: '销售',
     sales_manager: '销售主管',
@@ -351,23 +437,40 @@ exports.ROLE_CODE_TEMPLATE = {
     coach1: '陪跑1',
     coach2: '陪跑2',
     viewer: '产品开发',
-    warehouse: '仓库',
+    warehouse: '仓库操作',
+    warehouse_manager: '仓库主管',
+    inbound_clerk: '入库员',
+    outbound_clerk: '出库员',
+    returns_clerk: '退货员',
+    warehouse_reviewer: '复核员',
     dev_manager: '产品开发主管',
 };
-/** 角色元数据（种子 / 管理页） */
+exports.ROLE_SIDE_LABELS = {
+    office: '办公职位',
+    warehouse: '仓储职位',
+    system: '系统',
+};
+/** 角色元数据（种子 / 管理页）。side 决定能否出现在仓储端（拣货员 / 工位 / PDA） */
 exports.ROLE_DEFINITIONS = [
-    { roleCode: 'admin', roleName: '系统管理员', templateKey: '系统管理员', description: '拥有全部业务权限' },
-    { roleCode: 'ops_manager', roleName: '采购主管', templateKey: '采购主管', description: '采购审核、国内物流与海外入库协调' },
-    { roleCode: 'purchaser', roleName: '采购', templateKey: '采购', description: '采购下单、发运与明瑞物流' },
-    { roleCode: 'warehouse', roleName: '仓库', templateKey: '仓库', description: '收货、上架、出库与盘点' },
-    { roleCode: 'finance', roleName: '财务', templateKey: '财务', description: '结算、充值与报表' },
-    { roleCode: 'cs', roleName: '销售', templateKey: '销售', description: '线索跟进与成交' },
-    { roleCode: 'sales_manager', roleName: '销售主管', templateKey: '销售主管', description: '线索分配、团队跟进与报表' },
-    { roleCode: 'dev_manager', roleName: '产品开发主管', templateKey: '产品开发主管', description: '选品审核与定价' },
-    { roleCode: 'viewer', roleName: '产品开发', templateKey: '产品开发', description: '选品提交' },
-    { roleCode: 'coach', roleName: '陪跑', templateKey: '陪跑', description: '定价与 OMS 同步' },
-    { roleCode: 'coach1', roleName: '陪跑1', templateKey: '陪跑1', description: '店铺监控 1-5' },
-    { roleCode: 'coach2', roleName: '陪跑2', templateKey: '陪跑2', description: '店铺监控 6-9,0' },
+    { roleCode: 'admin', roleName: '系统管理员', templateKey: '系统管理员', description: '拥有全部业务权限', side: 'system' },
+    { roleCode: 'ops', roleName: '运营', templateKey: '运营', description: '货盘定价、店铺监控与日常运营', side: 'office' },
+    { roleCode: 'ops_manager', roleName: '运营主管', templateKey: '运营主管', description: '运营协调、店铺分配与货盘管理', side: 'office' },
+    { roleCode: 'purchaser', roleName: '采购', templateKey: '采购', description: '采购下单、发运与明瑞物流', side: 'office' },
+    { roleCode: 'purchase_manager', roleName: '采购主管', templateKey: '采购主管', description: '采购分配、主管审核与国内物流协调', side: 'office' },
+    { roleCode: 'warehouse_manager', roleName: '仓库主管', templateKey: '仓库主管', description: '仓内作业管理、盘点审批与异常处理', side: 'warehouse' },
+    { roleCode: 'warehouse', roleName: '仓库操作', templateKey: '仓库操作', description: '收货、上架、出库与盘点', side: 'warehouse' },
+    { roleCode: 'inbound_clerk', roleName: '入库员', templateKey: '入库员', description: '到仓扫描、收货清点与上架', side: 'warehouse' },
+    { roleCode: 'outbound_clerk', roleName: '出库员', templateKey: '出库员', description: '出库拣货、打包与发运', side: 'warehouse' },
+    { roleCode: 'returns_clerk', roleName: '退货员', templateKey: '退货员', description: '退件收货与处理', side: 'warehouse' },
+    { roleCode: 'warehouse_reviewer', roleName: '复核员', templateKey: '复核员', description: '出库复核', side: 'warehouse' },
+    { roleCode: 'finance', roleName: '财务', templateKey: '财务', description: '结算、充值与报表', side: 'office' },
+    { roleCode: 'cs', roleName: '销售', templateKey: '销售', description: '线索跟进与成交', side: 'office' },
+    { roleCode: 'sales_manager', roleName: '销售主管', templateKey: '销售主管', description: '线索分配、团队跟进与报表', side: 'office' },
+    { roleCode: 'dev_manager', roleName: '产品开发主管', templateKey: '产品开发主管', description: '选品审核与定价', side: 'office' },
+    { roleCode: 'viewer', roleName: '产品开发', templateKey: '产品开发', description: '选品提交', side: 'office' },
+    { roleCode: 'coach', roleName: '陪跑', templateKey: '陪跑', description: '定价与 OMS 同步', side: 'office' },
+    { roleCode: 'coach1', roleName: '陪跑1', templateKey: '陪跑1', description: '店铺监控 1-5', side: 'office' },
+    { roleCode: 'coach2', roleName: '陪跑2', templateKey: '陪跑2', description: '店铺监控 6-9,0', side: 'office' },
 ];
 /** 可被分配为线索归属人的销售角色 */
 exports.LEAD_ASSIGNEE_ROLE_CODES = ['cs', 'sales_manager'];
@@ -409,12 +512,45 @@ function defaultPermsForRoleCode(roleCode) {
 function templatePermsForRoleName(roleName) {
     const alias = {
         客服: '销售',
-        运营主管: '采购主管',
+        运营主管: '运营主管',
+        采购主管: '采购主管',
         采购员: '采购',
         访客: '产品开发',
-        仓库管理员: '仓库',
+        仓库管理员: '仓库操作',
+        仓库: '仓库操作',
     };
     const key = alias[roleName] || roleName;
     return normalizePermCodes(exports.ROLE_PERM_TEMPLATES[key] || []);
+}
+const ROLE_BY_CODE = new Map(exports.ROLE_DEFINITIONS.map((r) => [r.roleCode, r]));
+function roleDefinition(roleCode) {
+    return ROLE_BY_CODE.get(roleCode);
+}
+/** 未知职位按办公处理，避免误入仓储端 */
+function roleSide(roleCode) {
+    return ROLE_BY_CODE.get(roleCode)?.side ?? 'office';
+}
+function catalogRoleName(roleCode, fallback) {
+    return ROLE_BY_CODE.get(roleCode)?.roleName || fallback || roleCode;
+}
+function isKnownRoleCode(roleCode) {
+    return ROLE_BY_CODE.has(roleCode);
+}
+function isWarehouseStaffRole(roleCode) {
+    return roleSide(roleCode) === 'warehouse';
+}
+/** 仓储端（PDA / 拣货员 / 工位）可用的职位：仓库 + 系统管理员 */
+function canUseWarehouseClient(roleCode) {
+    const side = roleSide(roleCode);
+    return side === 'warehouse' || side === 'system';
+}
+exports.WAREHOUSE_STAFF_ROLE_CODES = exports.ROLE_DEFINITIONS
+    .filter((r) => r.side === 'warehouse')
+    .map((r) => r.roleCode);
+exports.OFFICE_ROLE_CODES = exports.ROLE_DEFINITIONS
+    .filter((r) => r.side === 'office')
+    .map((r) => r.roleCode);
+function roleCodesBySide(side) {
+    return exports.ROLE_DEFINITIONS.filter((r) => r.side === side).map((r) => r.roleCode);
 }
 //# sourceMappingURL=permissions.catalog.js.map

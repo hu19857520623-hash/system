@@ -7,12 +7,20 @@ export {
   ROLE_CODE_TEMPLATE,
   ROLE_DEFINITIONS,
   ROLE_PERM_TEMPLATES,
+  ROLE_SIDE_LABELS,
   STORE_MONITOR_ASSIGN_PERM,
+  WAREHOUSE_STAFF_ROLE_CODES,
+  canUseWarehouseClient,
+  catalogRoleName,
   defaultPermsForRoleCode,
+  isKnownRoleCode,
+  isWarehouseStaffRole,
   normalizePermCodes,
   permLabel,
   permModule,
+  roleCodesBySide,
+  roleSide,
   templatePermsForRoleName,
 } from '@erp/shared/permissions.catalog'
 
-export type { PermissionGroup, PermissionItem } from '@erp/shared/permissions.catalog'
+export type { PermissionGroup, PermissionItem, RoleDefinition, RoleSide } from '@erp/shared/permissions.catalog'

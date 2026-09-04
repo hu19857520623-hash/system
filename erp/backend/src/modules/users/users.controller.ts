@@ -16,7 +16,7 @@ export class UsersController {
 
   @RequirePerms('permissions.view')
   @Get()
-  list(@Query() q: PaginationDto & { roleCode?: string }) {
+  list(@Query() q: PaginationDto & { roleCode?: string; status?: string; roleSide?: string }) {
     return this.usersService.list(q)
   }
 

@@ -179,6 +179,21 @@ jobs:
           test -f "$volume_sql" || { echo "Missing $volume_sql"; exit 1; }
           cat "$volume_sql" | docker compose exec -T mysql mysql -uroot -p"$mysql_pw" --batch takealot_erp
 
+          echo '=== Apply office/warehouse job titles ==='
+          role_side_sql="${PWD}/backend/prisma/scripts/migrate_role_office_warehouse.sql"
+          test -f "$role_side_sql" || { echo "Missing $role_side_sql"; exit 1; }
+          cat "$role_side_sql" | docker compose exec -T mysql mysql -uroot -p"$mysql_pw" --default-character-set=utf8mb4 --batch takealot_erp
+
+          echo '=== Apply purchase manager job title ==='
+          purchase_mgr_sql="${PWD}/backend/prisma/scripts/migrate_purchase_manager_role.sql"
+          test -f "$purchase_mgr_sql" || { echo "Missing $purchase_mgr_sql"; exit 1; }
+          cat "$purchase_mgr_sql" | docker compose exec -T mysql mysql -uroot -p"$mysql_pw" --default-character-set=utf8mb4 --batch takealot_erp
+
+          echo '=== Apply warehouse job titles ==='
+          warehouse_jobs_sql="${PWD}/backend/prisma/scripts/migrate_warehouse_job_titles.sql"
+          test -f "$warehouse_jobs_sql" || { echo "Missing $warehouse_jobs_sql"; exit 1; }
+          cat "$warehouse_jobs_sql" | docker compose exec -T mysql mysql -uroot -p"$mysql_pw" --default-character-set=utf8mb4 --batch takealot_erp
+
           echo '=== Sync dashboard and role permissions ==='
           dash_perm_sql="${PWD}/backend/prisma/scripts/migrate_dashboard_permissions.sql"
           test -f "$dash_perm_sql" || { echo "Missing $dash_perm_sql"; exit 1; }

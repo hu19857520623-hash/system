@@ -27,6 +27,7 @@ class ErpClient(private val session: SessionStore) {
         val user = gson.fromJson(data.asJsonObject.get("user"), AuthUser::class.java)
             ?: throw ErpException("登录响应缺少用户信息")
         if (token.isBlank()) throw ErpException("登录响应缺少 token")
+        if (!user.canUsePda()) throw ErpException("该职位不能登录仓储 PDA，请使用仓库账号")
         session.saveLogin(token, user)
         user
     }

@@ -305,7 +305,7 @@ onMounted(async () => {
     customers.value = []
   }
   try {
-    const uRes = await usersApi.list({ pageSize: 100, status: 'active' })
+    const uRes = await usersApi.list({ pageSize: 100, status: 'active', roleSide: 'warehouse' })
     pickerUsers.value = (uRes.items || [])
       .filter((u: any) => u.status === 1)
       .map((u: any) => {

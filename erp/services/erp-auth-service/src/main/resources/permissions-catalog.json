@@ -493,79 +493,142 @@
       "roleCode": "admin",
       "roleName": "系统管理员",
       "templateKey": "系统管理员",
-      "description": "拥有全部业务权限"
+      "description": "拥有全部业务权限",
+      "side": "system"
+    },
+    {
+      "roleCode": "ops",
+      "roleName": "运营",
+      "templateKey": "运营",
+      "description": "货盘定价、店铺监控与日常运营",
+      "side": "office"
     },
     {
       "roleCode": "ops_manager",
-      "roleName": "采购主管",
-      "templateKey": "采购主管",
-      "description": "采购审核、国内物流与海外入库协调"
+      "roleName": "运营主管",
+      "templateKey": "运营主管",
+      "description": "运营协调、店铺分配与货盘管理",
+      "side": "office"
     },
     {
       "roleCode": "purchaser",
       "roleName": "采购",
       "templateKey": "采购",
-      "description": "采购下单、发运与明瑞物流"
+      "description": "采购下单、发运与明瑞物流",
+      "side": "office"
+    },
+    {
+      "roleCode": "purchase_manager",
+      "roleName": "采购主管",
+      "templateKey": "采购主管",
+      "description": "采购分配、主管审核与国内物流协调",
+      "side": "office"
+    },
+    {
+      "roleCode": "warehouse_manager",
+      "roleName": "仓库主管",
+      "templateKey": "仓库主管",
+      "description": "仓内作业管理、盘点审批与异常处理",
+      "side": "warehouse"
     },
     {
       "roleCode": "warehouse",
-      "roleName": "仓库",
-      "templateKey": "仓库",
-      "description": "收货、上架、出库与盘点"
+      "roleName": "仓库操作",
+      "templateKey": "仓库操作",
+      "description": "收货、上架、出库与盘点",
+      "side": "warehouse"
+    },
+    {
+      "roleCode": "inbound_clerk",
+      "roleName": "入库员",
+      "templateKey": "入库员",
+      "description": "到仓扫描、收货清点与上架",
+      "side": "warehouse"
+    },
+    {
+      "roleCode": "outbound_clerk",
+      "roleName": "出库员",
+      "templateKey": "出库员",
+      "description": "出库拣货、打包与发运",
+      "side": "warehouse"
+    },
+    {
+      "roleCode": "returns_clerk",
+      "roleName": "退货员",
+      "templateKey": "退货员",
+      "description": "退件收货与处理",
+      "side": "warehouse"
+    },
+    {
+      "roleCode": "warehouse_reviewer",
+      "roleName": "复核员",
+      "templateKey": "复核员",
+      "description": "出库复核",
+      "side": "warehouse"
     },
     {
       "roleCode": "finance",
       "roleName": "财务",
       "templateKey": "财务",
-      "description": "结算、充值与报表"
+      "description": "结算、充值与报表",
+      "side": "office"
     },
     {
       "roleCode": "cs",
       "roleName": "销售",
       "templateKey": "销售",
-      "description": "线索跟进与成交"
+      "description": "线索跟进与成交",
+      "side": "office"
     },
     {
       "roleCode": "sales_manager",
       "roleName": "销售主管",
       "templateKey": "销售主管",
-      "description": "线索分配、团队跟进与报表"
+      "description": "线索分配、团队跟进与报表",
+      "side": "office"
     },
     {
       "roleCode": "dev_manager",
       "roleName": "产品开发主管",
       "templateKey": "产品开发主管",
-      "description": "选品审核与定价"
+      "description": "选品审核与定价",
+      "side": "office"
     },
     {
       "roleCode": "viewer",
       "roleName": "产品开发",
       "templateKey": "产品开发",
-      "description": "选品提交"
+      "description": "选品提交",
+      "side": "office"
     },
     {
       "roleCode": "coach",
       "roleName": "陪跑",
       "templateKey": "陪跑",
-      "description": "定价与 OMS 同步"
+      "description": "定价与 OMS 同步",
+      "side": "office"
     },
     {
       "roleCode": "coach1",
       "roleName": "陪跑1",
       "templateKey": "陪跑1",
-      "description": "店铺监控 1-5"
+      "description": "店铺监控 1-5",
+      "side": "office"
     },
     {
       "roleCode": "coach2",
       "roleName": "陪跑2",
       "templateKey": "陪跑2",
-      "description": "店铺监控 6-9,0"
+      "description": "店铺监控 6-9,0",
+      "side": "office"
     }
   ],
   "roleCodeTemplate": {
     "admin": "系统管理员",
-    "ops_manager": "采购主管",
+    "ops": "运营",
+    "ops_manager": "运营主管",
     "purchaser": "采购",
+    "purchase_manager": "采购主管",
     "finance": "财务",
     "cs": "销售",
     "sales_manager": "销售主管",
@@ -573,7 +636,12 @@
     "coach1": "陪跑1",
     "coach2": "陪跑2",
     "viewer": "产品开发",
-    "warehouse": "仓库",
+    "warehouse": "仓库操作",
+    "warehouse_manager": "仓库主管",
+    "inbound_clerk": "入库员",
+    "outbound_clerk": "出库员",
+    "returns_clerk": "退货员",
+    "warehouse_reviewer": "复核员",
     "dev_manager": "产品开发主管"
   },
   "roleTemplates": {
@@ -897,6 +965,42 @@
       "inventory_query.view",
       "store_monitor.view"
     ],
+    "运营": [
+      "dashboard.view",
+      "dashboard.kpi_inventory",
+      "dashboard.kpi_products",
+      "dashboard.pipeline_overseas",
+      "products.view",
+      "pricing.view",
+      "pricing.set",
+      "pricing.sync_oms",
+      "store_monitor.view",
+      "store_monitor.view_all",
+      "inventory_query.view",
+      "inventory_query.detail",
+      "inbound.view",
+      "outbound.view"
+    ],
+    "运营主管": [
+      "dashboard.view",
+      "dashboard.kpi_inventory",
+      "dashboard.kpi_products",
+      "dashboard.pipeline_overseas",
+      "products.view",
+      "pricing.view",
+      "pricing.set",
+      "pricing.sync_oms",
+      "store_monitor.view",
+      "store_monitor.view_all",
+      "store_monitor.assign",
+      "store_monitor.manage",
+      "inventory_query.view",
+      "inventory_query.detail",
+      "inbound.view",
+      "outbound.view",
+      "operation_log.view",
+      "async_io.export"
+    ],
     "仓库": [
       "dashboard.view",
       "dashboard.kpi_inventory",
@@ -945,6 +1049,151 @@
       "sync.view",
       "sync.retry",
       "operation_log.view"
+    ],
+    "仓库操作": [
+      "dashboard.view",
+      "dashboard.kpi_inventory",
+      "dashboard.kpi_products",
+      "dashboard.kpi_sync",
+      "dashboard.trends_logistics",
+      "dashboard.pipeline_overseas",
+      "products.view",
+      "products.print_label",
+      "logistics_wh.view",
+      "logistics_wh.receive",
+      "logistics_wh.manage",
+      "create_inbound.view",
+      "create_inbound.create",
+      "create_inbound.label",
+      "warehouse_location.view",
+      "warehouse_location.edit",
+      "warehouse_location.batch_create",
+      "inbound.view",
+      "inbound.arrival_scan",
+      "inbound.receive",
+      "inbound.qc",
+      "inbound.putaway",
+      "inbound.confirm_diff",
+      "return.view",
+      "return.receive",
+      "return.process",
+      "anheng.view",
+      "anheng.test",
+      "outbound.view",
+      "outbound.create",
+      "outbound.relabel",
+      "outbound.pick",
+      "outbound.pack",
+      "outbound.ship",
+      "inventory_query.view",
+      "inventory_query.detail",
+      "inventory_query.adjust",
+      "stocktake.view",
+      "stocktake.create",
+      "stocktake.count",
+      "capacity.view",
+      "wms_reports.view",
+      "sync.view"
+    ],
+    "仓库主管": [
+      "dashboard.view",
+      "dashboard.kpi_inventory",
+      "dashboard.kpi_products",
+      "dashboard.kpi_sync",
+      "dashboard.trends_logistics",
+      "dashboard.pipeline_overseas",
+      "products.view",
+      "products.print_label",
+      "logistics_wh.view",
+      "logistics_wh.receive",
+      "logistics_wh.manage",
+      "create_inbound.view",
+      "create_inbound.create",
+      "create_inbound.label",
+      "warehouse_location.view",
+      "warehouse_location.edit",
+      "warehouse_location.batch_create",
+      "inbound.view",
+      "inbound.arrival_scan",
+      "inbound.receive",
+      "inbound.qc",
+      "inbound.putaway",
+      "inbound.handle_exception",
+      "inbound.confirm_diff",
+      "return.view",
+      "return.receive",
+      "return.process",
+      "anheng.view",
+      "anheng.test",
+      "outbound.view",
+      "outbound.create",
+      "outbound.relabel",
+      "outbound.pick",
+      "outbound.pack",
+      "outbound.ship",
+      "inventory_query.view",
+      "inventory_query.detail",
+      "inventory_query.adjust",
+      "stocktake.view",
+      "stocktake.create",
+      "stocktake.count",
+      "stocktake.approve",
+      "capacity.view",
+      "capacity.manage",
+      "wms_reports.view",
+      "sync.view",
+      "sync.retry",
+      "operation_log.view"
+    ],
+    "入库员": [
+      "dashboard.view",
+      "dashboard.kpi_inventory",
+      "dashboard.pipeline_overseas",
+      "products.view",
+      "products.print_label",
+      "warehouse_location.view",
+      "inbound.view",
+      "inbound.arrival_scan",
+      "inbound.receive",
+      "inbound.qc",
+      "inbound.putaway",
+      "anheng.view",
+      "anheng.test",
+      "inventory_query.view",
+      "inventory_query.detail"
+    ],
+    "出库员": [
+      "dashboard.view",
+      "dashboard.kpi_inventory",
+      "dashboard.pipeline_overseas",
+      "products.view",
+      "outbound.view",
+      "outbound.relabel",
+      "outbound.pick",
+      "outbound.pack",
+      "outbound.ship",
+      "inventory_query.view",
+      "inventory_query.detail"
+    ],
+    "退货员": [
+      "dashboard.view",
+      "dashboard.kpi_inventory",
+      "products.view",
+      "warehouse_location.view",
+      "return.view",
+      "return.receive",
+      "return.process",
+      "inbound.view",
+      "inventory_query.view",
+      "inventory_query.detail"
+    ],
+    "复核员": [
+      "dashboard.view",
+      "dashboard.kpi_inventory",
+      "products.view",
+      "outbound.view",
+      "outbound.pack",
+      "inventory_query.view"
     ]
   },
   "deprecated": [
