@@ -3,7 +3,7 @@
  */
 
 import { CATALOG_CUSTOMER_CODE, catalogBaseSkuFromInternal } from '@/constants/catalog.ts'
-import { catalogRoleName, roleSide } from '@erp/shared/permissions.catalog'
+import { catalogRoleName, roleSide, type RoleSide } from '@erp/shared/permissions.catalog'
 
 function parseFollowSalesFromRemark(remark?: string | null): string {
   const text = String(remark || '')
@@ -507,7 +507,10 @@ export function mapCostLedger(row: any) {
 
 export function mapUser(row: any) {
   const roleLabel = row.roleName || catalogRoleName(row.roleCode)
-  const side = row.roleSide || roleSide(row.roleCode)
+  const side: RoleSide =
+    row.roleSide === 'office' || row.roleSide === 'warehouse' || row.roleSide === 'system'
+      ? row.roleSide
+      : roleSide(row.roleCode)
   return {
     id: row.id,
     login: row.username,

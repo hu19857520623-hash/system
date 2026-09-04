@@ -84,10 +84,20 @@ function isWarehouseJob(roleCode: string) {
   return resolveRoleSide(roleCode) === 'warehouse'
 }
 
-function sideTagType(side: RoleSide) {
-  if (side === 'warehouse') return 'success'
-  if (side === 'system') return 'danger'
+function asRoleSide(side: unknown): RoleSide {
+  if (side === 'office' || side === 'warehouse' || side === 'system') return side
+  return 'office'
+}
+
+function sideTagType(side: unknown) {
+  const resolved = asRoleSide(side)
+  if (resolved === 'warehouse') return 'success'
+  if (resolved === 'system') return 'danger'
   return 'info'
+}
+
+function roleSideLabel(side: unknown): string {
+  return ROLE_SIDE_LABELS[asRoleSide(side)]
 }
 
 const statusCounts = ref({ all: 0, active: 0, disabled: 0 })
@@ -461,7 +471,7 @@ onMounted(async () => {
           <div class="cell-stack">
             <span class="mono primary">{{ row.login }}</span>
             <span class="sub">职位: {{ row.role }}</span>
-            <el-tag size="small" :type="sideTagType(row.roleSide)" class="mini-tag">{{ ROLE_SIDE_LABELS[row.roleSide] || '办公职位' }}</el-tag>
+            <el-tag size="small" :type="sideTagType(row.roleSide)" class="mini-tag">{{ roleSideLabel(row.roleSide) }}</el-tag>
             <el-tag v-if="row._raw?.hasCustomPermissions" size="small" type="warning" class="mini-tag">已自定义权限</el-tag>
           </div>
         </template>
