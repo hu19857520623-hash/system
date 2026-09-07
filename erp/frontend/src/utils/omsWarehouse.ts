@@ -20,13 +20,15 @@ const ERP_FBA_TO_OMS: Record<string, FulfillmentWarehouseId> = {
   DBN1: 'dbn',
 }
 
-/** OMS 仓库下拉（与 OMS 出库预约一致：jhb1 · 约翰内斯堡） */
+/** OMS 仓库下拉（与客户出库单 Takealot 目的仓一致：JHB3 · 约翰内斯堡） */
 export function omsWarehouseLabel(id: string): string {
-  const w = FULFILLMENT_WAREHOUSES.find((x) => x.id === id)
-  return w ? `${w.id} · ${w.city}` : id || '—'
+  const w = String(id || '').trim().toLowerCase()
+  if (!w || w === 'jhb' || w.includes('wms-jhb')) return 'JHB · 约翰内斯堡'
+  const hit = FULFILLMENT_WAREHOUSES.find((x) => x.id === w)
+  return hit ? `${hit.id.toUpperCase()} · ${hit.city}` : id || '—'
 }
 
-/** ERP fbaWarehouse（JHB3 等）→ OMS 展示文案 */
+/** ERP fbaWarehouse（JHB / JHB3 等）→ 客户出库单地点分类 */
 export function outboundDestinationLabel(row: {
   fbaWarehouse?: string | null
   destination?: string | null
@@ -36,7 +38,9 @@ export function outboundDestinationLabel(row: {
   if (row.destination?.trim()) return row.destination.trim()
   const raw = row.fbaWarehouse?.trim()
   if (raw) {
-    const omsId = ERP_FBA_TO_OMS[raw.toUpperCase()] || raw.toLowerCase()
+    const upper = raw.toUpperCase()
+    if (upper === 'JHB') return 'JHB · 约翰内斯堡'
+    const omsId = ERP_FBA_TO_OMS[upper] || raw.toLowerCase()
     const labeled = omsWarehouseLabel(omsId)
     if (labeled !== omsId) return labeled
     return raw
@@ -48,6 +52,14 @@ export function outboundDestinationLabel(row: {
   if (dt === 'local') return '本地配送'
   return '—'
 }
+
+export const TAKEALOT_DEST_OPTIONS = [
+  { value: 'JHB', label: 'JHB' },
+  { value: 'JHB3', label: 'JHB3' },
+  { value: 'CPT1', label: 'CPT1' },
+  { value: 'CPT2', label: 'CPT2' },
+  { value: 'DBN', label: 'DBN' },
+] as const
 
 export function warehouseFilterOptions() {
   return [

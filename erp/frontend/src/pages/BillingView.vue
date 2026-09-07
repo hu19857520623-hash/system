@@ -14,6 +14,8 @@ import { useRowActions } from '@/composables/useRowActions'
 
 import ListPagination from '@/components/ListPagination.vue'
 
+import { TAKEALOT_DEST_OPTIONS } from '@/utils/omsWarehouse.ts'
+
 
 
 const { showDetail, toast, confirmAction } = useRowActions()
@@ -120,7 +122,7 @@ const CHARGE_TYPES = [
 
   { value: 'other', label: '其他工费' },
 
-  { value: 'wms_outbound', label: 'WMS出库单（历史）' },
+  { value: 'wms_outbound', label: '出库费' },
 
 ]
 
@@ -138,17 +140,7 @@ const SOURCE_OPTIONS = [
 
 
 
-const DESTINATION_OPTIONS = [
-
-  { value: 'jhb1', label: 'jhb1 · 约翰内斯堡' },
-
-  { value: 'jhb3', label: 'jhb3 · 约翰内斯堡' },
-
-  { value: 'cpt1', label: 'cpt1 · 开普敦' },
-
-  { value: 'cpt2', label: 'cpt2 · 开普敦' },
-
-  { value: 'dbn', label: 'dbn · 德班' },
+const OTHER_DEST_OPTIONS = [
 
   { value: 'cpt', label: 'CPT 自提' },
 
@@ -815,11 +807,16 @@ onMounted(async () => {
 
           placeholder="送达地点"
 
-          style="width: 180px"
+          style="width: 200px"
 
         >
 
-          <el-option v-for="d in DESTINATION_OPTIONS" :key="d.value" :label="d.label" :value="d.value" />
+          <el-option-group label="Takealot 目的仓">
+            <el-option v-for="d in TAKEALOT_DEST_OPTIONS" :key="d.value" :label="d.label" :value="d.value" />
+          </el-option-group>
+          <el-option-group label="其他">
+            <el-option v-for="d in OTHER_DEST_OPTIONS" :key="d.value" :label="d.label" :value="d.value" />
+          </el-option-group>
 
         </el-select>
 

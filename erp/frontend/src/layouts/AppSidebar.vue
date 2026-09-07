@@ -95,7 +95,7 @@ function showChannelHeader(group: NavGroup, index: number): boolean {
     </div>
 
     <div class="sidebar-footer">
-      <div class="sidebar-version">ERP 0.1</div>
+      <div class="sidebar-version">ERP 0.2</div>
     </div>
   </aside>
 </template>

@@ -1,7 +1,7 @@
 import {
-  destinationHubCityNeedles,
-  erpFbaCodesForOmsWarehouse,
+  inferTakealotDestFromWarehouseHint,
   outboundDestinationLabel,
+  takealotDestCategory,
 } from '../outbound/oms-warehouse.util'
 
 export type ChargeSkuItem = {
@@ -40,16 +40,28 @@ export function outboundChargeFulfillment(order: {
   warehouseCode?: string | null
   items?: Array<{ sku: string; productName?: string | null; qty: number; pickedQty?: number | null }>
 }): ChargeFulfillment {
+  const takealotDest = takealotDestCategory(order.fbaWarehouse)?.value
+  if (takealotDest) {
+    return { destination: takealotDest, skuItems: buildOutboundSkuItems(order.items) }
+  }
   const hub = outboundDestinationLabel(order)
-  const destination = joinPlace(hub, recipientPlace(order.recipientJson)) || order.warehouseCode || '—'
-  const skuItems = (order.items || [])
+  const destination = joinPlace(hub, recipientPlace(order.recipientJson))
+    || inferTakealotDestFromWarehouseHint(order.warehouseCode)
+    || order.warehouseCode
+    || '—'
+  return { destination, skuItems: buildOutboundSkuItems(order.items) }
+}
+
+function buildOutboundSkuItems(
+  items?: Array<{ sku: string; productName?: string | null; qty: number; pickedQty?: number | null }>,
+): ChargeSkuItem[] {
+  return (items || [])
     .map((item) => ({
       sku: String(item.sku || '').trim(),
       productName: String(item.productName || '').trim(),
       quantity: Number(item.pickedQty || item.qty || 0),
     }))
     .filter((item) => item.sku && item.quantity > 0)
-  return { destination, skuItems }
 }
 
 export function inboundChargeFulfillment(order: {
@@ -74,8 +86,11 @@ export function returnChargeFulfillment(order: {
   warehouseName?: string | null
   items?: Array<{ sku: string; productName?: string | null; quantity: number }>
 }): ChargeFulfillment {
-  const hub = outboundDestinationLabel({ fbaWarehouse: order.returnWarehouse })
-  const destination = joinPlace(hub !== '—' ? hub : order.returnWarehouse, order.warehouseName) || '—'
+  const takealotDest = takealotDestCategory(order.returnWarehouse)?.value
+  const destination = takealotDest
+    || inferTakealotDestFromWarehouseHint(order.returnWarehouse, order.warehouseName)
+    || order.returnWarehouse
+    || '—'
   const skuItems = (order.items || [])
     .map((item) => ({
       sku: String(item.sku || '').trim(),
@@ -91,11 +106,11 @@ export function formatSkuSummary(items: ChargeSkuItem[]): string {
 }
 
 export const CHARGE_DESTINATION_FILTER_OPTIONS = [
-  { value: 'jhb1', label: 'jhb1 · 约翰内斯堡' },
-  { value: 'jhb3', label: 'jhb3 · 约翰内斯堡' },
-  { value: 'cpt1', label: 'cpt1 · 开普敦' },
-  { value: 'cpt2', label: 'cpt2 · 开普敦' },
-  { value: 'dbn', label: 'dbn · 德班' },
+  { value: 'JHB', label: 'JHB' },
+  { value: 'JHB3', label: 'JHB3' },
+  { value: 'CPT1', label: 'CPT1' },
+  { value: 'CPT2', label: 'CPT2' },
+  { value: 'DBN', label: 'DBN' },
   { value: 'cpt', label: 'CPT 自提' },
   { value: 'fba', label: 'FBA 转运' },
   { value: 'local', label: '本地配送' },
@@ -116,24 +131,16 @@ export function resolveDestinationFilter(raw?: string | null): {
   const value = String(raw || '').trim()
   if (!value || value === 'all') return null
   const option = CHARGE_DESTINATION_FILTER_OPTIONS.find(
-    (item) => item.value === value || item.label === value,
+    (item) => item.value === value || item.label === value || item.value.toLowerCase() === value.toLowerCase(),
   )
   const key = (option?.value || value).trim()
   const keyLower = key.toLowerCase()
   if (DEST_TYPE_FILTERS.has(keyLower)) {
-    return { destTypes: [keyLower], fbaCodes: [], likes: [option?.label || key] }
+    return { destTypes: [keyLower], fbaCodes: [], likes: [] }
   }
-  const fbaCodes = erpFbaCodesForOmsWarehouse(keyLower)
-  if (fbaCodes?.length) {
-    return {
-      destTypes: [],
-      fbaCodes,
-      likes: [...new Set([
-        key,
-        option?.label || '',
-        ...destinationHubCityNeedles(keyLower),
-      ].filter(Boolean))],
-    }
+  const category = takealotDestCategory(option?.value || value)
+  if (category) {
+    return { destTypes: [], fbaCodes: [...category.fbaCodes], likes: [] }
   }
   return { destTypes: [], fbaCodes: [], likes: [value] }
 }

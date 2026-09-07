@@ -14,9 +14,10 @@ import {
   returnChargeFulfillment,
   type ChargeFulfillment,
 } from './billing-charge-fulfillment.util'
+import { inferTakealotDestFromWarehouseHint } from '../outbound/oms-warehouse.util'
 
 export const BILLING_CHARGE_TYPE_LABELS: Record<string, string> = {
-  wms_outbound: 'WMS出库单',
+  wms_outbound: '出库费',
   order_fee: '订单处理费',
   catalog_purchase: '货盘采购',
   picking: '拣货费',
@@ -260,13 +261,14 @@ export class BillingService {
       items: items.map((item) => {
         const extra = fulfillmentByRef.get(String(item.bizRef || ''))
         const warehouse = warehouseMap.get(String(item.warehouseCode || ''))
-        const warehousePlace = [warehouse?.warehouseName || item.warehouseCode, warehouse?.city]
-          .map((part) => String(part || '').trim())
-          .filter(Boolean)
-          .join(' · ')
+        const warehouseHint = inferTakealotDestFromWarehouseHint(
+          item.warehouseCode,
+          warehouse?.warehouseName,
+          warehouse?.city,
+        )
         return {
           ...item,
-          destination: extra?.destination || warehousePlace || '—',
+          destination: extra?.destination || warehouseHint || item.warehouseCode || '—',
           skuItems: extra?.skuItems || [],
         }
       }),
