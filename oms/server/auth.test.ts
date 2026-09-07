@@ -7,6 +7,7 @@ import   {
     authenticateApi,
     hasValidInternalToken,
     isLoginAllowed,
+    isImpersonatedSession,
     isPortalIdentityActive,
     isStrongPassword,
     issueAccessToken,
@@ -14,6 +15,7 @@ import   {
     normalizeUsername,
     requiredWritePermission,
     verifyAccessToken,
+    withImpersonationOverrides,
     type AuthClaims,
     type AuthenticatedRequest,
   } from './auth.js'
@@ -75,7 +77,10 @@ test('customer-less system administrator claims are valid', () => {
     mustChangePassword: true,
   }
   assert.equal(isLoginAllowed('active', undefined, true, 'sys_admin', null), true)
-  assert.deepEqual(verifyAccessToken(issueAccessToken(adminClaims)), adminClaims)
+  assert.deepEqual(verifyAccessToken(issueAccessToken(adminClaims)), {
+    ...adminClaims,
+    impersonatedBy: null,
+  })
 })
 
 test('authentication middleware returns 401 without a bearer token', () => {
@@ -125,7 +130,7 @@ test('accepts a valid bearer JWT', () => {
   let nextCalled = false
   authenticateApi(req, res, (() => { nextCalled = true }) as NextFunction)
   assert.equal(nextCalled, true)
-  assert.deepEqual(req.auth, claims)
+  assert.deepEqual(req.auth, { ...claims, impersonatedBy: null })
 })
 
 test('maps mutating OMS API paths to write permissions', () => {
@@ -138,4 +143,18 @@ test('maps mutating OMS API paths to write permissions', () => {
   assert.equal(requiredWritePermission('PUT', '/platform-sku'), 'platform:write')
   assert.equal(requiredWritePermission('POST', '/erp/returns'), 'returns:write')
   assert.equal(requiredWritePermission('POST', '/accounts'), 'account:manage')
+})
+
+test('impersonated sessions keep mustChangePassword disabled after refresh merge', () => {
+  const impersonated = withImpersonationOverrides(claims, {
+    impersonatedBy: 'admin-1',
+  })
+  assert.equal(impersonated.mustChangePassword, false)
+  assert.equal(impersonated.impersonatedBy, 'admin-1')
+  assert.equal(isImpersonatedSession(impersonated), true)
+
+  const token = issueAccessToken(impersonated, true)
+  const verified = verifyAccessToken(token)
+  assert.equal(verified.mustChangePassword, false)
+  assert.equal(verified.impersonatedBy, 'admin-1')
 })

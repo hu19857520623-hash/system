@@ -30,6 +30,25 @@ export type AuthClaims = {
   role: OmsRole
   permissions: string[]
   mustChangePassword: boolean
+  impersonatedBy?: string | null
+}
+
+export function isImpersonatedSession(
+  claims: Pick<AuthClaims, 'impersonatedBy'> | undefined | null,
+) {
+  return Boolean(claims?.impersonatedBy)
+}
+
+export function withImpersonationOverrides(
+  claims: AuthClaims,
+  tokenClaims?: Pick<AuthClaims, 'impersonatedBy'> | null,
+): AuthClaims {
+  if (!isImpersonatedSession(tokenClaims)) return claims
+  return {
+    ...claims,
+    mustChangePassword: false,
+    impersonatedBy: tokenClaims!.impersonatedBy ?? null,
+  }
 }
 
 export type AuthenticatedRequest = Request & { auth?: AuthClaims }
@@ -130,6 +149,7 @@ export function verifyAccessToken(token: string): AuthClaims {
     role: role as OmsRole,
     permissions,
     mustChangePassword: Boolean(decoded.mustChangePassword),
+    impersonatedBy: decoded.impersonatedBy == null ? null : String(decoded.impersonatedBy),
   }
   if (
     !claims.userId

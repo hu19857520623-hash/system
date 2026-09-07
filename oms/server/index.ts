@@ -12,6 +12,7 @@ import {
   customerScope,
   getJwtSecret,
   isLoginAllowed,
+  isImpersonatedSession,
   isPortalIdentityActive,
   isStrongPassword,
   isValidUsername,
@@ -27,6 +28,7 @@ import {
   type AuthClaims,
   type AuthenticatedRequest,
   type OmsRole,
+  withImpersonationOverrides,
 } from './auth.js'
 import { LoginRateLimiter } from './login-rate-limit.js'
 import { ensureConfiguredPortalAdmin, resolvePortalUserForLogin } from './bootstrap-admin.js'
@@ -487,6 +489,7 @@ async function refreshAuthenticatedIdentity(
   req: AuthenticatedRequest,
   res: express.Response,
 ) {
+  const tokenClaims = req.auth
   const identity = await loadPortalIdentity(req.auth!.userId)
   if (
     !identity
@@ -497,7 +500,7 @@ async function refreshAuthenticatedIdentity(
     res.status(401).json({ error: 'Session is no longer active' })
     return false
   }
-  req.auth = claimsForIdentity(identity)
+  req.auth = withImpersonationOverrides(claimsForIdentity(identity), tokenClaims)
   return true
 }
 
@@ -573,7 +576,7 @@ app.get('/api/auth/me', authenticateApi, async (req: AuthenticatedRequest, res) 
     if (!portalUser || !activeIdentity(portalUser)) {
       return res.status(401).json({ error: '账号已停用' })
     }
-    const claims = claimsForIdentity(portalUser)
+    const claims = withImpersonationOverrides(claimsForIdentity(portalUser), req.auth)
     res.json({
       ...claims,
       username: portalUser.username,
@@ -688,6 +691,7 @@ app.post(
       const claims = {
         ...claimsForIdentity(portalUser),
         mustChangePassword: false,
+        impersonatedBy: req.auth!.userId,
       }
       res.json(publicSession(
         issueAccessToken(claims, true),
@@ -800,6 +804,7 @@ app.use('/api', (req: AuthenticatedRequest, res, next) => {
       if (!assertApiWritePermission(req, res)) return
       if (
         req.auth?.mustChangePassword
+        && !isImpersonatedSession(req.auth)
         && req.path !== '/auth/me'
         && req.path !== '/auth/change-password'
         && req.path !== '/auth/logout'
