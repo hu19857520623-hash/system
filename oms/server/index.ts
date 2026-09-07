@@ -655,6 +655,53 @@ async function resetCustomerTemporaryPassword(
 }
 
 app.post(
+  '/api/accounts/:id/impersonate',
+  authenticateActiveApi,
+  requireSysAdmin,
+  async (req: AuthenticatedRequest, res) => {
+    try {
+      if (req.auth?.mustChangePassword) {
+        return res.status(403).json({
+          error: '首次登录必须先修改密码',
+          code: 'PASSWORD_CHANGE_REQUIRED',
+        })
+      }
+      const account = await prisma.customerAccount.findUnique({
+        where: { id: String(req.params.id) },
+      })
+      if (!account) return res.status(404).json({ error: '客户不存在' })
+
+      const portalUser = await prisma.portalUser.findFirst({
+        where: { customerId: account.id },
+        include: { customerAccount: true },
+      })
+      if (!portalUser) {
+        return res.status(400).json({ error: '该客户尚未开通 OMS 登录账号' })
+      }
+      if (portalUser.role === 'sys_admin') {
+        return res.status(400).json({ error: '不能模拟系统管理员账号' })
+      }
+      if (!activeIdentity(portalUser)) {
+        return res.status(400).json({ error: '该账号已停用，无法登录' })
+      }
+
+      const claims = {
+        ...claimsForIdentity(portalUser),
+        mustChangePassword: false,
+      }
+      res.json(publicSession(
+        issueAccessToken(claims, true),
+        claims,
+        portalUser,
+      ))
+    } catch (error) {
+      console.error('[accounts impersonate]', error)
+      res.status(500).json({ error: '模拟登录失败' })
+    }
+  },
+)
+
+app.post(
   [
     '/api/accounts/:id/reset-temporary-password',
     '/api/accounts/:id/reset-password',

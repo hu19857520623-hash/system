@@ -23,10 +23,12 @@ import {
 import {
   apiGet,
   apiPost,
+  getAdminReturnSession,
   getStoredAuthSession,
   isPersistentAuthSession,
   normalizeAuthSession,
   normalizeSessionUser,
+  storeAdminReturnSession,
   storeAuthSession,
   type AuthSession,
   type SessionUser,
@@ -49,6 +51,9 @@ interface RoleContextValue {
   authReady: boolean
   authToken: string
   login: (username: string, password: string, remember?: boolean) => Promise<SessionUser>
+  impersonateAs: (accountId: string) => Promise<SessionUser>
+  restoreAdminSession: () => Promise<void>
+  hasAdminReturnSession: boolean
   changePassword: (currentPassword: string, newPassword: string) => Promise<void>
   logout: () => Promise<void>
   can: (permission: Permission) => boolean
@@ -63,6 +68,7 @@ const RoleContext = createContext<RoleContextValue | null>(null)
 export function RoleProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<AuthSession | null>(getStoredAuthSession)
   const [authReady, setAuthReady] = useState(!session)
+  const [hasAdminReturnSession, setHasAdminReturnSession] = useState(() => Boolean(getAdminReturnSession()))
   const accounts = useSyncExternalStore(subscribeAccounts, getAccountsSnapshot, getAccountsSnapshot)
   const role: OmsRole = session?.user.role ?? 'ecommerce'
   const permissions = session?.user.permissions ?? []
@@ -114,10 +120,36 @@ export function RoleProvider({ children }: { children: React.ReactNode }) {
   const login = useCallback(async (username: string, password: string, remember = true) => {
     const response = await apiPost<unknown>('/auth/login', { username, password, remember })
     const next = normalizeAuthSession(response)
+    storeAdminReturnSession(null)
+    setHasAdminReturnSession(false)
     storeAuthSession(next, remember)
     setSession(next)
     setAuthReady(true)
     return next.user
+  }, [])
+
+  const impersonateAs = useCallback(async (accountId: string) => {
+    if (!session || session.user.role !== 'sys_admin') {
+      throw new Error('仅系统管理员可模拟登录客户账号')
+    }
+    storeAdminReturnSession(session)
+    setHasAdminReturnSession(true)
+    const response = await apiPost<unknown>(`/accounts/${accountId}/impersonate`, {})
+    const next = normalizeAuthSession(response)
+    storeAuthSession(next, true)
+    setSession(next)
+    setAuthReady(true)
+    return next.user
+  }, [session])
+
+  const restoreAdminSession = useCallback(async () => {
+    const adminSession = getAdminReturnSession()
+    if (!adminSession) throw new Error('无可恢复的管理员会话')
+    storeAdminReturnSession(null)
+    setHasAdminReturnSession(false)
+    storeAuthSession(adminSession, true)
+    setSession(adminSession)
+    setAuthReady(true)
   }, [])
 
   const changePassword = useCallback(async (currentPassword: string, newPassword: string) => {
@@ -179,6 +211,9 @@ export function RoleProvider({ children }: { children: React.ReactNode }) {
     authReady,
     authToken: session?.token ?? '',
     login,
+    impersonateAs,
+    restoreAdminSession,
+    hasAdminReturnSession,
     changePassword,
     logout,
     can: (permission: Permission) => can(role, permission, permissions),
@@ -192,6 +227,9 @@ export function RoleProvider({ children }: { children: React.ReactNode }) {
     session,
     authReady,
     login,
+    impersonateAs,
+    restoreAdminSession,
+    hasAdminReturnSession,
     changePassword,
     logout,
     accounts,

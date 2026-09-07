@@ -1,6 +1,7 @@
 const API_BASE = '/api'
 const LOCAL_SESSION_KEY = 'oms-auth-session'
 const SESSION_SESSION_KEY = 'oms-auth-session-tab'
+const ADMIN_RETURN_SESSION_KEY = 'oms-admin-return-session'
 
 export type SessionUser = {
   id: string
@@ -177,6 +178,22 @@ export function storeAuthSession(session: AuthSession | null, remember = true) {
   if (!session) return
   const storage = remember ? localStorage : sessionStorage
   storage.setItem(remember ? LOCAL_SESSION_KEY : SESSION_SESSION_KEY, JSON.stringify(session))
+}
+
+export function storeAdminReturnSession(session: AuthSession | null) {
+  sessionStorage.removeItem(ADMIN_RETURN_SESSION_KEY)
+  if (!session) return
+  sessionStorage.setItem(ADMIN_RETURN_SESSION_KEY, JSON.stringify(session))
+}
+
+export function getAdminReturnSession(): AuthSession | null {
+  try {
+    const raw = sessionStorage.getItem(ADMIN_RETURN_SESSION_KEY)
+    return raw ? normalizeAuthSession(JSON.parse(raw)) : null
+  } catch {
+    sessionStorage.removeItem(ADMIN_RETURN_SESSION_KEY)
+    return null
+  }
 }
 
 export async function fetchWithAuth(url: string, init?: RequestInit) {

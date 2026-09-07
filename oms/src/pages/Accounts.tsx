@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { Ban, Check, KeyRound, Pencil, Plus, Receipt } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { Ban, Check, KeyRound, LogIn, Pencil, Plus, Receipt } from 'lucide-react'
 import {
   Button, Card, PageHeader, Badge, Table, TableFooter, MonoCode,
 } from '../components/ui'
@@ -79,7 +80,8 @@ function templateName(priceTemplates: { id: string; name: string }[], id: string
 }
 
 export default function Accounts() {
-  const { accounts, updateAccount, toggleAccountStatus, can, authToken } = useRole()
+  const navigate = useNavigate()
+  const { accounts, updateAccount, toggleAccountStatus, can, authToken, impersonateAs, role } = useRole()
   const { priceTemplates, regionDispatchRules } = useFeeTemplates()
   const dispatchRules = enabledDispatchRules(regionDispatchRules)
   const [editing, setEditing] = useState<CustomerAccount | null>(null)
@@ -95,6 +97,7 @@ export default function Accounts() {
   const [resetError, setResetError] = useState('')
   const [resetSaving, setResetSaving] = useState(false)
   const [feedback, setFeedback] = useState<Feedback | null>(null)
+  const [impersonatingId, setImpersonatingId] = useState<string | null>(null)
 
   const openEdit = (acc: CustomerAccount) => {
     setEditing(acc)
@@ -232,6 +235,36 @@ export default function Accounts() {
     setResetDraft(EMPTY_RESET_DRAFT)
     setResetError('')
     setFeedback(null)
+  }
+
+  const loginAsAccount = async (account: CustomerAccount) => {
+    const username = account.portalUser?.username || account.portalUser?.loginEmail || account.code
+    if (account.status !== 'active') {
+      setFeedback({ kind: 'error', message: '该客户账号已禁用，无法登录。' })
+      return
+    }
+    if (!account.portalUser || account.portalUser.status !== 'active') {
+      setFeedback({ kind: 'error', message: '该客户尚未开通 OMS 登录账号。' })
+      return
+    }
+    const detail = account.portalUser.mustChangePassword
+      ? '该账号首次登录需改密；模拟登录会跳过改密页，便于管理员排查。'
+      : ''
+    if (!window.confirm(`以 ${account.code}（${username}）身份登录 OMS？${detail}`)) return
+
+    setImpersonatingId(account.id)
+    setFeedback(null)
+    try {
+      await impersonateAs(account.id)
+      navigate('/', { replace: true })
+    } catch (error) {
+      setFeedback({
+        kind: 'error',
+        message: error instanceof Error ? error.message : '模拟登录失败',
+      })
+    } finally {
+      setImpersonatingId(null)
+    }
   }
 
   const resetTemporaryPassword = async () => {
@@ -379,7 +412,18 @@ export default function Accounts() {
                     : acc.lastLoginAt}
                 </td>
                 <td className="table-cell">
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap gap-2">
+                    {role === 'sys_admin' && can('account:manage') && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={impersonatingId === acc.id || acc.status !== 'active' || !acc.portalUser}
+                        onClick={() => void loginAsAccount(acc)}
+                      >
+                        <LogIn className="h-3 w-3" />
+                        {impersonatingId === acc.id ? '登录中…' : '登录 OMS'}
+                      </Button>
+                    )}
                     {can('account:assign') && (
                       <Button variant="ghost" size="sm" onClick={() => openEdit(acc)}>
                         <Pencil className="h-3 w-3" /> 权限

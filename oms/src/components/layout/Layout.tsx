@@ -149,8 +149,11 @@ export default function Layout() {
     isLoggedIn,
     userName,
     userEmail,
+    customerCode: sessionCustomerCode,
     warehouse: sessionWarehouse,
     logout,
+    hasAdminReturnSession,
+    restoreAdminSession,
   } = useRole()
   const dataScope = useDataScope()
   const admin = isSysAdmin(role)
@@ -162,7 +165,7 @@ export default function Layout() {
   const activeAccount = dataScope.activeCustomerId
     ? accounts.find(a => a.id === dataScope.activeCustomerId)
     : undefined
-  const customerCode = admin ? '—' : dataScope.activeCustomerCode
+  const customerCode = admin ? '—' : (sessionCustomerCode || dataScope.activeCustomerCode)
   const warehouse = activeAccount?.warehouse
     ? warehouseLabel(activeAccount.warehouse)
     : sessionWarehouse
@@ -389,6 +392,23 @@ export default function Layout() {
             </button>
           </div>
         </header>
+
+        {hasAdminReturnSession && !admin && (
+          <div className="flex shrink-0 items-center justify-between gap-3 border-b border-amber-200 bg-amber-50 px-6 py-2 text-sm text-amber-900">
+            <span>
+              当前正以客户 <strong>{customerCode}</strong> 身份浏览 OMS（管理员模拟登录）
+            </span>
+            <button
+              type="button"
+              className="rounded-lg border border-amber-300 bg-white px-3 py-1 text-xs font-medium text-amber-900 hover:bg-amber-100"
+              onClick={() => {
+                void restoreAdminSession().then(() => navigate('/accounts', { replace: true }))
+              }}
+            >
+              返回管理员
+            </button>
+          </div>
+        )}
 
         <main className="content-bg flex-1 overflow-y-auto scrollbar-thin p-6 lg:p-8">
           <Outlet />
