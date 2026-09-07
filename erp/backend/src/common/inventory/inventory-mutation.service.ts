@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common'
+import { lotBatchNo, roundMoney, unitCostRmb } from './inventory-lot-cost.util'
 import type {
   InventoryTx,
   LocationDeductLine,
@@ -65,27 +66,58 @@ export class InventoryMutationService {
     })
   }
 
-  /** 库位加库存（存在则累加）并同步仓级 */
+  private money(v: unknown): number | null {
+    if (v == null || v === '') return null
+    const n = Number(v)
+    return Number.isFinite(n) ? roundMoney(n) : null
+  }
+
+  private async refreshAvgCost(tx: InventoryTx, productId: bigint, warehouseCode: string) {
+    const lots = await tx.inventoryLocation.findMany({
+      where: { productId, warehouseCode, qty: { gt: 0 } },
+      select: { qty: true, unitCostRmb: true },
+    })
+    const totalQty = lots.reduce((sum, lot) => sum + lot.qty, 0)
+    const avg = totalQty > 0
+      ? roundMoney(lots.reduce((sum, lot) => sum + lot.qty * Number(lot.unitCostRmb || 0), 0) / totalQty)
+      : null
+    await tx.inventory.updateMany({
+      where: { productId, warehouseCode },
+      data: { avgCostRmb: avg },
+    })
+  }
+
+  /** 库位加库存（同入库批次累加，不同批次拆行）并同步仓级 */
   async addLocationStock(
     tx: InventoryTx,
     params: LocationStockParams,
     meta: { changeType: string; operatorId?: number; referenceNo?: string; remark?: string },
   ) {
-    const invLoc = await tx.inventoryLocation.findFirst({
-      where: {
-        productId: params.productId,
-        locationId: params.locationId,
-        batchNo: params.batchNo ?? null,
-      },
+    const inboundNo = String(params.inboundNo || '').trim() || null
+    const batchNo = lotBatchNo(params.batchNo || inboundNo)
+    const costRmb = this.money(params.costRmb)
+    const seaFreightPerUnit = this.money(params.seaFreightPerUnit)
+    const domesticFeePerUnit = this.money(params.domesticFeePerUnit)
+    const unitCost = this.money(params.unitCostRmb) ?? unitCostRmb({
+      costRmb,
+      seaFreightPerUnit,
+      domesticFeePerUnit,
     })
+
+    const invLoc = batchNo
+      ? await tx.inventoryLocation.findFirst({
+          where: {
+            productId: params.productId,
+            locationId: params.locationId,
+            batchNo,
+          },
+        })
+      : null
 
     if (invLoc) {
       await tx.inventoryLocation.update({
         where: { id: invLoc.id },
-        data: {
-          qty: invLoc.qty + params.qty,
-          inboundNo: params.inboundNo ?? invLoc.inboundNo,
-        },
+        data: { qty: invLoc.qty + params.qty },
       })
     } else {
       await tx.inventoryLocation.create({
@@ -96,8 +128,13 @@ export class InventoryMutationService {
           locationId: params.locationId,
           locationCode: params.locationCode,
           qty: params.qty,
-          batchNo: params.batchNo ?? null,
-          inboundNo: params.inboundNo ?? null,
+          batchNo,
+          inboundNo,
+          costRmb,
+          seaFreightPerUnit,
+          domesticFeePerUnit,
+          unitCostRmb: unitCost,
+          receivedAt: new Date(),
         },
       })
     }
@@ -112,6 +149,7 @@ export class InventoryMutationService {
       referenceNo: meta.referenceNo,
       remark: meta.remark ?? params.locationCode,
     })
+    await this.refreshAvgCost(tx, params.productId, params.warehouseCode)
   }
 
   /** FIFO 扣减库位库存，返回各批次扣减明细 */
@@ -121,7 +159,7 @@ export class InventoryMutationService {
   ): Promise<LocationDeductLine[]> {
     const stocks = await tx.inventoryLocation.findMany({
       where: { locationId: params.locationId, sku: params.sku, qty: { gt: 0 } },
-      orderBy: { id: 'asc' },
+      orderBy: [{ receivedAt: 'asc' }, { id: 'asc' }],
     })
     const available = stocks.reduce((sum, stock) => sum + stock.qty, 0)
     if (available < params.qty) {
@@ -140,8 +178,20 @@ export class InventoryMutationService {
       if (deducted.count !== 1) {
         throw new BadRequestException('库位库存已变化，请刷新后重试')
       }
-      lines.push({ inventoryLocationId: stock.id, qty: deductQty })
+      lines.push({
+        inventoryLocationId: stock.id,
+        qty: deductQty,
+        inboundNo: stock.inboundNo || null,
+        batchNo: stock.batchNo || null,
+        costRmb: stock.costRmb != null ? Number(stock.costRmb) : null,
+        seaFreightPerUnit: stock.seaFreightPerUnit != null ? Number(stock.seaFreightPerUnit) : null,
+        domesticFeePerUnit: stock.domesticFeePerUnit != null ? Number(stock.domesticFeePerUnit) : null,
+        unitCostRmb: stock.unitCostRmb != null ? Number(stock.unitCostRmb) : null,
+      })
       remaining -= deductQty
+    }
+    if (stocks[0]) {
+      await this.refreshAvgCost(tx, stocks[0].productId, stocks[0].warehouseCode)
     }
     return lines
   }
@@ -188,6 +238,7 @@ export class InventoryMutationService {
       referenceNo: params.referenceNo,
       remark: `盘点调整 · ${params.locationCode}`,
     })
+    await this.refreshAvgCost(tx, params.productId, params.warehouseCode)
   }
 
   /** 发运扣减：totalQty + lockedQty 同步减少 */

@@ -1138,7 +1138,7 @@ export class InventoryService {
     const orders = outboundNos.length
       ? await this.prisma.outboundOrder.findMany({
           where: { outboundNo: { in: outboundNos } },
-          include: { items: true },
+          include: { items: { include: { pickAllocations: { orderBy: { id: 'asc' } } } } },
         })
       : []
     const operators = operatorIds.length
@@ -1200,6 +1200,12 @@ export class InventoryService {
         statusLabel: order ? STATUS_LABEL[order.status] || order.status : '—',
         operatorName: r.operatorId ? operatorMap.get(Number(r.operatorId)) || '—' : '—',
         locationCode: line?.locationCode || locationMatch?.[1] || '',
+        inboundLots: (line?.pickAllocations || [])
+          .map((a) => `${a.inboundNo || a.batchNo || '期初'}×${a.qty}`)
+          .join('；'),
+        unitCostRmb: line?.pickAllocations?.[0]?.unitCostRmb != null
+          ? Number(line.pickAllocations[0].unitCostRmb)
+          : null,
         remark: r.remark || '',
         beforeQty: r.beforeQty,
         afterQty: r.afterQty,
@@ -1210,7 +1216,6 @@ export class InventoryService {
   async queryByLocation(q: { warehouseCode?: string; sku?: string; locationCode?: string }) {
     const where: any = {
       qty: { gt: 0 },
-      inboundNo: { startsWith: 'IN-' },
     }
     if (q.warehouseCode) where.warehouseCode = q.warehouseCode
     if (q.sku) where.sku = q.sku
@@ -1239,6 +1244,11 @@ export class InventoryService {
       qty: r.qty,
       batchNo: r.batchNo,
       inboundNo: r.inboundNo,
+      costRmb: r.costRmb != null ? Number(r.costRmb) : null,
+      seaFreightPerUnit: r.seaFreightPerUnit != null ? Number(r.seaFreightPerUnit) : null,
+      domesticFeePerUnit: r.domesticFeePerUnit != null ? Number(r.domesticFeePerUnit) : null,
+      unitCostRmb: r.unitCostRmb != null ? Number(r.unitCostRmb) : null,
+      receivedAt: r.receivedAt,
       updatedAt: r.updatedAt,
     }))
   }
@@ -1467,6 +1477,11 @@ export class InventoryService {
                 qty: newQty,
                 batchNo: row.batchNo,
                 inboundNo: row.inboundNo,
+                costRmb: row.costRmb,
+                seaFreightPerUnit: row.seaFreightPerUnit,
+                domesticFeePerUnit: row.domesticFeePerUnit,
+                unitCostRmb: row.unitCostRmb,
+                receivedAt: row.receivedAt,
               },
             })
           }
@@ -1604,48 +1619,36 @@ export class InventoryService {
     const remark = this.formatCustomerRemark(customerCode, body.remark)
 
     const result = await this.prisma.$transaction(async (tx) => {
-      const invLoc = await tx.inventoryLocation.findFirst({
-        where: { productId: product.id, locationId: loc.id, batchNo: null },
-      })
-
-      let lineId: bigint
-      let lineQty: number
-      if (invLoc) {
-        lineQty = invLoc.qty + qty
-        await tx.inventoryLocation.update({
-          where: { id: invLoc.id },
-          data: { qty: lineQty },
-        })
-        lineId = invLoc.id
-      } else {
-        const created = await tx.inventoryLocation.create({
-          data: {
-            productId: product.id,
-            sku,
-            warehouseCode,
-            locationId: loc.id,
-            locationCode: loc.locationCode,
-            qty,
-          },
-        })
-        lineId = created.id
-        lineQty = qty
-      }
-
-      await this.applyWarehouseQtyDelta(tx, product.id, sku, warehouseCode, qty, operatorId, {
-        changeType: 'adjust',
-        remark: remark || `库位 ${loc.locationCode} 增加库存 +${qty}`,
-        referenceNo: refNo,
-      })
+      await this.inventoryMutation.addLocationStock(
+        tx,
+        {
+          productId: product.id,
+          sku,
+          warehouseCode,
+          locationId: loc.id,
+          locationCode: loc.locationCode,
+          qty,
+          batchNo: refNo,
+          inboundNo: null,
+          costRmb: product.costRmb != null ? Number(product.costRmb) : 0,
+          seaFreightPerUnit: product.seaFreightPerUnit != null ? Number(product.seaFreightPerUnit) : 0,
+          domesticFeePerUnit: product.domesticFeePerUnit != null ? Number(product.domesticFeePerUnit) : 0,
+        },
+        {
+          changeType: 'adjust',
+          operatorId,
+          referenceNo: refNo,
+          remark: remark || `库位 ${loc.locationCode} 增加库存 +${qty}`,
+        },
+      )
 
       return {
-        id: Number(lineId),
         sku,
         warehouseCode,
         locationCode: loc.locationCode,
-        qty: lineQty,
-        batchNo: null,
-        inboundNo: invLoc?.inboundNo ?? null,
+        qty,
+        batchNo: refNo,
+        inboundNo: null as string | null,
       }
     })
 

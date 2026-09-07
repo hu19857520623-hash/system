@@ -631,14 +631,23 @@ watch([page, pageSize], () => load())
     </el-card>
 
     <!-- 库位分布 -->
-    <el-dialog v-model="locDialogVisible" :title="`库位分布 · ${locDialogSku}`" width="520px">
+    <el-dialog v-model="locDialogVisible" :title="`库位分布 · ${locDialogSku}`" width="720px">
       <el-table :data="skuLocations" border size="small">
-        <el-table-column prop="locationCode" label="库位" width="130">
+        <el-table-column prop="locationCode" label="库位" width="110">
           <template #default="{ row }"><span class="mono">{{ row.locationCode }}</span></template>
         </el-table-column>
-        <el-table-column prop="qty" label="数量" width="80" align="right" />
-        <el-table-column prop="inboundNo" label="入库单" min-width="120">
-          <template #default="{ row }"><span class="mono">{{ row.inboundNo || '—' }}</span></template>
+        <el-table-column prop="qty" label="数量" width="72" align="right" />
+        <el-table-column prop="inboundNo" label="发货批次" min-width="130">
+          <template #default="{ row }"><span class="mono">{{ row.inboundNo || row.batchNo || '期初' }}</span></template>
+        </el-table-column>
+        <el-table-column label="采购成本" width="88" align="right">
+          <template #default="{ row }">{{ row.costRmb != null ? `¥${Number(row.costRmb).toFixed(2)}` : '—' }}</template>
+        </el-table-column>
+        <el-table-column label="海运/件" width="88" align="right">
+          <template #default="{ row }">{{ row.seaFreightPerUnit != null ? `¥${Number(row.seaFreightPerUnit).toFixed(2)}` : '—' }}</template>
+        </el-table-column>
+        <el-table-column label="单位成本" width="88" align="right">
+          <template #default="{ row }">{{ row.unitCostRmb != null ? `¥${Number(row.unitCostRmb).toFixed(2)}` : '—' }}</template>
         </el-table-column>
         <el-table-column v-if="canAdjust" label="操作" width="72">
           <template #default="{ row }">
@@ -650,12 +659,18 @@ watch([page, pageSize], () => load())
     </el-dialog>
 
     <!-- 出库记录 -->
-    <el-dialog v-model="outboundLogVisible" :title="`出库记录 · ${outboundLogSku}`" width="760px" destroy-on-close>
+    <el-dialog v-model="outboundLogVisible" :title="`出库记录 · ${outboundLogSku}`" width="920px" destroy-on-close>
       <el-table v-loading="outboundLogLoading" :data="outboundLogRows" border size="small" max-height="400">
         <el-table-column prop="outboundNo" label="出库单" width="130" />
-        <el-table-column prop="qty" label="数量" width="80" align="right" />
+        <el-table-column prop="qty" label="数量" width="72" align="right" />
         <el-table-column prop="customerName" label="客户" min-width="100" />
-        <el-table-column prop="locationCode" label="库位" width="110" />
+        <el-table-column prop="locationCode" label="库位" width="100" />
+        <el-table-column prop="inboundLots" label="扣减批次" min-width="160">
+          <template #default="{ row }"><span class="mono">{{ row.inboundLots || '—' }}</span></template>
+        </el-table-column>
+        <el-table-column label="批次成本" width="92" align="right">
+          <template #default="{ row }">{{ row.unitCostRmb != null ? `¥${Number(row.unitCostRmb).toFixed(2)}` : '—' }}</template>
+        </el-table-column>
       </el-table>
     </el-dialog>
 

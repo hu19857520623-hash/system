@@ -434,6 +434,11 @@ export class OutboundService {
           locationCode: a.locationCode,
           qty: a.qty,
           status: a.status,
+          inboundNo: a.inboundNo || '',
+          batchNo: a.batchNo || '',
+          costRmb: a.costRmb != null ? Number(a.costRmb) : null,
+          seaFreightPerUnit: a.seaFreightPerUnit != null ? Number(a.seaFreightPerUnit) : null,
+          unitCostRmb: a.unitCostRmb != null ? Number(a.unitCostRmb) : null,
         })),
       })),
       totalQty: (r.items || []).reduce((s: number, i: any) => s + i.qty, 0),
@@ -1074,7 +1079,7 @@ export class OutboundService {
   private suggestPickLocations(warehouseCode: string, sku: string, needQty: number) {
     return this.prisma.inventoryLocation.findMany({
       where: { warehouseCode, sku, qty: { gt: 0 } },
-      orderBy: [{ locationCode: 'asc' }],
+      orderBy: [{ receivedAt: 'asc' }, { id: 'asc' }],
     }).then((locs) => {
       const suggestions: { locationCode: string; pickQty: number; available: number }[] = []
       const byLocation = new Map<string, number>()
@@ -1307,6 +1312,12 @@ th{background:#f5f5f5}
                 inventoryLocationId: deducted.inventoryLocationId,
                 locationCode: allocation.locationCode,
                 qty: deducted.qty,
+                inboundNo: deducted.inboundNo,
+                batchNo: deducted.batchNo,
+                costRmb: deducted.costRmb,
+                seaFreightPerUnit: deducted.seaFreightPerUnit,
+                domesticFeePerUnit: deducted.domesticFeePerUnit,
+                unitCostRmb: deducted.unitCostRmb,
                 operatorId: operatorId ? BigInt(operatorId) : null,
               },
             })

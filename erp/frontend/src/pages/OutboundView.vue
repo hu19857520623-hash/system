@@ -186,6 +186,18 @@ function cargoTypeLabel(row: any) {
   return row.cargoTypeLabel || row.cargoType || '—'
 }
 
+function lotSummary(row: any) {
+  const allocs = Array.isArray(row?.pickAllocations) ? row.pickAllocations : []
+  if (!allocs.length) return '—'
+  return allocs
+    .map((a: any) => {
+      const lot = a.inboundNo || a.batchNo || '期初'
+      const cost = a.unitCostRmb != null ? ` ¥${Number(a.unitCostRmb).toFixed(2)}` : ''
+      return `${lot}×${a.qty}${cost}`
+    })
+    .join('；')
+}
+
 function customerLabel(row: any) {
   if (row.customerCode && row.customerName && row.customerName !== '—') {
     return `${row.customerCode} · ${row.customerName}`
@@ -1554,6 +1566,11 @@ function statusTag(status: string) {
             </el-table-column>
             <el-table-column prop="locationCode" label="库位" width="100">
               <template #default="{ row }"><span class="mono">{{ row.locationCode || '—' }}</span></template>
+            </el-table-column>
+            <el-table-column label="发货批次" min-width="180">
+              <template #default="{ row }">
+                <span class="mono">{{ lotSummary(row) }}</span>
+              </template>
             </el-table-column>
           </el-table>
         </template>

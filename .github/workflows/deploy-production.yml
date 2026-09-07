@@ -164,6 +164,11 @@ jobs:
           test -f "$inbound_fee_sql" || { echo "Missing $inbound_fee_sql"; exit 1; }
           cat "$inbound_fee_sql" | docker compose exec -T mysql mysql -uroot -p"$mysql_pw" --batch takealot_erp
 
+          echo '=== Apply inventory lot cost schema ==='
+          lot_cost_sql="${PWD}/backend/prisma/scripts/migrate_inventory_lot_cost.sql"
+          test -f "$lot_cost_sql" || { echo "Missing $lot_cost_sql"; exit 1; }
+          cat "$lot_cost_sql" | docker compose exec -T mysql mysql -uroot -p"$mysql_pw" --batch takealot_erp
+
           echo '=== Apply Anheng WCS schema ==='
           anheng_sql="${PWD}/backend/prisma/scripts/migrate_anheng_wcs.sql"
           test -f "$anheng_sql" || { echo "Missing $anheng_sql"; exit 1; }

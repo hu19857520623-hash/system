@@ -26,11 +26,21 @@ export type LocationStockParams = {
   qty: number
   batchNo?: string | null
   inboundNo?: string | null
+  costRmb?: number | null
+  seaFreightPerUnit?: number | null
+  domesticFeePerUnit?: number | null
+  unitCostRmb?: number | null
 }
 
 export type LocationDeductLine = {
   inventoryLocationId: bigint
   qty: number
+  inboundNo: string | null
+  batchNo: string | null
+  costRmb: number | null
+  seaFreightPerUnit: number | null
+  domesticFeePerUnit: number | null
+  unitCostRmb: number | null
 }
 
 export type StocktakeAdjustParams = {

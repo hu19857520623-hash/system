@@ -272,6 +272,22 @@ export class InboundService {
     const inboundNo = data.inboundNo || 'IN-' + Date.now().toString().slice(-8)
     const warehouseNo = String(data.warehouseNo || '').trim() || this.extractWarehouseNo(data.remark) || undefined
     const trackingNo = String(data.trackingNo || '').trim() || undefined
+    const freightLines: any[] = data.freightLines || data.catalogSync || []
+    const freightBySku = new Map<string, { sea: number; domestic: number; cost?: number }>()
+    for (const line of freightLines) {
+      const sku = String(line?.sku || '').trim()
+      if (!sku) continue
+      freightBySku.set(sku, {
+        sea: Number(line.seaFreightPerUnit ?? line.unitFreight ?? line.seaFreight ?? 0) || 0,
+        domestic: Number(line.domesticFeePerUnit ?? line.domesticFee ?? 0) || 0,
+        cost: line.costRmb != null && line.costRmb !== '' ? Number(line.costRmb) : undefined,
+      })
+    }
+    const products = await this.prisma.product.findMany({
+      where: { id: { in: [...skuTotals.values()].map((row) => row.productId) } },
+      select: { id: true, costRmb: true, seaFreightPerUnit: true, domesticFeePerUnit: true },
+    })
+    const productCostMap = new Map(products.map((p) => [Number(p.id), p]))
 
     return this.prisma.$transaction(async (tx) => {
       for (const [sku, { productId, qty }] of skuTotals) {
@@ -296,12 +312,24 @@ export class InboundService {
           remark: data.remark,
           status: 'pending_receipt',
           items: {
-            create: lines.map((l) => ({
-              productId: BigInt(l.productId ?? 0),
-              sku: l.sku ?? '',
-              expectedQty: Number(l.expectedQty ?? l.qty ?? 0),
-              remark: l.remark,
-            })),
+            create: lines.map((l) => {
+              const sku = String(l.sku || '').trim()
+              const productId = Number(l.productId ?? 0)
+              const freight = freightBySku.get(sku)
+              const product = productCostMap.get(productId)
+              const costRmb = freight?.cost ?? (product?.costRmb != null ? Number(product.costRmb) : undefined)
+              const seaFreightPerUnit = freight?.sea || (product?.seaFreightPerUnit != null ? Number(product.seaFreightPerUnit) : 0)
+              const domesticFeePerUnit = freight?.domestic || (product?.domesticFeePerUnit != null ? Number(product.domesticFeePerUnit) : 0)
+              return {
+                productId: BigInt(l.productId ?? 0),
+                sku,
+                expectedQty: Number(l.expectedQty ?? l.qty ?? 0),
+                remark: l.remark,
+                costRmb: costRmb != null && Number.isFinite(costRmb) ? costRmb : undefined,
+                seaFreightPerUnit,
+                domesticFeePerUnit,
+              }
+            }),
           },
         },
         include: { items: true },
@@ -1203,6 +1231,10 @@ export class InboundService {
               locationCode: loc.locationCode,
               qty: line.qty,
               inboundNo: order.inboundNo,
+              batchNo: order.inboundNo,
+              costRmb: item.costRmb != null ? Number(item.costRmb) : undefined,
+              seaFreightPerUnit: item.seaFreightPerUnit != null ? Number(item.seaFreightPerUnit) : undefined,
+              domesticFeePerUnit: item.domesticFeePerUnit != null ? Number(item.domesticFeePerUnit) : undefined,
             },
             {
               changeType: 'putaway',
