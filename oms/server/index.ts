@@ -33,6 +33,10 @@ import {
 import { LoginRateLimiter } from './login-rate-limit.js'
 import { ensureConfiguredPortalAdmin, resolvePortalUserForLogin } from './bootstrap-admin.js'
 import {
+  isValidPortalLoginPhone,
+  normalizePortalLoginPhone,
+} from './portal-login.util.js'
+import {
   refundOutboundPreDeduct,
   settleOutboundFees,
   type OutboundFeesPayload,
@@ -526,7 +530,7 @@ app.post('/api/auth/login', async (req, res) => {
     const username = requestedUsername(req.body)
     const password = String(req.body?.password || '')
     if (!username || !password) {
-      return res.status(400).json({ error: '请输入登录账号和密码' })
+      return res.status(400).json({ error: '请输入手机号和密码' })
     }
     const rateKey = `${req.ip || req.socket.remoteAddress || 'unknown'}:${username}`
     try {
@@ -646,12 +650,7 @@ async function resetCustomerTemporaryPassword(
     include: { portalUser: { select: { username: true } } },
   })
   if (!account) return { status: 404, error: '客户不存在' } as const
-  const username = normalizeUsername(requestedLogin) || account.portalUser?.username || ''
-  if (!isValidUsername(username)) {
-    return { status: 400, error: '登录账号须为 6-50 位字母、数字、点、下划线或短横线' } as const
-  }
   const updated = await resetOmsPortalPassword(account.code, {
-    username,
     temporaryPassword,
   })
   return { status: 200, data: updated } as const
@@ -2278,17 +2277,20 @@ app.post('/api/accounts', requireSysAdmin, async (req, res) => {
       loginEmail?: string
       temporaryPassword?: string
     }
-    const username = requestedUsername(body)
     const required: [string, unknown][] = [
       ['customerName', body.customerName],
       ['contactEmail', body.contactEmail],
+      ['contactPhone', body.contactPhone],
       ['omsType', body.omsType],
       ['warehouse', body.warehouse],
-      ['username', username],
       ['temporaryPassword', body.temporaryPassword],
     ]
     const missing = required.find(([, value]) => !String(value || '').trim())
     if (missing) return res.status(400).json({ error: `缺少 ${missing[0]}` })
+    const contactPhone = String(body.contactPhone || '').trim()
+    if (!isValidPortalLoginPhone(normalizePortalLoginPhone(contactPhone))) {
+      return res.status(400).json({ error: '联系电话须为至少 6 位数字，作为 OMS 登录手机号' })
+    }
     const customerCode = String(body.customerCode || '').trim()
     if (customerCode && (customerCode.length > 30 || !/^[A-Za-z0-9_-]+$/.test(customerCode))) {
       return res.status(400).json({ error: '客户代码最多 30 位，且只能包含字母、数字、下划线和短横线' })
@@ -2302,7 +2304,7 @@ app.post('/api/accounts', requireSysAdmin, async (req, res) => {
     if (String(body.contactName || '').trim().length > 50) {
       return res.status(400).json({ error: '联系人最多 50 个字符' })
     }
-    if (String(body.contactPhone || '').trim().length > 30) {
+    if (contactPhone.length > 30) {
       return res.status(400).json({ error: '联系电话最多 30 个字符' })
     }
     if (String(body.warehouse).trim().length > 100) {
@@ -2310,9 +2312,6 @@ app.post('/api/accounts', requireSysAdmin, async (req, res) => {
     }
     if (!['ecommerce', 'catalog', 'hybrid'].includes(String(body.omsType))) {
       return res.status(400).json({ error: '客户类型无效' })
-    }
-    if (!isValidUsername(username)) {
-      return res.status(400).json({ error: '登录账号须为 6-50 位字母、数字、点、下划线或短横线' })
     }
     const contactEmail = normalizeEmail(body.contactEmail)
     if (contactEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail)) {
@@ -2341,11 +2340,10 @@ app.post('/api/accounts', requireSysAdmin, async (req, res) => {
       companyName: String(body.companyName || '').trim() || undefined,
       contactEmail,
       contactName: String(body.contactName || '').trim() || undefined,
-      contactPhone: String(body.contactPhone || '').trim() || undefined,
+      contactPhone,
       omsType: body.omsType!,
       warehouse: String(body.warehouse).trim(),
       permissions,
-      username,
       temporaryPassword: String(body.temporaryPassword),
     })
     res.status(201).json(provisioned)
@@ -2427,14 +2425,6 @@ app.patch('/api/accounts/:id', requireSysAdmin, async (req, res) => {
     if (patch.permissionTemplate !== undefined) {
       erpPatch.permissionTemplate = String(patch.permissionTemplate).trim()
     }
-    if (patch.username !== undefined || patch.loginEmail !== undefined) {
-      const value = requestedUsername(patch)
-      if (!isValidUsername(value)) {
-        return res.status(400).json({ error: '登录账号须为 6-50 位字母、数字、点、下划线或短横线' })
-      }
-      erpPatch.username = value
-    }
-
     if (Object.keys(erpPatch).length > 0) {
       await updateOmsCustomer(existing.code, erpPatch)
     }

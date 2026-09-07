@@ -1,6 +1,7 @@
 import type { PortalUser, PrismaClient } from '@prisma/client'
 import bcrypt from 'bcryptjs'
 import { isStrongPassword, isValidUsername, normalizeUsername } from './auth.js'
+import { normalizePortalLoginIdentifier } from './portal-login.util.js'
 
 export const LEGACY_BOOTSTRAP_USERNAMES = [
   'admin@oms.local',
@@ -136,8 +137,9 @@ export async function ensureConfiguredPortalAdmin(prisma: PrismaClient) {
 
 export async function resolvePortalUserForLogin(
   prisma: PrismaClient,
-  username: string,
+  rawUsername: string,
 ) {
+  const username = normalizePortalLoginIdentifier(rawUsername)
   const direct = await prisma.portalUser.findUnique({
     where: { username },
     include: { customerAccount: true },

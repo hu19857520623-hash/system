@@ -57,9 +57,9 @@ const editingId = ref<number | null>(null)
 const warehouseOptions = ref<{ code: string; name: string }[]>([])
 const passwordVisible = ref(false)
 const passwordCustomer = ref<ReturnType<typeof mapCustomer> | null>(null)
-const passwordForm = ref({ username: '', temporaryPassword: '', confirmPassword: '' })
+const passwordForm = ref({ temporaryPassword: '', confirmPassword: '' })
 const createSuccessVisible = ref(false)
-const createSuccess = ref<{ customerCode: string; username: string } | null>(null)
+const createSuccess = ref<{ customerCode: string; loginPhone: string } | null>(null)
 
 const emptyForm = () => ({
   customerCode: '',
@@ -74,7 +74,6 @@ const emptyForm = () => ({
   permissionMode: 'template' as 'template' | 'explicit',
   permissionTemplate: 'ecommerce' as OmsCustomerType,
   permissions: [...OMS_PERMISSION_TEMPLATES.ecommerce] as OmsPortalPermission[],
-  username: '',
   temporaryPassword: '',
   confirmPassword: '',
 })
@@ -87,17 +86,20 @@ const passwordFormRef = ref<FormInstance>()
 type ValidationCallback = (error?: Error) => void
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-const USERNAME_PATTERN = /^[A-Za-z0-9._-]+$/
 
-function usernameValidator(required: boolean) {
+function normalizePortalLoginPhone(value: unknown) {
+  return String(value ?? '').replace(/\D/g, '')
+}
+
+function portalLoginPhoneValidator(required: boolean) {
   return (_rule: unknown, value: unknown, callback: ValidationCallback) => {
-    const username = String(value ?? '').trim().toLowerCase()
-    if (!username) {
-      callback(required ? new Error('请填写 OMS 登录账号') : undefined)
-    } else if (username.length < 6) {
-      callback(new Error('登录账号至少 6 个字符'))
-    } else if (username.length > 50 || !USERNAME_PATTERN.test(username)) {
-      callback(new Error('登录账号须为 6-50 位字母、数字、点、下划线或短横线'))
+    const digits = normalizePortalLoginPhone(value)
+    if (!digits) {
+      callback(required ? new Error('请填写联系电话（OMS 登录手机号）') : undefined)
+    } else if (digits.length < 6) {
+      callback(new Error('联系电话须至少 6 位数字'))
+    } else if (digits.length > 50) {
+      callback(new Error('联系电话数字不能超过 50 位'))
     } else {
       callback()
     }
@@ -173,12 +175,11 @@ const createRules: FormRules = {
   companyName: [{ max: 200, message: '公司名称不能超过 200 个字符', trigger: 'blur' }],
   contactEmail: [{ validator: emailValidator('联系邮箱', false, 120), trigger: 'blur' }],
   contactName: [{ max: 50, message: '联系人不能超过 50 个字符', trigger: 'blur' }],
-  contactPhone: [{ max: 30, message: '联系电话不能超过 30 个字符', trigger: 'blur' }],
+  contactPhone: [{ validator: portalLoginPhoneValidator(true), trigger: 'blur' }],
   omsType: [{ required: true, message: '请选择 OMS 客户类型', trigger: 'change' }],
   warehouse: [{ validator: requiredTextValidator('默认仓库', 100), trigger: 'change' }],
   permissionTemplate: [{ required: true, message: '请选择权限模板', trigger: 'change' }],
   permissions: [{ validator: permissionsValidator, trigger: 'change' }],
-  username: [{ validator: usernameValidator(true), trigger: 'blur' }],
   temporaryPassword: [{ validator: temporaryPasswordValidator, trigger: 'blur' }],
   confirmPassword: [{ validator: createPasswordConfirmationValidator, trigger: 'blur' }],
 }
@@ -192,7 +193,6 @@ const editRules: FormRules = {
 }
 
 const passwordRules: FormRules = {
-  username: [{ validator: usernameValidator(true), trigger: 'blur' }],
   temporaryPassword: [{ validator: temporaryPasswordValidator, trigger: 'blur' }],
   confirmPassword: [{ validator: resetPasswordConfirmationValidator, trigger: 'blur' }],
 }
@@ -227,7 +227,7 @@ function handleCreateClosed() {
 }
 
 function handlePasswordClosed() {
-  passwordForm.value = { username: '', temporaryPassword: '', confirmPassword: '' }
+  passwordForm.value = { temporaryPassword: '', confirmPassword: '' }
   passwordCustomer.value = null
   passwordFormRef.value?.clearValidate()
 }
@@ -311,7 +311,6 @@ function openEdit(row: any) {
     permissionMode: 'template',
     permissionTemplate: (row.omsType || 'ecommerce') as OmsCustomerType,
     permissions: [...(row.omsPermissions || [])] as OmsPortalPermission[],
-    username: row.portalUsername || row.portalLoginEmail || '',
     temporaryPassword: '',
     confirmPassword: '',
   }
@@ -334,18 +333,9 @@ function handlePermissionModeChange(mode: string | number | boolean | undefined)
   }
 }
 
-function suggestPortalUsername() {
-  if (form.value.username) return
-  const code = form.value.customerCode.trim().toLowerCase()
-  if (USERNAME_PATTERN.test(code) && code.length >= 6 && code.length <= 50) {
-    form.value.username = code
-  }
-}
-
 function openPortalPassword(row: any) {
   passwordCustomer.value = row
   passwordForm.value = {
-    username: row.portalUsername || row.portalLoginEmail || '',
     temporaryPassword: '',
     confirmPassword: '',
   }
@@ -367,7 +357,6 @@ async function submitPortalPassword() {
     return
   }
   const payload = {
-    username: f.username.trim().toLowerCase(),
     temporaryPassword: f.temporaryPassword,
   }
   clearPasswordSecrets()
@@ -407,21 +396,19 @@ function goRecharge(row: any) {
 async function submitCreate() {
   const f = form.value
   if (!(await validateForm(createFormRef.value))) return
-  const username = f.username.trim().toLowerCase()
   const payload = {
     customerCode: f.customerCode.trim(),
     customerName: f.customerName.trim(),
     companyName: f.companyName.trim() || undefined,
     contactEmail: f.contactEmail.trim().toLowerCase() || undefined,
     contactName: f.contactName.trim() || undefined,
-    contactPhone: f.contactPhone.trim() || undefined,
+    contactPhone: f.contactPhone.trim(),
     portalType: f.omsType,
     omsType: f.omsType,
     warehouse: f.warehouse.trim(),
     ...(f.permissionMode === 'template'
       ? { permissionTemplate: f.permissionTemplate }
       : { permissions: f.permissions }),
-    username,
     temporaryPassword: f.temporaryPassword,
   }
   clearCreateSecrets()
@@ -430,7 +417,7 @@ async function submitCreate() {
     const result = await customerApi.create(payload)
     createSuccess.value = {
       customerCode: result.customerCode || payload.customerCode,
-      username: result.oms?.portalUsername || result.oms?.portalLoginEmail || username,
+      loginPhone: result.oms?.portalUsername || result.oms?.portalLoginEmail || normalizePortalLoginPhone(f.contactPhone),
     }
     form.value = emptyForm()
     createVisible.value = false
@@ -666,14 +653,13 @@ onMounted(() => {
                 v-model="form.contactEmail"
                 type="email"
                 placeholder="contact@example.com"
-                @blur="suggestPortalUsername"
               />
             </el-form-item>
             <el-form-item label="联系人" prop="contactName">
               <el-input v-model="form.contactName" />
             </el-form-item>
-            <el-form-item label="联系电话" prop="contactPhone">
-              <el-input v-model="form.contactPhone" />
+            <el-form-item label="联系电话" prop="contactPhone" required>
+              <el-input v-model="form.contactPhone" placeholder="至少 6 位数字，作为 OMS 登录手机号" />
             </el-form-item>
           </div>
         </div>
@@ -707,9 +693,6 @@ onMounted(() => {
                   :value="warehouse.code"
                 />
               </el-select>
-            </el-form-item>
-            <el-form-item label="登录账号" prop="username" required>
-              <el-input v-model="form.username" autocomplete="off" placeholder="至少 6 位，字母数字或 . _ -" />
             </el-form-item>
             <el-form-item label="权限方式" required>
               <el-radio-group v-model="form.permissionMode" @change="handlePermissionModeChange">
@@ -777,7 +760,7 @@ onMounted(() => {
     </el-dialog>
 
     <el-dialog v-model="createSuccessVisible" width="520px" destroy-on-close>
-      <el-result icon="success" title="OMS 开户成功" sub-title="客户现在可以使用登录账号和临时密码进入 OMS">
+      <el-result icon="success" title="OMS 开户成功" sub-title="客户现在可以使用手机号和临时密码进入 OMS">
         <template #extra>
           <div v-if="createSuccess" class="success-account">
             <div class="success-account-row">
@@ -785,8 +768,8 @@ onMounted(() => {
               <strong class="mono">{{ createSuccess.customerCode }}</strong>
             </div>
             <div class="success-account-row">
-              <span>OMS 登录账号</span>
-              <strong>{{ createSuccess.username }}</strong>
+              <span>OMS 登录手机号</span>
+              <strong>{{ createSuccess.loginPhone }}</strong>
             </div>
             <el-alert
               title="临时密码不会再次显示；客户首次登录后必须修改密码。"
@@ -989,8 +972,8 @@ onMounted(() => {
         label-width="100px"
         size="small"
       >
-        <el-form-item label="登录账号" prop="username" required>
-          <el-input v-model="passwordForm.username" autocomplete="off" placeholder="至少 6 位" />
+        <el-form-item v-if="passwordCustomer" label="登录手机号">
+          <span>{{ passwordCustomer.portalUsername || passwordCustomer.portalLoginEmail || passwordCustomer.phone || '—' }}</span>
         </el-form-item>
         <el-form-item label="临时密码" prop="temporaryPassword" required>
           <el-input

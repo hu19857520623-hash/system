@@ -243,6 +243,8 @@ export class UpdateCustomerDto {
 }
 
 export class SetPortalTemporaryPasswordDto {
+  /** @deprecated 登录账号已改为联系电话，可不传。 */
+  @IsOptional()
   @Transform(normalizeUsername)
   @IsString()
   @MinLength(6, { message: '登录账号至少 6 位' })
@@ -250,7 +252,7 @@ export class SetPortalTemporaryPasswordDto {
   @Matches(PORTAL_USERNAME_PATTERN, {
     message: '登录账号只能包含字母、数字、点、下划线和短横线',
   })
-  username: string
+  username?: string
 
   /** @deprecated Use username. */
   @IsOptional()

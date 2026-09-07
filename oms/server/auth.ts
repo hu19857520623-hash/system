@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from 'express'
 import jwt from 'jsonwebtoken'
 import { timingSafeEqual } from 'node:crypto'
+import { normalizePortalLoginIdentifier } from './portal-login.util.js'
 
 export const OMS_ROLES = ['sys_admin', 'ecommerce', 'catalog', 'hybrid'] as const
 export type OmsRole = typeof OMS_ROLES[number]
@@ -75,8 +76,10 @@ export function isValidUsername(value: string) {
     && USERNAME_PATTERN.test(value)
 }
 
-export function requestedUsername(body: { username?: unknown; email?: unknown; loginEmail?: unknown } | null | undefined): string {
-  return normalizeUsername(body?.username || body?.email || body?.loginEmail)
+export function requestedUsername(body: { username?: unknown; email?: unknown; loginEmail?: unknown; phone?: unknown } | null | undefined): string {
+  return normalizePortalLoginIdentifier(
+    body?.username || body?.phone || body?.email || body?.loginEmail,
+  )
 }
 
 export function isLoginAllowed(

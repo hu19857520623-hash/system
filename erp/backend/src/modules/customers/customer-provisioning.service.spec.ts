@@ -14,7 +14,7 @@ const customer = {
   companyName: 'Acme Ltd',
   contactEmail: 'owner@acme.test',
   contactName: 'Owner',
-  contactPhone: '123',
+  contactPhone: '13800138000',
   balance: 0,
   status: 1,
   createdAt: new Date('2026-01-01T00:00:00.000Z'),
@@ -27,11 +27,10 @@ const createDto: CreateCustomerDto = {
   companyName: 'Acme Ltd',
   contactEmail: 'owner@acme.test',
   contactName: 'Owner',
-  contactPhone: '123',
+  contactPhone: '13800138000',
   portalType: 'ecommerce',
   warehouse: 'WMS-JHB-01',
   permissionTemplate: 'ecommerce',
-  username: 'acmeportal',
   temporaryPassword: 'abcdef',
 }
 
@@ -95,7 +94,7 @@ describe('CustomerProvisioningService', () => {
     expect(tx.$executeRaw).toHaveBeenCalledTimes(3)
     expect(result.oms).toMatchObject({
       portalReady: true,
-      portalLoginEmail: 'acmeportal',
+      portalLoginEmail: '13800138000',
       mustChangePassword: true,
     })
     expect(bcrypt.hash).toHaveBeenCalledWith('abcdef', 12)
@@ -108,7 +107,7 @@ describe('CustomerProvisioningService', () => {
 
     const portalWrite = tx.$executeRaw.mock.calls[2]
     expect(sqlText(portalWrite)).toContain('oms_portaluser')
-    expect(sqlValues(portalWrite)).toContain('acmeportal')
+    expect(sqlValues(portalWrite)).toContain('13800138000')
     expect(sqlValues(portalWrite)).toContain('bcrypt-hash')
     expect(sqlValues(portalWrite)).not.toContain(createDto.temporaryPassword)
   })
@@ -146,7 +145,12 @@ describe('CustomerProvisioningService', () => {
       .mockResolvedValueOnce([{
         id: 'portal-existing',
         customerId: 'customer-existing',
-        username: 'acmeportal',
+        username: '13800138000',
+      }])
+      .mockResolvedValueOnce([{
+        id: 'portal-existing-2',
+        customerId: 'customer-existing-2',
+        username: '13800138000cus-042',
       }])
 
     await expect(
@@ -200,15 +204,17 @@ describe('CustomerProvisioningService', () => {
     }
     tx.customer.findUnique.mockResolvedValue(customer)
     tx.customer.update.mockResolvedValue(disabled)
-    tx.$queryRaw.mockResolvedValue([{
-      id: 'erp-customer-cus-042',
-      type: 'hybrid',
-      warehouse: 'WMS-CPT-01',
-      permissions: '["catalog:read"]',
-      portalUserId: 'erp-portal-cus-042',
-      portalLoginEmail: 'acmeportal',
-      portalMustChangePassword: 0,
-    }])
+    tx.$queryRaw
+      .mockResolvedValueOnce([{
+        id: 'erp-customer-cus-042',
+        type: 'hybrid',
+        warehouse: 'WMS-CPT-01',
+        permissions: '["catalog:read"]',
+        portalUserId: 'erp-portal-cus-042',
+        portalLoginEmail: '13800138000',
+        portalMustChangePassword: 0,
+      }])
+      .mockResolvedValueOnce([])
     tx.$executeRaw.mockResolvedValue(1)
 
     const result = await service.update(42, {

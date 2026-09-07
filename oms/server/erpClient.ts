@@ -85,7 +85,8 @@ export type ErpOmsProvisionRequest = {
   omsType: 'ecommerce' | 'catalog' | 'hybrid'
   warehouse: string
   permissions: string[]
-  username: string
+  /** @deprecated 由 contactPhone 自动派生 */
+  username?: string
   temporaryPassword: string
 }
 

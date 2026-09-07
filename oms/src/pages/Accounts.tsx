@@ -28,7 +28,6 @@ type CreateAccountDraft = {
   contactName: string
   contactPhone: string
   email: string
-  username: string
   omsType: CustomerAccountType
   warehouse: string
   permissionTemplate: CustomerAccountType
@@ -53,7 +52,6 @@ const EMPTY_CREATE_DRAFT: CreateAccountDraft = {
   contactName: '',
   contactPhone: '',
   email: '',
-  username: '',
   omsType: 'ecommerce',
   warehouse: 'WMS-JHB-01',
   permissionTemplate: 'ecommerce',
@@ -61,17 +59,22 @@ const EMPTY_CREATE_DRAFT: CreateAccountDraft = {
   confirmPassword: '',
 }
 
-const EMPTY_RESET_DRAFT: ResetPasswordDraft = {
-  temporaryPassword: '',
-  confirmPassword: '',
+function normalizePortalLoginPhone(value: string) {
+  return value.replace(/\D/g, '')
 }
 
-function isPortalUsername(value: string) {
-  return /^[A-Za-z0-9._-]{6,50}$/.test(value.trim())
+function isValidPortalLoginPhone(value: string) {
+  const digits = normalizePortalLoginPhone(value)
+  return digits.length >= 6 && digits.length <= 50
 }
 
 function isStrongTemporaryPassword(value: string) {
   return value.length >= 6 && value.length <= 128
+}
+
+const EMPTY_RESET_DRAFT: ResetPasswordDraft = {
+  temporaryPassword: '',
+  confirmPassword: '',
 }
 
 function templateName(priceTemplates: { id: string; name: string }[], id: string | null | undefined) {
@@ -150,7 +153,7 @@ export default function Accounts() {
       ['customerName', '客户名称'],
       ['warehouse', '仓库'],
       ['email', '联系邮箱'],
-      ['username', '登录账号'],
+      ['contactPhone', '联系电话（登录手机号）'],
       ['temporaryPassword', '临时密码'],
     ]
     const missing = required.find(([key]) => !createDraft[key].trim())
@@ -172,8 +175,8 @@ export default function Accounts() {
     if (createDraft.warehouse.trim().length > 100) return setCreateError('仓库编码最多 100 个字符')
     if (!emailPattern.test(createDraft.email.trim())) return setCreateError('联系邮箱格式无效')
     if (createDraft.email.trim().length > 120) return setCreateError('联系邮箱最多 120 个字符')
-    if (!isPortalUsername(createDraft.username)) {
-      return setCreateError('登录账号须为 6-50 位字母、数字、点、下划线或短横线')
+    if (!isValidPortalLoginPhone(createDraft.contactPhone)) {
+      return setCreateError('联系电话须为至少 6 位数字，将作为 OMS 登录手机号')
     }
     if (!isStrongTemporaryPassword(createDraft.temporaryPassword)) {
       return setCreateError('临时密码须为 6-128 位')
@@ -184,7 +187,6 @@ export default function Accounts() {
     setCreateSaving(true)
     try {
       const email = createDraft.email.trim().toLowerCase()
-      const username = createDraft.username.trim().toLowerCase()
       const response = await apiPost<unknown>('/accounts', {
         ...(createDraft.customerCode.trim()
           ? { customerCode: createDraft.customerCode.trim() }
@@ -192,10 +194,9 @@ export default function Accounts() {
         customerName: createDraft.customerName.trim(),
         companyName: createDraft.companyName.trim() || undefined,
         contactName: createDraft.contactName.trim() || undefined,
-        contactPhone: createDraft.contactPhone.trim() || undefined,
+        contactPhone: createDraft.contactPhone.trim(),
         email,
         contactEmail: email,
-        username,
         omsType: createDraft.omsType,
         warehouse: createDraft.warehouse.trim(),
         permissionTemplate: createDraft.permissionTemplate,
@@ -491,18 +492,15 @@ export default function Accounts() {
                   onChange={event => setCreateDraft(draft => ({ ...draft, email: event.target.value }))}
                 />
               </FormField>
-              <FormField label="登录账号" hint="6-50 位字母、数字、点、下划线或短横线" required>
+              <FormField label="联系电话" hint="至少 6 位数字，作为 OMS 登录手机号" required>
                 <input
-                  type="text"
+                  type="tel"
                   autoComplete="off"
                   className={formInput()}
-                  value={createDraft.username}
-                  placeholder="例如 acme001"
-                  onChange={event => setCreateDraft(draft => ({ ...draft, username: event.target.value }))}
+                  value={createDraft.contactPhone}
+                  placeholder="如 13800138000"
+                  onChange={event => setCreateDraft(draft => ({ ...draft, contactPhone: event.target.value }))}
                 />
-              </FormField>
-              <FormField label="联系电话">
-                <input className={formInput()} value={createDraft.contactPhone} onChange={event => setCreateDraft(draft => ({ ...draft, contactPhone: event.target.value }))} />
               </FormField>
               <FormField label="客户类型" required>
                 <select

@@ -12,6 +12,12 @@ import {
   type OmsCustomerType,
   type OmsPortalPermission,
 } from '@erp/shared/oms-portal.permissions'
+import {
+  buildPortalLoginUsername,
+  buildPortalLoginUsernameWithSuffix,
+  isValidPortalLoginPhone,
+  normalizePortalLoginPhone,
+} from '@erp/shared/portal-login.util'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import {
   CreateCustomerDto,
@@ -98,7 +104,12 @@ export class CustomerProvisioningService {
 
         if (portal) {
           const existingOmsAccount = await this.findOmsAccount(tx, customerCode)
-          await this.assertUsernameAvailable(tx, portal.username, existingOmsAccount?.id)
+          portal.username = await this.resolveAvailablePortalUsername(
+            tx,
+            data.contactPhone,
+            customerCode,
+            existingOmsAccount?.id,
+          )
         }
 
         const customer = await tx.customer.create({
@@ -132,9 +143,11 @@ export class CustomerProvisioningService {
       data.permissions,
       false,
     )
-    const normalizedUsername = data.username || data.loginEmail
+    let normalizedUsername = data.username || data.loginEmail
       ? this.requireUsername(data.username || data.loginEmail)
-      : undefined
+      : data.contactPhone?.trim()
+        ? this.requireUsername(this.resolvePortalUsernameFromPhone(data.contactPhone))
+        : undefined
     const passwordHash = data.temporaryPassword
       ? await this.hashTemporaryPassword(data.temporaryPassword)
       : undefined
@@ -164,7 +177,11 @@ export class CustomerProvisioningService {
           const newPortal = this.resolveUpdatePortalInput(data)
           const newPasswordHash = passwordHash
             || await this.hashTemporaryPassword(newPortal.temporaryPassword)
-          await this.assertUsernameAvailable(tx, newPortal.username)
+          const portalUsername = await this.resolveAvailablePortalUsername(
+            tx,
+            data.contactPhone,
+            customer.customerCode,
+          )
           const oms = await this.upsertOmsRows(
             tx,
             customer,
@@ -172,7 +189,7 @@ export class CustomerProvisioningService {
               portalType: newPortal.portalType,
               warehouse: newPortal.warehouse,
               permissions: newPortal.permissions,
-              username: newPortal.username,
+              username: portalUsername,
             },
             newPasswordHash,
           )
@@ -214,6 +231,24 @@ export class CustomerProvisioningService {
         let mustChangePassword: boolean | null = account.portalUserId
           ? Boolean(account.portalMustChangePassword)
           : null
+        if (account.portalUserId && customer.contactPhone?.trim()) {
+          let desiredPhoneUsername = ''
+          try {
+            desiredPhoneUsername = this.requireUsername(
+              this.resolvePortalUsernameFromPhone(customer.contactPhone),
+            )
+          } catch {
+            desiredPhoneUsername = ''
+          }
+          if (desiredPhoneUsername && desiredPhoneUsername !== portalUsername) {
+            normalizedUsername = await this.resolveAvailablePortalUsername(
+              tx,
+              customer.contactPhone,
+              customer.customerCode,
+              account.id,
+            )
+          }
+        }
         if (account.portalUserId) {
           const now = new Date().toISOString()
           if (passwordHash) {
@@ -242,7 +277,7 @@ export class CustomerProvisioningService {
         } else if (normalizedUsername || passwordHash) {
           if (!normalizedUsername || !passwordHash) {
             throw new BadRequestException(
-              '首次创建 OMS 登录用户时必须同时提供 username 和 temporaryPassword',
+              '首次创建 OMS 登录用户时必须同时提供联系电话和 temporaryPassword',
             )
           }
           portalUserId = await this.savePortalUser(
@@ -285,7 +320,6 @@ export class CustomerProvisioningService {
     where: Prisma.CustomerWhereUniqueInput,
     data: SetPortalTemporaryPasswordDto,
   ): Promise<CustomerProvisioningResult> {
-    const username = this.requireUsername(data.username || data.loginEmail)
     const passwordHash = await this.hashTemporaryPassword(data.temporaryPassword)
 
     try {
@@ -296,7 +330,14 @@ export class CustomerProvisioningService {
         const account = await this.findOmsAccount(tx, customer.customerCode)
         if (!account) throw new BadRequestException('该客户尚未开通 OMS 账户')
 
-        await this.assertUsernameAvailable(tx, username, account.id)
+        const username = data.username || data.loginEmail
+          ? this.requireUsername(data.username || data.loginEmail)
+          : await this.resolveAvailablePortalUsername(
+            tx,
+            customer.contactPhone ?? undefined,
+            customer.customerCode,
+            account.id,
+          )
         const portalType = this.asPortalType(account.type)
         const status = this.toOmsStatus(customer.status)
         const portalUserId = await this.savePortalUser(
@@ -350,19 +391,19 @@ export class CustomerProvisioningService {
     if (
       !portalType ||
       !data.warehouse?.trim() ||
-      !this.portalIdentity(data) ||
+      !data.contactPhone?.trim() ||
       !data.temporaryPassword ||
       !permissions
     ) {
       throw new BadRequestException(
-        'OMS 开户必须提供 portalType、warehouse、权限、username 和 temporaryPassword',
+        'OMS 开户必须提供 portalType、warehouse、权限、联系电话和 temporaryPassword',
       )
     }
     return {
       portalType,
       warehouse: data.warehouse.trim(),
       permissions,
-      username: this.requireUsername(this.portalIdentity(data)),
+      username: this.requireUsername(this.resolvePortalUsernameFromPhone(data.contactPhone)),
       temporaryPassword: data.temporaryPassword,
     }
   }
@@ -379,19 +420,19 @@ export class CustomerProvisioningService {
     if (
       !portalType ||
       !data.warehouse?.trim() ||
-      !this.portalIdentity(data) ||
+      !data.contactPhone?.trim() ||
       !data.temporaryPassword ||
       !permissions
     ) {
       throw new BadRequestException(
-        '首次开通 OMS 时必须提供 portalType、warehouse、权限、username 和 temporaryPassword',
+        '首次开通 OMS 时必须提供 portalType、warehouse、权限、联系电话和 temporaryPassword',
       )
     }
     return {
       portalType,
       warehouse: data.warehouse.trim(),
       permissions,
-      username: this.requireUsername(this.portalIdentity(data)),
+      username: this.requireUsername(this.resolvePortalUsernameFromPhone(data.contactPhone)),
       temporaryPassword: data.temporaryPassword,
     }
   }
@@ -412,6 +453,7 @@ export class CustomerProvisioningService {
     warehouse?: string
     permissionTemplate?: OmsCustomerType
     permissions?: OmsPortalPermission[]
+    contactPhone?: string
     username?: string
     loginEmail?: string
     temporaryPassword?: string
@@ -422,14 +464,11 @@ export class CustomerProvisioningService {
       data.warehouse,
       data.permissionTemplate,
       data.permissions,
+      data.contactPhone,
       data.username,
       data.loginEmail,
       data.temporaryPassword,
     ].some((value) => value !== undefined)
-  }
-
-  private portalIdentity(data: { username?: string; loginEmail?: string }): string | undefined {
-    return data.username || data.loginEmail
   }
 
   private resolveRequestedPermissions(
@@ -665,6 +704,40 @@ export class CustomerProvisioningService {
       throw new BadRequestException('OMS 登录账号须为 6-50 位字母、数字、点、下划线或短横线')
     }
     return username
+  }
+
+  private resolvePortalUsernameFromPhone(contactPhone: string | undefined): string {
+    if (!contactPhone?.trim()) {
+      throw new BadRequestException('OMS 开户须填写联系电话作为登录账号')
+    }
+    try {
+      return buildPortalLoginUsername(contactPhone)
+    } catch {
+      throw new BadRequestException('联系电话须为至少 6 位数字')
+    }
+  }
+
+  private async resolveAvailablePortalUsername(
+    tx: Prisma.TransactionClient,
+    contactPhone: string | undefined,
+    customerCode: string,
+    currentAccountId?: string,
+  ): Promise<string> {
+    if (!contactPhone?.trim() || !isValidPortalLoginPhone(normalizePortalLoginPhone(contactPhone))) {
+      throw new BadRequestException('OMS 开户须填写有效的联系电话作为登录账号')
+    }
+    const base = this.requireUsername(buildPortalLoginUsername(contactPhone))
+    try {
+      await this.assertUsernameAvailable(tx, base, currentAccountId)
+      return base
+    } catch (error) {
+      if (!(error instanceof ConflictException)) throw error
+      const withCode = this.requireUsername(
+        buildPortalLoginUsernameWithSuffix(contactPhone, customerCode),
+      )
+      await this.assertUsernameAvailable(tx, withCode, currentAccountId)
+      return withCode
+    }
   }
 
   private normalizeEmail(value: string): string {

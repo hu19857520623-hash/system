@@ -32,6 +32,14 @@ function readRememberPreference() {
   }
 }
 
+function isValidLoginIdentifier(value: string) {
+  const trimmed = value.trim()
+  if (!trimmed) return false
+  if (/[a-zA-Z]/.test(trimmed)) return trimmed.length >= 6
+  const digits = trimmed.replace(/\D/g, '')
+  return digits.length >= 6
+}
+
 export default function Login() {
   const navigate = useNavigate()
   const { login, isLoggedIn, mustChangePassword, authReady } = useRole()
@@ -51,11 +59,11 @@ export default function Login() {
     e.preventDefault()
     setError('')
     if (!username.trim()) {
-      setError('请输入登录账号')
+      setError('请输入手机号')
       return
     }
-    if (username.trim().length < 6) {
-      setError('登录账号至少 6 个字符')
+    if (!isValidLoginIdentifier(username)) {
+      setError('手机号须至少 6 位数字')
       return
     }
     if (!password) {
@@ -69,7 +77,7 @@ export default function Login() {
 
     setSubmitting(true)
     try {
-      const loginUsername = username.trim().toLowerCase()
+      const loginUsername = username.trim()
       const user = await login(loginUsername, password, remember)
       try {
         localStorage.setItem(REMEMBER_KEY, remember ? '1' : '0')
@@ -83,7 +91,7 @@ export default function Login() {
     } catch (loginError) {
       const status = (loginError as { status?: number } | null)?.status
       if (status === 401) {
-        setError('账号或密码不正确，或账号已停用')
+        setError('手机号或密码不正确，或账号已停用')
       } else if (status === 429) {
         setError('登录尝试过于频繁，请稍后再试')
       } else {
@@ -113,20 +121,20 @@ export default function Login() {
           <div className="mb-5">
             <h2 className="text-lg font-semibold text-text-primary">登录</h2>
             <p className="mt-1 text-sm text-text-secondary">
-              使用 ERP 为您开通的客户账号进入系统
+              使用开户时登记的手机号进入系统
             </p>
           </div>
 
           <form className="space-y-5" onSubmit={handleSubmit}>
-            <FormField label="登录账号" required>
+            <FormField label="手机号" required>
               <div className="relative">
                 <User className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-muted" />
                 <input
-                  type="text"
+                  type="tel"
                   autoComplete="username"
                   value={username}
                   onChange={e => { setUsername(e.target.value); setError('') }}
-                  placeholder="至少 6 个字符"
+                  placeholder="开户时登记的手机号"
                   disabled={submitting}
                   className={formInput('pl-10')}
                 />
@@ -164,7 +172,7 @@ export default function Login() {
                   onChange={e => setRemember(e.target.checked)}
                   className="rounded border-border text-primary-600 focus:ring-primary-500"
                 />
-                记住账号
+                记住手机号
               </label>
               <span className="text-text-muted">忘记密码请联系系统管理员重置</span>
             </div>

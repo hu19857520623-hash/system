@@ -325,7 +325,6 @@ async function toErp(row: any) {
     omsType,
     warehouse: warehouseOptions.value[0]?.code || 'WMS-JHB-01',
     permissionTemplate: omsType,
-    username: String(row.customerCode || `cus${Date.now().toString().slice(-8)}`).trim().toLowerCase().slice(0, 50),
     temporaryPassword: '',
     confirmPassword: '',
   }
@@ -338,7 +337,7 @@ const omsTarget = ref<any>(null)
 const omsFormRef = ref<FormInstance>()
 const warehouseOptions = ref<{ code: string; name: string }[]>([])
 const omsSuccessVisible = ref(false)
-const omsSuccess = ref<{ customerCode: string; username: string; customerId?: number } | null>(null)
+const omsSuccess = ref<{ customerCode: string; loginPhone: string; customerId?: number } | null>(null)
 const omsForm = ref({
   customerCode: '',
   customerName: '',
@@ -349,28 +348,29 @@ const omsForm = ref({
   omsType: 'ecommerce' as OmsCustomerType,
   warehouse: 'WMS-JHB-01',
   permissionTemplate: 'ecommerce' as OmsCustomerType,
-  username: '',
   temporaryPassword: '',
   confirmPassword: '',
 })
 
-const USERNAME_PATTERN = /^[A-Za-z0-9._-]+$/
-function omsUsernameValidator(required: boolean) {
+function normalizePortalLoginPhone(value: unknown) {
+  return String(value ?? '').replace(/\D/g, '')
+}
+
+function omsPhoneValidator(required: boolean) {
   return (_rule: unknown, value: unknown, callback: (error?: Error) => void) => {
-    const username = String(value ?? '').trim().toLowerCase()
-    if (!username) callback(required ? new Error('请填写 OMS 登录账号') : undefined)
-    else if (username.length < 6) callback(new Error('登录账号至少 6 个字符'))
-    else if (username.length > 50 || !USERNAME_PATTERN.test(username)) {
-      callback(new Error('登录账号须为 6-50 位字母、数字、点、下划线或短横线'))
-    } else callback()
+    const digits = normalizePortalLoginPhone(value)
+    if (!digits) callback(required ? new Error('请填写联系电话（OMS 登录手机号）') : undefined)
+    else if (digits.length < 6) callback(new Error('联系电话须至少 6 位数字'))
+    else if (digits.length > 50) callback(new Error('联系电话数字不能超过 50 位'))
+    else callback()
   }
 }
 const omsRules: FormRules = {
   customerCode: [{ required: true, message: '请填写客户代码', trigger: 'blur' }],
   customerName: [{ required: true, message: '请填写客户名称', trigger: 'blur' }],
+  contactPhone: [{ validator: omsPhoneValidator(true), trigger: 'blur' }],
   omsType: [{ required: true, message: '请选择 OMS 客户类型', trigger: 'change' }],
   warehouse: [{ required: true, message: '请选择默认仓库', trigger: 'change' }],
-  username: [{ validator: omsUsernameValidator(true), trigger: 'blur' }],
   temporaryPassword: [{
     validator: (_rule, value, callback) => {
       const password = String(value ?? '')
@@ -425,12 +425,11 @@ async function submitOmsAccount() {
       companyName: f.companyName.trim() || f.customerName.trim(),
       contactEmail: f.contactEmail.trim().toLowerCase() || undefined,
       contactName: f.contactName.trim() || undefined,
-      contactPhone: f.contactPhone.trim() || undefined,
+      contactPhone: f.contactPhone.trim(),
       portalType: f.omsType,
       omsType: f.omsType,
       warehouse: f.warehouse.trim(),
       permissionTemplate: f.permissionTemplate || f.omsType,
-      username: f.username.trim().toLowerCase(),
       temporaryPassword: f.temporaryPassword,
     })
     omsDialogVisible.value = false
@@ -438,7 +437,7 @@ async function submitOmsAccount() {
     omsForm.value.confirmPassword = ''
     omsSuccess.value = {
       customerCode: result.customerCode,
-      username: result.portalUsername || result.portalLoginEmail || f.username,
+      loginPhone: result.portalUsername || result.portalLoginEmail || normalizePortalLoginPhone(f.contactPhone),
       customerId: result.customerId,
     }
     omsSuccessVisible.value = true
@@ -692,7 +691,7 @@ onMounted(async () => {
     append-to-body
     :close-on-click-modal="false"
   >
-    <p class="oms-hint">填写登录信息后为该成交客户开通 OMS 账号。临时密码仅显示一次，客户首次登录必须修改。</p>
+    <p class="oms-hint">填写联系电话与临时密码后为该成交客户开通 OMS 账号。手机号即登录账号；临时密码仅显示一次，客户首次登录必须修改。</p>
     <el-form ref="omsFormRef" :model="omsForm" :rules="omsRules" label-width="108px">
       <el-form-item label="客户代码" prop="customerCode" required>
         <el-input v-model="omsForm.customerCode" placeholder="如 CUS-001" maxlength="30" />
@@ -706,8 +705,8 @@ onMounted(async () => {
       <el-form-item label="联系人">
         <el-input v-model="omsForm.contactName" maxlength="50" />
       </el-form-item>
-      <el-form-item label="联系电话">
-        <el-input v-model="omsForm.contactPhone" maxlength="30" />
+      <el-form-item label="联系电话" prop="contactPhone" required>
+        <el-input v-model="omsForm.contactPhone" maxlength="30" placeholder="至少 6 位数字，作为 OMS 登录手机号" />
       </el-form-item>
       <el-form-item label="联系邮箱">
         <el-input v-model="omsForm.contactEmail" type="email" placeholder="选填，可与登录邮箱相同" />
@@ -733,9 +732,6 @@ onMounted(async () => {
           />
         </el-select>
       </el-form-item>
-      <el-form-item label="OMS 登录账号" prop="username" required>
-        <el-input v-model="omsForm.username" autocomplete="off" placeholder="至少 6 位，字母数字或 . _ -" />
-      </el-form-item>
       <el-form-item label="临时密码" prop="temporaryPassword" required>
         <el-input v-model="omsForm.temporaryPassword" type="password" show-password autocomplete="new-password" placeholder="至少 6 位" />
       </el-form-item>
@@ -750,11 +746,11 @@ onMounted(async () => {
   </el-dialog>
 
   <el-dialog v-model="omsSuccessVisible" width="520px" destroy-on-close append-to-body>
-    <el-result icon="success" title="OMS 账号已开通" sub-title="请把登录账号和临时密码交给客户，并提醒首次登录必须改密">
+    <el-result icon="success" title="OMS 账号已开通" sub-title="请把登录手机号和临时密码交给客户，并提醒首次登录必须改密">
       <template #extra>
         <div v-if="omsSuccess" class="oms-success">
           <div><span>客户代码</span><strong>{{ omsSuccess.customerCode }}</strong></div>
-          <div><span>OMS 登录账号</span><strong>{{ omsSuccess.username }}</strong></div>
+          <div><span>OMS 登录手机号</span><strong>{{ omsSuccess.loginPhone }}</strong></div>
         </div>
         <el-button @click="omsSuccessVisible = false">完成</el-button>
         <el-button type="primary" @click="omsSuccessVisible = false; router.push('/customers')">去客户列表</el-button>

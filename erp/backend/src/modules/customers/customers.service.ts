@@ -306,6 +306,8 @@ export class CustomersService {
   }
 
   private legacyUsername(raw: Record<string, unknown>, customerCode: string) {
+    const phone = String(raw.contactPhone || '').replace(/\D/g, '')
+    if (/^\d{6,50}$/.test(phone)) return phone
     const fromFile = String(raw.username || '').trim().toLowerCase()
     if (/^[a-z0-9._-]{6,50}$/.test(fromFile)) return fromFile
     const fromCode = customerCode.trim().toLowerCase()
