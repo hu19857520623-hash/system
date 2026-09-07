@@ -171,6 +171,13 @@ export class PricingService {
   }
 
   private async resolveMarketFromDev(productName: string, sku: string): Promise<number> {
+    if (sku) {
+      const bySku = await this.prisma.productDev.findFirst({
+        where: { sku },
+        orderBy: { id: 'desc' },
+      })
+      if (bySku?.marketPrice) return num(bySku.marketPrice)
+    }
     const dev = await this.prisma.productDev.findFirst({
       where: {
         OR: [{ productName }, { productName: { contains: productName.slice(0, 8) } }],
@@ -178,10 +185,10 @@ export class PricingService {
       orderBy: { id: 'desc' },
     })
     if (dev?.marketPrice) return num(dev.marketPrice)
-    const bySku = await this.prisma.product.findFirst({ where: { sku } })
-    if (bySku) {
+    const bySkuProduct = await this.prisma.product.findFirst({ where: { sku } })
+    if (bySkuProduct) {
       const dev2 = await this.prisma.productDev.findFirst({
-        where: { productName: bySku.productName },
+        where: { productName: bySkuProduct.productName },
         orderBy: { id: 'desc' },
       })
       if (dev2?.marketPrice) return num(dev2.marketPrice)
@@ -329,12 +336,14 @@ export class PricingService {
     const visibleStockQty = data.visibleStockQty != null && data.visibleStockQty !== ''
       ? Math.max(0, Math.floor(Number(data.visibleStockQty)))
       : (row.inboundQty > 0 ? row.inboundQty : row.purchaseQty)
+    const marketPrice = num(data.marketPrice)
+    if (marketPrice <= 0) throw new BadRequestException('请填写市场参考价')
 
     await this.prisma.productPricing.update({
       where: { id: BigInt(id) },
       data: {
-        marketPrice: data.marketPrice,
-        pricingLogic: data.pricingLogic,
+        marketPrice,
+        pricingLogic: data.pricingLogic?.trim?.() || null,
         targetProfitRate: data.targetProfitRate,
         finalPrice: data.finalPrice,
         visibleStockQty,
@@ -344,11 +353,21 @@ export class PricingService {
         pricingStatus: 'priced',
       },
     })
+    const dev = await this.prisma.productDev.findFirst({
+      where: { sku: row.sku },
+      orderBy: { id: 'desc' },
+    })
+    if (dev) {
+      await this.prisma.productDev.update({
+        where: { id: dev.id },
+        data: { marketPrice },
+      })
+    }
     await this.addHistory(
       BigInt(id),
       role,
       '确认定价',
-      `市场参考 R${data.marketPrice}，最终售价 ¥${data.finalPrice}（${data.pricingLogic || '—'}）；对客户可见库存 ${visibleStockQty} 件`,
+      `市场参考 R${marketPrice}，最终售价 ¥${data.finalPrice}；对客户可见库存 ${visibleStockQty} 件`,
     )
     return this.detail(id)
   }

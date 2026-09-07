@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
-import { RefreshCw, ShoppingCart, Trash2 } from 'lucide-react'
-import { Badge, Button, Card, Drawer, MonoCode, PageHeader, SearchInput, Tabs } from '../components/ui'
+import { ClipboardList, RefreshCw, ShoppingCart, Trash2 } from 'lucide-react'
+import { Badge, Button, Card, Drawer, MonoCode, PageHeader, SearchInput, Table, Tabs } from '../components/ui'
 import { formatCurrency } from '../data/mockData'
 import {
   useProducts,
+  useCatalogPurchases,
   purchaseCatalogProductViaErp,
   getCatalogAvailableQty,
   mergeErpCatalogIntoState,
@@ -33,18 +34,22 @@ function lineTotal(line: { price: number; qty: number }) {
 }
 
 export default function Catalog() {
-  const { role } = useRole()
+  const { role, accounts } = useRole()
   const showCatalogMeta = role === 'catalog' || role === 'hybrid' || role === 'sys_admin'
+  const showAllCustomers = role === 'sys_admin' && !getCustomerIdForRole(role)
   const customerId = getCustomerIdForRole(role)
   const customerCode = getCustomerCode(customerId ?? undefined)
   const billing = useBilling()
   const allProducts = useProducts()
+  const allPurchases = useCatalogPurchases()
   const catalogProducts = allProducts.filter(p => p.inCatalog && p.productStatus === 'available')
   const [search, setSearch] = useState('')
   const [tab, setTab] = useState('all')
   const [qtyMap, setQtyMap] = useState<Record<string, string>>({})
   const [cart, setCart] = useState<Record<string, CatalogCartLine>>({})
   const [cartOpen, setCartOpen] = useState(false)
+  const [ordersOpen, setOrdersOpen] = useState(false)
+  const [orderSearch, setOrderSearch] = useState('')
   const [checkoutOpen, setCheckoutOpen] = useState(false)
   const [checkoutLines, setCheckoutLines] = useState<CheckoutLine[]>([])
   const [checkoutSource, setCheckoutSource] = useState<'cart' | 'buy_now'>('buy_now')
@@ -63,6 +68,34 @@ export default function Catalog() {
     () => checkoutLines.reduce((sum, line) => sum + lineTotal(line), 0),
     [checkoutLines],
   )
+
+  const purchaseRows = useMemo(() => {
+    let rows = customerId
+      ? allPurchases.filter(p => p.customerId === customerId)
+      : allPurchases
+    const q = orderSearch.trim().toLowerCase()
+    if (q) {
+      rows = rows.filter(p =>
+        p.purchaseNo.toLowerCase().includes(q)
+        || p.sku.toLowerCase().includes(q)
+        || p.productName.toLowerCase().includes(q),
+      )
+    }
+    return rows
+  }, [allPurchases, customerId, orderSearch])
+
+  const purchaseCount = useMemo(
+    () => (customerId
+      ? allPurchases.filter(p => p.customerId === customerId).length
+      : allPurchases.length),
+    [allPurchases, customerId],
+  )
+
+  const getPurchaseUnitPrice = (sku: string) =>
+    allProducts.find(p => p.internalSku === sku)?.price ?? 0
+
+  const getCustomerLabel = (id: string) =>
+    accounts.find(a => a.id === id)?.code || getCustomerCode(id) || id
 
   const refreshFromErp = async () => {
     setLoadingCatalog(true)
@@ -242,7 +275,7 @@ export default function Catalog() {
     if (purchased.length && !errors.length) {
       showMsg(
         'ok',
-        `申购成功 ${purchased.length} 项 · 余额 ¥${getCreditBalance().toFixed(2)} · 可在「库存查询 → 货盘库存」查看持有量 · ${purchased.join('；')}`,
+        `申购成功 ${purchased.length} 项 · 余额 ¥${getCreditBalance().toFixed(2)} · 购买记录已写入「订单管理」 · ${purchased.join('；')}`,
       )
       if (checkoutSource === 'cart') setCartOpen(false)
     } else if (purchased.length && errors.length) {
@@ -263,6 +296,15 @@ export default function Catalog() {
             <span className="hidden text-xs text-text-muted sm:inline">
               ERP 余额 {formatCurrency(billing.creditBalance)}
             </span>
+            <Button size="sm" variant="secondary" className="relative" onClick={() => setOrdersOpen(true)}>
+              <ClipboardList className="h-3.5 w-3.5" />
+              订单管理
+              {purchaseCount > 0 && (
+                <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-slate-600 px-1 text-[10px] font-bold text-white">
+                  {purchaseCount > 99 ? '99+' : purchaseCount}
+                </span>
+              )}
+            </Button>
             <Button size="sm" variant="secondary" className="relative" onClick={() => setCartOpen(true)}>
               <ShoppingCart className="h-3.5 w-3.5" />
               购物车
@@ -375,6 +417,73 @@ export default function Catalog() {
           })}
         </div>
       )}
+
+      <Drawer
+        open={ordersOpen}
+        onClose={() => setOrdersOpen(false)}
+        title="订单管理"
+        subtitle={
+          <span className="text-xs text-text-muted">
+            {showAllCustomers ? '全部客户购买记录' : `客户 ${customerCode} 的货盘购买记录`} · 共 {purchaseRows.length} 条
+          </span>
+        }
+        footer={
+          <div className="flex justify-end">
+            <Button variant="secondary" size="sm" onClick={() => setOrdersOpen(false)}>关闭</Button>
+          </div>
+        }
+      >
+        <div className="space-y-4 p-4">
+          <SearchInput
+            placeholder="搜索订单号、SKU 或商品名..."
+            value={orderSearch}
+            onChange={setOrderSearch}
+            className="w-full"
+          />
+          {purchaseRows.length === 0 ? (
+            <p className="py-12 text-center text-sm text-text-muted">
+              暂无购买记录。完成货盘申购后，每次购买都会自动记录在此。
+            </p>
+          ) : (
+            <Table>
+              <thead>
+                <tr className="border-b border-border-light text-xs text-text-muted">
+                  <th className="pb-2 pr-3 font-medium">购买时间</th>
+                  <th className="pb-2 pr-3 font-medium">订单号</th>
+                  {showAllCustomers && <th className="pb-2 pr-3 font-medium">客户</th>}
+                  <th className="pb-2 pr-3 font-medium">商品</th>
+                  <th className="pb-2 pr-3 font-medium">SKU</th>
+                  <th className="pb-2 pr-3 font-medium text-right">数量</th>
+                  <th className="pb-2 font-medium text-right">金额</th>
+                </tr>
+              </thead>
+              <tbody>
+                {purchaseRows.map(row => {
+                  const unitPrice = getPurchaseUnitPrice(row.sku)
+                  const amount = Math.round(unitPrice * row.qty * 100) / 100
+                  return (
+                    <tr key={`${row.purchaseNo}-${row.id}`} className="border-b border-border-light/80">
+                      <td className="py-3 pr-3 align-top text-xs text-text-muted whitespace-nowrap">{row.createdAt}</td>
+                      <td className="py-3 pr-3 align-top"><MonoCode>{row.purchaseNo}</MonoCode></td>
+                      {showAllCustomers && (
+                        <td className="py-3 pr-3 align-top text-xs">{getCustomerLabel(row.customerId)}</td>
+                      )}
+                      <td className="py-3 pr-3 align-top">
+                        <p className="font-medium text-text-primary">{row.productName}</p>
+                      </td>
+                      <td className="py-3 pr-3 align-top">
+                        <MonoCode>{getCustomerSkuDisplay({ internalSku: row.sku, customerSku: undefined }, customerCode)}</MonoCode>
+                      </td>
+                      <td className="py-3 pr-3 align-top text-right">{row.qty.toLocaleString()}</td>
+                      <td className="py-3 align-top text-right font-medium">{formatCurrency(amount)}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </Table>
+          )}
+        </div>
+      </Drawer>
 
       <Drawer
         open={cartOpen}

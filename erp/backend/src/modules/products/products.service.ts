@@ -115,6 +115,7 @@ export class ProductsService {
         const label = key === 'costRmb' ? '采购成本'
           : key === 'seaFreightPerUnit' ? '海运费用/件'
           : key === 'domesticFeePerUnit' ? '国内运费/件'
+          : key === 'marketPrice' ? '市场参考价'
           : key
         return `${label}: ${val.from ?? '—'} → ${val.to ?? '—'}`
       })
@@ -141,7 +142,7 @@ export class ProductsService {
     const supplierIds = [...new Set(rows.map((r) => r.supplierId).filter(Boolean))] as bigint[]
     const productIds = rows.map((r) => r.id) as bigint[]
 
-    const [suppliers, devBySku, poItems, productImages, pricingRows] = await Promise.all([
+    const [suppliers, devBySku, poItems, productImages, pricingRows, devMarketRows] = await Promise.all([
       supplierIds.length
         ? this.prisma.supplier.findMany({ where: { id: { in: supplierIds } }, select: { id: true, supplierName: true } })
         : [],
@@ -168,10 +169,23 @@ export class ProductsService {
       skus.length
         ? this.prisma.productPricing.findMany({
             where: { sku: { in: skus } },
-            select: { sku: true, seaFreight: true, domesticFee: true },
+            select: { sku: true, seaFreight: true, domesticFee: true, marketPrice: true },
+          })
+        : [],
+      skus.length
+        ? this.prisma.productDev.findMany({
+            where: { sku: { in: skus }, marketPrice: { not: null } },
+            select: { sku: true, marketPrice: true },
+            orderBy: { id: 'desc' },
           })
         : [],
     ])
+
+    const devMarketBySku = new Map<string, number>()
+    for (const dev of devMarketRows) {
+      if (!dev.sku || devMarketBySku.has(dev.sku)) continue
+      devMarketBySku.set(dev.sku, num(dev.marketPrice))
+    }
 
     const imagesByProduct = new Map<number, { id: bigint; imageUrl: string }[]>()
     for (const img of productImages) {
@@ -212,18 +226,22 @@ export class ProductsService {
 
     const supMap = new Map<number, string>(suppliers.map((s) => [Number(s.id), s.supplierName] as [number, string]))
     const userMap = new Map<number, string>(users.map((u) => [Number(u.id), u.realName] as [number, string]))
-    const pricingMap = new Map<string, { seaFreight: unknown; domesticFee: unknown }>()
+    const pricingMap = new Map<string, { seaFreight: unknown; domesticFee: unknown; marketPrice: unknown }>()
     for (const p of pricingRows) pricingMap.set(p.sku, p)
 
     return rows.map((row) => {
       const developerId = row.developerId ?? devSkuMap.get(row.sku) ?? null
       const purchaserId = row.purchaserId ?? purchaserSkuMap.get(row.sku) ?? null
+      const pricing = pricingMap.get(row.sku)
+      const marketFromPricing = num(pricing?.marketPrice)
+      const marketFromDev = devMarketBySku.get(row.sku) ?? 0
+      const marketPrice = marketFromPricing > 0 ? marketFromPricing : (marketFromDev > 0 ? marketFromDev : null)
       const imageMeta = this.buildImageList(
         Number(row.id),
         imagesByProduct.get(Number(row.id)) || [],
         row.imageUrl,
       )
-      const costFields = this.resolveCostFields(row, pricingMap.get(row.sku))
+      const costFields = this.resolveCostFields(row, pricing)
       return {
         id: Number(row.id),
         sku: row.sku,
@@ -241,6 +259,7 @@ export class ProductsService {
         measuredHeightCm: row.measuredHeightCm,
         measuredWeightKg: row.measuredWeightKg,
         costRmb: row.costRmb,
+        marketPrice,
         seaFreightPerUnit: costFields.seaFreightPerUnit,
         domesticFeePerUnit: costFields.domesticFeePerUnit,
         purchaseCostRmb: costFields.purchaseCostRmb,
@@ -442,6 +461,26 @@ export class ProductsService {
     return item
   }
 
+  private async syncMarketPrice(sku: string, marketPrice: number | null) {
+    const pricing = await this.prisma.productPricing.findUnique({ where: { sku } })
+    if (pricing) {
+      await this.prisma.productPricing.update({
+        where: { sku },
+        data: { marketPrice: marketPrice ?? 0 },
+      })
+    }
+    const dev = await this.prisma.productDev.findFirst({
+      where: { sku },
+      orderBy: { id: 'desc' },
+    })
+    if (dev) {
+      await this.prisma.productDev.update({
+        where: { id: dev.id },
+        data: { marketPrice: marketPrice ?? null },
+      })
+    }
+  }
+
   async update(id: number, data: any, operatorId?: number) {
     const before = await this.detail(id)
     const patch: Record<string, unknown> = {}
@@ -464,12 +503,24 @@ export class ProductsService {
     if (data.supplierId !== undefined) patch.supplierId = data.supplierId ? BigInt(data.supplierId) : null
 
     const row = await this.prisma.product.update({ where: { id: BigInt(id) }, data: patch })
+    if (data.marketPrice !== undefined) {
+      const raw = data.marketPrice
+      const marketPrice = raw === '' || raw == null ? null : num(raw)
+      await this.syncMarketPrice(row.sku, marketPrice != null && marketPrice > 0 ? marketPrice : null)
+    }
     const changes: Record<string, unknown> = {}
     for (const key of ['productName', 'spec', 'costRmb', 'seaFreightPerUnit', 'domesticFeePerUnit', 'weightKg', 'lengthCm', 'widthCm', 'heightCm', 'remark', 'status']) {
       const prev = (before as any)[key]
       const next = (row as any)[key]
       if (prev !== next && next !== undefined) {
         changes[key] = { from: prev, to: next }
+      }
+    }
+    if (data.marketPrice !== undefined) {
+      const prevMarket = num((before as any).marketPrice)
+      const nextMarket = data.marketPrice === '' || data.marketPrice == null ? null : num(data.marketPrice)
+      if (prevMarket !== nextMarket) {
+        changes.marketPrice = { from: prevMarket || '—', to: nextMarket ?? '—' }
       }
     }
     await this.opLog.log({

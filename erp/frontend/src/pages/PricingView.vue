@@ -52,7 +52,6 @@ interface PriceItem {
   exchangeRate: number
   freightCallbackTime: string
   marketPrice: number
-  pricingLogic: string
   targetProfitRate: number
   finalPrice: number
   overseasDeliveryFee: number
@@ -361,9 +360,11 @@ function suggestPriceByRate() {
 
 async function confirmPrice() {
   if (!editing.value) return
-  if (!editing.value.marketPrice) { ElMessage.warning('产品开发阶段未填写市场参考价，请先在选品申请中补充'); return }
+  if (!editing.value.marketPrice || editing.value.marketPrice <= 0) {
+    ElMessage.warning('请填写市场参考价（兰特）')
+    return
+  }
   if (!editing.value.finalPrice) { ElMessage.warning('请填写最终售价'); return }
-  if (!editing.value.pricingLogic) { ElMessage.warning('请填写定价逻辑'); return }
   if (estProfit.value < 0) {
     try {
       await erpConfirm(
@@ -375,7 +376,6 @@ async function confirmPrice() {
   const ok = await withAction(async () => {
     await pricingApi.confirm(editing.value!.id, {
       marketPrice: editing.value!.marketPrice,
-      pricingLogic: editing.value!.pricingLogic,
       targetProfitRate: editing.value!.targetProfitRate,
       finalPrice: editing.value!.finalPrice,
       visibleStockQty: editing.value!.visibleStockQty,
@@ -768,13 +768,16 @@ async function submitReprice() {
       <el-divider content-position="left">定价（开发主管 / 陪跑填写）</el-divider>
       <el-form label-width="150px">
         <el-form-item label="市场参考价(R)">
-          <span v-if="editing.marketPrice" style="font-weight:600;font-size:15px">R {{ editing.marketPrice.toFixed(2) }}</span>
-          <span v-else class="text-warn">产品开发阶段未填写</span>
-          <span v-if="editing.marketPrice" class="form-tip">≈ ¥ {{ marketPriceRmb.toFixed(2) }}</span>
-          <span class="form-tip">Takealot 竞品在售价（兰特），来自产品开发自动带入</span>
-        </el-form-item>
-        <el-form-item label="定价逻辑">
-          <el-input v-model="editing.pricingLogic" :disabled="!canSetPrice" placeholder="例如：对标市场价 -5% / 成本加成 60%" />
+          <template v-if="canSetPrice && editing.pricingStatus === 'pending_pricing'">
+            <el-input-number v-model="editing.marketPrice" :min="0" :precision="2" style="width:180px" />
+            <span v-if="editing.marketPrice" class="form-tip">≈ ¥ {{ marketPriceRmb.toFixed(2) }}</span>
+            <span class="form-tip">Takealot 竞品在售价（兰特）；选品申请或商品主数据有值时会自动带入，也可在此直接填写</span>
+          </template>
+          <template v-else>
+            <span v-if="editing.marketPrice" style="font-weight:600;font-size:15px">R {{ editing.marketPrice.toFixed(2) }}</span>
+            <span v-else class="text-warn">未填写</span>
+            <span v-if="editing.marketPrice" class="form-tip">≈ ¥ {{ marketPriceRmb.toFixed(2) }}</span>
+          </template>
         </el-form-item>
         <el-form-item label="目标利润率(%)">
           <el-input-number v-model="editing.targetProfitRate" :min="0" :max="100" :precision="1" :disabled="!canSetPrice" style="width:180px" />

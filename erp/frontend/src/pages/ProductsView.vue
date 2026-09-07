@@ -93,6 +93,12 @@ function formatMoney(val: string | number | undefined | null) {
   return n.toFixed(2)
 }
 
+function formatMarketPrice(val: string | number | null | undefined) {
+  const n = Number(val)
+  if (!Number.isFinite(n) || n <= 0) return '—'
+  return `R ${n.toFixed(2)}`
+}
+
 function downloadCsv(filename: string, headers: string[], rows: unknown[][]) {
   const bom = '\uFEFF'
   const content = bom + [headers.join(','), ...rows.map((r) => r.map(escapeCsv).join(','))].join('\n')
@@ -281,6 +287,9 @@ async function saveProduct() {
       spu: editingProduct.value.spu,
       spec: editingProduct.value.spec,
       costRmb: Number(editingProduct.value.purchaseCost || editingProduct.value.cost) || 0,
+      marketPrice: editingProduct.value.marketPrice === '' || editingProduct.value.marketPrice == null
+        ? null
+        : Number(editingProduct.value.marketPrice),
       lengthCm: Number(editingProduct.value.length) || undefined,
       widthCm: Number(editingProduct.value.width) || undefined,
       heightCm: Number(editingProduct.value.height) || undefined,
@@ -643,6 +652,10 @@ async function printSkuLabels(items: Array<{ sku?: string; name?: string; barcod
               <label>综合成本</label>
               <strong>¥ {{ formatMoney(detailProduct.totalCost || detailProduct.cost) }}</strong>
             </div>
+            <div class="erp-detail__metric">
+              <label>市场参考价</label>
+              <strong>{{ formatMarketPrice(detailProduct.marketPrice) }}</strong>
+            </div>
           </template>
         </DetailSheet>
         <dl class="info-list">
@@ -728,6 +741,10 @@ async function printSkuLabels(items: Array<{ sku?: string; name?: string; barcod
       <el-form-item label="SPU"><el-input v-model="editingProduct.spu" /></el-form-item>
       <el-form-item label="规格"><el-input v-model="editingProduct.spec" /></el-form-item>
       <el-form-item label="采购成本 (RMB)"><el-input v-model="editingProduct.purchaseCost" /></el-form-item>
+      <el-form-item label="市场参考价 (R)">
+        <el-input v-model="editingProduct.marketPrice" placeholder="Takealot 竞品在售价（兰特）" style="width:200px" />
+        <span class="form-tip" style="margin-left:8px">同步至货盘定价 / 选品申请</span>
+      </el-form-item>
       <el-form-item label="开发人">
         <el-select v-model="editingProduct.developerId" placeholder="选择开发人" clearable filterable style="width: 100%">
           <el-option v-for="u in developerOptions" :key="u.id" :label="u.label" :value="u.id" />

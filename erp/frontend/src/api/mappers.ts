@@ -99,6 +99,7 @@ export function mapProduct(row: any) {
     seaFreight: String(seaFreight ?? ''),
     domesticFee: String(domesticFee ?? ''),
     totalCost: String(totalCost ?? ''),
+    marketPrice: row.marketPrice != null && Number(row.marketPrice) > 0 ? String(row.marketPrice) : '',
     barcode: row.barcode || '',
     imageUrl: imageUrls[0] || '',
     imageUrls,
