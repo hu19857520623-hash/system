@@ -13,6 +13,12 @@ export class FreightBillController {
     return this.service.list(q)
   }
 
+  @RequirePerms('receivable_payable.view')
+  @Get('container-options')
+  containerOptions() {
+    return this.service.containerOptions()
+  }
+
   @RequirePerms('receivable_payable.manual')
   @Post()
   create(@Body() body: any) {

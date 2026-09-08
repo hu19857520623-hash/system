@@ -1203,6 +1203,8 @@ model SupplierFreightBill {
   billMonth      String   @map("bill_month") @db.VarChar(7)
   totalAmount    Decimal  @default(0) @map("total_amount") @db.Decimal(14, 2)
   containerCount Int?     @default(0) @map("container_count")
+  containerNo    String?  @map("container_no") @db.VarChar(50)
+  skuDetails     Json?    @map("sku_details")
   weightKg       Decimal? @map("weight_kg") @db.Decimal(12, 2)
   status         String   @default("draft") @db.VarChar(20)
   remark         String?  @db.Text
@@ -1210,6 +1212,7 @@ model SupplierFreightBill {
   updatedAt      DateTime @updatedAt @map("updated_at")
 
   @@index([supplierId], map: "idx_sfb_supplier")
+  @@index([containerNo], map: "idx_sfb_container")
   @@map("supplier_freight_bill")
 }
 

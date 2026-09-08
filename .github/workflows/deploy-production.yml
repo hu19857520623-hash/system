@@ -219,6 +219,11 @@ jobs:
           test -f "$unify_sales_sql" || { echo "Missing $unify_sales_sql"; exit 1; }
           cat "$unify_sales_sql" | docker compose exec -T mysql mysql -uroot -p"$mysql_pw" --default-character-set=utf8mb4 --batch takealot_erp
 
+          echo '=== Apply freight bill container link ==='
+          freight_container_sql="${PWD}/backend/prisma/scripts/migrate_freight_bill_container.sql"
+          test -f "$freight_container_sql" || { echo "Missing $freight_container_sql"; exit 1; }
+          cat "$freight_container_sql" | docker compose exec -T mysql mysql -uroot -p"$mysql_pw" --default-character-set=utf8mb4 --batch takealot_erp
+
           echo '=== Build store-monitor ==='
           cd /opt/system/store-monitor
           docker build -t takealot/store-monitor:production . </dev/null

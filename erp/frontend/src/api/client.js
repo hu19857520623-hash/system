@@ -503,6 +503,7 @@ export const billingApi = {
 
 export const freightBillApi = {
   list: (params) => api.get('/freight-bills', params),
+  containerOptions: () => api.get('/freight-bills/container-options'),
   create: (data) => api.post('/freight-bills', data),
 }
 

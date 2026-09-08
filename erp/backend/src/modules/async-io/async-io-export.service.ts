@@ -110,9 +110,9 @@ export class AsyncIoExportService {
       take: 5000,
       orderBy: { id: 'desc' },
     })
-    const headers = ['账单号', '供应商ID', '月份', '金额', '柜数', '状态', '备注']
+    const headers = ['账单号', '供应商ID', '柜号', '月份', '金额', '柜数', '状态', '备注']
     const data = rows.map((r) => [
-      r.billNo, Number(r.supplierId), r.billMonth || '', r.totalAmount, r.containerCount, r.status, r.remark || '',
+      r.billNo, Number(r.supplierId), r.containerNo || '', r.billMonth || '', r.totalAmount, r.containerCount, r.status, r.remark || '',
     ])
     return { fileName: `海运账单_${Date.now()}.csv`, content: toCsv(headers, data), totalRows: data.length }
   }

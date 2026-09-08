@@ -7,15 +7,37 @@ import { useTablePagination } from '@/composables/useTablePagination.ts'
 import { useRowActions } from '@/composables/useRowActions'
 import ListPagination from '@/components/ListPagination.vue'
 
-const { showDetail, exportTask, toast } = useRowActions()
+type SkuLine = {
+  sku: string
+  productName?: string
+  qty: number
+  areaCbm: number
+  sharePct: number
+}
+
+type ContainerOption = {
+  containerNo: string
+  shipmentNo?: string
+  mode?: string
+  poNos?: string
+  skuCount?: number
+  totalAreaCbm?: number
+  skuLines?: SkuLine[]
+}
+
+const { exportTask, toast } = useRowActions()
 
 const dialogVisible = ref(false)
+const detailVisible = ref(false)
+const detailRow = ref<any>(null)
 const suppliers = ref<any[]>([])
+const containerOptions = ref<ContainerOption[]>([])
 const form = ref({
   supplierId: null as number | null,
   totalAmount: '',
   billMonth: '',
   containerCount: 0,
+  containerNo: '',
   remark: '',
   mode: 'lcl' as 'lcl' | 'fcl',
 })
@@ -26,18 +48,26 @@ const STATUS_MAP: Record<string, { label: string; tone: string }> = {
   pending: { label: '待确认', tone: 'warn' },
 }
 
+function formatArea(value: unknown) {
+  const n = Number(value || 0)
+  return n > 0 ? n.toFixed(4) : '—'
+}
+
 function mapFreight(row: any) {
   const st = STATUS_MAP[row.status] || { label: row.status, tone: 'info' }
   return {
     id: row.billNo,
     supplier: row.supplierName || `供应商 #${row.supplierId}`,
-    po: row.poNo || row.remark || '',
+    containerNo: row.containerNo || '',
     type: '海运费',
     amount: num(row.totalAmount).toLocaleString(),
     mode: row.containerCount ? 'FCL' : 'LCL',
     status: st.label,
     tone: st.tone,
     date: fmtTime(row.createdAt).split(' ')[0],
+    skuLines: Array.isArray(row.skuLines) ? row.skuLines : [],
+    totalAreaCbm: Number(row.totalAreaCbm || 0),
+    remark: row.remark || '',
     _raw: row,
   }
 }
@@ -54,6 +84,10 @@ const totalAmount = computed(() =>
 const pendingCount = computed(() =>
   expenses.value.filter(row => row._raw?.status !== 'confirmed').length,
 )
+const selectedContainer = computed(() =>
+  containerOptions.value.find(item => item.containerNo === form.value.containerNo) || null,
+)
+const previewLines = computed<SkuLine[]>(() => selectedContainer.value?.skuLines || [])
 
 async function loadSuppliers() {
   try {
@@ -67,6 +101,15 @@ async function loadSuppliers() {
   }
 }
 
+async function loadContainerOptions() {
+  try {
+    const res = await freightBillApi.containerOptions()
+    containerOptions.value = Array.isArray(res) ? res : (res.items || [])
+  } catch {
+    containerOptions.value = []
+  }
+}
+
 function addExpense() {
   const now = new Date()
   form.value = {
@@ -74,6 +117,7 @@ function addExpense() {
     totalAmount: '',
     billMonth: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`,
     containerCount: 0,
+    containerNo: '',
     remark: '',
     mode: 'lcl',
   }
@@ -85,6 +129,11 @@ async function submitExpense() {
     toast('请选择供应商', 'warning')
     return
   }
+  if (!form.value.containerNo.trim()) {
+    toast('请选择或填写关联柜号', 'warning')
+    return
+  }
+  form.value.containerNo = form.value.containerNo.trim().toUpperCase()
   const amount = parseFloat(form.value.totalAmount)
   if (!Number.isFinite(amount) || amount <= 0) {
     toast('请填写有效金额', 'warning')
@@ -96,6 +145,7 @@ async function submitExpense() {
       totalAmount: amount,
       billMonth: form.value.billMonth,
       containerCount: form.value.mode === 'fcl' ? Math.max(1, form.value.containerCount || 1) : 0,
+      containerNo: form.value.containerNo.trim(),
       remark: form.value.remark || undefined,
       status: 'draft',
     })
@@ -105,14 +155,12 @@ async function submitExpense() {
 }
 
 function detail(row: any) {
-  showDetail(`海运账单 · ${row.id}`, [
-    ['账单编号', row.id], ['供应商', row.supplier], ['关联PO', row.po], ['费用类型', row.type],
-    ['金额 (RMB)', `¥ ${row.amount}`], ['运输方式', row.mode], ['状态', row.status], ['日期', row.date],
-  ])
+  detailRow.value = row
+  detailVisible.value = true
 }
 
 onMounted(async () => {
-  await loadSuppliers()
+  await Promise.all([loadSuppliers(), loadContainerOptions()])
   await load()
 })
 </script>
@@ -123,7 +171,7 @@ onMounted(async () => {
       <div class="page-header">
         <div>
           <div class="page-title">海运账单</div>
-          <p class="page-subtitle">记录海运、拼柜与整柜费用</p>
+          <p class="page-subtitle">按柜号归集海运费用，并查看各 SKU 分摊面积</p>
         </div>
         <div class="header-actions">
           <el-button type="primary" size="small" @click="addExpense">录入费用</el-button>
@@ -151,8 +199,8 @@ onMounted(async () => {
         <template #default="{ row }"><span class="mono">{{ row.id }}</span></template>
       </el-table-column>
       <el-table-column prop="supplier" label="供应商" min-width="140" show-overflow-tooltip />
-      <el-table-column prop="po" label="关联PO" min-width="140" show-overflow-tooltip>
-        <template #default="{ row }"><span class="mono linkish">{{ row.po || '—' }}</span></template>
+      <el-table-column prop="containerNo" label="关联柜号" min-width="150" show-overflow-tooltip>
+        <template #default="{ row }"><span class="mono linkish">{{ row.containerNo || '—' }}</span></template>
       </el-table-column>
       <el-table-column prop="type" label="费用类型" min-width="96" show-overflow-tooltip />
       <el-table-column prop="amount" label="金额 (RMB)" width="118" align="right">
@@ -173,13 +221,30 @@ onMounted(async () => {
     <ListPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
   </el-card>
 
-  <el-dialog v-model="dialogVisible" title="录入海运费用" width="640px" class="freight-entry-dialog">
-    <p class="dialog-note">录入后将生成待入账的海运账单，可在财务确认后进入成本核算。</p>
+  <el-dialog v-model="dialogVisible" title="录入海运费用" width="720px" class="freight-entry-dialog">
+    <p class="dialog-note">选择柜号后自动带出该柜 SKU、数量和分摊海运面积；保存后生成待入账账单。</p>
     <el-form label-position="top">
       <div class="expense-form-grid">
       <el-form-item label="供应商" required class="span-two">
         <el-select v-model="form.supplierId" placeholder="选择供应商" style="width:100%">
           <el-option v-for="s in suppliers" :key="s.id" :label="s.name" :value="s.id" />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="关联柜号" required class="span-two">
+        <el-select
+          v-model="form.containerNo"
+          filterable
+          allow-create
+          default-first-option
+          placeholder="选择或输入柜号"
+          style="width:100%"
+        >
+          <el-option
+            v-for="item in containerOptions"
+            :key="item.containerNo"
+            :label="item.shipmentNo ? `${item.containerNo} · ${item.shipmentNo}` : item.containerNo"
+            :value="item.containerNo"
+          />
         </el-select>
       </el-form-item>
       <el-form-item label="账期">
@@ -197,14 +262,64 @@ onMounted(async () => {
       <el-form-item label="金额 (RMB)" required>
         <el-input v-model="form.totalAmount" placeholder="海运/报关等费用" />
       </el-form-item>
-      <el-form-item label="关联 PO / 备注" class="span-two">
-        <el-input v-model="form.remark" placeholder="PO 号或备注" />
+      <el-form-item label="备注" class="span-two">
+        <el-input v-model="form.remark" placeholder="可选备注" />
       </el-form-item>
       </div>
     </el-form>
+    <div v-if="previewLines.length" class="sku-preview">
+      <div class="sku-preview-title">
+        <span>柜内 SKU 明细</span>
+        <strong>合计 {{ formatArea(selectedContainer?.totalAreaCbm) }} m³</strong>
+      </div>
+      <el-table :data="previewLines" size="small" border>
+        <el-table-column prop="sku" label="SKU" min-width="120">
+          <template #default="{ row }"><span class="mono">{{ row.sku }}</span></template>
+        </el-table-column>
+        <el-table-column prop="qty" label="数量" width="88" align="right" />
+        <el-table-column label="分摊海运面积 (m³)" min-width="150" align="right">
+          <template #default="{ row }">{{ formatArea(row.areaCbm) }}</template>
+        </el-table-column>
+      </el-table>
+    </div>
     <template #footer>
       <el-button @click="dialogVisible = false">取消</el-button>
       <el-button type="primary" @click="submitExpense">保存</el-button>
+    </template>
+  </el-dialog>
+
+  <el-dialog v-model="detailVisible" :title="detailRow ? `海运账单 · ${detailRow.id}` : '海运账单详情'" width="760px">
+    <template v-if="detailRow">
+      <div class="info-grid">
+        <div><span>账单编号</span><strong class="mono">{{ detailRow.id }}</strong></div>
+        <div><span>关联柜号</span><strong class="mono">{{ detailRow.containerNo || '—' }}</strong></div>
+        <div><span>供应商</span><strong>{{ detailRow.supplier }}</strong></div>
+        <div><span>金额</span><strong>¥ {{ detailRow.amount }}</strong></div>
+        <div><span>运输方式</span><strong>{{ detailRow.mode }}</strong></div>
+        <div><span>状态</span><strong>{{ detailRow.status }}</strong></div>
+        <div><span>日期</span><strong>{{ detailRow.date }}</strong></div>
+        <div><span>合计面积</span><strong>{{ formatArea(detailRow.totalAreaCbm) }} m³</strong></div>
+      </div>
+      <div class="sku-preview">
+        <div class="sku-preview-title">
+          <span>SKU 明细</span>
+          <strong>{{ detailRow.skuLines.length }} 个 SKU</strong>
+        </div>
+        <el-table v-if="detailRow.skuLines.length" :data="detailRow.skuLines" size="small" border>
+          <el-table-column prop="sku" label="SKU" min-width="120">
+            <template #default="{ row }"><span class="mono">{{ row.sku }}</span></template>
+          </el-table-column>
+          <el-table-column prop="productName" label="商品" min-width="140" show-overflow-tooltip />
+          <el-table-column prop="qty" label="数量" width="88" align="right" />
+          <el-table-column label="分摊海运面积 (m³)" min-width="150" align="right">
+            <template #default="{ row }">{{ formatArea(row.areaCbm) }}</template>
+          </el-table-column>
+          <el-table-column label="占比" width="80" align="right">
+            <template #default="{ row }">{{ row.areaCbm ? `${Number(row.sharePct || 0).toFixed(1)}%` : '—' }}</template>
+          </el-table-column>
+        </el-table>
+        <p v-else class="empty-hint">该柜号暂无 SKU 明细。可在明瑞物流里补齐柜号货物后刷新。</p>
+      </div>
     </template>
   </el-dialog>
 </template>
@@ -249,9 +364,39 @@ onMounted(async () => {
 .freight-table-scroll { --erp-table-min-width: 980px; }
 .mono { font-family: var(--font-mono); font-size: 12px; }
 .linkish { color: #2563eb; }
+.info-grid {
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:1px;
+  overflow:hidden;
+  margin-bottom:16px;
+  border:1px solid var(--border);
+  border-radius:12px;
+  background:var(--border);
+}
+.info-grid > div {
+  min-height:64px;
+  padding:12px 14px;
+  background:var(--panel-solid);
+}
+.info-grid span { display:block; margin-bottom:6px; color:var(--text-muted); font-size:11px; }
+.info-grid strong { color:var(--text); font-size:13px; }
+.sku-preview { margin-top:4px; }
+.sku-preview-title {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  margin:12px 0 8px;
+  color:var(--text);
+  font-size:13px;
+  font-weight:600;
+}
+.sku-preview-title strong { color:var(--text-muted); font-size:12px; font-weight:500; }
+.empty-hint { margin:0; color:var(--text-muted); font-size:12px; }
 @media (max-width:680px) {
   .bill-summary,
-  .expense-form-grid { grid-template-columns:1fr; }
+  .expense-form-grid,
+  .info-grid { grid-template-columns:1fr; }
   .span-two { grid-column:auto; }
 }
 </style>
