@@ -14,7 +14,7 @@ const customer = {
   companyName: 'Acme Ltd',
   contactEmail: 'owner@acme.test',
   contactName: 'Owner',
-  contactPhone: '123',
+  contactPhone: '13800138000',
   balance: 0,
   status: 1,
   createdAt: new Date('2026-01-01T00:00:00.000Z'),
@@ -37,11 +37,10 @@ const createDto: CreateCustomerDto = {
   companyName: 'Acme Ltd',
   contactEmail: 'owner@acme.test',
   contactName: 'Owner',
-  contactPhone: '123',
+  contactPhone: '13800138000',
   portalType: 'ecommerce',
   warehouse: 'WMS-JHB-01',
   permissionTemplate: 'ecommerce',
-  username: 'acmeportal',
   temporaryPassword: 'abcdef1',
 }
 
@@ -101,7 +100,7 @@ describe('CustomerProvisioningService unified ERP/OMS provisioning', () => {
       oms: {
         omsId: 'erp-customer-cus-042',
         portalReady: true,
-        portalLoginEmail: 'acmeportal',
+        portalLoginEmail: '13800138000',
         mustChangePassword: true,
       },
     })
@@ -119,7 +118,7 @@ describe('CustomerProvisioningService unified ERP/OMS provisioning', () => {
     const portalInsert = tx.$executeRaw.mock.calls[2]
     expect(rawText(portalInsert)).toContain('oms_portaluser')
     expect(rawValues(portalInsert)).toContain('erp-portal-cus-042')
-    expect(rawValues(portalInsert)).toContain('acmeportal')
+    expect(rawValues(portalInsert)).toContain('13800138000')
     expect(rawValues(portalInsert)).toContain('bcrypt-hash')
     expect(rawValues(portalInsert)).not.toContain('abcdef1')
   })
@@ -140,7 +139,12 @@ describe('CustomerProvisioningService unified ERP/OMS provisioning', () => {
       .mockResolvedValueOnce([{
         id: 'portal-existing',
         customerId: 'oms-existing',
-        username: 'acmeportal',
+        username: '13800138000',
+      }])
+      .mockResolvedValueOnce([{
+        id: 'portal-existing-2',
+        customerId: 'oms-existing-2',
+        username: '13800138000cus-042',
       }])
 
     await expect(service.create(createDto, { requirePortal: true }))
@@ -179,26 +183,29 @@ describe('CustomerProvisioningService unified ERP/OMS provisioning', () => {
     const disabled = {
       ...customer,
       customerName: 'Acme Updated',
-      contactPhone: '456',
+      contactPhone: '13800138000',
       status: 0,
       updatedAt: new Date('2026-01-02T00:00:00.000Z'),
     }
     tx.customer.findUnique.mockResolvedValue(customer)
     tx.customer.update.mockResolvedValue(disabled)
-    tx.$queryRaw.mockResolvedValue([{
-      ...account,
-      type: 'hybrid',
-      warehouse: 'WMS-CPT-01',
-      permissions: '["catalog:read"]',
-      portalUserId: 'erp-portal-cus-042',
-      portalLoginEmail: 'acmeportal',
-      portalMustChangePassword: 0,
-    }])
+    tx.$queryRaw
+      .mockResolvedValueOnce([{
+        ...account,
+        type: 'hybrid',
+        warehouse: 'WMS-CPT-01',
+        permissions: '["catalog:read"]',
+        portalUserId: 'erp-portal-cus-042',
+        portalUsername: '13800138000',
+        portalLoginEmail: '13800138000',
+        portalMustChangePassword: 0,
+      }])
+      .mockResolvedValueOnce([])
     tx.$executeRaw.mockResolvedValue(1)
 
     await service.update(42, {
       customerName: 'Acme Updated',
-      contactPhone: '456',
+      contactPhone: '13800138000',
       status: 0,
     })
 
@@ -225,7 +232,7 @@ describe('CustomerProvisioningService unified ERP/OMS provisioning', () => {
       .mockResolvedValueOnce([{
         ...account,
         portalUserId: 'erp-portal-cus-042',
-        portalLoginEmail: 'acmeportal',
+        portalLoginEmail: '13800138000',
         portalMustChangePassword: 0,
       }])
       .mockResolvedValueOnce([])
@@ -233,11 +240,11 @@ describe('CustomerProvisioningService unified ERP/OMS provisioning', () => {
 
     const result = await service.resetTemporaryPassword(
       { id: BigInt(42) },
-      { username: 'acmeportal', temporaryPassword: 'reset1' },
+      { temporaryPassword: 'reset1' },
     )
 
     expect(result.oms).toMatchObject({
-      portalLoginEmail: 'acmeportal',
+      portalLoginEmail: '13800138000',
       mustChangePassword: true,
     })
     expect(tx.$executeRaw).toHaveBeenCalledTimes(1)

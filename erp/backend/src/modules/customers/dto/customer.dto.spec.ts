@@ -9,7 +9,7 @@ const validInput = {
   portalType: 'ecommerce',
   warehouse: 'WMS-JHB-01',
   permissions: ['dashboard:read'],
-  username: 'acmeportal',
+  contactPhone: '13800138000',
   temporaryPassword: 'abcdef',
 }
 
