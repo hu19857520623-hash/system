@@ -14,7 +14,7 @@ export interface CustomerCreateRequest {
   companyName?: string
   contactEmail?: string
   contactName?: string
-  contactPhone?: string
+  contactPhone: string
   status?: 0 | 1
   balance?: number
   portalType: OmsCustomerType
@@ -23,7 +23,8 @@ export interface CustomerCreateRequest {
   warehouse: string
   permissionTemplate?: OmsCustomerType
   permissions?: OmsPortalPermission[]
-  username: string
+  /** OMS login is derived from contactPhone. */
+  username?: string
   temporaryPassword: string
 }
 
@@ -45,7 +46,8 @@ export interface CustomerPortalAccountWire {
 }
 
 export interface PortalTemporaryPasswordRequest {
-  username: string
+  /** @deprecated Login account is derived from the customer contact phone. */
+  username?: string
   temporaryPassword: string
 }
 
