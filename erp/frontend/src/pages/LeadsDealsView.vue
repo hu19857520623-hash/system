@@ -325,8 +325,6 @@ async function toErp(row: any) {
     omsType,
     warehouse: warehouseOptions.value[0]?.code || 'WMS-JHB-01',
     permissionTemplate: omsType,
-    temporaryPassword: '',
-    confirmPassword: '',
   }
   omsDialogVisible.value = true
 }
@@ -338,6 +336,7 @@ const omsFormRef = ref<FormInstance>()
 const warehouseOptions = ref<{ code: string; name: string }[]>([])
 const omsSuccessVisible = ref(false)
 const omsSuccess = ref<{ customerCode: string; loginPhone: string; customerId?: number } | null>(null)
+const DEFAULT_OMS_TEMPORARY_PASSWORD = '123456'
 const omsForm = ref({
   customerCode: '',
   customerName: '',
@@ -348,8 +347,6 @@ const omsForm = ref({
   omsType: 'ecommerce' as OmsCustomerType,
   warehouse: 'WMS-JHB-01',
   permissionTemplate: 'ecommerce' as OmsCustomerType,
-  temporaryPassword: '',
-  confirmPassword: '',
 })
 
 function normalizePortalLoginPhone(value: unknown) {
@@ -371,24 +368,6 @@ const omsRules: FormRules = {
   contactPhone: [{ validator: omsPhoneValidator(true), trigger: 'blur' }],
   omsType: [{ required: true, message: '请选择 OMS 客户类型', trigger: 'change' }],
   warehouse: [{ required: true, message: '请选择默认仓库', trigger: 'change' }],
-  temporaryPassword: [{
-    validator: (_rule, value, callback) => {
-      const password = String(value ?? '')
-      if (!password) callback(new Error('请填写临时密码'))
-      else if (password.length < 6) callback(new Error('临时密码至少 6 位'))
-      else if (password.length > 128) callback(new Error('临时密码不能超过 128 位'))
-      else callback()
-    },
-    trigger: 'blur',
-  }],
-  confirmPassword: [{
-    validator: (_rule, value, callback) => {
-      if (!value) callback(new Error('请再次输入临时密码'))
-      else if (value !== omsForm.value.temporaryPassword) callback(new Error('两次输入的临时密码不一致'))
-      else callback()
-    },
-    trigger: 'blur',
-  }],
 }
 
 async function loadWarehouses() {
@@ -430,11 +409,9 @@ async function submitOmsAccount() {
       omsType: f.omsType,
       warehouse: f.warehouse.trim(),
       permissionTemplate: f.permissionTemplate || f.omsType,
-      temporaryPassword: f.temporaryPassword,
+      temporaryPassword: DEFAULT_OMS_TEMPORARY_PASSWORD,
     })
     omsDialogVisible.value = false
-    omsForm.value.temporaryPassword = ''
-    omsForm.value.confirmPassword = ''
     omsSuccess.value = {
       customerCode: result.customerCode,
       loginPhone: result.portalUsername || result.portalLoginEmail || normalizePortalLoginPhone(f.contactPhone),
@@ -691,7 +668,7 @@ onMounted(async () => {
     append-to-body
     :close-on-click-modal="false"
   >
-    <p class="oms-hint">填写联系电话与临时密码后为该成交客户开通 OMS 账号。手机号即登录账号；临时密码仅显示一次，客户首次登录必须修改。</p>
+    <p class="oms-hint">填写联系电话后为该成交客户开通 OMS 账号。手机号即登录账号；临时密码固定为 123456，客户首次登录必须修改。</p>
     <el-form ref="omsFormRef" :model="omsForm" :rules="omsRules" label-width="108px">
       <el-form-item label="客户代码" prop="customerCode" required>
         <el-input v-model="omsForm.customerCode" placeholder="如 CUS-001" maxlength="30" />
@@ -732,11 +709,8 @@ onMounted(async () => {
           />
         </el-select>
       </el-form-item>
-      <el-form-item label="临时密码" prop="temporaryPassword" required>
-        <el-input v-model="omsForm.temporaryPassword" type="password" show-password autocomplete="new-password" placeholder="至少 6 位" />
-      </el-form-item>
-      <el-form-item label="确认密码" prop="confirmPassword" required>
-        <el-input v-model="omsForm.confirmPassword" type="password" show-password autocomplete="new-password" />
+      <el-form-item label="临时密码">
+        <el-input :model-value="DEFAULT_OMS_TEMPORARY_PASSWORD" disabled />
       </el-form-item>
     </el-form>
     <template #footer>
@@ -746,11 +720,12 @@ onMounted(async () => {
   </el-dialog>
 
   <el-dialog v-model="omsSuccessVisible" width="520px" destroy-on-close append-to-body>
-    <el-result icon="success" title="OMS 账号已开通" sub-title="请把登录手机号和临时密码交给客户，并提醒首次登录必须改密">
+    <el-result icon="success" title="OMS 账号已开通" sub-title="请把登录手机号和初始密码 123456 交给客户，并提醒首次登录必须改密">
       <template #extra>
         <div v-if="omsSuccess" class="oms-success">
           <div><span>客户代码</span><strong>{{ omsSuccess.customerCode }}</strong></div>
           <div><span>OMS 登录手机号</span><strong>{{ omsSuccess.loginPhone }}</strong></div>
+          <div><span>初始密码</span><strong>123456</strong></div>
         </div>
         <el-button @click="omsSuccessVisible = false">完成</el-button>
         <el-button type="primary" @click="omsSuccessVisible = false; router.push('/customers')">去客户列表</el-button>

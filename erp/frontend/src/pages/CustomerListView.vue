@@ -61,6 +61,8 @@ const passwordForm = ref({ temporaryPassword: '', confirmPassword: '' })
 const createSuccessVisible = ref(false)
 const createSuccess = ref<{ customerCode: string; loginPhone: string } | null>(null)
 
+const DEFAULT_OMS_TEMPORARY_PASSWORD = '123456'
+
 const emptyForm = () => ({
   customerCode: '',
   customerName: '',
@@ -74,8 +76,6 @@ const emptyForm = () => ({
   permissionMode: 'template' as 'template' | 'explicit',
   permissionTemplate: 'ecommerce' as OmsCustomerType,
   permissions: [...OMS_PERMISSION_TEMPLATES.ecommerce] as OmsPortalPermission[],
-  temporaryPassword: '',
-  confirmPassword: '',
 })
 
 const form = ref(emptyForm())
@@ -141,12 +141,6 @@ function temporaryPasswordValidator(_rule: unknown, value: unknown, callback: Va
   callback(error ? new Error(error) : undefined)
 }
 
-function createPasswordConfirmationValidator(_rule: unknown, value: unknown, callback: ValidationCallback) {
-  if (!value) callback(new Error('请再次输入临时密码'))
-  else if (value !== form.value.temporaryPassword) callback(new Error('两次输入的临时密码不一致'))
-  else callback()
-}
-
 function resetPasswordConfirmationValidator(_rule: unknown, value: unknown, callback: ValidationCallback) {
   if (!value) callback(new Error('请再次输入临时密码'))
   else if (value !== passwordForm.value.temporaryPassword) callback(new Error('两次输入的临时密码不一致'))
@@ -180,8 +174,6 @@ const createRules: FormRules = {
   warehouse: [{ validator: requiredTextValidator('默认仓库', 100), trigger: 'change' }],
   permissionTemplate: [{ required: true, message: '请选择权限模板', trigger: 'change' }],
   permissions: [{ validator: permissionsValidator, trigger: 'change' }],
-  temporaryPassword: [{ validator: temporaryPasswordValidator, trigger: 'blur' }],
-  confirmPassword: [{ validator: createPasswordConfirmationValidator, trigger: 'blur' }],
 }
 
 const editRules: FormRules = {
@@ -211,18 +203,12 @@ async function validateForm(instance: FormInstance | undefined) {
   }
 }
 
-function clearCreateSecrets() {
-  form.value.temporaryPassword = ''
-  form.value.confirmPassword = ''
-}
-
 function clearPasswordSecrets() {
   passwordForm.value.temporaryPassword = ''
   passwordForm.value.confirmPassword = ''
 }
 
 function handleCreateClosed() {
-  clearCreateSecrets()
   createFormRef.value?.clearValidate()
 }
 
@@ -311,8 +297,6 @@ function openEdit(row: any) {
     permissionMode: 'template',
     permissionTemplate: (row.omsType || 'ecommerce') as OmsCustomerType,
     permissions: [...(row.omsPermissions || [])] as OmsPortalPermission[],
-    temporaryPassword: '',
-    confirmPassword: '',
   }
   editVisible.value = true
 }
@@ -409,9 +393,8 @@ async function submitCreate() {
     ...(f.permissionMode === 'template'
       ? { permissionTemplate: f.permissionTemplate }
       : { permissions: f.permissions }),
-    temporaryPassword: f.temporaryPassword,
+    temporaryPassword: DEFAULT_OMS_TEMPORARY_PASSWORD,
   }
-  clearCreateSecrets()
   saving.value = true
   try {
     const result = await customerApi.create(payload)
@@ -424,7 +407,7 @@ async function submitCreate() {
     createSuccessVisible.value = true
     await reloadAll()
   } catch (e: any) {
-    ElMessage.error(`${e?.message || '开户失败'}；临时密码未保留，请重新输入`)
+    ElMessage.error(e?.message || '开户失败')
   } finally {
     saving.value = false
   }
@@ -730,27 +713,10 @@ onMounted(() => {
               </div>
             </div>
           </el-form-item>
-          <div class="form-grid">
-            <el-form-item label="临时密码" prop="temporaryPassword" required>
-              <el-input
-                v-model="form.temporaryPassword"
-                type="password"
-                show-password
-                autocomplete="new-password"
-                placeholder="至少 6 位"
-              />
-            </el-form-item>
-            <el-form-item label="确认密码" prop="confirmPassword" required>
-              <el-input
-                v-model="form.confirmPassword"
-                type="password"
-                show-password
-                autocomplete="new-password"
-                placeholder="再次输入临时密码"
-              />
-            </el-form-item>
-          </div>
-          <p class="password-note">临时密码仅用于本次开户，不会在成功后再次显示；客户首次登录必须修改。</p>
+          <el-form-item label="临时密码">
+            <el-input :model-value="DEFAULT_OMS_TEMPORARY_PASSWORD" disabled />
+          </el-form-item>
+          <p class="password-note">临时密码固定为 123456，无需填写；客户首次登录必须修改。</p>
         </div>
       </el-form>
       <template #footer>
@@ -771,8 +737,12 @@ onMounted(() => {
               <span>OMS 登录手机号</span>
               <strong>{{ createSuccess.loginPhone }}</strong>
             </div>
+            <div class="success-account-row">
+              <span>初始密码</span>
+              <strong class="mono">123456</strong>
+            </div>
             <el-alert
-              title="临时密码不会再次显示；客户首次登录后必须修改密码。"
+              title="客户首次登录后必须修改密码。"
               type="info"
               :closable="false"
               show-icon
