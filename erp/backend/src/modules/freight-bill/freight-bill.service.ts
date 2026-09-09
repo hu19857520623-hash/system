@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
 import { PRODUCT_DIM_SELECT } from '../management-loop/management-loop-report.util'
+import { numDim } from '../../common/product-dimension.util'
 import {
   allocateFreightArea,
   parseCargoItems,
@@ -270,7 +271,15 @@ export class FreightBillService {
           select: { ...PRODUCT_DIM_SELECT, sku: true, productName: true },
         })
       : []
-    const productMap = new Map(products.map((p) => [p.sku, p]))
+    const productMap = new Map(products.map((p) => [p.sku, {
+      productName: p.productName,
+      lengthCm: numDim(p.lengthCm),
+      widthCm: numDim(p.widthCm),
+      heightCm: numDim(p.heightCm),
+      measuredLengthCm: numDim(p.measuredLengthCm),
+      measuredWidthCm: numDim(p.measuredWidthCm),
+      measuredHeightCm: numDim(p.measuredHeightCm),
+    }]))
 
     for (const containerNo of unique) {
       result.set(containerNo, allocateFreightArea(cargoByContainer.get(containerNo) || [], productMap))
