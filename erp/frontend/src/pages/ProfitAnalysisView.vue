@@ -5,6 +5,9 @@ import { num } from '@/api/mappers.ts'
 import { useTablePagination } from '@/composables/useTablePagination.ts'
 import ListPagination from '@/components/ListPagination.vue'
 
+defineOptions({ name: 'ProfitAnalysisView' })
+withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false })
+
 const period = ref('year')
 const dateRange = ref<string[]>([])
 const keyword = ref('')
@@ -101,7 +104,7 @@ async function loadAll() {
 
     summary.value = [
       { label: '营业收入', value: fmtMoney(sales), change: '客户结算入账', tone: 'success' },
-      { label: '采购成本', value: fmtMoney(cost - freight), change: '成本台账', tone: '' },
+      { label: '采购成本', value: fmtMoney(cost - freight), change: '采购货款', tone: '' },
       { label: '物流费用', value: fmtMoney(freight), change: '运费/海运', tone: '' },
       { label: '毛利润', value: fmtMoney(gross), change: '营收 − 成本', tone: 'success' },
       { label: '毛利率', value: `${rate}%`, change: periodLabel.value, tone: 'success' },
@@ -177,8 +180,8 @@ watch(dim, loadAll)
 </script>
 
 <template>
-  <el-card v-loading="loading">
-    <template #header>
+  <el-card v-loading="loading" :class="{ 'is-embedded': embedded }" :shadow="embedded ? 'never' : undefined">
+    <template v-if="!embedded" #header>
       <div class="page-header">
         <div>
           <div class="page-title">利润 / 采购分析</div>
@@ -302,6 +305,7 @@ watch(dim, loadAll)
 .page-header { display:flex; align-items:center; justify-content:space-between; }
 .page-title { font-weight:600; font-size:15px; }
 .page-subtitle { margin-top:4px; color:var(--text-muted); font-size:12px; }
+.is-embedded { border: none; background: transparent; }
 .filter-bar {
   display:flex;
   flex-wrap:wrap;

@@ -5,6 +5,9 @@ import { operatingLedgerApi } from '@/api/client.js'
 import { useAppStore } from '@/stores/app'
 import { pickFile } from '@/composables/useAsyncIo'
 
+defineOptions({ name: 'OperatingLedgerView' })
+withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false })
+
 type LedgerRow = {
   id: number
   entryNo: string
@@ -219,8 +222,8 @@ onMounted(load)
 </script>
 
 <template>
-  <el-card v-loading="loading">
-    <template #header>
+  <el-card v-loading="loading" :class="{ 'is-embedded': embedded }" :shadow="embedded ? 'never' : undefined">
+    <template v-if="!embedded" #header>
       <div class="page-header">
         <div>
           <div class="page-title">经营收支</div>
@@ -234,6 +237,12 @@ onMounted(load)
         </div>
       </div>
     </template>
+    <div v-if="embedded" class="embedded-toolbar">
+      <el-button size="small" :disabled="!rows.length" @click="exportCsv">导出当前页</el-button>
+      <el-button v-if="canManage" size="small" @click="downloadTemplate">下载导入模板</el-button>
+      <el-button v-if="canManage" size="small" @click="importCsv">导入</el-button>
+      <el-button v-if="canManage" type="primary" size="small" @click="openCreate">新增收支</el-button>
+    </div>
 
     <div class="filters">
       <el-date-picker v-model="filters.dateRange" type="daterange" value-format="YYYY-MM-DD" range-separator="至" start-placeholder="开始日期" end-placeholder="结束日期" style="width:260px" />
@@ -301,7 +310,9 @@ onMounted(load)
 .page-header { display:flex; align-items:center; justify-content:space-between; gap:16px; }
 .page-title { font-size:15px; font-weight:600; }
 .page-subtitle { margin:4px 0 0; color:var(--text-muted); font-size:12px; }
-.header-actions, .filters { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.header-actions, .filters, .embedded-toolbar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.embedded-toolbar { justify-content:flex-end; margin-bottom:12px; }
+.is-embedded { border: none; background: transparent; }
 .filters { margin-bottom:14px; }
 .kpi-grid { display:grid; grid-template-columns:repeat(3, minmax(180px, 1fr)); gap:12px; margin-bottom:16px; }
 .kpi-card { padding:16px 18px; border:1px solid var(--el-border-color-lighter); border-radius:8px; background:var(--el-fill-color-blank); }

@@ -7,6 +7,9 @@ import { useTablePagination } from '@/composables/useTablePagination.ts'
 import { useRowActions } from '@/composables/useRowActions'
 import ListPagination from '@/components/ListPagination.vue'
 
+defineOptions({ name: 'SupplierSeaFreightBillView' })
+withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false })
+
 type SkuLine = {
   sku: string
   productName?: string
@@ -166,8 +169,8 @@ onMounted(async () => {
 </script>
 
 <template>
-  <el-card v-loading="loading" class="freight-page-card">
-    <template #header>
+  <el-card v-loading="loading" class="freight-page-card" :class="{ 'is-embedded': embedded }" :shadow="embedded ? 'never' : undefined">
+    <template v-if="!embedded" #header>
       <div class="page-header">
         <div>
           <div class="page-title">海运账单</div>
@@ -179,6 +182,10 @@ onMounted(async () => {
         </div>
       </div>
     </template>
+    <div v-if="embedded" class="embedded-toolbar">
+      <el-button type="primary" size="small" @click="addExpense">录入费用</el-button>
+      <el-button size="small" @click="exportTask('海运账单')">导出</el-button>
+    </div>
     <div class="bill-summary">
       <div>
         <span>账单数量</span>
@@ -327,7 +334,9 @@ onMounted(async () => {
 <style scoped>
 .page-header { display:flex; align-items:center; justify-content:space-between; }
 .page-title { font-weight:600; font-size:15px; }
-.header-actions { display:flex; gap:8px; align-items:center; }
+.header-actions, .embedded-toolbar { display:flex; gap:8px; align-items:center; }
+.embedded-toolbar { justify-content:flex-end; margin-bottom:12px; }
+.is-embedded { border: none; background: transparent; }
 .page-subtitle { margin-top:4px; color:var(--text-muted); font-size:12px; }
 .bill-summary {
   display:grid;

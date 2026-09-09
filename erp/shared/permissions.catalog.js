@@ -148,7 +148,7 @@ exports.PERM_GROUPS = [
     {
         label: '财务',
         perms: [
-            { id: 'cost.view', label: '成本台账 · 查看' },
+            { id: 'cost.view', label: '采购货款 · 查看' },
             { id: 'operating_ledger.view', label: '经营收支 · 查看' },
             { id: 'operating_ledger.manage', label: '经营收支 · 记账' },
             { id: 'billing.view', label: '客户结算 · 查看' },

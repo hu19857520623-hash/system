@@ -15,6 +15,7 @@ export class AsyncIoExportService {
       case 'sync':
         return this.exportSyncLogs()
       case '成本台账':
+      case '采购货款':
       case 'cost':
         return this.exportCostLedger()
       case '获客报表':
@@ -82,7 +83,7 @@ export class AsyncIoExportService {
       r.costNo, r.sku || '', r.costType, r.amountRmb, r.referenceNo || '',
       r.costDate.toISOString().slice(0, 10), r.remark || '',
     ])
-    return { fileName: `成本台账_${Date.now()}.csv`, content: toCsv(headers, data), totalRows: data.length }
+    return { fileName: `采购货款_${Date.now()}.csv`, content: toCsv(headers, data), totalRows: data.length }
   }
 
   private async exportLeadsReport() {

@@ -389,7 +389,7 @@
       "perms": [
         {
           "id": "cost.view",
-          "label": "成本台账 · 查看"
+          "label": "采购货款 · 查看"
         },
         {
           "id": "operating_ledger.view",

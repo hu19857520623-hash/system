@@ -7,6 +7,9 @@ import { useTablePagination } from '@/composables/useTablePagination.ts'
 import { useRowActions } from '@/composables/useRowActions'
 import ListPagination from '@/components/ListPagination.vue'
 
+defineOptions({ name: 'CostLedgerView' })
+withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false })
+
 const { showDetail, exportTask } = useRowActions()
 
 function toBillRow(row: any) {
@@ -64,8 +67,8 @@ async function resetFilters() {
 }
 
 function detail(row: any) {
-  showDetail(`成本台账 · ${row.id}`, [
-    ['成本单号', row.id],
+  showDetail(`采购货款 · ${row.id}`, [
+    ['货款单号', row.id],
     ['费用类型', row.costType],
     ['SKU', row.sku],
     ['关联单号', row.referenceNo],
@@ -83,18 +86,21 @@ onMounted(load)
 </script>
 
 <template>
-  <el-card v-loading="loading">
-    <template #header>
+  <el-card v-loading="loading" :class="{ 'is-embedded': embedded }" :shadow="embedded ? 'never' : undefined">
+    <template v-if="!embedded" #header>
       <div class="page-header">
         <div>
-          <div class="page-title">成本台账</div>
-          <p class="page-subtitle">按费用类型、业务单号和发生日期追踪成本</p>
+          <div class="page-title">采购货款</div>
+          <p class="page-subtitle">按费用类型、业务单号和发生日期追踪采购货款与相关费用</p>
         </div>
-        <el-button size="small" @click="exportTask('成本台账')">导出</el-button>
+        <el-button size="small" @click="exportTask('采购货款')">导出</el-button>
       </div>
     </template>
+    <div v-if="embedded" class="embedded-toolbar">
+      <el-button size="small" @click="exportTask('采购货款')">导出</el-button>
+    </div>
     <div class="filters">
-      <el-input v-model="filters.keyword" clearable placeholder="成本单号 / SKU / 关联单号" style="width:220px" @keyup.enter="applyFilters" />
+      <el-input v-model="filters.keyword" clearable placeholder="货款单号 / SKU / 关联单号" style="width:220px" @keyup.enter="applyFilters" />
       <el-input v-model="filters.costType" clearable placeholder="费用类型" style="width:140px" @keyup.enter="applyFilters" />
       <el-date-picker v-model="filters.dateRange" type="daterange" value-format="YYYY-MM-DD" range-separator="至" start-placeholder="开始日期" end-placeholder="结束日期" style="width:260px" />
       <el-input-number v-model="filters.minAmount" :min="0" :precision="2" controls-position="right" placeholder="最低金额" style="width:130px" />
@@ -106,7 +112,7 @@ onMounted(load)
     </div>
     <div class="erp-table-scroll cost-table-scroll">
     <el-table :data="pagedItems" stripe border size="small" class="cost-table">
-      <el-table-column prop="id" label="成本单号" min-width="132" show-overflow-tooltip>
+      <el-table-column prop="id" label="货款单号" min-width="132" show-overflow-tooltip>
         <template #default="{ row }"><span class="mono">{{ row.id }}</span></template>
       </el-table-column>
       <el-table-column prop="referenceNo" label="关联单号" min-width="140" show-overflow-tooltip>
@@ -143,6 +149,8 @@ onMounted(load)
 .page-header { display:flex; align-items:center; justify-content:space-between; }
 .page-title { font-weight:600; font-size:15px; }
 .page-subtitle { margin-top:4px; color:var(--text-muted); font-size:12px; }
+.embedded-toolbar { display:flex; justify-content:flex-end; margin-bottom:12px; }
+.is-embedded { border: none; background: transparent; }
 .filters { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:14px; }
 .range-separator { color:var(--el-text-color-secondary); }
 .filter-summary { margin-left:auto; color:var(--el-text-color-secondary); font-size:13px; white-space:nowrap; }
