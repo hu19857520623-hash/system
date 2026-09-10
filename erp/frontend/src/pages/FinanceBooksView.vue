@@ -23,7 +23,8 @@ const tabs = [
 
 function canSeeTab(perm: string | readonly string[]) {
   if (app.authenticatedUser?.roleCode === 'admin') return true
-  return Array.isArray(perm) ? perm.some((p) => app.hasPerm(p)) : app.hasPerm(perm)
+  const perms = Array.isArray(perm) ? [...perm] : [perm]
+  return perms.some((p) => app.hasPerm(p))
 }
 
 const visibleTabs = computed(() => tabs.filter((tab) => canSeeTab(tab.perm)))
