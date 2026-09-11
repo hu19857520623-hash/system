@@ -95,6 +95,12 @@ export function getErpSkuInventory(customerCode: string) {
   return apiGet<ErpSkuHolding[]>(`/erp/customers/${encodeURIComponent(customerCode)}/sku-inventory`)
 }
 
+export type ErpInboundCarton = {
+  boxSeq: number
+  boxCode?: string
+  items: { sku: string; qty: number }[]
+}
+
 export type ErpInboundOrder = {
   id: number
   inboundNo: string
@@ -117,6 +123,7 @@ export type ErpInboundOrder = {
   receivedAt?: string | null
   putawayAt?: string | null
   items: { sku: string; expectedQty: number; receivedQty: number; productName?: string }[]
+  cartons?: ErpInboundCarton[]
   idempotent?: boolean
 }
 

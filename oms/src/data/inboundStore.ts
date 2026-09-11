@@ -22,8 +22,45 @@ function mapErpInboundStatus(omsStatus: string): InboundStatus {
   return (allowed.includes(omsStatus as InboundStatus) ? omsStatus : 'on_the_way') as InboundStatus
 }
 
+function lineItemsFromErpCartons(erp: ErpInboundOrder) {
+  if (!erp.cartons?.length) return []
+  return erp.cartons.flatMap((carton) => {
+    const boxNo = Number(carton.boxSeq) > 0 ? Number(carton.boxSeq) : 1
+    return (carton.items || []).map((item) => {
+      const matched = erp.items.find((line) => line.sku === item.sku)
+      return {
+        sku: item.sku,
+        name: matched?.productName || item.sku,
+        qty: item.qty,
+        boxNo,
+        packType: '自带包装',
+        stockType: '以仓库为准',
+      }
+    })
+  })
+}
+
 export function applyErpInboundToLocal(erp: ErpInboundOrder, customerId?: string): InboundOrder {
   const existing = getInboundOrdersSnapshot().find(o => o.inboundNo === erp.inboundNo)
+  const cartonLines = lineItemsFromErpCartons(erp)
+  const lineItems = cartonLines.length
+    ? cartonLines
+    : (existing?.lineItems?.length
+      ? existing.lineItems
+      : erp.items.map((i, index) => ({
+          sku: i.sku,
+          name: i.productName || i.sku,
+          qty: i.expectedQty,
+          boxNo: index + 1,
+          packType: '自带包装',
+          stockType: '以仓库为准',
+        })))
+  const boxCount = Math.max(
+    erp.cartons?.length || 0,
+    existing?.boxCount || 0,
+    new Set(lineItems.map(line => Math.max(1, Number(line.boxNo) || 1))).size,
+    1,
+  )
   const order: InboundOrder = {
     id: existing?.id || `erp-ib-${erp.id}`,
     customerId: customerId || existing?.customerId,
@@ -32,8 +69,8 @@ export function applyErpInboundToLocal(erp: ErpInboundOrder, customerId?: string
     inboundType: (erp.inboundType as InboundType | null) || existing?.inboundType || '自发头程',
     deliveryMethod: (erp.deliveryMethod as DeliveryMethod | null) || existing?.deliveryMethod || 'self',
     stockSource: (erp.stockSource as InboundOrder['stockSource']) || existing?.stockSource || 'owned',
-    boxCount: existing?.boxCount || erp.items.length || 1,
-    skuCount: erp.items.length,
+    boxCount,
+    skuCount: erp.items.length || new Set(lineItems.map(line => line.sku)).size,
     totalQty: erp.totalExpectedQty,
     receivedQty: erp.totalReceivedQty,
     status: mapErpInboundStatus(erp.omsStatus),
@@ -45,17 +82,7 @@ export function applyErpInboundToLocal(erp: ErpInboundOrder, customerId?: string
     contact: erp.contact || existing?.contact,
     contactPhone: erp.contactPhone || existing?.contactPhone,
     remark: erp.remark || existing?.remark,
-    lineItems: erp.items.map((i, index) => {
-      const localLine = existing?.lineItems?.find(line => line.sku === i.sku)
-      return {
-        sku: i.sku,
-        name: i.productName || localLine?.name || i.sku,
-        qty: i.expectedQty,
-        boxNo: localLine?.boxNo || index + 1,
-        packType: localLine?.packType || '自带包装',
-        stockType: localLine?.stockType || '以仓库为准',
-      }
-    }),
+    lineItems,
     attachments: existing?.attachments,
   }
   upsertInboundOrder(order)

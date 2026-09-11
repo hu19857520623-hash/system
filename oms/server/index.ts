@@ -154,6 +154,40 @@ function toOmsWarehouseCode(code?: string | null, fallback = 'jhb1'): string {
   return fallback
 }
 
+type InboundLineItemPayload = {
+  sku: string
+  name: string
+  qty: number
+  boxNo: number
+  packType: string
+  stockType: string
+}
+
+function inboundLinesFromErp(inbound: ErpInboundOrder, existing?: { lineItems?: string | null }): InboundLineItemPayload[] {
+  const existingLines = parseJson<InboundLineItemPayload[]>(String(existing?.lineItems || ''), [])
+  const fromCartons = (inbound.cartons || []).flatMap((carton) => {
+    const boxNo = Number(carton.boxSeq) > 0 ? Number(carton.boxSeq) : 1
+    return (carton.items || []).map((item) => ({
+      sku: item.sku,
+      name: inbound.items.find(line => line.sku === item.sku)?.productName || item.sku,
+      qty: item.qty,
+      boxNo,
+      packType: '自带包装',
+      stockType: '以仓库为准',
+    }))
+  })
+  if (fromCartons.length) return fromCartons
+  if (existingLines.length) return existingLines
+  return (inbound.items || []).map((item, index) => ({
+    sku: item.sku,
+    name: item.productName || item.sku,
+    qty: item.expectedQty,
+    boxNo: index + 1,
+    packType: '自带包装',
+    stockType: '以仓库为准',
+  }))
+}
+
 function validWebhookSignature(rawBody: Buffer, signature: string): boolean {
   if (!WEBHOOK_SECRET) return false
   if (!signature.startsWith('sha256=')) return false
@@ -1475,15 +1509,13 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
       const status = inbound.omsStatus || 'on_the_way'
       const totalQty = inbound.totalExpectedQty ?? 0
       const receivedQty = inbound.totalReceivedQty ?? 0
-      const lineItems = JSON.stringify(
-        (inbound.items || []).map(i => ({
-          sku: i.sku,
-          name: (i as { productName?: string }).productName || i.sku,
-          qty: i.expectedQty,
-          boxNo: 1,
-          packType: '自带包装',
-          stockType: '以仓库为准',
-        })),
+      const lineItemsArr = inboundLinesFromErp(inbound, existing || undefined)
+      const lineItems = JSON.stringify(lineItemsArr)
+      const boxCount = Math.max(
+        inbound.cartons?.length || 0,
+        existing?.boxCount || 0,
+        new Set(lineItemsArr.map(line => Math.max(1, Number(line.boxNo) || 1))).size,
+        1,
       )
       const payload = {
         status,
@@ -1501,6 +1533,8 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
         contactPhone: inbound.contactPhone || existing?.contactPhone,
         remark: inbound.remark ?? existing?.remark,
         lineItems,
+        boxCount,
+        skuCount: inbound.items?.length || existing?.skuCount || 0,
       }
       if (existing) {
         await prisma.inboundOrder.update({
@@ -1517,7 +1551,7 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
             inboundType: inbound.inboundType || '自发头程',
             deliveryMethod: inbound.deliveryMethod || 'self',
             stockSource: inbound.stockSource || 'owned',
-            boxCount: Math.max(1, inbound.items?.length || 1),
+            boxCount,
             skuCount: inbound.items?.length || 0,
             totalQty,
             receivedQty,

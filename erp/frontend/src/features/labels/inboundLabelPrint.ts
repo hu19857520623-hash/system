@@ -58,15 +58,29 @@ function orderLines(order: InboundLabelOrder): InboundLabelLine[] {
       }]
 }
 
+function splitQty(qty: number, parts: number) {
+  const base = Math.floor(qty / parts)
+  const rem = qty % parts
+  return Array.from({ length: parts }, (_, i) => base + (i < rem ? 1 : 0))
+}
+
 export function buildBoxLabelData(order: InboundLabelOrder): BoxLabelData[] {
   const lines = orderLines(order)
-  const boxNos = [...new Set(lines.map(l => l.boxNo ?? 1))].sort((a, b) => a - b)
-  const boxTotal = order.boxCount || boxNos.length || 1
+  const lineBoxNos = lines.map(l => Math.max(1, Number(l.boxNo) || 1))
+  const maxLineBox = lineBoxNos.length ? Math.max(...lineBoxNos) : 1
+  const boxTotal = Math.max(1, Number(order.boxCount) || 0, maxLineBox)
   const referenceNo = order.referenceNo?.trim() || order.inboundNo
   const warehouseCode = order.warehouseCode?.trim() || order.warehouse?.trim() || '—'
+  const uniqueBoxes = new Set(lineBoxNos)
+  const shouldSplit = uniqueBoxes.size === 1 && boxTotal > 1
 
-  return boxNos.map((boxNo) => {
-    const boxLines = lines.filter(l => (l.boxNo ?? 1) === boxNo)
+  return Array.from({ length: boxTotal }, (_, i) => {
+    const boxNo = i + 1
+    const boxLines = shouldSplit
+      ? lines
+          .map(line => ({ ...line, qty: splitQty(Math.max(0, Number(line.qty) || 0), boxTotal)[i] }))
+          .filter(line => line.qty > 0)
+      : lines.filter(l => Math.max(1, Number(l.boxNo) || 1) === boxNo)
     return {
       referenceNo,
       boxNo,
@@ -74,10 +88,12 @@ export function buildBoxLabelData(order: InboundLabelOrder): BoxLabelData[] {
       origin: order.origin,
       boxIndex: boxNo,
       boxTotal,
-      lines: boxLines.map(line => ({
-        sku: lineSku(line, order),
-        qty: Math.max(0, Number(line.qty) || 0),
-      })),
+      lines: boxLines.length
+        ? boxLines.map(line => ({
+            sku: lineSku(line, order),
+            qty: Math.max(0, Number(line.qty) || 0),
+          }))
+        : [{ sku: '—', qty: 0 }],
     }
   })
 }

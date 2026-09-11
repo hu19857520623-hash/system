@@ -104,6 +104,21 @@ describe('inboundLabelPrint', () => {
     expect(labels[1].lines[0]).toEqual({ sku: 'TKL0001-SKU-1', qty: 5 })
   })
 
+  it('prints one page per declared carton when line items lost their box numbers', () => {
+    const labels = buildBoxLabelData({
+      inboundNo: 'IN-20260707001',
+      warehouse: 'jhb1',
+      boxCount: 2,
+      lineItems: [
+        { sku: 'HX6', name: 'HX6', qty: 80, boxNo: 1 },
+      ],
+    })
+
+    expect(labels).toHaveLength(2)
+    expect(labels[0]).toMatchObject({ boxNo: 1, boxTotal: 2, lines: [{ sku: 'HX6', qty: 40 }] })
+    expect(labels[1]).toMatchObject({ boxNo: 2, boxTotal: 2, lines: [{ sku: 'HX6', qty: 40 }] })
+  })
+
   it('builds sku labels with qty copies', () => {
     const inputs = buildInboundLabelInputs({
       inboundNo: 'IN-002',

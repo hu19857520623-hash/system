@@ -287,6 +287,7 @@ export type ErpInboundOrder = {
   createdAt: string
   updatedAt: string
   items: { sku: string; expectedQty: number; receivedQty: number; productId: number; productName?: string }[]
+  cartons?: { boxSeq: number; boxCode?: string; items: { sku: string; qty: number }[] }[]
   idempotent?: boolean
 }
 

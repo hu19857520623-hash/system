@@ -332,7 +332,7 @@ export class InboundService {
             }),
           },
         },
-        include: { items: true },
+        include: { items: true, cartons: { include: { items: true }, orderBy: { boxSeq: 'asc' } } },
       })
 
       for (const [sku, { productId, qty }] of skuTotals) {
@@ -379,7 +379,7 @@ export class InboundService {
       })
       const withItems = await this.prisma.inboundOrder.findUnique({
         where: { id: BigInt(result.id) },
-        include: { items: true },
+        include: { items: true, cartons: { include: { items: true }, orderBy: { boxSeq: 'asc' } } },
       })
       if (withItems) {
         await this.persistCartons(this.prisma, withItems, data.cartons)
@@ -423,6 +423,23 @@ export class InboundService {
         items: [{ sku: item.sku, qty: item.expectedQty }],
       }))
     }
+
+    const merged = new Map<number, { boxCode?: string; boxSeq: number; items: { sku: string; qty: number }[] }>()
+    let autoSeq = 0
+    for (const carton of cartonsDef) {
+      const boxSeq = Number(carton.boxSeq) > 0 ? Number(carton.boxSeq) : ++autoSeq
+      const current = merged.get(boxSeq) ?? { boxSeq, boxCode: carton.boxCode, items: [] as { sku: string; qty: number }[] }
+      if (!current.boxCode && carton.boxCode) current.boxCode = carton.boxCode
+      for (const line of carton.items) {
+        const sku = String(line.sku || '').trim()
+        const qty = Number(line.qty)
+        const hit = current.items.find((item) => item.sku.toUpperCase() === sku.toUpperCase())
+        if (hit) hit.qty += qty
+        else current.items.push({ sku, qty })
+      }
+      merged.set(boxSeq, current)
+    }
+    cartonsDef = [...merged.values()].sort((a, b) => a.boxSeq - b.boxSeq)
 
     const expectedBySku = new Map<string, number>()
     for (const item of order.items) {
@@ -920,7 +937,7 @@ export class InboundService {
           arrivedAt: now,
           arrivedBy: operatorId ? BigInt(operatorId) : undefined,
         },
-        include: { items: true },
+        include: { items: true, cartons: { include: { items: true }, orderBy: { boxSeq: 'asc' } } },
       })
       await tx.inboundArrivalScan.create({
         data: {
@@ -1293,7 +1310,7 @@ export class InboundService {
               confirmedBy: operatorId ? BigInt(operatorId) : undefined,
             }
           : {},
-        include: { items: true },
+        include: { items: true, cartons: { include: { items: true }, orderBy: { boxSeq: 'asc' } } },
       })
       return { ...updated, id: Number(updated.id), allDone }
     }).then(async (result) => {
@@ -1552,6 +1569,11 @@ export class InboundService {
     receivedAt?: Date | null
     putawayAt?: Date | null
     items?: { sku: string; expectedQty: number; actualQty?: number | null; productId: bigint; remark?: string | null }[]
+    cartons?: Array<{
+      boxSeq: number
+      boxCode: string
+      items?: Array<{ sku: string; qty: number }>
+    }>
   }) {
     const displayStatus = normalizeInboundStatus(order.status)
     const items = (order.items || []).map((i) => ({
@@ -1560,6 +1582,11 @@ export class InboundService {
       receivedQty: i.actualQty ?? 0,
       productId: Number(i.productId),
       productName: i.remark || i.sku,
+    }))
+    const cartons = (order.cartons || []).map((carton) => ({
+      boxSeq: carton.boxSeq,
+      boxCode: carton.boxCode,
+      items: (carton.items || []).map((item) => ({ sku: item.sku, qty: item.qty })),
     }))
     const meta = parseOmsInboundMeta(order.remark)
     return {
@@ -1588,6 +1615,7 @@ export class InboundService {
       totalExpectedQty: items.reduce((s, i) => s + i.expectedQty, 0),
       totalReceivedQty: items.reduce((s, i) => s + i.receivedQty, 0),
       items,
+      cartons,
     }
   }
 
@@ -1742,7 +1770,7 @@ export class InboundService {
     if (existing) {
       const detail = await this.prisma.inboundOrder.findUnique({
         where: { id: existing.id },
-        include: { items: true },
+        include: { items: true, cartons: { include: { items: true }, orderBy: { boxSeq: 'asc' } } },
       })
       return { ...this.mapInboundForOms(detail!), idempotent: true }
     }
@@ -1847,7 +1875,7 @@ export class InboundService {
 
     const fresh = await this.prisma.inboundOrder.findUnique({
       where: { id: order.id },
-      include: { items: true },
+      include: { items: true, cartons: { include: { items: true }, orderBy: { boxSeq: 'asc' } } },
     })
     return { ...this.mapInboundForOms(fresh!), idempotent: false }
   }
@@ -1857,7 +1885,7 @@ export class InboundService {
     if (!code) throw new BadRequestException('缺少客户编码')
     const rows = await this.prisma.inboundOrder.findMany({
       where: { omsCustomerCode: code },
-      include: { items: true },
+      include: { items: true, cartons: { include: { items: true }, orderBy: { boxSeq: 'asc' } } },
       orderBy: { id: 'desc' },
       take: 200,
     })
@@ -1868,7 +1896,7 @@ export class InboundService {
     const no = inboundNo.trim()
     const row = await this.prisma.inboundOrder.findUnique({
       where: { inboundNo: no },
-      include: { items: true },
+      include: { items: true, cartons: { include: { items: true }, orderBy: { boxSeq: 'asc' } } },
     })
     if (!row) throw new NotFoundException(`入库单 ${no} 不存在`)
     return this.mapInboundForOms(row)
@@ -1879,7 +1907,7 @@ export class InboundService {
     try {
       const row = await this.prisma.inboundOrder.findUnique({
         where: { inboundNo },
-        include: { items: true },
+        include: { items: true, cartons: { include: { items: true }, orderBy: { boxSeq: 'asc' } } },
       })
       if (!row?.omsCustomerCode) return
       const payload = this.mapInboundForOms(row)
@@ -1899,7 +1927,7 @@ export class InboundService {
   async replayOmsStatuses(): Promise<{ inboundNo: string; omsStatus: string; ok: boolean }[]> {
     const rows = await this.prisma.inboundOrder.findMany({
       where: { omsCustomerCode: { not: null } },
-      include: { items: true },
+      include: { items: true, cartons: { include: { items: true }, orderBy: { boxSeq: 'asc' } } },
       orderBy: { id: 'asc' },
     })
     const out: { inboundNo: string; omsStatus: string; ok: boolean }[] = []
