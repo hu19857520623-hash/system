@@ -8,6 +8,7 @@ import { useListLoader, withAction } from '@/composables/useListLoader.ts'
 import { useTablePagination } from '@/composables/useTablePagination.ts'
 import { useRowActions } from '@/composables/useRowActions'
 import ListPagination from '@/components/ListPagination.vue'
+import StockFillBar from '@/components/ui/StockFillBar.vue'
 
 const { confirmAction, showDetail } = useRowActions()
 const router = useRouter()
@@ -274,6 +275,13 @@ function receiptDetail(row: any) {
 }
 
 const warehouseOptions = computed(() => warehouses.value.filter(w => w.statusCode === 1))
+
+function goCreateInbound(row?: any) {
+  const q: Record<string, string> = {}
+  if (row?.warehouse) q.wh = row.warehouse
+  if (row?.sku) q.sku = row.sku
+  router.push({ path: '/inbound/create', query: q })
+}
 </script>
 
 <template>
@@ -286,7 +294,8 @@ const warehouseOptions = computed(() => warehouses.value.filter(w => w.statusCod
             <el-option label="全部物流仓" value="all" />
             <el-option v-for="wh in warehouseOptions" :key="wh.code" :label="wh.name" :value="wh.code" />
           </el-select>
-          <el-button v-if="tab === 'stock'" size="small" @click="router.push('/logistics-inventory')">库存查询</el-button>
+          <el-button v-if="tab === 'stock'" size="small" @click="router.push('/logistics-inventory')">完整库存页</el-button>
+          <el-button v-if="tab === 'stock'" type="primary" size="small" @click="goCreateInbound()">创建入库单</el-button>
           <el-button v-if="tab === 'manage'" type="primary" size="small" @click="openAddWarehouse">添加物流仓库</el-button>
         </div>
       </div>
@@ -402,33 +411,53 @@ const warehouseOptions = computed(() => warehouses.value.filter(w => w.statusCod
 
     <!-- 仓库库存 -->
     <template v-if="tab === 'stock'">
-      <el-alert type="info" :closable="false" show-icon style="margin-bottom:12px">
-        中转仓已收货 SKU 的可用库存；创建入库单时从此处扣减发运数量。
-      </el-alert>
-      <el-table v-loading="stockLoading" :data="pagedStock" stripe border size="small" style="width: 100%">
-        <el-table-column prop="warehouse" label="仓库" width="110">
-          <template #default="{ row }"><span style="font-family:var(--font-mono);font-size:11px">{{ row.warehouse }}</span></template>
-        </el-table-column>
-        <el-table-column prop="sku" label="SKU" width="110">
-          <template #default="{ row }"><span style="font-family:var(--font-mono);font-size:12px">{{ row.sku }}</span></template>
-        </el-table-column>
-        <el-table-column prop="name" label="商品名" min-width="140" />
-        <el-table-column prop="spec" label="规格" width="80" />
-        <el-table-column label="在库总量" width="90" align="right">
-          <template #default="{ row }">{{ row.total.toLocaleString() }}</template>
-        </el-table-column>
-        <el-table-column prop="available" label="可用" width="80" align="right">
-          <template #default="{ row }"><strong>{{ row.available.toLocaleString() }}</strong></template>
-        </el-table-column>
-        <el-table-column prop="locked" label="锁定" width="70" align="right">
+      <p class="stock-hint">已收货在库。可发数量用于创建海外入库单，发运后从这里扣减。</p>
+      <el-table v-loading="stockLoading" :data="pagedStock" border stripe size="small" class="stock-table" empty-text="该仓库暂无到货库存" header-cell-class-name="stock-table-header">
+        <el-table-column label="SKU / 商品" min-width="200">
           <template #default="{ row }">
-            <span :style="{ color: row.locked > 0 ? '#e8953a' : '#8b95a8' }">{{ row.locked }}</span>
+            <div class="mono sku">{{ row.sku }}</div>
+            <div class="title-cn">{{ row.name || '—' }}</div>
+            <div v-if="row.spec" class="title-en">{{ row.spec }}</div>
           </template>
         </el-table-column>
-        <el-table-column prop="referenceNo" label="最近单号" width="120">
-          <template #default="{ row }"><span style="font-size:11px">{{ row.referenceNo || '—' }}</span></template>
+        <el-table-column label="中转仓" width="128">
+          <template #default="{ row }">
+            <div>{{ row.warehouseName || row.warehouse }}</div>
+            <div class="title-en">{{ row.warehouse }}</div>
+          </template>
         </el-table-column>
-        <el-table-column prop="lastInboundDate" label="到货日期" width="100" />
+        <el-table-column label="库存构成" min-width="150">
+          <template #default="{ row }">
+            <StockFillBar :available="row.available" :locked="row.locked" :total="row.total" />
+          </template>
+        </el-table-column>
+        <el-table-column label="库存数量" align="center">
+          <el-table-column label="在库" width="80" align="right">
+            <template #default="{ row }"><span class="qty-num">{{ row.total.toLocaleString() }}</span></template>
+          </el-table-column>
+          <el-table-column label="可发" width="80" align="right">
+            <template #default="{ row }">
+              <strong class="qty-num" :class="{ ready: row.available > 0 }">{{ row.available.toLocaleString() }}</strong>
+            </template>
+          </el-table-column>
+          <el-table-column label="锁定" width="68" align="right">
+            <template #default="{ row }">
+              <span class="qty-num" :class="{ locked: row.locked > 0 }">{{ row.locked.toLocaleString() }}</span>
+            </template>
+          </el-table-column>
+        </el-table-column>
+        <el-table-column label="最近变动" width="140">
+          <template #default="{ row }">
+            <div>{{ row.lastInboundDate || '—' }}</div>
+            <div class="title-en">{{ row.referenceNo || '无关联单' }}</div>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="88" fixed="right">
+          <template #default="{ row }">
+            <el-button v-if="row.available > 0" link type="primary" size="small" @click="goCreateInbound(row)">发运</el-button>
+            <span v-else class="title-en">不可发</span>
+          </template>
+        </el-table-column>
       </el-table>
       <ListPagination v-model:page="stockPage" v-model:page-size="stockPageSize" :total="stockTotal" />
       <el-empty v-if="!stockLoading && !stockItems.length" description="该仓库暂无到货库存" />
@@ -594,6 +623,19 @@ const warehouseOptions = computed(() => warehouses.value.filter(w => w.statusCod
 .page-title { font-weight:600; font-size:15px; }
 .header-actions { display:flex; gap:8px; align-items:center; }
 .mono { font-family: var(--font-mono); font-size: 12px; }
+.sku { font-weight: 600; color: var(--el-color-primary); }
+.stock-hint { margin: 0 0 12px; color: var(--text-muted); font-size: 12px; line-height: 1.5; }
+.stock-table { width: 100%; }
+.stock-table :deep(.stock-table-header) {
+  background: var(--table-header-bg) !important;
+  color: var(--table-header-text);
+  font-weight: 600;
+}
+.title-cn { margin-top: 2px; line-height: 1.4; }
+.title-en { margin-top: 2px; color: var(--text-muted); font-size: 11px; }
+.qty-num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.qty-num.ready { color: #0f766e; }
+.qty-num.locked { color: #b45309; }
 .line-preview { display:flex; align-items:center; gap:6px; line-height:22px; flex-wrap:wrap; }
 .line-name { max-width:120px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; color:#64748b; }
 .line-pending { color:#1f9d92; font-size:12px; white-space:nowrap; }

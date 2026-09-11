@@ -3,6 +3,7 @@ import { InventoryService } from './inventory.service'
 import { PaginationDto } from '../../common/dto/pagination.dto'
 import { RequireAnyPerm, RequirePerms } from '../../common/decorators/require-perms.decorator'
 import { CurrentUser } from '../../common/decorators/current-user.decorator'
+import { LogisticsTransferDto } from './dto/logistics-transfer.dto'
 
 @Controller('inventory')
 export class InventoryController {
@@ -167,5 +168,11 @@ export class InventoryController {
   @Get('logs/:sku')
   logs(@Param('sku') sku: string, @Query('warehouseCode') warehouseCode?: string) {
     return this.service.logs(sku, warehouseCode)
+  }
+
+  @RequireAnyPerm('logistics_wh.manage', 'logistics_wh.receive')
+  @Post('logistics-transfer')
+  transferLogistics(@Body() body: LogisticsTransferDto, @CurrentUser('userId') userId: number) {
+    return this.service.transferLogistics(body as unknown as Record<string, unknown>, userId)
   }
 }

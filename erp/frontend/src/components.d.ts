@@ -74,6 +74,7 @@ declare module 'vue' {
     OutboundShipDialog: typeof import('./components/outbound/OutboundShipDialog.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
+    StockFillBar: typeof import('./components/ui/StockFillBar.vue')['default']
     ThemeToggle: typeof import('./components/ThemeToggle.vue')['default']
   }
   export interface GlobalDirectives {

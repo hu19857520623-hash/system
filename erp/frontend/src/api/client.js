@@ -363,6 +363,7 @@ export const inventoryApi = {
   outboundLogs: (sku, params) => api.get(`/inventory/logs/${encodeURIComponent(sku)}/outbound`, params),
   catalogPurchases: (params) => api.get('/inventory/catalog-purchases', params),
   reclaimCatalogHolding: (data) => api.post('/inventory/catalog-reclaim', data),
+  transferLogistics: (data) => api.post('/inventory/logistics-transfer', data),
 }
 
 // ── 出库 ──

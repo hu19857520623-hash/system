@@ -26,6 +26,11 @@ import {
 } from '../../common/product-dimension.util'
 import { InventoryMutationService } from '../../common/inventory/inventory-mutation.service'
 import type { InventoryTx } from '../../common/inventory/inventory-mutation.types'
+import {
+  assertLogisticsWarehouse,
+  parseLogisticsTransferBody,
+  transferLogRemarks,
+} from './logistics-transfer.util'
 
 type Tx = InventoryTx
 
@@ -1667,6 +1672,75 @@ export class InventoryService {
         customerCode,
         referenceNo: refNo,
       },
+    })
+
+    return result
+  }
+
+  /** 中转仓之间调拨可发库存（深圳 → 义乌等） */
+  async transferLogistics(body: Record<string, unknown>, operatorId?: number) {
+    const input = parseLogisticsTransferBody(body)
+    const [fromWh, toWh] = await Promise.all([
+      this.prisma.warehouse.findUnique({ where: { warehouseCode: input.fromWarehouseCode } }),
+      this.prisma.warehouse.findUnique({ where: { warehouseCode: input.toWarehouseCode } }),
+    ])
+    const fromWarehouse = assertLogisticsWarehouse(fromWh, '调出')
+    const toWarehouse = assertLogisticsWarehouse(toWh, '调入')
+
+    const product = await this.prisma.product.findFirst({ where: { sku: input.sku } })
+    if (!product) throw new NotFoundException(`SKU ${input.sku} 不存在`)
+
+    const refNo = `LT-${Date.now()}`
+    const remarks = transferLogRemarks(fromWarehouse.warehouseName, toWarehouse.warehouseName, input.remark)
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const source = await tx.inventory.findUnique({
+        where: { productId_warehouseCode: { productId: product.id, warehouseCode: fromWarehouse.warehouseCode } },
+      })
+      const available = source?.availableQty ?? 0
+      if (!source || available < input.qty) {
+        throw new BadRequestException(`可发数量不足（可发 ${available}，需调拨 ${input.qty}）`)
+      }
+
+      await this.inventoryMutation.applyWarehouseQtyDelta(tx, {
+        productId: product.id,
+        sku: product.sku,
+        warehouseCode: fromWarehouse.warehouseCode,
+        diff: -input.qty,
+        operatorId,
+        changeType: 'logistics_transfer',
+        referenceNo: refNo,
+        remark: remarks.outRemark,
+      })
+      await this.inventoryMutation.applyWarehouseQtyDelta(tx, {
+        productId: product.id,
+        sku: product.sku,
+        warehouseCode: toWarehouse.warehouseCode,
+        diff: input.qty,
+        operatorId,
+        changeType: 'logistics_transfer',
+        referenceNo: refNo,
+        remark: remarks.inRemark,
+      })
+
+      return {
+        sku: product.sku,
+        qty: input.qty,
+        fromWarehouseCode: fromWarehouse.warehouseCode,
+        fromWarehouseName: fromWarehouse.warehouseName,
+        toWarehouseCode: toWarehouse.warehouseCode,
+        toWarehouseName: toWarehouse.warehouseName,
+        referenceNo: refNo,
+      }
+    })
+
+    await this.opLog.log({
+      operatorId,
+      module: 'inventory',
+      action: 'logistics_transfer',
+      targetType: 'inventory',
+      targetId: result.sku,
+      detail: { ...result, remark: input.remark || '' },
     })
 
     return result
