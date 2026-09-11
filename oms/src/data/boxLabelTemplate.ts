@@ -1,4 +1,6 @@
-/** 100×100mm 外箱唛（Packing List 版式，与 Takealot receiving list 一致） */
+/** 100×100mm 外箱唛（照抄 Takealot receiving_list Packing List） */
+
+import { code128Svg } from './code128'
 
 export interface BoxLabelLine {
   sku: string
@@ -25,16 +27,19 @@ export const BOX_LABEL_STYLE = `@page{size:100mm 100mm;margin:0}
 *{box-sizing:border-box}
 html,body{margin:0;padding:0;background:#fff;color:#000;font-family:Arial,Helvetica,sans-serif}
 body{display:block}
-.box-label{width:100mm;height:100mm;padding:5mm 6mm 4mm;display:flex;flex-direction:column;page-break-after:always;overflow:hidden}
-.title{margin:0 0 2mm;font:700 11pt/1.1 Arial,Helvetica,sans-serif;text-align:center;letter-spacing:.02em}
-.ref{margin:0 0 3mm;font:700 10pt/1.15 Arial,Helvetica,sans-serif;text-align:center;word-break:break-all}
-.box-no{margin:0 0 2mm;font:700 28pt/1 Arial,Helvetica,sans-serif;text-align:center}
-.wh{margin:0 0 4mm;font:700 12pt/1.1 Arial,Helvetica,sans-serif;text-align:center;letter-spacing:.04em}
-table{width:100%;border-collapse:collapse;margin:0 0 auto;flex:0 0 auto}
-th,td{padding:1.5mm 1mm;font:700 9pt/1.2 Arial,Helvetica,sans-serif;text-align:left;vertical-align:top}
-th:last-child,td:last-child{text-align:right;width:18mm}
-.sku-cell{word-break:break-all;font:700 8.5pt/1.25 Arial,Helvetica,sans-serif}
-.footer{margin-top:auto;display:flex;justify-content:space-between;align-items:flex-end;font:700 9pt/1.2 Arial,Helvetica,sans-serif;padding-top:3mm}
+.box-label{width:100mm;height:100mm;padding:3mm 3mm 8mm;display:flex;flex-direction:column;page-break-after:always;overflow:hidden}
+.title{margin:0;font:700 17.6pt/1.2 Arial,Helvetica,sans-serif;text-align:left}
+.barcode-row{display:flex;align-items:flex-start;gap:3mm;margin:1mm 0 1.5mm}
+.barcode-wrap{flex:1 1 auto;min-width:0;height:14mm}
+.barcode-wrap svg{width:100%;height:14mm;display:block}
+.box-no{flex:0 0 12mm;margin:1mm 0 0;font:700 20pt/1 Arial,Helvetica,sans-serif;text-align:right}
+.ref{margin:0 0 2mm;padding-left:12mm;font:700 9.6pt/1.2 Arial,Helvetica,sans-serif;letter-spacing:.04em}
+.wh{margin:0 0 3mm;padding-left:3mm;font:700 20pt/1.15 Arial,Helvetica,sans-serif}
+table{width:100%;border-collapse:collapse;margin:0}
+th,td{border:0.35mm solid #000;padding:1.2mm 1.5mm;font:400 12.8pt/1.2 Arial,Helvetica,sans-serif;text-align:left;vertical-align:middle}
+th:last-child,td:last-child{text-align:center;width:14mm}
+.sku-cell{word-break:break-all}
+.footer{margin-top:10mm;display:flex;justify-content:space-between;align-items:flex-end;font:400 12pt/1.2 Arial,Helvetica,sans-serif}
 @media print{html,body{width:100mm;height:100mm}.box-label{page-break-inside:avoid}}`
 
 export function buildBoxLabelArticle(data: BoxLabelData) {
@@ -47,8 +52,11 @@ export function buildBoxLabelArticle(data: BoxLabelData) {
 
   return `<article class="box-label">
   <h1 class="title">Packing List</h1>
+  <div class="barcode-row">
+    <div class="barcode-wrap">${code128Svg(data.referenceNo)}</div>
+    <p class="box-no">${data.boxNo}</p>
+  </div>
   <p class="ref">${escapeHtml(data.referenceNo)}</p>
-  <p class="box-no">${data.boxNo}</p>
   <p class="wh">${escapeHtml(data.warehouseCode)}</p>
   <table>
     <thead><tr><th>SKU</th><th>PCS</th></tr></thead>

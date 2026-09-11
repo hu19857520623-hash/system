@@ -44,7 +44,10 @@ describe('boxLabelTemplate', () => {
     expect(html).toContain('AFU0002-9902297558367')
     expect(html).toContain('MADE IN CHINA')
     expect(html).toContain('1/1')
+    expect(html).toContain('class="barcode"')
+    expect(html).toContain('<svg')
     expect(BOX_LABEL_STYLE).toContain('margin:0')
+    expect(BOX_LABEL_STYLE).toContain('border:0.35mm solid #000')
     expect(buildBoxLabelArticle({
       referenceNo: 'RVAFU0002-260731-0003',
       boxNo: 1,
