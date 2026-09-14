@@ -7,7 +7,7 @@ import {
   PLATFORM_BINDING_STATUS_LABELS,
 } from './mockData'
 import { getProductsSnapshot } from './inventoryStore'
-import { getCustomerSkuDisplay } from './skuCode'
+import { getCustomerSkuDisplay, productMatchesSellerSku } from './skuCode'
 import { getPlatformSkuMappingsSnapshot, getStoresSnapshot } from './entityStore'
 
 export { PLATFORM_BINDING_STATUS_LABELS }
@@ -59,11 +59,7 @@ export function findProductByCode(code: string, customerId?: string) {
   const byInternal = scoped.find(p => p.internalSku === q)
   if (byInternal) return byInternal
 
-  const qLower = q.toLowerCase()
-  const byCustomer = scoped.find(p => {
-    const display = getCustomerSkuDisplay(p).toLowerCase()
-    return display === qLower || (p.customerSku || '').toLowerCase() === qLower
-  })
+  const byCustomer = scoped.find(p => productMatchesSellerSku(p, q))
   if (byCustomer) return byCustomer
 
   const mapping = getPlatformSkuMappingsSnapshot().find(

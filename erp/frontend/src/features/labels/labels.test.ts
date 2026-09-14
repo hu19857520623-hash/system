@@ -40,6 +40,7 @@ describe('boxLabelTemplate', () => {
     expect(html).toContain('100mm 100mm')
     expect(html).toContain('Packing List')
     expect(html).toContain('RVAFU0002-260731-0003')
+    expect(html).toContain('RVAFU0002-260731-0003-1')
     expect(html).toContain('AAE938')
     expect(html).toContain('AFU0002-9902297558367')
     expect(html).toContain('MADE IN CHINA')
@@ -83,8 +84,7 @@ describe('barcodeLabelTemplate', () => {
 describe('inboundLabelPrint', () => {
   it('builds one 100x100 box label per carton', () => {
     const labels = buildBoxLabelData({
-      inboundNo: 'IN-001',
-      referenceNo: 'RVAFU0002-260731-0003',
+      inboundNo: 'RVAFU0002-260731-0003',
       warehouse: 'AAE938',
       boxCount: 2,
       lineItems: [

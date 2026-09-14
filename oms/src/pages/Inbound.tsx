@@ -5,7 +5,7 @@ import { Button, Card, MonoCode, Table } from '../components/ui'
 import { FormSection, FormGrid, FormField, formInput, formSelect, formTextarea } from '../components/ui/form'
 import { findProductByCode } from '../data/platformBindingUtils'
 import { useRole } from '../auth/RoleContext'
-import { getCustomerIdForRole } from '../data/dataScope'
+import { getCustomerCode, getCustomerIdForRole } from '../data/dataScope'
 import { addInboundOrder, nextInboundNo, submitInboundToErp } from '../data/inboundStore'
 import { notifyIfUserError } from '../utils/userNotify'
 import { fileToAttachment, todayDateInput } from '../data/fileUtils'
@@ -149,7 +149,7 @@ export default function Inbound() {
     const localOrder = {
       id: editOrder?.id || `ib-${Date.now()}`,
       customerId,
-      inboundNo: editOrder?.inboundNo || nextInboundNo(),
+      inboundNo: editOrder?.inboundNo || nextInboundNo(getCustomerCode(customerId)),
       source: role === 'catalog' ? '货盘' : '客户自发',
       inboundType: inboundType as InboundType,
       deliveryMethod: delivery as DeliveryMethod,

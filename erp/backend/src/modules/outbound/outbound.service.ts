@@ -41,6 +41,7 @@ import {
   type ReviewSource,
 } from './outbound.policy'
 import { isWarehouseStaffRole } from '@erp/shared/permissions.catalog'
+import { buildOutboundNo, nextSeqFromNos, outboundNoPrefix } from '@erp/shared/wms-doc-no'
 import { notifyOms } from '../../common/oms-notify.util'
 import { erpFbaCodesForOmsWarehouse, outboundDestinationLabel } from './oms-warehouse.util'
 import { toOmsLogisticsStatus, toOmsOutboundStatus } from './oms-status.util'
@@ -550,13 +551,27 @@ export class OutboundService {
     return item
   }
 
+  private async allocateOutboundNo(customerCode?: string, customerId?: number | string | bigint | null) {
+    let code = String(customerCode || '').trim()
+    if (!code && customerId) {
+      const customer = await this.prisma.customer.findUnique({ where: { id: BigInt(customerId) } })
+      code = customer?.customerCode || ''
+    }
+    const prefix = outboundNoPrefix(code)
+    const rows = await this.prisma.outboundOrder.findMany({
+      where: { outboundNo: { startsWith: prefix } },
+      select: { outboundNo: true },
+    })
+    return buildOutboundNo(code, new Date(), nextSeqFromNos(rows.map((row) => row.outboundNo), prefix))
+  }
+
   async create(data: any, operatorId?: number, tx?: Prisma.TransactionClient) {
     const warehouseCode = data.warehouseCode?.trim()
     if (!warehouseCode) throw new BadRequestException('请指定出库仓库')
     const lines: any[] = data.items || []
     if (!lines.length) throw new BadRequestException('请添加出库明细')
 
-    const outboundNo = data.outboundNo?.trim() || `OB-${Date.now().toString().slice(-8)}`
+    const outboundNo = data.outboundNo?.trim() || await this.allocateOutboundNo(data.customerCode, data.customerId)
     const needsRelabel = !!data.needsRelabel
     const initialStatus = 'pending_pick'
     const destType = data.destType || 'cpt'
@@ -1828,7 +1843,7 @@ th{background:#f5f5f5}
     if (!customer) throw new NotFoundException(`客户代码 ${customerCode} 不存在`)
     if (customer.status !== 1) throw new BadRequestException('客户已停用')
 
-    const outboundNo = String(data.outboundNo || '').trim() || `OUT-OMS-${Date.now().toString().slice(-8)}`
+    const outboundNo = String(data.outboundNo || '').trim() || await this.allocateOutboundNo(customerCode)
     if (outboundNo.length > 30) {
       throw new BadRequestException(`出库单号最长 30 字符，当前 ${outboundNo.length} 字符`)
     }

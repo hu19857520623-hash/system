@@ -7,14 +7,14 @@ import {
 } from './entityStore'
 import { createErpInbound, syncErpInbounds, type ErpInboundOrder } from '../api/erp'
 import { getCustomerCode } from './dataScope'
+import { buildInboundNo, inboundNoPrefix, nextSeqFromNos } from './wmsDocNo'
 
 export { pushInbound as addInboundOrder, updateInboundOrder, upsertInboundOrder }
 
-export function nextInboundNo(): string {
-  const d = new Date()
-  const date = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`
-  const seq = String(getInboundOrdersSnapshot().length + 1).padStart(3, '0')
-  return `IN-${date}${seq}`
+export function nextInboundNo(customerCode?: string): string {
+  const prefix = inboundNoPrefix(customerCode)
+  const seq = nextSeqFromNos(getInboundOrdersSnapshot().map(o => o.inboundNo), prefix)
+  return buildInboundNo(customerCode, new Date(), seq)
 }
 
 function mapErpInboundStatus(omsStatus: string): InboundStatus {

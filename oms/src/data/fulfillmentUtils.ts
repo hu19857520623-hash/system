@@ -4,6 +4,8 @@ import {
   SHIPMENT_SOURCE_LABELS,
   statusLabels,
 } from './mockData'
+import { getCustomerCode } from './dataScope'
+import { buildOutboundNo } from './wmsDocNo'
 
 export interface FulfillmentRow {
   id: string
@@ -71,8 +73,9 @@ function warehouseTracking(
 
 /** 平台订单同步后系统自动创建出库单号（尚未预约发货的订单） */
 function systemOutboundNoForOrder(order: Order): string {
-  const date = order.createdAt.slice(0, 10).replace(/-/g, '')
-  return `OUT-${date}${String(order.id).padStart(3, '0')}`
+  const created = order.createdAt ? new Date(order.createdAt) : new Date()
+  const seq = Math.max(1, ((Number(order.id) || 1) - 1) % 9999 + 1)
+  return buildOutboundNo(getCustomerCode(order.customerId), Number.isNaN(created.getTime()) ? new Date() : created, seq)
 }
 
 export function buildFulfillmentRows(

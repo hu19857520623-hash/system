@@ -242,7 +242,7 @@ class OutboundViewModel : ViewModel() {
         return if (pickScanMode == "carton") target else minOf(target, current + 1)
     }
 
-    fun setPickScanMode(mode: String) {
+    fun applyPickScanMode(mode: String) {
         pickScanMode = if (mode == "piece") "piece" else "carton"
         session.pickScanMode = pickScanMode
     }
@@ -362,14 +362,14 @@ fun OutboundScreen(modeKey: String, onBack: () -> Unit, vm: OutboundViewModel = 
             if (vm.mode == "pick") {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TextButton(
-                        onClick = { vm.setPickScanMode("carton") },
+                        onClick = { vm.applyPickScanMode("carton") },
                         modifier = Modifier.weight(1f).background(
                             if (vm.pickScanMode == "carton") PdaAccent.copy(alpha = 0.25f) else PdaSurface2,
                             RoundedCornerShape(8.dp),
                         ),
                     ) { Text("按箱扫", color = if (vm.pickScanMode == "carton") PdaAccent else PdaMuted) }
                     TextButton(
-                        onClick = { vm.setPickScanMode("piece") },
+                        onClick = { vm.applyPickScanMode("piece") },
                         modifier = Modifier.weight(1f).background(
                             if (vm.pickScanMode == "piece") PdaAccent.copy(alpha = 0.25f) else PdaSurface2,
                             RoundedCornerShape(8.dp),

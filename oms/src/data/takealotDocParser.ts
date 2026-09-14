@@ -239,6 +239,112 @@ export function parseTakealotFilename(fileName: string): Partial<TakealotParsedD
   return out
 }
 
+const TAKEALOT_MP_BARCODE = /^(990\d{10}|\d{13})$/
+const TAKEALOT_TSIN = /^\d{8,11}$/
+const TAKEALOT_QTY = /^\d{1,5}$/
+const TAKEALOT_SELLER_SKU = /^[A-Z][A-Z0-9][A-Z0-9_-]{0,28}$/i
+
+function tokenizeTakealotPdfText(text: string): string[] {
+  return text
+    .replace(/\r/g, '\n')
+    .split('\n')
+    .flatMap(line => line.replace(/\s+/g, ' ').trim().split(' '))
+    .map(token => token.trim())
+    .filter(Boolean)
+}
+
+function isTakealotPageFooter(tokens: string[], index: number): boolean {
+  return /^page$/i.test(tokens[index] || '')
+    && /^\d+$/.test(tokens[index + 1] || '')
+    && /^of$/i.test(tokens[index + 2] || '')
+}
+
+function isTakealotTableHeaderToken(token: string): boolean {
+  return /^(MP|Takealot|Barcode|Product|Title|TSIN|SKU|Units|SHIPMENT|CONTENT)$/i.test(token)
+}
+
+/**
+ * Shipping note SHIPMENT CONTENT rows: 990 barcode, title, TSIN, seller SKU, units.
+ * PDF text extractors often split one visual row across several lines.
+ */
+export function parseTakealotShipmentContentItems(text: string): TakealotLineItem[] {
+  const tokens = tokenizeTakealotPdfText(text)
+  const items: TakealotLineItem[] = []
+  const seen = new Set<string>()
+
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (!TAKEALOT_MP_BARCODE.test(tokens[index])) continue
+    const barcode = tokens[index]
+    let tsin: string | undefined
+    let sku: string | undefined
+    let qty: number | undefined
+    const titleParts: string[] = []
+    let cursor = index + 1
+
+    for (; cursor < tokens.length; cursor += 1) {
+      const token = tokens[cursor]
+      if (isTakealotPageFooter(tokens, cursor)) break
+      if (TAKEALOT_MP_BARCODE.test(token)) {
+        if (tsin && !sku) {
+          sku = token
+          continue
+        }
+        break
+      }
+      if (isTakealotTableHeaderToken(token)) continue
+
+      const gluedTsinSkuQty = token.match(/^(\d{8,11})([A-Z][A-Z0-9_-]{1,24})(\d{1,4})$/i)
+      if (!tsin && gluedTsinSkuQty) {
+        tsin = gluedTsinSkuQty[1]
+        sku = gluedTsinSkuQty[2].toUpperCase()
+        qty = Number(gluedTsinSkuQty[3])
+        break
+      }
+
+      if (!tsin && TAKEALOT_TSIN.test(token) && !TAKEALOT_MP_BARCODE.test(token)) {
+        tsin = token
+        continue
+      }
+      if (
+        tsin
+        && !sku
+        && TAKEALOT_SELLER_SKU.test(token)
+        && !TAKEALOT_TSIN.test(token)
+        && !TAKEALOT_QTY.test(token)
+      ) {
+        sku = token.toUpperCase()
+        continue
+      }
+      if (
+        sku
+        && qty == null
+        && TAKEALOT_QTY.test(token)
+        && token !== tsin
+        && !TAKEALOT_MP_BARCODE.test(token)
+      ) {
+        qty = Number(token)
+        break
+      }
+      if (!tsin) titleParts.push(token)
+    }
+
+    if (sku && qty && qty > 0 && !seen.has(barcode)) {
+      seen.add(barcode)
+      items.push({
+        barcode,
+        tsin,
+        sku,
+        qty,
+        expectedQty: qty,
+        productTitle: titleParts.join(' ') || undefined,
+      })
+    }
+    if (cursor > index + 1) index = cursor - 1
+  }
+
+  return items
+}
+
 export function parseTakealotDocumentText(text: string, kind?: TakealotDocKind): Partial<TakealotParsedDoc> {
   const sources = [`text:${kind || 'unknown'}`]
   const t = text.replace(/\r/g, '\n')
@@ -324,6 +430,11 @@ export function parseTakealotDocumentText(text: string, kind?: TakealotDocKind):
     }
   }
 
+  if (kind === '发货清单' || /SHIPMENT CONTENT|Shipping Note/i.test(t)) {
+    for (const item of parseTakealotShipmentContentItems(t)) addLine(item)
+  }
+  const parsedShipmentTable = out.lineItems!.some(item => Boolean(item.barcode && item.sku))
+
   // 发货清单：优先按 PDF 行解析，支持多 SKU。
   const rows = t.split('\n').map(line => line.replace(/\s+/g, ' ').trim()).filter(Boolean)
   for (let index = 0; index < rows.length; index += 1) {
@@ -362,8 +473,10 @@ export function parseTakealotDocumentText(text: string, kind?: TakealotDocKind):
       continue
     }
 
+    if (parsedShipmentTable) continue
+
     const compact = row.match(/(?:(\d{13})\s*)?(\d{8,11})\s*([A-Z0-9][A-Z0-9_-]{1,29})(\d{1,5})\s*(?:Page\s*\d+)?$/i)
-    if (compact) {
+    if (compact && !TAKEALOT_MP_BARCODE.test(row)) {
       const previous = rows[index - 1]
       const qty = Number(compact[4])
       addLine({

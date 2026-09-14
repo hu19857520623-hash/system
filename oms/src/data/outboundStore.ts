@@ -3,6 +3,7 @@ import { apiDelete, apiPut } from '../api/client'
 import type { LegacyOrderStatus, OutboundOrder } from './mockData'
 import { createErpOutbound, syncErpOutbounds, type ErpOutboundOrder } from '../api/erp'
 import { getCustomerCode } from './dataScope'
+import { buildOutboundNo, nextSeqFromNos, outboundNoPrefix } from './wmsDocNo'
 import { toErpTakealotDestWh, fromErpTakealotDestWh } from './takealotDocParser'
 import { getPriceTemplateForCustomer } from './feeTemplateStore'
 import { buildOutboundTemplateSnapshot } from './feeTemplates'
@@ -84,11 +85,10 @@ export function useOutboundOrders(): OutboundOrder[] {
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
 }
 
-export function nextOutboundNo(): string {
-  const d = new Date()
-  const date = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`
-  const seq = String(orders.length + 1).padStart(3, '0')
-  return `OUT-${date}${seq}`
+export function nextOutboundNo(customerCode?: string): string {
+  const prefix = outboundNoPrefix(customerCode)
+  const seq = nextSeqFromNos(orders.map(o => o.outboundNo), prefix)
+  return buildOutboundNo(customerCode, new Date(), seq)
 }
 
 export function resetOutboundOrders(seed: OutboundOrder[]) {

@@ -48,6 +48,21 @@ export function getCustomerSkuDisplay(
   return internal
 }
 
+/** Shipping note seller SKU → customer product (customerSku or `{code}-{sku}`). */
+export function productMatchesSellerSku(
+  product: Pick<Product, 'customerSku' | 'internalSku'>,
+  sellerSku: string,
+  customerCode?: string,
+): boolean {
+  const q = sellerSku.trim().toLowerCase()
+  if (!q) return false
+  if (product.internalSku.trim().toLowerCase() === q) return true
+  if ((product.customerSku || '').trim().toLowerCase() === q) return true
+  if (getCustomerSkuDisplay(product, customerCode).toLowerCase() === q) return true
+  const internal = product.internalSku.trim().toLowerCase()
+  return q.length >= 3 && internal.endsWith(`-${q}`)
+}
+
 export function listInternalSkusForCustomer(
   products: Product[],
   customerId?: string,

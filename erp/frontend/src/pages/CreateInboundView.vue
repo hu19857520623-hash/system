@@ -933,7 +933,7 @@ async function handleAttachmentFile(e: Event) {
           <el-row :gutter="20">
             <el-col :span="12">
               <el-form-item label="入库单号">
-                <el-input v-model="createForm.inboundNo" placeholder="如 IN-2026-0413，留空自动生成" clearable />
+                <el-input v-model="createForm.inboundNo" placeholder="如 RVAFU0430-260910-0002，留空自动生成" clearable />
                 <p class="field-hint">默认系统自动生成，可直接修改；提交后不可变更</p>
               </el-form-item>
             </el-col>
@@ -1211,7 +1211,7 @@ async function handleAttachmentFile(e: Event) {
             </div>
           </div>
           <p class="sku-hint">
-            留空则提交后按每个 SKU 一行自动生成外箱（箱码如 IN-xxx-C001）。混装请配置每箱 SKU 与数量，须与上方明细总数一致。
+            留空则提交后按每个 SKU 一行自动生成外箱（箱码如 RVAFU0430-260910-0002-1）。混装请配置每箱 SKU 与数量，须与上方明细总数一致。
           </p>
           <el-table v-if="createForm.cartons.length" :data="createForm.cartons" border size="small" class="lines-table">
             <el-table-column label="#" width="50" align="center">

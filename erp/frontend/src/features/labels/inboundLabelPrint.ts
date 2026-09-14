@@ -69,7 +69,7 @@ export function buildBoxLabelData(order: InboundLabelOrder): BoxLabelData[] {
   const lineBoxNos = lines.map(l => Math.max(1, Number(l.boxNo) || 1))
   const maxLineBox = lineBoxNos.length ? Math.max(...lineBoxNos) : 1
   const boxTotal = Math.max(1, Number(order.boxCount) || 0, maxLineBox)
-  const referenceNo = order.referenceNo?.trim() || order.inboundNo
+  const referenceNo = order.inboundNo.trim() || order.referenceNo?.trim() || ''
   const warehouseCode = order.warehouseCode?.trim() || order.warehouse?.trim() || '—'
   const uniqueBoxes = new Set(lineBoxNos)
   const shouldSplit = uniqueBoxes.size === 1 && boxTotal > 1

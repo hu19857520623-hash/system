@@ -1,6 +1,7 @@
 /** 100×100mm 外箱唛（照抄 Takealot receiving_list Packing List） */
 
 import { code128Svg } from '@erp/shared/code128'
+import { buildCartonCode } from '@erp/shared/wms-doc-no'
 
 export interface BoxLabelLine {
   sku: string
@@ -55,7 +56,7 @@ export function buildBoxLabelArticle(data: BoxLabelData) {
   return `<article class="box-label">
   <h1 class="title">Packing List</h1>
   <div class="barcode-row">
-    <div class="barcode-wrap">${code128Svg(data.referenceNo)}</div>
+    <div class="barcode-wrap">${code128Svg(buildCartonCode(data.referenceNo, data.boxNo))}</div>
     <p class="box-no">${data.boxNo}</p>
   </div>
   <p class="ref">${escapeHtml(data.referenceNo)}</p>

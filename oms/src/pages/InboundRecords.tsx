@@ -18,7 +18,7 @@ import { useInboundOrders } from '../data/entityStore'
 import { useDataScope } from '../auth/useDataScope'
 import { AdminCustomerFilter, AdminCustomerCell } from '../components/admin/AdminCustomerFilter'
 import { useRole } from '../auth/RoleContext'
-import { getCustomerIdForRole } from '../data/dataScope'
+import { getCustomerCode, getCustomerIdForRole } from '../data/dataScope'
 import { addInboundOrder, nextInboundNo, refreshInboundsFromErp } from '../data/inboundStore'
 import { importCsvFile } from '../data/csvImportExport'
 import {
@@ -156,7 +156,7 @@ export default function InboundRecords() {
         addInboundOrder({
           id: `ib-import-${Date.now()}-${order.headerKey}`,
           customerId,
-          inboundNo: nextInboundNo(),
+          inboundNo: nextInboundNo(getCustomerCode(customerId)),
           source: role === 'catalog' ? '货盘' : '客户自发',
           inboundType: order.inboundType,
           deliveryMethod: order.deliveryMethod,

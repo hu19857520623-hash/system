@@ -12,9 +12,17 @@ import { resolveBillingDimensions } from '../../common/product-dimension.util'
 import { parseInboundQcScanInput } from './inbound-qc-scan.util'
 import { findInboundItemByScan as matchInboundItemByScan } from './inbound-item-scan.util'
 import { InventoryMutationService } from '../../common/inventory/inventory-mutation.service'
-import { buildInternalSku } from '../../common/sku-code.util'
+import { buildInternalSku, deriveCustomerCodeFromInternalSku } from '../../common/sku-code.util'
 import { buildBoxLabelsPdfBuffer, buildInboundBoxLabelData } from '../../common/labels/box-label-pdf.util'
 import { InboundFeeService } from './inbound-fee.service'
+import {
+  buildCartonCode,
+  buildInboundNo,
+  inboundNoFromScan,
+  inboundNoPrefix,
+  matchCartonByScan,
+  nextSeqFromNos,
+} from '@erp/shared/wms-doc-no'
 
 /** 在途，等待到仓扫描 */
 const PENDING_RECEIPT_STATUSES = new Set([
@@ -269,7 +277,10 @@ export class InboundService {
       skuTotals.set(sku, { productId, qty: (prev?.qty ?? 0) + qty })
     }
 
-    const inboundNo = data.inboundNo || 'IN-' + Date.now().toString().slice(-8)
+    const inboundNo = String(data.inboundNo || '').trim()
+      || await this.allocateInboundNo(
+        data.omsCustomerCode || data.customerCode || deriveCustomerCodeFromInternalSku(String(lines[0]?.sku || '')),
+      )
     const warehouseNo = String(data.warehouseNo || '').trim() || this.extractWarehouseNo(data.remark) || undefined
     const trackingNo = String(data.trackingNo || '').trim() || undefined
     const freightLines: any[] = data.freightLines || data.catalogSync || []
@@ -467,7 +478,7 @@ export class InboundService {
     for (const c of cartonsDef) {
       seq += 1
       const boxSeq = c.boxSeq ?? seq
-      const boxCode = String(c.boxCode || '').trim() || `${order.inboundNo}-C${String(boxSeq).padStart(3, '0')}`
+      const boxCode = String(c.boxCode || '').trim() || buildCartonCode(order.inboundNo, boxSeq)
       await tx.inboundCarton.create({
         data: {
           inboundId: order.id,
@@ -489,32 +500,21 @@ export class InboundService {
     }
   }
 
-  private normalizeScanToken(raw: string) {
-    return String(raw || '').trim().toUpperCase()
+  private async allocateInboundNo(customerCode?: string) {
+    const prefix = inboundNoPrefix(customerCode)
+    const rows = await this.prisma.inboundOrder.findMany({
+      where: { inboundNo: { startsWith: prefix } },
+      select: { inboundNo: true },
+    })
+    return buildInboundNo(customerCode, new Date(), nextSeqFromNos(rows.map((row) => row.inboundNo), prefix))
   }
 
   private async findPendingCarton(inboundId: number, inboundNo: string, scanCode: string) {
-    const token = this.normalizeScanToken(scanCode)
     const cartons = await this.prisma.inboundCarton.findMany({
       where: { inboundId: BigInt(inboundId), status: 'pending' },
       include: { items: true },
     })
-    if (!cartons.length) return null
-
-    let hit = cartons.find((c) => this.normalizeScanToken(c.boxCode) === token)
-    if (!hit) {
-      hit = cartons.find((c) => token.includes(this.normalizeScanToken(c.boxCode)))
-    }
-    if (!hit) {
-      const suffix = token.match(/-C\d{3,}$/)
-      if (suffix) {
-        hit = cartons.find((c) => this.normalizeScanToken(c.boxCode).endsWith(suffix[0]))
-      }
-    }
-    if (!hit && token.startsWith(this.normalizeScanToken(inboundNo))) {
-      hit = cartons.find((c) => token === this.normalizeScanToken(c.boxCode))
-    }
-    return hit || null
+    return matchCartonByScan(cartons, scanCode, inboundNo)
   }
 
   private buildReceiveSummary(order: any) {
@@ -904,10 +904,11 @@ export class InboundService {
       throw new BadRequestException('操作仓库必须是海外仓')
     }
 
+    const inboundNo = inboundNoFromScan(scanCode) || scanCode
     const order = await this.prisma.inboundOrder.findFirst({
       where: {
         warehouseCode,
-        inboundNo: scanCode,
+        inboundNo,
       },
       include: { items: true },
     })
@@ -1765,7 +1766,7 @@ export class InboundService {
       throw new BadRequestException(`目的仓 ${warehouseCode} 必须是海外仓（wms）`)
     }
 
-    const inboundNo = String(data.inboundNo || '').trim() || `IN-OMS-${Date.now().toString().slice(-8)}`
+    const inboundNo = String(data.inboundNo || '').trim() || await this.allocateInboundNo(customerCode)
     const existing = await this.prisma.inboundOrder.findUnique({ where: { inboundNo } })
     if (existing) {
       const detail = await this.prisma.inboundOrder.findUnique({

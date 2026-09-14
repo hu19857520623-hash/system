@@ -23,6 +23,7 @@ import {
   resolvePlatformBarcodes,
   type PlatformBarcodeResolution,
 } from '../data/platformBindingUtils'
+import { applyTakealotShippingNoteBindings } from '../data/takealotAutoBind'
 import {
   calculateOutboundPreDeduct, warehouseIdToRegion,
   enabledDispatchRules, findDispatchRuleForRegion, regionDispatchLabel, regionLabel,
@@ -366,9 +367,11 @@ export default function Outbound() {
     setQuickBindTarget(null)
   }
 
-  const applyTakealotParsed = (doc: TakealotParsedDoc) => {
+  const applyTakealotParsed = (doc: TakealotParsedDoc, mode: 'fill' | 'replace' = 'fill') => {
     if (doc.poNumber) setRefNo(doc.poNumber)
+    else if (mode === 'replace') setRefNo('')
     if (doc.appointmentDate) setScheduledDeliveryDate(doc.appointmentDate)
+    else if (mode === 'replace') setScheduledDeliveryDate('')
     if (
       doc.warehouseCode
       && !(doc.warehouseConfidence === 'generic' && destinationExplicitlySelected.current)
@@ -378,9 +381,13 @@ export default function Outbound() {
       if (exists) setTakealotDestWarehouse(wh)
     }
     if (doc.sellerName) setSellerStoreName(doc.sellerName)
+    else if (mode === 'replace') setSellerStoreName('')
     if (doc.sellerId) setTakealotSellerId(doc.sellerId)
+    else if (mode === 'replace') setTakealotSellerId('')
     if (doc.bookingRef) setTakealotBookingRef(doc.bookingRef)
+    else if (mode === 'replace') setTakealotBookingRef('')
     if (doc.shipmentDate) setShipmentDueDate(doc.shipmentDate)
+    else if (mode === 'replace') setShipmentDueDate('')
     setTakealotParseHint(describeTakealotParsed(doc))
     setTakealotParsedDoc(doc)
   }
@@ -447,7 +454,13 @@ export default function Outbound() {
   }, [takealotParsedDoc, labelCrops, platformMappings, customerId, effectiveTakealotSellerId])
 
   useEffect(() => {
-    if (!takealotParsedDoc) return
+    if (!takealotParsedDoc) {
+      setLines(previous => {
+        if (!previous.some(line => line.source === 'takealot')) return previous
+        return previous.filter(line => line.source !== 'takealot')
+      })
+      return
+    }
     const grouped = new Map<string, LineItem>()
     for (const row of takealotValidationRows) {
       if (row.expectedQty <= 0 || row.resolution.status !== 'resolved') continue
@@ -554,6 +567,39 @@ export default function Outbound() {
 
   const removeGeneralAttachment = (fileName: string) => {
     setAttachments(prev => prev.filter(attachment => attachment.fileName !== fileName))
+  }
+
+  const removeTakealotSourceFile = (fileType: TakealotAttachmentKind, fileName: string) => {
+    for (const key of [...takealotParsedParts.current.keys()]) {
+      if (key === `${fileType}:${fileName}` || key.startsWith(`${fileType}:`)) {
+        takealotParsedParts.current.delete(key)
+      }
+    }
+    setAttachments(prev => prev.filter(attachment => {
+      if (attachment.fileType !== fileType) return true
+      if (attachment.labelRole === 'sourceDocument') return attachment.fileName !== fileName
+      if (attachment.labelRole === 'unitCrop') {
+        return Boolean(attachment.localStorageRef) && attachment.localStorageRef !== fileName
+      }
+      return attachment.fileName !== fileName
+    }))
+    if (fileType === TAKEALOT_ATTACHMENT_KINDS.skuLabel) {
+      setTakealotLabelResults(previous => {
+        if (!(fileName in previous) && Object.keys(previous).length === 0) return previous
+        const next = { ...previous }
+        delete next[fileName]
+        return next
+      })
+    }
+    const remaining = [...takealotParsedParts.current.values()].flat()
+    if (!remaining.length) {
+      setTakealotParsedDoc(null)
+      setTakealotParseHint('')
+      setParseErrors([])
+      return
+    }
+    applyTakealotParsed(mergeTakealotParsed(...remaining), 'replace')
+    setParseErrors([])
   }
 
   const onPickAttachment = async (
@@ -705,7 +751,47 @@ export default function Outbound() {
       Object.assign(nextLabelResults, generatedLabelResults)
 
       const merged = mergeTakealotParsed(...[...takealotParsedParts.current.values()].flat())
+      let bindHint = ''
+      if (
+        can('platform:write')
+        && customerId
+        && merged.lineItems.some(item => item.barcode && item.sku)
+      ) {
+        const bindResult = applyTakealotShippingNoteBindings({
+          items: merged.lineItems,
+          mappings: platformMappings,
+          products: allProducts,
+          customerId,
+          sellerId: merged.sellerId || takealotSellerId.trim() || undefined,
+          store: pickTakealotStoreForBinding(
+            merged.sellerId || takealotSellerId.trim() || undefined,
+            customerId,
+          ),
+          stockSource,
+          now: todayDateInput(),
+        })
+        if (bindResult.bound.length) {
+          setPlatformSkuMappings(bindResult.mappings)
+          try {
+            await apiPut('/platform-sku-mappings', bindResult.mappings)
+            bindHint = `已自动绑定 ${bindResult.bound.length} 个 990→SKU`
+          } catch (error) {
+            setPlatformSkuMappings(platformMappings)
+            errors.push(`自动绑定 990 条码失败：${error instanceof Error ? error.message : String(error)}`)
+          }
+        }
+        if (bindResult.unmatchedSkus.length) {
+          const preview = bindResult.unmatchedSkus.slice(0, 8).join('、')
+          bindHint = [
+            bindHint,
+            `未找到客户商品 ${bindResult.unmatchedSkus.length} 个：${preview}`,
+          ].filter(Boolean).join(' · ')
+        }
+      }
       applyTakealotParsed(merged)
+      if (bindHint) {
+        setTakealotParseHint(`${describeTakealotParsed(merged)} · ${bindHint}`)
+      }
       setAttachments(prev => [
         ...prev.filter(existing =>
           !uploadedTypes.has(existing.fileType as TakealotAttachmentKind)
@@ -854,7 +940,7 @@ export default function Outbound() {
       return
     }
 
-    const outboundNo = editOrder?.outboundNo || nextOutboundNo()
+    const outboundNo = editOrder?.outboundNo || nextOutboundNo(getCustomerCode(submitCustomerId))
     const submitPriceTemplate = getPriceTemplateForCustomer(submitCustomerId, effectiveDestRegion)
     const feeResult = asDraft
       ? { lines: [], total: 0, totalVolumeM3: 0, totalWeightKg: 0 }
@@ -1184,8 +1270,9 @@ export default function Outbound() {
               const uploaded = attachments.filter(attachment =>
                 attachment.fileType === item.fileType
                 && attachment.labelRole === 'sourceDocument')
+              const sourceFile = uploaded[0]
               return (
-                <div key={item.fileType}>
+                <div key={item.fileType} className="relative">
                   <input
                     type="file"
                     accept=".pdf,application/pdf"
@@ -1200,13 +1287,30 @@ export default function Outbound() {
                     type="button"
                     disabled={parseBusy}
                     onClick={() => takealotFileRefs.current[item.fileType]?.click()}
-                    className="w-full rounded-lg border border-border-light bg-surface-muted/40 px-3 py-2.5 text-left hover:border-primary-300 hover:bg-primary-50/30"
+                    className={`w-full rounded-lg border bg-surface-muted/40 px-3 py-2.5 text-left hover:border-primary-300 hover:bg-primary-50/30 ${
+                      sourceFile ? 'border-emerald-200 pr-9' : 'border-border-light'
+                    }`}
                   >
                     <p className="text-xs font-medium text-text-secondary">{item.label}</p>
-                    <p className={`mt-0.5 text-[10px] ${uploaded.length ? 'text-emerald-700' : 'text-text-muted'}`}>
-                      {uploaded.length ? `${uploaded.length} 个文件` : '一次上传一个'}
+                    <p
+                      className={`mt-0.5 truncate text-[10px] ${sourceFile ? 'text-emerald-700' : 'text-text-muted'}`}
+                      title={sourceFile?.fileName}
+                    >
+                      {sourceFile ? sourceFile.fileName : '一次上传一个'}
                     </p>
                   </button>
+                  {sourceFile && (
+                    <button
+                      type="button"
+                      disabled={parseBusy}
+                      onClick={() => removeTakealotSourceFile(item.fileType, sourceFile.fileName)}
+                      className="absolute right-1.5 top-1.5 rounded-md p-1 text-red-500 hover:bg-red-50 hover:text-red-700 disabled:opacity-50"
+                      aria-label={`删除 ${sourceFile.fileName}`}
+                      title="删除这个文件"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  )}
                 </div>
               )
             })}

@@ -410,7 +410,7 @@ watch(warehouseCode, loadCurrent)
         <el-form-item v-if="stocktakeForm.mode === 'sku'" label="SKU"><el-input v-model="stocktakeForm.skusText" type="textarea" placeholder="多个 SKU 用逗号或换行分隔" /></el-form-item>
         <el-form-item v-if="stocktakeForm.mode === 'spot'" label="抽盘明细数"><el-input-number v-model="stocktakeForm.sampleSize" :min="1" :max="500" /></el-form-item>
         <el-form-item label="客户"><el-select v-model="stocktakeForm.customerCode" filterable clearable allow-create default-first-option placeholder="不限客户，可输入客户代码" style="width:100%"><el-option v-for="c in stocktakeCustomers" :key="c.customerCode" :label="c.customerCode" :value="c.customerCode" /></el-select></el-form-item>
-        <el-form-item label="入库单号"><el-input v-model="stocktakeForm.inboundNo" clearable placeholder="按单盘点时填写，例如 IN-20260903-0001" /></el-form-item>
+        <el-form-item label="入库单号"><el-input v-model="stocktakeForm.inboundNo" clearable placeholder="按单盘点时填写，例如 RVAFU0430-260910-0002" /></el-form-item>
         <el-form-item label="入库时间"><el-date-picker v-model="stocktakeForm.inboundDateRange" type="daterange" value-format="YYYY-MM-DD" start-placeholder="开始日期" end-placeholder="结束日期" style="width:100%" /></el-form-item>
         <el-form-item label="盲盘"><el-switch v-model="stocktakeForm.blindCount" /><span class="form-tip">盘点过程中不向操作员显示账面数量</span></el-form-item>
         <el-form-item label="备注"><el-input v-model="stocktakeForm.remark" /></el-form-item>

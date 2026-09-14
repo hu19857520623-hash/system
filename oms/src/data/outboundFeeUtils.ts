@@ -1,5 +1,6 @@
 import type { FeeRecord, OutboundOrder } from './mockData'
 import { feeTypeLabel } from './chargeType'
+import { isOutboundDocNo } from './wmsDocNo'
 
 export type OutboundFeeSummary = {
   outboundNo: string
@@ -20,10 +21,8 @@ export type OutboundFeeSummary = {
   allRecords: FeeRecord[]
 }
 
-const OUTBOUND_NO_RE = /^OUT-/i
-
 export function isOutboundRefNo(refNo: string): boolean {
-  return OUTBOUND_NO_RE.test(String(refNo || '').trim())
+  return isOutboundDocNo(refNo)
 }
 
 /** P6-4：按出库单聚合预扣 / 实扣 / 对账流水 */
