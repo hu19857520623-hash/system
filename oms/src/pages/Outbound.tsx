@@ -635,10 +635,13 @@ export default function Outbound() {
         } else if (file.type.startsWith('text/') || /\.(txt|csv)$/i.test(file.name)) {
           text = await file.text()
         }
+        const inferredKind = detectTakealotDocKind(file.name, text)
         const detectedKind = (
           kind === 'auto'
-            ? detectTakealotDocKind(file.name, text)
-            : FILE_TYPE_TO_DOC_KIND[kind]
+            ? inferredKind
+            : kind === TAKEALOT_ATTACHMENT_KINDS.deliveryList && inferredKind === 'SKU 标签'
+              ? inferredKind
+              : FILE_TYPE_TO_DOC_KIND[kind]
         ) as TakealotDocKind
         const fileType = DOC_KIND_TO_FILE_TYPE[detectedKind]
         if (!fileType) {

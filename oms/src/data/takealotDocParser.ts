@@ -35,14 +35,35 @@ export interface TakealotParsedDoc {
   sources: string[]
 }
 
+function looksLikeTakealotShippingNote(fileName: string, text: string): boolean {
+  const name = fileName.toLowerCase()
+  return /shipping.?note|manifest|packing.?list|发货清单|装箱单/.test(name)
+    || /shipping note|shipment content|included pos|due date/i.test(text)
+}
+
+/** Takealot unit labels often render 990 EAN as three text runs: 9 / 902316 / 738435 */
+function looksLikeTakealotSkuLabelSheet(text: string): boolean {
+  if (!text.trim()) return false
+  if (/shipping note|shipment content|included pos|due date|booking confirmation/i.test(text)) {
+    return false
+  }
+  const compact = text.replace(/\s+/g, '')
+  if ((compact.match(/990\d{10}/g) || []).length >= 1) return true
+  if (/barcode|tsin/i.test(text) && !/shipment name/i.test(text)) return true
+  return /(?:^|\n)\s*9\s*(?:\n|$)/.test(text) && /90\d{4}/.test(text)
+}
+
 export function detectTakealotDocKind(fileName: string, text = ''): TakealotDocKind {
   const name = fileName.toLowerCase()
-  const body = text.toLowerCase()
   if (/^tal[a-z0-9]+\.pdf$/i.test(fileName) || /booking confirmation|booking reference number|date of booking/i.test(text)) {
     return '预约单'
   }
-  if (/product.?labels?|sku.?labels?|条码|sku标签/.test(name)) {
-    return 'SKU 标签'
+  if (
+    /product.?labels?|sku.?labels?|unit.?labels?|item.?labels?|条码|sku标签|产品标签|商品标签/.test(name)
+    || /标签\.pdf$/.test(name)
+    || /(^|[^a-z0-9])labels?\.pdf$/.test(name)
+  ) {
+    if (!/箱标|外箱|carton|shipping.?label/.test(name)) return 'SKU 标签'
   }
   if (
     /shipping.?labels?|carton|outer.?box|box.?label|外箱|箱标/.test(name)
@@ -50,16 +71,9 @@ export function detectTakealotDocKind(fileName: string, text = ''): TakealotDocK
   ) {
     return '外箱标'
   }
-  if (/barcode|tsin/i.test(text) && !/shipment name|included pos|shipping note/i.test(text)) {
-    return 'SKU 标签'
-  }
-  if (
-    /shipping.?note|manifest|shipment|packing.?list|发货清单|装箱单/.test(name)
-    || /shipping note|shipment content|included pos|due date/i.test(text)
-  ) {
-    return '发货清单'
-  }
-  if (/_PO_/i.test(fileName) || /takealot|seller id|po number/.test(body)) return '发货清单'
+  if (looksLikeTakealotShippingNote(fileName, text)) return '发货清单'
+  if (looksLikeTakealotSkuLabelSheet(text)) return 'SKU 标签'
+  if (/_PO_/i.test(fileName)) return '发货清单'
   return '发货清单'
 }
 

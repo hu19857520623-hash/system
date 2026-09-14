@@ -35,6 +35,40 @@ Included POs: 123456789
 
 assert.equal(detectTakealotDocKind('shipment-manifest.pdf', manifestText), '发货清单')
 assert.equal(detectTakealotDocKind('TALABC123.pdf', bookingText), '预约单')
+assert.equal(detectTakealotDocKind('product_labels.pdf', ''), 'SKU 标签')
+assert.equal(detectTakealotDocKind('标签.pdf', ''), 'SKU 标签')
+assert.equal(
+  detectTakealotDocKind('标签.pdf', `
+9
+902316
+738435
+P
+M
+Ergonomic Gaming Chair
+with Headrest & Footrest -
+Blue
+`),
+  'SKU 标签',
+)
+assert.equal(
+  detectTakealotDocKind('random.pdf', `
+9
+902297
+558367
+P
+M
+MCHOSE v9proTriple-Mode
+Gaming Headset
+`),
+  'SKU 标签',
+)
+assert.equal(
+  detectTakealotDocKind(
+    'shipping_note_PO_29899395_26_08_2026_CPT_1.pdf',
+    'Shipping Note\nSHIPMENT CONTENT\nDue Date: 2026/09/02',
+  ),
+  '发货清单',
+)
 
 const manifest = parseTakealotDocumentText(manifestText, '发货清单')
 const booking = parseTakealotDocumentText(bookingText, '预约单')
