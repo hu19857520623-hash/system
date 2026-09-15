@@ -66,7 +66,8 @@ fun SettingsScreen(onBack: () -> Unit, onLogout: () -> Unit) {
             Panel {
                 Text("主管设置", color = PdaText, fontSize = 16.sp)
                 OutlinedTextField(value = baseUrl, onValueChange = { baseUrl = it }, label = { Text(tr("server")) }, singleLine = true, colors = fieldColors())
-                Text("服务器配置影响本机所有仓储作业，请确认地址后保存。", color = PdaMuted, fontSize = 12.sp)
+                Text("正式环境：${com.takealot.pda.data.SessionStore.PRODUCTION_API_BASE}", color = PdaMuted, fontSize = 12.sp)
+                Text("局域网地址（192.168…）海外仓连不上，会自动改回正式服务器。", color = PdaMuted, fontSize = 12.sp)
                 BigButton(
                     text = tr("save"),
                     onClick = {

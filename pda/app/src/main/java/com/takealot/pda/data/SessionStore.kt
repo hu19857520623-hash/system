@@ -6,9 +6,13 @@ import com.takealot.pda.BuildConfig
 class SessionStore(context: Context) {
     private val prefs = context.getSharedPreferences("pda_session", Context.MODE_PRIVATE)
 
+    init {
+        migrateLanUrlToProduction()
+    }
+
     var baseUrl: String
-        get() = prefs.getString(KEY_BASE, DEFAULT_BASE) ?: DEFAULT_BASE
-        set(value) { prefs.edit().putString(KEY_BASE, value.trim().trimEnd('/')).apply() }
+        get() = resolveBaseUrl(prefs.getString(KEY_BASE, DEFAULT_BASE) ?: DEFAULT_BASE)
+        set(value) { prefs.edit().putString(KEY_BASE, resolveBaseUrl(value)).apply() }
     var token: String
         get() = prefs.getString(KEY_TOKEN, "") ?: ""
         set(value) { prefs.edit().putString(KEY_TOKEN, value).apply() }
@@ -58,8 +62,35 @@ class SessionStore(context: Context) {
             .remove(KEY_REAL_NAME).remove(KEY_PERMS).remove(KEY_USER_STATION).apply()
     }
 
+    /** 海外仓无法访问局域网开发机，启动时把旧地址改成正式环境。 */
+    private fun migrateLanUrlToProduction() {
+        val stored = prefs.getString(KEY_BASE, null) ?: return
+        if (looksLikeLanDev(stored)) {
+            prefs.edit().putString(KEY_BASE, PRODUCTION_API_BASE).apply()
+        }
+    }
+
     companion object {
+        const val PRODUCTION_API_BASE = "https://www.erp.sztekeluo.com/api"
         val DEFAULT_BASE: String = BuildConfig.ERP_API_BASE_URL
+
+        fun looksLikeLanDev(url: String): Boolean {
+            val lower = url.lowercase()
+            return lower.contains("192.168.") ||
+                lower.contains("10.0.2.2") ||
+                lower.contains("localhost") ||
+                lower.contains("127.0.0.1")
+        }
+
+        fun resolveBaseUrl(raw: String): String {
+            var value = raw.trim().trimEnd('/')
+            if (value.isEmpty() || looksLikeLanDev(value)) return PRODUCTION_API_BASE
+            if (!value.startsWith("http://", ignoreCase = true) && !value.startsWith("https://", ignoreCase = true)) {
+                value = "https://$value"
+            }
+            return value
+        }
+
         private const val KEY_BASE = "base_url"
         private const val KEY_TOKEN = "token"
         private const val KEY_USER_ID = "user_id"

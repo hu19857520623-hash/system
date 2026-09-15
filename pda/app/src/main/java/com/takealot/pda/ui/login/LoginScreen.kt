@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.takealot.pda.PdaApp
 import com.takealot.pda.data.ErpException
+import com.takealot.pda.data.SessionStore
 import com.takealot.pda.ui.components.BigButton
 import com.takealot.pda.ui.components.Feedback
 import com.takealot.pda.ui.components.FeedbackBar
@@ -47,6 +48,7 @@ fun LoginScreen(onLoggedIn: () -> Unit) {
         feedback = null
         scope.launch {
             try {
+                session.baseUrl = SessionStore.PRODUCTION_API_BASE
                 api.login(username.trim(), password)
                 onLoggedIn()
             } catch (e: ErpException) {
@@ -68,6 +70,7 @@ fun LoginScreen(onLoggedIn: () -> Unit) {
         OutlinedTextField(value = password, onValueChange = { password = it }, label = { Text(tr("password")) }, singleLine = true, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), colors = fieldColors())
         FeedbackBar(feedback)
         BigButton(if (busy) tr("logging_in") else tr("login"), onClick = { submit() }, enabled = !busy && username.isNotBlank() && password.isNotBlank())
+        Text("服务器：${SessionStore.PRODUCTION_API_BASE}", color = PdaMuted, fontSize = 12.sp)
         Text(tr("server_hint"), color = PdaMuted, fontSize = 12.sp)
     }
 }

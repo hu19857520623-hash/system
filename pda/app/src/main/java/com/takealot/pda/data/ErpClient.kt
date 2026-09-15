@@ -164,7 +164,7 @@ class ErpClient(private val session: SessionStore) {
     }
 
     private fun request(path: String, auth: Boolean = true): Request.Builder {
-        val builder = Request.Builder().url("${session.baseUrl.trim().trimEnd('/')}$path")
+        val builder = Request.Builder().url("${SessionStore.resolveBaseUrl(session.baseUrl)}$path")
         if (auth && session.token.isNotBlank()) builder.header("Authorization", "Bearer ${session.token}")
         builder.header("Accept", "application/json")
         return builder
