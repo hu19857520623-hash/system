@@ -5,7 +5,7 @@ import { Button, Card, MonoCode, Table } from '../components/ui'
 import { FormSection, FormGrid, FormField, formInput, formSelect, formTextarea } from '../components/ui/form'
 import {
   FULFILLMENT_WAREHOUSES, warehouseLabel,
-  LOGISTICS_CHANNELS, PLATFORM_OPTIONS, formatCurrency,
+  PLATFORM_OPTIONS, formatCurrency,
   TAKEALOT_ATTACHMENT_KINDS,
   type FileAttachment, type OutboundOrder, type OutboundType, type PlatformSkuMapping,
   type ShipmentSource, type StockSource, type TakealotAttachmentKind,
@@ -26,7 +26,7 @@ import {
 import { applyTakealotShippingNoteBindings } from '../data/takealotAutoBind'
 import {
   calculateOutboundPreDeduct, warehouseIdToRegion,
-  enabledDispatchRules, findDispatchRuleForRegion, regionDispatchLabel, regionLabel,
+  enabledDispatchRules, findDispatchRuleForRegion, regionLabel,
 } from '../data/feeTemplates'
 import { useFeeTemplates, getPriceTemplateForCustomer } from '../data/feeTemplateStore'
 import { preDeductOutboundFees, rollbackPreDeductOutboundFees, useBilling } from '../data/billingStore'
@@ -58,8 +58,8 @@ import {
   parseOutboundLines,
 } from '../data/importTemplates'
 import { ImportTemplateLegend } from '../components/ui/ImportTemplateLegend'
-import SkuFuzzyPicker from '../components/ui/SkuFuzzyPicker'
 import PlatformBindingModal, { type BindingFormState } from '../components/platform/PlatformBindingModal'
+import OutboundSkuPickerModal, { type OutboundSkuPickerConfirmRow } from '../components/outbound/OutboundSkuPickerModal'
 import {
   setPlatformSkuMappings,
   usePlatformSkuMappings,
@@ -118,7 +118,6 @@ export default function Outbound() {
   const [takealotDestWarehouse, setTakealotDestWarehouse] = useState<string>(DEFAULT_TAKEALOT_DEST_WAREHOUSE)
   const [platform, setPlatform] = useState<string>(PLATFORM_OPTIONS[0])
   const [outboundType, setOutboundType] = useState<string>('Takealot入仓')
-  const [shippingMethod, setShippingMethod] = useState<string>(LOGISTICS_CHANNELS[0])
   const [refNo, setRefNo] = useState('')
   const [sellerStoreName, setSellerStoreName] = useState('')
   const [takealotSellerId, setTakealotSellerId] = useState('')
@@ -141,15 +140,11 @@ export default function Outbound() {
   const [recipientAddress2, setRecipientAddress2] = useState('')
   const [recipientEmail, setRecipientEmail] = useState('')
   const [attachments, setAttachments] = useState<FileAttachment[]>([])
-  const [skuInput, setSkuInput] = useState('')
-  const [qtyInput, setQtyInput] = useState('')
-  const [declaredNameInput, setDeclaredNameInput] = useState('')
-  const [declaredValueInput, setDeclaredValueInput] = useState('')
-  const [noteInput, setNoteInput] = useState('')
   const [lines, setLines] = useState<LineItem[]>([])
   const [destRegion, setDestRegion] = useState('jhb')
   const [dispatchRuleId, setDispatchRuleId] = useState('')
   const [quickBindTarget, setQuickBindTarget] = useState<{ barcode: string; title?: string } | null>(null)
+  const [skuPickerOpen, setSkuPickerOpen] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const generalAttachmentRef = useRef<HTMLInputElement>(null)
   const takealotFileRefs = useRef<Record<string, HTMLInputElement | null>>({})
@@ -181,6 +176,15 @@ export default function Outbound() {
     ? warehouseIdToRegion(takealotDestWarehouse)
     : destRegion
 
+  const resolvedShippingMethod = useMemo(() => {
+    if (isTakealot) {
+      const rule = findDispatchRuleForRegion(regionDispatchRules, effectiveDestRegion)
+      return rule?.shippingMethod ?? '卡派'
+    }
+    const rule = activeDispatchRules.find(r => r.id === dispatchRuleId)
+    return rule?.shippingMethod ?? '卡派'
+  }, [isTakealot, effectiveDestRegion, regionDispatchRules, dispatchRuleId, activeDispatchRules])
+
   const customerId = getCustomerIdForRole(role)
   const effectiveTakealotSellerId = (takealotParsedDoc?.sellerId || takealotSellerId.trim()) || undefined
   const quickBindStore = useMemo(
@@ -205,11 +209,6 @@ export default function Outbound() {
     return Math.max(0, getShippableQty(normalized) - reserved)
   }
 
-  const selectedSkuShippableQty = useMemo(
-    () => (skuInput.trim() ? getRemainingShippableQty(skuInput) : null),
-    [skuInput, lines, stockSource, customerId, allProducts],
-  )
-
   const updateLineQty = (lineId: string, rawQty: number) => {
     const qty = Math.max(1, Math.trunc(Number(rawQty) || 0))
     setLines(prev => prev.map(line => (line.id === lineId ? { ...line, qty } : line)))
@@ -220,7 +219,6 @@ export default function Outbound() {
     hydratedEditId.current = editOrder.id
     setOutboundType(editOrder.type === 'dropship' ? '一件代发' : 'Takealot入仓')
     setPlatform(editOrder.type === 'takealot' ? 'Takealot' : PLATFORM_OPTIONS[0])
-    setShippingMethod(editOrder.shippingMethod || LOGISTICS_CHANNELS[0])
     setRefNo(editOrder.refNo || '')
     setSellerStoreName(editOrder.sellerStoreName || '')
     setTakealotSellerId(editOrder.takealotSellerId || '')
@@ -276,30 +274,16 @@ export default function Outbound() {
   }, [activeDispatchRules, dispatchRuleId])
 
   useEffect(() => {
-    if (isTakealot) {
-      const rule = findDispatchRuleForRegion(regionDispatchRules, effectiveDestRegion)
-      if (rule && shippingMethod !== '自提') {
-        setShippingMethod(rule.shippingMethod)
-      }
-      return
-    }
+    if (isTakealot) return
     const rule = activeDispatchRules.find(r => r.id === dispatchRuleId)
-    if (rule) {
-      setDestRegion(rule.code)
-      if (shippingMethod !== '自提') {
-        setShippingMethod(rule.shippingMethod)
-      }
-    }
-  }, [dispatchRuleId, isTakealot, effectiveDestRegion, takealotDestWarehouse, regionDispatchRules, activeDispatchRules])
+    if (rule) setDestRegion(rule.code)
+  }, [dispatchRuleId, isTakealot, activeDispatchRules])
 
   const applyDispatchRule = (ruleId: string) => {
     const rule = activeDispatchRules.find(r => r.id === ruleId)
     if (!rule) return
     setDispatchRuleId(ruleId)
     setDestRegion(rule.code)
-    if (shippingMethod !== '自提') {
-      setShippingMethod(rule.shippingMethod)
-    }
   }
 
   const resolveDimensions = (sku: string) => {
@@ -318,13 +302,13 @@ export default function Outbound() {
     const stockLines = lines.map(l => ({ sku: l.sku, qty: l.qty }))
     return calculateOutboundPreDeduct(
       stockLines,
-      shippingMethod,
+      resolvedShippingMethod,
       effectiveDestRegion,
       resolveDimensions,
       priceTemplate,
       regionDispatchRules,
     )
-  }, [lines, shippingMethod, effectiveDestRegion, regionDispatchRules, priceTemplate])
+  }, [lines, resolvedShippingMethod, effectiveDestRegion, regionDispatchRules, priceTemplate])
 
   const goRecords = () => navigate('/outbound/records')
 
@@ -332,7 +316,6 @@ export default function Outbound() {
     setTakealotDestWarehouse(DEFAULT_TAKEALOT_DEST_WAREHOUSE)
     setPlatform(PLATFORM_OPTIONS[0])
     setOutboundType('Takealot入仓')
-    setShippingMethod(LOGISTICS_CHANNELS[0])
     setRefNo('')
     setSellerStoreName('')
     setTakealotSellerId('')
@@ -357,11 +340,6 @@ export default function Outbound() {
     setRecipientEmail('')
     setAttachments([])
     setLines([])
-    setSkuInput('')
-    setQtyInput('')
-    setDeclaredNameInput('')
-    setDeclaredValueInput('')
-    setNoteInput('')
     setDestRegion('jhb')
     setDispatchRuleId(activeDispatchRules[0]?.id ?? '')
     setQuickBindTarget(null)
@@ -949,7 +927,7 @@ export default function Outbound() {
       ? { lines: [], total: 0, totalVolumeM3: 0, totalWeightKg: 0 }
       : calculateOutboundPreDeduct(
           stockLines,
-          shippingMethod,
+          resolvedShippingMethod,
           effectiveDestRegion,
           resolveDimensions,
           submitPriceTemplate,
@@ -980,7 +958,7 @@ export default function Outbound() {
         email: recipientEmail.trim() || undefined,
       } : undefined,
       createdAt: editOrder?.createdAt || todayDateInput(),
-      shippingMethod,
+      shippingMethod: resolvedShippingMethod,
       preDeductFees: feeResult.lines.map(f => ({ type: f.type, amount: f.amount, label: f.label, detail: f.detail })),
       destRegion: effectiveDestRegion,
       priceTemplateId: submitPriceTemplate.id,
@@ -1083,27 +1061,17 @@ export default function Outbound() {
     goRecords()
   }
 
-  const addLine = () => {
-    if (!skuInput || !qtyInput) return
-    const sku = resolveLineSku(skuInput)
-    const prod = findProductByCode(skuInput)
-    const qty = Math.max(1, Math.trunc(Number(qtyInput) || 0))
-    const declaredValue = declaredValueInput ? Number(declaredValueInput) : (prod?.price ?? 0)
-    setLines(prev => [...prev, {
-      id: String(Date.now()),
-      sku,
-      name: prod?.name ?? sku,
-      qty,
-      declaredName: declaredNameInput || prod?.declaredNameEn || sku,
-      declaredValue: Number.isFinite(declaredValue) ? declaredValue : 0,
-      note: noteInput,
-      source: 'manual',
-    }])
-    setSkuInput('')
-    setQtyInput('')
-    setDeclaredNameInput('')
-    setDeclaredValueInput('')
-    setNoteInput('')
+  const applySkuPickerLines = (rows: OutboundSkuPickerConfirmRow[]) => {
+    setLines(rows.map((row, index) => ({
+      id: row.existingId || `${Date.now()}-${index}`,
+      sku: row.sku,
+      name: row.name,
+      qty: row.qty,
+      declaredName: row.declaredName,
+      declaredValue: row.declaredValue,
+      note: row.note,
+      source: row.source ?? 'manual',
+    })))
   }
 
   const handleBatchUploadLines = async () => {
@@ -1481,11 +1449,6 @@ export default function Outbound() {
                 {OUTBOUND_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
               </select>
             </FormField>
-            <FormField label="配送方式" required hint="自提仅收操作费；其余按地区模板默认">
-              <select value={shippingMethod} onChange={e => setShippingMethod(e.target.value)} className={formSelect()}>
-                {LOGISTICS_CHANNELS.map(m => <option key={m} value={m}>{m}</option>)}
-              </select>
-            </FormField>
             <FormField label="出库单号" hint="提交后由系统自动生成">
               <input className={formInput()} value="提交后自动生成" readOnly disabled />
             </FormField>
@@ -1523,17 +1486,6 @@ export default function Outbound() {
                     ))}
                   </select>
                 </FormField>
-                <FormField label="地区模板" hint="根据 Takealot 目的仓自动匹配">
-                  <input
-                    className={formInput()}
-                    value={regionDispatchLabel(
-                      findDispatchRuleForRegion(regionDispatchRules, effectiveDestRegion)
-                      ?? { id: '', code: effectiveDestRegion, label: regionLabel(effectiveDestRegion, regionDispatchRules), shippingMethod: '卡派', enabled: true },
-                    )}
-                    readOnly
-                    disabled
-                  />
-                </FormField>
                 <FormField label="PO单号" hint="Takealot 入仓 PO，上传文件后可自动识别">
                   <input className={formInput()} placeholder="PO单号" value={refNo} onChange={e => setRefNo(e.target.value)} />
                 </FormField>
@@ -1553,14 +1505,14 @@ export default function Outbound() {
             )}
             {!isTakealot && (
               <>
-                <FormField label="发货地区" required hint="选择发往哪里，自动套用卡派/快递">
+                <FormField label="发货地区" required hint="选择目的地区，费用按地区价格模板试算">
                   <select
                     value={dispatchRuleId}
                     onChange={e => applyDispatchRule(e.target.value)}
                     className={formSelect()}
                   >
                     {activeDispatchRules.map(r => (
-                      <option key={r.id} value={r.id}>{regionDispatchLabel(r)}</option>
+                      <option key={r.id} value={r.id}>{r.label}</option>
                     ))}
                   </select>
                 </FormField>
@@ -1629,6 +1581,8 @@ export default function Outbound() {
           title="货品选择"
           action={
             <div className="flex flex-wrap gap-2">
+              <Button size="sm" onClick={() => setSkuPickerOpen(true)}><Plus className="h-3.5 w-3.5" /> 增加</Button>
+              <Button variant="secondary" size="sm" onClick={() => setLines([])}>清除</Button>
               <Button variant="secondary" size="sm" onClick={downloadOutboundLineTemplate}>下载模板</Button>
               <Button variant="secondary" size="sm" onClick={() => void handleBatchUploadLines()}>
                 <Upload className="h-3.5 w-3.5" /> 批量上传
@@ -1637,52 +1591,6 @@ export default function Outbound() {
           }
         >
           <ImportTemplateLegend columns={OUTBOUND_LINE_COLUMNS} />
-          <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-            <FormField label="SKU" required>
-              <SkuFuzzyPicker
-                value={skuInput}
-                onChange={setSkuInput}
-                customerId={getCustomerIdForRole(role) ?? undefined}
-                onSelect={product => {
-                  setDeclaredNameInput(product.declaredNameEn || product.name)
-                  setDeclaredValueInput(String(product.declaredValue || product.price || ''))
-                }}
-              />
-            </FormField>
-            <FormField
-              label="数量"
-              required
-              hint={
-                selectedSkuShippableQty != null
-                  ? `仓库可发 ${selectedSkuShippableQty.toLocaleString()} 件${stockSource === 'catalog' ? '（已锁定库存）' : ''}`
-                  : '> 0'
-              }
-            >
-              <input value={qtyInput} onChange={e => setQtyInput(e.target.value)} type="number" min={1} className={formInput()} />
-            </FormField>
-            <FormField label="申报品名">
-              <input
-                className={formInput()}
-                placeholder="Declared Name (EN)"
-                value={declaredNameInput}
-                onChange={e => setDeclaredNameInput(e.target.value)}
-              />
-            </FormField>
-            <FormField label="申报价值">
-              <input
-                type="number"
-                className={formInput()}
-                placeholder="0.00"
-                step="0.01"
-                value={declaredValueInput}
-                onChange={e => setDeclaredValueInput(e.target.value)}
-              />
-            </FormField>
-            <div className="flex items-end gap-2">
-              <Button size="sm" onClick={addLine}><Plus className="h-3.5 w-3.5" /> 增加</Button>
-              <Button variant="secondary" size="sm" onClick={() => setLines([])}>清除</Button>
-            </div>
-          </div>
 
           <Card className="overflow-hidden">
             <Table>
@@ -1701,7 +1609,7 @@ export default function Outbound() {
                 {lines.length === 0 ? (
                   <tr>
                     <td colSpan={7} className="table-cell py-8 text-center text-xs text-text-muted">
-                      暂无货品，请录入 SKU 后点击「增加」，或使用批量上传
+                      暂无货品，请点击「增加」选择 SKU，或使用批量上传
                       {availableProducts.length > 0 && (
                         <span className="mt-2 block text-[10px]">
                           可匹配库存：{availableProducts.slice(0, 3).map(p => p.internalSku).join('、')} 等
@@ -1810,6 +1718,16 @@ export default function Outbound() {
           </div>
         </div>
       </div>
+
+      <OutboundSkuPickerModal
+        open={skuPickerOpen}
+        onClose={() => setSkuPickerOpen(false)}
+        customerId={customerId ?? undefined}
+        catalogOnly={catalogOnly}
+        stockSource={stockSource}
+        lines={lines}
+        onConfirm={applySkuPickerLines}
+      />
 
       <PlatformBindingModal
         open={Boolean(quickBindTarget)}

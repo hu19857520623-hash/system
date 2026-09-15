@@ -206,7 +206,7 @@ export default function RegionTemplates() {
 
           <li>· 保存后自动在「价格模板」中为新地区生成默认物流费与<strong>自提费</strong>，可在价格模板中微调</li>
 
-          <li>· 客户在「预约发货」选择发货地区后，系统自动套用对应配送方式（可手动改为自提）</li>
+          <li>· 客户在「预约发货」选择目的地区或 Takealot 目的仓后，费用试算与提交将按本地区默认配送方式计费</li>
 
           <li>· Takealot 入仓仍按目的仓映射到 jhb / cpt / dbn 等地区代码</li>
 
