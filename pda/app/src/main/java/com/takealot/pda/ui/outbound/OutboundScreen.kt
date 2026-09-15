@@ -200,7 +200,7 @@ class OutboundViewModel : ViewModel() {
             nextLines = suggestions.flatMap { row ->
                 row.suggestions.orEmpty().filter { it.pickQty > 0 }.map { allocation ->
                     val location = allocation.locationCode.orEmpty().trim().uppercase()
-                    LocalPickLine(row.id, row.sku.orEmpty(), row.productName.orEmpty(), allocation.pickQty, location, 0, "${row.id}@$location", row.barcode.orEmpty())
+                    LocalPickLine(row.id, row.sku.orEmpty(), row.productName.orEmpty(), allocation.pickQty, location, 0, "${row.id}@$location", row.barcode.orEmpty(), row.platformBarcode.orEmpty())
                 }
             }
             if (nextLines.isEmpty()) throw ErpException("暂无可执行的库位拣货任务，请先完成上架")
@@ -212,7 +212,7 @@ class OutboundViewModel : ViewModel() {
             }
             if (nextOrder.omsPreDeduct != null) feedback = Feedback(false, "OMS 单需在电脑端录入外箱尺寸后再复核")
             nextLines = nextOrder.itemList.map {
-                LocalPickLine(it.id, it.sku.orEmpty(), it.productName.orEmpty(), if (it.pickedQty > 0) it.pickedQty else it.qty, it.locationCode.orEmpty(), 0, "review@${it.id}", it.barcode.orEmpty())
+                LocalPickLine(it.id, it.sku.orEmpty(), it.productName.orEmpty(), if (it.pickedQty > 0) it.pickedQty else it.qty, it.locationCode.orEmpty(), 0, "review@${it.id}", it.barcode.orEmpty(), it.platformBarcode.orEmpty())
             }
         }
         val saved = PdaApp.instance.workJournal.pickProgress(nextOrder.id, mode)
@@ -386,6 +386,7 @@ fun OutboundScreen(modeKey: String, onBack: () -> Unit, vm: OutboundViewModel = 
             vm.lines.forEach { line ->
                 SkuCard(
                     sku = line.sku,
+                    bound990 = line.bound990,
                     progress = "${line.scannedQty}/${line.qty}",
                     done = line.done,
                     selected = line.taskKey == vm.selectedSku,
@@ -397,11 +398,11 @@ fun OutboundScreen(modeKey: String, onBack: () -> Unit, vm: OutboundViewModel = 
                         Text(line.locationCode.ifBlank { "未填" }, color = PdaText, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                     }
                     if (vm.mode == "pick") Text(
-                        if (vm.pickScanMode == "carton") "先扫库位，再扫 SKU；按箱一次记满 ${line.qty}" else "先扫库位，再扫 SKU；逐件扫满 ${line.qty}",
+                        if (vm.pickScanMode == "carton") "先扫库位，再扫 SKU 或已绑 990；按箱一次记满 ${line.qty}" else "先扫库位，再扫 SKU 或已绑 990；逐件扫满 ${line.qty}",
                         color = PdaAccent,
                         fontSize = 12.sp,
                     )
-                    else Text("逐件扫描 SKU 或条码，扫满 ${line.qty} 件", color = PdaAccent, fontSize = 12.sp)
+                    else Text("逐件扫描 SKU 或已绑 990，扫满 ${line.qty} 件", color = PdaAccent, fontSize = 12.sp)
                 }
             }
             if (vm.mode == "pick") BigButton("提交拣货", onClick = { vm.submitPick() }, enabled = !vm.busy && vm.lines.isNotEmpty(), color = PdaOk)

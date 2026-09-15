@@ -23,4 +23,14 @@ describe('findInboundItemByScan', () => {
     const barcodes = new Map<number, string>([[11, '999']])
     expect(findInboundItemByScan(items, 'xx-123', barcodes)).toBeNull()
   })
+
+  it('matches a bound Takealot 990 alias', () => {
+    const barcodes = new Map<number, string[]>([[22, ['9902357529948']]])
+    expect(findInboundItemByScan(items, '9902357529948', barcodes)?.id).toBe(2)
+  })
+
+  it('matches platformBarcode on the inbound line itself', () => {
+    const with990 = [{ id: 3, sku: 'CHI0001-RED', productId: 33, platformBarcode: '9902357529948' }]
+    expect(findInboundItemByScan(with990, '9902357529948', new Map())?.id).toBe(3)
+  })
 })

@@ -8,6 +8,31 @@ import { useAppStore } from '@/stores/app'
 import { INBOUND_STATUS } from '@/constants/index.js'
 import { withAction } from '@/composables/useListLoader.ts'
 
+function bound990Text(row: any): string {
+  const codes = [
+    row?.platformBarcode,
+    ...(Array.isArray(row?.platformBarcodes) ? row.platformBarcodes : []),
+    row?.barcode,
+  ]
+    .map((c: any) => String(c || '').trim())
+    .filter((c: string) => /^990\d+/i.test(c))
+  const unique = [...new Set(codes)]
+  if (!unique.length) return ''
+  return unique.length === 1 ? unique[0] : `${unique[0]} 等${unique.length}个`
+}
+
+function lineMatchesScan(line: any, raw: string): boolean {
+  const token = String(raw || '').trim().toUpperCase()
+  if (!token) return false
+  if (String(line?.sku || '').trim().toUpperCase() === token) return true
+  const aliases = [
+    line?.barcode,
+    line?.platformBarcode,
+    ...(Array.isArray(line?.platformBarcodes) ? line.platformBarcodes : []),
+  ]
+  return aliases.some((a) => String(a || '').trim().toUpperCase() === token)
+}
+
 const app = useAppStore()
 const route = useRoute()
 
@@ -192,6 +217,9 @@ function buildPutawayDraft(order: any) {
       return {
         id: item.id,
         sku: item.sku,
+        barcode: item.barcode || '',
+        platformBarcode: item.platformBarcode || '',
+        platformBarcodes: item.platformBarcodes || [],
         productName: item.productName || '',
         actualQty: actual,
         putawayQty: item.putawayQty ?? 0,
@@ -239,6 +267,9 @@ function buildQcLines(order: any) {
   qcLines.value = (order.items || []).map((item: any) => ({
     id: item.id,
     sku: item.sku,
+    barcode: item.barcode || '',
+    platformBarcode: item.platformBarcode || '',
+    platformBarcodes: item.platformBarcodes || [],
     productName: item.productName || item.sku,
     spec: item.spec || '',
     expectedQty: item.expectedQty,
@@ -572,9 +603,9 @@ function validateMeasureLine(item: any) {
 }
 
 function onPutawaySkuScan() {
-  const code = putawaySkuScan.value.trim().toUpperCase()
+  const code = putawaySkuScan.value.trim()
   if (!code) return
-  const line = putawayReadyLines.value.find((i: any) => String(i.sku).toUpperCase() === code)
+  const line = putawayReadyLines.value.find((i: any) => lineMatchesScan(i, code))
   if (!line) {
     ElMessage.warning(`SKU ${putawaySkuScan.value} 不在待上架明细中`)
     return
@@ -976,8 +1007,13 @@ onMounted(async () => {
         </el-table>
 
         <el-table :data="activeOrder.items || []" border size="small" stripe>
-          <el-table-column prop="sku" label="SKU" width="120">
-            <template #default="{ row }"><span class="mono">{{ row.sku }}</span></template>
+          <el-table-column prop="sku" label="SKU" min-width="150">
+            <template #default="{ row }">
+              <div class="sku-cell">
+                <span class="mono">{{ row.sku }}</span>
+                <span v-if="bound990Text(row)" class="bound-990">已绑 {{ bound990Text(row) }}</span>
+              </div>
+            </template>
           </el-table-column>
           <el-table-column prop="productName" label="品名" min-width="140" show-overflow-tooltip />
           <el-table-column prop="spec" label="规格" width="88" show-overflow-tooltip>
@@ -1006,7 +1042,7 @@ onMounted(async () => {
           <el-button v-if="canResolve" link type="primary" @click="resolveAndPutaway">异常放行</el-button>
         </el-alert>
         <el-alert v-else type="info" :closable="false" show-icon style="margin-bottom:12px">
-          本环节确认 SKU 实收件数（支持 1 SKU 一箱扫 1 次、或一箱多件时设置「每次件数」后扫 SKU 累加）；测量机回传长宽高会自动填入（也支持 JSON 或「SKU|长|宽|高」）。确认后点击「提交清点与测量」。
+          本环节确认 SKU 实收件数（支持 1 SKU 一箱扫 1 次、或一箱多件时设置「每次件数」后扫 SKU / 已绑 990 累加）；测量机回传长宽高会自动填入（也支持 JSON 或「SKU|长|宽|高」）。确认后点击「提交清点与测量」。
         </el-alert>
 
         <el-descriptions :column="4" border size="small" class="order-summary">
@@ -1035,7 +1071,7 @@ onMounted(async () => {
               <el-input
                 ref="qcScanRef"
                 v-model="qcSkuScan"
-                placeholder="SKU 标签 / 测量机输出"
+                placeholder="SKU 标签 / 已绑 990 / 测量机输出"
                 style="width:320px"
                 clearable
                 :disabled="qcScanning"
@@ -1054,7 +1090,7 @@ onMounted(async () => {
             </el-form-item>
           </el-form>
           <p v-if="qcSelectedLine" class="hint">
-            当前：{{ qcSelectedLine.sku }} · 实收 {{ qcSelectedLine.actualQty }} / {{ qcSelectedLine.expectedQty }}
+            当前：{{ qcSelectedLine.sku }}<template v-if="bound990Text(qcSelectedLine)"> · 已绑 {{ bound990Text(qcSelectedLine) }}</template> · 实收 {{ qcSelectedLine.actualQty }} / {{ qcSelectedLine.expectedQty }}
             <template v-if="hasDimensions(qcSelectedLine)">
               · {{ qcSelectedLine.lengthCm }}×{{ qcSelectedLine.widthCm }}×{{ qcSelectedLine.heightCm }} cm
             </template>
@@ -1070,8 +1106,13 @@ onMounted(async () => {
           :row-class-name="({ row }: any) => (row.id === qcSelectedItemId ? 'qc-row-active' : '')"
           @row-click="(row: any) => { qcSelectedItemId = row.id }"
         >
-          <el-table-column prop="sku" label="SKU" width="118" fixed="left">
-            <template #default="{ row }"><span class="mono">{{ row.sku }}</span></template>
+          <el-table-column prop="sku" label="SKU" min-width="150" fixed="left">
+            <template #default="{ row }">
+              <div class="sku-cell">
+                <span class="mono">{{ row.sku }}</span>
+                <span v-if="bound990Text(row)" class="bound-990">已绑 {{ bound990Text(row) }}</span>
+              </div>
+            </template>
           </el-table-column>
           <el-table-column prop="productName" label="品名" min-width="120" show-overflow-tooltip />
           <el-table-column prop="spec" label="规格" width="72" show-overflow-tooltip />
@@ -1201,21 +1242,21 @@ onMounted(async () => {
                 <el-select
                   v-model="putawaySelectedItemId"
                   filterable
-                  placeholder="选择或扫描 SKU"
+                  placeholder="选择或扫描 SKU / 已绑 990"
                   style="width:260px"
                   size="small"
                 >
                   <el-option
                     v-for="line in putawayReadyLines"
                     :key="line.id"
-                    :label="`${line.sku}（待上架 ${line.remaining}）`"
+                    :label="bound990Text(line) ? `${line.sku} / ${bound990Text(line)}（待上架 ${line.remaining}）` : `${line.sku}（待上架 ${line.remaining}）`"
                     :value="line.id"
                   />
                 </el-select>
                 <el-input
                   ref="putawayScanRef"
                   v-model="putawaySkuScan"
-                  placeholder="扫描 SKU 快速选中"
+                  placeholder="扫描 SKU 或已绑 990"
                   style="width:200px;margin-left:8px"
                   size="small"
                   clearable
@@ -1267,6 +1308,7 @@ onMounted(async () => {
                 <div class="sku-card-title">
                   <span class="sku-index">{{ idx + 1 }}</span>
                   <span class="mono sku-code">{{ line.sku }}</span>
+                  <span v-if="bound990Text(line)" class="bound-990">已绑 {{ bound990Text(line) }}</span>
                   <span v-if="line.productName" class="sku-name">{{ line.productName }}</span>
                 </div>
                 <div class="sku-qty-tags">
@@ -1453,6 +1495,19 @@ onMounted(async () => {
 }
 
 .sku-code { font-weight: 600; }
+
+.sku-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.bound-990 {
+  font-size: 11px;
+  color: var(--el-color-warning);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
 
 .sku-name {
   font-size: 12px;

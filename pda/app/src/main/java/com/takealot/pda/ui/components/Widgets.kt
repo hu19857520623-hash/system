@@ -192,6 +192,7 @@ fun SkuCard(
     done: Boolean,
     selected: Boolean,
     modifier: Modifier = Modifier,
+    bound990: String = "",
     onClick: () -> Unit,
     content: @Composable () -> Unit,
 ) {
@@ -208,6 +209,9 @@ fun SkuCard(
             Column {
                 Text("SKU", color = PdaSku, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                 Text(sku, color = PdaText, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                if (bound990.isNotBlank() && !bound990.equals(sku, ignoreCase = true)) {
+                    Text("已绑 990  $bound990", color = PdaMuted, fontSize = 12.sp)
+                }
             }
             StatusChip(progress, if (done) "ok" else "warn")
         }

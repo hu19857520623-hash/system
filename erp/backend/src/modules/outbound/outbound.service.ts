@@ -45,6 +45,7 @@ import { buildOutboundNo, nextSeqFromNos, outboundNoPrefix } from '@erp/shared/w
 import { notifyOms } from '../../common/oms-notify.util'
 import { erpFbaCodesForOmsWarehouse, outboundDestinationLabel } from './oms-warehouse.util'
 import { toOmsLogisticsStatus, toOmsOutboundStatus } from './oms-status.util'
+import { loadPlatformBarcodesByInternalSku, productScanFields } from '../../common/platform-barcode-lookup.util'
 import {
   buildOutboundRemark,
   parseOmsOutboundMeta,
@@ -353,6 +354,15 @@ export class OutboundService {
       ? await this.prisma.product.findMany({ where: { id: { in: productIds } } })
       : []
     const productMap = new Map(products.map((p) => [Number(p.id), p]))
+    const platformBySku = await loadPlatformBarcodesByInternalSku(
+      this.prisma,
+      rows.flatMap((r) =>
+        (r.items || []).flatMap((i: any) => {
+          const product = productMap.get(Number(i.productId))
+          return [i.sku, product?.sku, product?.customerSku]
+        }),
+      ).filter(Boolean),
+    )
     return rows.map((r) => ({
       id: Number(r.id),
       outboundNo: r.outboundNo,
@@ -418,18 +428,23 @@ export class OutboundService {
       podCode: r.podCode || '',
       podScannedAt: r.podScannedAt ? this.fmtTime(r.podScannedAt) : null,
       createdAt: this.fmtTime(r.createdAt),
-      items: (r.items || []).map((i: any) => ({
-        id: Number(i.id),
-        productId: Number(i.productId),
-        sku: i.sku,
-        barcode: productMap.get(Number(i.productId))?.barcode || '',
-        productName: i.productName || '',
-        qty: i.qty,
-        pickedQty: i.pickedQty ?? 0,
-        locationCode: i.locationCode || '',
-        oldBarcode: i.oldBarcode || '',
-        newBarcode: i.newBarcode || '',
-        relabelScannedAt: i.relabelScannedAt ? this.fmtTime(i.relabelScannedAt) : null,
+      items: (r.items || []).map((i: any) => {
+        const product = productMap.get(Number(i.productId))
+        const scan = productScanFields(i.sku, product, platformBySku)
+        return {
+          id: Number(i.id),
+          productId: Number(i.productId),
+          sku: i.sku,
+          barcode: scan.barcode,
+          platformBarcode: scan.platformBarcode,
+          platformBarcodes: scan.platformBarcodes,
+          productName: i.productName || '',
+          qty: i.qty,
+          pickedQty: i.pickedQty ?? 0,
+          locationCode: i.locationCode || '',
+          oldBarcode: i.oldBarcode || '',
+          newBarcode: i.newBarcode || '',
+          relabelScannedAt: i.relabelScannedAt ? this.fmtTime(i.relabelScannedAt) : null,
         pickAllocations: (i.pickAllocations || []).map((a: any) => ({
           id: Number(a.id),
           locationCode: a.locationCode,
@@ -441,7 +456,8 @@ export class OutboundService {
           seaFreightPerUnit: a.seaFreightPerUnit != null ? Number(a.seaFreightPerUnit) : null,
           unitCostRmb: a.unitCostRmb != null ? Number(a.unitCostRmb) : null,
         })),
-      })),
+      }
+      }),
       totalQty: (r.items || []).reduce((s: number, i: any) => s + i.qty, 0),
       skuSummary: summarizeSkus(r.items || []),
     }))
@@ -1201,14 +1217,25 @@ th{background:#f5f5f5}
       ? await this.prisma.product.findMany({ where: { id: { in: productIds } } })
       : []
     const productMap = new Map(products.map((p) => [Number(p.id), p]))
+    const platformBySku = await loadPlatformBarcodesByInternalSku(
+      this.prisma,
+      order.items.flatMap((item) => {
+        const product = productMap.get(Number(item.productId))
+        return [item.sku, product?.sku, product?.customerSku]
+      }).filter(Boolean) as string[],
+    )
     const items = await Promise.all(
       order.items.map(async (item) => {
         const pickQty = item.pickedQty && item.pickedQty > 0 ? item.pickedQty : item.qty
         const plan = await this.suggestPickLocations(order.warehouseCode, item.sku, pickQty)
+        const product = productMap.get(Number(item.productId))
+        const scan = productScanFields(item.sku, product, platformBySku)
         return {
           id: Number(item.id),
           sku: item.sku,
-          barcode: productMap.get(Number(item.productId))?.barcode || '',
+          barcode: scan.barcode,
+          platformBarcode: scan.platformBarcode,
+          platformBarcodes: scan.platformBarcodes,
           productName: item.productName || '',
           qty: item.qty,
           pickedQty: pickQty,

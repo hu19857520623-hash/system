@@ -63,8 +63,8 @@ import kotlinx.coroutines.launch
 enum class InboundMode(val key: String, val title: String, val scanLabel: String) {
     Arrival("arrival", "到仓扫描", "扫入库单号"),
     Receive("receive", "确认箱数", "扫外箱标"),
-    Qc("qc", "清点", "扫 SKU"),
-    Putaway("putaway", "上架", "扫 SKU / 条码或库位");
+    Qc("qc", "清点", "扫 SKU / 已绑 990"),
+    Putaway("putaway", "上架", "扫 SKU / 已绑 990 或库位");
     companion object { fun from(key: String) = entries.find { it.key == key } ?: Arrival }
 }
 
@@ -329,6 +329,7 @@ fun InboundScreen(modeKey: String, onBack: () -> Unit, vm: InboundViewModel = vi
             order.itemList.forEach { item ->
                 SkuCard(
                     sku = item.skuCode,
+                    bound990 = item.bound990,
                     progress = "${item.actualQty ?: 0}/${item.expectedQty}",
                     done = (item.actualQty ?: 0) == item.expectedQty,
                     selected = item.id == vm.selectedItemId,

@@ -11,6 +11,7 @@ import { buildInboundRemark, parseOmsInboundMeta, stripOmsSystemTags } from '../
 import { resolveBillingDimensions } from '../../common/product-dimension.util'
 import { parseInboundQcScanInput } from './inbound-qc-scan.util'
 import { findInboundItemByScan as matchInboundItemByScan } from './inbound-item-scan.util'
+import { loadPlatformBarcodesByInternalSku, productScanFields } from '../../common/platform-barcode-lookup.util'
 import { InventoryMutationService } from '../../common/inventory/inventory-mutation.service'
 import { buildInternalSku, deriveCustomerCodeFromInternalSku } from '../../common/sku-code.util'
 import { buildBoxLabelsPdfBuffer, buildInboundBoxLabelData } from '../../common/labels/box-label-pdf.util'
@@ -103,6 +104,7 @@ export class InboundService {
       ? await this.prisma.product.findMany({ where: { id: { in: productIds } } })
       : []
     const prodMap = new Map(products.map((p) => [Number(p.id), p]))
+    const platformBySku = await this.loadPlatformScanIndex(rows.flatMap((r) => r.items), prodMap)
     const erpItems = rows.map((order) => ({
       ...order,
       id: Number(order.id),
@@ -111,7 +113,7 @@ export class InboundService {
       dataSourceLabel: order.omsCustomerCode ? 'ERP·OMS客户' : 'ERP·发运',
       readOnly: false,
       sortKey: order.createdAt.getTime(),
-      items: order.items.map((item: any) => this.enrichInboundItem(item, prodMap)),
+      items: order.items.map((item: any) => this.enrichInboundItem(item, prodMap, platformBySku)),
     }))
 
     const omsItems = await fetchOmsInboundRows(this.prisma, {
@@ -134,6 +136,7 @@ export class InboundService {
       ? await this.prisma.product.findMany({ where: { id: { in: productIds } } })
       : []
     const prodMap = new Map(products.map((p) => [Number(p.id), p]))
+    const platformBySku = await this.loadPlatformScanIndex(row.items, prodMap)
 
     const cartons = await this.loadCartons(Number(row.id), row.inboundNo, row.items)
 
@@ -141,7 +144,7 @@ export class InboundService {
       ...row,
       id: Number(row.id),
       displayStatus: normalizeInboundStatus(row.status),
-      items: row.items.map((item) => this.enrichInboundItem(item, prodMap)),
+      items: row.items.map((item) => this.enrichInboundItem(item, prodMap, platformBySku)),
       cartons,
       omsAttachments: await this.loadOmsAttachments(Number(row.id)),
     }
@@ -217,9 +220,25 @@ export class InboundService {
     }))
   }
 
-  private enrichInboundItem(item: any, prodMap: Map<number, any>) {
+  private async loadPlatformScanIndex(
+    items: Array<{ sku?: string | null; productId?: number | bigint | null }>,
+    prodMap: Map<number, { sku?: string | null; customerSku?: string | null }>,
+  ) {
+    const skus = items.flatMap((item) => {
+      const prod = prodMap.get(Number(item.productId))
+      return [item.sku, prod?.sku, prod?.customerSku]
+    })
+    return loadPlatformBarcodesByInternalSku(this.prisma, skus.filter(Boolean) as string[])
+  }
+
+  private enrichInboundItem(
+    item: any,
+    prodMap: Map<number, any>,
+    platformBySku: Map<string, string[]> = new Map(),
+  ) {
     const prod = prodMap.get(Number(item.productId))
     const billing = resolveBillingDimensions(prod || {})
+    const scan = productScanFields(item.sku, prod, platformBySku)
     return {
       ...item,
       id: Number(item.id),
@@ -231,17 +250,24 @@ export class InboundService {
       widthCm: billing.widthCm,
       heightCm: billing.heightCm,
       dimensionsSource: billing.source === 'none' ? null : billing.source,
-      barcode: prod?.barcode || '',
+      barcode: scan.barcode,
+      platformBarcode: scan.platformBarcode,
+      platformBarcodes: scan.platformBarcodes,
     }
   }
 
   private findInboundItemByScan(
     order: { items: any[] },
     skuToken: string,
-    prodMap: Map<number, { barcode?: string | null }>,
+    prodMap: Map<number, { barcode?: string | null; sku?: string | null; customerSku?: string | null }>,
+    platformBySku: Map<string, string[]> = new Map(),
   ) {
-    const barcodes = new Map<number, string | null | undefined>()
-    for (const [id, product] of prodMap.entries()) barcodes.set(id, product.barcode)
+    const barcodes = new Map<number, string[]>()
+    for (const item of order.items) {
+      const prod = prodMap.get(Number(item.productId))
+      const scan = productScanFields(item.sku, prod, platformBySku)
+      barcodes.set(Number(item.productId), [scan.barcode, scan.platformBarcode, ...scan.platformBarcodes])
+    }
     return matchInboundItemByScan(order.items, skuToken, barcodes)
   }
 
@@ -796,8 +822,9 @@ export class InboundService {
       ? await this.prisma.product.findMany({ where: { id: { in: productIds } } })
       : []
     const prodMap = new Map(products.map((p) => [Number(p.id), p]))
+    const platformBySku = await this.loadPlatformScanIndex(order.items, prodMap)
 
-    const item = this.findInboundItemByScan(order, parsed.skuToken, prodMap)
+    const item = this.findInboundItemByScan(order, parsed.skuToken, prodMap, platformBySku)
     if (!item) {
       throw new NotFoundException(`扫描码 ${parsed.skuToken} 不属于入库单 ${order.inboundNo}`)
     }

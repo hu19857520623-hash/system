@@ -10,6 +10,19 @@ import { INBOUND_STATUS } from '@/constants/index.js'
 import ListPagination from '@/components/ListPagination.vue'
 import DetailSheet from '@/components/ui/DetailSheet.vue'
 
+function bound990Text(row: any): string {
+  const codes = [
+    row?.platformBarcode,
+    ...(Array.isArray(row?.platformBarcodes) ? row.platformBarcodes : []),
+    row?.barcode,
+  ]
+    .map((c: any) => String(c || '').trim())
+    .filter((c: string) => /^990\d+/i.test(c))
+  const unique = [...new Set(codes)]
+  if (!unique.length) return ''
+  return unique.length === 1 ? unique[0] : `${unique[0]} 等${unique.length}个`
+}
+
 const app = useAppStore()
 const route = useRoute()
 
@@ -253,6 +266,9 @@ async function openQc(row: any) {
     qcLines.value = (data.items || []).map((item: any) => ({
       id: item.id,
       sku: item.sku,
+      barcode: item.barcode || '',
+      platformBarcode: item.platformBarcode || '',
+      platformBarcodes: item.platformBarcodes || [],
       productName: item.productName || item.sku,
       spec: item.spec || '',
       expectedQty: item.expectedQty,
@@ -440,8 +456,13 @@ onMounted(async () => {
 
           <div class="detail-section-title">明细</div>
           <el-table :data="detailOrder.items || []" border size="small">
-            <el-table-column prop="sku" label="SKU" width="120">
-              <template #default="{ row }"><span class="mono">{{ row.sku }}</span></template>
+            <el-table-column prop="sku" label="SKU" min-width="150">
+              <template #default="{ row }">
+                <div class="sku-cell">
+                  <span class="mono">{{ row.sku }}</span>
+                  <span v-if="bound990Text(row)" class="bound-990">已绑 {{ bound990Text(row) }}</span>
+                </div>
+              </template>
             </el-table-column>
             <el-table-column prop="productName" label="品名" min-width="140" show-overflow-tooltip />
             <el-table-column prop="spec" label="规格" width="88" show-overflow-tooltip>
@@ -513,8 +534,13 @@ onMounted(async () => {
         </el-descriptions>
         <div v-loading="qcLoading" class="qc-table-wrap">
           <el-table :data="qcLines" border size="small" stripe style="width:100%">
-            <el-table-column prop="sku" label="SKU" width="118" fixed="left" show-overflow-tooltip>
-              <template #default="{ row }"><span class="mono">{{ row.sku }}</span></template>
+            <el-table-column prop="sku" label="SKU" min-width="150" fixed="left" show-overflow-tooltip>
+              <template #default="{ row }">
+                <div class="sku-cell">
+                  <span class="mono">{{ row.sku }}</span>
+                  <span v-if="bound990Text(row)" class="bound-990">已绑 {{ bound990Text(row) }}</span>
+                </div>
+              </template>
             </el-table-column>
             <el-table-column prop="productName" label="品名" min-width="150" show-overflow-tooltip />
             <el-table-column prop="spec" label="规格" width="88" show-overflow-tooltip>
@@ -582,6 +608,8 @@ onMounted(async () => {
 .tab-count { margin-left:2px; font-size:11px; opacity:0.85; }
 .spacer { flex:1; }
 .mono { font-family:var(--font-mono,Consolas,monospace); font-size:12px; }
+.sku-cell { display:flex; flex-direction:column; gap:2px; min-width:0; }
+.bound-990 { font-size:11px; color:var(--el-color-warning); font-family:var(--font-mono,Consolas,monospace); }
 .qc-footer { margin-top:12px; font-size:13px; }
 .qc-summary { margin-bottom: 12px; }
 .qc-table-wrap { width: 100%; overflow-x: auto; margin-bottom: 8px; }
