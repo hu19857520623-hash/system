@@ -82,8 +82,12 @@ export function normalizeRegionDispatchRules(raw: unknown[]): RegionDispatchRule
   }).filter(r => r.code)
 }
 
+export const DEFAULT_VOLUMETRIC_RATIO = 4000
+
 export interface ChannelShippingRule {
   mode: 'volume' | 'weight'
+  /** 抛重比：体积重(kg) = 长×宽×高(cm³) ÷ 抛重比，与实重取大后为计费重 */
+  volumetricRatio?: number
   ratePerCbm?: number
   ratePerKg?: number
   minCharge: number
@@ -132,13 +136,28 @@ export interface StorageRentTemplate {
   updatedAt: string
 }
 
+function truckRatePerKgFromCbm(ratePerCbm: number, ratio = DEFAULT_VOLUMETRIC_RATIO): number {
+  return Math.round((ratePerCbm * ratio / 1_000_000) * 100) / 100
+}
+
 function regionRates(
   truckCbm: number, truckMin: number,
   expressKg: number, expressMin: number,
+  volumetricRatio = DEFAULT_VOLUMETRIC_RATIO,
 ): RegionShippingRates {
   return {
-    卡派: { mode: 'volume', ratePerCbm: truckCbm, minCharge: truckMin },
-    快递: { mode: 'weight', ratePerKg: expressKg, minCharge: expressMin },
+    卡派: {
+      mode: 'weight',
+      volumetricRatio,
+      ratePerKg: truckRatePerKgFromCbm(truckCbm, volumetricRatio),
+      minCharge: truckMin,
+    },
+    快递: {
+      mode: 'weight',
+      volumetricRatio,
+      ratePerKg: expressKg,
+      minCharge: expressMin,
+    },
   }
 }
 
@@ -265,6 +284,45 @@ export function calcSkuWeightKg(d: SkuDimensions, qty: number): number {
   return d.weightKg * qty
 }
 
+/** 计费重 = max(实重 kg, 体积 cm³ ÷ 抛重比) */
+export function calcBillingWeightKg(
+  totalVolumeM3: number,
+  totalWeightKg: number,
+  volumetricRatio = DEFAULT_VOLUMETRIC_RATIO,
+): number {
+  const ratio = volumetricRatio > 0 ? volumetricRatio : DEFAULT_VOLUMETRIC_RATIO
+  const volumetricWeightKg = (totalVolumeM3 * 1_000_000) / ratio
+  return Math.max(totalWeightKg, volumetricWeightKg)
+}
+
+export function normalizeChannelShippingRule(rule: ChannelShippingRule): ChannelShippingRule {
+  const ratio = rule.volumetricRatio ?? DEFAULT_VOLUMETRIC_RATIO
+  if (rule.mode === 'volume' && rule.ratePerCbm != null) {
+    return {
+      mode: 'weight',
+      volumetricRatio: ratio,
+      ratePerKg: rule.ratePerKg ?? truckRatePerKgFromCbm(rule.ratePerCbm, ratio),
+      minCharge: rule.minCharge,
+    }
+  }
+  return {
+    ...rule,
+    mode: 'weight',
+    volumetricRatio: ratio,
+    ratePerKg: rule.ratePerKg ?? 0,
+  }
+}
+
+function normalizeRegionShippingRates(rates: RegionShippingRates): RegionShippingRates {
+  const truck = normalizeChannelShippingRule(rates['卡派'])
+  const express = normalizeChannelShippingRule(rates['快递'])
+  const sharedRatio = truck.volumetricRatio ?? DEFAULT_VOLUMETRIC_RATIO
+  return {
+    卡派: { ...truck, volumetricRatio: sharedRatio },
+    快递: { ...express, volumetricRatio: sharedRatio },
+  }
+}
+
 /** 估算单 SKU 日仓租（用于库存侧展示） */
 export function estimateDailyStorageRent(
   dims: SkuDimensions,
@@ -342,12 +400,18 @@ export function calculateOutboundPreDeduct(
     let shipping = 0
     let shippingDetail = ''
 
-    if (channelRule.mode === 'volume') {
-      shipping = Math.max(channelRule.minCharge, totalVolumeM3 * (channelRule.ratePerCbm ?? 0))
+    const ratio = channelRule.volumetricRatio
+      ?? rates['卡派']?.volumetricRatio
+      ?? DEFAULT_VOLUMETRIC_RATIO
+
+    if (channelRule.mode === 'volume' && channelRule.ratePerCbm != null) {
+      shipping = Math.max(channelRule.minCharge, totalVolumeM3 * channelRule.ratePerCbm)
       shippingDetail = `${destRegionLabel} · ${channel} · 体积 ${totalVolumeM3.toFixed(4)} m³ × ¥${channelRule.ratePerCbm}/m³`
     } else {
-      shipping = Math.max(channelRule.minCharge, totalWeightKg * (channelRule.ratePerKg ?? 0))
-      shippingDetail = `${destRegionLabel} · ${channel} · 重量 ${totalWeightKg.toFixed(2)} kg × ¥${channelRule.ratePerKg}/kg`
+      const billKg = calcBillingWeightKg(totalVolumeM3, totalWeightKg, ratio)
+      const ratePerKg = channelRule.ratePerKg ?? 0
+      shipping = Math.max(channelRule.minCharge, billKg * ratePerKg)
+      shippingDetail = `${destRegionLabel} · ${channel} · 计费重 ${billKg.toFixed(2)} kg（抛重比 ${ratio}）× ¥${ratePerKg}/kg`
     }
 
     feeLines.push({
@@ -383,6 +447,7 @@ export function buildOutboundTemplateSnapshot(
       ? { mode: 'volume' as const, ratePerCbm: 0, minCharge: 0 }
       : {
           mode: channelRule.mode,
+          volumetricRatio: channelRule.volumetricRatio ?? rates['卡派']?.volumetricRatio ?? DEFAULT_VOLUMETRIC_RATIO,
           ratePerCbm: channelRule.ratePerCbm,
           ratePerKg: channelRule.ratePerKg,
           minCharge: channelRule.minCharge,
@@ -423,10 +488,11 @@ export function normalizePriceTemplate(raw: Partial<PriceTemplate> & { shippingC
   const base = { ...DEFAULT_PRICE_TEMPLATE, ...raw, regionCode }
   const legacyShipping = raw.shippingByRegion ?? DEFAULT_PRICE_TEMPLATE.shippingByRegion
   const legacyPickup = raw.pickupByRegion ?? DEFAULT_PRICE_TEMPLATE.pickupByRegion
+  const regionShipping = legacyShipping[regionCode] ?? defaultRegionShippingRates()
   return {
     ...base,
     shippingByRegion: {
-      [regionCode]: legacyShipping[regionCode] ?? defaultRegionShippingRates(),
+      [regionCode]: normalizeRegionShippingRates(regionShipping),
     },
     pickupByRegion: {
       [regionCode]: legacyPickup?.[regionCode] ?? defaultPickupRegionRule(),

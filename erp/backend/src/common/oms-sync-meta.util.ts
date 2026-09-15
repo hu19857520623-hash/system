@@ -28,6 +28,7 @@ export type OmsOutboundFeeTemplateSnapshot = {
   handling: { perOrderBase: number; perUnit: number; perSkuLine: number }
   shipping: {
     mode: 'volume' | 'weight'
+    volumetricRatio?: number
     ratePerCbm?: number
     ratePerKg?: number
     minCharge: number

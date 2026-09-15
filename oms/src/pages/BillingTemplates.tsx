@@ -6,6 +6,7 @@ import {
 import { FormField, formInput, formSelect } from '../components/ui/form'
 import {
   DEFAULT_PRICE_TEMPLATE, DEFAULT_STORAGE_TEMPLATE,
+  DEFAULT_VOLUMETRIC_RATIO,
   defaultRegionShippingRates, defaultPickupRegionRule,
   syncPriceTemplateRegions, regionLabel,
   enabledDispatchRules,
@@ -130,7 +131,7 @@ export default function BillingTemplates() {
         <p className="text-xs font-semibold text-amber-900">预扣款规则</p>
         <p className="mt-1 text-[11px] leading-relaxed text-amber-800">
           客户提交出库单时，系统根据<strong>目的地区</strong>读取该客户绑定的<strong>对应地区价格模板</strong>，
-          按 SKU 尺寸与配送方式试算费用。卡派/快递按体积或重量计费；自提按该地区自提费另加操作费。
+          按 SKU 尺寸与配送方式试算费用。卡派/快递按计费重（实重与体积重取大，体积重=cm³÷抛重比）× 单价；自提按该地区自提费另加操作费。
         </p>
       </div>
 
@@ -246,33 +247,50 @@ export default function BillingTemplates() {
 
             <div>
               <p className="mb-1 text-xs font-semibold text-text-secondary">物流费</p>
-              <p className="mb-3 text-[11px] text-text-muted">卡派按体积 (m³)、快递按重量 (kg)</p>
+              <p className="mb-3 text-[11px] text-text-muted">
+                抛重比默认 {DEFAULT_VOLUMETRIC_RATIO}；卡派与快递共用同一抛重比计算体积重
+              </p>
               <div className="grid gap-3 sm:grid-cols-2">
                 {(['卡派', '快递'] as const).map(channel => {
                   const rule = regionRates[channel]
+                  const sharedRatio = regionRates['卡派']?.volumetricRatio ?? DEFAULT_VOLUMETRIC_RATIO
                   return (
                     <div key={channel} className="rounded-md bg-surface-muted/60 p-2.5 ring-1 ring-border-light">
                       <p className="mb-2 text-[11px] font-medium text-text-secondary">{channel}</p>
                       <div className="grid grid-cols-2 gap-2">
-                        <FormField label={channel === '卡派' ? '单价 (¥/m³)' : '单价 (¥/kg)'}>
+                        <FormField label={channel === '卡派' ? '抛重比' : '单价 (¥/kg)'}>
                           <input
                             type="number"
-                            step="0.01"
+                            step={channel === '卡派' ? 1 : 0.01}
+                            min={channel === '卡派' ? 1 : 0}
                             className={formInput()}
-                            value={channel === '卡派' ? (rule.ratePerCbm ?? 0) : (rule.ratePerKg ?? 0)}
+                            value={channel === '卡派' ? sharedRatio : (rule.ratePerKg ?? 0)}
                             onChange={e => {
                               const val = Number(e.target.value)
-                              setPriceDraft(p => ({
-                                ...p,
-                                shippingByRegion: {
-                                  [activeRegion]: {
-                                    ...regionRates,
-                                    [channel]: channel === '卡派'
-                                      ? { ...rule, ratePerCbm: val }
-                                      : { ...rule, ratePerKg: val },
+                              setPriceDraft(p => {
+                                const current = p.shippingByRegion[activeRegion] ?? defaultRegionShippingRates()
+                                if (channel === '卡派') {
+                                  return {
+                                    ...p,
+                                    shippingByRegion: {
+                                      [activeRegion]: {
+                                        ...current,
+                                        卡派: { ...current['卡派'], volumetricRatio: val },
+                                        快递: { ...current['快递'], volumetricRatio: val },
+                                      },
+                                    },
+                                  }
+                                }
+                                return {
+                                  ...p,
+                                  shippingByRegion: {
+                                    [activeRegion]: {
+                                      ...current,
+                                      快递: { ...current['快递'], ratePerKg: val },
+                                    },
                                   },
-                                },
-                              }))
+                                }
+                              })
                             }}
                           />
                         </FormField>

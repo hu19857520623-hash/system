@@ -145,7 +145,7 @@ export type ErpOutboundPreDeduct = {
   deductedAt?: string
   templateSnapshot?: {
     handling: { perOrderBase: number; perUnit: number; perSkuLine: number }
-    shipping: { mode: 'volume' | 'weight'; ratePerCbm?: number; ratePerKg?: number; minCharge: number }
+    shipping: { mode: 'volume' | 'weight'; volumetricRatio?: number; ratePerCbm?: number; ratePerKg?: number; minCharge: number }
     pickup?: { perOrder: number; perUnit: number; minCharge: number }
     shippingMethod: string
     destRegion: string

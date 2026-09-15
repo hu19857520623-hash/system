@@ -8,12 +8,19 @@ export type OutboundActualFeeLine = {
   chargeType: 'handling' | 'outbound_ship'
 }
 
+const DEFAULT_VOLUMETRIC_RATIO = 4000
+
 const DEFAULT_SNAPSHOT: OmsOutboundFeeTemplateSnapshot = {
   handling: { perOrderBase: 8, perUnit: 1.2, perSkuLine: 2 },
-  shipping: { mode: 'volume', ratePerCbm: 580, minCharge: 30 },
+  shipping: { mode: 'weight', volumetricRatio: DEFAULT_VOLUMETRIC_RATIO, ratePerKg: 2.32, minCharge: 30 },
   pickup: { perOrder: 12, perUnit: 0.8, minCharge: 10 },
   shippingMethod: '卡派',
   destRegion: 'jhb',
+}
+
+function billingWeightKg(totalVolumeM3: number, totalWeightKg: number, ratio: number): number {
+  const r = ratio > 0 ? ratio : DEFAULT_VOLUMETRIC_RATIO
+  return Math.max(totalWeightKg, (totalVolumeM3 * 1_000_000) / r)
 }
 
 export function resolveFeeTemplateSnapshot(
@@ -76,12 +83,14 @@ export function calculateOutboundActualFees(params: {
     const rule = snapshot.shipping
     let amount = 0
     let detail = ''
-    if (rule.mode === 'volume') {
-      amount = round2(Math.max(rule.minCharge, totalVolumeM3 * (rule.ratePerCbm ?? 0)))
+    if (rule.mode === 'volume' && rule.ratePerCbm != null) {
+      amount = round2(Math.max(rule.minCharge, totalVolumeM3 * rule.ratePerCbm))
       detail = `实测 · ${destRegion} · ${channel} · 体积 ${totalVolumeM3.toFixed(4)} m³ × ¥${rule.ratePerCbm}/m³`
     } else {
-      amount = round2(Math.max(rule.minCharge, totalWeightKg * (rule.ratePerKg ?? 0)))
-      detail = `实测 · ${destRegion} · ${channel} · 重量 ${totalWeightKg.toFixed(2)} kg × ¥${rule.ratePerKg}/kg`
+      const ratio = rule.volumetricRatio ?? DEFAULT_VOLUMETRIC_RATIO
+      const billKg = billingWeightKg(totalVolumeM3, totalWeightKg, ratio)
+      amount = round2(Math.max(rule.minCharge, billKg * (rule.ratePerKg ?? 0)))
+      detail = `实测 · ${destRegion} · ${channel} · 计费重 ${billKg.toFixed(2)} kg（抛重比 ${ratio}）× ¥${rule.ratePerKg}/kg`
     }
     lines.push({
       type: 'shipping',
