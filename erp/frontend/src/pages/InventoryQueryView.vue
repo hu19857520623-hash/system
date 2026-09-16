@@ -609,10 +609,10 @@ watch([page, pageSize], () => load())
           </el-table-column>
         </el-table-column>
 
-        <el-table-column label="操作" width="76" fixed="right" align="center">
+        <el-table-column label="操作" width="88" fixed="right" align="center">
           <template #default="{ row }">
-            <el-dropdown trigger="click">
-              <el-button link type="primary" size="small">操作</el-button>
+            <el-dropdown trigger="click" placement="bottom-end" popper-class="table-row-dropdown">
+              <el-button link type="primary" size="small" @click.stop>操作</el-button>
               <template #dropdown>
                 <el-dropdown-menu>
                   <el-dropdown-item v-if="row.dataSource === 'erp'" @click="showSkuLocations(row)">库位明细</el-dropdown-item>

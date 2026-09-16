@@ -253,7 +253,7 @@ export default function OutboundRecords() {
               <th className="whitespace-nowrap">费用对账</th>
               <th className="whitespace-nowrap text-right">金额</th>
               <th className="whitespace-nowrap">时间</th>
-              <th className="w-[76px] whitespace-nowrap">操作</th>
+              <th className="min-w-[120px] whitespace-nowrap">操作</th>
             </tr>
           </thead>
           <tbody className="table-body">

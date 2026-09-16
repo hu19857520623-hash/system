@@ -512,7 +512,7 @@ html.dark .topbar { box-shadow: 0 12px 40px rgba(0, 0, 0, 0.14); }
   background: var(--table-bg) !important;
   border: 1px solid var(--border);
   border-radius: 14px;
-  overflow: hidden;
+  overflow: visible;
   box-shadow: var(--shadow-panel);
 }
 .el-table::before, .el-table--border::after, .el-table--border::before { background-color: var(--border) !important; }
@@ -1006,6 +1006,10 @@ html.dark .el-tag.el-tag--info { --el-tag-text-color: #cbd5e1 !important; }
   color: var(--text-secondary);
   border-color: var(--border) !important;
   background: var(--dropdown-bg) !important;
+  z-index: 4000 !important;
+}
+.el-table .cell:has(.el-dropdown) {
+  overflow: visible;
 }
 .el-select-dropdown__item, .el-dropdown-menu__item { color: var(--text-secondary) !important; }
 .el-select-dropdown__item.is-hovering, .el-dropdown-menu__item:not(.is-disabled):focus {

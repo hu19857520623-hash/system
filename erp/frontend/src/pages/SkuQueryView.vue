@@ -463,10 +463,10 @@ onMounted(() => {
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="100" fixed="right" align="center">
+        <el-table-column label="操作" width="128" fixed="right" align="center">
           <template #default="{ row }">
-            <el-dropdown trigger="click">
-              <el-button size="small" class="more-btn">
+            <el-dropdown trigger="click" placement="bottom-end" popper-class="table-row-dropdown">
+              <el-button size="small" class="more-btn" @click.stop>
                 <span class="gear">⚙</span> 更多操作
               </el-button>
               <template #dropdown>

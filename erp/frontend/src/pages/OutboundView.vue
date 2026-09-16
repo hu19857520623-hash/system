@@ -390,6 +390,18 @@ function appendDetailCommand(cmds: RowAction[]) {
   cmds.unshift({ key: 'detail', command: 'detail', label: '查看详情' })
 }
 
+function appendAttachmentCommands(cmds: RowAction[], row: any) {
+  rowActionAttachments(row).forEach((att: any, index: number) => {
+    const isPod = att.fileType === 'pod'
+    const hasAttachmentId = Number.isFinite(att.id) && att.id > 0
+    cmds.push({
+      key: isPod ? `downloadPod-${index}` : (hasAttachmentId ? `att-${att.id}-${index}` : `att-${att.fileName || att.fileType || 'file'}-${index}`),
+      command: isPod ? 'downloadPod' : (hasAttachmentId ? `downloadAtt:${att.id}` : 'downloadCpt'),
+      label: `下载${attachmentActionLabel(att)}`,
+    })
+  })
+}
+
 function rowCommands(row: any): RowAction[] {
   const cmds: RowAction[] = []
   const status = row.status
@@ -399,15 +411,7 @@ function rowCommands(row: any): RowAction[] {
     if (rowHasArchivableLabels(row)) {
       cmds.push({ key: 'labels', command: 'labels', label: '下载标签' })
     }
-    for (const att of rowActionAttachments(row)) {
-      const isPod = att.fileType === 'pod'
-      const hasAttachmentId = Number.isFinite(att.id) && att.id > 0
-      cmds.push({
-        key: isPod ? 'downloadPod' : (hasAttachmentId ? `att-${att.id}` : `att-${att.fileName || att.fileType || 'file'}`),
-        command: isPod ? 'downloadPod' : (hasAttachmentId ? `downloadAtt:${att.id}` : 'downloadCpt'),
-        label: `下载${attachmentActionLabel(att)}`,
-      })
-    }
+    appendAttachmentCommands(cmds, row)
     return cmds
   }
 
@@ -442,15 +446,7 @@ function rowCommands(row: any): RowAction[] {
     cmds.push({ key: 'appointment', command: 'appointment', label: '预约派送' })
   }
 
-  for (const att of rowActionAttachments(row)) {
-    const isPod = att.fileType === 'pod'
-    const hasAttachmentId = Number.isFinite(att.id) && att.id > 0
-    cmds.push({
-      key: isPod ? 'downloadPod' : (hasAttachmentId ? `att-${att.id}` : `att-${att.fileName || att.fileType || 'file'}`),
-      command: isPod ? 'downloadPod' : (hasAttachmentId ? `downloadAtt:${att.id}` : 'downloadCpt'),
-      label: `下载${attachmentActionLabel(att)}`,
-    })
-  }
+  appendAttachmentCommands(cmds, row)
 
   if (canCreate.value && !['cancelled', 'shipped', 'delivered', 'partial_delivered', 'delivery_failed'].includes(status)) {
     cmds.push({
@@ -1278,13 +1274,14 @@ function statusTag(status: string) {
             {{ row.pickerId ? formatPickerLabel(row.pickerName, row.pickerWorkstation) : '—' }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="88" fixed="right" align="center">
+        <el-table-column label="操作" width="88" fixed="right" align="center" class-name="outbound-ops-col">
           <template #default="{ row }">
             <template v-if="rowCommands(row).length">
               <el-dropdown
                 trigger="click"
-                :teleported="false"
+                placement="bottom-end"
                 popper-class="outbound-row-dropdown"
+                @command="(command) => handleRowCommand(command, row)"
               >
                 <el-button link type="primary" size="small" @click.stop>操作</el-button>
                 <template #dropdown>
@@ -1292,8 +1289,8 @@ function statusTag(status: string) {
                     <el-dropdown-item
                       v-for="item in rowCommands(row)"
                       :key="item.key"
+                      :command="item.command"
                       :divided="item.divided"
-                      @click.stop="handleRowCommand(item.command, row)"
                     >
                       {{ item.label }}
                     </el-dropdown-item>
@@ -1768,14 +1765,12 @@ function statusTag(status: string) {
 .remark-text { white-space: pre-wrap; word-break: break-word; }
 
 .outbound-table :deep(.el-table__fixed-right),
-.outbound-table :deep(.el-table-fixed-column--right) {
+.outbound-table :deep(.el-table-fixed-column--right),
+.outbound-table :deep(.outbound-ops-col .cell) {
   overflow: visible;
 }
 .outbound-table :deep(.el-dropdown) {
   vertical-align: middle;
-}
-:deep(.outbound-row-dropdown) {
-  z-index: 20;
 }
 
 @media (max-width: 1200px) {

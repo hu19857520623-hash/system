@@ -284,7 +284,7 @@ export default function InboundRecords() {
               <th>应收/实收</th>
               <th>状态</th>
               <th>创建日期</th>
-              <th className="w-[76px]">操作</th>
+              <th className="min-w-[120px] whitespace-nowrap">操作</th>
             </tr>
           </thead>
           <tbody className="table-body">
