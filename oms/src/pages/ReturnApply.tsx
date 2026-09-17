@@ -12,9 +12,9 @@ import { resolveErpCustomerContext, getCustomerIdForRole } from '../data/dataSco
 import { AdminCustomerFilter } from '../components/admin/AdminCustomerFilter'
 import { useDataScope } from '../auth/useDataScope'
 import {
-  addReturnOrder,
+  addReturnOrderOrThrow,
   getReturnOrdersSnapshot,
-  updateReturnOrder,
+  updateReturnOrderOrThrow,
 } from '../data/entityStore'
 import {
   RETURN_PROCESS_OPTIONS,
@@ -439,17 +439,19 @@ export default function ReturnApply() {
     }
   }
 
-  const handleSaveDraft = () => {
+  const handleSaveDraft = async () => {
     setSavingDraft(true)
     try {
       const order = buildReturnOrder(formFields(), true)
       if (editingId) {
-        updateReturnOrder(editingId, order)
+        await updateReturnOrderOrThrow(editingId, order)
       } else {
-        addReturnOrder(order)
+        await addReturnOrderOrThrow(order)
       }
       window.alert(`草稿已保存：${order.returnNo}`)
       navigate('/returns/processing?tab=draft')
+    } catch (err) {
+      notifyIfUserError(err, '保存草稿失败')
     } finally {
       setSavingDraft(false)
     }
@@ -499,18 +501,19 @@ export default function ReturnApply() {
     }
     const order = buildReturnOrder(formFields(), false)
     setSubmitting(true)
-    const result = await submitReturnToErp(order, { customerId, customerCode })
-    setSubmitting(false)
-    if (!result.ok) {
-      const draftOrder = { ...order, status: 'draft', statusLabel: '草稿' }
-      if (editingId) updateReturnOrder(editingId, draftOrder)
-      else addReturnOrder(draftOrder)
-      window.alert(`提交失败，已自动保存为草稿，表单数据不会丢失：${result.error}`)
-      navigate('/returns/processing?tab=draft')
-      return
+    try {
+      const result = await submitReturnToErp(order, { customerId, customerCode })
+      if (!result.ok) {
+        window.alert(`提交失败：${result.error}`)
+        return
+      }
+      window.alert(`退件单 ${result.order.returnNo} 已提交，仓库到货后将更新处理进度`)
+      navigate('/returns/processing')
+    } catch (err) {
+      notifyIfUserError(err, '提交失败')
+    } finally {
+      setSubmitting(false)
     }
-    window.alert(`退件单 ${result.order.returnNo} 已提交，仓库到货后将更新处理进度`)
-    navigate('/returns/processing')
   }
 
   return (
@@ -825,7 +828,7 @@ export default function ReturnApply() {
 
         <div className="flex justify-end gap-3">
           <Button variant="secondary" onClick={() => navigate('/returns/processing')}>取消</Button>
-          <Button variant="secondary" disabled={savingDraft || submitting} onClick={handleSaveDraft}>
+          <Button variant="secondary" disabled={savingDraft || submitting} onClick={() => void handleSaveDraft()}>
             {savingDraft ? '保存中…' : '保存草稿'}
           </Button>
           <Button disabled={submitting || savingDraft} onClick={() => void handleSubmit()}>

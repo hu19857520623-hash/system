@@ -128,23 +128,51 @@ export function persistInboundOrders(list: InboundOrder[]) {
   void apiPut('/inbound-orders', list).catch(err => notifyPersistFailed('入库单', err))
 }
 
+export async function persistInboundOrdersOrThrow(list: InboundOrder[]) {
+  const before = state.inboundOrders
+  setInboundOrders(list)
+  try {
+    await apiPut('/inbound-orders', list)
+  } catch (err) {
+    setInboundOrders(before)
+    throw err
+  }
+}
+
+function nextInboundOrdersWithUpsert(order: InboundOrder, base = state.inboundOrders) {
+  const idx = base.findIndex(o => o.inboundNo === order.inboundNo || o.id === order.id)
+  if (idx >= 0) {
+    const next = [...base]
+    next[idx] = { ...next[idx], ...order }
+    return next
+  }
+  return [order, ...base.filter(o => o.id !== order.id && o.inboundNo !== order.inboundNo)]
+}
+
 export function addInboundOrder(order: InboundOrder) {
   persistInboundOrders([order, ...state.inboundOrders])
+}
+
+export async function addInboundOrderOrThrow(order: InboundOrder) {
+  await persistInboundOrdersOrThrow(nextInboundOrdersWithUpsert(order))
 }
 
 export function updateInboundOrder(id: string, patch: Partial<InboundOrder>) {
   persistInboundOrders(state.inboundOrders.map(o => (o.id === id ? { ...o, ...patch } : o)))
 }
 
+export async function updateInboundOrderOrThrow(id: string, patch: Partial<InboundOrder>) {
+  await persistInboundOrdersOrThrow(
+    state.inboundOrders.map(o => (o.id === id ? { ...o, ...patch } : o)),
+  )
+}
+
 export function upsertInboundOrder(order: InboundOrder) {
-  const idx = state.inboundOrders.findIndex(o => o.inboundNo === order.inboundNo || o.id === order.id)
-  if (idx >= 0) {
-    const next = [...state.inboundOrders]
-    next[idx] = { ...next[idx], ...order }
-    persistInboundOrders(next)
-    return
-  }
-  persistInboundOrders([order, ...state.inboundOrders])
+  persistInboundOrders(nextInboundOrdersWithUpsert(order))
+}
+
+export async function upsertInboundOrderOrThrow(order: InboundOrder) {
+  await persistInboundOrdersOrThrow(nextInboundOrdersWithUpsert(order))
 }
 
 export function setOrders(list: Order[]) {
@@ -184,23 +212,51 @@ export function persistReturnOrders(list: ReturnOrder[]) {
   void apiPut('/return-orders', list).catch(err => notifyPersistFailed('退件单', err))
 }
 
+export async function persistReturnOrdersOrThrow(list: ReturnOrder[]) {
+  const before = state.returnOrders
+  setReturnOrders(list)
+  try {
+    await apiPut('/return-orders', list)
+  } catch (err) {
+    setReturnOrders(before)
+    throw err
+  }
+}
+
+function nextReturnOrdersWithUpsert(order: ReturnOrder, base = state.returnOrders) {
+  const idx = base.findIndex(o => o.returnNo === order.returnNo || o.id === order.id)
+  if (idx >= 0) {
+    const next = [...base]
+    next[idx] = { ...next[idx], ...order }
+    return next
+  }
+  return [order, ...base.filter(o => o.id !== order.id && o.returnNo !== order.returnNo)]
+}
+
 export function addReturnOrder(order: ReturnOrder) {
   persistReturnOrders([order, ...state.returnOrders])
+}
+
+export async function addReturnOrderOrThrow(order: ReturnOrder) {
+  await persistReturnOrdersOrThrow(nextReturnOrdersWithUpsert(order))
 }
 
 export function updateReturnOrder(id: string, patch: Partial<ReturnOrder>) {
   persistReturnOrders(state.returnOrders.map(o => (o.id === id ? { ...o, ...patch } : o)))
 }
 
+export async function updateReturnOrderOrThrow(id: string, patch: Partial<ReturnOrder>) {
+  await persistReturnOrdersOrThrow(
+    state.returnOrders.map(o => (o.id === id ? { ...o, ...patch } : o)),
+  )
+}
+
 export function upsertReturnOrder(order: ReturnOrder) {
-  const idx = state.returnOrders.findIndex(o => o.returnNo === order.returnNo || o.id === order.id)
-  if (idx >= 0) {
-    const next = [...state.returnOrders]
-    next[idx] = { ...next[idx], ...order }
-    persistReturnOrders(next)
-    return
-  }
-  persistReturnOrders([order, ...state.returnOrders])
+  persistReturnOrders(nextReturnOrdersWithUpsert(order))
+}
+
+export async function upsertReturnOrderOrThrow(order: ReturnOrder) {
+  await persistReturnOrdersOrThrow(nextReturnOrdersWithUpsert(order))
 }
 
 export function getReturnOrdersSnapshot() {

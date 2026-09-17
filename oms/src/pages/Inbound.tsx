@@ -6,7 +6,8 @@ import { FormSection, FormGrid, FormField, formInput, formSelect, formTextarea }
 import { findProductByCode } from '../data/platformBindingUtils'
 import { useRole } from '../auth/RoleContext'
 import { getCustomerCode, getCustomerIdForRole } from '../data/dataScope'
-import { addInboundOrder, nextInboundNo, submitInboundToErp } from '../data/inboundStore'
+import { nextInboundNo, submitInboundToErp } from '../data/inboundStore'
+import { addInboundOrderOrThrow, updateInboundOrderOrThrow } from '../data/entityStore'
 import { notifyIfUserError } from '../utils/userNotify'
 import { fileToAttachment, todayDateInput } from '../data/fileUtils'
 import { importCsvFile } from '../data/csvImportExport'
@@ -19,7 +20,7 @@ import {
 import { ImportTemplateLegend } from '../components/ui/ImportTemplateLegend'
 import SkuFuzzyPicker from '../components/ui/SkuFuzzyPicker'
 import type { DeliveryMethod, FileAttachment, InboundStatus, InboundType, StockSource } from '../data/mockData'
-import { updateInboundOrder, useInboundOrders } from '../data/entityStore'
+import { useInboundOrders } from '../data/entityStore'
 
 const INBOUND_WAREHOUSE_ID = 'jhb1'
 
@@ -56,6 +57,7 @@ export default function Inbound() {
   const [lines, setLines] = useState<LineItem[]>([])
   const [attachments, setAttachments] = useState<FileAttachment[]>([])
   const [confirmWarehouseData, setConfirmWarehouseData] = useState(false)
+  const [saving, setSaving] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const hydratedEditId = useRef<string | null>(null)
 
@@ -171,21 +173,30 @@ export default function Inbound() {
       attachments: attachments.length ? attachments : undefined,
     }
 
-    if (editOrder) updateInboundOrder(editOrder.id, localOrder)
-    else addInboundOrder(localOrder)
+    setSaving(true)
+    try {
+      if (editOrder) await updateInboundOrderOrThrow(editOrder.id, localOrder)
+      else await addInboundOrderOrThrow(localOrder)
 
-    if (!asDraft) {
-      const erpResult = await submitInboundToErp(localOrder)
-      if (!erpResult.ok) {
-        updateInboundOrder(localOrder.id, { status: 'draft' })
-        window.alert(`同步 ERP 失败，已自动保留为草稿：${erpResult.error}`)
+      if (!asDraft) {
+        const erpResult = await submitInboundToErp(localOrder)
+        if (!erpResult.ok) {
+          await updateInboundOrderOrThrow(localOrder.id, { status: 'draft' })
+          window.alert(`同步 ERP 失败，已保留为草稿，请修改后重试：${erpResult.error}`)
+          return
+        }
       }
-    }
 
-    setLines([])
-    setAttachments([])
-    setConfirmWarehouseData(false)
-    goRecords()
+      window.alert(asDraft ? `草稿已保存：${localOrder.inboundNo}` : `入库单 ${localOrder.inboundNo} 已提交`)
+      setLines([])
+      setAttachments([])
+      setConfirmWarehouseData(false)
+      goRecords()
+    } catch (err) {
+      notifyIfUserError(err, asDraft ? '保存草稿失败' : '提交失败')
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
@@ -369,9 +380,13 @@ export default function Inbound() {
               : '提交前请勾选「以仓库收货数据为准」'}
           </p>
           <div className="flex gap-2">
-            <Button variant="secondary" onClick={goRecords}>取消</Button>
-            <Button variant="secondary" onClick={() => handleSubmit(true)}>保存草稿</Button>
-            <Button onClick={() => handleSubmit(false)} disabled={!confirmWarehouseData}>提交</Button>
+            <Button variant="secondary" onClick={goRecords} disabled={saving}>取消</Button>
+            <Button variant="secondary" disabled={saving} onClick={() => void handleSubmit(true)}>
+              {saving ? '保存中…' : '保存草稿'}
+            </Button>
+            <Button disabled={!confirmWarehouseData || saving} onClick={() => void handleSubmit(false)}>
+              {saving ? '提交中…' : '提交'}
+            </Button>
           </div>
         </div>
       </div>

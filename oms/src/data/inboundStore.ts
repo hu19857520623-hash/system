@@ -4,6 +4,7 @@ import {
   getInboundOrdersSnapshot,
   updateInboundOrder,
   upsertInboundOrder,
+  upsertInboundOrderOrThrow,
 } from './entityStore'
 import { createErpInbound, syncErpInbounds, type ErpInboundOrder } from '../api/erp'
 import { getCustomerCode } from './dataScope'
@@ -40,7 +41,7 @@ function lineItemsFromErpCartons(erp: ErpInboundOrder) {
   })
 }
 
-export function applyErpInboundToLocal(erp: ErpInboundOrder, customerId?: string): InboundOrder {
+export function buildInboundOrderFromErp(erp: ErpInboundOrder, customerId?: string): InboundOrder {
   const existing = getInboundOrdersSnapshot().find(o => o.inboundNo === erp.inboundNo)
   const cartonLines = lineItemsFromErpCartons(erp)
   const lineItems = cartonLines.length
@@ -85,6 +86,11 @@ export function applyErpInboundToLocal(erp: ErpInboundOrder, customerId?: string
     lineItems,
     attachments: existing?.attachments,
   }
+  return order
+}
+
+export function applyErpInboundToLocal(erp: ErpInboundOrder, customerId?: string): InboundOrder {
+  const order = buildInboundOrderFromErp(erp, customerId)
   upsertInboundOrder(order)
   return order
 }
@@ -123,7 +129,8 @@ export async function submitInboundToErp(order: InboundOrder): Promise<{ ok: tru
         url: a.url,
       })),
     })
-    const merged = applyErpInboundToLocal(erp, order.customerId)
+    const merged = buildInboundOrderFromErp(erp, order.customerId)
+    await upsertInboundOrderOrThrow(merged)
     return { ok: true, order: merged }
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) }

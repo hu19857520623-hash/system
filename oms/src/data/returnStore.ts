@@ -4,6 +4,7 @@ import {
   getReturnOrdersSnapshot,
   updateReturnOrder,
   upsertReturnOrder,
+  upsertReturnOrderOrThrow,
 } from './entityStore'
 import type { FileAttachment } from './mockData'
 import { createErpReturn, cancelErpReturn, decideErpReturn, syncErpReturns, type ErpReturnOrder } from '../api/erp'
@@ -152,7 +153,7 @@ export function nextReturnNo(): string {
   return `RT-${date}${seq}`
 }
 
-export function applyErpReturnToLocal(erp: ErpReturnOrder, customerId?: string): ReturnOrder {
+export function buildReturnOrderFromErp(erp: ErpReturnOrder, customerId?: string): ReturnOrder {
   const existing = getReturnOrdersSnapshot().find(o => o.returnNo === erp.returnNo)
   const order: ReturnOrder = {
     id: existing?.id || `erp-rt-${erp.id}`,
@@ -207,6 +208,11 @@ export function applyErpReturnToLocal(erp: ErpReturnOrder, customerId?: string):
     customerProcessChoiceLabel: erp.customerProcessChoiceLabel ?? existing?.customerProcessChoiceLabel,
     decisionDeadline: erp.decisionDeadline?.slice(0, 19).replace('T', ' ') ?? existing?.decisionDeadline,
   }
+  return order
+}
+
+export function applyErpReturnToLocal(erp: ErpReturnOrder, customerId?: string): ReturnOrder {
+  const order = buildReturnOrderFromErp(erp, customerId)
   upsertReturnOrder(order)
   return order
 }
@@ -246,18 +252,14 @@ export async function submitReturnToErp(
         productName: l.name,
       })),
     })
-    const merged = applyErpReturnToLocal(erp, order.customerId)
-    const finalOrder = {
+    const merged = buildReturnOrderFromErp(erp, order.customerId)
+    const finalOrder: ReturnOrder = {
       ...merged,
       returnPlatform: order.returnPlatform,
       takealotReturnDetails: order.takealotReturnDetails,
       ...(order.attachments?.length ? { attachments: order.attachments } : {}),
     }
-    updateReturnOrder(finalOrder.id, {
-      returnPlatform: order.returnPlatform,
-      takealotReturnDetails: order.takealotReturnDetails,
-      ...(order.attachments?.length ? { attachments: order.attachments } : {}),
-    })
+    await upsertReturnOrderOrThrow(finalOrder)
     return { ok: true, order: finalOrder }
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) }
