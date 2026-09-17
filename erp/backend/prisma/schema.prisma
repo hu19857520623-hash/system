@@ -653,6 +653,7 @@ model OutboundOrderItem {
   sku          String        @db.VarChar(30)
   productName  String?       @map("product_name") @db.VarChar(300)
   qty          Int
+  needsRelabel Boolean       @default(true) @map("needs_relabel")
   pickedQty    Int           @default(0) @map("picked_qty")
   locationCode String?       @map("location_code") @db.VarChar(30)
   oldBarcode   String?       @map("old_barcode") @db.VarChar(50)

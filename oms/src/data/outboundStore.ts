@@ -132,6 +132,7 @@ export function applyErpOutboundToLocal(erp: ErpOutboundOrder, base?: Partial<Ou
       sku: i.sku,
       name: i.productName || i.sku,
       qty: i.qty,
+      needsRelabel: i.needsRelabel !== false,
     })) || existing?.lineItems,
     attachments: existing?.attachments || base?.attachments,
     preDeductFees: existing?.preDeductFees || base?.preDeductFees,
@@ -220,6 +221,7 @@ export async function submitOutboundToErp(
         sku: l.sku,
         qty: l.qty,
         productName: l.name,
+        needsRelabel: l.needsRelabel !== false,
       })),
       attachments: (order.attachments || []).map(a => ({
         fileType: a.fileType || a.kind || 'other',

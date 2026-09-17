@@ -192,7 +192,7 @@ export type ErpOutboundOrder = {
   trackingNo: string | null
   carrier: string | null
   remark?: string | null
-  items: { sku: string; productName: string | null; qty: number }[]
+  items: { sku: string; productName: string | null; qty: number; needsRelabel?: boolean }[]
   idempotent?: boolean
 }
 
@@ -349,7 +349,7 @@ export function createErpOutbound(body: {
   stockSource?: 'catalog' | 'owned'
   destType?: string
   fbaWarehouse?: string
-  items: { sku: string; qty: number; productName?: string }[]
+  items: { sku: string; qty: number; productName?: string; needsRelabel?: boolean }[]
   attachments?: { fileType?: string; fileName: string; contentBase64?: string; url?: string }[]
   preDeduct?: ErpOutboundPreDeduct
 }) {

@@ -630,13 +630,15 @@ async function openRelabel(row: any) {
   try {
     const detail = await outboundApi.detail(row.id)
     relabelOrder.value = detail
-    relabelLines.value = (detail.items || []).map((item: any) => ({
-      id: item.id,
-      sku: item.sku,
-      productName: item.productName || '',
-      scannedBarcode: item.oldBarcode || '',
-      newBarcode: item.newBarcode || '',
-    }))
+    relabelLines.value = (detail.items || [])
+      .filter((item: any) => item.needsRelabel !== false)
+      .map((item: any) => ({
+        id: item.id,
+        sku: item.sku,
+        productName: item.productName || '',
+        scannedBarcode: item.oldBarcode || '',
+        newBarcode: item.newBarcode || '',
+      }))
     relabelVisible.value = true
   } catch (e: any) {
     ElMessage.error(e?.message || '加载换标明细失败')
@@ -1320,7 +1322,7 @@ function statusTag(status: string) {
         @print-unit="(line, unitIndex) => printUnitLabel(relabelOrder, line, unitIndex)"
       />
       <div v-if="!relabelUsesPlatformUnitLabels" class="legacy-relabel">
-        <div class="pick-hint">请扫描旧条码确认换标；新条码/FNSKU 可选填。确认后进入待发运。</div>
+        <div class="pick-hint">仅列出需换标的 SKU；不换标行已跳过。请扫描旧条码确认换标；新条码/FNSKU 可选填。确认后进入待发运。</div>
         <el-table :data="relabelLines" size="small" border>
           <el-table-column prop="sku" label="SKU" width="120" />
           <el-table-column prop="productName" label="品名" min-width="120" show-overflow-tooltip />

@@ -440,6 +440,7 @@ export class OutboundService {
           platformBarcodes: scan.platformBarcodes,
           productName: i.productName || '',
           qty: i.qty,
+          needsRelabel: i.needsRelabel !== false,
           pickedQty: i.pickedQty ?? 0,
           locationCode: i.locationCode || '',
           oldBarcode: i.oldBarcode || '',
@@ -588,7 +589,9 @@ export class OutboundService {
     if (!lines.length) throw new BadRequestException('请添加出库明细')
 
     const outboundNo = data.outboundNo?.trim() || await this.allocateOutboundNo(data.customerCode, data.customerId)
-    const needsRelabel = !!data.needsRelabel
+    const needsRelabel = data.needsRelabel != null
+      ? !!data.needsRelabel
+      : lines.some((line: { needsRelabel?: boolean }) => line.needsRelabel !== false)
     const initialStatus = 'pending_pick'
     const destType = data.destType || 'cpt'
     const platform = data.platform?.trim() || null
@@ -626,7 +629,10 @@ export class OutboundService {
         requiredFiles = []
       }
       const providedTypes = new Set(normalizedAttachments.map(item => item.fileType))
-      const missingTypes = requiredFiles.filter(fileType => !providedTypes.has(fileType))
+      const missingTypes = requiredFiles.filter((fileType) => {
+        if (fileType === 'skuLabel' && !needsRelabel) return false
+        return !providedTypes.has(fileType)
+      })
       if (missingTypes.length) {
         const labels: Record<string, string> = {
           outerLabel: '外箱标签', skuLabel: 'SKU 标签', deliveryList: '送货清单', appointment: '预约文件',
@@ -678,6 +684,7 @@ export class OutboundService {
               sku: l.sku,
               productName: l.productName || null,
               qty: Number(l.qty),
+              needsRelabel: l.needsRelabel !== false,
             })),
           },
         },
@@ -761,12 +768,13 @@ export class OutboundService {
       }
 
       const scannedIds = new Set(scans.map((s) => Number(s.id)))
-      const missing = order.items.filter((i) => !scannedIds.has(Number(i.id)))
+      const relabelItems = order.items.filter((i) => i.needsRelabel !== false)
+      const missing = relabelItems.filter((i) => !scannedIds.has(Number(i.id)))
       if (missing.length) {
         throw new BadRequestException(`仍有 ${missing.length} 个 SKU 未扫码换标：${missing.map((i) => i.sku).join('、')}`)
       }
 
-      const printCount = order.items.reduce((s, i) => s + i.qty, 0)
+      const printCount = relabelItems.reduce((s, i) => s + i.qty, 0)
       // 新流程：复核后换标 → 待发运；兼容旧单（尚未拣货就换标）→ 待拣货
       const nextStatus =
         order.reviewedAt || order.items.some((i) => (i.pickedQty ?? 0) > 0)
@@ -794,7 +802,7 @@ export class OutboundService {
         })
       })
     } else {
-      const printCount = order.items.reduce((s, i) => s + i.qty, 0)
+      const printCount = order.items.filter((i) => i.needsRelabel !== false).reduce((s, i) => s + i.qty, 0)
       const nextStatus =
         order.reviewedAt || order.items.some((i) => (i.pickedQty ?? 0) > 0)
           ? 'packed'
@@ -1787,7 +1795,7 @@ th{background:#f5f5f5}
     podCode: string | null
     createdAt: Date
     updatedAt: Date
-    items?: { sku: string; productName: string | null; qty: number; productId: bigint }[]
+    items?: { sku: string; productName: string | null; qty: number; productId: bigint; needsRelabel?: boolean }[]
     attachments?: any[]
     customerName?: string | null
     customerCode?: string | null
@@ -1846,6 +1854,7 @@ th{background:#f5f5f5}
         productName: i.productName,
         qty: i.qty,
         productId: Number(i.productId),
+        needsRelabel: i.needsRelabel !== false,
       })),
     }
   }
@@ -1951,7 +1960,7 @@ th{background:#f5f5f5}
       },
       preDeduct,
     })
-    const resolved: { productId: bigint; sku: string; qty: number; productName: string }[] = []
+    const resolved: { productId: bigint; sku: string; qty: number; productName: string; needsRelabel: boolean }[] = []
     for (const line of lines) {
       const sku = String(line.sku || '').trim()
       const qty = Math.floor(Number(line.qty ?? 0))
@@ -1963,6 +1972,7 @@ th{background:#f5f5f5}
         sku: product.sku,
         qty,
         productName: line.productName || product.productName,
+        needsRelabel: line.needsRelabel !== false,
       })
     }
 
@@ -1997,12 +2007,13 @@ th{background:#f5f5f5}
           logisticsProduct: shippingMethod,
           remark,
           recipient: data.recipient,
-          needsRelabel: true,
+          needsRelabel: resolved.some((l) => l.needsRelabel !== false),
           items: resolved.map((l) => ({
             productId: Number(l.productId),
             sku: l.sku,
             productName: l.productName,
             qty: l.qty,
+            needsRelabel: l.needsRelabel !== false,
           })),
           attachments: normalizedAttachments,
         },

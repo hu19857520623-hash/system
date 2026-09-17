@@ -52,6 +52,7 @@ import {
   type TakealotLabelPdfResult,
 } from '../data/takealotLabelPdf'
 import { importCsvFile } from '../data/csvImportExport'
+import { reportLineImportResult } from '../utils/lineImportResult'
 import {
   OUTBOUND_LINE_COLUMNS,
   downloadOutboundLineTemplate,
@@ -96,6 +97,7 @@ interface LineItem {
   declaredValue: number
   note: string
   source?: 'manual' | 'takealot'
+  needsRelabel: boolean
 }
 
 interface TakealotValidationRow {
@@ -247,6 +249,7 @@ export default function Outbound() {
       declaredValue: line.declaredValue || 0,
       note: line.note || '',
       source: 'manual',
+      needsRelabel: line.needsRelabel ?? editOrder.type !== 'dropship',
     })))
   }, [editOrder])
 
@@ -458,6 +461,7 @@ export default function Outbound() {
         declaredValue: product.declaredValue || product.price || 0,
         note: `Takealot ${row.barcode}`,
         source: 'takealot',
+        needsRelabel: true,
       })
     }
     const mapped = [...grouped.values()]
@@ -475,6 +479,7 @@ export default function Outbound() {
           declaredValue: existing.declaredValue || line.declaredValue,
           note: existing.note || line.note,
           source: existing.source === 'manual' ? 'manual' : line.source,
+          needsRelabel: existing.needsRelabel,
         }
       })
       return [
@@ -512,8 +517,22 @@ export default function Outbound() {
     ),
     [attachments],
   )
+  const anyNeedsRelabel = lines.some(line => line.needsRelabel)
+  const skuLabelRequired = isTakealot && anyNeedsRelabel
+  const skipSkuLabelQtyIssue = (row: TakealotValidationRow) => {
+    const sku = row.resolution.status === 'resolved' ? row.resolution.product.internalSku : ''
+    if (sku) return lines.find(line => line.sku === sku)?.needsRelabel === false
+    return !anyNeedsRelabel
+  }
+  const rowDisplayIssues = (row: TakealotValidationRow) => {
+    if (!skipSkuLabelQtyIssue(row)) return row.issues
+    return row.issues.filter(issue => !issue.startsWith('缺少') && !issue.startsWith('多出'))
+  }
   const missingTakealotDocs = TAKEALOT_DOWNLOAD_ITEMS
-    .filter(item => !sourceAttachmentTypes.has(item.fileType))
+    .filter(item => {
+      if (item.fileType === TAKEALOT_ATTACHMENT_KINDS.skuLabel && !skuLabelRequired) return false
+      return !sourceAttachmentTypes.has(item.fileType)
+    })
     .map(item => item.label)
   const labelBlockingStates = Object.values(takealotLabelResults)
     .flatMap(result => result.blockingStates)
@@ -526,9 +545,9 @@ export default function Outbound() {
     ...missingTakealotDocs.map(label => `缺少${label}`),
     ...parseErrors,
     ...identityConflicts,
-    ...labelBlockingStates.map(state => state.message),
+    ...(skuLabelRequired ? labelBlockingStates.map(state => state.message) : []),
     ...(takealotParsedDoc ? takealotMissingFields(takealotParsedDoc).map(field => `缺少${field}`) : ['尚未解析 Takealot 文件']),
-    ...takealotValidationRows.flatMap(row => row.issues.map(issue => `${row.barcode}：${issue}`)),
+    ...takealotValidationRows.flatMap(row => rowDisplayIssues(row).map(issue => `${row.barcode}：${issue}`)),
     ...(takealotParsedDoc?.totalUnits != null && takealotParsedDoc.totalUnits !== expectedTotal
       ? [`预约单总件数 ${takealotParsedDoc.totalUnits} 与清单 ${expectedTotal} 不一致`]
       : []),
@@ -987,6 +1006,7 @@ export default function Outbound() {
         declaredName: l.declaredName || undefined,
         declaredValue: l.declaredValue || undefined,
         note: l.note || undefined,
+        needsRelabel: isTakealot ? l.needsRelabel : false,
       })),
       attachments: attachments.length ? attachments : undefined,
     }
@@ -1071,29 +1091,24 @@ export default function Outbound() {
       declaredValue: row.declaredValue,
       note: row.note,
       source: row.source ?? 'manual',
+      needsRelabel: row.needsRelabel ?? isTakealot,
     })))
   }
 
   const handleBatchUploadLines = async () => {
     try {
-      const { data, errors } = await importCsvFile(OUTBOUND_LINE_COLUMNS, parseOutboundLines)
-      if (errors.length > 0) {
-        window.alert(`导入失败：\n${errors.slice(0, 8).join('\n')}${errors.length > 8 ? `\n…共 ${errors.length} 条` : ''}`)
-        return
-      }
-      if (data.length === 0) {
-        window.alert('未解析到有效明细，请使用最新模板')
-        return
-      }
-      setLines(prev => [...prev, ...data.map(row => ({
-        ...row,
-        sku: resolveLineSku(row.sku),
-        declaredName: row.declaredName ?? row.name,
-        declaredValue: row.declaredValue ?? 0,
-        note: row.note ?? '',
-        source: 'manual' as const,
-      }))])
-      window.alert(`已导入 ${data.length} 行出库明细`)
+      const result = await importCsvFile(OUTBOUND_LINE_COLUMNS, parseOutboundLines)
+      await reportLineImportResult(result, () => {
+        setLines(prev => [...prev, ...result.data.map(row => ({
+          ...row,
+          sku: resolveLineSku(row.sku),
+          declaredName: row.declaredName ?? row.name,
+          declaredValue: row.declaredValue ?? 0,
+          note: row.note ?? '',
+          source: 'manual' as const,
+          needsRelabel: isTakealot,
+        }))])
+      })
     } catch (err) {
       notifyIfUserError(err, '导入失败')
     }
@@ -1188,7 +1203,9 @@ export default function Outbound() {
             <div>
               <h2 className="text-base font-semibold text-text-primary">Takealot 文件智能识别</h2>
               <p className="mt-1 text-xs text-text-muted">
-                请逐个上传预约单、发货清单、SKU 标签和外箱标。后传文件的 PO 号、Seller ID、目的仓等必须与已上传文件一致，否则将拒绝上传。
+                {skuLabelRequired
+                  ? '请上传预约单、发货清单、外箱标，以及需换标 SKU 的标签。不换标 SKU 可出现在同一份标签 PDF 中，系统只核对需换标行。'
+                  : '本单全部不换标，只需上传预约单、发货清单和外箱标，不必上传 SKU 标签。若部分 SKU 要换标，请在货品明细中打开「换标」。'}
               </p>
             </div>
             {takealotParsedDoc && (
@@ -1262,7 +1279,12 @@ export default function Outbound() {
                       sourceFile ? 'border-emerald-200 pr-9' : 'border-border-light'
                     }`}
                   >
-                    <p className="text-xs font-medium text-text-secondary">{item.label}</p>
+                    <p className="text-xs font-medium text-text-secondary">
+                      {item.label}
+                      {item.fileType === TAKEALOT_ATTACHMENT_KINDS.skuLabel && !skuLabelRequired && (
+                        <span className="ml-1 font-normal text-text-muted">选填</span>
+                      )}
+                    </p>
                     <p
                       className={`mt-0.5 truncate text-[10px] ${sourceFile ? 'text-emerald-700' : 'text-text-muted'}`}
                       title={sourceFile?.fileName}
@@ -1317,7 +1339,7 @@ export default function Outbound() {
                       <p className="text-[10px] text-text-muted">
                         {takealotValidationBlockers.length
                           ? `${takealotValidationBlockers.length} 项阻塞，修复后才能提交`
-                          : '四份文件、数量、条码映射与裁切均已通过'}
+                          : '文件、条码映射已通过；SKU 标签仅核对应换标行'}
                       </p>
                     </div>
                   </div>
@@ -1332,12 +1354,18 @@ export default function Outbound() {
               <div className="grid grid-cols-2 border-b border-border-light sm:grid-cols-4">
                 {TAKEALOT_DOWNLOAD_ITEMS.map(item => {
                   const uploaded = sourceAttachmentTypes.has(item.fileType)
+                  const optional = item.fileType === TAKEALOT_ATTACHMENT_KINDS.skuLabel && !skuLabelRequired
+                  const missing = !uploaded && !optional
                   return (
                     <div key={item.fileType} className="flex items-center gap-1.5 border-r border-border-light px-3 py-2 text-[10px] last:border-r-0">
                       {uploaded
                         ? <CheckCircle2 className="h-3 w-3 text-emerald-600" />
-                        : <XCircle className="h-3 w-3 text-red-500" />}
-                      <span className={uploaded ? 'text-text-secondary' : 'text-red-700'}>{item.label}</span>
+                        : optional
+                          ? <CheckCircle2 className="h-3 w-3 text-text-muted" />
+                          : <XCircle className="h-3 w-3 text-red-500" />}
+                      <span className={missing ? 'text-red-700' : 'text-text-secondary'}>
+                        {item.label}{optional ? '（免传）' : ''}
+                      </span>
                     </div>
                   )
                 })}
@@ -1367,12 +1395,15 @@ export default function Outbound() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border-light">
-                    {takealotValidationRows.map(row => (
+                    {takealotValidationRows.map(row => {
+                      const issues = rowDisplayIssues(row)
+                      const skipQty = skipSkuLabelQtyIssue(row)
+                      return (
                       <tr key={row.barcode}>
                         <td className="px-3 py-2 font-mono text-text-primary">{row.barcode}</td>
                         <td className="max-w-[220px] truncate px-3 py-2 text-text-secondary" title={row.title}>{row.title || '—'}</td>
                         <td className="px-3 py-2 text-center font-semibold">{row.expectedQty}</td>
-                        <td className={`px-3 py-2 text-center font-semibold ${row.expectedQty === row.observedQty ? 'text-emerald-700' : 'text-red-700'}`}>{row.observedQty}</td>
+                        <td className={`px-3 py-2 text-center font-semibold ${skipQty || row.expectedQty === row.observedQty ? 'text-emerald-700' : 'text-red-700'}`}>{row.observedQty}</td>
                         <td className="px-3 py-2 text-center">{row.cropCount}</td>
                         <td className="px-3 py-2">
                           {row.resolution.status === 'resolved'
@@ -1380,13 +1411,13 @@ export default function Outbound() {
                             : <span className="text-text-muted">—</span>}
                         </td>
                         <td className="px-3 py-2">
-                          {row.issues.length === 0 ? (
+                          {issues.length === 0 ? (
                             <span className="inline-flex items-center gap-1 text-emerald-700">
-                              <CheckCircle2 className="h-3 w-3" /> 通过
+                              <CheckCircle2 className="h-3 w-3" /> {skipQty ? '不换标' : '通过'}
                             </span>
                           ) : (
                             <div className="flex items-center gap-2">
-                              <span className="text-red-700">{row.issues.join('、')}</span>
+                              <span className="text-red-700">{issues.join('、')}</span>
                               {row.resolution.status === 'unmatched' && (
                                 <button
                                   type="button"
@@ -1412,7 +1443,8 @@ export default function Outbound() {
                           )}
                         </td>
                       </tr>
-                    ))}
+                      )
+                    })}
                     {takealotValidationRows.length === 0 && (
                       <tr><td colSpan={7} className="px-3 py-6 text-center text-text-muted">尚未解析到清单条码或产品标签</td></tr>
                     )}
@@ -1583,6 +1615,12 @@ export default function Outbound() {
             <div className="flex flex-wrap gap-2">
               <Button size="sm" onClick={() => setSkuPickerOpen(true)}><Plus className="h-3.5 w-3.5" /> 增加</Button>
               <Button variant="secondary" size="sm" onClick={() => setLines([])}>清除</Button>
+              {isTakealot && lines.length > 0 && (
+                <>
+                  <Button variant="secondary" size="sm" onClick={() => setLines(prev => prev.map(l => ({ ...l, needsRelabel: true })))}>全部换标</Button>
+                  <Button variant="secondary" size="sm" onClick={() => setLines(prev => prev.map(l => ({ ...l, needsRelabel: false })))}>全部不换标</Button>
+                </>
+              )}
               <Button variant="secondary" size="sm" onClick={downloadOutboundLineTemplate}>下载模板</Button>
               <Button variant="secondary" size="sm" onClick={() => void handleBatchUploadLines()}>
                 <Upload className="h-3.5 w-3.5" /> 批量上传
@@ -1599,16 +1637,17 @@ export default function Outbound() {
                   <th>SKU</th>
                   <th>产品标题</th>
                   <th>数量</th>
+                  {isTakealot && <th>换标</th>}
                   <th>申报品名</th>
                   <th>申报价值</th>
                   <th>备注</th>
-                  <th>操作</th>
+                  <th className="table-ops">操作</th>
                 </tr>
               </thead>
               <tbody className="table-body">
                 {lines.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="table-cell py-8 text-center text-xs text-text-muted">
+                    <td colSpan={isTakealot ? 8 : 7} className="table-cell py-8 text-center text-xs text-text-muted">
                       暂无货品，请点击「增加」选择 SKU，或使用批量上传
                       {availableProducts.length > 0 && (
                         <span className="mt-2 block text-[10px]">
@@ -1637,6 +1676,18 @@ export default function Outbound() {
                         {overMax ? ' · 已超出' : ''}
                       </p>
                     </td>
+                    {isTakealot && (
+                      <td className="table-cell">
+                        <label className="inline-flex items-center gap-1.5 text-xs text-text-secondary">
+                          <input
+                            type="checkbox"
+                            checked={row.needsRelabel}
+                            onChange={e => setLines(prev => prev.map(l => l.id === row.id ? { ...l, needsRelabel: e.target.checked } : l))}
+                          />
+                          需换标
+                        </label>
+                      </td>
+                    )}
                     <td className="table-cell text-xs">{row.declaredName}</td>
                     <td className="table-cell text-xs">{row.declaredValue > 0 ? formatCurrency(row.declaredValue) : '—'}</td>
                     <td className="table-cell text-xs text-text-muted">{row.note || '—'}</td>
@@ -1658,6 +1709,9 @@ export default function Outbound() {
           {lines.length > 0 && (
             <p className="mt-2 text-xs text-text-muted">
               合计 {lines.length} 行 · {lines.reduce((s, l) => s + l.qty, 0)} 件
+              {isTakealot && (
+                <> · 需换标 {lines.filter(l => l.needsRelabel).length} 行{!anyNeedsRelabel ? ' · 全部不换标，无需上传 SKU 标签' : ''}</>
+              )}
             </p>
           )}
           <p className="mt-2 text-[11px] text-text-muted">提交后海外仓将执行打包发货，物流单号与签收单在「订单与出库」中查看</p>

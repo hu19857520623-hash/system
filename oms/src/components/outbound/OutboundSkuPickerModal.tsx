@@ -20,6 +20,7 @@ export interface OutboundSkuPickerLine {
   declaredValue: number
   note: string
   source?: 'manual' | 'takealot'
+  needsRelabel?: boolean
 }
 
 export interface OutboundSkuPickerConfirmRow {
@@ -31,6 +32,7 @@ export interface OutboundSkuPickerConfirmRow {
   note: string
   source?: 'manual' | 'takealot'
   existingId?: string
+  needsRelabel?: boolean
 }
 
 type Props = {
@@ -263,6 +265,7 @@ export default function OutboundSkuPickerModal({
         note: existing?.note ?? '',
         source: existing?.source,
         existingId: existing?.id,
+        needsRelabel: existing?.needsRelabel,
       })
     }
     onConfirm(rows)

@@ -112,6 +112,22 @@ describe('outbound Takealot label UI model', () => {
     })
   })
 
+  it('does not require printable labels for SKUs marked as not needing relabel', () => {
+    const summary = buildOutboundLabelSummary({
+      platform: 'Takealot',
+      items: [
+        { sku: 'INT-REL', qty: 1, needsRelabel: true },
+        { sku: 'INT-SKIP', qty: 2, needsRelabel: false },
+      ],
+      attachments: [
+        { fileType: 'skuLabel', sku: 'INT-REL', unitIndex: 1 },
+      ],
+    })
+
+    expect(summary.lines.find(line => line.internalSku === 'INT-SKIP')?.printable).toBe(true)
+    expect(summary.allPrintable).toBe(true)
+  })
+
   it('creates independent loading keys for order, SKU and unit actions', () => {
     expect(outboundLabelActionKey(42, 'order')).toBe('42:order')
     expect(outboundLabelActionKey(42, 'sku', 'INT-001')).toBe('42:sku:INT-001')

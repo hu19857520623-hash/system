@@ -1,6 +1,7 @@
 import { Type, Transform } from 'class-transformer'
 import {
   IsArray,
+  IsBoolean,
   IsIn,
   IsInt,
   IsNotEmpty,
@@ -94,6 +95,16 @@ export class OmsOutboundItemDto {
   @IsString()
   @MaxLength(300)
   productName?: string
+
+  /** 该 SKU 是否需要仓库换标；不传则按需换标处理（兼容旧客户端） */
+  @IsOptional()
+  @Transform(({ value }) => {
+    if (value === true || value === 'true' || value === 1 || value === '1') return true
+    if (value === false || value === 'false' || value === 0 || value === '0') return false
+    return value
+  })
+  @IsBoolean()
+  needsRelabel?: boolean
 }
 
 export class CreateOmsOutboundDto {

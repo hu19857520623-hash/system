@@ -54,6 +54,45 @@ describe('outbound label utilities', () => {
     expect(() => assertSkuLabelCounts([{ sku: 'SKU-A', qty: 2 }], attachments)).not.toThrow()
   })
 
+  it('ignores SKUs marked as not needing relabel when counting cropped labels', () => {
+    const attachments = normalizeOmsOutboundAttachments([
+      {
+        fileType: 'skuLabel',
+        fileName: 'sku-a-1.pdf',
+        contentBase64: PDF_BASE64,
+        sku: 'SKU-A',
+        unitIndex: 1,
+      },
+      {
+        fileType: 'skuLabel',
+        fileName: 'sku-b-1.pdf',
+        contentBase64: PDF_BASE64,
+        sku: 'SKU-B',
+        unitIndex: 1,
+      },
+    ])
+
+    expect(() => assertSkuLabelCounts([
+      { sku: 'SKU-A', qty: 1, needsRelabel: true },
+      { sku: 'SKU-B', qty: 3, needsRelabel: false },
+    ], attachments)).not.toThrow()
+  })
+
+  it('skips SKU label count checks when no line needs relabel', () => {
+    const attachments = normalizeOmsOutboundAttachments([
+      {
+        fileType: 'skuLabel',
+        fileName: 'original-label-sheet.pdf',
+        contentBase64: PDF_BASE64,
+        labelRole: 'sourceDocument',
+      },
+    ])
+    expect(() => assertSkuLabelCounts(
+      [{ sku: 'SKU-A', qty: 2, needsRelabel: false }],
+      attachments,
+    )).not.toThrow()
+  })
+
   it('reports each SKU whose cropped-label count does not match quantity', () => {
     const attachments = normalizeOmsOutboundAttachments([
       {

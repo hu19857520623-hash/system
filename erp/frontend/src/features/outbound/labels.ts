@@ -10,6 +10,7 @@ export interface OutboundLabelLine {
   countMatches: boolean
   printable: boolean
   unitIndices: number[]
+  needsRelabel: boolean
 }
 
 export interface OutboundLabelSummary {
@@ -189,6 +190,10 @@ function normalizeLine(lineValue: unknown, index: number): OutboundLabelLine {
     line.labelStatus,
     metadata.labelStatus,
   ))
+  const needsRelabel = line.needsRelabel !== false
+    && line.needsRelabel !== 0
+    && line.needsRelabel !== 'false'
+    && line.needsRelabel !== '0'
   const countMatches = expectedQty > 0 && croppedLabelCount === expectedQty
   const mappingReady = mappingFlag ?? croppedLabelCount > 0
   const labelReady = labelFlag ?? croppedLabelCount > 0
@@ -201,8 +206,9 @@ function normalizeLine(lineValue: unknown, index: number): OutboundLabelLine {
     mappingReady,
     labelReady,
     countMatches,
-    printable: countMatches && mappingReady && labelReady,
+    printable: needsRelabel ? countMatches && mappingReady && labelReady : true,
     unitIndices,
+    needsRelabel,
   }
 }
 
@@ -316,13 +322,14 @@ export function buildOutboundLabelSummary(detailValue: unknown): OutboundLabelSu
   const totalExpectedQty = lines.reduce((sum, line) => sum + line.expectedQty, 0)
   const totalCroppedLabels = lines.reduce((sum, line) => sum + line.croppedLabelCount, 0)
 
+  const relabelLines = lines.filter(line => line.needsRelabel)
   return {
     isTakealot,
     hasLabelMetadata,
     lines,
     totalExpectedQty,
     totalCroppedLabels,
-    allPrintable: isTakealot && lines.length > 0 && lines.every(line => line.printable),
+    allPrintable: isTakealot && relabelLines.length > 0 && relabelLines.every(line => line.printable),
   }
 }
 

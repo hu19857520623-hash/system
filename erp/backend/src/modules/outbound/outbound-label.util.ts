@@ -160,7 +160,7 @@ export function normalizeOmsOutboundAttachments(
 }
 
 export function assertSkuLabelCounts(
-  items: { sku: string; qty: number }[],
+  items: { sku: string; qty: number; needsRelabel?: boolean }[],
   attachments: NormalizedOutboundAttachment[],
 ) {
   const skuLabels = attachments.filter(
@@ -172,12 +172,20 @@ export function assertSkuLabelCounts(
   )
   if (!skuLabels.length) return
 
+  const skipSkus = new Set(
+    (items || [])
+      .filter((item) => item.needsRelabel === false)
+      .map((item) => String(item.sku || '').trim())
+      .filter(Boolean),
+  )
   const expected = new Map<string, number>()
   for (const item of items || []) {
     const sku = String(item.sku || '').trim()
-    if (!sku) continue
+    if (!sku || item.needsRelabel === false) continue
     expected.set(sku, (expected.get(sku) || 0) + Math.floor(Number(item.qty) || 0))
   }
+  if (!expected.size) return
+
   const actual = new Map<string, number>()
   for (const label of skuLabels) {
     const sku = label.sku!
@@ -190,6 +198,7 @@ export function assertSkuLabelCounts(
     if (labelCount !== qty) mismatches.add(`${sku} 需要 ${qty} 张，收到 ${labelCount} 张`)
   }
   for (const [sku, labelCount] of actual) {
+    if (skipSkus.has(sku)) continue
     if (!expected.has(sku)) mismatches.add(`${sku} 不在出库明细中，但收到 ${labelCount} 张`)
   }
   if (mismatches.size) {

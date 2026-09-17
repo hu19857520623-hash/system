@@ -83,6 +83,8 @@ export interface OutboundLineItem {
   declaredName?: string
   declaredValue?: number
   note?: string
+  /** 该行是否需要仓库换标；Takealot 默认 true */
+  needsRelabel?: boolean
 }
 
 export interface InboundLineItem {
