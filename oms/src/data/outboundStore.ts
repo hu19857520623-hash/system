@@ -111,7 +111,12 @@ export function applyErpOutboundToLocal(erp: ErpOutboundOrder, base?: Partial<Ou
     stockSource: erp.stockSource || base?.stockSource || existing?.stockSource || (base?.source === 'catalog_dist' ? 'catalog' : 'owned'),
     refNo: existing?.refNo || base?.refNo || erp.fbaNo || undefined,
     orderNo: erp.orderNo || existing?.orderNo || base?.orderNo || undefined,
-    type: base?.type || existing?.type || (erp.platform === 'Takealot' ? 'takealot' : 'dropship'),
+    type: base?.type || existing?.type || (
+      erp.platform === 'Takealot' ? 'takealot'
+        : erp.platform === 'TFS' ? 'tfs'
+          : erp.platform === 'Transfer' ? 'transfer'
+            : 'dropship'
+    ),
     warehouse: erp.warehouseCode?.toLowerCase().includes('jhb') ? 'jhb1' : (existing?.warehouse || 'jhb1'),
     items: erp.items?.length || existing?.items || 1,
     totalQty: erp.items?.reduce((s, i) => s + i.qty, 0) || existing?.totalQty || 0,
@@ -199,7 +204,7 @@ export async function submitOutboundToErp(
       customerCode,
       customerId: order.customerId,
       warehouseCode: 'WMS-JHB-01',
-      platform: order.type === 'takealot' ? 'Takealot' : undefined,
+      platform: order.type === 'takealot' ? 'Takealot' : order.type === 'tfs' ? 'TFS' : order.type === 'transfer' ? 'Transfer' : undefined,
       fbaNo: order.refNo,
       appointmentDate: order.scheduledDeliveryDate,
       shipmentDueDate: order.shipmentDueDate,

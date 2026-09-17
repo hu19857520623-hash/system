@@ -1626,7 +1626,10 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
             outboundNo: outbound.outboundNo,
             source: outbound.source || 'catalog_dist',
             stockSource: outbound.stockSource || 'catalog',
-            type: outbound.platform === 'Takealot' ? 'takealot' : 'dropship',
+            type: outbound.platform === 'Takealot' ? 'takealot'
+              : outbound.platform === 'TFS' ? 'tfs'
+                : outbound.platform === 'Transfer' ? 'transfer'
+                  : 'dropship',
             warehouse: 'jhb1',
             items: outbound.items?.length || 1,
             totalQty,

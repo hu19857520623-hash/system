@@ -9,6 +9,7 @@ import {
   TAKEALOT_ATTACHMENT_KINDS,
   type FileAttachment, type OutboundOrder, type OutboundType, type PlatformSkuMapping,
   type ShipmentSource, type StockSource, type TakealotAttachmentKind,
+  OUTBOUND_TYPE_OPTIONS, outboundTypeFromLabel, outboundTypeLabel,
 } from '../data/mockData'
 import { getOutboundShippableQty, lockStockForOutbound, rollbackStockForOutbound, useInventoryItems, useProducts } from '../data/inventoryStore'
 import { addOutboundOrderOrThrow, nextOutboundNo, removeOutboundOrder, submitOutboundToErp, useOutboundOrders } from '../data/outboundStore'
@@ -71,7 +72,6 @@ import { notifyIfUserError } from '../utils/userNotify'
 
 const SHIP_WAREHOUSE_ID = 'jhb'
 const DEFAULT_TAKEALOT_DEST_WAREHOUSE = 'jhb3'
-const OUTBOUND_TYPES = ['Takealot入仓', '一件代发', '中转出库'] as const
 
 const DOC_KIND_TO_FILE_TYPE: Record<string, TakealotAttachmentKind> = {
   '外箱标': TAKEALOT_ATTACHMENT_KINDS.outerLabel,
@@ -163,6 +163,8 @@ export default function Outbound() {
 
   const isDropship = outboundType === '一件代发'
   const isTakealot = outboundType === 'Takealot入仓'
+  const isTfs = outboundType === 'TFS快递'
+  const needsRecipient = isDropship || isTfs
   const takealotAttachmentKinds = useMemo(
     () => new Set(Object.values(TAKEALOT_ATTACHMENT_KINDS)),
     [],
@@ -178,13 +180,14 @@ export default function Outbound() {
     : destRegion
 
   const resolvedShippingMethod = useMemo(() => {
+    if (isTfs) return '快递'
     if (isTakealot) {
       const rule = findDispatchRuleForRegion(regionDispatchRules, effectiveDestRegion)
       return rule?.shippingMethod ?? '卡派'
     }
     const rule = activeDispatchRules.find(r => r.id === dispatchRuleId)
     return rule?.shippingMethod ?? '卡派'
-  }, [isTakealot, effectiveDestRegion, regionDispatchRules, dispatchRuleId, activeDispatchRules])
+  }, [isTfs, isTakealot, effectiveDestRegion, regionDispatchRules, dispatchRuleId, activeDispatchRules])
 
   const customerId = getCustomerIdForRole(role)
   const effectiveTakealotSellerId = (takealotParsedDoc?.sellerId || takealotSellerId.trim()) || undefined
@@ -218,7 +221,7 @@ export default function Outbound() {
   useEffect(() => {
     if (!editOrder || hydratedEditId.current === editOrder.id) return
     hydratedEditId.current = editOrder.id
-    setOutboundType(editOrder.type === 'dropship' ? '一件代发' : 'Takealot入仓')
+    setOutboundType(outboundTypeLabel(editOrder.type))
     setPlatform(editOrder.type === 'takealot' ? 'Takealot' : PLATFORM_OPTIONS[0])
     setRefNo(editOrder.refNo || '')
     setSellerStoreName(editOrder.sellerStoreName || '')
@@ -898,7 +901,7 @@ export default function Outbound() {
 
   const handleSubmit = async (asDraft = false) => {
     const submitCustomerId = getCustomerIdForRole(role) ?? undefined
-    const type: OutboundType = isTakealot ? 'takealot' : 'dropship'
+    const type: OutboundType = outboundTypeFromLabel(outboundType)
     const source: ShipmentSource = role === 'catalog' ? 'catalog_dist' : 'platform_order'
     const stockSource: StockSource = role === 'catalog' ? 'catalog' : 'owned'
     const totalQty = lines.reduce((s, l) => s + l.qty, 0)
@@ -928,7 +931,7 @@ export default function Outbound() {
     }
     if (
       !asDraft &&
-      isDropship &&
+      needsRecipient &&
       (!recipientName.trim() ||
         !recipientCity.trim() ||
         !recipientPostalCode.trim() ||
@@ -965,7 +968,7 @@ export default function Outbound() {
       totalQty,
       status: asDraft ? 'draft' : 'locked',
       destination: destination || '待完善',
-      recipient: isDropship ? {
+      recipient: needsRecipient ? {
         name: recipientName.trim(),
         province: recipientProvince.trim() || undefined,
         city: recipientCity.trim(),
@@ -1477,7 +1480,7 @@ export default function Outbound() {
                 value={outboundType}
                 onChange={e => setOutboundType(e.target.value)}
               >
-                {OUTBOUND_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                {OUTBOUND_TYPE_OPTIONS.map(t => <option key={t} value={t}>{t}</option>)}
               </select>
             </FormField>
             <FormField label="出库单号" hint="提交后由系统自动生成">
@@ -1576,7 +1579,7 @@ export default function Outbound() {
           </div>
         </FormSection>
 
-        {isDropship && (
+        {needsRecipient && (
           <FormSection num={2} title="收件人信息">
             <FormGrid cols={3}>
               <FormField label="收件人姓名" required>
@@ -1608,7 +1611,7 @@ export default function Outbound() {
         )}
 
         <FormSection
-          num={isDropship ? 3 : 2}
+          num={needsRecipient ? 3 : 2}
           title="货品选择"
           action={
             <div className="flex flex-wrap gap-2">
@@ -1717,7 +1720,7 @@ export default function Outbound() {
         </FormSection>
 
         {feeEstimate && (
-          <FormSection num={isDropship ? 4 : 3} title="费用试算 · 预扣款">
+          <FormSection num={needsRecipient ? 4 : 3} title="费用试算 · 预扣款">
             <div className="rounded-xl bg-amber-50 p-4 ring-1 ring-amber-100">
               <p className="text-xs font-semibold text-amber-900">
                 按 {effectiveDestRegion.toUpperCase()} 价格模板「{priceTemplate.name}」试算 · 提交时从余额预扣

@@ -4,7 +4,7 @@ import {
 } from '../ui'
 import {
   formatCurrency, statusLabels,
-  SHIPMENT_SOURCE_LABELS, STOCK_SOURCE_LABELS,
+  SHIPMENT_SOURCE_LABELS, STOCK_SOURCE_LABELS, outboundTypeLabel,
 } from '../../data/mockData'
 import type { FulfillmentRow } from '../../data/fulfillmentUtils'
 import { updateOrder } from '../../data/entityStore'
@@ -169,7 +169,7 @@ export default function FulfillmentDetailDrawer({ row, open, onClose, onUploadPo
             {outbound && (
               <section>
                 <SectionTitle>出库详情</SectionTitle>
-                <InfoRow label="出库类型" value={outbound.type} />
+                <InfoRow label="出库类型" value={outboundTypeLabel(outbound.type)} />
                 <InfoRow label="目的地" value={outbound.destination} />
                 <InfoRow label="预约送仓日" value={outbound.scheduledDeliveryDate ?? '—'} />
                 <InfoRow label="备注" value={outbound.remark ?? '—'} />

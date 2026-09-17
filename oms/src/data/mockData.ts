@@ -626,12 +626,32 @@ export function countOrdersByTab(tab: string, orderList: Order[] = orders): numb
 
 export type LegacyOrderStatus = 'draft' | 'pending' | 'locked' | 'picking' | 'shipped' | 'delivered' | 'partial_delivered' | 'delivery_failed' | 'cancelled' | 'exception'
 export type InboundStatus = 'draft' | 'receiving' | 'partial' | 'completed' | 'exception' | 'on_the_way' | 'shelved'
-export type OutboundType = 'dropship' | 'takealot'
+export type OutboundType = 'dropship' | 'takealot' | 'transfer' | 'tfs'
 export type CodeStatus = 'active' | 'pending_review' | 'deprecated'
 /** 发货来源：平台订单驱动 / 货盘分销 / 手工创建 */
 export type ShipmentSource = 'platform_order' | 'catalog_dist' | 'manual'
 /** 库存来源：客户自有 vs 货盘选品 */
 export type StockSource = 'owned' | 'catalog'
+
+export const OUTBOUND_TYPE_LABELS: Record<OutboundType, string> = {
+  takealot: 'Takealot入仓',
+  dropship: '一件代发',
+  transfer: '中转出库',
+  tfs: 'TFS快递',
+}
+
+export const OUTBOUND_TYPE_OPTIONS = ['Takealot入仓', '一件代发', '中转出库', 'TFS快递'] as const
+
+export function outboundTypeLabel(type: OutboundType | string | undefined): string {
+  if (!type) return '—'
+  return OUTBOUND_TYPE_LABELS[type as OutboundType] || type
+}
+
+export function outboundTypeFromLabel(label: string): OutboundType {
+  const found = (Object.entries(OUTBOUND_TYPE_LABELS) as [OutboundType, string][])
+    .find(([, value]) => value === label)
+  return found?.[0] ?? 'takealot'
+}
 
 export const SHIPMENT_SOURCE_LABELS: Record<ShipmentSource, string> = {
   platform_order: '平台订单',
