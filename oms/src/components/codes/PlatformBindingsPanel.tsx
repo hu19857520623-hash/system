@@ -332,7 +332,7 @@ export default function PlatformBindingsPanel() {
               <th>库存来源</th>
               <th>绑定状态</th>
               <th>同步来源</th>
-              <th>操作</th>
+              <th className="table-ops">操作</th>
             </tr>
             <tr className="bg-surface-muted/40">
               <th />

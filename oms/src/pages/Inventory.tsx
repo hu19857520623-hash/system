@@ -304,7 +304,7 @@ export default function InventoryPage({ alertsOnly }: InventoryPageProps) {
               <th className="whitespace-nowrap text-right">不良品</th>
               <th className="whitespace-nowrap text-right">已出库</th>
               <th className="whitespace-nowrap">状态</th>
-              <th className="whitespace-nowrap text-right">操作</th>
+              <th className="table-ops whitespace-nowrap text-right">操作</th>
             </tr>
           </thead>
           <tbody className="table-body">

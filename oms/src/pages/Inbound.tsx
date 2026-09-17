@@ -340,7 +340,7 @@ export default function Inbound() {
                   <th>数量</th>
                   <th>包装类型</th>
                   <th>库存类型</th>
-                  <th>操作</th>
+                  <th className="table-ops">操作</th>
                 </tr>
               </thead>
               <tbody className="table-body">

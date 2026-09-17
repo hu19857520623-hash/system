@@ -338,7 +338,7 @@ export default function RegionTemplates() {
 
               <th>预约发货展示</th>
 
-              <th>操作</th>
+              <th className="table-ops">操作</th>
 
             </tr>
 

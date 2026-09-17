@@ -96,7 +96,7 @@ export default function StoresPage() {
               <th>拉单频率</th>
               <th>今日订单</th>
               <th>最近同步</th>
-              <th>操作</th>
+              <th className="table-ops">操作</th>
             </tr>
           </thead>
           <tbody className="table-body">

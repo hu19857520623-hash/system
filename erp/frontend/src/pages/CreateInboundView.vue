@@ -1186,7 +1186,7 @@ async function handleAttachmentFile(e: Event) {
             <el-table-column label="单件海运费" width="100" align="right">
               <template #default="{ row }"><span class="mono">{{ freightLabel(row.sku, 'unitFreight') }}</span></template>
             </el-table-column>
-            <el-table-column label="操作" width="60" align="center" fixed="right">
+            <el-table-column label="操作" width="80" align="center" fixed="right">
               <template #default="{ $index }">
                 <el-button link type="danger" size="small" @click="removeLine($index)">移除</el-button>
               </template>
@@ -1238,7 +1238,7 @@ async function handleAttachmentFile(e: Event) {
                 <el-button link type="primary" size="small" @click="addCartonLine(row as CartonForm)">+ SKU</el-button>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="70" align="center">
+            <el-table-column label="操作" width="80" align="center">
               <template #default="{ $index }">
                 <el-button link type="danger" size="small" @click="createForm.cartons.splice($index, 1)">删除</el-button>
               </template>

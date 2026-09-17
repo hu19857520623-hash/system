@@ -261,7 +261,7 @@ export default function ReturnProcessing() {
               <th>状态</th>
               <th>处理结果</th>
               <th>创建日期</th>
-              <th>操作</th>
+              <th className="table-ops">操作</th>
             </tr>
           </thead>
           <tbody className="table-body">

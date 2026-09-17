@@ -1008,7 +1008,9 @@ html.dark .el-tag.el-tag--info { --el-tag-text-color: #cbd5e1 !important; }
   background: var(--dropdown-bg) !important;
   z-index: 4000 !important;
 }
-.el-table .cell:has(.el-dropdown) {
+.el-table .cell:has(.el-dropdown),
+.el-table .cell:has(.el-button),
+.el-table .cell:has(.el-select) {
   overflow: visible;
 }
 .el-select-dropdown__item, .el-dropdown-menu__item { color: var(--text-secondary) !important; }

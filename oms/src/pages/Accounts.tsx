@@ -358,7 +358,7 @@ export default function Accounts() {
               <th>价格模板（按地区）</th>
               <th>状态</th>
               <th>最近登录</th>
-              <th>操作</th>
+              <th className="table-ops">操作</th>
             </tr>
           </thead>
           <tbody className="table-body">

@@ -73,6 +73,10 @@
 
   }
 
+  .table-ops {
+    @apply min-w-[7.5rem] whitespace-nowrap;
+  }
+
 
 
   .status-tab {

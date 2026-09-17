@@ -220,7 +220,7 @@ onMounted(async () => {
         </template>
       </el-table-column>
       <el-table-column prop="date" label="日期" width="96" />
-      <el-table-column label="操作" width="72" fixed="right" align="center">
+      <el-table-column label="操作" width="80" fixed="right" align="center">
         <template #default="{ row }"><el-button link type="primary" size="small" @click="detail(row)">详情</el-button></template>
       </el-table-column>
     </el-table>
