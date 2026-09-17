@@ -7,6 +7,12 @@ import { useTablePagination } from '@/composables/useTablePagination.ts'
 import { useRowActions } from '@/composables/useRowActions'
 import { useAsyncIo } from '@/composables/useAsyncIo'
 import { downloadLeadsImportTemplate, downloadProductImportTemplate } from '@/constants/importTemplates.ts'
+import {
+  formatImportDetailFields,
+  importCounts,
+  parseImportFailures,
+  showImportFailuresDialog,
+} from '@/utils/importResultFeedback.ts'
 import ListPagination from '@/components/ListPagination.vue'
 
 const { showDetail } = useRowActions()
@@ -30,6 +36,8 @@ function mapJob(row: any) {
     type: row.module,
     file: row.fileName || '—',
     rows: row.totalRows ?? 0,
+    successRows: row.processedRows ?? 0,
+    failedRows: row.failedRows ?? 0,
     format: 'CSV',
     status: st.label,
     tone: st.tone,
@@ -65,10 +73,30 @@ async function newExport() {
   if (job) await load()
 }
 
-function importDetail(row: any) {
-  showDetail(`导入任务 · ${row.id}`, [
-    ['任务编号', row.id], ['导入类型', row.type], ['文件名', row.file], ['行数', row.rows], ['状态', row.status], ['时间', row.time],
-  ])
+async function importDetail(row: any) {
+  const id = row.jobId ?? row._raw?.id
+  let raw = row._raw ?? {}
+  if (id) {
+    try {
+      raw = await asyncIoApi.detail(id)
+    } catch {
+      /* 列表数据兜底 */
+    }
+  }
+  const failures = parseImportFailures(raw)
+  const { imported, failed } = importCounts(raw)
+  if (failures.length > 0) {
+    await showImportFailuresDialog(
+      `任务 ${row.id} · ${raw.module ?? row.type} · ${raw.fileName ?? row.file}\n成功 ${imported} 条，失败 ${failed} 条`,
+      failures,
+      `导入失败明细-${row.id}`,
+    )
+    return
+  }
+  const fields = formatImportDetailFields(raw)
+  const timeField = fields.find(([label]) => label === '时间')
+  if (timeField) timeField[1] = fmtTime(raw.createdAt)
+  showDetail(`导入任务 · ${row.id}`, fields)
 }
 
 function download(row: any) {
@@ -102,6 +130,8 @@ onMounted(load)
         <el-table-column prop="type" label="导入类型" width="120" />
         <el-table-column prop="file" label="文件名" min-width="180" />
         <el-table-column prop="rows" label="行数" width="70" align="center" />
+        <el-table-column prop="successRows" label="成功" width="70" align="center" />
+        <el-table-column prop="failedRows" label="失败" width="70" align="center" />
         <el-table-column prop="status" label="状态" width="90">
           <template #default="{ row }">
             <el-tag :type="(row.tone as any)" size="small">{{ row.status }}</el-tag>

@@ -26,6 +26,7 @@ import {
   parseProducts,
 } from '../data/importTemplates'
 import { ImportTemplateLegend } from '../components/ui/ImportTemplateLegend'
+import { reportLineImportResult } from '../utils/lineImportResult'
 
 const statusTabs = [
   { id: 'all', label: '全部' },
@@ -210,25 +211,25 @@ export default function Products() {
     try {
       const customerId = getCustomerIdForRole(role) ?? undefined
       const customerCode = getCustomerCode(customerId)
-      const { data, errors } = await importCsvFile(
+      const parsed = await importCsvFile(
         PRODUCT_COLUMNS,
         records => parseProducts(records, customerId),
       )
-      if (errors.length > 0) {
-        window.alert(`导入失败：\n${errors.slice(0, 8).join('\n')}${errors.length > 8 ? `\n…共 ${errors.length} 条` : ''}`)
-        return
-      }
-      if (data.length === 0) {
-        window.alert('未解析到有效产品，请使用最新模板')
-        return
-      }
-      const result = await importProducts(data, { customerCode, customerId })
-      if (!result.ok) {
-        window.alert(result.error)
-        return
-      }
-      window.alert(`已导入 ${result.count} 个产品（待审核）`)
-      setTab('reviewing')
+      await reportLineImportResult(
+        parsed,
+        async () => {
+          const result = await importProducts(parsed.data, { customerCode, customerId })
+          if (!result.ok) {
+            window.alert(result.error)
+            return
+          }
+          setTab('reviewing')
+        },
+        {
+          successMessage: n => `已导入 ${n} 个产品（待审核）`,
+          emptyMessage: '未解析到有效产品，请使用最新模板',
+        },
+      )
     } catch (err) {
       notifyIfUserError(err, '导入失败')
     }

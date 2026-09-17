@@ -5,6 +5,7 @@ import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
 import { AsyncIoExportService } from './async-io-export.service'
 import { LeadsService } from '../leads/leads.service'
 import { ProductsService } from '../products/products.service'
+import { serializeImportResultDetail, type ImportRowFailure } from '../../common/import-row-result.util'
 
 @Injectable()
 export class AsyncIoService {
@@ -91,7 +92,8 @@ export class AsyncIoService {
       },
     })
     try {
-      const { ok, fail } = await this.runImport(data.module, data.content, operatorId)
+      const { ok, fail, failures } = await this.runImport(data.module, data.content, operatorId)
+      const resultDetail = serializeImportResultDetail(failures)
       const updated = await this.prisma.asyncIoJob.update({
         where: { id: job.id },
         data: {
@@ -99,10 +101,17 @@ export class AsyncIoService {
           processedRows: ok,
           failedRows: fail,
           status: fail > 0 && ok === 0 ? 'failed' : fail > 0 ? 'partial' : 'completed',
+          resultDetail,
           finishedAt: new Date(),
         },
       })
-      return { ...updated, id: Number(updated.id), imported: ok, failed: fail }
+      return {
+        ...updated,
+        id: Number(updated.id),
+        imported: ok,
+        failed: fail,
+        failures,
+      }
     } catch (e: any) {
       await this.prisma.asyncIoJob.update({
         where: { id: job.id },
@@ -112,14 +121,18 @@ export class AsyncIoService {
     }
   }
 
-  private async runImport(module: string, content: string, operatorId?: number) {
+  private async runImport(
+    module: string,
+    content: string,
+    operatorId?: number,
+  ): Promise<{ ok: number; fail: number; failures: ImportRowFailure[] }> {
     if (module === '线索' || module === 'leads') {
       const result = await this.leadsService.importFromCsv(content, operatorId)
-      return { ok: result.imported, fail: result.failed }
+      return { ok: result.imported, fail: result.failed, failures: result.failures ?? [] }
     }
     if (module === '商品主数据' || module === 'products') {
       const result = await this.productsService.importFromCsv(content, operatorId)
-      return { ok: result.imported, fail: result.failed }
+      return { ok: result.imported, fail: result.failed, failures: result.failures ?? [] }
     }
 
     throw new BadRequestException(

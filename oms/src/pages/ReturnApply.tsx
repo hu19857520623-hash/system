@@ -26,6 +26,7 @@ import {
 } from '../data/returnStore'
 import { todayDateInput, toDatetimeLocalInput, fromDatetimeLocalInput, fileToAttachment } from '../data/fileUtils'
 import { importCsvFile } from '../data/csvImportExport'
+import { reportLineImportResult } from '../utils/lineImportResult'
 import {
   RETURN_LINE_COLUMNS,
   downloadReturnLineTemplate,
@@ -429,17 +430,10 @@ export default function ReturnApply() {
 
   const handleBatchUploadLines = async () => {
     try {
-      const { data, errors } = await importCsvFile(RETURN_LINE_COLUMNS, parseReturnLines)
-      if (errors.length > 0) {
-        window.alert(`导入失败：\n${errors.slice(0, 8).join('\n')}${errors.length > 8 ? `\n…共 ${errors.length} 条` : ''}`)
-        return
-      }
-      if (data.length === 0) {
-        window.alert('未解析到有效明细，请使用最新模板')
-        return
-      }
-      setLines(prev => [...prev, ...data])
-      window.alert(`已导入 ${data.length} 行退件 SKU 明细`)
+      const result = await importCsvFile(RETURN_LINE_COLUMNS, parseReturnLines)
+      await reportLineImportResult(result, () => {
+        setLines(prev => [...prev, ...result.data])
+      })
     } catch (err) {
       notifyIfUserError(err, '导入失败')
     }

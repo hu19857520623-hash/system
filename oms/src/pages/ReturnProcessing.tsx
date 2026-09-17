@@ -16,6 +16,7 @@ import {
 } from '../data/returnStore'
 import { formatDatetimeDisplay, todayDateInput } from '../data/fileUtils'
 import { importCsvFile } from '../data/csvImportExport'
+import { reportLineImportResult } from '../utils/lineImportResult'
 import {
   RETURN_ORDER_COLUMNS,
   downloadReturnOrderTemplate,
@@ -125,49 +126,47 @@ export default function ReturnProcessing() {
   const handleBulkImport = async () => {
     if (!canWrite) return
     try {
-      const { data, errors } = await importCsvFile(RETURN_ORDER_COLUMNS, parseReturnOrders)
-      if (errors.length > 0) {
-        window.alert(`导入失败：\n${errors.slice(0, 8).join('\n')}${errors.length > 8 ? `\n…共 ${errors.length} 条` : ''}`)
-        return
-      }
-      if (data.length === 0) {
-        window.alert('未解析到有效退件单，请使用最新模板')
-        return
-      }
-
+      const result = await importCsvFile(RETURN_ORDER_COLUMNS, parseReturnOrders)
       const customerId = erpCustomer?.customerId ?? getCustomerIdForRole(role) ?? undefined
-      if (dataScope.isAdmin && !customerId) {
+      if (dataScope.isAdmin && !customerId && result.data.length > 0) {
         window.alert('请先在上方选择要代操作的客户端，再批量导入退件')
         return
       }
 
-      for (const order of data) {
-        const totalQty = order.lineItems.reduce((s, l) => s + l.qty, 0)
-        addReturnOrder({
-          id: `rt-import-${Date.now()}-${order.headerKey}`,
-          customerId,
-          returnNo: nextReturnNo(),
-          orderNo: order.orderNo.trim(),
-          referenceNo: order.referenceNo,
-          trackingNo: order.trackingNo,
-          sellerStoreName: order.sellerStoreName,
-          sellerTaxNo: order.sellerTaxNo,
-          returnWarehouse: order.returnWarehouse,
-          expectedArrivalAt: order.expectedArrivalAt,
-          returnReason: order.returnReason,
-          returnDescription: order.returnDescription,
-          requestedProcess: order.requestedProcess,
-          status: 'draft',
-          statusLabel: '草稿',
-          createdAt: todayDateInput(),
-          lineItems: order.lineItems,
-          totalQty,
-          remark: order.remark,
-        })
-      }
-
-      window.alert(`已导入 ${data.length} 张退件预约单（草稿），请在列表中核对后提交`)
-      setTab('draft')
+      await reportLineImportResult(
+        result,
+        () => {
+          for (const order of result.data) {
+            const totalQty = order.lineItems.reduce((s, l) => s + l.qty, 0)
+            addReturnOrder({
+              id: `rt-import-${Date.now()}-${order.headerKey}`,
+              customerId,
+              returnNo: nextReturnNo(),
+              orderNo: order.orderNo.trim(),
+              referenceNo: order.referenceNo,
+              trackingNo: order.trackingNo,
+              sellerStoreName: order.sellerStoreName,
+              sellerTaxNo: order.sellerTaxNo,
+              returnWarehouse: order.returnWarehouse,
+              expectedArrivalAt: order.expectedArrivalAt,
+              returnReason: order.returnReason,
+              returnDescription: order.returnDescription,
+              requestedProcess: order.requestedProcess,
+              status: 'draft',
+              statusLabel: '草稿',
+              createdAt: todayDateInput(),
+              lineItems: order.lineItems,
+              totalQty,
+              remark: order.remark,
+            })
+          }
+          setTab('draft')
+        },
+        {
+          successMessage: n => `已导入 ${n} 张退件预约单（草稿），请在列表中核对后提交`,
+          emptyMessage: '未解析到有效退件单，请使用最新模板',
+        },
+      )
     } catch (err) {
       notifyIfUserError(err, '导入失败')
     }

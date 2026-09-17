@@ -1252,6 +1252,7 @@ model AsyncIoJob {
   failedRows    Int?      @default(0) @map("failed_rows")
   status        String    @default("pending") @db.VarChar(20)
   errorMessage  String?   @map("error_message") @db.Text
+  resultDetail  String?   @map("result_detail") @db.Text
   operatorId    BigInt?   @map("operator_id")
   startedAt     DateTime? @map("started_at")
   finishedAt    DateTime? @map("finished_at")

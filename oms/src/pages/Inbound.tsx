@@ -10,6 +10,7 @@ import { addInboundOrder, nextInboundNo, submitInboundToErp } from '../data/inbo
 import { notifyIfUserError } from '../utils/userNotify'
 import { fileToAttachment, todayDateInput } from '../data/fileUtils'
 import { importCsvFile } from '../data/csvImportExport'
+import { reportLineImportResult } from '../utils/lineImportResult'
 import {
   INBOUND_LINE_COLUMNS,
   downloadInboundLineTemplate,
@@ -96,25 +97,18 @@ export default function Inbound() {
 
   const handleBatchUploadLines = async () => {
     try {
-      const { data, errors } = await importCsvFile(INBOUND_LINE_COLUMNS, parseInboundLines)
-      if (errors.length > 0) {
-        window.alert(`导入失败：\n${errors.slice(0, 8).join('\n')}${errors.length > 8 ? `\n…共 ${errors.length} 条` : ''}`)
-        return
-      }
-      if (data.length === 0) {
-        window.alert('未解析到有效明细，请使用最新模板')
-        return
-      }
-      setLines(prev => [...prev, ...data.map(row => ({
-        id: row.id,
-        sku: row.sku,
-        name: row.name,
-        qty: row.qty,
-        boxNo: row.boxNo,
-        packType: row.packType ?? '自带包装',
-        stockType: row.stockType ?? '以仓库为准',
-      }))])
-      window.alert(`已导入 ${data.length} 行入库明细`)
+      const result = await importCsvFile(INBOUND_LINE_COLUMNS, parseInboundLines)
+      await reportLineImportResult(result, () => {
+        setLines(prev => [...prev, ...result.data.map(row => ({
+          id: row.id,
+          sku: row.sku,
+          name: row.name,
+          qty: row.qty,
+          boxNo: row.boxNo,
+          packType: row.packType ?? '自带包装',
+          stockType: row.stockType ?? '以仓库为准',
+        }))])
+      })
     } catch (err) {
       notifyIfUserError(err, '导入失败')
     }

@@ -1,3 +1,6 @@
+import type { ImportRowFailure } from '../utils/importFailureDetail'
+import { failuresFromLegacyErrors, formatImportFailureLine } from '../utils/importFailureDetail'
+
 export interface CsvColumn {
   key: string
   header: string
@@ -195,11 +198,36 @@ function isHintRow(row: string[]): boolean {
   })
 }
 
+/** 映射到 Excel/CSV 物理行号（1-based），供解析层 failures.lineNo 使用 */
+export const CSV_SOURCE_LINE_KEY = '_sourceLineNo'
+
+export function sourceLineNoFromRecord(row: Record<string, string>, fallbackIdx: number): number {
+  const fromFile = Number(row[CSV_SOURCE_LINE_KEY])
+  if (Number.isFinite(fromFile) && fromFile > 0) return fromFile
+  return fallbackIdx + 1
+}
+
+function skuFromRecord(record: Record<string, string>): string | undefined {
+  const sku = record.sku?.trim() || record.internalSku?.trim()
+  return sku || undefined
+}
+
 export function mapCsvRows(
   rows: string[][],
   columns: CsvColumn[],
-): { records: Record<string, string>[]; errors: string[] } {
-  if (rows.length === 0) return { records: [], errors: ['文件为空'] }
+): { records: Record<string, string>[]; errors: string[]; failures: ImportRowFailure[] } {
+  const failures: ImportRowFailure[] = []
+  const pushFailure = (lineNo: number, reason: string, record?: Record<string, string>) => {
+    const sku = record ? skuFromRecord(record) : undefined
+    const row: ImportRowFailure = { lineNo, reason, ...(sku ? { sku } : {}) }
+    failures.push(row)
+  }
+
+  if (rows.length === 0) {
+    const reason = '文件为空'
+    failures.push({ lineNo: 0, reason })
+    return { records: [], errors: [reason], failures }
+  }
 
   const headerRow = rows[0]
   const headerMap = new Map<string, number>()
@@ -213,14 +241,15 @@ export function mapCsvRows(
       && !headerMap.has(normalizeHeader(c.header))
   })
   if (missing.length > 0) {
-    return { records: [], errors: [`缺少必填列：${missing.map(c => columnHeader(c)).join('、')}`] }
+    const reason = `缺少必填列：${missing.map(c => columnHeader(c)).join('、')}`
+    failures.push({ lineNo: 0, reason })
+    return { records: [], errors: [reason], failures }
   }
 
   let start = 1
   if (rows[1] && isHintRow(rows[1])) start = 2
 
   const records: Record<string, string>[] = []
-  const errors: string[] = []
 
   for (let i = start; i < rows.length; i += 1) {
     const row = rows[i]
@@ -235,16 +264,23 @@ export function mapCsvRows(
       record[col.key] = idx === undefined ? '' : String(row[idx] ?? '').trim()
     }
 
+    let rowInvalid = false
     for (const col of columns) {
       if (col.required && !record[col.key]) {
-        errors.push(`第 ${i + 1} 行：${columnHeader(col)} 不能为空`)
+        const reason = `${columnHeader(col)} 不能为空`
+        pushFailure(i + 1, reason, record)
+        rowInvalid = true
       }
     }
 
-    records.push(record)
+    if (!rowInvalid) {
+      record[CSV_SOURCE_LINE_KEY] = String(i + 1)
+      records.push(record)
+    }
   }
 
-  return { records, errors }
+  const errorLines = failures.map(formatImportFailureLine)
+  return { records, errors: errorLines, failures }
 }
 
 export function pickCsvFile(accept = '.csv,.xls,.xlsx,text/csv,application/vnd.ms-excel'): Promise<string> {
@@ -267,13 +303,23 @@ export function pickCsvFile(accept = '.csv,.xls,.xlsx,text/csv,application/vnd.m
   })
 }
 
+export type CsvParseResult<T> = { data: T[]; errors: string[]; failures?: ImportRowFailure[] }
+
 export async function importCsvFile<T>(
   columns: CsvColumn[],
-  parse: (records: Record<string, string>[]) => { data: T[]; errors: string[] },
-): Promise<{ data: T[]; errors: string[] }> {
+  parse: (records: Record<string, string>[]) => CsvParseResult<T>,
+): Promise<{ data: T[]; errors: string[]; failures: ImportRowFailure[] }> {
   const text = await pickCsvFile()
   const rows = parseCsv(text)
   const mapped = mapCsvRows(rows, columns)
-  if (mapped.errors.length > 0) return { data: [], errors: mapped.errors }
-  return parse(mapped.records)
+  if (mapped.records.length === 0 && mapped.failures.length > 0) {
+    return { data: [], errors: mapped.errors, failures: mapped.failures }
+  }
+  const parsed = parse(mapped.records)
+  const parseFailures = parsed.failures?.length
+    ? parsed.failures
+    : failuresFromLegacyErrors(parsed.errors)
+  const failures = [...mapped.failures, ...parseFailures]
+  const errors = failures.length ? failures.map(formatImportFailureLine) : parsed.errors
+  return { data: parsed.data, errors, failures }
 }

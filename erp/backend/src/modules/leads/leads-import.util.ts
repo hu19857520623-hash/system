@@ -21,6 +21,8 @@ function colIdx(header: string[], aliases: string[]) {
 }
 
 export interface ParsedLeadImportRow {
+  /** 表格行号（含表头，第 1 行为表头） */
+  lineNo: number
   leadNo?: string
   companyName: string
   contactName: string
@@ -53,6 +55,7 @@ export function parseLeadsImportCsv(content: string): ParsedLeadImportRow[] {
     const contactName = contactIdx >= 0 ? cols[contactIdx]?.trim() : ''
     if (!contactName) continue
     parsed.push({
+      lineNo: i + 1,
       leadNo: leadNoIdx >= 0 ? cols[leadNoIdx]?.trim() || undefined : undefined,
       companyName,
       contactName,

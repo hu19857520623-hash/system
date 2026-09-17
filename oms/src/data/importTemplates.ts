@@ -14,9 +14,35 @@ import type { ReturnLineItem } from './returnStore'
 import { RETURN_PROCESS_OPTIONS, RETURN_WAREHOUSE_OPTIONS } from './returnStore'
 import { getCustomerSkuDisplay } from './skuCode'
 import type { CsvColumn } from './csvImportExport'
-import { columnHeader, downloadCsv, downloadTemplate } from './csvImportExport'
+import { columnHeader, downloadCsv, downloadTemplate, sourceLineNoFromRecord } from './csvImportExport'
+import type { ImportRowFailure } from '../utils/importFailureDetail'
+import { failuresFromLegacyErrors, formatImportFailureLine } from '../utils/importFailureDetail'
 
-export type ParseResult<T> = { data: T[]; errors: string[] }
+export type ParseResult<T> = { data: T[]; errors: string[]; failures: ImportRowFailure[] }
+
+function pushParseFailure(
+  failures: ImportRowFailure[],
+  errors: string[],
+  lineNo: number,
+  reason: string,
+  sku?: string,
+) {
+  const row: ImportRowFailure = {
+    lineNo,
+    reason,
+    ...(sku?.trim() ? { sku: sku.trim() } : {}),
+  }
+  failures.push(row)
+  errors.push(formatImportFailureLine(row))
+}
+
+function finishParse<T>(data: T[], errors: string[], failures: ImportRowFailure[]): ParseResult<T> {
+  return {
+    data,
+    errors,
+    failures: failures.length ? failures : failuresFromLegacyErrors(errors),
+  }
+}
 
 // ─── 出库明细（与 Outbound.tsx 手动「增加」行一致） ───
 
@@ -38,17 +64,20 @@ export function downloadOutboundLineTemplate() {
 export function parseOutboundLines(records: Record<string, string>[]): ParseResult<OutboundLineItem & { id: string }> {
   const data: (OutboundLineItem & { id: string })[] = []
   const errors: string[] = []
+  const failures: ImportRowFailure[] = []
 
   records.forEach((row, idx) => {
+    const lineNo = sourceLineNoFromRecord(row, idx)
+    const sku = row.sku?.trim()
     const qty = Number(row.qty)
     if (!Number.isFinite(qty) || qty <= 0) {
-      errors.push(`第 ${idx + 1} 行：数量须大于 0`)
+      pushParseFailure(failures, errors, lineNo, '数量须大于 0', sku)
       return
     }
     const prod = findProductByCode(row.sku)
     const declaredValue = row.declaredValue ? Number(row.declaredValue) : (prod?.price ?? 0)
     if (row.declaredValue && !Number.isFinite(declaredValue)) {
-      errors.push(`第 ${idx + 1} 行：申报价值格式不正确`)
+      pushParseFailure(failures, errors, lineNo, '申报价值格式不正确', sku)
       return
     }
     data.push({
@@ -62,7 +91,7 @@ export function parseOutboundLines(records: Record<string, string>[]): ParseResu
     })
   })
 
-  return { data, errors }
+  return finishParse(data, errors, failures)
 }
 
 // ─── 入库明细（与 Inbound.tsx 手动「增加」行一致） ───
@@ -85,22 +114,25 @@ export function downloadInboundLineTemplate() {
 export function parseInboundLines(records: Record<string, string>[]): ParseResult<InboundLineItem & { id: string }> {
   const data: (InboundLineItem & { id: string })[] = []
   const errors: string[] = []
+  const failures: ImportRowFailure[] = []
 
   records.forEach((row, idx) => {
+    const lineNo = sourceLineNoFromRecord(row, idx)
+    const sku = row.sku?.trim()
     const qty = Number(row.qty)
     if (!Number.isFinite(qty) || qty <= 0) {
-      errors.push(`第 ${idx + 1} 行：数量须大于 0`)
+      pushParseFailure(failures, errors, lineNo, '数量须大于 0', sku)
       return
     }
     const prod = findProductByCode(row.sku)
     const packType = row.packType || '自带包装'
     if (!['自带包装', '仓库包装'].includes(packType)) {
-      errors.push(`第 ${idx + 1} 行：包装类型须为「自带包装」或「仓库包装」`)
+      pushParseFailure(failures, errors, lineNo, '包装类型须为「自带包装」或「仓库包装」', sku)
       return
     }
     const stockType = row.stockType || '以仓库为准'
     if (!['以仓库为准', '以箱为准'].includes(stockType)) {
-      errors.push(`第 ${idx + 1} 行：箱库存类型须为「以仓库为准」或「以箱为准」`)
+      pushParseFailure(failures, errors, lineNo, '箱库存类型须为「以仓库为准」或「以箱为准」', sku)
       return
     }
     data.push({
@@ -114,7 +146,7 @@ export function parseInboundLines(records: Record<string, string>[]): ParseResul
     })
   })
 
-  return { data, errors }
+  return finishParse(data, errors, failures)
 }
 
 // ─── 入库预约单批量导入（与 Inbound.tsx 表单头 + 明细一致） ───
@@ -164,20 +196,23 @@ export interface ParsedInboundImport {
 export function parseInboundOrders(records: Record<string, string>[]): ParseResult<ParsedInboundImport> {
   const groups = new Map<string, ParsedInboundImport>()
   const errors: string[] = []
+  const failures: ImportRowFailure[] = []
 
   records.forEach((row, idx) => {
+    const lineNo = sourceLineNoFromRecord(row, idx)
+    const sku = row.sku?.trim()
     if (!INBOUND_TYPES.includes(row.inboundType as InboundType)) {
-      errors.push(`第 ${idx + 1} 行：入库类型无效`)
+      pushParseFailure(failures, errors, lineNo, '入库类型无效', sku)
       return
     }
     const deliveryMethod = parseDeliveryMethod(row.delivery)
     if (!deliveryMethod) {
-      errors.push(`第 ${idx + 1} 行：交货方式须为「自送」或「揽收」`)
+      pushParseFailure(failures, errors, lineNo, '交货方式须为「自送」或「揽收」', sku)
       return
     }
     const qty = Number(row.qty)
     if (!Number.isFinite(qty) || qty <= 0) {
-      errors.push(`第 ${idx + 1} 行：数量须大于 0`)
+      pushParseFailure(failures, errors, lineNo, '数量须大于 0', sku)
       return
     }
 
@@ -218,7 +253,7 @@ export function parseInboundOrders(records: Record<string, string>[]): ParseResu
     })
   })
 
-  return { data: [...groups.values()], errors }
+  return finishParse([...groups.values()], errors, failures)
 }
 
 export function exportInboundOrders(orders: InboundOrder[]) {
@@ -289,23 +324,26 @@ export function parsePlatformBindings(
 ): ParseResult<ParsedPlatformBinding> {
   const groups = new Map<string, ParsedPlatformBinding>()
   const errors: string[] = []
+  const failures: ImportRowFailure[] = []
 
   records.forEach((row, idx) => {
+    const lineNo = sourceLineNoFromRecord(row, idx)
+    const internalSku = row.internalSku?.trim()
     const platform = row.platform as PlatformSkuMapping['platform']
     if (!['Takealot', 'Shopify', 'Manual'].includes(platform)) {
-      errors.push(`第 ${idx + 1} 行：平台名称无效`)
+      pushParseFailure(failures, errors, lineNo, '平台名称无效', internalSku)
       return
     }
     const store = stores.find(s => s.platform === platform && s.status !== 'disabled')
       || stores.find(s => s.platform === platform)
     const stockSource = parseStockSource(row.stockSource)
     if (!stockSource) {
-      errors.push(`第 ${idx + 1} 行：库存来源须为「自有库存」或「货盘库存」`)
+      pushParseFailure(failures, errors, lineNo, '库存来源须为「自有库存」或「货盘库存」', internalSku)
       return
     }
     const lineQty = Number(row.lineQty || '1')
     if (!Number.isFinite(lineQty) || lineQty <= 0) {
-      errors.push(`第 ${idx + 1} 行：仓库商品数量须大于 0`)
+      pushParseFailure(failures, errors, lineNo, '仓库商品数量须大于 0', internalSku)
       return
     }
 
@@ -334,7 +372,7 @@ export function parsePlatformBindings(
     }
   })
 
-  return { data: [...groups.values()], errors }
+  return finishParse([...groups.values()], errors, failures)
 }
 
 // ─── 产品导入（与 ProductForm 核心字段一致） ───
@@ -364,11 +402,13 @@ export function downloadProductTemplate() {
 export function parseProducts(records: Record<string, string>[], customerId?: string): ParseResult<Product> {
   const data: Product[] = []
   const errors: string[] = []
+  const failures: ImportRowFailure[] = []
 
   records.forEach((row, idx) => {
+    const lineNo = sourceLineNoFromRecord(row, idx)
     const customerSku = row.internalSku.trim()
     if (!customerSku) {
-      errors.push(`第 ${idx + 1} 行：产品SKU 不能为空`)
+      pushParseFailure(failures, errors, lineNo, '产品SKU 不能为空')
       return
     }
 
@@ -378,7 +418,7 @@ export function parseProducts(records: Record<string, string>[], customerId?: st
     const heightCm = Number(row.heightCm)
     const declaredValue = Number(row.declaredValue)
     if ([weightKg, lengthCm, widthCm, heightCm, declaredValue].some(v => !Number.isFinite(v) || v <= 0)) {
-      errors.push(`第 ${idx + 1} 行：申报价值与重量/尺寸须为大于 0 的数字`)
+      pushParseFailure(failures, errors, lineNo, '申报价值与重量/尺寸须为大于 0 的数字', customerSku)
       return
     }
 
@@ -415,7 +455,7 @@ export function parseProducts(records: Record<string, string>[], customerId?: st
     })
   })
 
-  return { data, errors }
+  return finishParse(data, errors, failures)
 }
 
 // ─── 退件明细（与 ReturnApply.tsx 手动「添加」行一致） ───
@@ -435,11 +475,14 @@ export function downloadReturnLineTemplate() {
 export function parseReturnLines(records: Record<string, string>[]): ParseResult<ReturnLineItem & { id: string }> {
   const data: (ReturnLineItem & { id: string })[] = []
   const errors: string[] = []
+  const failures: ImportRowFailure[] = []
 
   records.forEach((row, idx) => {
+    const lineNo = sourceLineNoFromRecord(row, idx)
+    const sku = row.sku?.trim()
     const qty = Number(row.qty)
     if (!Number.isFinite(qty) || qty <= 0) {
-      errors.push(`第 ${idx + 1} 行：数量须大于 0`)
+      pushParseFailure(failures, errors, lineNo, '数量须大于 0', sku)
       return
     }
     const prod = findProductByCode(row.sku)
@@ -451,7 +494,7 @@ export function parseReturnLines(records: Record<string, string>[]): ParseResult
     })
   })
 
-  return { data, errors }
+  return finishParse(data, errors, failures)
 }
 
 // ─── 退件预约单批量导入（与 ReturnApply.tsx 表单头 + 明细一致） ───
@@ -525,21 +568,24 @@ export function downloadReturnOrderTemplate() {
 export function parseReturnOrders(records: Record<string, string>[]): ParseResult<ParsedReturnImport> {
   const groups = new Map<string, ParsedReturnImport>()
   const errors: string[] = []
+  const failures: ImportRowFailure[] = []
 
   records.forEach((row, idx) => {
+    const lineNo = sourceLineNoFromRecord(row, idx)
+    const sku = row.sku?.trim()
     const returnWarehouse = parseReturnWarehouse(row.returnWarehouse)
     if (!returnWarehouse) {
-      errors.push(`第 ${idx + 1} 行：退件仓库须为 ${RETURN_WAREHOUSE_VALUES.join(' / ')}`)
+      pushParseFailure(failures, errors, lineNo, `退件仓库须为 ${RETURN_WAREHOUSE_VALUES.join(' / ')}`, sku)
       return
     }
     const requestedProcess = parseReturnProcess(row.requestedProcess)
     if (!requestedProcess) {
-      errors.push(`第 ${idx + 1} 行：处理方式无效（如：检查拍照、直接上架、换标上架、等问题）`)
+      pushParseFailure(failures, errors, lineNo, '处理方式无效（如：检查拍照、直接上架、换标上架、等问题）', sku)
       return
     }
     const qty = Number(row.qty)
     if (!Number.isFinite(qty) || qty <= 0) {
-      errors.push(`第 ${idx + 1} 行：数量须大于 0`)
+      pushParseFailure(failures, errors, lineNo, '数量须大于 0', sku)
       return
     }
 
@@ -583,7 +629,7 @@ export function parseReturnOrders(records: Record<string, string>[]): ParseResul
     })
   })
 
-  return { data: [...groups.values()], errors }
+  return finishParse([...groups.values()], errors, failures)
 }
 
 export function exportProducts(products: Product[]) {

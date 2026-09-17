@@ -5,6 +5,11 @@ import { FileStoreService } from '../../common/file-store.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
 import { parseLeadsImportCsv } from './leads-import.util'
 import {
+  type ImportRowFailure,
+  type ImportRowResult,
+  MAX_IMPORT_FAILURE_DETAILS,
+} from '../../common/import-row-result.util'
+import {
   canonicalizeFollowSales,
   followSalesMatchTokens,
   formatFollowSalesLabel,
@@ -661,23 +666,31 @@ export class LeadsService {
 
     let ok = 0
     let fail = 0
+    const failures: ImportRowFailure[] = []
+    const recordFail = (lineNo: number, reason: string, sku?: string) => {
+      fail++
+      if (failures.length < MAX_IMPORT_FAILURE_DETAILS) {
+        failures.push({ lineNo, reason, ...(sku?.trim() ? { sku: sku.trim() } : {}) })
+      }
+    }
+
     for (const row of parsed) {
       try {
         if (findIndexedLeadContactConflict(contactIndex, row.contactName, row.contactPhone)) {
-          fail++
+          recordFail(row.lineNo, '联系方式与客户名称组合已存在')
           continue
         }
         let assigneeId: bigint | undefined
         if (row.assigneeKey) {
           assigneeId = assigneeByKey.get(row.assigneeKey.toLowerCase())
           if (!assigneeId) {
-            fail++
+            recordFail(row.lineNo, `归属运营「${row.assigneeKey}」未找到`)
             continue
           }
         } else if (defaultAssigneeId) {
           assigneeId = BigInt(defaultAssigneeId)
         } else {
-          fail++
+          recordFail(row.lineNo, '未填写归属运营且无法使用当前用户作为默认归属')
           continue
         }
         await this.create(
@@ -695,11 +708,11 @@ export class LeadsService {
           contactIndex,
         )
         ok++
-      } catch {
-        fail++
+      } catch (e: any) {
+        recordFail(row.lineNo, e?.message || '写入失败')
       }
     }
-    return { imported: ok, failed: fail }
+    return { imported: ok, failed: fail, failures } satisfies ImportRowResult
   }
 
   private async assertLeadContactUnique(opts: {

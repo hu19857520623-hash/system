@@ -1,6 +1,7 @@
 import { ElMessage } from 'element-plus'
 import { asyncIoApi } from '@/api/client.js'
 import { normalizeImportFileText } from '@/utils/csv'
+import { showImportResultFeedback } from '@/utils/importResultFeedback.ts'
 
 export function triggerBlobDownload(blob: Blob, fileName: string) {
   const url = URL.createObjectURL(blob)
@@ -39,9 +40,7 @@ export function useAsyncIo() {
     try {
       const content = normalizeImportFileText(await f.text())
       const job = await asyncIoApi.import({ module, fileName: f.name, content })
-      const imported = job?.imported ?? job?.processedRows ?? 0
-      const failed = job?.failed ?? job?.failedRows ?? 0
-      ElMessage.success(`导入完成：成功 ${imported} 条${failed ? `，失败 ${failed} 条` : ''}`)
+      await showImportResultFeedback(job)
       return job
     } catch (e: any) {
       ElMessage.error(e.message || '导入失败')

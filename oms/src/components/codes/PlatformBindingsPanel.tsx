@@ -37,6 +37,7 @@ import {
   parsePlatformBindings,
 } from '../../data/importTemplates'
 import { ImportTemplateLegend } from '../ui/ImportTemplateLegend'
+import { reportLineImportResult } from '../../utils/lineImportResult'
 
 const STATUS_TABS: { id: PlatformBindingTab; label: string }[] = [
   { id: 'all', label: '全部' },
@@ -219,39 +220,36 @@ export default function PlatformBindingsPanel() {
 
   const handleImportBindings = async () => {
     try {
-      const { data, errors } = await importCsvFile(
+      const result = await importCsvFile(
         PLATFORM_BINDING_COLUMNS,
         records => parsePlatformBindings(records, stores),
       )
-      if (errors.length > 0) {
-        window.alert(`导入失败：\n${errors.slice(0, 8).join('\n')}${errors.length > 8 ? `\n…共 ${errors.length} 条` : ''}`)
-        return
-      }
-      if (data.length === 0) {
-        window.alert('未解析到有效绑定，请使用最新模板')
-        return
-      }
-
-      const imported: PlatformSkuMapping[] = data.map(row => ({
-        id: `pb-import-${Date.now()}-${row.platformBarcode}`,
-        platform: row.platform,
-        storeId: row.storeId,
-        storeName: row.storeName,
-        platformSkuId: undefined,
-        platformBarcode: row.platformBarcode,
-        platformTitle: row.platformTitle,
-        lines: row.lines,
-        status: row.lines.length ? 'active' : 'unmapped',
-        stockSource: row.stockSource,
-        syncSource: 'import',
-        version: 1,
-        hasInventory: false,
-        updatedAt: '2026-07-08',
-      }))
-
-      if (await persistList([...imported, ...list])) {
-        window.alert(`已导入 ${imported.length} 条平台绑定`)
-      }
+      await reportLineImportResult(
+        result,
+        async () => {
+          const imported: PlatformSkuMapping[] = result.data.map(row => ({
+            id: `pb-import-${Date.now()}-${row.platformBarcode}`,
+            platform: row.platform,
+            storeId: row.storeId,
+            storeName: row.storeName,
+            platformSkuId: undefined,
+            platformBarcode: row.platformBarcode,
+            platformTitle: row.platformTitle,
+            lines: row.lines,
+            status: row.lines.length ? 'active' : 'unmapped',
+            stockSource: row.stockSource,
+            syncSource: 'import',
+            version: 1,
+            hasInventory: false,
+            updatedAt: '2026-07-08',
+          }))
+          await persistList([...imported, ...list])
+        },
+        {
+          successMessage: n => `已导入 ${n} 条平台绑定`,
+          emptyMessage: '未解析到有效绑定，请使用最新模板',
+        },
+      )
     } catch (err) {
       notifyIfUserError(err, '导入失败')
     }

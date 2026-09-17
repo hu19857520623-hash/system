@@ -4,6 +4,7 @@ import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'elem
 import { operatingLedgerApi } from '@/api/client.js'
 import { useAppStore } from '@/stores/app'
 import { pickFile } from '@/composables/useAsyncIo'
+import { reportPartialImportResult, type ImportRowFailure } from '@/utils/importResultFeedback.ts'
 
 defineOptions({ name: 'OperatingLedgerView' })
 withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false })
@@ -200,16 +201,14 @@ async function importCsv() {
   try {
     const result = await operatingLedgerApi.importCsv({ fileName: file.name, content: await file.text() })
     const imported = Number(result.imported || 0)
-    const failed = Number(result.failed || 0)
-    if (failed) {
-      const details = (result.errors || []).slice(0, 20).map((error: any) => `第 ${error.line} 行：${error.message}`).join('\n')
-      await ElMessageBox.alert(`成功 ${imported} 条，失败 ${failed} 条。\n\n${details}${failed > 20 ? '\n……仅显示前 20 条' : ''}`, '导入结果', {
-        confirmButtonText: '知道了',
-        type: imported ? 'warning' : 'error',
-      })
-    } else {
-      ElMessage.success(`导入完成：成功 ${imported} 条`)
-    }
+    const failures: ImportRowFailure[] = (result.errors || []).map((error: { line?: number; message?: string }) => ({
+      lineNo: Number(error.line) || 0,
+      reason: String(error.message || '导入失败'),
+    }))
+    await reportPartialImportResult(imported, failures, undefined, {
+      moduleLabel: '经营收支导入',
+      csvFilename: '经营收支导入失败明细',
+    })
     await search()
   } catch (error: any) {
     ElMessage.error(error?.message || '导入失败')

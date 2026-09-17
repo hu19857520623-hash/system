@@ -23,6 +23,7 @@ import {
   validateInboundSkuImportRow,
 } from '@/constants/importTemplates.ts'
 import { normalizeImportFileText, parseCsvLine } from '@/utils/csv.ts'
+import { reportPartialImportResult, type ImportRowFailure } from '@/utils/importResultFeedback.ts'
 
 const DRAFT_KEY = 'erp-inbound-drafts' // legacy localStorage key — migrated to API
 
@@ -570,12 +571,12 @@ async function handleSkuImportFile(e: Event) {
   }
   let added = 0
   let updated = 0
-  const notFound: string[] = []
-  const invalid: string[] = []
+  const failures: ImportRowFailure[] = []
   for (let i = 1; i < lines.length; i++) {
     const cols = parseCsvLine(lines[i])
     const sku = cols[skuIdx]?.trim()
     if (!sku) continue
+    const lineNo = i + 1
     const qty = qtyIdx >= 0 ? Number(cols[qtyIdx]) || 0 : 0
     const remark = remarkIdx >= 0 ? cols[remarkIdx]?.trim() || '' : ''
     const dims = {
@@ -594,27 +595,25 @@ async function handleSkuImportFile(e: Event) {
       remark,
     })
     if (rowErr) {
-      invalid.push(`第 ${i + 1} 行：${rowErr}`)
+      failures.push({ lineNo, sku, reason: rowErr })
       continue
     }
     const built = buildLineFromSku(sku, qty, remark, dims)
-    if (!built) { notFound.push(sku); continue }
+    if (!built) {
+      failures.push({ lineNo, sku, reason: '未匹配到可发 SKU' })
+      continue
+    }
     const existIdx = createForm.value.lines.findIndex((l) => l.sku === sku)
     if (existIdx >= 0) { createForm.value.lines[existIdx] = built; updated++ }
     else { createForm.value.lines.push(built); added++ }
   }
-  if (!added && !updated) {
-    const hint = invalid[0] || (notFound.length ? `未匹配到可发 SKU：${notFound.slice(0, 5).join('、')}` : '未解析到有效数据')
-    ElMessage.warning(hint)
-    return
-  }
-  let msg = `已导入 ${added + updated} 条 SKU（新增 ${added}，更新 ${updated}）`
-  if (notFound.length) msg += `，${notFound.length} 条 SKU 不可发`
-  if (invalid.length) msg += `，${invalid.length} 行因必填项缺失已跳过`
-  ElMessage.success(msg)
-  if (invalid.length) {
-    ElMessage.warning(invalid.slice(0, 3).join('；') + (invalid.length > 3 ? '…' : ''))
-  }
+  const ok = added + updated
+  await reportPartialImportResult(ok, failures, undefined, {
+    emptyMessage: '未解析到有效数据，请先下载最新模板',
+    successMessage: (n) => `已读取 ${n} 行明细，请核对后提交`,
+    moduleLabel: '明细导入',
+    csvFilename: '入库明细导入失败明细',
+  })
 }
 
 watch(

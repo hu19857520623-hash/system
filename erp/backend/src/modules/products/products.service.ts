@@ -8,6 +8,11 @@ import { FileStoreService } from '../../common/file-store.service'
 import { OperationLogService } from '../operation-log/operation-log.service'
 import { operationActionLabel, operationModuleLabel } from '../operation-log/operation-log.constants'
 import { parseProductsImportCsv } from './products-import.util'
+import {
+  type ImportRowFailure,
+  type ImportRowResult,
+  MAX_IMPORT_FAILURE_DETAILS,
+} from '../../common/import-row-result.util'
 import { buildProductRemark } from '../../common/oms-sync-meta.util'
 import { buildInternalSku } from '../../common/sku-code.util'
 import { CosObjectUrlService } from '../../common/cos-object-url.service'
@@ -348,24 +353,41 @@ export class ProductsService {
 
     let ok = 0
     let fail = 0
+    const failures: ImportRowFailure[] = []
+    const recordFail = (lineNo: number, reason: string, sku?: string) => {
+      fail++
+      if (failures.length < MAX_IMPORT_FAILURE_DETAILS) {
+        failures.push({ lineNo, reason, ...(sku?.trim() ? { sku: sku.trim() } : {}) })
+      }
+    }
+
     for (const row of parsed) {
       try {
         let developerId: number | undefined
         if (row.developerKey) {
           const id = developerByKey.get(row.developerKey.toLowerCase())
-          if (!id) { fail++; continue }
+          if (!id) {
+            recordFail(row.lineNo, `开发人「${row.developerKey}」未找到`, row.sku)
+            continue
+          }
           developerId = Number(id)
         }
         let purchaserId: number | undefined
         if (row.purchaserKey) {
           const id = purchaserByKey.get(row.purchaserKey.toLowerCase())
-          if (!id) { fail++; continue }
+          if (!id) {
+            recordFail(row.lineNo, `采购员「${row.purchaserKey}」未找到`, row.sku)
+            continue
+          }
           purchaserId = Number(id)
         }
         let supplierId: number | undefined
         if (row.supplierKey) {
           const id = supplierByKey.get(row.supplierKey.toLowerCase())
-          if (!id) { fail++; continue }
+          if (!id) {
+            recordFail(row.lineNo, `供应商「${row.supplierKey}」未找到`, row.sku)
+            continue
+          }
           supplierId = Number(id)
         }
         await this.create({
@@ -385,11 +407,11 @@ export class ProductsService {
           status: row.status,
         }, operatorId)
         ok++
-      } catch {
-        fail++
+      } catch (e: any) {
+        recordFail(row.lineNo, e?.message || '写入失败', row.sku)
       }
     }
-    return { imported: ok, failed: fail }
+    return { imported: ok, failed: fail, failures } satisfies ImportRowResult
   }
 
   async create(data: any, operatorId?: number) {
