@@ -52,7 +52,6 @@ import {
   type TakealotLabelPdfResult,
 } from '../data/takealotLabelPdf'
 import { importCsvFile } from '../data/csvImportExport'
-import { reportLineImportResult } from '../utils/lineImportResult'
 import {
   OUTBOUND_LINE_COLUMNS,
   downloadOutboundLineTemplate,
@@ -1097,18 +1096,25 @@ export default function Outbound() {
 
   const handleBatchUploadLines = async () => {
     try {
-      const result = await importCsvFile(OUTBOUND_LINE_COLUMNS, parseOutboundLines)
-      await reportLineImportResult(result, () => {
-        setLines(prev => [...prev, ...result.data.map(row => ({
-          ...row,
-          sku: resolveLineSku(row.sku),
-          declaredName: row.declaredName ?? row.name,
-          declaredValue: row.declaredValue ?? 0,
-          note: row.note ?? '',
-          source: 'manual' as const,
-          needsRelabel: isTakealot,
-        }))])
-      })
+      const { data, errors } = await importCsvFile(OUTBOUND_LINE_COLUMNS, parseOutboundLines)
+      if (errors.length > 0) {
+        window.alert(`导入失败：\n${errors.slice(0, 8).join('\n')}${errors.length > 8 ? `\n…共 ${errors.length} 条` : ''}`)
+        return
+      }
+      if (data.length === 0) {
+        window.alert('未解析到有效明细，请使用最新模板')
+        return
+      }
+      setLines(prev => [...prev, ...data.map(row => ({
+        ...row,
+        sku: resolveLineSku(row.sku),
+        declaredName: row.declaredName ?? row.name,
+        declaredValue: row.declaredValue ?? 0,
+        note: row.note ?? '',
+        source: 'manual' as const,
+        needsRelabel: isTakealot,
+      }))])
+      window.alert(`已导入 ${data.length} 行出库明细`)
     } catch (err) {
       notifyIfUserError(err, '导入失败')
     }
