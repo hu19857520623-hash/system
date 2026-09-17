@@ -229,6 +229,11 @@ jobs:
           test -f "$needs_relabel_sql" || { echo "Missing $needs_relabel_sql"; exit 1; }
           cat "$needs_relabel_sql" | docker compose exec -T mysql mysql -uroot -p"$mysql_pw" --default-character-set=utf8mb4 --batch takealot_erp
 
+          echo '=== Apply async import result detail ==='
+          async_io_detail_sql="${PWD}/backend/prisma/scripts/migrate_async_io_result_detail.sql"
+          test -f "$async_io_detail_sql" || { echo "Missing $async_io_detail_sql"; exit 1; }
+          cat "$async_io_detail_sql" | docker compose exec -T mysql mysql -uroot -p"$mysql_pw" --default-character-set=utf8mb4 --batch takealot_erp
+
           echo '=== Build store-monitor ==='
           cd /opt/system/store-monitor
           docker build -t takealot/store-monitor:production . </dev/null
