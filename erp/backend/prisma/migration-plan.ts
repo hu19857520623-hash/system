@@ -67,6 +67,7 @@ export const MIGRATION_ORDER = [
   'migrate_inventory_lot_cost.sql',
   'migrate_freight_bill_container.sql',
   'migrate_outbound_item_needs_relabel.sql',
+  'migrate_async_io_result_detail.sql',
 ] as const
 
 /**
