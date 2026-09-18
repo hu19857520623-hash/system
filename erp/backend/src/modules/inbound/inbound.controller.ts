@@ -34,6 +34,12 @@ export class InboundController {
   }
 
   @OmsBridge()
+  @Post('oms/asn/:inboundNo/reactivate')
+  omsReactivateAsn(@Param('inboundNo') inboundNo: string, @Body() body: CreateOmsAsnDto) {
+    return this.service.reactivateAsnFromOms(inboundNo, body)
+  }
+
+  @OmsBridge()
   @Get('oms/by-customer/:customerCode')
   omsListByCustomer(@Param('customerCode') customerCode: string) {
     return this.service.listByOmsCustomer(customerCode)

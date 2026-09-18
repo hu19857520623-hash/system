@@ -1,6 +1,7 @@
 import type { OmsRole } from '../auth/permissions'
 import { getAccountsSnapshot } from '../auth/accountStore'
 import { getStoredAuthSession } from '../api/client'
+import { isErpPalletInbound } from './mockData'
 import { CATALOG_CUSTOMER_CODE, CATALOG_CUSTOMER_ID } from './skuCode'
 
 export { CATALOG_CUSTOMER_CODE, CATALOG_CUSTOMER_ID }
@@ -84,6 +85,22 @@ export function scopeOutboundForRole<T extends CustomerScoped & { source?: strin
     list = list.filter(o => o.source === 'catalog_dist')
   }
   return list
+}
+
+/** 入库单：客户账户不展示 ERP 货盘入库（货盘只在 ERP 入库） */
+export function scopeInboundForRole<T extends CustomerScoped & {
+  inboundType?: string
+  stockSource?: string
+  source?: string
+}>(
+  items: T[],
+  role: OmsRole,
+  customerFilter: string = 'all',
+  authenticatedCustomerId: string | null = getCustomerIdForRole(role),
+): T[] {
+  const list = scopeForRole(items, role, customerFilter, authenticatedCustomerId)
+  if (isSysAdmin(role)) return list
+  return list.filter(item => !isErpPalletInbound(item))
 }
 
 /** 按角色过滤数据：管理员看全部（可选按客户筛选），客户只看自己的 */

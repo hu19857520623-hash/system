@@ -268,6 +268,27 @@ export function cancelErpInbound(inboundNo: string, body: {
   return apiPost<ErpInboundOrder>(`/erp/inbound/${encodeURIComponent(inboundNo)}/cancel`, body)
 }
 
+export function reactivateErpInbound(inboundNo: string, body: {
+  inboundNo?: string
+  customerCode?: string
+  customerId?: string
+  warehouseCode?: string
+  trackingNo?: string
+  remark?: string
+  source?: string
+  inboundType?: string
+  deliveryMethod?: string
+  stockSource?: string
+  referenceNo?: string
+  eta?: string
+  contact?: string
+  contactPhone?: string
+  attachments?: { fileType?: string; fileName: string; contentBase64?: string; url?: string }[]
+  items: { sku: string; qty: number; productName?: string; boxNo?: number }[]
+}) {
+  return apiPost<ErpInboundOrder>(`/erp/inbound/${encodeURIComponent(inboundNo)}/reactivate`, body)
+}
+
 export function syncErpInbounds(customerCode: string) {
   return apiGet<{ items: ErpInboundOrder[]; total: number }>(
     `/erp/inbound/by-customer/${encodeURIComponent(customerCode)}`,

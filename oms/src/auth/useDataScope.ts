@@ -3,6 +3,7 @@ import { useRole } from './RoleContext'
 import {
   isSysAdmin,
   scopeForRole,
+  scopeInboundForRole,
   scopeOutboundForRole,
   scopeProducts,
   getCustomerCode,
@@ -27,6 +28,8 @@ export function useDataScope() {
     customerOptions: accounts.filter(a => a.status === 'active'),
     scope: <T extends { customerId?: string }>(items: T[]) =>
       scopeForRole(items, role, admin ? customerFilter : 'all', activeCustomerId),
+    scopeInbound: <T extends { customerId?: string; inboundType?: string; stockSource?: string; source?: string }>(items: T[]) =>
+      scopeInboundForRole(items, role, admin ? customerFilter : 'all', activeCustomerId),
     scopeOutbound: <T extends { customerId?: string; source?: string }>(items: T[]) =>
       scopeOutboundForRole(items, role, admin ? customerFilter : 'all', activeCustomerId),
     scopeProducts: <T extends {

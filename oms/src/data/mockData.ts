@@ -664,6 +664,32 @@ export const STOCK_SOURCE_LABELS: Record<StockSource, string> = {
   catalog: '货盘库存',
 }
 
+/** 客户 OMS 可预约的入库类型。货盘入库只在 ERP 做，不出现在客户账户。 */
+export const CUSTOMER_INBOUND_TYPES: InboundType[] = ['自发头程', '中转入库', '退货入库']
+
+export function sanitizeCustomerInboundType(type?: string | null): InboundType {
+  if (type === '中转入库' || type === '退货入库' || type === '自发头程') return type
+  return '自发头程'
+}
+
+export function isErpPalletInbound(order: {
+  inboundType?: string
+  stockSource?: string
+  source?: string
+}) {
+  const pallet = order.inboundType === '货盘入库' || order.stockSource === 'catalog'
+  if (!pallet) return false
+  return /ERP/i.test(String(order.source || ''))
+}
+
+export function customerInboundTypeLabel(type?: string | null) {
+  return sanitizeCustomerInboundType(type)
+}
+
+export function customerInboundStockLabel(_stockSource?: StockSource | string | null) {
+  return STOCK_SOURCE_LABELS.owned
+}
+
 /** 发货来源默认匹配的库存池（混合客户手工录入需手动选择） */
 export function stockSourceForShipment(source: ShipmentSource): StockSource | null {
   if (source === 'platform_order') return 'owned'

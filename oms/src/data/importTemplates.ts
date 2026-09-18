@@ -152,7 +152,7 @@ export function parseInboundLines(records: Record<string, string>[]): ParseResul
 // ─── 入库预约单批量导入（与 Inbound.tsx 表单头 + 明细一致） ───
 
 export const INBOUND_ORDER_COLUMNS: CsvColumn[] = [
-  { key: 'inboundType', header: '入库类型', required: true, hint: '自发头程 / 中转入库 / 退货入库 / 货盘入库' },
+  { key: 'inboundType', header: '入库类型', required: true, hint: '自发头程 / 中转入库 / 退货入库' },
   { key: 'delivery', header: '交货方式', required: true, hint: '自送 / 揽收' },
   { key: 'eta', header: '预计到达时间', required: false, hint: 'YYYY-MM-DD' },
   { key: 'trackingNo', header: '跟踪号/提单号', required: false },
@@ -166,7 +166,7 @@ export const INBOUND_ORDER_COLUMNS: CsvColumn[] = [
   { key: 'stockType', header: '箱库存类型', required: false, hint: '以仓库为准 / 以箱为准' },
 ]
 
-const INBOUND_TYPES: InboundType[] = ['自发头程', '中转入库', '退货入库', '货盘入库']
+const INBOUND_TYPES: InboundType[] = ['自发头程', '中转入库', '退货入库']
 
 function parseDeliveryMethod(value: string): DeliveryMethod | null {
   if (value === '自送' || value === 'self') return 'self'
@@ -264,7 +264,7 @@ export function exportInboundOrders(orders: InboundOrder[]) {
       : [{ sku: order.skuHint ?? '', name: '', qty: order.totalQty, boxNo: 1, packType: '自带包装', stockType: '以仓库为准' }]
     for (const line of lines) {
       rows.push([
-        order.inboundType,
+        order.inboundType === '货盘入库' ? '自发头程' : order.inboundType,
         order.deliveryMethod === 'pickup' ? '揽收' : '自送',
         order.eta ?? '',
         order.trackingNo ?? '',

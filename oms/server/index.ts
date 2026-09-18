@@ -47,6 +47,7 @@ import {
   createErpInboundAsn,
   updateErpInboundAsn,
   cancelErpInboundAsn,
+  reactivateErpInboundAsn,
   createErpOutbound,
   createErpProduct,
   createErpRecharge,
@@ -451,7 +452,7 @@ async function buildBootstrap(auth: AuthClaims) {
     products: customerProducts,
     inventory: all.inventory.filter(item => item.customerId === customerId),
     orders: all.orders.filter(item => item.customerId === customerId),
-    inboundOrders: customerInbound,
+    inboundOrders: customerInbound.filter(item => !isErpPalletInboundRecord(item)),
     outboundOrders: customerOutbound,
     returnOrders: all.returnOrders.filter(item => item.customerId === customerId),
     codeMappings: all.codeMappings.filter(item => customerProductSkus.has(item.internalSku)),
@@ -1508,6 +1509,10 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
       const inbound = data as unknown as ErpInboundOrder
       if (!inbound.inboundNo) return res.status(400).json({ error: '缺少 inboundNo' })
       const existing = await prisma.inboundOrder.findFirst({ where: { inboundNo: inbound.inboundNo } })
+      const palletInbound = inbound.inboundType === '货盘入库' || inbound.stockSource === 'catalog'
+      if (palletInbound && !existing) {
+        return res.json({ ok: true, type, skipped: 'pallet inbound is ERP-only' })
+      }
       const status = inbound.omsStatus || 'on_the_way'
       const totalQty = inbound.totalExpectedQty ?? 0
       const receivedQty = inbound.totalReceivedQty ?? 0
@@ -1526,9 +1531,9 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
         trackingNo: inbound.trackingNo ?? existing?.trackingNo,
         warehouse: toOmsWarehouseCode(inbound.warehouseCode, existing?.warehouse),
         source: inbound.source || existing?.source,
-        inboundType: inbound.inboundType || existing?.inboundType,
+        inboundType: sanitizeOmsInboundType(inbound.inboundType || existing?.inboundType),
         deliveryMethod: inbound.deliveryMethod || existing?.deliveryMethod,
-        stockSource: inbound.stockSource || existing?.stockSource,
+        stockSource: 'owned',
         referenceNo: inbound.referenceNo || existing?.referenceNo,
         eta: inbound.eta || existing?.eta,
         contact: inbound.contact || existing?.contact,
@@ -1550,9 +1555,9 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
             customerId: customerId ?? null,
             inboundNo: inbound.inboundNo,
             source: inbound.source || 'ERP回传',
-            inboundType: inbound.inboundType || '自发头程',
+            inboundType: sanitizeOmsInboundType(inbound.inboundType),
             deliveryMethod: inbound.deliveryMethod || 'self',
-            stockSource: inbound.stockSource || 'owned',
+            stockSource: 'owned',
             boxCount,
             skuCount: inbound.items?.length || 0,
             totalQty,
@@ -1862,6 +1867,21 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
   }
 })
 
+function sanitizeOmsInboundType(type?: string | null) {
+  if (type === '中转入库' || type === '退货入库' || type === '自发头程') return type
+  return '自发头程'
+}
+
+function isErpPalletInboundRecord(row: {
+  inboundType?: string | null
+  stockSource?: string | null
+  source?: string | null
+}) {
+  const pallet = row.inboundType === '货盘入库' || row.stockSource === 'catalog'
+  if (!pallet) return false
+  return /ERP/i.test(String(row.source || ''))
+}
+
 /** P1：预约入库 ASN */
 function mapOmsAsnRequest(body: {
   inboundNo?: string
@@ -1898,10 +1918,10 @@ function mapOmsAsnRequest(body: {
     warehouseCode: body.warehouseCode || 'WMS-JHB-01',
     trackingNo: body.trackingNo,
     remark: body.remark,
-    source: body.source,
-    inboundType: body.inboundType,
+    source: body.source || '客户自发',
+    inboundType: sanitizeOmsInboundType(body.inboundType),
     deliveryMethod: body.deliveryMethod,
-    stockSource: body.stockSource,
+    stockSource: 'owned',
     referenceNo: body.referenceNo,
     eta: body.eta,
     contact: body.contact,
@@ -1993,6 +2013,40 @@ app.post('/api/erp/inbound/:inboundNo/cancel', async (req, res) => {
     }
     if (!customerCode) return res.status(400).json({ error: '缺少 customerCode' })
     res.json(await cancelErpInboundAsn(inboundNo, customerCode))
+  } catch (e) {
+    sendErpError(res, e)
+  }
+})
+
+app.post('/api/erp/inbound/:inboundNo/reactivate', async (req, res) => {
+  try {
+    const inboundNo = String(req.params.inboundNo || '').trim()
+    if (!inboundNo) return res.status(400).json({ error: '缺少 inboundNo' })
+    const body = req.body as {
+      inboundNo?: string
+      customerCode?: string
+      customerId?: string
+      warehouseCode?: string
+      trackingNo?: string
+      remark?: string
+      source?: string
+      inboundType?: string
+      deliveryMethod?: string
+      stockSource?: string
+      referenceNo?: string
+      eta?: string
+      contact?: string
+      contactPhone?: string
+      items?: { sku: string; qty: number; productName?: string; boxNo?: number }[]
+      attachments?: { fileName: string; contentBase64?: string; fileType?: string; url?: string }[]
+    }
+    let customerCode = authenticatedCustomerCode(req, body.customerCode)
+    if (!customerCode && body.customerId) {
+      const account = await prisma.customerAccount.findUnique({ where: { id: String(body.customerId) } })
+      customerCode = account?.code?.trim() || ''
+    }
+    if (!customerCode) return res.status(400).json({ error: '缺少 customerCode' })
+    res.json(await reactivateErpInboundAsn(inboundNo, mapOmsAsnRequest({ ...body, inboundNo }, customerCode)))
   } catch (e) {
     sendErpError(res, e)
   }
@@ -3309,10 +3363,10 @@ app.put('/api/inbound-orders', async (req, res) => {
         const data = {
             customerId: scope ?? (o.customerId as string | null | undefined) ?? null,
             inboundNo: String(o.inboundNo),
-            source: String(o.source),
-            inboundType: String(o.inboundType),
+            source: String(o.source || '客户自发'),
+            inboundType: sanitizeOmsInboundType(String(o.inboundType)),
             deliveryMethod: String(o.deliveryMethod),
-            stockSource: String(o.stockSource),
+            stockSource: 'owned',
             boxCount: Number(o.boxCount),
             skuCount: Number(o.skuCount),
             totalQty: Number(o.totalQty),

@@ -1,27 +1,25 @@
 import { useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { Printer, RefreshCw } from 'lucide-react'
+import { RefreshCw } from 'lucide-react'
 import { TableActionLink, actionLinkClass } from '../components/outbound/PodReceiptModals'
 import {
   Badge, Button, Card, PageHeader, MonoCode, Tabs, Table, TableFooter, Select, StatCard,
 } from '../components/ui'
 import InboundDetailDrawer from '../components/inbound/InboundDetailDrawer'
-import { INBOUND_DOWNLOAD_ITEMS } from '../data/customerShipFlows'
-import { printInboundLabels, type InboundLabelKind } from '../data/inboundLabelPrint'
-import { printInboundReceivingList } from '../data/inboundReceivingListPrint'
-import { useProducts } from '../data/inventoryStore'
+import { InboundPrintLabelMenu } from '../components/inbound/InboundPrintLabelMenu'
 import {
   SearchField, FilterActions, DropdownBtn, inputCls, matchText, type SearchMode,
 } from '../components/ui/filters'
 import {
   InboundOrder, DELIVERY_METHOD_LABELS, STOCK_SOURCE_LABELS, statusLabels, warehouseFilterOptions, warehouseLabel,
+  CUSTOMER_INBOUND_TYPES, customerInboundTypeLabel, customerInboundStockLabel,
 } from '../data/mockData'
 import { useInboundOrders } from '../data/entityStore'
 import { useDataScope } from '../auth/useDataScope'
 import { AdminCustomerFilter, AdminCustomerCell } from '../components/admin/AdminCustomerFilter'
 import { useRole } from '../auth/RoleContext'
 import { getCustomerCode, getCustomerIdForRole } from '../data/dataScope'
-import { addInboundOrder, canEditInboundOrder, canVoidInboundOrder, nextInboundNo, refreshInboundsFromErp, voidInboundOrder } from '../data/inboundStore'
+import { addInboundOrder, canEditInboundOrder, canVoidInboundOrder, canReorderInboundOrder, nextInboundNo, refreshInboundsFromErp, voidInboundOrder } from '../data/inboundStore'
 import { importCsvFile } from '../data/csvImportExport'
 import {
   INBOUND_ORDER_COLUMNS,
@@ -31,7 +29,6 @@ import {
 } from '../data/importTemplates'
 import { ImportTemplateLegend } from '../components/ui/ImportTemplateLegend'
 import { todayDateInput } from '../data/fileUtils'
-import type { StockSource } from '../data/mockData'
 import { notifyIfUserError } from '../utils/userNotify'
 
 const statusTabs = [
@@ -73,10 +70,13 @@ function filterByTab(list: InboundOrder[], tab: string) {
   return list.filter(o => o.status === tab)
 }
 
-function applyInboundFilters(list: InboundOrder[], f: InboundFilters) {
+function applyInboundFilters(list: InboundOrder[], f: InboundFilters, forCustomer: boolean) {
   return list.filter(o => {
     if (f.warehouse !== 'all' && o.warehouse !== f.warehouse) return false
-    if (f.inboundType !== 'all' && o.inboundType !== f.inboundType) return false
+    if (f.inboundType !== 'all') {
+      const inboundType = forCustomer ? customerInboundTypeLabel(o.inboundType) : o.inboundType
+      if (inboundType !== f.inboundType) return false
+    }
     if (!matchText(o.inboundNo, f.inboundNo, f.inboundNoMode)) return false
     if (!matchText(o.referenceNo ?? '', f.referenceNo, f.referenceNoMode)) return false
     if (!matchText(o.skuHint ?? '', f.sku, f.skuMode)) return false
@@ -91,8 +91,7 @@ export default function InboundRecords() {
   const dataScope = useDataScope()
   const { role } = useRole()
   const inboundOrders = useInboundOrders()
-  const products = useProducts()
-  const scopedInbound = useMemo(() => dataScope.scope(inboundOrders), [dataScope, inboundOrders])
+  const scopedInbound = useMemo(() => dataScope.scopeInbound(inboundOrders), [dataScope, inboundOrders])
   const [searchParams] = useSearchParams()
   const initialTab = searchParams.get('tab') ?? 'all'
   const [tab, setTab] = useState(initialTab === 'submitted' ? 'on_the_way' : initialTab)
@@ -124,9 +123,9 @@ export default function InboundRecords() {
   const filtered = useMemo(() => {
     let list = scopedInbound
     list = filterByTab(list, tab)
-    list = applyInboundFilters(list, applied)
+    list = applyInboundFilters(list, applied, !dataScope.isAdmin)
     return list
-  }, [tab, applied, scopedInbound])
+  }, [tab, applied, scopedInbound, dataScope.isAdmin])
 
   const tabCounts = useMemo(() => ({
     all: scopedInbound.length,
@@ -156,7 +155,6 @@ export default function InboundRecords() {
       }
 
       const customerId = getCustomerIdForRole(role) ?? undefined
-      const stockSource: StockSource = role === 'catalog' ? 'catalog' : 'owned'
 
       for (const order of data) {
         const totalQty = order.lines.reduce((s, l) => s + l.qty, 0)
@@ -164,10 +162,10 @@ export default function InboundRecords() {
           id: `ib-import-${Date.now()}-${order.headerKey}`,
           customerId,
           inboundNo: nextInboundNo(getCustomerCode(customerId)),
-          source: role === 'catalog' ? '货盘' : '客户自发',
+          source: '客户自发',
           inboundType: order.inboundType,
           deliveryMethod: order.deliveryMethod,
-          stockSource,
+          stockSource: 'owned',
           boxCount: new Set(order.lines.map(l => l.boxNo)).size,
           skuCount: new Set(order.lines.map(l => l.sku)).size,
           totalQty,
@@ -220,7 +218,7 @@ export default function InboundRecords() {
   const confirmVoid = (orders: InboundOrder[]) => {
     const labels = orders.map(o => o.inboundNo).slice(0, 8).join('、')
     const more = orders.length > 8 ? ` 等 ${orders.length} 张` : ''
-    return window.confirm(`确认作废入库单 ${labels}${more}？作废后仓库不再收货，且不可再修改。`)
+    return window.confirm(`确认作废入库单 ${labels}${more}？作废后仓库不再收货，可在详情中确认后重新下单。`)
   }
 
   const handleVoidOrders = async (orders: InboundOrder[]) => {
@@ -279,7 +277,7 @@ export default function InboundRecords() {
         <StatCard label="在途" value={tabCounts.on_the_way} sub="货物发往海外仓" />
         <StatCard label="收货中" value={tabCounts.receiving} />
         <StatCard label="异常" value={tabCounts.exception} alert={tabCounts.exception > 0} />
-        <StatCard label="作废" value={tabCounts.voided} sub="已取消不再收货" />
+        <StatCard label="作废" value={tabCounts.voided} sub="已取消，可重新下单" />
       </div>
 
       <div className="mb-4 overflow-x-auto">
@@ -319,10 +317,7 @@ export default function InboundRecords() {
             </div>
             <Select label="入库类型" value={draft.inboundType} onChange={v => setDraftField('inboundType', v)} options={[
               { value: 'all', label: '全部' },
-              { value: '自发头程', label: '自发头程' },
-              { value: '中转入库', label: '中转入库' },
-              { value: '货盘入库', label: '货盘入库' },
-              { value: '退货入库', label: '退货入库' },
+              ...CUSTOMER_INBOUND_TYPES.map(type => ({ value: type, label: type })),
             ]} />
             <div>
               <label className="mb-1 block text-[11px] font-medium text-text-muted">创建日期从</label>
@@ -396,11 +391,11 @@ export default function InboundRecords() {
                 <td className="table-cell"><MonoCode>{o.inboundNo}</MonoCode></td>
                 <AdminCustomerCell customerId={o.customerId} scope={dataScope} />
                 <td className="table-cell text-xs">{warehouseLabel(o.warehouse)}</td>
-                <td className="table-cell text-xs">{o.inboundType}</td>
+                <td className="table-cell text-xs">{dataScope.isAdmin ? o.inboundType : customerInboundTypeLabel(o.inboundType)}</td>
                 <td className="table-cell text-xs">{DELIVERY_METHOD_LABELS[o.deliveryMethod]}</td>
                 <td className="table-cell">
-                  <span className={`text-[11px] font-semibold ${o.stockSource === 'owned' ? 'text-emerald-700' : 'text-violet-700'}`}>
-                    {STOCK_SOURCE_LABELS[o.stockSource]}
+                  <span className={`text-[11px] font-semibold ${!dataScope.isAdmin || o.stockSource === 'owned' ? 'text-emerald-700' : 'text-violet-700'}`}>
+                    {dataScope.isAdmin ? STOCK_SOURCE_LABELS[o.stockSource] : customerInboundStockLabel(o.stockSource)}
                   </span>
                 </td>
                 <td className="table-cell text-xs">{o.eta ?? '—'}</td>
@@ -413,23 +408,7 @@ export default function InboundRecords() {
                 <td className="table-cell align-top">
                   <div className="flex min-w-[72px] flex-col gap-0.5">
                     <TableActionLink onClick={() => setDetail(o)}>详情</TableActionLink>
-                    {!['draft', 'voided'].includes(o.status) && (
-                      <TableActionLink
-                        icon={<Printer className="h-3 w-3 shrink-0" />}
-                        onClick={() => { printInboundReceivingList(o, products) }}
-                      >
-                        入库清单
-                      </TableActionLink>
-                    )}
-                    {!['draft', 'voided'].includes(o.status) && INBOUND_DOWNLOAD_ITEMS.map(l => (
-                      <TableActionLink
-                        key={l}
-                        icon={<Printer className="h-3 w-3 shrink-0" />}
-                        onClick={() => { void printInboundLabels(o, l as InboundLabelKind) }}
-                      >
-                        {l === 'SKU 标签' ? 'SKU' : l}
-                      </TableActionLink>
-                    ))}
+                    <InboundPrintLabelMenu order={o} />
                     {canEditInboundOrder(o.status) && (
                       <Link to={`/inbound?edit=${encodeURIComponent(o.id)}`} className={actionLinkClass()}>
                         {o.status === 'draft' ? '编辑' : '修改'}
@@ -438,6 +417,11 @@ export default function InboundRecords() {
                     {canVoidInboundOrder(o.status) && (
                       <TableActionLink onClick={() => void handleVoidOrders([o])}>
                         作废
+                      </TableActionLink>
+                    )}
+                    {canReorderInboundOrder(o.status) && (
+                      <TableActionLink onClick={() => setDetail(o)}>
+                        重新下单
                       </TableActionLink>
                     )}
                   </div>
@@ -449,7 +433,11 @@ export default function InboundRecords() {
         <TableFooter total={filtered.length} />
       </Card>
 
-      <InboundDetailDrawer order={detail} onClose={() => setDetail(null)} onOrderChanged={() => setDetail(null)} />
+      <InboundDetailDrawer
+        order={detail}
+        onClose={() => setDetail(null)}
+        onOrderChanged={next => setDetail(next ?? null)}
+      />
     </div>
   )
 }

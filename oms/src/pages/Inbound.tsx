@@ -6,7 +6,7 @@ import { FormSection, FormGrid, FormField, formInput, formSelect, formTextarea }
 import { findProductByCode } from '../data/platformBindingUtils'
 import { useRole } from '../auth/RoleContext'
 import { getCustomerCode, getCustomerIdForRole } from '../data/dataScope'
-import { nextInboundNo, submitInboundToErp, updateInboundOnErp, canEditInboundOrder } from '../data/inboundStore'
+import { nextInboundNo, submitInboundToErp, updateInboundOnErp, reorderInboundOnErp, canEditInboundOrder, canReorderInboundOrder } from '../data/inboundStore'
 import { addInboundOrderOrThrow, updateInboundOrderOrThrow } from '../data/entityStore'
 import { notifyIfUserError } from '../utils/userNotify'
 import { fileToAttachment, todayDateInput } from '../data/fileUtils'
@@ -19,7 +19,8 @@ import {
 } from '../data/importTemplates'
 import { ImportTemplateLegend } from '../components/ui/ImportTemplateLegend'
 import SkuFuzzyPicker from '../components/ui/SkuFuzzyPicker'
-import type { DeliveryMethod, FileAttachment, InboundStatus, InboundType, StockSource } from '../data/mockData'
+import type { DeliveryMethod, FileAttachment, InboundStatus, InboundType } from '../data/mockData'
+import { CUSTOMER_INBOUND_TYPES, sanitizeCustomerInboundType } from '../data/mockData'
 import { useInboundOrders } from '../data/entityStore'
 
 const INBOUND_WAREHOUSE_ID = 'jhb1'
@@ -38,14 +39,18 @@ export default function Inbound() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const editId = searchParams.get('edit')
+  const reorderId = searchParams.get('reorder')
   const inboundOrders = useInboundOrders()
-  const targetOrder = editId ? inboundOrders.find(order => order.id === editId) : undefined
-  const editOrder = targetOrder && canEditInboundOrder(targetOrder.status) ? targetOrder : undefined
+  const targetOrder = (reorderId || editId)
+    ? inboundOrders.find(order => order.id === (reorderId || editId))
+    : undefined
+  const reordering = Boolean(targetOrder && reorderId && canReorderInboundOrder(targetOrder.status))
+  const editOrder = targetOrder && (reordering || canEditInboundOrder(targetOrder.status)) ? targetOrder : undefined
   const editingInTransit = editOrder?.status === 'on_the_way'
   const { role } = useRole()
   const [delivery, setDelivery] = useState<'self' | 'pickup'>('self')
   const [entryMode, setEntryMode] = useState<'sequential' | 'simple'>('sequential')
-  const [inboundType, setInboundType] = useState(role === 'catalog' ? '货盘入库' : '自发头程')
+  const [inboundType, setInboundType] = useState<InboundType>('自发头程')
   const [eta, setEta] = useState('')
   const [trackingNo, setTrackingNo] = useState('')
   const [referenceNo, setReferenceNo] = useState('')
@@ -68,7 +73,7 @@ export default function Inbound() {
     if (!editOrder || hydratedEditId.current === editOrder.id) return
     hydratedEditId.current = editOrder.id
     setDelivery(editOrder.deliveryMethod === 'pickup' ? 'pickup' : 'self')
-    setInboundType(editOrder.inboundType || (role === 'catalog' ? '货盘入库' : '自发头程'))
+    setInboundType(sanitizeCustomerInboundType(editOrder.inboundType))
     setEta(editOrder.eta || '')
     setTrackingNo(editOrder.trackingNo || '')
     setReferenceNo(editOrder.referenceNo || '')
@@ -83,14 +88,23 @@ export default function Inbound() {
       stockType: line.stockType || '以仓库为准',
     })))
     setAttachments(editOrder.attachments || [])
+    setConfirmWarehouseData(false)
   }, [editOrder, role])
 
   useEffect(() => {
-    if (!editId || inboundOrders.length === 0 || redirectedEdit.current) return
+    if ((!editId && !reorderId) || inboundOrders.length === 0 || redirectedEdit.current) return
     if (!targetOrder) {
       redirectedEdit.current = true
       window.alert('未找到该入库单')
       navigate('/inbound/records')
+      return
+    }
+    if (reorderId) {
+      if (!canReorderInboundOrder(targetOrder.status)) {
+        redirectedEdit.current = true
+        window.alert('仅已作废的入库单可重新下单')
+        navigate('/inbound/records')
+      }
       return
     }
     if (!canEditInboundOrder(targetOrder.status)) {
@@ -98,7 +112,7 @@ export default function Inbound() {
       window.alert('仅草稿或在途入库单可修改')
       navigate('/inbound/records')
     }
-  }, [editId, inboundOrders, navigate, targetOrder])
+  }, [editId, reorderId, inboundOrders, navigate, targetOrder])
 
   const addLine = () => {
     if (!skuInput || !qtyInput) return
@@ -147,6 +161,7 @@ export default function Inbound() {
 
   const handleSubmit = async (asDraft = false) => {
     if (editingInTransit && asDraft) return
+    if (reordering && asDraft) return
     if (!asDraft && !editingInTransit && !confirmWarehouseData) {
       window.alert('请先勾选「以仓库收货数据为准」后再提交')
       return
@@ -158,17 +173,16 @@ export default function Inbound() {
 
     const totalQty = lines.reduce((s, l) => s + l.qty, 0)
     const boxCount = new Set(lines.map(l => l.boxNo)).size
-    const stockSource: StockSource = role === 'catalog' ? 'catalog' : 'owned'
     const customerId = getCustomerIdForRole(role) ?? undefined
 
     const localOrder = {
       id: editOrder?.id || `ib-${Date.now()}`,
       customerId,
       inboundNo: editOrder?.inboundNo || nextInboundNo(getCustomerCode(customerId)),
-      source: role === 'catalog' ? '货盘' : '客户自发',
-      inboundType: inboundType as InboundType,
+      source: '客户自发',
+      inboundType: sanitizeCustomerInboundType(inboundType),
       deliveryMethod: delivery as DeliveryMethod,
-      stockSource,
+      stockSource: 'owned' as const,
       boxCount,
       skuCount: new Set(lines.map(l => l.sku)).size,
       totalQty,
@@ -196,6 +210,17 @@ export default function Inbound() {
 
     setSaving(true)
     try {
+      if (reordering) {
+        const erpResult = await reorderInboundOnErp({ ...localOrder, status: 'voided' })
+        if (!erpResult.ok) {
+          window.alert(`重新下单失败：${erpResult.error}`)
+          return
+        }
+        window.alert(`入库单 ${localOrder.inboundNo} 已重新下单，进入在途`)
+        goRecords()
+        return
+      }
+
       if (editingInTransit) {
         const erpResult = await updateInboundOnErp(localOrder)
         if (!erpResult.ok) {
@@ -225,7 +250,7 @@ export default function Inbound() {
       setConfirmWarehouseData(false)
       goRecords()
     } catch (err) {
-      notifyIfUserError(err, asDraft ? '保存草稿失败' : editingInTransit ? '保存失败' : '提交失败')
+      notifyIfUserError(err, asDraft ? '保存草稿失败' : reordering ? '重新下单失败' : editingInTransit ? '保存失败' : '提交失败')
     } finally {
       setSaving(false)
     }
@@ -236,12 +261,12 @@ export default function Inbound() {
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-text-primary">
-            {editingInTransit ? '修改入库单' : editOrder ? '编辑草稿' : '预约入库'}
+            {reordering ? '重新下单' : editingInTransit ? '修改入库单' : editOrder ? '编辑草稿' : '预约入库'}
           </h1>
           {editOrder && (
             <p className="mt-1 text-xs text-text-muted">
               {editOrder.inboundNo}
-              {editingInTransit ? ' · 在途状态可修改后保存' : ''}
+              {reordering ? ' · 请确认入库单内容后提交，提交后进入在途' : editingInTransit ? ' · 在途状态可修改后保存' : ''}
             </p>
           )}
         </div>
@@ -259,11 +284,10 @@ export default function Inbound() {
               </select>
             </FormField>
             <FormField label="入库类型" required>
-              <select className={formSelect()} value={inboundType} onChange={e => setInboundType(e.target.value)}>
-                {role !== 'catalog' && <option value="自发头程">自发头程</option>}
-                {role !== 'catalog' && <option value="中转入库">中转入库</option>}
-                {role !== 'catalog' && <option value="退货入库">退货入库</option>}
-                {(role === 'catalog' || role === 'hybrid') && <option value="货盘入库">货盘入库</option>}
+              <select className={formSelect()} value={inboundType} onChange={e => setInboundType(sanitizeCustomerInboundType(e.target.value))}>
+                {CUSTOMER_INBOUND_TYPES.map(type => (
+                  <option key={type} value={type}>{type}</option>
+                ))}
               </select>
             </FormField>
             <FormField label="交货方式" required>
@@ -302,7 +326,7 @@ export default function Inbound() {
             {attachments.length > 0 && (
               <p className="pt-1 text-xs text-text-muted">已上传 {attachments.length} 个文件</p>
             )}
-            <FormField label="以仓库收货数据为准" required={!editingInTransit} hint={editingInTransit ? '在途修改无需再次确认' : '提交前必须确认此项'} className="mb-0">
+            <FormField label="以仓库收货数据为准" required={!editingInTransit} hint={editingInTransit ? '在途修改无需再次确认' : reordering ? '重新下单前必须确认此项' : '提交前必须确认此项'} className="mb-0">
               <label className="flex items-center gap-2 pt-1 text-sm text-text-primary">
                 <input
                   type="checkbox"
@@ -416,17 +440,23 @@ export default function Inbound() {
       <div className="fixed bottom-0 left-0 right-0 z-30 border-t border-border-light bg-white/95 px-6 py-4 backdrop-blur-sm lg:pl-[220px]">
         <div className="mx-auto flex max-w-[1280px] items-center justify-between gap-3">
           <p className="hidden text-xs text-text-muted sm:block">
-            {editingInTransit
-              ? '在途入库单可修改货品与物流信息，保存后同步仓库'
-              : confirmWarehouseData
-                ? '提交后进入「在途」，写入数据库 · 可在入库记录查看'
-                : '提交前请勾选「以仓库收货数据为准」'}
+            {reordering
+              ? (confirmWarehouseData ? '确认后提交，入库单将重新进入在途' : '请确认入库单内容，并勾选「以仓库收货数据为准」')
+              : editingInTransit
+                ? '在途入库单可修改货品与物流信息，保存后同步仓库'
+                : confirmWarehouseData
+                  ? '提交后进入「在途」，写入数据库 · 可在入库记录查看'
+                  : '提交前请勾选「以仓库收货数据为准」'}
           </p>
           <div className="flex gap-2">
             <Button variant="secondary" onClick={goRecords} disabled={saving}>取消</Button>
             {editingInTransit ? (
               <Button disabled={saving} onClick={() => void handleSubmit(false)}>
                 {saving ? '保存中…' : '保存修改'}
+              </Button>
+            ) : reordering ? (
+              <Button disabled={!confirmWarehouseData || saving} onClick={() => void handleSubmit(false)}>
+                {saving ? '提交中…' : '提交'}
               </Button>
             ) : (
               <>

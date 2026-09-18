@@ -2016,8 +2016,7 @@ export class InboundService {
     return { ...this.mapInboundForOms(fresh!), idempotent: false }
   }
 
-  /** OMS：在途入库单由客户修改明细，替换 SKU / 外箱后仍保持 pending_receipt */
-  async updateAsnFromOms(inboundNo: string, data: {
+  private omsAsnPayloadFields(data: {
     customerCode: string
     warehouseCode?: string
     trackingNo?: string
@@ -2033,6 +2032,30 @@ export class InboundService {
     items: { sku: string; qty: number; productName?: string; boxNo?: number }[]
     attachments?: { fileName: string; contentBase64: string; fileType?: string }[]
   }) {
+    return data
+  }
+
+  /** OMS：在途入库单由客户修改明细，替换 SKU / 外箱后仍保持 pending_receipt */
+  async updateAsnFromOms(
+    inboundNo: string,
+    data: Parameters<InboundService['omsAsnPayloadFields']>[0],
+  ) {
+    return this.saveOmsAsnRevision(inboundNo, data, 'update')
+  }
+
+  /** OMS：已作废入库单由客户确认后重新下单，回到 pending_receipt */
+  async reactivateAsnFromOms(
+    inboundNo: string,
+    data: Parameters<InboundService['omsAsnPayloadFields']>[0],
+  ) {
+    return this.saveOmsAsnRevision(inboundNo, data, 'reactivate')
+  }
+
+  private async saveOmsAsnRevision(
+    inboundNo: string,
+    data: Parameters<InboundService['omsAsnPayloadFields']>[0],
+    mode: 'update' | 'reactivate',
+  ) {
     const no = String(inboundNo || '').trim()
     if (!no) throw new BadRequestException('缺少入库单号')
     const customerCode = String(data.customerCode || '').trim()
@@ -2045,11 +2068,17 @@ export class InboundService {
     if (!existing || existing.omsCustomerCode !== customerCode) {
       throw new NotFoundException(`入库单 ${no} 不存在`)
     }
-    if (!PENDING_RECEIPT_STATUSES.has(existing.status)) {
+    if (mode === 'reactivate') {
+      if (existing.status !== 'cancelled') {
+        throw new BadRequestException('仅已作废的入库单可重新下单')
+      }
+    } else if (!PENDING_RECEIPT_STATUSES.has(existing.status)) {
       throw new BadRequestException('仅在途状态的入库单可由客户修改')
     }
     if (existing.items.some((item) => (item.actualQty ?? 0) > 0)) {
-      throw new BadRequestException('已开始收货的入库单不可由客户修改')
+      throw new BadRequestException(
+        mode === 'reactivate' ? '已开始收货的入库单不可重新下单' : '已开始收货的入库单不可由客户修改',
+      )
     }
 
     const warehouseCode = this.resolveWmsWarehouseCode(String(data.warehouseCode || existing.warehouseCode || 'WMS-JHB-01').trim())
@@ -2077,6 +2106,7 @@ export class InboundService {
           eta: data.eta?.trim() || null,
           contact: data.contact?.trim() || existing.contact,
           contactPhone: data.contactPhone?.trim() || existing.contactPhone,
+          ...(mode === 'reactivate' ? { status: 'pending_receipt' } : {}),
           items: {
             create: resolved.map((l) => ({
               productId: l.productId,
@@ -2108,7 +2138,7 @@ export class InboundService {
 
     await this.opLog.log({
       module: 'inbound',
-      action: 'oms_asn_update',
+      action: mode === 'reactivate' ? 'oms_asn_reactivate' : 'oms_asn_update',
       targetType: 'inbound_order',
       targetId: no,
       detail: { customerCode, warehouseCode, itemCount: resolved.length },

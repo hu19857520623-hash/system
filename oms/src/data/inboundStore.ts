@@ -1,4 +1,5 @@
 import type { DeliveryMethod, InboundOrder, InboundStatus, InboundType } from './mockData'
+import { isErpPalletInbound, sanitizeCustomerInboundType } from './mockData'
 import {
   addInboundOrder as pushInbound,
   getInboundOrdersSnapshot,
@@ -6,7 +7,7 @@ import {
   upsertInboundOrder,
   upsertInboundOrderOrThrow,
 } from './entityStore'
-import { createErpInbound, updateErpInbound, cancelErpInbound, syncErpInbounds, type ErpInboundOrder } from '../api/erp'
+import { createErpInbound, updateErpInbound, cancelErpInbound, reactivateErpInbound, syncErpInbounds, type ErpInboundOrder } from '../api/erp'
 import { getCustomerCode } from './dataScope'
 import { buildInboundNo, inboundNoPrefix, nextSeqFromNos } from './wmsDocNo'
 
@@ -18,6 +19,10 @@ export function canEditInboundOrder(status: InboundStatus) {
 
 export function canVoidInboundOrder(status: InboundStatus) {
   return status === 'draft' || status === 'on_the_way'
+}
+
+export function canReorderInboundOrder(status: InboundStatus) {
+  return status === 'voided'
 }
 
 export function nextInboundNo(customerCode?: string): string {
@@ -76,9 +81,9 @@ export function buildInboundOrderFromErp(erp: ErpInboundOrder, customerId?: stri
     customerId: customerId || existing?.customerId,
     inboundNo: erp.inboundNo,
     source: erp.source || existing?.source || '客户自发',
-    inboundType: (erp.inboundType as InboundType | null) || existing?.inboundType || '自发头程',
+    inboundType: sanitizeCustomerInboundType((erp.inboundType as InboundType | null) || existing?.inboundType),
     deliveryMethod: (erp.deliveryMethod as DeliveryMethod | null) || existing?.deliveryMethod || 'self',
-    stockSource: (erp.stockSource as InboundOrder['stockSource']) || existing?.stockSource || 'owned',
+    stockSource: 'owned',
     boxCount,
     skuCount: erp.items.length || new Set(lineItems.map(line => line.sku)).size,
     totalQty: erp.totalExpectedQty,
@@ -112,10 +117,10 @@ function erpAsnPayload(order: InboundOrder, customerCode: string) {
     warehouseCode: 'WMS-JHB-01',
     trackingNo: order.trackingNo,
     remark: order.remark,
-    source: order.source,
-    inboundType: order.inboundType,
+    source: order.source || '客户自发',
+    inboundType: sanitizeCustomerInboundType(order.inboundType),
     deliveryMethod: order.deliveryMethod,
-    stockSource: order.stockSource,
+    stockSource: 'owned',
     referenceNo: order.referenceNo,
     eta: order.eta,
     contact: order.contact,
@@ -209,11 +214,50 @@ export async function voidInboundOrder(order: InboundOrder): Promise<{ ok: true;
   return { ok: true, order: next }
 }
 
+function isNotFoundError(err: unknown) {
+  const status = err && typeof err === 'object' ? (err as { status?: number }).status : undefined
+  const message = err instanceof Error ? err.message : String(err)
+  return status === 404 || message.includes('不存在')
+}
+
+/** 作废单确认后重新下单：ERP 已取消则激活，否则按新 ASN 提交，进入在途 */
+export async function reorderInboundOnErp(order: InboundOrder): Promise<{ ok: true; order: InboundOrder } | { ok: false; error: string }> {
+  if (!canReorderInboundOrder(order.status)) {
+    return { ok: false, error: '仅已作废的入库单可重新下单' }
+  }
+  if (!order.lineItems?.length) {
+    return { ok: false, error: '请先确认入库货品后再提交' }
+  }
+  const customerCode = getCustomerCode(order.customerId)
+  if (!customerCode || customerCode === '—') {
+    return { ok: false, error: '当前角色未绑定客户编码，无法同步 ERP' }
+  }
+  const payload = erpAsnPayload(order, customerCode)
+  try {
+    let erp: ErpInboundOrder
+    try {
+      erp = await reactivateErpInbound(order.inboundNo, payload)
+    } catch (err) {
+      if (!isNotFoundError(err)) throw err
+      erp = await createErpInbound(payload)
+    }
+    const merged = {
+      ...mergeLocalInboundAfterErp(erp, order),
+      status: 'on_the_way' as InboundStatus,
+    }
+    await upsertInboundOrderOrThrow(merged)
+    return { ok: true, order: merged }
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
 export async function refreshInboundsFromErp(customerId: string): Promise<number> {
   const customerCode = getCustomerCode(customerId)
   if (!customerCode || customerCode === '—') return 0
   const data = await syncErpInbounds(customerCode)
   for (const item of data.items || []) {
+    if (isErpPalletInbound(item)) continue
     applyErpInboundToLocal(item, customerId)
   }
   return data.total
