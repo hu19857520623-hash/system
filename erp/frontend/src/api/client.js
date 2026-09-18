@@ -323,6 +323,7 @@ export const inboundApi = {
   uploadAttachment: (data) => api.post('/inbound/attachments', data),
   downloadSkuLabel: (id, sku) => downloadRequest(`/inbound/${id}/labels/sku${sku ? `?sku=${encodeURIComponent(sku)}` : ''}`),
   downloadOuterLabel: (id) => downloadRequest(`/inbound/${id}/labels/outer`),
+  downloadReceivingList: (id) => openHtmlPrint(`/inbound/${id}/receiving-list`),
   downloadOmsAttachment: (inboundId, attachmentId) =>
     downloadRequest(`/inbound/${inboundId}/attachments/${attachmentId}`),
 }

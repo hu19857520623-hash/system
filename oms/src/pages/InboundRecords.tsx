@@ -8,6 +8,8 @@ import {
 import InboundDetailDrawer from '../components/inbound/InboundDetailDrawer'
 import { INBOUND_DOWNLOAD_ITEMS } from '../data/customerShipFlows'
 import { printInboundLabels, type InboundLabelKind } from '../data/inboundLabelPrint'
+import { printInboundReceivingList } from '../data/inboundReceivingListPrint'
+import { useProducts } from '../data/inventoryStore'
 import {
   SearchField, FilterActions, DropdownBtn, inputCls, matchText, type SearchMode,
 } from '../components/ui/filters'
@@ -19,7 +21,7 @@ import { useDataScope } from '../auth/useDataScope'
 import { AdminCustomerFilter, AdminCustomerCell } from '../components/admin/AdminCustomerFilter'
 import { useRole } from '../auth/RoleContext'
 import { getCustomerCode, getCustomerIdForRole } from '../data/dataScope'
-import { addInboundOrder, nextInboundNo, refreshInboundsFromErp } from '../data/inboundStore'
+import { addInboundOrder, canEditInboundOrder, canVoidInboundOrder, nextInboundNo, refreshInboundsFromErp, voidInboundOrder } from '../data/inboundStore'
 import { importCsvFile } from '../data/csvImportExport'
 import {
   INBOUND_ORDER_COLUMNS,
@@ -40,6 +42,7 @@ const statusTabs = [
   { id: 'completed', label: '收货完成' },
   { id: 'shelved', label: '上架完成' },
   { id: 'exception', label: '异常' },
+  { id: 'voided', label: '作废' },
 ]
 
 interface InboundFilters {
@@ -88,6 +91,7 @@ export default function InboundRecords() {
   const dataScope = useDataScope()
   const { role } = useRole()
   const inboundOrders = useInboundOrders()
+  const products = useProducts()
   const scopedInbound = useMemo(() => dataScope.scope(inboundOrders), [dataScope, inboundOrders])
   const [searchParams] = useSearchParams()
   const initialTab = searchParams.get('tab') ?? 'all'
@@ -97,6 +101,8 @@ export default function InboundRecords() {
   const [applied, setApplied] = useState<InboundFilters>(defaultFilters)
   const [detail, setDetail] = useState<InboundOrder | null>(null)
   const [syncing, setSyncing] = useState(false)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [voiding, setVoiding] = useState(false)
 
   const syncFromErp = async () => {
     const customerId = getCustomerIdForRole(role)
@@ -130,6 +136,7 @@ export default function InboundRecords() {
     completed: scopedInbound.filter(o => ['partial', 'completed'].includes(o.status)).length,
     shelved: scopedInbound.filter(o => o.status === 'shelved').length,
     exception: scopedInbound.filter(o => o.status === 'exception').length,
+    voided: scopedInbound.filter(o => o.status === 'voided').length,
   }), [scopedInbound])
 
   const setDraftField = <K extends keyof InboundFilters>(key: K, value: InboundFilters[K]) => {
@@ -184,6 +191,66 @@ export default function InboundRecords() {
     }
   }
 
+  const allVisibleSelected = filtered.length > 0 && filtered.every(o => selected.has(o.id))
+  const selectedOrders = filtered.filter(o => selected.has(o.id))
+
+  const toggleAll = () => {
+    setSelected(prev => {
+      if (filtered.every(o => prev.has(o.id))) return new Set()
+      return new Set(filtered.map(o => o.id))
+    })
+  }
+
+  const toggleOne = (id: string) => {
+    setSelected(prev => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+
+  const handleExportSelected = () => {
+    if (selectedOrders.length === 0) {
+      window.alert('请先勾选要导出的入库单')
+      return
+    }
+    exportInboundOrders(selectedOrders)
+  }
+
+  const confirmVoid = (orders: InboundOrder[]) => {
+    const labels = orders.map(o => o.inboundNo).slice(0, 8).join('、')
+    const more = orders.length > 8 ? ` 等 ${orders.length} 张` : ''
+    return window.confirm(`确认作废入库单 ${labels}${more}？作废后仓库不再收货，且不可再修改。`)
+  }
+
+  const handleVoidOrders = async (orders: InboundOrder[]) => {
+    const targets = orders.filter(o => canVoidInboundOrder(o.status))
+    if (targets.length === 0) {
+      window.alert('选中的入库单均不可作废（仅草稿或在途可作废）')
+      return
+    }
+    if (!confirmVoid(targets)) return
+    setVoiding(true)
+    try {
+      for (const order of targets) {
+        const result = await voidInboundOrder(order)
+        if (!result.ok) {
+          window.alert(`作废 ${order.inboundNo} 失败：${result.error}`)
+          return
+        }
+      }
+      setSelected(prev => {
+        const next = new Set(prev)
+        for (const order of targets) next.delete(order.id)
+        return next
+      })
+      if (detail && targets.some(o => o.id === detail.id)) setDetail(null)
+      window.alert(targets.length === 1 ? `入库单 ${targets[0].inboundNo} 已作废` : `已作废 ${targets.length} 张入库单`)
+    } finally {
+      setVoiding(false)
+    }
+  }
+
   return (
     <div className="page-shell">
       <PageHeader
@@ -198,6 +265,7 @@ export default function InboundRecords() {
             <DropdownBtn label="导入/导出" items={[
               { label: '批量导入预约单', onClick: () => void handleBulkImport() },
               { label: '导出列表', onClick: () => exportInboundOrders(filtered) },
+              { label: '导出选中', onClick: handleExportSelected },
               { label: '下载导入模板', onClick: downloadInboundOrderTemplate },
             ]} />
           </div>
@@ -206,11 +274,12 @@ export default function InboundRecords() {
 
       <ImportTemplateLegend columns={INBOUND_ORDER_COLUMNS} />
 
-      <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-5">
         <StatCard label="草稿" value={tabCounts.draft} sub="未提交的预约单" />
         <StatCard label="在途" value={tabCounts.on_the_way} sub="货物发往海外仓" />
         <StatCard label="收货中" value={tabCounts.receiving} />
         <StatCard label="异常" value={tabCounts.exception} alert={tabCounts.exception > 0} />
+        <StatCard label="作废" value={tabCounts.voided} sub="已取消不再收货" />
       </div>
 
       <div className="mb-4 overflow-x-auto">
@@ -268,9 +337,34 @@ export default function InboundRecords() {
       </Card>
 
       <Card className="overflow-hidden">
+        {selectedOrders.length > 0 && (
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border-light bg-surface-muted/60 px-4 py-2.5">
+            <p className="text-xs text-text-secondary">已选 {selectedOrders.length} 张入库单</p>
+            <div className="flex gap-2">
+              <Button variant="secondary" size="sm" onClick={handleExportSelected}>导出选中</Button>
+              <Button
+                variant="danger-outline"
+                size="sm"
+                disabled={voiding || selectedOrders.every(o => !canVoidInboundOrder(o.status))}
+                onClick={() => void handleVoidOrders(selectedOrders)}
+              >
+                {voiding ? '作废中…' : '作废选中'}
+              </Button>
+            </div>
+          </div>
+        )}
         <Table>
           <thead className="table-head">
             <tr>
+              <th className="w-10">
+                <input
+                  type="checkbox"
+                  checked={allVisibleSelected}
+                  onChange={toggleAll}
+                  className="rounded border-border"
+                  aria-label="全选入库单"
+                />
+              </th>
               <th>预约单号</th>
               {dataScope.isAdmin && <th>客户代码</th>}
               <th>目的仓</th>
@@ -290,6 +384,15 @@ export default function InboundRecords() {
           <tbody className="table-body">
             {filtered.map(o => (
               <tr key={o.id} className="table-row">
+                <td className="table-cell">
+                  <input
+                    type="checkbox"
+                    checked={selected.has(o.id)}
+                    onChange={() => toggleOne(o.id)}
+                    className="rounded border-border"
+                    aria-label={`选择 ${o.inboundNo}`}
+                  />
+                </td>
                 <td className="table-cell"><MonoCode>{o.inboundNo}</MonoCode></td>
                 <AdminCustomerCell customerId={o.customerId} scope={dataScope} />
                 <td className="table-cell text-xs">{warehouseLabel(o.warehouse)}</td>
@@ -310,7 +413,15 @@ export default function InboundRecords() {
                 <td className="table-cell align-top">
                   <div className="flex min-w-[72px] flex-col gap-0.5">
                     <TableActionLink onClick={() => setDetail(o)}>详情</TableActionLink>
-                    {!['draft'].includes(o.status) && INBOUND_DOWNLOAD_ITEMS.map(l => (
+                    {!['draft', 'voided'].includes(o.status) && (
+                      <TableActionLink
+                        icon={<Printer className="h-3 w-3 shrink-0" />}
+                        onClick={() => { printInboundReceivingList(o, products) }}
+                      >
+                        入库清单
+                      </TableActionLink>
+                    )}
+                    {!['draft', 'voided'].includes(o.status) && INBOUND_DOWNLOAD_ITEMS.map(l => (
                       <TableActionLink
                         key={l}
                         icon={<Printer className="h-3 w-3 shrink-0" />}
@@ -319,10 +430,15 @@ export default function InboundRecords() {
                         {l === 'SKU 标签' ? 'SKU' : l}
                       </TableActionLink>
                     ))}
-                    {o.status === 'draft' && (
+                    {canEditInboundOrder(o.status) && (
                       <Link to={`/inbound?edit=${encodeURIComponent(o.id)}`} className={actionLinkClass()}>
-                        编辑
+                        {o.status === 'draft' ? '编辑' : '修改'}
                       </Link>
+                    )}
+                    {canVoidInboundOrder(o.status) && (
+                      <TableActionLink onClick={() => void handleVoidOrders([o])}>
+                        作废
+                      </TableActionLink>
                     )}
                   </div>
                 </td>

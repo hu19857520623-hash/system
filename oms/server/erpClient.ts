@@ -411,6 +411,36 @@ export function createErpInboundAsn(body: {
   })
 }
 
+export function updateErpInboundAsn(inboundNo: string, body: {
+  inboundNo?: string
+  customerCode: string
+  warehouseCode?: string
+  trackingNo?: string
+  remark?: string
+  source?: string
+  inboundType?: string
+  deliveryMethod?: string
+  stockSource?: string
+  referenceNo?: string
+  eta?: string
+  contact?: string
+  contactPhone?: string
+  items: { sku: string; qty: number; productName?: string; boxNo?: number }[]
+  attachments?: { fileName: string; contentBase64: string; fileType?: string }[]
+}) {
+  return erpRequest<ErpInboundOrder>(`/inbound/oms/asn/${encodeURIComponent(inboundNo)}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  })
+}
+
+export function cancelErpInboundAsn(inboundNo: string, customerCode: string) {
+  return erpRequest<ErpInboundOrder>(`/inbound/oms/asn/${encodeURIComponent(inboundNo)}/cancel`, {
+    method: 'POST',
+    body: JSON.stringify({ customerCode }),
+  })
+}
+
 export function fetchErpInboundsByCustomer(customerCode: string) {
   return erpRequest<{ items: ErpInboundOrder[]; total: number }>(
     `/inbound/oms/by-customer/${encodeURIComponent(customerCode)}`,

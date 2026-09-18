@@ -28,7 +28,7 @@ export const ECOMMERCE_SHIP_FLOW: ShipFlowStep[] = [
   { id: 'recharge', order: 2, title: '充值余额', desc: '账户充值后用于仓储、操作与物流费用扣款', route: '/billing/recharge', module: '平台与费用中心' },
   { id: 'product', order: 3, title: '创建商品信息', desc: '维护 SKU、申报信息、规格与绑码', route: '/products/new', module: '商品与编码中心' },
   { id: 'inbound-create', order: 4, title: '预约入库', desc: '填写入库预报单：目的仓、预计到货与货品明细', route: '/inbound', module: '仓储履约预约中心' },
-  { id: 'inbound-labels', order: 5, title: '打印箱唛与 SKU 标签', desc: '提交后在入库记录详情下载/打印标签，贴于外箱后发往海外仓', route: '/inbound/records', module: '仓储履约预约中心' },
+  { id: 'inbound-labels', order: 5, title: '打印入库清单、箱唛与 SKU 标签', desc: '提交后在入库记录下载入库清单（在途即可），并打印箱唛与 SKU 标签贴于外箱后发往海外仓', route: '/inbound/records', module: '仓储履约预约中心' },
   { id: 'inbound-receive', order: 6, title: '海外仓入库验收', desc: '在入库记录中跟踪在途、收货与上架进度', route: '/inbound/records', module: '仓储履约预约中心' },
   {
     id: 'takealot-prep', order: 7, title: 'Takealot 预约发货', desc: '在 Takealot 预约入仓时间，并下载外箱标、SKU 标签、清单、预约单',

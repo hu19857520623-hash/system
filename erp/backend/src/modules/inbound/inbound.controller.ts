@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Header, Param, ParseIntPipe, Post, Query, Res } from '@nestjs/common'
+import { Body, Controller, Delete, Get, Header, Param, ParseIntPipe, Post, Put, Query, Res } from '@nestjs/common'
 import type { Response } from 'express'
 import { InboundService } from './inbound.service'
 import { PaginationDto } from '../../common/dto/pagination.dto'
@@ -19,9 +19,37 @@ export class InboundController {
   }
 
   @OmsBridge()
+  @Put('oms/asn/:inboundNo')
+  omsUpdateAsn(@Param('inboundNo') inboundNo: string, @Body() body: CreateOmsAsnDto) {
+    return this.service.updateAsnFromOms(inboundNo, body)
+  }
+
+  @OmsBridge()
+  @Post('oms/asn/:inboundNo/cancel')
+  omsCancelAsn(
+    @Param('inboundNo') inboundNo: string,
+    @Body() body: { customerCode?: string },
+  ) {
+    return this.service.cancelAsnFromOms(inboundNo, { customerCode: String(body?.customerCode || '') })
+  }
+
+  @OmsBridge()
   @Get('oms/by-customer/:customerCode')
   omsListByCustomer(@Param('customerCode') customerCode: string) {
     return this.service.listByOmsCustomer(customerCode)
+  }
+
+  @OmsBridge()
+  @Get('oms/by-no/:inboundNo/receiving-list')
+  @Header('Content-Type', 'text/html;charset=utf-8')
+  async omsReceivingList(
+    @Param('inboundNo') inboundNo: string,
+    @Query('customerCode') customerCode: string,
+    @Res() res: Response,
+  ) {
+    const file = await this.service.getReceivingListForOms(inboundNo, customerCode)
+    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(file.fileName)}"`)
+    res.send(file.content)
   }
 
   @OmsBridge()
@@ -111,6 +139,22 @@ export class InboundController {
   async outerLabel(@Param('id', ParseIntPipe) id: number, @Res() res: Response) {
     const file = await this.service.getOuterLabel(id)
     res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(file.fileName)}"`)
+    res.send(file.content)
+  }
+
+  @RequireAnyPerm(
+    'create_inbound.view',
+    'inbound.view',
+    'inbound.arrival_scan',
+    'inbound.receive',
+    'inbound.qc',
+    'inbound.putaway',
+  )
+  @Get(':id/receiving-list')
+  @Header('Content-Type', 'text/html;charset=utf-8')
+  async receivingList(@Param('id', ParseIntPipe) id: number, @Res() res: Response) {
+    const file = await this.service.getReceivingList(id)
+    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(file.fileName)}"`)
     res.send(file.content)
   }
 

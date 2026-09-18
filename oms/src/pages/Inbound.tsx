@@ -6,7 +6,7 @@ import { FormSection, FormGrid, FormField, formInput, formSelect, formTextarea }
 import { findProductByCode } from '../data/platformBindingUtils'
 import { useRole } from '../auth/RoleContext'
 import { getCustomerCode, getCustomerIdForRole } from '../data/dataScope'
-import { nextInboundNo, submitInboundToErp } from '../data/inboundStore'
+import { nextInboundNo, submitInboundToErp, updateInboundOnErp, canEditInboundOrder } from '../data/inboundStore'
 import { addInboundOrderOrThrow, updateInboundOrderOrThrow } from '../data/entityStore'
 import { notifyIfUserError } from '../utils/userNotify'
 import { fileToAttachment, todayDateInput } from '../data/fileUtils'
@@ -39,7 +39,9 @@ export default function Inbound() {
   const [searchParams] = useSearchParams()
   const editId = searchParams.get('edit')
   const inboundOrders = useInboundOrders()
-  const editOrder = editId ? inboundOrders.find(order => order.id === editId && order.status === 'draft') : undefined
+  const targetOrder = editId ? inboundOrders.find(order => order.id === editId) : undefined
+  const editOrder = targetOrder && canEditInboundOrder(targetOrder.status) ? targetOrder : undefined
+  const editingInTransit = editOrder?.status === 'on_the_way'
   const { role } = useRole()
   const [delivery, setDelivery] = useState<'self' | 'pickup'>('self')
   const [entryMode, setEntryMode] = useState<'sequential' | 'simple'>('sequential')
@@ -60,6 +62,7 @@ export default function Inbound() {
   const [saving, setSaving] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const hydratedEditId = useRef<string | null>(null)
+  const redirectedEdit = useRef(false)
 
   useEffect(() => {
     if (!editOrder || hydratedEditId.current === editOrder.id) return
@@ -81,6 +84,21 @@ export default function Inbound() {
     })))
     setAttachments(editOrder.attachments || [])
   }, [editOrder, role])
+
+  useEffect(() => {
+    if (!editId || inboundOrders.length === 0 || redirectedEdit.current) return
+    if (!targetOrder) {
+      redirectedEdit.current = true
+      window.alert('未找到该入库单')
+      navigate('/inbound/records')
+      return
+    }
+    if (!canEditInboundOrder(targetOrder.status)) {
+      redirectedEdit.current = true
+      window.alert('仅草稿或在途入库单可修改')
+      navigate('/inbound/records')
+    }
+  }, [editId, inboundOrders, navigate, targetOrder])
 
   const addLine = () => {
     if (!skuInput || !qtyInput) return
@@ -128,7 +146,8 @@ export default function Inbound() {
   }
 
   const handleSubmit = async (asDraft = false) => {
-    if (!asDraft && !confirmWarehouseData) {
+    if (editingInTransit && asDraft) return
+    if (!asDraft && !editingInTransit && !confirmWarehouseData) {
       window.alert('请先勾选「以仓库收货数据为准」后再提交')
       return
     }
@@ -153,13 +172,15 @@ export default function Inbound() {
       boxCount,
       skuCount: new Set(lines.map(l => l.sku)).size,
       totalQty,
-      receivedQty: 0,
+      receivedQty: editingInTransit ? (editOrder?.receivedQty || 0) : 0,
       status: (asDraft ? 'draft' : 'on_the_way') as InboundStatus,
       createdAt: editOrder?.createdAt || todayDateInput(),
       eta: eta || undefined,
       warehouse: INBOUND_WAREHOUSE_ID,
       referenceNo: referenceNo.trim() || platformRef.trim() || undefined,
       trackingNo: trackingNo.trim() || undefined,
+      contact: editOrder?.contact,
+      contactPhone: editOrder?.contactPhone,
       skuHint: lines.map(l => l.sku).slice(0, 3).join(', '),
       remark: remark.trim() || undefined,
       lineItems: lines.map(l => ({
@@ -175,6 +196,17 @@ export default function Inbound() {
 
     setSaving(true)
     try {
+      if (editingInTransit) {
+        const erpResult = await updateInboundOnErp(localOrder)
+        if (!erpResult.ok) {
+          window.alert(`保存失败：${erpResult.error}`)
+          return
+        }
+        window.alert(`入库单 ${localOrder.inboundNo} 已保存`)
+        goRecords()
+        return
+      }
+
       if (editOrder) await updateInboundOrderOrThrow(editOrder.id, localOrder)
       else await addInboundOrderOrThrow(localOrder)
 
@@ -193,7 +225,7 @@ export default function Inbound() {
       setConfirmWarehouseData(false)
       goRecords()
     } catch (err) {
-      notifyIfUserError(err, asDraft ? '保存草稿失败' : '提交失败')
+      notifyIfUserError(err, asDraft ? '保存草稿失败' : editingInTransit ? '保存失败' : '提交失败')
     } finally {
       setSaving(false)
     }
@@ -203,7 +235,15 @@ export default function Inbound() {
     <div className="page-shell pb-24">
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-text-primary">预约入库</h1>
+          <h1 className="text-2xl font-semibold tracking-tight text-text-primary">
+            {editingInTransit ? '修改入库单' : editOrder ? '编辑草稿' : '预约入库'}
+          </h1>
+          {editOrder && (
+            <p className="mt-1 text-xs text-text-muted">
+              {editOrder.inboundNo}
+              {editingInTransit ? ' · 在途状态可修改后保存' : ''}
+            </p>
+          )}
         </div>
         <Link to="/inbound/records" className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-white px-3 py-2 text-xs font-medium text-text-secondary hover:bg-surface-muted">
           <ListOrdered className="h-3.5 w-3.5" /> 查看入库记录
@@ -262,11 +302,12 @@ export default function Inbound() {
             {attachments.length > 0 && (
               <p className="pt-1 text-xs text-text-muted">已上传 {attachments.length} 个文件</p>
             )}
-            <FormField label="以仓库收货数据为准" required hint="提交前必须确认此项" className="mb-0">
+            <FormField label="以仓库收货数据为准" required={!editingInTransit} hint={editingInTransit ? '在途修改无需再次确认' : '提交前必须确认此项'} className="mb-0">
               <label className="flex items-center gap-2 pt-1 text-sm text-text-primary">
                 <input
                   type="checkbox"
-                  checked={confirmWarehouseData}
+                  checked={editingInTransit || confirmWarehouseData}
+                  disabled={editingInTransit}
                   onChange={e => setConfirmWarehouseData(e.target.checked)}
                   className="rounded border-border text-primary-600"
                 />
@@ -375,18 +416,28 @@ export default function Inbound() {
       <div className="fixed bottom-0 left-0 right-0 z-30 border-t border-border-light bg-white/95 px-6 py-4 backdrop-blur-sm lg:pl-[220px]">
         <div className="mx-auto flex max-w-[1280px] items-center justify-between gap-3">
           <p className="hidden text-xs text-text-muted sm:block">
-            {confirmWarehouseData
-              ? '提交后进入「在途」，写入数据库 · 可在入库记录查看'
-              : '提交前请勾选「以仓库收货数据为准」'}
+            {editingInTransit
+              ? '在途入库单可修改货品与物流信息，保存后同步仓库'
+              : confirmWarehouseData
+                ? '提交后进入「在途」，写入数据库 · 可在入库记录查看'
+                : '提交前请勾选「以仓库收货数据为准」'}
           </p>
           <div className="flex gap-2">
             <Button variant="secondary" onClick={goRecords} disabled={saving}>取消</Button>
-            <Button variant="secondary" disabled={saving} onClick={() => void handleSubmit(true)}>
-              {saving ? '保存中…' : '保存草稿'}
-            </Button>
-            <Button disabled={!confirmWarehouseData || saving} onClick={() => void handleSubmit(false)}>
-              {saving ? '提交中…' : '提交'}
-            </Button>
+            {editingInTransit ? (
+              <Button disabled={saving} onClick={() => void handleSubmit(false)}>
+                {saving ? '保存中…' : '保存修改'}
+              </Button>
+            ) : (
+              <>
+                <Button variant="secondary" disabled={saving} onClick={() => void handleSubmit(true)}>
+                  {saving ? '保存中…' : '保存草稿'}
+                </Button>
+                <Button disabled={!confirmWarehouseData || saving} onClick={() => void handleSubmit(false)}>
+                  {saving ? '提交中…' : '提交'}
+                </Button>
+              </>
+            )}
           </div>
         </div>
       </div>

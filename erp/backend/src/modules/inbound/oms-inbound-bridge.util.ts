@@ -27,6 +27,7 @@ export function mapOmsInboundStatus(status: string) {
   if (s === 'partial') return { status: 'pending_putaway', displayStatus: 'pending_putaway' }
   if (s === 'shelved' || s === 'completed') return { status: 'completed', displayStatus: 'completed' }
   if (s === 'exception') return { status: 'exception', displayStatus: 'exception' }
+  if (s === 'voided' || s === 'cancelled') return { status: 'cancelled', displayStatus: 'cancelled' }
   return { status: s || 'pending_receipt', displayStatus: s || 'pending_receipt' }
 }
 
@@ -45,6 +46,8 @@ function omsStatusesForErpFilter(status?: string): string[] | null {
       return ['shelved', 'completed']
     case 'exception':
       return ['exception']
+    case 'cancelled':
+      return ['voided']
     default:
       return [status]
   }

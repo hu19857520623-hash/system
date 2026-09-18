@@ -850,6 +850,16 @@ async function downloadOuterLabel(row: any) {
   }
 }
 
+async function downloadReceivingList(row: any) {
+  const id = row._raw?.id
+  if (!id) return
+  try {
+    await inboundApi.downloadReceivingList(id)
+  } catch (e: any) {
+    ElMessage.error(e.message || '入库清单下载失败')
+  }
+}
+
 function editDraft(row: any) {
   editingDraftId.value = row.id
   createForm.value = JSON.parse(JSON.stringify(row._form))
@@ -1340,9 +1350,10 @@ async function handleAttachmentFile(e: Event) {
             <el-tag :type="row.tone === 'ok' ? 'success' : row.tone === 'err' ? 'danger' : row.tone === 'warn' ? 'warning' : 'info'" size="small">{{ row.statusLabel }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="180" fixed="right">
+        <el-table-column label="操作" width="240" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="detail(row)">详情</el-button>
+            <el-button link type="primary" size="small" @click="downloadReceivingList(row)">入库清单</el-button>
             <el-button link type="primary" size="small" @click="downloadLabel(row)">标签</el-button>
             <el-button link type="primary" size="small" @click="downloadOuterLabel(row)">外箱标</el-button>
           </template>
@@ -1350,7 +1361,7 @@ async function handleAttachmentFile(e: Event) {
       </el-table>
       <el-empty v-if="!loading && !filteredInbounds.length" description="暂无入库单，点击「新建入库单」开始创建" />
       <ListPagination v-model:page="inboundPage" v-model:page-size="inboundPageSize" :total="inboundTotal" />
-      <p class="text-muted footer-note">入库单创建后进入待收货；仓库在「到仓扫描」完成收货、清点与上架。可下载 SKU 标签与外箱标。</p>
+      <p class="text-muted footer-note">入库单创建后进入待收货（在途）；可下载入库清单供人工清点，仓库在「到仓扫描」完成收货、清点与上架。</p>
     </template>
   </el-card>
 </template>

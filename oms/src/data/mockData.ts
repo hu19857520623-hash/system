@@ -625,7 +625,7 @@ export function countOrdersByTab(tab: string, orderList: Order[] = orders): numb
 // ─── 原项目：商品 / 入库 / 发货出库 / 编码 ─────────────────────────
 
 export type LegacyOrderStatus = 'draft' | 'pending' | 'locked' | 'picking' | 'shipped' | 'delivered' | 'partial_delivered' | 'delivery_failed' | 'cancelled' | 'exception'
-export type InboundStatus = 'draft' | 'receiving' | 'partial' | 'completed' | 'exception' | 'on_the_way' | 'shelved'
+export type InboundStatus = 'draft' | 'receiving' | 'partial' | 'completed' | 'exception' | 'on_the_way' | 'shelved' | 'voided'
 export type OutboundType = 'dropship' | 'takealot' | 'transfer' | 'tfs'
 export type CodeStatus = 'active' | 'pending_review' | 'deprecated'
 /** 发货来源：平台订单驱动 / 货盘分销 / 手工创建 */
@@ -1304,6 +1304,7 @@ Object.assign(statusLabels, {
   partial_delivered: '部分签收', delivery_failed: '派送失败',
   draft: '草稿', receiving: '收货中', partial: '部分收货', completed: '收货完成', shelved: '上架完成',
   on_the_way: '在途',
+  voided: '作废',
   deprecated: '已停用', unpaid: '待支付', paid: '已支付', overdue: '已逾期',
   unmapped: '待绑定', barcode_mismatch: '条码不一致',
   inspecting: '质检中', received: '已收货', active: '生效中',
@@ -1327,6 +1328,7 @@ Object.assign(statusColors, {
   discarded: 'bg-slate-100 text-slate-500',
   reviewing: 'bg-amber-100 text-amber-800',
   cancelled: 'bg-slate-100 text-slate-500',
+  voided: 'bg-slate-100 text-slate-500',
   shelved: 'bg-emerald-100 text-emerald-800',
   on_the_way: 'bg-blue-100 text-blue-800',
 })

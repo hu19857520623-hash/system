@@ -6,11 +6,19 @@ import {
   upsertInboundOrder,
   upsertInboundOrderOrThrow,
 } from './entityStore'
-import { createErpInbound, syncErpInbounds, type ErpInboundOrder } from '../api/erp'
+import { createErpInbound, updateErpInbound, cancelErpInbound, syncErpInbounds, type ErpInboundOrder } from '../api/erp'
 import { getCustomerCode } from './dataScope'
 import { buildInboundNo, inboundNoPrefix, nextSeqFromNos } from './wmsDocNo'
 
 export { pushInbound as addInboundOrder, updateInboundOrder, upsertInboundOrder }
+
+export function canEditInboundOrder(status: InboundStatus) {
+  return status === 'draft' || status === 'on_the_way'
+}
+
+export function canVoidInboundOrder(status: InboundStatus) {
+  return status === 'draft' || status === 'on_the_way'
+}
 
 export function nextInboundNo(customerCode?: string): string {
   const prefix = inboundNoPrefix(customerCode)
@@ -19,7 +27,8 @@ export function nextInboundNo(customerCode?: string): string {
 }
 
 function mapErpInboundStatus(omsStatus: string): InboundStatus {
-  const allowed: InboundStatus[] = ['draft', 'receiving', 'partial', 'completed', 'exception', 'on_the_way', 'shelved']
+  if (omsStatus === 'cancelled') return 'voided'
+  const allowed: InboundStatus[] = ['draft', 'receiving', 'partial', 'completed', 'exception', 'on_the_way', 'shelved', 'voided']
   return (allowed.includes(omsStatus as InboundStatus) ? omsStatus : 'on_the_way') as InboundStatus
 }
 
@@ -95,6 +104,49 @@ export function applyErpInboundToLocal(erp: ErpInboundOrder, customerId?: string
   return order
 }
 
+function erpAsnPayload(order: InboundOrder, customerCode: string) {
+  return {
+    inboundNo: order.inboundNo,
+    customerCode,
+    customerId: order.customerId,
+    warehouseCode: 'WMS-JHB-01',
+    trackingNo: order.trackingNo,
+    remark: order.remark,
+    source: order.source,
+    inboundType: order.inboundType,
+    deliveryMethod: order.deliveryMethod,
+    stockSource: order.stockSource,
+    referenceNo: order.referenceNo,
+    eta: order.eta,
+    contact: order.contact,
+    contactPhone: order.contactPhone,
+    items: (order.lineItems || []).map(l => ({
+      sku: l.sku,
+      qty: l.qty,
+      productName: l.name,
+      boxNo: l.boxNo,
+    })),
+    attachments: (order.attachments || []).map(a => ({
+      fileType: a.kind || 'other',
+      fileName: a.fileName,
+      url: a.url,
+    })),
+  }
+}
+
+function mergeLocalInboundAfterErp(erp: ErpInboundOrder, local: InboundOrder): InboundOrder {
+  const merged = buildInboundOrderFromErp(erp, local.customerId)
+  return {
+    ...merged,
+    id: local.id || merged.id,
+    warehouse: local.warehouse || merged.warehouse,
+    lineItems: local.lineItems?.length ? local.lineItems : merged.lineItems,
+    attachments: local.attachments ?? merged.attachments,
+    remark: local.remark ?? merged.remark,
+    source: local.source || merged.source,
+  }
+}
+
 /** 提交非草稿入库时推送 ERP ASN，并回写本地状态 */
 export async function submitInboundToErp(order: InboundOrder): Promise<{ ok: true; order: InboundOrder } | { ok: false; error: string }> {
   const customerCode = getCustomerCode(order.customerId)
@@ -102,39 +154,59 @@ export async function submitInboundToErp(order: InboundOrder): Promise<{ ok: tru
     return { ok: false, error: '当前角色未绑定客户编码，无法同步 ERP' }
   }
   try {
-    const erp = await createErpInbound({
-      inboundNo: order.inboundNo,
-      customerCode,
-      customerId: order.customerId,
-      warehouseCode: 'WMS-JHB-01',
-      trackingNo: order.trackingNo,
-      remark: order.remark,
-      source: order.source,
-      inboundType: order.inboundType,
-      deliveryMethod: order.deliveryMethod,
-      stockSource: order.stockSource,
-      referenceNo: order.referenceNo,
-      eta: order.eta,
-      contact: order.contact,
-      contactPhone: order.contactPhone,
-      items: (order.lineItems || []).map(l => ({
-        sku: l.sku,
-        qty: l.qty,
-        productName: l.name,
-        boxNo: l.boxNo,
-      })),
-      attachments: (order.attachments || []).map(a => ({
-        fileType: a.kind || 'other',
-        fileName: a.fileName,
-        url: a.url,
-      })),
-    })
-    const merged = buildInboundOrderFromErp(erp, order.customerId)
+    const erp = await createErpInbound(erpAsnPayload(order, customerCode))
+    const merged = mergeLocalInboundAfterErp(erp, order)
     await upsertInboundOrderOrThrow(merged)
     return { ok: true, order: merged }
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) }
   }
+}
+
+/** 在途入库单修改后同步 ERP，并回写本地状态 */
+export async function updateInboundOnErp(order: InboundOrder): Promise<{ ok: true; order: InboundOrder } | { ok: false; error: string }> {
+  const customerCode = getCustomerCode(order.customerId)
+  if (!customerCode || customerCode === '—') {
+    return { ok: false, error: '当前角色未绑定客户编码，无法同步 ERP' }
+  }
+  try {
+    const erp = await updateErpInbound(order.inboundNo, erpAsnPayload(order, customerCode))
+    const merged = mergeLocalInboundAfterErp(erp, order)
+    await upsertInboundOrderOrThrow(merged)
+    return { ok: true, order: merged }
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+/** 草稿本地作废；在途单同步 ERP 后不再收货 */
+export async function voidInboundOrder(order: InboundOrder): Promise<{ ok: true; order: InboundOrder } | { ok: false; error: string }> {
+  if (!canVoidInboundOrder(order.status)) {
+    return { ok: false, error: '仅草稿或在途入库单可作废' }
+  }
+  if (order.status === 'on_the_way') {
+    const customerCode = getCustomerCode(order.customerId)
+    if (!customerCode || customerCode === '—') {
+      return { ok: false, error: '当前角色未绑定客户编码，无法同步 ERP' }
+    }
+    try {
+      const erp = await cancelErpInbound(order.inboundNo, {
+        customerCode,
+        customerId: order.customerId,
+      })
+      const merged = {
+        ...mergeLocalInboundAfterErp(erp, order),
+        status: 'voided' as InboundStatus,
+      }
+      await upsertInboundOrderOrThrow(merged)
+      return { ok: true, order: merged }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  }
+  const next = { ...order, status: 'voided' as InboundStatus }
+  await upsertInboundOrderOrThrow(next)
+  return { ok: true, order: next }
 }
 
 export async function refreshInboundsFromErp(customerId: string): Promise<number> {

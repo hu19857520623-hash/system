@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { X, Download, Printer } from 'lucide-react'
 import { Badge, Button, MonoCode } from '../ui'
 import {
@@ -6,8 +7,11 @@ import {
 } from '../../data/mockData'
 import { INBOUND_DOWNLOAD_ITEMS } from '../../data/customerShipFlows'
 import { downloadInboundLabelHtml, printInboundLabels, type InboundLabelKind } from '../../data/inboundLabelPrint'
+import { downloadInboundReceivingList, printInboundReceivingList } from '../../data/inboundReceivingListPrint'
+import { useProducts } from '../../data/inventoryStore'
 import { getInboundOrdersSnapshot, setInboundOrders } from '../../data/entityStore'
 import { apiDelete } from '../../api/client'
+import { canEditInboundOrder, canVoidInboundOrder, voidInboundOrder } from '../../data/inboundStore'
 
 interface InboundDetailDrawerProps {
   order: InboundOrder | null
@@ -23,10 +27,13 @@ const TIMELINE: Record<string, string[]> = {
   completed: ['已提交预约', '收货完成'],
   shelved: ['已提交预约', '收货完成', '上架完成'],
   exception: ['已提交预约', '收货异常待处理'],
+  voided: ['已作废'],
 }
 
 export default function InboundDetailDrawer({ order, onClose, onOrderChanged }: InboundDetailDrawerProps) {
   const [feedback, setFeedback] = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
+  const [voiding, setVoiding] = useState(false)
+  const products = useProducts()
 
   if (!order) return null
 
@@ -41,6 +48,17 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged }: 
     const ok = await printInboundLabels(order, kind)
     if (ok) {
       showFeedback('ok', `已打开${kind}打印预览`)
+    }
+  }
+
+  const handleDownloadReceivingList = () => {
+    downloadInboundReceivingList(order, products)
+    showFeedback('ok', '已下载入库清单')
+  }
+
+  const handlePrintReceivingList = () => {
+    if (printInboundReceivingList(order, products)) {
+      showFeedback('ok', '已打开入库清单打印预览')
     }
   }
 
@@ -67,10 +85,28 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged }: 
     }
   }
 
+  const handleVoid = async () => {
+    if (!canVoidInboundOrder(order.status)) return
+    if (!window.confirm(`确认作废入库单 ${order.inboundNo}？作废后仓库不再收货，且不可再修改。`)) return
+    setVoiding(true)
+    try {
+      const result = await voidInboundOrder(order)
+      if (!result.ok) {
+        showFeedback('err', `作废失败：${result.error}`)
+        return
+      }
+      showFeedback('ok', '入库单已作废')
+      onOrderChanged?.()
+      window.setTimeout(onClose, 300)
+    } finally {
+      setVoiding(false)
+    }
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-slate-900/20 backdrop-blur-sm" onClick={onClose}>
       <div
-        className="flex h-full w-full max-w-lg flex-col bg-white shadow-2xl"
+        className="flex h-full w-full max-w-2xl flex-col bg-white shadow-2xl"
         onClick={e => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-border-light px-5 py-4">
@@ -117,6 +153,56 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged }: 
             ))}
           </div>
 
+          {order.remark ? (
+            <div>
+              <p className="mb-1 text-xs font-semibold text-text-secondary">备注</p>
+              <p className="whitespace-pre-wrap text-sm text-text-primary">{order.remark}</p>
+            </div>
+          ) : null}
+
+          <div>
+            <p className="mb-2 text-xs font-semibold text-text-secondary">货品明细</p>
+            {order.lineItems?.length ? (
+              <div className="overflow-hidden rounded-lg ring-1 ring-border-light">
+                <table className="w-full text-xs">
+                  <thead className="bg-surface-muted text-text-muted">
+                    <tr>
+                      <th className="px-2 py-1.5 text-left font-medium">箱号</th>
+                      <th className="px-2 py-1.5 text-left font-medium">SKU</th>
+                      <th className="px-2 py-1.5 text-left font-medium">产品</th>
+                      <th className="px-2 py-1.5 text-right font-medium">数量</th>
+                      <th className="px-2 py-1.5 text-left font-medium">包装</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {order.lineItems.map((line, index) => (
+                      <tr key={`${line.sku}-${line.boxNo}-${index}`} className="border-t border-border-light">
+                        <td className="px-2 py-1.5 text-text-secondary">{line.boxNo}</td>
+                        <td className="px-2 py-1.5"><MonoCode>{line.sku}</MonoCode></td>
+                        <td className="px-2 py-1.5 text-text-primary">{line.name}</td>
+                        <td className="px-2 py-1.5 text-right font-semibold text-text-primary">{line.qty}</td>
+                        <td className="px-2 py-1.5 text-text-secondary">{line.packType || '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="text-xs text-text-muted">{order.skuHint || '暂无明细'}</p>
+            )}
+          </div>
+
+          {order.attachments?.length ? (
+            <div>
+              <p className="mb-1 text-xs font-semibold text-text-secondary">附件</p>
+              <ul className="space-y-1 text-xs text-text-secondary">
+                {order.attachments.map((file, index) => (
+                  <li key={`${file.fileName}-${index}`}>{file.fileName}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
           <div>
             <p className="mb-2 text-xs font-semibold text-text-secondary">进度跟踪</p>
             <ul className="space-y-2">
@@ -131,9 +217,14 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged }: 
 
           {['on_the_way', 'draft'].includes(order.status) && (
             <div className="rounded-xl bg-amber-50 p-4 ring-1 ring-amber-100">
-              <p className="text-xs font-semibold text-amber-900">提交后请打印标签</p>
-              <p className="mt-1 text-[11px] text-amber-800">下载或打印箱唛与 SKU 标签贴于外箱，便于海外仓识别收货</p>
+              <p className="text-xs font-semibold text-amber-900">提交后请打印入库清单与标签</p>
+              <p className="mt-1 text-[11px] text-amber-800">在途即可下载入库清单做人工清点；箱唛与 SKU 标签贴于外箱，便于海外仓收货</p>
               <div className="mt-3 flex flex-wrap gap-2">
+                {order.status !== 'draft' && (
+                  <Button variant="secondary" size="sm" onClick={handlePrintReceivingList}>
+                    <Printer className="h-3 w-3" /> 打印入库清单
+                  </Button>
+                )}
                 {INBOUND_DOWNLOAD_ITEMS.map(l => (
                   <Button key={l} variant="secondary" size="sm" onClick={() => handlePrint(l as InboundLabelKind)}>
                     <Printer className="h-3 w-3" /> 打印{l}
@@ -145,11 +236,26 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged }: 
         </div>
 
         <div className="border-t border-border-light p-4 flex flex-wrap gap-2">
-          {INBOUND_DOWNLOAD_ITEMS.map(l => (
+          {canEditInboundOrder(order.status) && (
+            <Link to={`/inbound?edit=${encodeURIComponent(order.id)}`}>
+              <Button size="sm">{order.status === 'draft' ? '编辑' : '修改'}</Button>
+            </Link>
+          )}
+          {!['draft', 'voided'].includes(order.status) && (
+            <Button variant="secondary" size="sm" onClick={handleDownloadReceivingList}>
+              <Download className="h-3 w-3" />入库清单
+            </Button>
+          )}
+          {order.status !== 'voided' && INBOUND_DOWNLOAD_ITEMS.map(l => (
             <Button key={l} variant="secondary" size="sm" onClick={() => handleDownload(l as InboundLabelKind)}>
               <Download className="h-3 w-3" />{l}
             </Button>
           ))}
+          {canVoidInboundOrder(order.status) && (
+            <Button variant="danger-outline" size="sm" disabled={voiding} onClick={() => void handleVoid()}>
+              {voiding ? '作废中…' : '作废'}
+            </Button>
+          )}
           {order.status === 'draft' && (
             <Button variant="danger-outline" size="sm" className="ml-auto" onClick={() => void handleCancel()}>
               删除草稿

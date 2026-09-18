@@ -45,6 +45,8 @@ import { applyErpBillingChanged, openPreDeductTotal, type ErpBillingChangedPaylo
 import {
   ErpApiError,
   createErpInboundAsn,
+  updateErpInboundAsn,
+  cancelErpInboundAsn,
   createErpOutbound,
   createErpProduct,
   createErpRecharge,
@@ -1861,6 +1863,54 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
 })
 
 /** P1：预约入库 ASN */
+function mapOmsAsnRequest(body: {
+  inboundNo?: string
+  customerCode?: string
+  warehouseCode?: string
+  trackingNo?: string
+  remark?: string
+  source?: string
+  inboundType?: string
+  deliveryMethod?: string
+  stockSource?: string
+  referenceNo?: string
+  eta?: string
+  contact?: string
+  contactPhone?: string
+  items?: { sku: string; qty: number; productName?: string; boxNo?: number }[]
+  attachments?: { fileName: string; contentBase64?: string; fileType?: string; url?: string }[]
+}, customerCode: string) {
+  const attachments = (body.attachments || []).map(a => {
+    let contentBase64 = a.contentBase64
+    if (!contentBase64 && a.url?.startsWith('data:')) {
+      contentBase64 = a.url.split(',')[1] || ''
+    }
+    return {
+      fileType: a.fileType || 'other',
+      fileName: a.fileName,
+      contentBase64: contentBase64 || '',
+    }
+  }).filter(a => a.fileName && a.contentBase64)
+
+  return {
+    inboundNo: body.inboundNo,
+    customerCode,
+    warehouseCode: body.warehouseCode || 'WMS-JHB-01',
+    trackingNo: body.trackingNo,
+    remark: body.remark,
+    source: body.source,
+    inboundType: body.inboundType,
+    deliveryMethod: body.deliveryMethod,
+    stockSource: body.stockSource,
+    referenceNo: body.referenceNo,
+    eta: body.eta,
+    contact: body.contact,
+    contactPhone: body.contactPhone,
+    items: body.items || [],
+    attachments,
+  }
+}
+
 app.post('/api/erp/inbound', async (req, res) => {
   try {
     const body = req.body as {
@@ -1879,7 +1929,7 @@ app.post('/api/erp/inbound', async (req, res) => {
       contact?: string
       contactPhone?: string
       items?: { sku: string; qty: number; productName?: string; boxNo?: number }[]
-      attachments?: { fileName: string; contentBase64: string; fileType?: string; url?: string }[]
+      attachments?: { fileName: string; contentBase64?: string; fileType?: string; url?: string }[]
     }
     let customerCode = authenticatedCustomerCode(req, body.customerCode)
     if (!customerCode && body.customerId) {
@@ -1888,36 +1938,61 @@ app.post('/api/erp/inbound', async (req, res) => {
     }
     if (!customerCode) return res.status(400).json({ error: '缺少 customerCode' })
 
-    const attachments = (body.attachments || []).map(a => {
-      let contentBase64 = a.contentBase64
-      if (!contentBase64 && a.url?.startsWith('data:')) {
-        contentBase64 = a.url.split(',')[1] || ''
-      }
-      return {
-        fileType: a.fileType || 'other',
-        fileName: a.fileName,
-        contentBase64: contentBase64 || '',
-      }
-    }).filter(a => a.fileName && a.contentBase64)
-
-    const result = await createErpInboundAsn({
-      inboundNo: body.inboundNo,
-      customerCode,
-      warehouseCode: body.warehouseCode || 'WMS-JHB-01',
-      trackingNo: body.trackingNo,
-      remark: body.remark,
-      source: body.source,
-      inboundType: body.inboundType,
-      deliveryMethod: body.deliveryMethod,
-      stockSource: body.stockSource,
-      referenceNo: body.referenceNo,
-      eta: body.eta,
-      contact: body.contact,
-      contactPhone: body.contactPhone,
-      items: body.items || [],
-      attachments,
-    })
+    const result = await createErpInboundAsn(mapOmsAsnRequest(body, customerCode))
     res.json(result)
+  } catch (e) {
+    sendErpError(res, e)
+  }
+})
+
+app.put('/api/erp/inbound/:inboundNo', async (req, res) => {
+  try {
+    const inboundNo = String(req.params.inboundNo || '').trim()
+    if (!inboundNo) return res.status(400).json({ error: '缺少 inboundNo' })
+    const body = req.body as {
+      inboundNo?: string
+      customerCode?: string
+      customerId?: string
+      warehouseCode?: string
+      trackingNo?: string
+      remark?: string
+      source?: string
+      inboundType?: string
+      deliveryMethod?: string
+      stockSource?: string
+      referenceNo?: string
+      eta?: string
+      contact?: string
+      contactPhone?: string
+      items?: { sku: string; qty: number; productName?: string; boxNo?: number }[]
+      attachments?: { fileName: string; contentBase64?: string; fileType?: string; url?: string }[]
+    }
+    let customerCode = authenticatedCustomerCode(req, body.customerCode)
+    if (!customerCode && body.customerId) {
+      const account = await prisma.customerAccount.findUnique({ where: { id: String(body.customerId) } })
+      customerCode = account?.code?.trim() || ''
+    }
+    if (!customerCode) return res.status(400).json({ error: '缺少 customerCode' })
+
+    const result = await updateErpInboundAsn(inboundNo, mapOmsAsnRequest({ ...body, inboundNo }, customerCode))
+    res.json(result)
+  } catch (e) {
+    sendErpError(res, e)
+  }
+})
+
+app.post('/api/erp/inbound/:inboundNo/cancel', async (req, res) => {
+  try {
+    const inboundNo = String(req.params.inboundNo || '').trim()
+    if (!inboundNo) return res.status(400).json({ error: '缺少 inboundNo' })
+    const body = req.body as { customerCode?: string; customerId?: string }
+    let customerCode = authenticatedCustomerCode(req, body.customerCode)
+    if (!customerCode && body.customerId) {
+      const account = await prisma.customerAccount.findUnique({ where: { id: String(body.customerId) } })
+      customerCode = account?.code?.trim() || ''
+    }
+    if (!customerCode) return res.status(400).json({ error: '缺少 customerCode' })
+    res.json(await cancelErpInboundAsn(inboundNo, customerCode))
   } catch (e) {
     sendErpError(res, e)
   }

@@ -17,6 +17,12 @@ import { buildInternalSku, deriveCustomerCodeFromInternalSku } from '../../commo
 import { buildBoxLabelsPdfBuffer, buildInboundBoxLabelData } from '../../common/labels/box-label-pdf.util'
 import { InboundFeeService } from './inbound-fee.service'
 import {
+  buildInboundReceivingListHtml,
+  formatInboundListDateTime,
+  groupReceivingListSkus,
+  printInboundWarehouseCode,
+} from '@erp/shared/inbound-receiving-list'
+import {
   buildCartonCode,
   buildInboundNo,
   inboundNoFromScan,
@@ -45,7 +51,7 @@ const LEGACY_CONFIRM_STATUSES = new Set([
   'receiving',
 ])
 
-const TERMINAL_STATUSES = new Set(['completed', 'confirmed'])
+const TERMINAL_STATUSES = new Set(['completed', 'confirmed', 'cancelled'])
 
 function pieceQty(items: Array<{ actualQty?: number | null; expectedQty?: number; putawayQty?: number | null }>, field?: 'putawayQty') {
   return (items || []).reduce((sum, item) => {
@@ -249,6 +255,7 @@ export class InboundService {
       lengthCm: billing.lengthCm,
       widthCm: billing.widthCm,
       heightCm: billing.heightCm,
+      weightKg: prod?.weightKg != null ? Number(prod.weightKg) : null,
       dimensionsSource: billing.source === 'none' ? null : billing.source,
       barcode: scan.barcode,
       platformBarcode: scan.platformBarcode,
@@ -448,9 +455,13 @@ export class InboundService {
     tx: Pick<PrismaService, 'inboundCarton' | 'inboundCartonItem'>,
     order: { id: bigint; inboundNo: string; items: { id: bigint; productId: bigint; sku: string; expectedQty: number }[] },
     cartonsInput?: { boxCode?: string; boxSeq?: number; items: { sku: string; qty: number }[] }[],
+    options?: { replace?: boolean },
   ) {
     const existing = await tx.inboundCarton.count({ where: { inboundId: order.id } })
-    if (existing > 0) return
+    if (existing > 0) {
+      if (!options?.replace) return
+      await tx.inboundCarton.deleteMany({ where: { inboundId: order.id } })
+    }
 
     const itemBySku = new Map(order.items.map((i) => [String(i.sku).trim().toUpperCase(), i]))
     let cartonsDef = cartonsInput?.filter((c) => c.items?.length)
@@ -1574,6 +1585,75 @@ export class InboundService {
     return { fileName, content: pdf, mimeType: 'application/pdf' }
   }
 
+  async getReceivingList(id: number) {
+    const order = await this.detail(id)
+    return this.buildReceivingListFile(order)
+  }
+
+  async getReceivingListForOms(inboundNo: string, customerCode: string) {
+    const code = String(customerCode || '').trim()
+    if (!code) throw new BadRequestException('缺少客户编码')
+    const row = await this.prisma.inboundOrder.findUnique({ where: { inboundNo: inboundNo.trim() } })
+    if (!row || row.omsCustomerCode !== code) throw new NotFoundException('入库单不存在')
+    return this.getReceivingList(Number(row.id))
+  }
+
+  private async buildReceivingListFile(order: any) {
+    const skuList: string[] = (order.items || [])
+      .map((item: { sku?: string }) => String(item.sku || '').trim())
+      .filter((sku) => sku.length > 0)
+    const skus = [...new Set<string>(skuList)]
+    const firstArrival = new Set(skus)
+    if (order.omsCustomerCode && skus.length) {
+      const prior = await this.prisma.inboundOrderItem.findMany({
+        where: {
+          sku: { in: skus },
+          inboundId: { not: BigInt(order.id) },
+          order: {
+            omsCustomerCode: order.omsCustomerCode,
+            status: { in: ['completed', 'confirmed'] },
+          },
+        },
+        select: { sku: true },
+      })
+      for (const row of prior) firstArrival.delete(row.sku)
+    }
+    const warehouse = printInboundWarehouseCode(order.warehouseCode)
+    const remark = stripOmsSystemTags(order.remark) || ''
+    const html = buildInboundReceivingListHtml({
+      inboundNo: order.inboundNo,
+      createdAt: formatInboundListDateTime(order.createdAt),
+      shipWarehouse: printInboundWarehouseCode(order.sourceWarehouseCode || order.warehouseCode),
+      destWarehouse: warehouse,
+      customerCode: order.omsCustomerCode || '',
+      trackingNo: order.trackingNo || '',
+      referenceNo: order.referenceNo || '',
+      remark,
+      csRemark: remark,
+      printedAt: formatInboundListDateTime(new Date()),
+      skus: groupReceivingListSkus({
+        inboundNo: order.inboundNo,
+        items: (order.items || []).map((item: any) => ({
+          sku: item.sku,
+          name: item.productName,
+          expectedQty: item.expectedQty,
+          actualQty: item.actualQty,
+          firstArrival: firstArrival.has(item.sku),
+          weightKg: item.weightKg,
+          lengthCm: item.lengthCm,
+          widthCm: item.widthCm,
+          heightCm: item.heightCm,
+        })),
+        cartons: order.cartons,
+      }),
+    })
+    return {
+      fileName: `入库清单_${order.inboundNo}.html`,
+      content: Buffer.from(html, 'utf-8'),
+      mimeType: 'text/html;charset=utf-8',
+    }
+  }
+
   // ───────────── OMS P1：客户预约入库 ASN（不扣中转仓库存） ─────────────
 
   private mapInboundForOms(order: {
@@ -1660,6 +1740,8 @@ export class InboundService {
         return 'shelved'
       case 'exception':
         return 'exception'
+      case 'cancelled':
+        return 'voided'
       default:
         return displayStatus
     }
@@ -1760,6 +1842,79 @@ export class InboundService {
     return { id: created.id, sku: created.sku, productName: created.productName }
   }
 
+  private async resolveOmsAsnLines(
+    linesInput: { sku: string; qty: number; productName?: string; boxNo?: number }[] | undefined,
+    customerCode: string,
+  ) {
+    const lines = Array.isArray(linesInput) ? linesInput : []
+    if (!lines.length) throw new BadRequestException('请填写入库明细')
+    const resolved: { productId: bigint; sku: string; qty: number; productName: string; boxNo: number }[] = []
+    for (const line of lines) {
+      const sku = String(line.sku || '').trim()
+      const qty = Math.floor(Number(line.qty ?? 0))
+      if (!sku || qty <= 0) throw new BadRequestException('SKU 与入库数量无效')
+      const product = await this.ensureProductBySku(sku, line.productName, customerCode)
+      resolved.push({
+        productId: product.id,
+        sku: product.sku,
+        qty,
+        productName: product.productName,
+        boxNo: Number(line.boxNo) || resolved.length + 1,
+      })
+    }
+    return resolved
+  }
+
+  private buildOmsAsnRemark(data: {
+    remark?: string
+    source?: string
+    inboundType?: string
+    deliveryMethod?: string
+    stockSource?: string
+    referenceNo?: string
+    eta?: string
+    contact?: string
+    contactPhone?: string
+  }, customerCode: string) {
+    return buildInboundRemark({
+      customerCode,
+      userRemark: data.remark,
+      meta: {
+        source: data.source?.trim(),
+        inboundType: data.inboundType?.trim(),
+        deliveryMethod: data.deliveryMethod?.trim(),
+        stockSource: data.stockSource?.trim(),
+        referenceNo: data.referenceNo?.trim(),
+        eta: data.eta?.trim(),
+        contact: data.contact?.trim(),
+        contactPhone: data.contactPhone?.trim(),
+      },
+    })
+  }
+
+  private async saveOmsAsnAttachments(
+    inboundId: bigint,
+    attachments?: { fileName: string; contentBase64: string; fileType?: string }[],
+  ) {
+    if (!Array.isArray(attachments)) return
+    for (const att of attachments) {
+      if (!att.fileName?.trim() || !att.contentBase64) continue
+      const buf = Buffer.from(att.contentBase64, 'base64')
+      const { relativePath } = this.files.write(
+        'inbound-attachments',
+        `${Date.now()}_${att.fileName.trim()}`,
+        buf,
+      )
+      await this.prisma.$executeRawUnsafe(
+        'INSERT INTO inbound_attachment (inbound_id, draft_no, file_name, file_path) VALUES (?, ?, ?, ?)',
+        Number(inboundId),
+        null,
+        att.fileName.trim(),
+        relativePath,
+      )
+    }
+  }
+
   /** OMS：客户自发货预报入库（ASN），不扣中转仓库存 */
   async createAsnFromOms(data: {
     inboundNo?: string
@@ -1784,9 +1939,6 @@ export class InboundService {
     if (!customer) throw new NotFoundException(`客户代码 ${customerCode} 不存在`)
     if (customer.status !== 1) throw new BadRequestException('客户已停用')
 
-    const lines = Array.isArray(data.items) ? data.items : []
-    if (!lines.length) throw new BadRequestException('请填写入库明细')
-
     const warehouseCode = this.resolveWmsWarehouseCode(String(data.warehouseCode || 'WMS-JHB-01').trim())
     const wh = await this.prisma.warehouse.findUnique({ where: { warehouseCode } })
     if (!wh || wh.warehouseType !== 'wms') {
@@ -1803,35 +1955,8 @@ export class InboundService {
       return { ...this.mapInboundForOms(detail!), idempotent: true }
     }
 
-    const resolved: { productId: bigint; sku: string; qty: number; productName: string; boxNo: number }[] = []
-    for (const line of lines) {
-      const sku = String(line.sku || '').trim()
-      const qty = Math.floor(Number(line.qty ?? 0))
-      if (!sku || qty <= 0) throw new BadRequestException('SKU 与入库数量无效')
-      const product = await this.ensureProductBySku(sku, line.productName, customerCode)
-      resolved.push({
-        productId: product.id,
-        sku: product.sku,
-        qty,
-        productName: product.productName,
-        boxNo: Number(line.boxNo) || resolved.length + 1,
-      })
-    }
-
-    const remarkParts = buildInboundRemark({
-      customerCode,
-      userRemark: data.remark,
-      meta: {
-        source: data.source?.trim(),
-        inboundType: data.inboundType?.trim(),
-        deliveryMethod: data.deliveryMethod?.trim(),
-        stockSource: data.stockSource?.trim(),
-        referenceNo: data.referenceNo?.trim(),
-        eta: data.eta?.trim(),
-        contact: data.contact?.trim(),
-        contactPhone: data.contactPhone?.trim(),
-      },
-    })
+    const resolved = await this.resolveOmsAsnLines(data.items, customerCode)
+    const remarkParts = this.buildOmsAsnRemark(data, customerCode)
 
     const order = await this.prisma.inboundOrder.create({
       data: {
@@ -1874,24 +1999,7 @@ export class InboundService {
       })),
     )
 
-    if (Array.isArray(data.attachments)) {
-      for (const att of data.attachments) {
-        if (!att.fileName?.trim() || !att.contentBase64) continue
-        const buf = Buffer.from(att.contentBase64, 'base64')
-        const { relativePath } = this.files.write(
-          'inbound-attachments',
-          `${Date.now()}_${att.fileName.trim()}`,
-          buf,
-        )
-        await this.prisma.$executeRawUnsafe(
-          'INSERT INTO inbound_attachment (inbound_id, draft_no, file_name, file_path) VALUES (?, ?, ?, ?)',
-          Number(order.id),
-          null,
-          att.fileName.trim(),
-          relativePath,
-        )
-      }
-    }
+    await this.saveOmsAsnAttachments(order.id, data.attachments)
 
     await this.opLog.log({
       module: 'inbound',
@@ -1906,6 +2014,159 @@ export class InboundService {
       include: { items: true, cartons: { include: { items: true }, orderBy: { boxSeq: 'asc' } } },
     })
     return { ...this.mapInboundForOms(fresh!), idempotent: false }
+  }
+
+  /** OMS：在途入库单由客户修改明细，替换 SKU / 外箱后仍保持 pending_receipt */
+  async updateAsnFromOms(inboundNo: string, data: {
+    customerCode: string
+    warehouseCode?: string
+    trackingNo?: string
+    remark?: string
+    source?: string
+    inboundType?: string
+    deliveryMethod?: string
+    stockSource?: string
+    referenceNo?: string
+    eta?: string
+    contact?: string
+    contactPhone?: string
+    items: { sku: string; qty: number; productName?: string; boxNo?: number }[]
+    attachments?: { fileName: string; contentBase64: string; fileType?: string }[]
+  }) {
+    const no = String(inboundNo || '').trim()
+    if (!no) throw new BadRequestException('缺少入库单号')
+    const customerCode = String(data.customerCode || '').trim()
+    if (!customerCode) throw new BadRequestException('缺少客户编码 customerCode')
+
+    const existing = await this.prisma.inboundOrder.findUnique({
+      where: { inboundNo: no },
+      include: { items: true },
+    })
+    if (!existing || existing.omsCustomerCode !== customerCode) {
+      throw new NotFoundException(`入库单 ${no} 不存在`)
+    }
+    if (!PENDING_RECEIPT_STATUSES.has(existing.status)) {
+      throw new BadRequestException('仅在途状态的入库单可由客户修改')
+    }
+    if (existing.items.some((item) => (item.actualQty ?? 0) > 0)) {
+      throw new BadRequestException('已开始收货的入库单不可由客户修改')
+    }
+
+    const warehouseCode = this.resolveWmsWarehouseCode(String(data.warehouseCode || existing.warehouseCode || 'WMS-JHB-01').trim())
+    const wh = await this.prisma.warehouse.findUnique({ where: { warehouseCode } })
+    if (!wh || wh.warehouseType !== 'wms') {
+      throw new BadRequestException(`目的仓 ${warehouseCode} 必须是海外仓（wms）`)
+    }
+
+    const resolved = await this.resolveOmsAsnLines(data.items, customerCode)
+    const remarkParts = this.buildOmsAsnRemark(data, customerCode)
+
+    const order = await this.prisma.$transaction(async (tx) => {
+      await tx.inboundCarton.deleteMany({ where: { inboundId: existing.id } })
+      await tx.inboundOrderItem.deleteMany({ where: { inboundId: existing.id } })
+      const updated = await tx.inboundOrder.update({
+        where: { id: existing.id },
+        data: {
+          warehouseCode,
+          trackingNo: String(data.trackingNo || data.referenceNo || '').trim() || null,
+          remark: remarkParts,
+          inboundType: data.inboundType?.trim() || existing.inboundType,
+          deliveryMethod: data.deliveryMethod?.trim() || existing.deliveryMethod,
+          stockSource: data.stockSource?.trim() || existing.stockSource,
+          referenceNo: data.referenceNo?.trim() || null,
+          eta: data.eta?.trim() || null,
+          contact: data.contact?.trim() || existing.contact,
+          contactPhone: data.contactPhone?.trim() || existing.contactPhone,
+          items: {
+            create: resolved.map((l) => ({
+              productId: l.productId,
+              sku: l.sku,
+              expectedQty: l.qty,
+              remark: l.productName,
+            })),
+          },
+        },
+        include: { items: true },
+      })
+      await this.persistCartons(
+        tx as Pick<PrismaService, 'inboundCarton' | 'inboundCartonItem'>,
+        {
+          id: updated.id,
+          inboundNo: updated.inboundNo,
+          items: updated.items,
+        },
+        resolved.map((l) => ({
+          boxSeq: l.boxNo,
+          items: [{ sku: l.sku, qty: l.qty }],
+        })),
+        { replace: true },
+      )
+      return updated
+    })
+
+    await this.saveOmsAsnAttachments(order.id, data.attachments)
+
+    await this.opLog.log({
+      module: 'inbound',
+      action: 'oms_asn_update',
+      targetType: 'inbound_order',
+      targetId: no,
+      detail: { customerCode, warehouseCode, itemCount: resolved.length },
+    })
+
+    await this.pushInboundStatusToOms(no)
+
+    const fresh = await this.prisma.inboundOrder.findUnique({
+      where: { id: order.id },
+      include: { items: true, cartons: { include: { items: true }, orderBy: { boxSeq: 'asc' } } },
+    })
+    return this.mapInboundForOms(fresh!)
+  }
+
+  /** OMS：客户作废在途入库单，仓库不再收货 */
+  async cancelAsnFromOms(inboundNo: string, data: { customerCode: string }) {
+    const no = String(inboundNo || '').trim()
+    if (!no) throw new BadRequestException('缺少入库单号')
+    const customerCode = String(data.customerCode || '').trim()
+    if (!customerCode) throw new BadRequestException('缺少客户编码 customerCode')
+
+    const existing = await this.prisma.inboundOrder.findUnique({
+      where: { inboundNo: no },
+      include: { items: true, cartons: { include: { items: true }, orderBy: { boxSeq: 'asc' } } },
+    })
+    if (!existing || existing.omsCustomerCode !== customerCode) {
+      throw new NotFoundException(`入库单 ${no} 不存在`)
+    }
+    if (existing.status === 'cancelled') {
+      return this.mapInboundForOms(existing)
+    }
+    if (!PENDING_RECEIPT_STATUSES.has(existing.status)) {
+      throw new BadRequestException('仅在途状态的入库单可作废')
+    }
+    if (existing.items.some((item) => (item.actualQty ?? 0) > 0)) {
+      throw new BadRequestException('已开始收货的入库单不可作废')
+    }
+
+    await this.prisma.inboundOrder.update({
+      where: { id: existing.id },
+      data: { status: 'cancelled' },
+    })
+
+    await this.opLog.log({
+      module: 'inbound',
+      action: 'oms_asn_cancel',
+      targetType: 'inbound_order',
+      targetId: no,
+      detail: { customerCode },
+    })
+
+    await this.pushInboundStatusToOms(no)
+
+    const fresh = await this.prisma.inboundOrder.findUnique({
+      where: { id: existing.id },
+      include: { items: true, cartons: { include: { items: true }, orderBy: { boxSeq: 'asc' } } },
+    })
+    return this.mapInboundForOms(fresh!)
   }
 
   async listByOmsCustomer(customerCode: string) {

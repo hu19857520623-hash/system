@@ -26,7 +26,7 @@ function bound990Text(row: any): string {
 const app = useAppStore()
 const route = useRoute()
 
-type StatusFilter = 'all' | 'in_transit' | 'arrived' | 'receiving' | 'putaway' | 'completed' | 'exception'
+type StatusFilter = 'all' | 'in_transit' | 'arrived' | 'receiving' | 'putaway' | 'completed' | 'exception' | 'cancelled'
 
 const filter = ref<StatusFilter>('all')
 const searchQ = ref('')
@@ -44,6 +44,7 @@ const statusCounts = ref({
   putaway: 0,
   completed: 0,
   exception: 0,
+  cancelled: 0,
 })
 
 const STATUS_FILTER_QUERY: Record<Exclude<StatusFilter, 'all'>, string> = {
@@ -53,6 +54,7 @@ const STATUS_FILTER_QUERY: Record<Exclude<StatusFilter, 'all'>, string> = {
   putaway: 'pending_putaway',
   completed: 'completed',
   exception: 'exception',
+  cancelled: 'cancelled',
 }
 
 /** 从入库备注中剥离入仓号/到货日等系统元数据，得到客户填写备注 */
@@ -84,6 +86,7 @@ const filterTabs = computed(() => [
   { value: 'putaway' as const, label: '待上架', count: statusCounts.value.putaway },
   { value: 'completed' as const, label: '已入库', count: statusCounts.value.completed },
   { value: 'exception' as const, label: '异常', count: statusCounts.value.exception },
+  { value: 'cancelled' as const, label: '作废', count: statusCounts.value.cancelled },
 ])
 
 function statusTagType(status: string, displayStatus?: string) {
@@ -137,6 +140,7 @@ async function refreshCounts() {
     ['putaway', 'pending_putaway'],
     ['completed', 'completed'],
     ['exception', 'exception'],
+    ['cancelled', 'cancelled'],
   ]
   try {
     const results = await Promise.all(
@@ -251,6 +255,19 @@ async function downloadOmsAttachment(inboundId: number, attachmentId: number, fi
     URL.revokeObjectURL(a.href)
   } catch (e: any) {
     ElMessage.error(e?.message || '下载失败')
+  }
+}
+
+async function downloadReceivingList(row: any) {
+  const id = row?._raw?.id ?? row?.id
+  if (!id || row.readOnly || String(id).startsWith('oms-')) {
+    ElMessage.warning('该入库单尚未同步到 ERP，暂不能下载清单')
+    return
+  }
+  try {
+    await inboundApi.downloadReceivingList(id)
+  } catch (e: any) {
+    ElMessage.error(e?.message || '下载入库清单失败')
   }
 }
 
@@ -388,10 +405,15 @@ onMounted(async () => {
           <el-tag :type="statusTagType(row.status, row.displayStatus)" size="small">{{ row.statusLabel }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="240" fixed="right">
+      <el-table-column label="操作" width="300" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" size="small" @click="openDetail(row)">详情</el-button>
           <template v-if="!row.readOnly">
+          <el-button
+            v-if="!row.readOnly"
+            link type="primary" size="small"
+            @click="downloadReceivingList(row)"
+          >入库清单</el-button>
           <el-button
             v-if="row.status === 'arrived' && canReceive"
             link type="primary" size="small"
@@ -502,6 +524,10 @@ onMounted(async () => {
         </template>
       </div>
       <template #footer>
+        <el-button
+          v-if="detailOrder && !detailOrder.readOnly && !String(detailOrder.id).startsWith('oms-')"
+          @click="downloadReceivingList(detailOrder)"
+        >下载入库清单</el-button>
         <el-button type="primary" @click="detailVisible = false">关闭</el-button>
       </template>
     </el-dialog>

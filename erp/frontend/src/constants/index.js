@@ -60,6 +60,7 @@ export const INBOUND_STATUS = {
   pending_putaway: { label: '待上架', type: 'warning' },
   completed: { label: '已入库', type: 'success' },
   exception: { label: '异常', type: 'danger' },
+  cancelled: { label: '作废', type: 'info' },
   confirmed: { label: '已入库', type: 'success' },
   // 兼容旧 WMS 推送态（展示同在途）
   pending_push: { label: '在途', type: 'info' },
