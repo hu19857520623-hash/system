@@ -38,6 +38,7 @@ jobs:
 
       - name: Sync application source
         run: |
+          SSH_OPTS="-i $HOME/.ssh/deploy_key -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=8"
           rsync -az \
             --exclude='.git/' \
             --exclude='.env' \
@@ -46,15 +47,23 @@ jobs:
             --exclude='*/dist/' \
             --exclude='.codex-tmp/' \
             --exclude='tmp/' \
-            -e 'ssh -i ~/.ssh/deploy_key -o BatchMode=yes' \
+            -e "ssh $SSH_OPTS" \
             ./ ubuntu@175.178.50.202:/opt/system/
 
       - name: Build and restart ERP and OMS
         run: |
-          ssh -i ~/.ssh/deploy_key -o BatchMode=yes ubuntu@175.178.50.202 \
+          SSH_OPTS="-i $HOME/.ssh/deploy_key -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=8"
+          ssh $SSH_OPTS ubuntu@175.178.50.202 \
             'cat > /tmp/system-production-deploy.sh && bash /tmp/system-production-deploy.sh' <<'REMOTE'
           set -Eeuo pipefail
-          trap 'echo "DEPLOY_FAIL line=$LINENO cmd=$BASH_COMMAND status=$?" >&2' ERR
+          (
+            while sleep 30; do
+              echo "deploy heartbeat $(date -u +%H:%M:%S)"
+            done
+          ) &
+          heartbeat_pid=$!
+          trap 'kill "$heartbeat_pid" 2>/dev/null || true; echo "DEPLOY_FAIL line=$LINENO cmd=$BASH_COMMAND status=$?" >&2' ERR
+          trap 'kill "$heartbeat_pid" 2>/dev/null || true' EXIT
 
           exec 9>/tmp/system-production-deploy.lock
           flock -n 9 || { echo 'Another production deployment is running.'; exit 1; }
