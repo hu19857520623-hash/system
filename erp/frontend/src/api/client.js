@@ -413,6 +413,12 @@ export const warehouseApi = {
   updateCapacity: (id, data) => api.patch(`/warehouses/${id}/capacity`, data),
 }
 
+export const takealotDestApi = {
+  list: (params) => api.get('/takealot-dest-warehouses', params),
+  create: (data) => api.post('/takealot-dest-warehouses', data),
+  update: (id, data) => api.patch(`/takealot-dest-warehouses/${id}`, data),
+}
+
 export const warehouseZoneApi = {
   list: (params) => api.get('/warehouse-zones', params),
   create: (data) => api.post('/warehouse-zones', data),

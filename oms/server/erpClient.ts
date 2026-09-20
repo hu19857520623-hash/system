@@ -693,6 +693,14 @@ export function fetchErpLogisticsByCustomer(customerCode: string) {
   )
 }
 
+export type ErpFulfillmentWarehouse = { id: string; city: string }
+
+export function fetchErpTakealotFulfillmentWarehouses() {
+  return erpRequest<{ items: ErpFulfillmentWarehouse[] }>(
+    '/takealot-dest-warehouses/oms/fulfillment',
+  )
+}
+
 export function fetchErpInventoryView(customerCode: string, warehouseCode?: string) {
   const q = warehouseCode ? `?warehouseCode=${encodeURIComponent(warehouseCode)}` : ''
   return erpRequest<{

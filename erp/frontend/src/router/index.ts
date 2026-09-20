@@ -30,6 +30,7 @@ const routes: RouteRecordRaw[] = [
       { path: 'logistics-inventory', name: 'LogisticsInventory', component: () => import('@/pages/LogisticsInventoryView.vue'), meta: { title: '中转仓库存查询', section: '国内 · 物流中转' } },
       { path: 'mingrui', name: 'Mingrui', component: () => import('@/pages/MingruiView.vue'), meta: { title: '明瑞物流', section: '国内 · 物流中转' } },
       { path: 'warehouse/locations', name: 'WarehouseLocations', component: () => import('@/pages/WarehouseLocationView.vue'), meta: { title: '库位管理', section: '海外仓 · 仓储作业' } },
+      { path: 'warehouse/takealot-dest', name: 'TakealotDest', component: () => import('@/pages/TakealotDestView.vue'), meta: { title: 'Takealot 目的仓', section: '海外仓 · 仓储作业' } },
       { path: 'inbound/create', name: 'CreateInbound', component: () => import('@/pages/CreateInboundView.vue'), meta: { title: '发运海外仓', section: '国内 · 物流中转' } },
       { path: 'inbound/arrival-scan', name: 'InboundArrivalScan', component: () => import('@/pages/InboundArrivalScanView.vue'), meta: { title: '到仓扫描', section: '海外仓 · 仓储作业' } },
       { path: 'inbound/receipt', name: 'InboundReceipt', component: () => import('@/pages/InboundReceiptView.vue'), meta: { title: '入库单管理', section: '海外仓 · 仓储作业' } },

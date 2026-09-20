@@ -1,4 +1,4 @@
-/** 各模块功能说明 — 参考行业 OMS 标准能力，适配 Takealot 海外仓场景 */
+/** 各模块功能说明 — 以当前 OMS 页面为准（非行业对标清单）；status 表示本仓库已实现程度 */
 
 export interface ModuleGuide {
   title: string
@@ -10,20 +10,25 @@ export interface ModuleGuide {
 export const MODULE_GUIDES: Record<string, ModuleGuide> = {
   dashboard: {
     title: '首页看板',
-    desc: '一屏掌握订单、库存、异常与费用概况，快速跳转待处理事项。',
-    features: ['今日订单与 GMV', '发货进度漏斗', '异常中心汇总', '库存预警与费用概览'],
-    status: 'ready',
+    desc: '欢迎页与快捷入口：余额、今日订单、待办计数，跳转入库/出库/库存/账单；非 BI 报表页。',
+    features: [
+      '横幅：账户余额、今日订单数、异常订单数',
+      '常用功能快捷入口、待办（在途入库 / 待发货出库 / 未读消息）',
+      '最近入库 / 最近出库、系统公告（只读）',
+      '未提供：GMV 汇总、发货进度漏斗、渠道分析',
+    ],
+    status: 'partial',
   },
   orders: {
-    title: '订单管理',
-    desc: '平台同步与手工订单统一管理，支持状态筛选、高级筛选与异常处理。',
+    title: '订单与出库',
+    desc: 'OMS 出库履约与费用查看；数据来自出库单与本地履约记录，非 Shopify/Takealot 订单自动同步中心。',
     features: [
-      '状态 Tab：全部 / 待审核 / 待发货 / 发货中 / 已发货 / 异常',
-      '高级筛选：平台（Takealot / 手工 / Shopify）、店铺、仓库、国家、物流',
-      '批量操作：导出、重新同步、取消、重新推送发货',
-      '订单抽屉：商品明细、物流轨迹、费用明细、操作日志',
+      '列表 Tab 与筛选：单号、平台（Takealot / 其他）、仓库、SKU 等',
+      '详情抽屉：概要、费用明细、异常备注保存',
+      '回传运单 / POD（Takealot 等平台仓场景）',
+      '未提供：Shopify 店铺订单同步、批量重新同步 / 取消 / 重新推仓',
     ],
-    status: 'ready',
+    status: 'partial',
   },
   ordersImport: {
     title: '批量导入订单',
@@ -39,23 +44,22 @@ export const MODULE_GUIDES: Record<string, ModuleGuide> = {
   },
   products: {
     title: '我的商品',
-    desc: '参考「产品管理」：SKU 主数据、申报信息、规格尺寸、证书与绑码状态。',
+    desc: 'ERP 同步的 SKU 主数据：申报信息、规格尺寸与绑码状态；新建产品走 ERP 接口。',
     features: [
-      '筛选：含电池 / 上传证书 / 箱规 / 品类 / SKU / 申报价值 / 重量',
-      '状态 Tab：全部 / 可用 / 草稿 / 废弃 / 审核中',
-      '列表：申报品名、申报价值、长宽高、重量、证书状态',
-      '操作：创建产品、打印条码、批量、导入/导出、编辑、复制',
+      '筛选：含电池 / 箱规 / SKU / 申报价值 / 重量',
+      '状态 Tab：全部 / 可用 / 草稿 / 废弃（历史本地状态仍可在「全部」查看）',
+      '列表：申报品名、申报价值、长宽高、重量',
+      '操作：创建产品（同步 ERP）、打印条码、导出、复制新建',
     ],
     status: 'partial',
   },
   codes: {
-    title: '编码与绑定',
-    desc: '平台商品条码 ↔ 仓库 SKU 映射，以及客户自定义码、箱唛等辅助编码。',
+    title: '990码绑定',
+    desc: 'Takealot 990 条码 ↔ 仓库 SKU，用于出库识别标签。',
     features: [
-      '平台绑定：Takealot 商品条码、listing、组合品',
+      '绑定 990 条码到仓库 SKU，支持组合品',
       'Tab：待绑定 / 已绑定 / 条码不一致 / 待审核',
-      '同步 Takealot 商品、导入、打印标签',
-      '辅助编码：客户码 / 箱唛、版本号与变更申请',
+      '导入绑定、出库时按 990 码识别商品',
     ],
     status: 'ready',
   },
@@ -65,7 +69,7 @@ export const MODULE_GUIDES: Record<string, ModuleGuide> = {
     features: [
       'Takealot 入仓：先在 Takealot 预约，再在 OMS 创建出库单',
       '上传 Takealot 下载的外箱标、SKU 标签、清单、预约单',
-      '货盘分销 / 平台订单 / 手工录入（Makro、Temu）',
+      '货盘分销 / 手工录入 / Takealot 入仓',
       '海外仓发货后物流单号与签收单在「订单与出库」查看',
     ],
     status: 'partial',
@@ -106,8 +110,8 @@ export const MODULE_GUIDES: Record<string, ModuleGuide> = {
   },
   logistics: {
     title: '物流与签收',
-    desc: '已合并至「订单与出库」：出库后物流单号、轨迹与平台仓签收单（POD）在同一页查看与回传。',
-    features: ['按出库单/运单查轨迹', '回传平台仓签收单（POD）', '待回传签收单筛选', '与 WMS 出库回传联动'],
+    desc: '已合并至「订单与出库」：出库后物流单号与平台仓签收单（POD）在同一页查看与回传。',
+    features: ['海外仓发货后回传运单号', '回传平台仓签收单（POD）', '待回传签收单筛选'],
     status: 'partial',
   },
   returns: {
@@ -126,10 +130,10 @@ export const MODULE_GUIDES: Record<string, ModuleGuide> = {
     title: '费用账单',
     desc: '预扣款模式：出库按 SKU 尺寸试算并扣减余额，仓租按模板日扣。',
     features: [
-      '按月汇总：仓储 / 操作 / 物流',
+      '按月汇总：仓储 / 操作 / 物流 / 换标（来自费用流水）',
       '费用明细：预扣标记、关联单号',
-      '账户余额与充值',
-      '报表中心：费用占比与趋势分析',
+      '账户余额与充值（ERP）',
+      '不含客户档案中的静态「预算已用」进度',
     ],
     status: 'ready',
   },

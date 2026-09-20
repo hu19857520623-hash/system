@@ -25,7 +25,7 @@ const emit = defineEmits<{
   success: []
 }>()
 
-const pickSource = ref<'pda' | 'pick_list'>('pda')
+const pickSource = ref<'pda' | 'pick_list'>('pick_list')
 const pickLines = ref<PickLine[]>([])
 const pickLoading = ref(false)
 const pickSubmitting = ref(false)
@@ -43,7 +43,7 @@ async function loadPickLines(row: NonNullable<typeof props.order>) {
     emit('update:modelValue', false)
     return
   }
-  pickSource.value = 'pda'
+  pickSource.value = 'pick_list'
   pickLines.value = []
   pickLoading.value = true
   try {
@@ -110,15 +110,9 @@ async function submitPick() {
     width="640px"
     @update:model-value="emit('update:modelValue', $event)"
   >
-    <div class="pick-hint">系统已按库位拆分任务，必须全部拣完；短拣请标记库存短缺异常。</div>
-    <el-form label-width="80px" style="margin-bottom:12px">
-      <el-form-item label="拣货来源">
-        <el-radio-group v-model="pickSource" size="small">
-          <el-radio-button value="pda">PDA</el-radio-button>
-          <el-radio-button value="pick_list">拣货单</el-radio-button>
-        </el-radio-group>
-      </el-form-item>
-    </el-form>
+    <div class="pick-hint">
+      在 ERP 网页按库位确认拣货（无独立 PDA 扫描端）。系统已拆分库位任务，须全部拣完；短拣请标记库存短缺异常。
+    </div>
     <el-table v-loading="pickLoading" :data="pickLines" row-key="key" size="small" border>
       <el-table-column prop="sku" label="SKU" width="120" />
       <el-table-column label="总应拣" width="75" align="right">

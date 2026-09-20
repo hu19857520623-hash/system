@@ -14,7 +14,10 @@ import { useRowActions } from '@/composables/useRowActions'
 
 import ListPagination from '@/components/ListPagination.vue'
 
-import { TAKEALOT_DEST_OPTIONS } from '@/utils/omsWarehouse.ts'
+import { TAKEALOT_DEST_FILTER_HINT } from '@/utils/omsWarehouse.ts'
+import { loadTakealotDestConfig, useTakealotDestConfig } from '@/composables/useTakealotDestConfig.ts'
+
+const { billingOptions: takealotDestOptions } = useTakealotDestConfig()
 
 
 
@@ -681,6 +684,8 @@ function exportCharges(rows = selectedRows.value) {
 
 onMounted(async () => {
 
+  await loadTakealotDestConfig()
+
   await loadCustomers()
 
   await loadCharges()
@@ -730,6 +735,7 @@ onMounted(async () => {
         <div class="callout-body">
 
           每笔扣费可追溯至 ERP 出库单或手工录入。生成账单时可按客户、来源、时间与类型筛选待入账费用。
+          「送达地点」中 Takealot 目的仓来自静态平台仓表，不是仓库主数据接口；仓点增减需改代码配置。
 
         </div>
 
@@ -805,14 +811,16 @@ onMounted(async () => {
 
           default-first-option
 
-          placeholder="送达地点"
+          placeholder="送达地点 / Takealot 仓"
 
-          style="width: 200px"
+          style="width: 220px"
+
+          :title="TAKEALOT_DEST_FILTER_HINT"
 
         >
 
-          <el-option-group label="Takealot 目的仓">
-            <el-option v-for="d in TAKEALOT_DEST_OPTIONS" :key="d.value" :label="d.label" :value="d.value" />
+          <el-option-group label="Takealot 目的仓（静态配置）">
+            <el-option v-for="d in takealotDestOptions" :key="d.value" :label="d.label" :value="d.value" />
           </el-option-group>
           <el-option-group label="其他">
             <el-option v-for="d in OTHER_DEST_OPTIONS" :key="d.value" :label="d.label" :value="d.value" />

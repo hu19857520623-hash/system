@@ -23,7 +23,9 @@ import {
   type OutboundLabelAction,
   type OutboundLabelLine,
 } from '@/features/outbound/labels'
-import { warehouseFilterOptions } from '@/utils/omsWarehouse.ts'
+import { loadTakealotDestConfig, useTakealotDestConfig } from '@/composables/useTakealotDestConfig.ts'
+
+const { outboundFilterOptions: destWarehouseOptions } = useTakealotDestConfig()
 
 const app = useAppStore()
 const route = useRoute()
@@ -121,7 +123,6 @@ const relabelLines = ref<{ id: number; sku: string; productName: string; scanned
 
 const customers = ref<{ id: number; code: string; name: string }[]>([])
 const pickerUsers = ref<{ id: number; name: string; workstation: string; label: string }[]>([])
-const destWarehouseOptions = warehouseFilterOptions()
 
 function formatPickerLabel(name?: string | null, workstation?: string | null) {
   const display = String(name || '').trim()
@@ -304,6 +305,7 @@ function resetFilters() {
 }
 
 onMounted(async () => {
+  await loadTakealotDestConfig()
   const q = String(route.query.q || '').trim()
   if (q) searchQ.value = q
   try {
@@ -719,7 +721,7 @@ async function openPack(row: any) {
   packOrder.value = row
   packIsPalletized.value = !!row.isPalletized
   packPalletInfo.value = row.palletInfo || ''
-  packReviewSource.value = row.reviewSource === 'pda' ? 'pda' : 'pick_list'
+  packReviewSource.value = 'pick_list'
   packCartons.value = [{ lengthCm: '', widthCm: '', heightCm: '', grossWeightKg: '' }]
   packVisible.value = true
   packDetailLoading.value = true
@@ -1066,7 +1068,7 @@ function statusTag(status: string) {
         <div class="page-header">
           <div>
             <span class="page-title">出库单管理</span>
-            <p class="page-desc">出库单由客户在 OMS 预约创建，ERP 负责拣货、打包与发运。</p>
+            <p class="page-desc">出库单由客户在 OMS 预约创建；拣货、复核、打包与发运均在 ERP 网页完成（无独立 PDA 作业端）。</p>
           </div>
           <el-button size="small" text @click="reloadAll">刷新</el-button>
         </div>
@@ -1115,7 +1117,7 @@ function statusTag(status: string) {
             <el-input v-model="filterSku" placeholder="SKU / 客户唛头" clearable size="small" />
           </div>
           <div class="filter-item">
-            <label>目的地</label>
+            <label title="Takealot 平台目的仓（静态配置，非 WMS 仓库主数据）">Takealot 目的仓</label>
             <el-select v-model="filterDest" size="small" style="width:100%">
               <el-option
                 v-for="opt in destWarehouseOptions"
@@ -1397,12 +1399,7 @@ function statusTag(status: string) {
             <el-button link type="primary" @click="addPackCarton">+ 加一箱</el-button>
           </div>
         </el-form-item>
-        <el-form-item label="复核来源">
-          <el-radio-group v-model="packReviewSource" size="small">
-            <el-radio-button value="pda">PDA</el-radio-button>
-            <el-radio-button value="pick_list">拣货单</el-radio-button>
-          </el-radio-group>
-        </el-form-item>
+        <p class="dialog-hint" style="margin:0 0 12px">复核在 ERP 网页确认；独立 PDA 复核端尚未提供。</p>
         <el-form-item label="打托">
           <el-checkbox v-model="packIsPalletized">已打托</el-checkbox>
         </el-form-item>
@@ -1470,7 +1467,7 @@ function statusTag(status: string) {
 
     <!-- 分配拣货员 -->
     <el-dialog v-model="assignVisible" title="分配拣货员" width="360px">
-      <p class="dialog-hint">已选 {{ assignTargetIds.length }} 单（仅待拣货）。未分配拣货员的出库单不能在 PDA 扫描。</p>
+      <p class="dialog-hint">已选 {{ assignTargetIds.length }} 单（仅待拣货）。须先分配拣货员，才能在 ERP 网页完成拣货确认。</p>
       <el-select v-model="assignPickerId" placeholder="选择工位 / 拣货员" filterable style="width:100%">
         <el-option v-for="u in pickerUsers" :key="u.id" :label="u.label" :value="u.id" />
       </el-select>

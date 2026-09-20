@@ -536,7 +536,7 @@ onMounted(async () => {
         <el-form-item label="手机"><el-input v-model="createForm.phone" /></el-form-item>
         <el-form-item label="邮箱"><el-input v-model="createForm.email" /></el-form-item>
         <el-form-item v-if="isWarehouseJob(createForm.roleCode)" label="工位">
-          <el-input v-model="createForm.workstation" maxlength="30" placeholder="如 工位A，PDA 拣货绑定用" />
+          <el-input v-model="createForm.workstation" maxlength="30" placeholder="如 工位A，出库分配拣货员时展示" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -555,7 +555,8 @@ onMounted(async () => {
       class="edit-dialog"
     >
       <div class="edit-hint">
-        职位决定账号属于办公还是仓储。出库拣货员、工位和 PDA 只能使用仓储职位，运营/销售等办公职位不会出现在仓储端。
+        职位区分办公与仓内岗位（收货/拣货/复核等），均在同一 ERP 网页登录，暂无独立 PDA 或仓储端 App。
+        仓内账号请选「仓储职位」并配置出库拣货等权限；工位字段仅用于分配拣货员时的展示。
         权限细分是该账号可访问的模块，切换职位会加载默认权限，之后可再勾选调整。
         <el-tag v-if="permSource === 'custom'" size="small" type="warning">当前为自定义权限</el-tag>
         <el-tag v-else size="small" type="info">跟随职位默认</el-tag>

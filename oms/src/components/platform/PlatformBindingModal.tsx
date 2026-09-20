@@ -6,7 +6,7 @@ import {
   type PlatformSkuMapping, type PlatformBindingLine, type StoreAccount,
   PLATFORM_BINDING_STATUS_LABELS,
 } from '../../data/mockData'
-import { findProductByCode } from '../../data/platformBindingUtils'
+import { findProductByCode, firstTakealotStore } from '../../data/platformBindingUtils'
 import { useStores } from '../../data/entityStore'
 import SkuFuzzyPicker from '../ui/SkuFuzzyPicker'
 
@@ -34,9 +34,9 @@ function toFormState(
   initialValues?: Partial<BindingFormState>,
 ): BindingFormState {
   if (!m) {
-    const firstStore = storeList.find(s => s.platform === 'Takealot' && s.status === 'connected')
+    const firstStore = firstTakealotStore(storeList)
     return {
-      platform: initialValues?.platform ?? 'Takealot',
+      platform: 'Takealot',
       storeId: initialValues?.storeId ?? firstStore?.id ?? storeList[0]?.id ?? '',
       platformSkuId: initialValues?.platformSkuId ?? '',
       platformBarcode: initialValues?.platformBarcode ?? '',
@@ -46,7 +46,7 @@ function toFormState(
     }
   }
   return {
-    platform: m.platform,
+    platform: 'Takealot',
     storeId: m.storeId,
     platformSkuId: m.platformSkuId,
     platformBarcode: m.platformBarcode,
@@ -120,34 +120,19 @@ export default function PlatformBindingModal({ open, editing, initialValues, cus
       <div className="my-6 w-full max-w-3xl rounded-2xl bg-white shadow-2xl ring-1 ring-border-light" onClick={e => e.stopPropagation()}>
         <div className="border-b border-border-light px-6 py-5">
           <h3 className="font-semibold text-text-primary">
-            {editing ? '编辑平台商品绑定' : '新增 OMS 平台商品'}
+            {editing ? '编辑 990 码绑定' : '绑定 990 码'}
           </h3>
-          <p className="mt-1 text-xs text-text-muted">平台 listing 与仓库 SKU 的映射关系，支持组合品多行</p>
+          <p className="mt-1 text-xs text-text-muted">把 Takealot 990 条码对应到仓库 SKU，用于出库识别标签。不会从平台拉单扣库存。</p>
         </div>
 
         <div className="max-h-[70vh] overflow-y-auto px-6 py-5 space-y-6">
           <section>
-            <h4 className="mb-3 text-sm font-semibold text-text-primary">平台商品信息</h4>
+            <h4 className="mb-3 text-sm font-semibold text-text-primary">990 条码</h4>
             <FormGrid cols={2}>
-              <FormField label="平台名称" required>
-                <select
-                  className={formSelect()}
-                  value={form.platform}
-                  onChange={e => {
-                    const platform = e.target.value as PlatformSkuMapping['platform']
-                    const nextStore = stores.find(s => s.platform === platform && s.status === 'connected')
-                    setForm(prev => ({ ...prev, platform, storeId: nextStore?.id ?? '' }))
-                  }}
-                >
-                  <option value="Takealot">Takealot</option>
-                  <option value="Shopify">Shopify</option>
-                  <option value="Manual">Manual</option>
-                </select>
-              </FormField>
-              <FormField label="平台商品条码" required>
+              <FormField label="990 条码" required>
                 <input className={formInput()} value={form.platformBarcode} onChange={e => setForm(prev => ({ ...prev, platformBarcode: e.target.value }))} placeholder="9901234567890" />
               </FormField>
-              <FormField label="平台商品名称" className="sm:col-span-2">
+              <FormField label="商品名称">
                 <input className={formInput()} value={form.platformTitle} onChange={e => setForm(prev => ({ ...prev, platformTitle: e.target.value }))} />
               </FormField>
               <FormField label="库存来源">
@@ -199,7 +184,7 @@ export default function PlatformBindingModal({ open, editing, initialValues, cus
                         <option>仓库包装</option>
                       </select>
                     </FormField>
-                    <FormField label="仓库商品数量" required hint="组合品时填写每件平台 SKU 对应的数量">
+                    <FormField label="仓库商品数量" required hint="组合品时填写每个 990 条码对应的数量">
                       <input type="number" min={1} className={formInput()} value={line.qty} onChange={e => setLine(idx, { qty: Number(e.target.value) || 1 })} />
                     </FormField>
                   </FormGrid>
@@ -207,7 +192,7 @@ export default function PlatformBindingModal({ open, editing, initialValues, cus
               ))}
             </div>
             {form.lines.length > 1 && (
-              <p className="mt-2 text-[11px] text-text-muted">当前为组合品映射：1 个平台 SKU 对应 {form.lines.length} 个仓库 SKU</p>
+              <p className="mt-2 text-[11px] text-text-muted">当前为组合品映射：1 个 990 条码对应 {form.lines.length} 个仓库 SKU</p>
             )}
           </section>
 

@@ -1,27 +1,33 @@
-/** OMS 履约仓库 id → ERP outbound fbaWarehouse 编码 */
-const OMS_TO_ERP_FBA: Record<string, string[]> = {
-  jhb1: ['JHB1'],
-  jhb3: ['JHB3', 'JHB'],
-  cpt1: ['CPT1', 'CPT'],
-  cpt2: ['CPT2'],
-  dbn: ['DBN', 'DBN1'],
+import { getEnabledTakealotDestRows, getTakealotDestCache } from '../warehouse/takealot-dest.cache'
+import type { TakealotDestRow } from '../warehouse/takealot-dest.defaults'
+
+export type TakealotDestCategory = {
+  value: string
+  label: string
+  fbaCodes: readonly string[]
 }
 
-const OMS_WH_CITY: Record<string, string> = {
-  jhb1: '约翰内斯堡',
-  jhb3: '约翰内斯堡',
-  cpt1: '开普敦',
-  cpt2: '开普敦',
-  dbn: '德班',
+function rowsForMatch(): TakealotDestRow[] {
+  return getEnabledTakealotDestRows()
+}
+
+function allAliasCodes(row: TakealotDestRow): string[] {
+  const codes = new Set<string>([row.code.toUpperCase(), ...row.matchAliases.map((a) => a.toUpperCase())])
+  return [...codes]
 }
 
 export function erpFbaCodesForOmsWarehouse(omsId: string): string[] | null {
   const key = omsId.trim().toLowerCase()
-  return OMS_TO_ERP_FBA[key] ?? null
+  if (!key) return null
+  const row = rowsForMatch().find((r) => r.omsWarehouseId === key)
+  if (!row) return null
+  return allAliasCodes(row)
 }
 
 export function destinationHubCityNeedles(omsId: string): string[] {
-  const city = OMS_WH_CITY[omsId.trim().toLowerCase()]
+  const key = omsId.trim().toLowerCase()
+  const row = rowsForMatch().find((r) => r.omsWarehouseId === key)
+  const city = row?.city
   if (!city) return []
   if (city === '约翰内斯堡') return [city, 'Johannesburg']
   if (city === '开普敦') return [city, 'Cape Town']
@@ -29,37 +35,23 @@ export function destinationHubCityNeedles(omsId: string): string[] {
   return [city]
 }
 
-/** 客户出库单目的仓分类（Takealot：JHB / JHB3 / CPT1 / CPT2 / DBN） */
-export const TAKEALOT_DEST_CATEGORIES = [
-  { value: 'JHB', label: 'JHB', fbaCodes: ['JHB', 'JHB1'] },
-  { value: 'JHB3', label: 'JHB3', fbaCodes: ['JHB3'] },
-  { value: 'CPT1', label: 'CPT1', fbaCodes: ['CPT1', 'CPT'] },
-  { value: 'CPT2', label: 'CPT2', fbaCodes: ['CPT2'] },
-  { value: 'DBN', label: 'DBN', fbaCodes: ['DBN', 'DBN1'] },
-] as const
-
-const OMS_ID_TO_DEST_CATEGORY: Record<string, string> = {
-  jhb: 'JHB',
-  jhb1: 'JHB',
-  jhb3: 'JHB3',
-  cpt1: 'CPT1',
-  cpt2: 'CPT2',
-  dbn: 'DBN',
-}
-
-export function takealotDestCategory(raw?: string | null): (typeof TAKEALOT_DEST_CATEGORIES)[number] | null {
+export function takealotDestCategory(raw?: string | null): TakealotDestCategory | null {
   const key = String(raw || '').trim()
   if (!key) return null
   const upper = key.toUpperCase()
   const lower = key.toLowerCase()
-  const fromOms = OMS_ID_TO_DEST_CATEGORY[lower]
-  return TAKEALOT_DEST_CATEGORIES.find((item) => (
-    item.value === upper
-    || item.label === key
-    || item.label.toLowerCase() === lower
-    || (item.fbaCodes as readonly string[]).includes(upper)
-    || item.value === fromOms
-  )) || null
+  for (const row of rowsForMatch()) {
+    const aliases = allAliasCodes(row)
+    if (
+      row.code === upper
+      || row.label.toUpperCase() === upper
+      || aliases.includes(upper)
+      || row.omsWarehouseId === lower
+    ) {
+      return { value: row.code, label: row.label, fbaCodes: aliases }
+    }
+  }
+  return null
 }
 
 export function takealotDestCategoryLabel(raw?: string | null): string {
@@ -72,11 +64,12 @@ export function inferTakealotDestFromWarehouseHint(...parts: Array<string | null
   if (fromCode) return fromCode
   const text = parts.map((p) => String(p || '').trim()).filter(Boolean).join(' ').toLowerCase()
   if (!text) return ''
-  if (text.includes('jhb3')) return 'JHB3'
-  if (text.includes('cpt2')) return 'CPT2'
-  if (text.includes('cpt1') || /\bcpt\b/.test(text)) return 'CPT1'
-  if (text.includes('dbn')) return 'DBN'
-  if (text.includes('jhb')) return 'JHB'
+  for (const row of [...rowsForMatch()].sort((a, b) => b.code.length - a.code.length)) {
+    const tokens = [row.code, row.omsWarehouseId || '', ...row.matchAliases].filter(Boolean)
+    for (const token of tokens) {
+      if (text.includes(String(token).toLowerCase())) return row.code
+    }
+  }
   return ''
 }
 

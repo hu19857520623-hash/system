@@ -406,7 +406,6 @@ export class ProfitService {
           totalAmt: Math.round(row.totalAmt * 100) / 100,
           avgLead: avgLead ? `${avgLead} 天` : '—',
           onTime: `${onTimeRate}%`,
-          quality: onTimeRate >= 80 ? '优' : onTimeRate >= 50 ? '良' : '一般',
         }
       })
       .filter((row) => this.matchesKeyword(opts.keyword, row.dim))

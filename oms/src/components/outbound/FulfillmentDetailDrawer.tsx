@@ -14,7 +14,7 @@ import { buildOutboundFeeSummary } from '../../data/outboundFeeUtils'
 import OutboundFeePanel from './OutboundFeePanel'
 import type { LogisticsRecord } from '../../data/mockData'
 import { PodStatusBadge, PodRowActions } from './PodReceiptModals'
-import { AlertCircle, Package, MapPin, Clock } from 'lucide-react'
+import { AlertCircle, Package } from 'lucide-react'
 
 interface Props {
   row: FulfillmentRow | null
@@ -71,11 +71,7 @@ export default function FulfillmentDetailDrawer({ row, open, onClose, onUploadPo
   }
   const tabs = [
     { id: 'summary', label: '概要' },
-    ...(order ? [
-      { id: 'items', label: '商品明细' },
-      { id: 'tracking', label: '物流轨迹' },
-      { id: 'logs', label: '操作日志' },
-    ] : []),
+    ...(order ? [{ id: 'items', label: '商品明细' }] : []),
     ...(feeSummary && (feeSummary.preDeductTotal > 0 || feeSummary.actualTotal > 0 || feeSummary.allRecords.length > 0)
       ? [{ id: 'fees', label: '费用明细' }]
       : []),
@@ -261,48 +257,8 @@ export default function FulfillmentDetailDrawer({ row, open, onClose, onUploadPo
           </div>
         )}
 
-        {tab === 'tracking' && order && (
-          <div className="space-y-0">
-            {order.tracking.length === 0 ? (
-              <p className="py-8 text-center text-sm text-text-muted">暂无物流轨迹</p>
-            ) : order.tracking.map((t, i) => (
-              <div key={i} className="flex gap-3 pb-4">
-                <div className="flex flex-col items-center">
-                  <div className={`h-2.5 w-2.5 rounded-full ${i === 0 ? 'bg-primary-500' : 'bg-border'}`} />
-                  {i < order.tracking.length - 1 && <div className="w-px flex-1 bg-border" />}
-                </div>
-                <div className="pb-2">
-                  <p className="text-sm font-medium text-text-primary">{t.desc}</p>
-                  {t.location && (
-                    <p className="mt-0.5 flex items-center gap-1 text-xs text-text-muted">
-                      <MapPin className="h-3 w-3" /> {t.location}
-                    </p>
-                  )}
-                  <p className="mt-0.5 flex items-center gap-1 text-xs text-text-muted">
-                    <Clock className="h-3 w-3" /> {t.time}
-                  </p>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
         {tab === 'fees' && feeSummary && (
           <OutboundFeePanel summary={feeSummary} />
-        )}
-
-        {tab === 'logs' && order && (
-          <div className="space-y-2">
-            {order.logs.map((log, i) => (
-              <div key={i} className="flex items-start justify-between gap-3 border-b border-border-light py-2 text-xs last:border-0">
-                <div>
-                  <p className="font-medium text-text-primary">{log.action}</p>
-                  <p className="text-text-muted">{log.user}</p>
-                </div>
-                <span className="shrink-0 text-text-muted">{log.time}</span>
-              </div>
-            ))}
-          </div>
         )}
       </div>
     </Drawer>

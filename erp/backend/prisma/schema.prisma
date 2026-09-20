@@ -1369,6 +1369,24 @@ model ProductPriceRecord {
   @@map("product_price_record")
 }
 
+// ───────────── Takealot 平台目的仓（账单/出库/OMS，非 WMS 主数据） ─────────────
+
+model TakealotDestWarehouse {
+  id             Int      @id @default(autoincrement())
+  code           String   @unique @db.VarChar(20)
+  omsWarehouseId String?  @map("oms_warehouse_id") @db.VarChar(20)
+  label          String   @db.VarChar(80)
+  city           String?  @db.VarChar(50)
+  matchAliases   String   @map("match_aliases") @db.Text
+  enabled        Boolean  @default(true)
+  sortOrder      Int      @default(0) @map("sort_order")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@index([enabled, sortOrder], map: "idx_takealot_dest_enabled_sort")
+  @@map("takealot_dest_warehouse")
+}
+
 // ───────────── Takealot 店铺监控 ─────────────
 
 model TakealotStore {

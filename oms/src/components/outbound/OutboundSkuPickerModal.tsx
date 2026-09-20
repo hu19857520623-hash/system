@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { RefreshCw, Settings2, X } from 'lucide-react'
+import { RefreshCw, X } from 'lucide-react'
 import { Button, MonoCode, Table } from '../ui'
 import { formInput } from '../ui/form'
 import type { Product, StockSource } from '../../data/mockData'
@@ -371,14 +371,6 @@ export default function OutboundSkuPickerModal({
             onClick={() => setRefreshKey(k => k + 1)}
           >
             <RefreshCw className="h-4 w-4" />
-          </button>
-          <button
-            type="button"
-            className="rounded p-1.5 text-slate-400"
-            title="列设置（暂未开放）"
-            disabled
-          >
-            <Settings2 className="h-4 w-4" />
           </button>
         </div>
 

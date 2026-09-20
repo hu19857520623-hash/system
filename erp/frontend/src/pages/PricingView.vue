@@ -585,7 +585,7 @@ async function submitReprice() {
           <span v-else style="color:#b0a89c;font-size:11px">—</span>
         </template>
       </el-table-column>
-      <el-table-column label="可见库存" width="88" align="right">
+      <el-table-column label="对客户可见" width="96" align="right">
         <template #default="{ row }">
           <span v-if="row.visibleStockQty != null">{{ row.visibleStockQty.toLocaleString() }}</span>
           <span v-else style="color:#b0a89c">—</span>
@@ -698,7 +698,7 @@ async function submitReprice() {
             <strong>¥ {{ editing.seaFreight }}</strong>
           </div>
           <div class="erp-detail__metric">
-            <label>可见库存</label>
+            <label>对客户可见</label>
             <strong>{{ editing.visibleStockQty != null ? editing.visibleStockQty.toLocaleString() : '—' }}</strong>
           </div>
           <div class="erp-detail__metric is-accent">
@@ -793,7 +793,10 @@ async function submitReprice() {
             :disabled="!canSetPrice"
             style="width:180px"
           />
-          <span class="form-tip">OMS 展示的可售库存（可与实际上架量不同；补货规则后续完善）</span>
+          <span class="form-tip">
+            手工设定 OMS 可售上限（可低于「仓内可用」）。确认定价并同步 OMS 后，客户侧剩余 = 可见库存 − 已售。
+            系统不会按海外仓库存自动补货或改可见量（自动补货规则尚未上线）。
+          </span>
         </el-form-item>
         <el-form-item label="最终售价(¥)">
           <el-input-number v-model="editing.finalPrice" :min="0" :precision="2" :disabled="!canSetPrice" style="width:180px" />
@@ -811,8 +814,9 @@ async function submitReprice() {
             <el-tag :type="editing.orderableOnOms ? 'success' : 'warning'" size="small">{{ editing.orderableOnOms ? '是' : '否（待海外仓库存）' }}</el-tag>
             <span v-if="editing.orderableOnOmsAt" class="desc-time">{{ editing.orderableOnOmsAt }}</span>
           </el-descriptions-item>
-          <el-descriptions-item label="OMS 展示库存">
+          <el-descriptions-item label="OMS 展示剩余">
             <span style="font-weight:600;color:#1f9d92">{{ editing.remainingStockQty?.toLocaleString?.() ?? '—' }}</span>
+            <span class="form-tip">可见 {{ editing.visibleStockQty?.toLocaleString?.() ?? '—' }} − 已售；非仓内可用自动同步</span>
           </el-descriptions-item>
           <el-descriptions-item label="客户购买">
             {{ editing.soldQty?.toLocaleString?.() ?? '—' }}

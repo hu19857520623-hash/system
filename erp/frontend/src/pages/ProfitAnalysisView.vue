@@ -30,7 +30,7 @@ const summary = ref([
 
 const topProducts = ref<{ name: string; sku: string; revenue: string; qty: number; margin: string }[]>([])
 const profitRows = ref<{ dim: string; revenue: string; cost: string; freight: string; profit: string; margin: string }[]>([])
-const purchaseRows = ref<{ dim: string; poCount: number; totalAmt: string; avgLead: string; onTime: string; quality: string }[]>([])
+const purchaseRows = ref<{ dim: string; poCount: number; totalAmt: string; avgLead: string; onTime: string }[]>([])
 
 const { page: rankPage, pageSize: rankPageSize, total: rankTotal, pagedItems: rankPagedItems, resetPage: resetRankPage } = useTablePagination(topProducts)
 const { page: profitPage, pageSize: profitPageSize, total: profitTotal, pagedItems: profitPagedItems, resetPage: resetProfitPage } = useTablePagination(profitRows)
@@ -117,7 +117,6 @@ async function loadAll() {
       totalAmt: fmtMoney(num(row.totalAmt)),
       avgLead: row.avgLead || '—',
       onTime: row.onTime || '—',
-      quality: row.quality || '—',
     }))
 
     const rows = detail || []
@@ -288,10 +287,11 @@ watch(dim, loadAll)
         <el-table-column prop="poCount" label="PO数" width="70" align="center" />
         <el-table-column prop="totalAmt" label="总金额" width="120" align="right" />
         <el-table-column prop="avgLead" label="平均交期" width="90" align="center" />
-        <el-table-column prop="onTime" label="准时率" width="80" align="center" />
-        <el-table-column prop="quality" label="质量评级" width="90" align="center">
-          <template #default="{ row }">
-            <el-tag :type="row.quality === '优' ? 'success' : 'warning'" size="small">{{ row.quality }}</el-tag>
+        <el-table-column prop="onTime" label="采购准时率" min-width="108" width="120" align="center">
+          <template #header>
+            <el-tooltip content="采购准时率，不是货物质检等级" placement="top">
+              <span>采购准时率</span>
+            </el-tooltip>
           </template>
         </el-table-column>
       </el-table>

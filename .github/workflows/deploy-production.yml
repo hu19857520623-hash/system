@@ -243,6 +243,11 @@ jobs:
           test -f "$async_io_detail_sql" || { echo "Missing $async_io_detail_sql"; exit 1; }
           cat "$async_io_detail_sql" | docker compose exec -T mysql mysql -uroot -p"$mysql_pw" --default-character-set=utf8mb4 --batch takealot_erp
 
+          echo '=== Apply Takealot destination warehouse config ==='
+          takealot_dest_sql="${PWD}/backend/prisma/scripts/migrate_takealot_dest_warehouse.sql"
+          test -f "$takealot_dest_sql" || { echo "Missing $takealot_dest_sql"; exit 1; }
+          cat "$takealot_dest_sql" | docker compose exec -T mysql mysql -uroot -p"$mysql_pw" --default-character-set=utf8mb4 --batch takealot_erp
+
           echo '=== Build store-monitor ==='
           cd /opt/system/store-monitor
           docker build -t takealot/store-monitor:production . </dev/null

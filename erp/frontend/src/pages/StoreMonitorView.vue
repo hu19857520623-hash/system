@@ -216,7 +216,10 @@ onMounted(loadSession)
         <div>
           <p class="command-kicker">TAKEALOT OPERATIONS</p>
           <h1>店铺监控</h1>
-          <p>集中查看店铺表现、履约状态与接口连接情况</p>
+          <p>
+            Takealot 经营看板嵌入 ERP，数据经<strong>本机代理</strong>（默认 127.0.0.1:3456 + Chrome）拉取；
+            非云端内置实时服务。店铺槽位与 API Key 存 ERP，看板需代理在线。
+          </p>
         </div>
       </div>
 
@@ -272,7 +275,7 @@ onMounted(loadSession)
     <div v-if="canManage && !loading && configuredCount === 0" class="setup-callout">
       <div>
         <strong>还没有接入店铺</strong>
-        <span>配置 Takealot API Key 后，监控数据才会开始同步。</span>
+        <span>配置 Takealot API Key 后，在本机代理在线时看板才会拉取店铺数据。</span>
       </div>
       <el-button type="primary" plain @click="configOpen = true">立即配置</el-button>
     </div>
@@ -281,8 +284,9 @@ onMounted(loadSession)
       <div class="monitor-bar">
         <div class="monitor-bar__title">
           <span class="live-indicator" :class="`is-${serviceState}`" />
-          <span>实时经营看板</span>
-          <small v-if="diag">连接通道 {{ channelCount }}/3</small>
+          <span>Takealot 经营看板（本机代理）</span>
+          <small v-if="diag">连接通道 {{ channelCount }}/3 · 非 ERP 直连 Takealot</small>
+          <small v-else>需本机 store-monitor 代理</small>
         </div>
         <div class="monitor-bar__actions">
           <button type="button" @click="checkService">重新检测接口</button>
@@ -293,20 +297,26 @@ onMounted(loadSession)
       </div>
 
       <div class="monitor-stage">
-        <div v-if="loading || !frameReady" class="frame-loading">
-          <span class="loading-orbit" />
-          <strong>{{ loading ? '正在读取店铺权限' : '正在启动经营看板' }}</strong>
-          <small>连接店铺数据与本地代理服务</small>
+        <div v-if="serviceState === 'offline'" class="frame-offline">
+          <strong>看板未加载</strong>
+          <p>Takealot 代理离线时无法展示 iframe 看板。请在本机启动 <code>store-monitor</code> 或运行 <code>dev-local.ps1</code>，再点击「重新检测」。</p>
         </div>
-        <iframe
-          v-if="!loading && session"
-          :key="frameKey"
-          ref="frameRef"
-          class="monitor-frame"
-          :src="iframeSrc"
-          title="Takealot 店铺监控"
-          @load="onFrameLoad"
-        />
+        <template v-else>
+          <div v-if="loading || !frameReady" class="frame-loading">
+            <span class="loading-orbit" />
+            <strong>{{ loading ? '正在读取店铺权限' : '正在加载本机代理看板' }}</strong>
+            <small>经 127.0.0.1:3456 转发 Takealot 数据</small>
+          </div>
+          <iframe
+            v-if="!loading && session"
+            :key="frameKey"
+            ref="frameRef"
+            class="monitor-frame"
+            :src="iframeSrc"
+            title="Takealot 店铺监控（本机代理）"
+            @load="onFrameLoad"
+          />
+        </template>
       </div>
     </section>
 
@@ -666,6 +676,33 @@ onMounted(loadSession)
 }
 
 .frame-loading small { color: var(--text-muted); }
+
+.frame-offline {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 8px;
+  padding: 32px 24px;
+  text-align: center;
+  color: var(--text);
+}
+
+.frame-offline p {
+  max-width: 420px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-muted);
+}
+
+.frame-offline code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--surface-muted, #f4f4f5);
+  font-size: 11px;
+}
 
 .loading-orbit {
   width: 28px;

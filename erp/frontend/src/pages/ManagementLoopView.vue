@@ -266,7 +266,7 @@ watch(warehouseCode, loadCurrent)
   <div class="management-loop-page">
     <el-card class="head-card">
       <div class="page-head">
-        <div><h2>仓储管理闭环</h2><p>报表、盘点和容量使用同一套真实业务数据</p></div>
+        <div><h2>仓储管理闭环</h2><p>报表、盘点和容量使用同一套业务数据；盘点在 ERP 网页录入实盘，无独立 PDA 盘点端</p></div>
         <el-select v-model="warehouseCode" clearable placeholder="全部仓库" style="width: 220px">
           <el-option v-for="wh in warehouses" :key="wh.warehouseCode || wh.code" :label="wh.warehouseName || wh.name" :value="wh.warehouseCode || wh.code" />
         </el-select>
@@ -350,7 +350,7 @@ watch(warehouseCode, loadCurrent)
     </template>
 
     <el-card v-else-if="activeTab === 'stocktake'">
-      <div class="toolbar"><div class="hint">可按客户、入库单号或入库时间收窄范围；PDA 扫盘点单号后按库位清点</div><el-button v-if="app.hasPerm('stocktake.create')" type="primary" @click="openCreateStocktake">创建盘点</el-button></div>
+      <div class="toolbar"><div class="hint">可按客户、入库单号或入库时间收窄范围；打开盘点单后在网页按库位填写实盘数量并提交（非扫码枪/PDA 作业）</div><el-button v-if="app.hasPerm('stocktake.create')" type="primary" @click="openCreateStocktake">创建盘点</el-button></div>
       <el-table :data="stocktakes" stripe>
         <el-table-column prop="stocktakeNo" label="盘点单号" min-width="180" />
         <el-table-column prop="warehouseCode" label="仓库" width="140" />

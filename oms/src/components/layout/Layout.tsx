@@ -1,7 +1,7 @@
 import { NavLink, Outlet, useLocation, useNavigate, Link } from 'react-router-dom'
 import { useEffect, useMemo, useState } from 'react'
 import {
-  LayoutDashboard, ShoppingCart, Package, AlertTriangle, MapPin,
+  LayoutDashboard, ShoppingCart, Package, MapPin,
   RotateCcw, Receipt, CreditCard, BarChart3, Bell, LogOut,
   Boxes, Link2, ArrowDownToLine, ArrowUpFromLine, Layers, Search, Users,
   ChevronDown, ChevronUp, ClipboardList, FileCheck, Truck, Wallet,
@@ -47,7 +47,6 @@ const accordionNav: NavAccordion[] = [
     items: [
       { to: '/inbound', label: '预约入库', icon: ClipboardList, end: true },
       { to: '/inbound/records', label: '入库记录', icon: FileCheck, end: true },
-      { to: '/inbound/qc', label: '质检报告', icon: FileCheck, end: true },
     ],
   },
   {
@@ -76,7 +75,6 @@ const accordionNav: NavAccordion[] = [
     icon: Package,
     items: [
       { to: '/inventory', label: '库存查询', icon: Package, end: true },
-      { to: '/inventory/alerts', label: '库存预警', icon: AlertTriangle, end: true, badge: 3 },
     ],
   },
   {
@@ -95,7 +93,7 @@ const accordionNav: NavAccordion[] = [
     icon: Boxes,
     items: [
       { to: '/catalog', label: '货盘选品', icon: Layers, end: true },
-      { to: '/codes', label: '编码与绑定', icon: Link2, end: true },
+      { to: '/codes', label: '990码绑定', icon: Link2, end: true },
       { to: '/products', label: '我的商品', icon: Boxes, end: true },
     ],
   },

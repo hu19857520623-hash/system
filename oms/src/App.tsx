@@ -20,7 +20,6 @@ const ProductDetail = lazy(() => import('./pages/ProductDetail'))
 const Codes = lazy(() => import('./pages/Codes'))
 const Inbound = lazy(() => import('./pages/Inbound'))
 const InboundRecords = lazy(() => import('./pages/InboundRecords'))
-const InboundQc = lazy(() => import('./pages/InboundQc'))
 const Outbound = lazy(() => import('./pages/Outbound'))
 const OutboundRecords = lazy(() => import('./pages/OutboundRecords'))
 const Messages = lazy(() => import('./pages/Messages'))
@@ -71,18 +70,18 @@ export default function App() {
         <Route path="products/new" element={<ProductCreate />} />
         <Route path="products/:id/edit" element={<ProductCreate />} />
         <Route path="products/:id" element={<ProductDetail />} />
-        <Route path="platform-bindings" element={<Navigate to="/codes?tab=platform" replace />} />
+        <Route path="platform-bindings" element={<Navigate to="/codes" replace />} />
         <Route path="codes" element={<Codes />} />
         <Route path="inbound" element={<Inbound />} />
         <Route path="inbound/new" element={<Navigate to="/inbound" replace />} />
         <Route path="inbound/records" element={<InboundRecords />} />
-        <Route path="inbound/qc" element={<InboundQc />} />
+        <Route path="inbound/qc" element={<Navigate to="/inbound/records" replace />} />
         <Route path="outbound/orders" element={<Navigate to="/outbound/records" replace />} />
         <Route path="outbound" element={<Outbound />} />
         <Route path="outbound/new" element={<Navigate to="/outbound" replace />} />
         <Route path="outbound/records" element={<OutboundRecords />} />
         <Route path="inventory" element={<InventoryPage />} />
-        <Route path="inventory/alerts" element={<InventoryPage alertsOnly />} />
+        <Route path="inventory/alerts" element={<Navigate to="/inventory" replace />} />
         <Route path="shipping" element={<Navigate to="/outbound" replace />} />
         <Route path="logistics" element={<Navigate to="/outbound/records" replace />} />
         <Route path="returns" element={<Navigate to="/returns/processing" replace />} />

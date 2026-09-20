@@ -117,13 +117,13 @@ export const REVIEW_SOURCES = ['pda', 'pick_list'] as const
 export type ReviewSource = (typeof REVIEW_SOURCES)[number]
 
 export const PICK_SOURCE_LABELS: Record<string, string> = {
-  pda: 'PDA拣货',
-  pick_list: '拣货单',
+  pda: 'PDA拣货(预留)',
+  pick_list: '网页拣货',
 }
 
 export const REVIEW_SOURCE_LABELS: Record<string, string> = {
-  pda: 'PDA复核',
-  pick_list: '拣货单复核',
+  pda: 'PDA复核(预留)',
+  pick_list: '网页复核',
 }
 
 export function parseWorkDate(value?: string | null): Date | null {

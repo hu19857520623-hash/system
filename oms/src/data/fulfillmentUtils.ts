@@ -4,8 +4,6 @@ import {
   SHIPMENT_SOURCE_LABELS,
   statusLabels,
 } from './mockData'
-import { getCustomerCode } from './dataScope'
-import { buildOutboundNo } from './wmsDocNo'
 
 export interface FulfillmentRow {
   id: string
@@ -65,26 +63,16 @@ function warehouseTracking(
   return fallback ?? null
 }
 
-/** 平台订单同步后系统自动创建出库单号（尚未预约发货的订单） */
-function systemOutboundNoForOrder(order: Order): string {
-  const created = order.createdAt ? new Date(order.createdAt) : new Date()
-  const seq = Math.max(1, ((Number(order.id) || 1) - 1) % 9999 + 1)
-  return buildOutboundNo(getCustomerCode(order.customerId), Number.isNaN(created.getTime()) ? new Date() : created, seq)
-}
-
 export function buildFulfillmentRows(
   orders: Order[],
   outboundOrders: OutboundOrder[],
   logistics: LogisticsRecord[] = [],
 ): FulfillmentRow[] {
   const orderByNo = new Map(orders.map(o => [o.orderNo, o]))
-  const linkedOrderNos = new Set<string>()
-
   const logisticsByOutbound = new Map(logistics.map(l => [l.outboundNo, l]))
 
   const fromOutbound: FulfillmentRow[] = outboundOrders.map(ob => {
     const order = ob.orderNo ? orderByNo.get(ob.orderNo) : undefined
-    if (order) linkedOrderNos.add(order.orderNo)
     const log = logisticsByOutbound.get(ob.outboundNo)
     const { key, label } = statusForRow(ob, order)
     return {
@@ -107,27 +95,7 @@ export function buildFulfillmentRows(
     }
   })
 
-  /** 已同步平台订单、系统已分配出库单号但尚未创建出库单记录 */
-  const fromPendingOrders: FulfillmentRow[] = orders
-    .filter(o => !linkedOrderNos.has(o.orderNo))
-    .map(o => ({
-      id: `ord-${o.id}`,
-      outboundNo: systemOutboundNoForOrder(o),
-      refNo: null,
-      trackingNo: null,
-      shippingMethod: o.logistics || null,
-      source: (o.platform === 'Manual' ? 'manual' : 'platform_order') as ShipmentSource,
-      platform: platformDisplayLabel(o.platform),
-      warehouse: o.warehouse,
-      statusKey: o.status,
-      statusLabel: statusLabels[o.status] ?? o.status,
-      amount: o.amount,
-      createdAt: o.createdAt,
-      customerId: o.customerId,
-      order: o,
-    }))
-
-  return [...fromOutbound, ...fromPendingOrders].sort(
+  return fromOutbound.sort(
     (a, b) => b.createdAt.localeCompare(a.createdAt),
   )
 }

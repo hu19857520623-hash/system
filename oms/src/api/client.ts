@@ -338,10 +338,8 @@ export type BootstrapData = {
   inboundOrders: import('../data/mockData').InboundOrder[]
   returnOrders: import('../data/returnStore').ReturnOrder[]
   outboundOrders: import('../data/mockData').OutboundOrder[]
-  codeMappings: import('../data/mockData').CodeMapping[]
   platformSkuMappings: import('../data/mockData').PlatformSkuMapping[]
   logistics: import('../data/mockData').LogisticsRecord[]
-  qcReports: import('../data/mockData').QcReport[]
   systemMessages: import('../data/mockData').SystemMessage[]
   announcements: { id: string; title: string; date: string; type: string }[]
   feeTemplates: {
@@ -352,4 +350,5 @@ export type BootstrapData = {
   }
   paymentMethods: import('../data/feeTemplates').PaymentMethod[]
   purchases: import('../data/inventoryStore').CatalogPurchase[]
+  fulfillmentWarehouses: { id: string; city: string }[]
 }

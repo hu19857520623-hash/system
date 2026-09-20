@@ -76,7 +76,11 @@ export interface PlatformBarcodeResolveScope {
   platform?: StorePlatform
 }
 
-/** 与 Takealot Seller ID 精确匹配的店铺（用于条码解析范围） */
+/** 绑定 990 码时使用的 Takealot 店铺（内部记录用，页面不展示平台绑定） */
+export function firstTakealotStore(stores: StoreAccount[]): StoreAccount | undefined {
+  return stores.find(s => s.platform === 'Takealot' && s.status === 'connected')
+    ?? stores.find(s => s.platform === 'Takealot')
+}
 export function findTakealotStoresForSeller(
   sellerId: string | undefined,
   customerId?: string,

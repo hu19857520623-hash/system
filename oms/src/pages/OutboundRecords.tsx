@@ -37,7 +37,6 @@ const LOGISTICS_TABS = [
 
 const SOURCE_TABS: { id: string; label: string; source?: ShipmentSource }[] = [
   { id: 'all', label: '全部' },
-  { id: 'platform_order', label: '平台订单', source: 'platform_order' },
   { id: 'catalog_dist', label: '货盘分销', source: 'catalog_dist' },
   { id: 'manual', label: '手工录入', source: 'manual' },
   { id: 'active', label: '进行中' },
@@ -65,7 +64,9 @@ export default function OutboundRecords() {
   const scopedOutbound = useMemo(() => dataScope.scopeOutbound(allOutbound), [dataScope, allOutbound])
   const scopedOrders = useMemo(() => dataScope.scope(orders), [dataScope, orders])
   const [searchParams] = useSearchParams()
-  const initialTab = searchParams.get('tab') ?? 'all'
+  const initialTab = searchParams.get('tab') === 'platform_order'
+    ? 'all'
+    : (searchParams.get('tab') ?? 'all')
   const urlOrderNo = searchParams.get('orderNo') ?? ''
   const urlOrderNoMode = (searchParams.get('orderNoMode') === 'exact' ? 'exact' : 'fuzzy') as SearchMode
   const [tab, setTab] = useState(initialTab)
@@ -128,9 +129,7 @@ export default function OutboundRecords() {
     ? [...SOURCE_TABS, ...LOGISTICS_TABS]
     : role === 'catalog'
       ? [...SOURCE_TABS.filter(t => ['all', 'catalog_dist', 'active'].includes(t.id)), ...LOGISTICS_TABS]
-      : role === 'ecommerce'
-        ? [...SOURCE_TABS.filter(t => ['all', 'platform_order', 'catalog_dist', 'manual', 'active'].includes(t.id)), ...LOGISTICS_TABS]
-        : [...SOURCE_TABS, ...LOGISTICS_TABS]
+      : [...SOURCE_TABS, ...LOGISTICS_TABS]
 
   const tabCount = (tabId: string) => filterFulfillmentRows(allRows, tabId, applied).length
 

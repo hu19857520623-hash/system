@@ -2,6 +2,8 @@
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 
+& (Join-Path $root 'scripts\sync-dev-oms-erp-env.ps1')
+
 function Start-DevWindow([string]$title, [string]$cwd, [string]$command) {
   Start-Process powershell -WorkingDirectory $cwd -ArgumentList @(
     '-NoExit',

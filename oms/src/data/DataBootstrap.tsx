@@ -9,6 +9,7 @@ import { hydrateFeeTemplates } from './feeTemplateStore'
 import { hydratePaymentMethods } from './paymentMethodStore'
 import { hydrateAccounts } from '../auth/accountStore'
 import { useRole } from '../auth/RoleContext'
+import { hydrateFulfillmentWarehouses } from './fulfillmentWarehouseConfig'
 
 let bootPromise: Promise<void> | null = null
 let bootSessionKey = ''
@@ -41,6 +42,7 @@ export async function bootstrapFromApi(sessionKey: string, force = false) {
       hydrateFeeTemplates(data.feeTemplates)
       hydratePaymentMethods(data.paymentMethods)
       hydrateAccounts(data.accounts)
+      hydrateFulfillmentWarehouses(data.fulfillmentWarehouses)
     })().catch(err => {
       if (generation === bootGeneration) {
         bootPromise = null

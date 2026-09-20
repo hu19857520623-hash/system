@@ -107,7 +107,7 @@ export const PERM_GROUPS: PermissionGroup[] = [
       { id: 'outbound.view', label: '出库单 · 查看' },
       { id: 'outbound.create', label: '出库单 · 创建' },
       { id: 'outbound.relabel', label: '出库 · 换标确认' },
-      { id: 'outbound.pick', label: '出库 · 拣货' },
+      { id: 'outbound.pick', label: '出库 · 拣货（网页）' },
       { id: 'outbound.pack', label: '出库 · 打包' },
       { id: 'outbound.ship', label: '出库 · 发运' },
       { id: 'anheng.view', label: '安衡测量仪 · 查看' },
@@ -122,7 +122,7 @@ export const PERM_GROUPS: PermissionGroup[] = [
       { id: 'inventory_query.adjust', label: '库存查询 · 调整库位' },
       { id: 'stocktake.view', label: '盘点 · 查看' },
       { id: 'stocktake.create', label: '盘点 · 创建' },
-      { id: 'stocktake.count', label: '盘点 · 初盘/复盘' },
+      { id: 'stocktake.count', label: '盘点 · 初盘/复盘（网页录入）' },
       { id: 'stocktake.approve', label: '盘点 · 审批调整' },
       { id: 'capacity.view', label: '容量预警 · 查看' },
       { id: 'capacity.manage', label: '容量预警 · 刷新' },
@@ -462,7 +462,7 @@ export type RoleDefinition = {
   side: RoleSide
 }
 
-/** 角色元数据（种子 / 管理页）。side 决定能否出现在仓储端（拣货员 / 工位 / PDA） */
+/** 角色元数据（种子 / 管理页）。side=warehouse 表示仓内岗位，仍使用同一 ERP 网页，无独立 PDA/仓储端 App */
 export const ROLE_DEFINITIONS: readonly RoleDefinition[] = [
   { roleCode: 'admin', roleName: '系统管理员', templateKey: '系统管理员', description: '拥有全部业务权限', side: 'system' },
   { roleCode: 'ops', roleName: '运营', templateKey: '运营', description: '货盘定价、店铺监控与日常运营', side: 'office' },
@@ -550,7 +550,7 @@ export function roleDefinition(roleCode: string) {
   return ROLE_BY_CODE.get(roleCode)
 }
 
-/** 未知职位按办公处理，避免误入仓储端 */
+/** 未知职位按办公处理，避免误标为仓内岗位 */
 export function roleSide(roleCode: string): RoleSide {
   return ROLE_BY_CODE.get(roleCode)?.side ?? 'office'
 }
@@ -567,7 +567,7 @@ export function isWarehouseStaffRole(roleCode: string): boolean {
   return roleSide(roleCode) === 'warehouse'
 }
 
-/** 仓储端（PDA / 拣货员 / 工位）可用的职位：仓库 + 系统管理员 */
+/** 仓内岗位（拣货/收货等）+ 系统管理员；与办公端共用 ERP 登录，非独立客户端 */
 export function canUseWarehouseClient(roleCode: string): boolean {
   const side = roleSide(roleCode)
   return side === 'warehouse' || side === 'system'

@@ -76,8 +76,11 @@ onMounted(load)
       </div>
     </template>
     <div class="callout info">
-      <div class="callout-title">对外同步（OMS，后续接入）</div>
-      <div class="callout-body">展示 ERP 与 OMS 之间的接口调用记录。入库库存已在 ERP 内部闭环，不再产生 WMS 推送日志。</div>
+      <div class="callout-title">对外同步（OMS）</div>
+      <div class="callout-body">
+        展示 ERP 与 OMS 之间已接入的推送与回调记录（如出库状态、费用/余额镜像、货盘同步、公告等）。
+        失败条目可在此重试。入库库存已在 ERP 内部闭环，不再产生 WMS 推送日志。
+      </div>
     </div>
     <div class="kpi-row">
       <div class="kpi"><strong>{{ entries.length }}</strong><span>近期调用</span></div>

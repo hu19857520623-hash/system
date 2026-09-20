@@ -82,6 +82,7 @@ import {
   type ErpInboundOrder,
   type ErpOutboundOrder,
   type ErpReturnOrder,
+  fetchErpTakealotFulfillmentWarehouses,
 } from './erpClient.js'
 
 const prisma = new PrismaClient()
@@ -218,10 +219,8 @@ async function buildUnscopedBootstrap(
     inboundOrders,
     outboundOrders,
     returnOrders,
-    codeMappings,
     platformSkuMappings,
     logistics,
-    qcReports,
     systemMessages,
     announcements,
     priceTemplates,
@@ -269,13 +268,11 @@ async function buildUnscopedBootstrap(
       where: scope ? { customerId: scope.customerId } : undefined,
       orderBy: { createdAt: 'desc' },
     }),
-    prisma.codeMapping.findMany({ orderBy: { id: 'asc' } }),
     prisma.platformSkuMapping.findMany({
       where: scope ? { customerId: scope.customerId } : undefined,
       orderBy: { id: 'asc' },
     }),
     prisma.logisticsRecord.findMany({ orderBy: { updatedAt: 'desc' } }),
-    prisma.qcReport.findMany({ orderBy: { reportDate: 'desc' } }),
     prisma.systemMessage.findMany({
       where: scope
         ? { OR: [{ customerId: null }, { customerId: scope.customerId }] }
@@ -292,6 +289,22 @@ async function buildUnscopedBootstrap(
     }),
     prisma.paymentMethod.findMany({ orderBy: { sortOrder: 'asc' } }),
   ])
+
+  const defaultFulfillmentWarehouses = [
+    { id: 'jhb1', city: '约翰内斯堡' },
+    { id: 'jhb3', city: '约翰内斯堡' },
+    { id: 'cpt1', city: '开普敦' },
+    { id: 'cpt2', city: '开普敦' },
+    { id: 'dbn', city: '德班' },
+  ]
+  let fulfillmentWarehouses = defaultFulfillmentWarehouses
+  try {
+    const erpRows = await fetchErpTakealotFulfillmentWarehouses()
+    if (erpRows.items?.length) fulfillmentWarehouses = erpRows.items
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    console.warn(`[bootstrap] ERP Takealot 目的仓未同步（${msg}），使用静态兜底`)
+  }
 
   return {
     accounts: customers.map(c => ({
@@ -357,13 +370,11 @@ async function buildUnscopedBootstrap(
       estimatedFeeTotal: o.estimatedFeeTotal == null ? undefined : Number(o.estimatedFeeTotal),
       totalVolumeCbm: o.totalVolumeCbm == null ? undefined : Number(o.totalVolumeCbm),
     })),
-    codeMappings,
     platformSkuMappings: platformSkuMappings.map(m => ({
       ...m,
       lines: parseJson(m.lines, []),
     })),
     logistics,
-    qcReports,
     systemMessages,
     announcements,
     feeTemplates: {
@@ -388,6 +399,7 @@ async function buildUnscopedBootstrap(
     },
     paymentMethods,
     purchases,
+    fulfillmentWarehouses,
   }
 }
 
@@ -426,8 +438,6 @@ async function buildBootstrap(auth: AuthClaims) {
   const customerProducts = all.products.filter(item => item.customerId === customerId)
   const customerInbound = all.inboundOrders.filter(item => item.customerId === customerId)
   const customerOutbound = all.outboundOrders.filter(item => item.customerId === customerId)
-  const customerProductSkus = new Set(customerProducts.map(item => item.internalSku))
-  const inboundNos = new Set(customerInbound.map(item => item.inboundNo))
   const outboundNos = new Set(customerOutbound.map(item => item.outboundNo))
   const billing = await prisma.billingAccount.findUnique({ where: { customerId } })
 
@@ -455,10 +465,8 @@ async function buildBootstrap(auth: AuthClaims) {
     inboundOrders: customerInbound.filter(item => !isErpPalletInboundRecord(item)),
     outboundOrders: customerOutbound,
     returnOrders: all.returnOrders.filter(item => item.customerId === customerId),
-    codeMappings: all.codeMappings.filter(item => customerProductSkus.has(item.internalSku)),
     platformSkuMappings: all.platformSkuMappings.filter(item => item.customerId === customerId),
     logistics: all.logistics.filter(item => outboundNos.has(item.outboundNo)),
-    qcReports: all.qcReports.filter(item => inboundNos.has(item.inboundNo)),
     systemMessages: all.systemMessages.filter(
       item => item.customerId === null || item.customerId === customerId,
     ),
@@ -994,6 +1002,14 @@ function mapAnnouncementType(raw?: string): string {
 app.get('/api/erp/catalog', async (_req, res) => {
   try {
     res.json(await fetchErpCatalog())
+  } catch (e) {
+    sendErpError(res, e)
+  }
+})
+
+app.get('/api/erp/takealot-dest-warehouses/fulfillment', async (_req, res) => {
+  try {
+    res.json(await fetchErpTakealotFulfillmentWarehouses())
   } catch (e) {
     sendErpError(res, e)
   }

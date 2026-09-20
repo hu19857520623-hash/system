@@ -560,6 +560,12 @@ export function getErpAnnouncements() {
   return apiGet<{ items: ErpAnnouncementItem[]; total: number }>('/erp/announcements')
 }
 
+export type ErpFulfillmentWarehouse = { id: string; city: string }
+
+export function getErpFulfillmentWarehouses() {
+  return apiGet<{ items: ErpFulfillmentWarehouse[] }>('/erp/takealot-dest-warehouses/fulfillment')
+}
+
 export function createErpProduct(body: {
   sku: string
   customerSku?: string

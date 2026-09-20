@@ -23,7 +23,9 @@ export default function ProductCreate() {
         <h1 className="mt-2 text-2xl font-semibold tracking-tight text-text-primary">
           {isEdit ? `修改产品：${skuLabel}` : isCopy ? `复制产品：${skuLabel}` : '创建产品'}
         </h1>
-        <p className="mt-1 text-sm text-text-muted">填写产品信息、规格尺寸与图片</p>
+        <p className="mt-1 text-sm text-text-muted">
+          {isEdit ? 'SKU 主数据请在 ERP 维护' : '填写申报与规格，保存后写入 ERP 主数据'}
+        </p>
       </div>
       <ProductForm product={product} mode={isEdit ? 'edit' : 'create'} />
     </div>

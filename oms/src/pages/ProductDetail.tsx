@@ -1,18 +1,12 @@
-import { useMemo, useState } from 'react'
 import { Link, Navigate, useParams } from 'react-router-dom'
-import { ChevronLeft, Pencil } from 'lucide-react'
+import { ChevronLeft } from 'lucide-react'
 import {
-  Badge, Button, Card, MonoCode, Table, Tabs,
+  Badge, Card, MonoCode,
 } from '../components/ui'
-import { getProductLogs, statusLabels, formatCurrency } from '../data/mockData'
+import { statusLabels, formatCurrency } from '../data/mockData'
 import { getPrimaryPlatformBarcode } from '../data/platformBindingUtils'
 import { useProducts } from '../data/inventoryStore'
 import { useProductById } from '../components/products/ProductForm'
-
-const detailTabs = [
-  { id: 'logs', label: '产品日志' },
-  { id: 'images', label: '产品图片' },
-]
 
 function displaySku(internalSku: string) {
   return getPrimaryPlatformBarcode(internalSku) ?? internalSku
@@ -31,9 +25,6 @@ export default function ProductDetail() {
   const { id } = useParams()
   const product = useProductById(id)
   const allProducts = useProducts()
-  const [tab, setTab] = useState('logs')
-
-  const logs = useMemo(() => (id ? getProductLogs(id, allProducts) : []), [id, allProducts])
 
   if (!id) return <Navigate to="/products" replace />
   if (!product) {
@@ -62,11 +53,6 @@ export default function ProductDetail() {
             <Badge status={product.productStatus} label={statusLabels[product.productStatus]} />
           </div>
         </div>
-        <Link to={`/products/${product.id}/edit`}>
-          <Button variant="secondary" size="sm">
-            <Pencil className="h-3.5 w-3.5" /> 编辑
-          </Button>
-        </Link>
       </div>
 
       <Card className="mb-4 p-5">
@@ -88,7 +74,6 @@ export default function ProductDetail() {
           <DetailField label="申报价值" value={formatCurrency(product.declaredValue)} />
           <DetailField label="产品单位" value={product.unit} />
           <DetailField label="含电池" value={product.hasBattery ? '是' : '否'} />
-          <DetailField label="上传证书" value={product.certUploaded ? '是' : '否'} />
           <DetailField label="产品箱规" value={product.hasBoxSpec ? '是' : '否'} />
           <DetailField label="外箱条码" value={product.outerBoxBarcode ?? '—'} />
           <DetailField label="可售库存" value={String(product.availableQty)} />
@@ -97,44 +82,16 @@ export default function ProductDetail() {
         </div>
       </Card>
 
-      <div className="mb-4">
-        <Tabs tabs={detailTabs} active={tab} onChange={setTab} />
-      </div>
-
-      <Card className="overflow-hidden">
-        {tab === 'logs' && (
-          <Table>
-            <thead className="table-head">
-              <tr>
-                <th>日志</th>
-                <th>操作员</th>
-                <th>时间</th>
-                <th>IP</th>
-              </tr>
-            </thead>
-            <tbody className="table-body">
-              {logs.map(log => (
-                <tr key={log.id} className="table-row">
-                  <td className="table-cell text-sm">{log.action}</td>
-                  <td className="table-cell text-sm">{log.operator}</td>
-                  <td className="table-cell text-sm font-mono text-text-secondary">{log.createdAt}</td>
-                  <td className="table-cell text-sm font-mono text-text-muted">{log.ip}</td>
-                </tr>
-              ))}
-            </tbody>
-          </Table>
-        )}
-
-        {tab === 'images' && (
-          <div className="p-6">
-            {product.image ? (
-              <img src={product.image} alt={product.name} className="h-32 w-32 rounded-lg object-cover ring-1 ring-border-light" />
-            ) : (
-              <p className="text-center text-sm text-text-muted">暂无产品图片</p>
-            )}
+      {product.image ? (
+        <Card className="overflow-hidden">
+          <div className="border-b border-border-light px-5 py-3">
+            <h2 className="text-sm font-semibold text-text-primary">主图（来自 ERP 同步）</h2>
           </div>
-        )}
-      </Card>
+          <div className="p-6">
+            <img src={product.image} alt={product.name} className="h-32 w-32 rounded-lg object-cover ring-1 ring-border-light" />
+          </div>
+        </Card>
+      ) : null}
     </div>
   )
 }

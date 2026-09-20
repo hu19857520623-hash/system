@@ -122,6 +122,7 @@ const NAV: NavGroup[] = [
     channel: 'overseas_wms',
     items: [
       { id: 'warehouse_locations', name: '库位管理' },
+      { id: 'takealot_dest', name: 'Takealot 目的仓' },
       { id: 'inbound_arrival', name: '到仓扫描', badgeKey: 'inbound_in_transit' },
       { id: 'inbound', name: '入库单管理', badgeKey: 'inbound_receipt' },
       { id: 'returns', name: '退件管理' },
@@ -181,6 +182,7 @@ const NAV_ROUTE_MAP: Record<string, string> = {
   logistics_inventory: '/logistics-inventory',
   mingrui: '/mingrui',
   warehouse_locations: '/warehouse/locations',
+  takealot_dest: '/warehouse/takealot-dest',
   inbound_arrival: '/inbound/arrival-scan',
   create_inbound: '/inbound/create',
   inbound: '/inbound/receipt',
@@ -386,6 +388,7 @@ export const useAppStore = defineStore('app', {
         logistics_inventory: 'logistics_wh.view',
         mingrui: 'mingrui.view',
         warehouse_locations: 'warehouse_location.view',
+        takealot_dest: 'logistics_wh.view',
         inbound_arrival: 'inbound.arrival_scan',
         create_inbound: 'create_inbound.view',
         inbound: 'inbound.view',

@@ -3,7 +3,6 @@ import { PrismaClient } from '@prisma/client'
 import {
   CUSTOMER,
   announcements,
-  codeMappings,
   customerAccounts,
   feeRecords,
   inboundOrders,
@@ -13,7 +12,6 @@ import {
   outboundOrders,
   platformSkuMappings,
   products,
-  qcReports,
   stores,
   systemMessages,
 } from '../src/data/mockData'
@@ -296,24 +294,7 @@ async function main() {
     })
   }
 
-  console.log('Seeding code / platform mappings...')
-  for (const m of codeMappings) {
-    await prisma.codeMapping.create({
-      data: {
-        id: m.id,
-        internalSku: m.internalSku,
-        productName: m.productName,
-        codeType: m.codeType,
-        codeValue: m.codeValue,
-        status: m.status,
-        version: m.version,
-        hasInventory: m.hasInventory,
-        updatedAt: m.updatedAt,
-        platformMappingId: m.platformMappingId ?? null,
-      },
-    })
-  }
-
+  console.log('Seeding platform mappings...')
   for (const m of platformSkuMappings) {
     await prisma.platformSkuMapping.create({
       data: {
@@ -358,10 +339,6 @@ async function main() {
         exceptionReason: r.exceptionReason ?? null,
       },
     })
-  }
-
-  for (const q of qcReports) {
-    await prisma.qcReport.create({ data: { ...q } })
   }
 
   for (const m of systemMessages) {

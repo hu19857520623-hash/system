@@ -1,11 +1,9 @@
 import { useSyncExternalStore } from 'react'
 import { apiDelete, apiPatch, apiPut, type BootstrapData } from '../api/client'
 import type {
-  CodeMapping,
   InboundOrder,
   Order,
   PlatformSkuMapping,
-  QcReport,
   StoreAccount,
   SystemMessage,
 } from './mockData'
@@ -26,9 +24,7 @@ interface EntityState {
   inboundOrders: InboundOrder[]
   returnOrders: ReturnOrder[]
   stores: StoreAccount[]
-  codeMappings: CodeMapping[]
   platformSkuMappings: PlatformSkuMapping[]
-  qcReports: QcReport[]
   systemMessages: SystemMessage[]
   announcements: AnnouncementItem[]
   customerProfile: {
@@ -50,9 +46,7 @@ const empty: EntityState = {
   inboundOrders: [],
   returnOrders: [],
   stores: [],
-  codeMappings: [],
   platformSkuMappings: [],
-  qcReports: [],
   systemMessages: [],
   announcements: [],
   customerProfile: null,
@@ -82,9 +76,7 @@ export function hydrateEntities(data: BootstrapData) {
     inboundOrders: data.inboundOrders,
     returnOrders: data.returnOrders ?? [],
     stores: data.stores,
-    codeMappings: data.codeMappings,
     platformSkuMappings: data.platformSkuMappings,
-    qcReports: data.qcReports,
     systemMessages: data.systemMessages,
     announcements: data.announcements.map(a => ({
       id: a.id,
@@ -283,16 +275,8 @@ export function useStores() {
   return useEntityStore().stores
 }
 
-export function useCodeMappings() {
-  return useEntityStore().codeMappings
-}
-
 export function usePlatformSkuMappings() {
   return useEntityStore().platformSkuMappings
-}
-
-export function useQcReports() {
-  return useEntityStore().qcReports
 }
 
 export function useSystemMessages() {

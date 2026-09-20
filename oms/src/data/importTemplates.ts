@@ -9,7 +9,7 @@ import type {
   StockSource,
   StoreAccount,
 } from './mockData'
-import { findProductByCode } from './platformBindingUtils'
+import { findProductByCode, firstTakealotStore } from './platformBindingUtils'
 import type { ReturnLineItem } from './returnStore'
 import { RETURN_PROCESS_OPTIONS, RETURN_WAREHOUSE_OPTIONS } from './returnStore'
 import { getCustomerSkuDisplay } from './skuCode'
@@ -282,12 +282,11 @@ export function exportInboundOrders(orders: InboundOrder[]) {
   downloadCsv('OMS-入库记录导出.csv', rows)
 }
 
-// ─── 平台绑定（与 PlatformBindingModal 一致，同条码多行=组合品） ───
+// ─── 990 码绑定（与 PlatformBindingModal 一致，同条码多行=组合品） ───
 
 export const PLATFORM_BINDING_COLUMNS: CsvColumn[] = [
-  { key: 'platform', header: '平台名称', required: true, hint: 'Takealot / Shopify / Manual' },
-  { key: 'platformBarcode', header: '平台商品条码', required: true, hint: '990 条码' },
-  { key: 'platformTitle', header: '平台商品名称', required: false },
+  { key: 'platformBarcode', header: '990条码', required: true, hint: 'Takealot 990 条码' },
+  { key: 'platformTitle', header: '商品名称', required: false },
   { key: 'stockSource', header: '库存来源', required: true, hint: '自有库存 / 货盘库存' },
   { key: 'internalSku', header: '仓库商品编码', required: true, hint: '内部 SKU' },
   { key: 'warehouseName', header: '仓库商品名称', required: false, hint: '默认取商品名' },
@@ -303,8 +302,8 @@ function parseStockSource(value: string): StockSource | null {
 }
 
 export function downloadPlatformBindingTemplate() {
-  downloadTemplate('OMS-平台绑定导入模板.xls', PLATFORM_BINDING_COLUMNS, [
-    ['Takealot', '6009637110200', 'Wireless Mouse', '自有库存', 'HX6', 'Ergonomic Mouse', '', '自带包装', '1'],
+  downloadTemplate('OMS-990绑定导入模板.xls', PLATFORM_BINDING_COLUMNS, [
+    ['9901234567890', 'Wireless Mouse', '自有库存', 'HX6', 'Ergonomic Mouse', '', '自带包装', '1'],
   ])
 }
 
@@ -329,13 +328,12 @@ export function parsePlatformBindings(
   records.forEach((row, idx) => {
     const lineNo = sourceLineNoFromRecord(row, idx)
     const internalSku = row.internalSku?.trim()
-    const platform = row.platform as PlatformSkuMapping['platform']
-    if (!['Takealot', 'Shopify', 'Manual'].includes(platform)) {
-      pushParseFailure(failures, errors, lineNo, '平台名称无效', internalSku)
+    const barcode = row.platformBarcode?.trim()
+    if (!barcode) {
+      pushParseFailure(failures, errors, lineNo, '990条码不能为空', internalSku)
       return
     }
-    const store = stores.find(s => s.platform === platform && s.status !== 'disabled')
-      || stores.find(s => s.platform === platform)
+    const store = firstTakealotStore(stores)
     const stockSource = parseStockSource(row.stockSource)
     if (!stockSource) {
       pushParseFailure(failures, errors, lineNo, '库存来源须为「自有库存」或「货盘库存」', internalSku)
@@ -347,7 +345,7 @@ export function parsePlatformBindings(
       return
     }
 
-    const key = `${platform}|${store?.id || ''}|${row.platformBarcode}|${stockSource}`
+    const key = `${store?.id || ''}|${barcode}|${stockSource}`
     const prod = findProductByCode(row.internalSku)
     const line = {
       internalSku: row.internalSku,
@@ -359,11 +357,11 @@ export function parsePlatformBindings(
 
     if (!groups.has(key)) {
       groups.set(key, {
-        platform,
+        platform: 'Takealot',
         storeId: store?.id ?? '',
         storeName: store?.name ?? '—',
-        platformBarcode: row.platformBarcode,
-        platformTitle: row.platformTitle || prod?.name || row.platformBarcode,
+        platformBarcode: barcode,
+        platformTitle: row.platformTitle || prod?.name || barcode,
         stockSource,
         lines: [line],
       })

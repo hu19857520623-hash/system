@@ -24,6 +24,7 @@ import {
   applyPlatformBindingFilters,
   bindingTabCounts,
   defaultPlatformBindingFilters,
+  firstTakealotStore,
   type PlatformBindingTab,
   type PlatformBindingFilters,
 } from '../../data/platformBindingUtils'
@@ -120,13 +121,18 @@ export default function PlatformBindingsPanel() {
     }
   }
 
+  const takealotList = useMemo(
+    () => dataScope.scope(list).filter(m => m.platform === 'Takealot'),
+    [list, dataScope],
+  )
+
   const filtered = useMemo(() => {
-    let rows = filterBindingsByTab(dataScope.scope(list), tab)
+    let rows = filterBindingsByTab(takealotList, tab)
     rows = applyPlatformBindingFilters(rows, filters)
     return rows
-  }, [list, tab, filters, dataScope])
+  }, [takealotList, tab, filters])
 
-  const counts = useMemo(() => bindingTabCounts(dataScope.scope(list)), [list, dataScope])
+  const counts = useMemo(() => bindingTabCounts(takealotList), [takealotList])
 
   const setFilter = <K extends keyof PlatformBindingFilters>(key: K, value: PlatformBindingFilters[K]) => {
     setFilters(prev => ({ ...prev, [key]: value }))
@@ -145,7 +151,8 @@ export default function PlatformBindingsPanel() {
   }
 
   const handleSave = async (form: BindingFormState, prev: PlatformSkuMapping | null) => {
-    const store = stores.find(s => s.id === form.storeId)
+    const takealotStore = firstTakealotStore(stores)
+    const store = takealotStore ?? stores.find(s => s.id === form.storeId)
     const validLines = form.lines.filter(l => l.internalSku)
     const nextStatus = prev?.hasInventory && prev.status === 'active'
       ? 'pending_review' as const
@@ -159,8 +166,8 @@ export default function PlatformBindingsPanel() {
         ...m,
         customerId: dataScope.activeCustomerId ?? m.customerId,
         sellerId: store?.sellerId ?? m.sellerId,
-        platform: form.platform,
-        storeId: form.storeId,
+        platform: 'Takealot',
+        storeId: store?.id ?? form.storeId,
         storeName: store?.name ?? m.storeName,
         platformSkuId: prev.platformSkuId || undefined,
         platformBarcode: form.platformBarcode,
@@ -177,8 +184,8 @@ export default function PlatformBindingsPanel() {
         id: `pb-${Date.now()}`,
         customerId: dataScope.activeCustomerId ?? undefined,
         sellerId: store?.sellerId,
-        platform: form.platform,
-        storeId: form.storeId,
+        platform: 'Takealot',
+        storeId: store?.id ?? form.storeId,
         storeName: store?.name ?? '—',
         platformSkuId: undefined,
         platformBarcode: form.platformBarcode,
@@ -200,7 +207,7 @@ export default function PlatformBindingsPanel() {
 
   const handleDelete = async () => {
     if (selected.size === 0) return
-    if (!window.confirm(`确认删除已选 ${selected.size} 条平台绑定？此操作不可恢复。`)) return
+    if (!window.confirm(`确认删除已选 ${selected.size} 条 990 绑定？此操作不可恢复。`)) return
     const before = list
     const next = list.filter(m => !selected.has(m.id))
     setList(next)
@@ -210,7 +217,7 @@ export default function PlatformBindingsPanel() {
         apiDelete(`/platform-sku-mappings/${encodeURIComponent(id)}`),
       ))
       setSelected(new Set())
-      window.alert(`已删除 ${selected.size} 条平台绑定`)
+      window.alert(`已删除 ${selected.size} 条 990 绑定`)
     } catch (error) {
       setList(before)
       setPlatformSkuMappings(before)
@@ -227,11 +234,12 @@ export default function PlatformBindingsPanel() {
       await reportLineImportResult(
         result,
         async () => {
+          const takealotStore = firstTakealotStore(stores)
           const imported: PlatformSkuMapping[] = result.data.map(row => ({
             id: `pb-import-${Date.now()}-${row.platformBarcode}`,
-            platform: row.platform,
-            storeId: row.storeId,
-            storeName: row.storeName,
+            platform: 'Takealot',
+            storeId: takealotStore?.id ?? row.storeId,
+            storeName: takealotStore?.name ?? row.storeName,
             platformSkuId: undefined,
             platformBarcode: row.platformBarcode,
             platformTitle: row.platformTitle,
@@ -246,7 +254,7 @@ export default function PlatformBindingsPanel() {
           await persistList([...imported, ...list])
         },
         {
-          successMessage: n => `已导入 ${n} 条平台绑定`,
+          successMessage: n => `已导入 ${n} 条 990 绑定`,
           emptyMessage: '未解析到有效绑定，请使用最新模板',
         },
       )
@@ -263,7 +271,7 @@ export default function PlatformBindingsPanel() {
   if (role === 'catalog' && !dataScope.isAdmin) {
     return (
       <Card className="p-6 text-sm text-text-secondary">
-        <p className="font-medium text-text-primary">货盘客户通常无需绑定平台 SKU</p>
+        <p className="font-medium text-text-primary">货盘客户通常无需绑定 990 码</p>
         <p className="mt-2">请使用货盘选品与内部 SKU 履约。如需开通电商业务，请联系管理员将账号升级为混合客户。</p>
       </Card>
     )
@@ -274,13 +282,13 @@ export default function PlatformBindingsPanel() {
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-text-secondary">
           {dataScope.isAdmin
-            ? '全平台商品条码与仓库 SKU 映射'
-            : '平台商品条码与仓库 SKU 的映射，订单同步后据此扣减库存'}
+            ? '全平台 990 条码与仓库 SKU 映射，用于出库识别标签'
+            : '将 Takealot 990 条码对应到仓库 SKU，用于出库识别标签；不会从平台拉单扣库存'}
         </p>
         {canWrite && (
           <div className="flex flex-wrap gap-2">
             <Button size="sm" onClick={openCreate}><Plus className="h-3.5 w-3.5" /> 新增</Button>
-            <DropdownBtn label="导入平台商品" items={[
+            <DropdownBtn label="导入 990 绑定" items={[
               { label: 'Excel 批量导入', onClick: () => void handleImportBindings() },
               { label: '下载导入模板', onClick: downloadPlatformBindingTemplate },
             ]} />
@@ -294,7 +302,7 @@ export default function PlatformBindingsPanel() {
         {canWrite && (
           <>
             <Button variant="toolbar" size="sm" onClick={() => void handleImportBindings()}>
-              <Upload className="h-3.5 w-3.5" /> 导入平台商品
+              <Upload className="h-3.5 w-3.5" /> 导入 990 绑定
             </Button>
             <Button variant="toolbar" size="sm" disabled={selected.size === 0} onClick={() => void handleDelete()}>
               <Trash2 className="h-3.5 w-3.5" /> 删除
@@ -322,32 +330,29 @@ export default function PlatformBindingsPanel() {
               <th className="w-10">
                 <input type="checkbox" checked={selected.size === filtered.length && filtered.length > 0} onChange={toggleAll} className="rounded border-border" />
               </th>
-              <th className="text-primary-700">平台名称</th>
               {dataScope.isAdmin && <th>客户代码</th>}
-              <th className="text-primary-700">平台商品条码</th>
-              <th className="min-w-[180px] text-primary-700">平台商品名称</th>
+              <th className="text-primary-700">990 条码</th>
+              <th className="min-w-[180px] text-primary-700">商品名称</th>
               <th>仓库商品编码</th>
               <th>仓库商品名称</th>
               <th>简称</th>
               <th>库存来源</th>
               <th>绑定状态</th>
-              <th>同步来源</th>
               <th className="table-ops">操作</th>
             </tr>
             <tr className="bg-surface-muted/40">
               <th />
-              <th><input className={inputCls} placeholder="筛选" value={filters.platform} onChange={e => setFilter('platform', e.target.value)} /></th>
               {dataScope.isAdmin && <th />}
               <th><input className={inputCls} placeholder="筛选" value={filters.barcode} onChange={e => setFilter('barcode', e.target.value)} /></th>
               <th><input className={inputCls} placeholder="筛选" value={filters.platformTitle} onChange={e => setFilter('platformTitle', e.target.value)} /></th>
               <th><input className={inputCls} placeholder="筛选" value={filters.warehouseSku} onChange={e => setFilter('warehouseSku', e.target.value)} /></th>
               <th><input className={inputCls} placeholder="筛选" value={filters.warehouseName} onChange={e => setFilter('warehouseName', e.target.value)} /></th>
-              <th colSpan={5} />
+              <th colSpan={4} />
             </tr>
           </thead>
           <tbody className="table-body">
             {filtered.length === 0 ? (
-              <tr><td colSpan={dataScope.isAdmin ? 12 : 11} className="table-cell py-10 text-center text-xs text-text-muted">暂无数据</td></tr>
+              <tr><td colSpan={dataScope.isAdmin ? 10 : 9} className="table-cell py-10 text-center text-xs text-text-muted">暂无数据</td></tr>
             ) : filtered.flatMap(row => {
               if (row.lines.length === 0) {
                 return [(
@@ -359,7 +364,6 @@ export default function PlatformBindingsPanel() {
                         return next
                       })} className="rounded border-border" />
                     </td>
-                    <td className="table-cell text-xs font-semibold text-primary-700">{row.platform}</td>
                     <AdminCustomerCell customerId={row.customerId} scope={dataScope} />
                     <td className="table-cell text-xs text-primary-700">
                       <span className="inline-flex items-center font-mono">{row.platformBarcode}<CopyBarcodeButton value={row.platformBarcode} /></span>
@@ -368,7 +372,6 @@ export default function PlatformBindingsPanel() {
                     <td className="table-cell text-xs text-text-muted" colSpan={3}>— 待绑定仓库 SKU —</td>
                     <td className="table-cell text-xs">{STOCK_SOURCE_LABELS[row.stockSource]}</td>
                     <td className="table-cell"><span className={`rounded-md px-2 py-0.5 text-[11px] font-semibold ${statusBadge(row.status)}`}>{PLATFORM_BINDING_STATUS_LABELS[row.status]}</span></td>
-                    <td className="table-cell text-xs text-text-muted">{row.syncSource === 'api' ? '平台同步' : row.syncSource === 'import' ? '导入' : '手工'}</td>
                     <td className="table-cell">
                       {canWrite && <Button variant="ghost" size="sm" onClick={() => openEdit(row)}>绑定</Button>}
                     </td>
@@ -386,7 +389,6 @@ export default function PlatformBindingsPanel() {
                           return next
                         })} className="rounded border-border" />
                       </td>
-                      <td className="table-cell align-top text-xs font-semibold text-primary-700" rowSpan={row.lines.length}>{row.platform}</td>
                       <AdminCustomerCell customerId={row.customerId} scope={dataScope} rowSpan={row.lines.length} />
                       <td className="table-cell align-top text-xs text-primary-700" rowSpan={row.lines.length}>
                         <span className="inline-flex items-center font-mono">{row.platformBarcode}<CopyBarcodeButton value={row.platformBarcode} /></span>
@@ -403,7 +405,6 @@ export default function PlatformBindingsPanel() {
                       <td className="table-cell align-top" rowSpan={row.lines.length}>
                         <span className={`rounded-md px-2 py-0.5 text-[11px] font-semibold ${statusBadge(row.status)}`}>{PLATFORM_BINDING_STATUS_LABELS[row.status]}</span>
                       </td>
-                      <td className="table-cell align-top text-xs text-text-muted" rowSpan={row.lines.length}>{row.syncSource === 'api' ? '平台同步' : row.syncSource === 'import' ? '导入' : '手工'}</td>
                       <td className="table-cell align-top" rowSpan={row.lines.length}>
                         {canWrite && (
                           <Button variant="ghost" size="sm" onClick={() => openEdit(row)} title="编辑">
@@ -415,7 +416,7 @@ export default function PlatformBindingsPanel() {
                             variant="ghost"
                             size="sm"
                             onClick={() => {
-                              if (!window.confirm(`确认审核通过平台条码 ${row.platformBarcode}？`)) return
+                              if (!window.confirm(`确认审核通过 990 条码 ${row.platformBarcode}？`)) return
                               void persistList(list.map(m => m.id === row.id ? { ...m, status: 'active' } : m))
                             }}
                           >

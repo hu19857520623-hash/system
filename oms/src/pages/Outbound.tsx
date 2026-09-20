@@ -4,7 +4,7 @@ import { AlertTriangle, CheckCircle2, Link2, ListOrdered, Plus, Trash2, Upload, 
 import { Button, Card, MonoCode, Table } from '../components/ui'
 import { FormSection, FormGrid, FormField, formInput, formSelect, formTextarea } from '../components/ui/form'
 import {
-  FULFILLMENT_WAREHOUSES, warehouseLabel,
+  warehouseLabel,
   PLATFORM_OPTIONS, formatCurrency,
   TAKEALOT_ATTACHMENT_KINDS,
   type FileAttachment, type OutboundOrder, type OutboundType, type PlatformSkuMapping,
@@ -77,6 +77,7 @@ import {
 } from '../data/entityStore'
 import { apiPut } from '../api/client'
 import { notifyIfUserError } from '../utils/userNotify'
+import { getFulfillmentWarehouses } from '../data/fulfillmentWarehouseConfig'
 
 const SHIP_WAREHOUSE_ID = 'jhb'
 const DEFAULT_TAKEALOT_DEST_WAREHOUSE = 'jhb3'
@@ -125,6 +126,7 @@ export default function Outbound() {
   const editOrder = editId ? outboundOrders.find(order => order.id === editId && order.status === 'draft') : undefined
   const { role, can } = useRole()
   const [takealotDestWarehouse, setTakealotDestWarehouse] = useState<string>(DEFAULT_TAKEALOT_DEST_WAREHOUSE)
+  const [fulfillmentWarehouses, setFulfillmentWarehouses] = useState(() => getFulfillmentWarehouses())
   const [platform, setPlatform] = useState<string>(PLATFORM_OPTIONS[0])
   const [outboundType, setOutboundType] = useState<string>('Takealot入仓')
   const [refNo, setRefNo] = useState('')
@@ -368,7 +370,7 @@ export default function Outbound() {
       && !(doc.warehouseConfidence === 'generic' && destinationExplicitlySelected.current)
     ) {
       const wh = doc.warehouseCode.toLowerCase()
-      const exists = FULFILLMENT_WAREHOUSES.some(w => w.id === wh)
+      const exists = getFulfillmentWarehouses().some(w => w.id === wh)
       if (exists) setTakealotDestWarehouse(wh)
     }
     if (doc.sellerName) setSellerStoreName(doc.sellerName)
@@ -836,7 +838,6 @@ export default function Outbound() {
   const openQuickBind = (row: TakealotValidationRow) => {
     if (!can('platform:write')) {
       const query = new URLSearchParams({
-        tab: 'platform',
         barcode: row.barcode,
         title: row.title || '',
       })
@@ -852,7 +853,7 @@ export default function Outbound() {
   ) => {
     const validLines = form.lines.filter(line => line.internalSku)
     if (!form.platformBarcode.trim() || validLines.length !== 1) {
-      window.alert('快速绑定需要填写平台条码并且只选择一个仓库 SKU')
+      window.alert('快速绑定需要填写 990 条码并且只选择一个仓库 SKU')
       return
     }
     const store = stores.find(item => item.id === form.storeId) ?? quickBindStore
@@ -1407,7 +1408,7 @@ export default function Outbound() {
                 <table className="w-full min-w-[760px] text-left text-[11px]">
                   <thead className="bg-surface-muted/60 text-text-muted">
                     <tr>
-                      <th className="px-3 py-2 font-medium">平台条码</th>
+                      <th className="px-3 py-2 font-medium">990 条码</th>
                       <th className="px-3 py-2 font-medium">产品</th>
                       <th className="px-3 py-2 text-center font-medium">清单</th>
                       <th className="px-3 py-2 text-center font-medium">标签</th>
@@ -1453,7 +1454,7 @@ export default function Outbound() {
                                 <button
                                   type="button"
                                   onClick={() => {
-                                    const query = new URLSearchParams({ tab: 'platform', barcode: row.barcode, title: row.title || '' })
+                                    const query = new URLSearchParams({ barcode: row.barcode, title: row.title || '' })
                                     window.open(`/codes?${query.toString()}`, '_blank', 'noopener,noreferrer')
                                   }}
                                   className="shrink-0 font-medium text-primary-700 hover:underline"
@@ -1535,8 +1536,8 @@ export default function Outbound() {
                     }}
                     className={formSelect()}
                   >
-                    {FULFILLMENT_WAREHOUSES.map(w => (
-                      <option key={w.id} value={w.id}>{warehouseLabel(w.id)}</option>
+                    {fulfillmentWarehouses.map(w => (
+                      <option key={w.id} value={w.id}>{`${w.id.toUpperCase()} · ${w.city}`}</option>
                     ))}
                   </select>
                 </FormField>

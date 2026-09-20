@@ -1,13 +1,12 @@
 import { Link } from 'react-router-dom'
 import {
   ArrowDownToLine, ArrowUpFromLine, Package, ShoppingCart, Wallet,
-  Bell, AlertTriangle, Warehouse, FileText,
+  Bell, Warehouse, FileText,
 } from 'lucide-react'
 import { Card, CardHeader, Badge, MonoCode } from '../components/ui'
-import { formatCurrency, getInventoryStatus } from '../data/mockData'
+import { formatCurrency } from '../data/mockData'
 import { useAnnouncements, useCustomerProfile, useInboundOrders, useOrders, useSystemMessages } from '../data/entityStore'
 import { useOutboundOrders } from '../data/outboundStore'
-import { useInventoryItems } from '../data/inventoryStore'
 import { useBilling } from '../data/billingStore'
 import { useRole } from '../auth/RoleContext'
 import { useDataScope } from '../auth/useDataScope'
@@ -34,17 +33,14 @@ export default function Dashboard() {
   const customer = useCustomerProfile()
   const { creditBalance } = useBilling()
   const messages = useSystemMessages()
-  const inventory = useInventoryItems()
   const scopedOrders = dataScope.scope(orders)
   const scopedInbound = dataScope.scope(inboundOrders)
   const scopedOutbound = dataScope.scopeOutbound(outboundOrders)
-  const scopedInventory = dataScope.scope(inventory)
   const todayKey = new Date().toISOString().slice(0, 10)
   const todayOrders = scopedOrders.filter(o => String(o.createdAt || '').startsWith(todayKey)).length
   const todayExceptions = scopedOrders.filter(o => o.exception).length
   const inboundOnWay = scopedInbound.filter(o => o.status === 'on_the_way').length
   const outboundPending = scopedOutbound.filter(o => OUTBOUND_PENDING.has(o.status)).length
-  const inventoryAlerts = scopedInventory.filter(i => getInventoryStatus(i) !== 'normal').length
   const unreadMessages = messages.filter(m => !m.read).length
   const visibleActions = quickActionDefs.filter(a => can(a.perm)).map(action => ({
     ...action,
@@ -119,21 +115,15 @@ export default function Dashboard() {
             {[
               { label: '在途入库', count: inboundOnWay, to: '/inbound/records?tab=on_the_way', show: can('inbound:read') },
               { label: '待发货出库', count: outboundPending, to: '/outbound/records?tab=active', show: can('outbound:read') || can('order:read') },
-              { label: '库存预警', count: inventoryAlerts, to: '/inventory/alerts', show: can('inventory:read'), alert: true },
               { label: '未读消息', count: unreadMessages, to: '/messages', show: true },
             ].filter(i => i.show).map(item => (
               <Link
                 key={item.label}
                 to={item.to}
-                className={`flex items-center justify-between rounded-xl px-4 py-3 ring-1 transition-colors hover:bg-surface-muted ${
-                  item.alert && item.count > 0 ? 'bg-red-50 ring-red-100' : 'bg-white ring-border-light'
-                }`}
+                className="flex items-center justify-between rounded-xl bg-white px-4 py-3 ring-1 ring-border-light transition-colors hover:bg-surface-muted"
               >
-                <div className="flex items-center gap-2">
-                  {item.alert && item.count > 0 && <AlertTriangle className="h-4 w-4 text-red-500" />}
-                  <span className="text-sm text-text-primary">{item.label}</span>
-                </div>
-                <span className={`text-lg font-bold ${item.alert && item.count > 0 ? 'text-red-600' : 'text-primary-600'}`}>{item.count}</span>
+                <span className="text-sm text-text-primary">{item.label}</span>
+                <span className="text-lg font-bold text-primary-600">{item.count}</span>
               </Link>
             ))}
           </div>

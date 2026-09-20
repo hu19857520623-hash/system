@@ -157,15 +157,13 @@ export const ROUTE_PERMISSIONS: Record<string, Permission> = {
   '/catalog': 'catalog:read',
   '/products': 'product:read',
   '/products/new': 'product:write',
-  '/codes': 'code:read',
+  '/codes': 'platform:read',
   '/platform-bindings': 'platform:read',
   '/inbound': 'inbound:read',
   '/inbound/records': 'inbound:read',
-  '/inbound/qc': 'inbound:read',
   '/outbound': 'outbound:read',
   '/messages': 'dashboard:read',
   '/inventory': 'inventory:read',
-  '/inventory/alerts': 'inventory:read',
   '/shipping': 'outbound:read',
   '/logistics': 'outbound:read',
   '/returns': 'returns:read',
@@ -201,8 +199,8 @@ export function resolveRoutePermission(pathname: string): Permission | null {
 
 export function canAccessRoute(role: OmsRole, pathname: string, customPermissions?: Permission[]): boolean {
   const basePath = pathname.split('?')[0]
-  if (basePath === '/codes' || basePath === '/platform-bindings') {
-    return can(role, 'code:read', customPermissions) || can(role, 'platform:read', customPermissions)
+  if (basePath === '/platform-bindings') {
+    return can(role, 'platform:read', customPermissions)
   }
   const permission = resolveRoutePermission(pathname)
   if (!permission) return true
@@ -210,13 +208,13 @@ export function canAccessRoute(role: OmsRole, pathname: string, customPermission
 }
 
 export function navPermissionForRoute(to: string): Permission {
-  if (to === '/codes') return 'code:read'
+  if (to === '/codes') return 'platform:read'
   return ROUTE_PERMISSIONS[to] ?? 'dashboard:read'
 }
 
 export function canAccessNavRoute(role: OmsRole, to: string, customPermissions?: Permission[]): boolean {
-  if (to === '/codes') {
-    return can(role, 'code:read', customPermissions) || can(role, 'platform:read', customPermissions)
+  if (to === '/codes' || to === '/platform-bindings') {
+    return can(role, 'platform:read', customPermissions)
   }
   return can(role, navPermissionForRoute(to), customPermissions)
 }

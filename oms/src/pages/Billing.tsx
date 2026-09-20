@@ -4,7 +4,6 @@ import { Link } from 'react-router-dom'
 import { Button, PageHeader, Card, MonoCode, StatCard, Table, TableFooter, FilterChip, Badge } from '../components/ui'
 import { formInput, formTextarea } from '../components/ui/form'
 import { formatCurrency } from '../data/mockData'
-import { useCustomerProfile } from '../data/entityStore'
 import { rechargeViaErp, useBilling } from '../data/billingStore'
 import { groupFeeRecordsByOutbound, isOutboundRefNo } from '../data/outboundFeeUtils'
 import { useRole } from '../auth/RoleContext'
@@ -263,8 +262,6 @@ export default function BillingPage({ rechargeOnly }: BillingPageProps) {
   const { can, role } = useRole()
   const dataScope = useDataScope()
   const { creditBalance, feeRecords } = useBilling()
-  const customer = useCustomerProfile()
-  const budgetUsed = customer?.budgetUsed ?? 0
   const allMethods = usePaymentMethods()
   const enabledMethods = allMethods.filter(m => m.enabled).sort((a, b) => a.sortOrder - b.sortOrder)
   const [payMethodId, setPayMethodId] = useState(enabledMethods[0]?.id ?? 'bank')
@@ -425,17 +422,10 @@ export default function BillingPage({ rechargeOnly }: BillingPageProps) {
         </p>
       </div>
 
-      <div className="mb-4 grid grid-cols-4 gap-4">
-        <StatCard label="账户余额" value={formatCurrency(creditBalance)} />
-        <StatCard label="累计扣费" value={formatCurrency(monthlySpent)} sub="含预扣与实际结算" />
+      <div className="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <StatCard label="账户余额" value={formatCurrency(creditBalance)} sub="来自 ERP 账本余额" />
+        <StatCard label="累计扣费" value={formatCurrency(monthlySpent)} sub="本页流水中的扣费合计（含预扣与实算）" />
         <StatCard label="预扣笔数" value={preDeductCount} sub="出库提交时产生" />
-        <Card padding>
-          <p className="text-xs font-medium text-text-muted">预算使用</p>
-          <p className="mt-2 text-2xl font-bold tracking-tight">{budgetUsed}%</p>
-          <div className="mt-3 h-2 overflow-hidden rounded-full bg-surface-subtle">
-            <div className="h-full rounded-full bg-gradient-to-r from-primary-500 to-primary-600" style={{ width: `${budgetUsed}%` }} />
-          </div>
-        </Card>
       </div>
 
       <Card className="mb-4 p-5">

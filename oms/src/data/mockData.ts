@@ -496,23 +496,6 @@ export const logisticsRecords: LogisticsRecord[] = [
   { id: '3', refNo: 'CAT-SEL-20260705', outboundNo: 'OUT-20260705003', carrier: '—', trackingNo: '—', status: 'exception', destination: 'Takealot JNB 仓', updatedAt: '2026-07-05 09:12', podStatus: 'pending' },
 ]
 
-export interface QcReport {
-  id: string
-  inboundNo: string
-  sku: string
-  productName: string
-  sampleQty: number
-  passQty: number
-  failQty: number
-  result: 'pass' | 'partial' | 'fail'
-  reportDate: string
-}
-
-export const qcReports: QcReport[] = [
-  { id: '1', inboundNo: 'IN-20260706001', sku: 'SKU-JNB-10021', productName: '无线蓝牙耳机 Pro', sampleQty: 50, passQty: 50, failQty: 0, result: 'pass', reportDate: '2026-07-04' },
-  { id: '2', inboundNo: 'IN-20260705004', sku: 'SKU-JNB-10058', productName: '手机支架 磁吸款', sampleQty: 60, passQty: 55, failQty: 5, result: 'partial', reportDate: '2026-07-03' },
-]
-
 export const reportSummary = {
   orderTrend: [{ month: '3月', orders: 820, gmv: 285000 }, { month: '4月', orders: 910, gmv: 312000 }, { month: '5月', orders: 1050, gmv: 358000 }, { month: '6月', orders: 1180, gmv: 402000 }],
   inventoryTurnover: 28,
@@ -627,7 +610,6 @@ export function countOrdersByTab(tab: string, orderList: Order[] = orders): numb
 export type LegacyOrderStatus = 'draft' | 'pending' | 'locked' | 'picking' | 'shipped' | 'delivered' | 'partial_delivered' | 'delivery_failed' | 'cancelled' | 'exception'
 export type InboundStatus = 'draft' | 'receiving' | 'partial' | 'completed' | 'exception' | 'on_the_way' | 'shelved' | 'voided'
 export type OutboundType = 'dropship' | 'takealot' | 'transfer' | 'tfs'
-export type CodeStatus = 'active' | 'pending_review' | 'deprecated'
 /** 发货来源：平台订单驱动 / 货盘分销 / 手工创建 */
 export type ShipmentSource = 'platform_order' | 'catalog_dist' | 'manual'
 /** 库存来源：客户自有 vs 货盘选品 */
@@ -743,51 +725,6 @@ export interface Product {
   declaredNameCn: string
   declaredValue: number
   unit: string
-}
-
-export interface ProductLogEntry {
-  id: string
-  productId: string
-  action: string
-  operator: string
-  createdAt: string
-  ip: string
-}
-
-export function getProductLogs(productId: string, productList: Product[] = products): ProductLogEntry[] {
-  const product = productList.find(p => p.id === productId)
-  if (!product) return []
-  const logs: ProductLogEntry[] = [
-    {
-      id: `${productId}-create`,
-      productId,
-      action: '新建产品',
-      operator: 'HX',
-      createdAt: '2026-06-25 14:09:16',
-      ip: '192.168.1.100',
-    },
-  ]
-  if (product.productStatus === 'reviewing') {
-    logs.unshift({
-      id: `${productId}-review`,
-      productId,
-      action: '提交审核',
-      operator: 'HX',
-      createdAt: '2026-06-26 09:12:04',
-      ip: '192.168.1.100',
-    })
-  }
-  if (product.certUploaded) {
-    logs.unshift({
-      id: `${productId}-cert`,
-      productId,
-      action: '上传证书',
-      operator: 'HX',
-      createdAt: '2026-06-27 11:30:22',
-      ip: '192.168.1.100',
-    })
-  }
-  return logs
 }
 
 export type InboundType = '自发头程' | '中转入库' | '退货入库' | '货盘入库'
@@ -929,20 +866,6 @@ export interface OutboundOrder {
   }
   lineItems?: OutboundLineItem[]
   attachments?: FileAttachment[]
-}
-
-export interface CodeMapping {
-  id: string
-  internalSku: string
-  productName: string
-  codeType: 'custom' | 'box_label'
-  codeValue: string
-  status: CodeStatus
-  version: number
-  hasInventory: boolean
-  updatedAt: string
-  /** 平台条码类编码已迁移至 platformSkuMappings */
-  platformMappingId?: string
 }
 
 export type PlatformBindingStatus = 'unmapped' | 'active' | 'pending_review' | 'barcode_mismatch' | 'deprecated'
@@ -1158,12 +1081,6 @@ export const outboundOrders: OutboundOrder[] = [
   { id: '9', customerId: '2', outboundNo: 'OUT-CPT-260707001', orderNo: 'ORD-CPT-260707001', refNo: 'REF-CPT-7001', source: 'catalog_dist', stockSource: 'catalog', type: 'dropship', warehouse: 'jhb1', items: 2, totalQty: 15, status: 'pending', destination: 'Cape Town · 8001', createdAt: '2026-07-07', shippingMethod: '卡派' },
   { id: '10', customerId: '1', outboundNo: 'OUT-20260706010', orderNo: 'ORD-260706002', source: 'platform_order', stockSource: 'owned', type: 'dropship', warehouse: 'jhb1', items: 2, totalQty: 3, status: 'pending', destination: 'Durban · 4001', createdAt: '2026-07-06', shippingMethod: '卡派' },
   { id: '11', customerId: '1', outboundNo: 'OUT-20260705011', orderNo: 'ORD-260705018', refNo: 'PO-US-0518', source: 'manual', stockSource: 'owned', type: 'dropship', warehouse: 'jhb1', items: 2, totalQty: 6, status: 'locked', destination: 'Los Angeles · 90001', createdAt: '2026-07-05', shippingMethod: '自提' },
-]
-
-export const codeMappings: CodeMapping[] = [
-  { id: '2', internalSku: 'SKU-JNB-10021', productName: '无线蓝牙耳机 Pro', codeType: 'custom', codeValue: 'BT-PRO-BK', status: 'active', version: 1, hasInventory: true, updatedAt: '2026-05-20', platformMappingId: 'pb-1' },
-  { id: '5', internalSku: 'SKU-JNB-10072', productName: '便携榨汁杯 380ml', codeType: 'custom', codeValue: 'JUICER-PK', status: 'active', version: 1, hasInventory: true, updatedAt: '2026-06-10' },
-  { id: '6', internalSku: 'SKU-JNB-10021', productName: '无线蓝牙耳机 Pro', codeType: 'box_label', codeValue: 'OBX-88291001', status: 'active', version: 1, hasInventory: true, updatedAt: '2026-06-01' },
 ]
 
 export const platformSkuMappings: PlatformSkuMapping[] = [

@@ -22,10 +22,6 @@ import { exportInventoryCsv } from '../data/listExport'
 import { findProductByCode } from '../data/platformBindingUtils'
 import { calcSkuVolumeM3 } from '../data/feeTemplates'
 
-interface InventoryPageProps {
-  alertsOnly?: boolean
-}
-
 interface InvFilters {
   sku: string
   skuMode: SearchMode
@@ -88,7 +84,7 @@ function applyInvFilters(list: ReturnType<typeof useInventoryItems>, f: InvFilte
   })
 }
 
-export default function InventoryPage({ alertsOnly }: InventoryPageProps) {
+export default function InventoryPage() {
   const { role } = useRole()
   const dataScope = useDataScope()
   const allInventory = useInventoryItems()
@@ -96,8 +92,8 @@ export default function InventoryPage({ alertsOnly }: InventoryPageProps) {
   const scopedInventory = useMemo(() => dataScope.scope(allInventory), [dataScope, allInventory])
   const scopedOutbound = useMemo(() => dataScope.scopeOutbound(allOutbound), [dataScope, allOutbound])
   const [poolTab, setPoolTab] = useState<'all' | StockSource>('all')
-  const [tab, setTab] = useState(alertsOnly ? 'low' : 'all')
-  const [filtersOpen, setFiltersOpen] = useState(!alertsOnly)
+  const [tab, setTab] = useState('all')
+  const [filtersOpen, setFiltersOpen] = useState(true)
   const [draft, setDraft] = useState<InvFilters>(defaultFilters)
   const [applied, setApplied] = useState<InvFilters>(defaultFilters)
   const [syncing, setSyncing] = useState(false)
@@ -174,7 +170,6 @@ export default function InventoryPage({ alertsOnly }: InventoryPageProps) {
   const ownedAvailable = ownedItems.reduce((s, i) => s + i.available, 0)
   const catalogHoldingQty = catalogItems.reduce((s, i) => s + i.locked, 0)
   const totalLocked = scopedInventory.reduce((s, i) => s + i.locked, 0)
-  const alertCount = scopedInventory.filter(i => getInventoryStatus(i) !== 'normal').length
   const showCatalogHoldColumn = poolTab === 'catalog' || poolTab === 'all'
 
   const tabs = [
@@ -193,8 +188,8 @@ export default function InventoryPage({ alertsOnly }: InventoryPageProps) {
   return (
     <div className="page-shell">
       <PageHeader
-        title={alertsOnly ? '库存预警' : '库存查询'}
-        desc={dataScope.isAdmin ? '全平台库存总览，可按客户筛选' : (alertsOnly ? '低库存与断货风险 SKU 列表' : '自有库存看可用量；货盘申购后持有量显示在「货盘持有」列，可出库发货')}
+        title="库存查询"
+        desc={dataScope.isAdmin ? '全平台库存总览，可按客户筛选' : '自有库存看可用量；货盘申购后持有量显示在「货盘持有」列，可出库发货'}
         action={
           <>
             <Button variant="secondary" size="sm" onClick={() => exportInventoryCsv(filtered)}>
@@ -208,40 +203,34 @@ export default function InventoryPage({ alertsOnly }: InventoryPageProps) {
         }
       />
 
-      {!alertsOnly && (
-        <>
-          <div className="mb-3 flex flex-wrap gap-2">
-            {([
-              { id: 'all' as const, label: '全部库存', count: scopedInventory.length },
-              { id: 'owned' as const, label: '自有库存', count: ownedItems.length },
-              { id: 'catalog' as const, label: '货盘库存', count: catalogItems.length },
-            ]).map(p => (
-              <FilterChip key={p.id} active={poolTab === p.id} onClick={() => setPoolTab(p.id)}>
-                {p.label} ({p.count})
-              </FilterChip>
-            ))}
-          </div>
-          <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-6">
-            <StatCard label="SKU 总数" value={scopedInventory.length} />
-            <StatCard label="可用库存" value={totalAvailable.toLocaleString()} />
-            <StatCard label="自有可用" value={ownedAvailable.toLocaleString()} sub={STOCK_SOURCE_LABELS.owned} />
-            <StatCard label="货盘持有" value={catalogHoldingQty.toLocaleString()} sub="申购后可发" alert={catalogHoldingQty > 0} />
-            <StatCard label="锁定库存" value={totalLocked.toLocaleString()} sub="出库占用" />
-            <StatCard label="预警 SKU" value={alertCount} alert={alertCount > 0} />
-          </div>
-        </>
-      )}
+      <div className="mb-3 flex flex-wrap gap-2">
+        {([
+          { id: 'all' as const, label: '全部库存', count: scopedInventory.length },
+          { id: 'owned' as const, label: '自有库存', count: ownedItems.length },
+          { id: 'catalog' as const, label: '货盘库存', count: catalogItems.length },
+        ]).map(p => (
+          <FilterChip key={p.id} active={poolTab === p.id} onClick={() => setPoolTab(p.id)}>
+            {p.label} ({p.count})
+          </FilterChip>
+        ))}
+      </div>
+      <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-5">
+        <StatCard label="SKU 总数" value={scopedInventory.length} />
+        <StatCard label="可用库存" value={totalAvailable.toLocaleString()} />
+        <StatCard label="自有可用" value={ownedAvailable.toLocaleString()} sub={STOCK_SOURCE_LABELS.owned} />
+        <StatCard label="货盘持有" value={catalogHoldingQty.toLocaleString()} sub="申购后可发" alert={catalogHoldingQty > 0} />
+        <StatCard label="锁定库存" value={totalLocked.toLocaleString()} sub="出库占用" />
+      </div>
 
-      {!alertsOnly && (
-        <Card className="mb-4 p-4">
-          <div className="mb-3 flex items-center justify-between">
-            <p className="text-sm font-semibold text-text-primary">筛选条件</p>
-            <button type="button" onClick={() => setFiltersOpen(v => !v)} className="text-xs text-primary-600 hover:underline">
-              {filtersOpen ? '收起' : '展开'}
-            </button>
-          </div>
-          {filtersOpen && (
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <Card className="mb-4 p-4">
+        <div className="mb-3 flex items-center justify-between">
+          <p className="text-sm font-semibold text-text-primary">筛选条件</p>
+          <button type="button" onClick={() => setFiltersOpen(v => !v)} className="text-xs text-primary-600 hover:underline">
+            {filtersOpen ? '收起' : '展开'}
+          </button>
+        </div>
+        {filtersOpen && (
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               {dataScope.isAdmin && <AdminCustomerFilter scope={dataScope} />}
               <SearchField label="SKU" value={draft.sku} onChange={v => setDraftField('sku', v)} mode={draft.skuMode} onModeChange={v => setDraftField('skuMode', v)} />
               <SearchField label="自定义编号" value={draft.customCode} onChange={v => setDraftField('customCode', v)} mode={draft.customCodeMode} onModeChange={v => setDraftField('customCodeMode', v)} />
@@ -272,10 +261,9 @@ export default function InventoryPage({ alertsOnly }: InventoryPageProps) {
                 onQuery={() => setApplied({ ...draft })}
                 onReset={() => { setDraft(defaultFilters); setApplied(defaultFilters) }}
               />
-            </div>
-          )}
-        </Card>
-      )}
+          </div>
+        )}
+      </Card>
 
       <div className="mb-4 flex flex-wrap gap-2">
         {tabs.map(t => (
