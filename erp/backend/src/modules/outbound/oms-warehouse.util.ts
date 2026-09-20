@@ -1,4 +1,4 @@
-import { getEnabledTakealotDestRows, getTakealotDestCache } from '../warehouse/takealot-dest.cache'
+import { getEnabledTakealotDestRows } from '../warehouse/takealot-dest.cache'
 import type { TakealotDestRow } from '../warehouse/takealot-dest.defaults'
 
 export type TakealotDestCategory = {
