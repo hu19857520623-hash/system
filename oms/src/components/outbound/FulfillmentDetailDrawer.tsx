@@ -91,7 +91,7 @@ export default function FulfillmentDetailDrawer({ row, open, onClose, onUploadPo
       subtitle={
         <>
           <span className="text-xs text-text-muted">
-            {row.platform}{row.store !== '—' ? ` · ${row.store}` : ''}
+            {row.platform}
           </span>
           <Badge status={row.statusKey} label={row.statusLabel} />
           {order?.exception && <ExceptionBadge type={order.exception} />}
@@ -159,7 +159,6 @@ export default function FulfillmentDetailDrawer({ row, open, onClose, onUploadPo
               <InfoRow label="物流渠道" value={row.shippingMethod ?? '—'} />
               <InfoRow label="发货来源" value={row.source ? SHIPMENT_SOURCE_LABELS[row.source] : '—'} />
               <InfoRow label="平台" value={row.platform} />
-              <InfoRow label="店铺" value={row.store} />
               <InfoRow label="仓库" value={row.warehouse} />
               <InfoRow label="履约状态" value={row.statusLabel} />
               <InfoRow label="金额" value={row.amount != null ? formatCurrency(row.amount) : '—'} />

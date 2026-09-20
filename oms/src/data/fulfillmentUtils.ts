@@ -18,7 +18,6 @@ export interface FulfillmentRow {
   shippingMethod: string | null
   source: ShipmentSource | null
   platform: string
-  store: string
   warehouse: string
   statusKey: string
   statusLabel: string
@@ -35,11 +34,6 @@ function platformForRow(outbound: OutboundOrder, order: Order | undefined): stri
   if (outbound.source === 'platform_order') return 'Takealot'
   if (outbound.source === 'catalog_dist') return '—'
   return '其他'
-}
-
-function storeForRow(order: Order | undefined): string {
-  if (order?.store && order.store !== '—') return order.store
-  return '—'
 }
 
 function statusForRow(outbound: OutboundOrder, order: Order | undefined): { key: string; label: string } {
@@ -101,7 +95,6 @@ export function buildFulfillmentRows(
       shippingMethod: ob.shippingMethod ?? order?.logistics ?? log?.carrier ?? null,
       source: ob.source,
       platform: platformForRow(ob, order),
-      store: storeForRow(order),
       warehouse: ob.warehouse,
       statusKey: key,
       statusLabel: label,
@@ -125,7 +118,6 @@ export function buildFulfillmentRows(
       shippingMethod: o.logistics || null,
       source: (o.platform === 'Manual' ? 'manual' : 'platform_order') as ShipmentSource,
       platform: platformDisplayLabel(o.platform),
-      store: o.store,
       warehouse: o.warehouse,
       statusKey: o.status,
       statusLabel: statusLabels[o.status] ?? o.status,
@@ -148,7 +140,6 @@ export interface FulfillmentFilters {
   sku: string
   skuMode: 'exact' | 'fuzzy'
   platform: string
-  store: string
   warehouse: string
   status: string
   logistics: string
@@ -162,7 +153,6 @@ export const defaultFulfillmentFilters: FulfillmentFilters = {
   sku: '',
   skuMode: 'fuzzy',
   platform: 'all',
-  store: 'all',
   warehouse: 'all',
   status: 'all',
   logistics: 'all',
@@ -186,7 +176,6 @@ function matchPlatform(row: FulfillmentRow, filter: string): boolean {
 export function applyFulfillmentFilters(rows: FulfillmentRow[], f: FulfillmentFilters): FulfillmentRow[] {
   return rows.filter(r => {
     if (f.platform !== 'all' && !matchPlatform(r, f.platform)) return false
-    if (f.store !== 'all' && r.store !== f.store) return false
     if (f.warehouse !== 'all' && r.warehouse !== f.warehouse) return false
     if (f.status !== 'all' && r.statusKey !== f.status) return false
     if (f.logistics !== 'all' && (r.shippingMethod ?? '') !== f.logistics) return false

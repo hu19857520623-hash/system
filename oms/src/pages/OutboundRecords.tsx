@@ -129,7 +129,7 @@ export default function OutboundRecords() {
     : role === 'catalog'
       ? [...SOURCE_TABS.filter(t => ['all', 'catalog_dist', 'active'].includes(t.id)), ...LOGISTICS_TABS]
       : role === 'ecommerce'
-        ? [...SOURCE_TABS.filter(t => ['all', 'platform_order', 'manual', 'active'].includes(t.id)), ...LOGISTICS_TABS]
+        ? [...SOURCE_TABS.filter(t => ['all', 'platform_order', 'catalog_dist', 'manual', 'active'].includes(t.id)), ...LOGISTICS_TABS]
         : [...SOURCE_TABS, ...LOGISTICS_TABS]
 
   const tabCount = (tabId: string) => filterFulfillmentRows(allRows, tabId, applied).length
@@ -164,7 +164,7 @@ export default function OutboundRecords() {
       </div>
 
       <Card className="mb-4 p-4">
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           <div>
             <label className="mb-1 block text-[11px] font-medium text-text-muted">创建时间</label>
             <div className="flex items-center gap-1">
@@ -183,12 +183,6 @@ export default function OutboundRecords() {
           <Select label="平台" value={draft.platform} onChange={v => setDraftField('platform', v)} options={[
             { value: 'all', label: '全部' },
             ...PLATFORM_OPTIONS.map(p => ({ value: p, label: p })),
-          ]} />
-          <Select label="平台店铺" value={draft.store} onChange={v => setDraftField('store', v)} options={[
-            { value: 'all', label: '全部' },
-            { value: '主店', label: '主店' },
-            { value: '副店', label: '副店' },
-            { value: '独立站', label: '独立站' },
           ]} />
         </div>
         <div className="mt-3 flex items-center justify-between border-t border-border-light pt-3">
@@ -245,7 +239,6 @@ export default function OutboundRecords() {
               <th className="whitespace-nowrap">物流渠道</th>
               <th className="whitespace-nowrap">发货来源</th>
               <th className="whitespace-nowrap">平台</th>
-              <th className="whitespace-nowrap">店铺</th>
               <th className="whitespace-nowrap">仓库</th>
               <th className="whitespace-nowrap">履约状态</th>
               <th className="whitespace-nowrap">物流状态</th>
@@ -258,7 +251,7 @@ export default function OutboundRecords() {
           </thead>
           <tbody className="table-body">
             {filtered.length === 0 ? (
-              <tr><td colSpan={15} className="table-cell py-10 text-center text-xs text-text-muted">暂无数据</td></tr>
+              <tr><td colSpan={14} className="table-cell py-10 text-center text-xs text-text-muted">暂无数据</td></tr>
             ) : filtered.map(r => {
               const feeSummary = r.outbound ? buildOutboundFeeSummary(r.outbound, feeRecords) : null
               return (
@@ -279,7 +272,6 @@ export default function OutboundRecords() {
                   ) : '—'}
                 </td>
                 <td className="table-cell text-xs">{r.platform}</td>
-                <td className="table-cell text-xs text-text-secondary">{r.store}</td>
                 <td className="table-cell text-xs font-medium">{warehouseLabel(r.warehouse)}</td>
                 <td className="table-cell">
                   <Badge status={r.statusKey} label={r.statusLabel} />

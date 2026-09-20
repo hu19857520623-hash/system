@@ -380,6 +380,82 @@ export async function mergeErpCatalogIntoState(items: ErpCatalogItem[]) {
   }
 }
 
+function skuLookupKeys(sku: string): string[] {
+  const trimmed = sku.trim()
+  if (!trimmed) return []
+  const keys = new Set([trimmed])
+  const lower = trimmed.toLowerCase()
+  for (const product of state.products) {
+    const matches =
+      product.internalSku.toLowerCase() === lower
+      || (product.customerSku || '').toLowerCase() === lower
+      || getCustomerSkuDisplay(product).toLowerCase() === lower
+    if (!matches) continue
+    keys.add(product.internalSku)
+    if (product.customerSku?.trim()) keys.add(product.customerSku.trim())
+  }
+  return [...keys]
+}
+
+function findCustomerInventory(
+  sku: string,
+  stockSource: 'owned' | 'catalog',
+  customerId?: string,
+) {
+  const keys = new Set(skuLookupKeys(sku).map(value => value.toLowerCase()))
+  if (keys.size === 0) return undefined
+  return state.inventory.find(item => {
+    if (item.stockSource !== stockSource) return false
+    if (!keys.has(item.sku.toLowerCase())) return false
+    if (stockSource === 'catalog') return Boolean(customerId) && item.customerId === customerId
+    return !item.customerId || item.customerId === customerId
+  })
+}
+
+function findProductForSku(sku: string) {
+  const keys = new Set(skuLookupKeys(sku).map(value => value.toLowerCase()))
+  return state.products.find(product =>
+    keys.has(product.internalSku.toLowerCase())
+    || (product.customerSku ? keys.has(product.customerSku.toLowerCase()) : false),
+  )
+}
+
+/** 出库 SKU 优先走客户货盘持有，没有持有再走自有可售。 */
+export function resolveOutboundStockSource(
+  sku: string,
+  customerId?: string,
+  preferred?: 'owned' | 'catalog',
+): 'owned' | 'catalog' {
+  if (preferred === 'catalog' || preferred === 'owned') return preferred
+  const catalogQty = Math.max(0, findCustomerInventory(sku, 'catalog', customerId)?.locked ?? 0)
+  return catalogQty > 0 ? 'catalog' : 'owned'
+}
+
+/** 当前客户可加入出库单的库存行（货盘看持有量，自有看可售）。 */
+export function listShippableOutboundItems(
+  customerId?: string,
+  options?: { catalogOnly?: boolean },
+): Array<{ sku: string; name: string; shippable: number; stockSource: 'owned' | 'catalog' }> {
+  const catalogOnly = Boolean(options?.catalogOnly)
+  const rows: Array<{ sku: string; name: string; shippable: number; stockSource: 'owned' | 'catalog' }> = []
+  for (const item of state.inventory) {
+    if (item.stockSource === 'catalog') {
+      if (!customerId || item.customerId !== customerId) continue
+      if (isCatalogPoolCustomerId(item.customerId)) continue
+      const shippable = Math.max(0, item.locked)
+      if (shippable <= 0) continue
+      rows.push({ sku: item.sku, name: item.name, shippable, stockSource: 'catalog' })
+      continue
+    }
+    if (catalogOnly) continue
+    if (customerId && item.customerId && item.customerId !== customerId) continue
+    const shippable = Math.max(0, item.available)
+    if (shippable <= 0) continue
+    rows.push({ sku: item.sku, name: item.name, shippable, stockSource: 'owned' })
+  }
+  return rows
+}
+
 /** 出库提交时锁定库存（货盘扣减客户锁定量，自有扣减可售并转锁定） */
 export async function lockStockForOutbound(
   lines: { sku: string; qty: number }[],
@@ -394,9 +470,7 @@ export async function lockStockForOutbound(
     if (qty <= 0) continue
     if (stockSource === 'catalog') {
       if (!customerId) return { ok: false, error: '货盘出库需关联客户账号' }
-      const item = state.inventory.find(
-        i => i.sku === line.sku && i.stockSource === 'catalog' && i.customerId === customerId,
-      )
+      const item = findCustomerInventory(line.sku, 'catalog', customerId)
       if (!item) {
         return { ok: false, error: `${line.sku} 尚未申购，请先在货盘选品申购并锁定库存` }
       }
@@ -405,9 +479,7 @@ export async function lockStockForOutbound(
       }
       continue
     }
-    const item = state.inventory.find(
-      i => i.sku === line.sku && i.stockSource === 'owned' && (!i.customerId || i.customerId === customerId),
-    )
+    const item = findCustomerInventory(line.sku, 'owned', customerId)
     if (!item) return { ok: false, error: `未找到 SKU ${line.sku} 的自有库存` }
     if (item.available < qty) {
       return { ok: false, error: `${line.sku} 可售库存不足（需 ${qty}，可售 ${item.available}）` }
@@ -417,12 +489,8 @@ export async function lockStockForOutbound(
   for (const line of lines) {
     const qty = line.qty
     if (qty <= 0) continue
-    const product = state.products.find(p => p.internalSku === line.sku)
-    const item = state.inventory.find(i =>
-      i.sku === line.sku &&
-      i.stockSource === stockSource &&
-      (stockSource === 'catalog' ? i.customerId === customerId : (!i.customerId || i.customerId === customerId)),
-    )!
+    const item = findCustomerInventory(line.sku, stockSource, customerId)!
+    const product = findProductForSku(item.sku)
     if (stockSource === 'catalog') {
       item.locked -= qty
       item.pendingOutbound += qty
@@ -458,21 +526,15 @@ export async function rollbackStockForOutbound(
   for (const line of lines) {
     const qty = Math.max(0, Number(line.qty) || 0)
     if (!qty) continue
-    const product = state.products.find(p => p.internalSku === line.sku)
+    const item = findCustomerInventory(line.sku, stockSource, customerId)
+    if (!item) continue
+    const product = findProductForSku(item.sku)
     if (stockSource === 'catalog') {
-      const item = state.inventory.find(
-        i => i.sku === line.sku && i.stockSource === 'catalog' && i.customerId === customerId,
-      )
-      if (!item) continue
       item.locked += qty
       item.pendingOutbound = Math.max(0, item.pendingOutbound - qty)
       if (product) product.lockedQty += qty
       continue
     }
-    const item = state.inventory.find(
-      i => i.sku === line.sku && i.stockSource === 'owned' && (!i.customerId || i.customerId === customerId),
-    )
-    if (!item) continue
     item.available += qty
     item.locked = Math.max(0, item.locked - qty)
     if (product) {
@@ -495,22 +557,18 @@ export function getCatalogAvailableQty(internalSku: string): number {
 /** 出库单行可发上限：自有库存看 available，货盘出库看客户 locked。 */
 export function getOutboundShippableQty(
   sku: string,
-  stockSource: 'owned' | 'catalog',
+  stockSource: 'owned' | 'catalog' | 'auto',
   customerId?: string,
 ): number {
   if (!sku.trim()) return 0
-  if (stockSource === 'catalog') {
+  const resolved = resolveOutboundStockSource(sku, customerId, stockSource === 'auto' ? undefined : stockSource)
+  if (resolved === 'catalog') {
     if (!customerId) return 0
-    const item = state.inventory.find(
-      i => i.sku === sku && i.stockSource === 'catalog' && i.customerId === customerId,
-    )
-    return Math.max(0, item?.locked ?? 0)
+    return Math.max(0, findCustomerInventory(sku, 'catalog', customerId)?.locked ?? 0)
   }
-  const item = state.inventory.find(
-    i => i.sku === sku && i.stockSource === 'owned' && (!i.customerId || i.customerId === customerId),
-  )
+  const item = findCustomerInventory(sku, 'owned', customerId)
   if (item) return Math.max(0, item.available)
-  const product = state.products.find(p => p.internalSku === sku)
+  const product = findProductForSku(sku)
   return Math.max(0, product?.availableQty ?? 0)
 }
 

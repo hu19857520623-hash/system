@@ -63,7 +63,7 @@ export interface CustomerScoped {
   customerId?: string
 }
 
-/** 出库单：严格按 customerId 隔离，并按角色过滤来源（电商不看货盘分销） */
+/** 出库单：严格按 customerId 隔离；货盘持有也可发，客户应能看到自己的货盘分销单 */
 export function scopeOutboundForRole<T extends CustomerScoped & { source?: string }>(
   items: T[],
   role: OmsRole,
@@ -79,9 +79,7 @@ export function scopeOutboundForRole<T extends CustomerScoped & { source?: strin
   const cid = authenticatedCustomerId
   if (!cid) return []
   let list = items.filter(i => i.customerId === cid)
-  if (role === 'ecommerce') {
-    list = list.filter(o => o.source !== 'catalog_dist')
-  } else if (role === 'catalog') {
+  if (role === 'catalog') {
     list = list.filter(o => o.source === 'catalog_dist')
   }
   return list

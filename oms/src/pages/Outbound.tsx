@@ -11,7 +11,15 @@ import {
   type ShipmentSource, type StockSource, type TakealotAttachmentKind,
   OUTBOUND_TYPE_OPTIONS, outboundTypeFromLabel, outboundTypeLabel,
 } from '../data/mockData'
-import { getOutboundShippableQty, lockStockForOutbound, rollbackStockForOutbound, useInventoryItems, useProducts } from '../data/inventoryStore'
+import {
+  getOutboundShippableQty,
+  listShippableOutboundItems,
+  lockStockForOutbound,
+  resolveOutboundStockSource,
+  rollbackStockForOutbound,
+  useInventoryItems,
+  useProducts,
+} from '../data/inventoryStore'
 import { addOutboundOrderOrThrow, nextOutboundNo, removeOutboundOrder, submitOutboundToErp, useOutboundOrders } from '../data/outboundStore'
 import { getCustomerCode, getCustomerIdForRole } from '../data/dataScope'
 import {
@@ -172,7 +180,7 @@ export default function Outbound() {
   const allProducts = useProducts()
   useInventoryItems()
   const catalogOnly = role === 'catalog'
-  const stockSource: StockSource = catalogOnly ? 'catalog' : 'owned'
+  const pickerStockSource: StockSource | 'auto' = catalogOnly ? 'catalog' : 'auto'
   const { creditBalance } = useBilling()
 
   const effectiveDestRegion = isTakealot
@@ -202,7 +210,7 @@ export default function Outbound() {
 
   const resolveLineSku = (input: string) => findProductByCode(input)?.internalSku || input.trim()
 
-  const getShippableQty = (sku: string) => getOutboundShippableQty(sku, stockSource, customerId ?? undefined)
+  const getShippableQty = (sku: string) => getOutboundShippableQty(sku, pickerStockSource, customerId ?? undefined)
 
   const getRemainingShippableQty = (sku: string, excludeLineId?: string) => {
     const normalized = resolveLineSku(sku)
@@ -769,7 +777,7 @@ export default function Outbound() {
             merged.sellerId || takealotSellerId.trim() || undefined,
             customerId,
           ),
-          stockSource,
+          stockSource: catalogOnly ? 'catalog' : 'owned',
           now: todayDateInput(),
         })
         if (bindResult.bound.length) {
@@ -902,18 +910,30 @@ export default function Outbound() {
   const handleSubmit = async (asDraft = false) => {
     const submitCustomerId = getCustomerIdForRole(role) ?? undefined
     const type: OutboundType = outboundTypeFromLabel(outboundType)
-    const source: ShipmentSource = role === 'catalog' ? 'catalog_dist' : 'platform_order'
-    const stockSource: StockSource = role === 'catalog' ? 'catalog' : 'owned'
+    const stockLines = lines.length > 0
+      ? lines.map(l => ({ sku: resolveLineSku(l.sku) || l.sku, qty: l.qty }))
+      : []
+    const lineSources = new Set(
+      stockLines.map(line => resolveOutboundStockSource(
+        line.sku,
+        submitCustomerId,
+        catalogOnly ? 'catalog' : undefined,
+      )),
+    )
+    if (!asDraft && lineSources.size > 1) {
+      window.alert('同一出库单不能混发自有库存与货盘库存，请分开下单')
+      return
+    }
+    const stockSource: StockSource = lineSources.size === 1
+      ? [...lineSources][0]
+      : (catalogOnly ? 'catalog' : 'owned')
+    const source: ShipmentSource = stockSource === 'catalog' ? 'catalog_dist' : 'platform_order'
     const totalQty = lines.reduce((s, l) => s + l.qty, 0)
     const destination = isTakealot
       ? warehouseLabel(takealotDestWarehouse)
       : [recipientAddress1.trim(), recipientCity.trim(), recipientProvince.trim(), recipientPostalCode.trim()]
           .filter(Boolean)
           .join(', ')
-
-    const stockLines = lines.length > 0
-      ? lines.map(l => ({ sku: l.sku, qty: l.qty }))
-      : []
 
     if (!asDraft && isTakealot && takealotValidationBlockers.length > 0) {
       window.alert(
@@ -1116,7 +1136,7 @@ export default function Outbound() {
     }
   }
 
-  const availableProducts = allProducts.filter(p => catalogOnly ? p.inCatalog : true)
+  const availableProducts = listShippableOutboundItems(customerId ?? undefined, { catalogOnly })
   const parseMissing = takealotParsedDoc ? takealotMissingFields(takealotParsedDoc) : []
   const parsedFieldCount = takealotParsedDoc ? 7 - parseMissing.length : 0
 
@@ -1653,7 +1673,7 @@ export default function Outbound() {
                       暂无货品，请点击「增加」选择 SKU，或使用批量上传
                       {availableProducts.length > 0 && (
                         <span className="mt-2 block text-[10px]">
-                          可匹配库存：{availableProducts.slice(0, 3).map(p => p.internalSku).join('、')} 等
+                          可匹配库存：{availableProducts.slice(0, 3).map(p => p.sku).join('、')} 等
                         </span>
                       )}
                     </td>
@@ -1780,7 +1800,7 @@ export default function Outbound() {
         onClose={() => setSkuPickerOpen(false)}
         customerId={customerId ?? undefined}
         catalogOnly={catalogOnly}
-        stockSource={stockSource}
+        stockSource={pickerStockSource}
         lines={lines}
         onConfirm={applySkuPickerLines}
       />

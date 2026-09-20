@@ -3,7 +3,11 @@ import { RefreshCw, Settings2, X } from 'lucide-react'
 import { Button, MonoCode, Table } from '../ui'
 import { formInput } from '../ui/form'
 import type { Product, StockSource } from '../../data/mockData'
-import { getProductsSnapshot, getOutboundShippableQty } from '../../data/inventoryStore'
+import {
+  getProductsSnapshot,
+  getOutboundShippableQty,
+  listShippableOutboundItems,
+} from '../../data/inventoryStore'
 import { findProductByCode } from '../../data/platformBindingUtils'
 import { getCustomerSkuDisplay } from '../../data/skuCode'
 
@@ -40,7 +44,7 @@ type Props = {
   onClose: () => void
   customerId?: string
   catalogOnly: boolean
-  stockSource: StockSource
+  stockSource: StockSource | 'auto'
   lines: OutboundSkuPickerLine[]
   initialSearch?: string
   onConfirm: (rows: OutboundSkuPickerConfirmRow[]) => void
@@ -107,9 +111,16 @@ export default function OutboundSkuPickerModal({
 
   const catalog = useMemo(() => {
     void refreshKey
+    const holdings = listShippableOutboundItems(customerId, { catalogOnly })
+    const holdingKeys = new Set(holdings.flatMap(item => [item.sku.toLowerCase()]))
     let list = getProductsSnapshot()
-    if (customerId) list = list.filter(p => !p.customerId || p.customerId === customerId)
-    if (catalogOnly) list = list.filter(p => p.inCatalog)
+    list = list.filter(p => {
+      const ownedByCustomer = !customerId || !p.customerId || p.customerId === customerId
+      const hasHolding = holdingKeys.has(p.internalSku.toLowerCase())
+        || (p.customerSku ? holdingKeys.has(p.customerSku.toLowerCase()) : false)
+      if (catalogOnly) return p.inCatalog || hasHolding
+      return ownedByCustomer || hasHolding
+    })
     return list
   }, [customerId, catalogOnly, open, refreshKey])
 
@@ -144,7 +155,11 @@ export default function OutboundSkuPickerModal({
   const skuTokens = useMemo(() => parseSkuTokens(skuFilter), [skuFilter])
 
   const listItems = useMemo((): RowItem[] => {
-    const catalogKeys = new Set(catalog.map(p => p.internalSku))
+    const catalogKeys = new Set(catalog.flatMap(p => [
+      p.internalSku.toLowerCase(),
+      (p.customerSku || '').toLowerCase(),
+      getCustomerSkuDisplay(p).toLowerCase(),
+    ].filter(Boolean)))
     let products = catalog.filter(
       p => lineByInternalSku.has(p.internalSku)
         || getOutboundShippableQty(p.internalSku, stockSource, customerId) > 0,
@@ -152,12 +167,30 @@ export default function OutboundSkuPickerModal({
     products = products.filter(p => productMatchesSkuTokens(p, skuTokens) && productMatchesName(p, nameFilter))
 
     const orphans: RowItem[] = []
-    for (const [internalSku, line] of lineByInternalSku) {
-      if (catalogKeys.has(internalSku)) continue
+    const seenOrphans = new Set<string>()
+    const pushOrphan = (internalSku: string, line: OutboundSkuPickerLine) => {
+      const key = internalSku.toLowerCase()
+      if (catalogKeys.has(key) || seenOrphans.has(key)) return
       const skuHay = [line.sku, internalSku].map(s => s.toLowerCase())
       const skuOk = skuTokens.length === 0 || skuTokens.some(tok => skuHay.some(h => h === tok || h.includes(tok)))
       const nameOk = !nameFilter.trim() || line.name.toLowerCase().includes(nameFilter.trim().toLowerCase())
-      if (skuOk && nameOk) orphans.push({ kind: 'orphan', internalSku, line })
+      if (!skuOk || !nameOk) return
+      seenOrphans.add(key)
+      orphans.push({ kind: 'orphan', internalSku, line })
+    }
+    for (const [internalSku, line] of lineByInternalSku) {
+      pushOrphan(internalSku, line)
+    }
+    for (const holding of listShippableOutboundItems(customerId, { catalogOnly })) {
+      pushOrphan(holding.sku, {
+        id: `inv-${holding.sku}`,
+        sku: holding.sku,
+        name: holding.name,
+        qty: 1,
+        declaredName: holding.name,
+        declaredValue: 0,
+        note: '',
+      })
     }
 
     const inOrder = lineByInternalSku
@@ -174,7 +207,7 @@ export default function OutboundSkuPickerModal({
       .map(product => ({ kind: 'product' as const, product }))
 
     return [...orphans, ...sortedProducts]
-  }, [catalog, skuTokens, nameFilter, lineByInternalSku, stockSource, customerId])
+  }, [catalog, skuTokens, nameFilter, lineByInternalSku, stockSource, customerId, catalogOnly])
 
   const total = listItems.length
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
@@ -257,7 +290,7 @@ export default function OutboundSkuPickerModal({
       const qty = Math.max(1, Math.trunc(qtyBySku[internalSku] || existing?.qty || 1))
       const displaySku = prod ? getCustomerSkuDisplay(prod) : existing?.sku ?? internalSku
       rows.push({
-        sku: displaySku,
+        sku: prod?.internalSku ?? existing?.sku ?? internalSku,
         name: prod?.name ?? existing?.name ?? displaySku,
         qty,
         declaredName: existing?.declaredName || prod?.declaredNameEn || prod?.name || displaySku,
