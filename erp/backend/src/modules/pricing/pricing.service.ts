@@ -250,11 +250,10 @@ export class PricingService {
     ])
     const stockMap = await this.loadWarehouseAvailableBySku(rows.map((r) => r.sku))
     const holdersMap = await this.loadCatalogHoldersBySku(rows.map((r) => r.sku))
-    const items = []
-    for (const r of rows) {
+    const items = await Promise.all(rows.map(async (r) => {
       const ready = await this.ensureOrderableIfWarehouseReady(r, stockMap.get(r.sku) || 0)
-      items.push(this.attachHolderFields(this.serialize(ready, stockMap.get(r.sku) || 0), holdersMap))
-    }
+      return this.attachHolderFields(this.serialize(ready, stockMap.get(r.sku) || 0), holdersMap)
+    }))
     return {
       items,
       total,
