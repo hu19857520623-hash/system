@@ -214,6 +214,23 @@ export class PricingService {
     })
   }
 
+  private async ensureOrderableIfWarehouseReady<T extends {
+    sku: string
+    visibleOnOms: boolean
+    orderableOnOms: boolean
+    visibleStockQty?: number | null
+    inboundQty?: number | null
+    purchaseQty?: number | null
+    soldQty?: number | null
+  }>(row: T, warehouseAvailableQty: number): Promise<T> {
+    if (row.visibleOnOms && !row.orderableOnOms && remainingCatalogStock(row) > 0 && warehouseAvailableQty > 0) {
+      if (await tryMarkOrderableOnOms(this.prisma, row.sku)) {
+        return { ...row, orderableOnOms: true, orderableOnOmsAt: new Date() } as T
+      }
+    }
+    return row
+  }
+
   async list(q: PaginationDto & { status?: string }) {
     const { page, pageSize } = getPagination(q, 50)
     const where: any = {}
@@ -233,8 +250,13 @@ export class PricingService {
     ])
     const stockMap = await this.loadWarehouseAvailableBySku(rows.map((r) => r.sku))
     const holdersMap = await this.loadCatalogHoldersBySku(rows.map((r) => r.sku))
+    const items = []
+    for (const r of rows) {
+      const ready = await this.ensureOrderableIfWarehouseReady(r, stockMap.get(r.sku) || 0)
+      items.push(this.attachHolderFields(this.serialize(ready, stockMap.get(r.sku) || 0), holdersMap))
+    }
     return {
-      items: rows.map((r) => this.attachHolderFields(this.serialize(r, stockMap.get(r.sku) || 0), holdersMap)),
+      items,
       total,
       page,
       pageSize,
@@ -249,8 +271,9 @@ export class PricingService {
     if (!row) throw new NotFoundException('货盘库存记录不存在')
     const enriched = await this.ensureMarketPrice(row)
     const stockMap = await this.loadWarehouseAvailableBySku([enriched.sku])
-    const holdersMap = await this.loadCatalogHoldersBySku([enriched.sku])
-    return this.attachHolderFields(this.serialize(enriched, stockMap.get(enriched.sku) || 0), holdersMap)
+    const ready = await this.ensureOrderableIfWarehouseReady(enriched, stockMap.get(enriched.sku) || 0)
+    const holdersMap = await this.loadCatalogHoldersBySku([ready.sku])
+    return this.attachHolderFields(this.serialize(ready, stockMap.get(ready.sku) || 0), holdersMap)
   }
 
   /** 入库发运创建时自动同步货盘库存（海运费、入库数量等） */

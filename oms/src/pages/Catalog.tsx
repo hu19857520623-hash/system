@@ -42,7 +42,9 @@ export default function Catalog() {
   const billing = useBilling()
   const allProducts = useProducts()
   const allPurchases = useCatalogPurchases()
-  const catalogProducts = allProducts.filter(p => p.inCatalog && p.productStatus === 'available')
+  const catalogProducts = allProducts.filter(p =>
+    p.inCatalog && p.catalogVisibleOnOms === true && p.productStatus !== 'discarded',
+  )
   const [search, setSearch] = useState('')
   const [tab, setTab] = useState('all')
   const [qtyMap, setQtyMap] = useState<Record<string, string>>({})
@@ -337,24 +339,28 @@ export default function Catalog() {
 
       {filtered.length === 0 ? (
         <Card className="p-8 text-center text-sm text-text-muted">
-          {loadingCatalog ? '正在从 ERP 拉取货盘…' : '暂无 ERP 可售货盘。请先在 ERP 定价中心确认售价并「同步 OMS」。'}
+          {loadingCatalog ? '正在从 ERP 拉取货盘…' : '暂无已同步的货盘商品。请先在 ERP 货盘库存点「同步 OMS」。仅「可见」或「可下单」的 SKU 会显示在这里。'}
         </Card>
       ) : (
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           {filtered.map(p => {
             const available = getCatalogAvailableQty(p.internalSku)
-            const canBuy = available > 0 && p.productStatus === 'available'
+            const canBuy = available > 0 && Boolean(p.catalogOrderableOnOms)
             const displaySku = getCustomerSkuDisplay(p, customerCode)
             return (
               <Card key={p.id} className="group overflow-hidden transition-all duration-200 hover:-translate-y-0.5 hover:shadow-card">
                 <div className="relative aspect-[5/4] overflow-hidden bg-surface-subtle">
                   <img src={p.image} alt={p.name} className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105" />
                   <div className="absolute left-2 top-2 scale-90 origin-top-left"><Badge status="active" label={p.category} /></div>
-                  {available < 500 && available > 0 && (
+                  {!p.catalogOrderableOnOms ? (
+                    <div className="absolute right-2 top-2 rounded-md bg-slate-600 px-1.5 py-0.5 text-[9px] font-semibold text-white shadow-sm">
+                      暂不可下单
+                    </div>
+                  ) : available < 500 && available > 0 ? (
                     <div className="absolute right-2 top-2 rounded-md bg-amber-500 px-1.5 py-0.5 text-[9px] font-semibold text-white shadow-sm">
                       库存紧张
                     </div>
-                  )}
+                  ) : null}
                 </div>
                 <div className="p-2.5">
                   <h3 className="truncate text-xs font-semibold text-text-primary" title={p.name}>{p.name}</h3>

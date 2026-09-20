@@ -370,6 +370,17 @@ export async function mergeErpCatalogIntoState(items: ErpCatalogItem[]) {
       })
     }
   }
+
+  const erpSkus = new Set(items.map(item => item.sku.trim().toLowerCase()).filter(Boolean))
+  state.products = state.products.filter((product) => {
+    if (!product.inCatalog || !isCatalogPoolCustomerId(product.customerId)) return true
+    return erpSkus.has(product.internalSku.toLowerCase())
+  })
+  state.inventory = state.inventory.filter((item) => {
+    if (item.stockSource !== 'catalog' || !isCatalogPoolCustomerId(item.customerId)) return true
+    return erpSkus.has(item.sku.toLowerCase())
+  })
+
   emit()
   try {
     await persistLocalOrThrow()

@@ -10,12 +10,6 @@ export async function tryMarkOrderableOnOms(prisma: PrismaService, sku: string):
 
   if (remainingCatalogStock(pricing) <= 0) return false
 
-  const product = await prisma.product.findFirst({
-    where: { sku: { in: catalogSkuLookupKeys(sku) } },
-    select: { id: true },
-  })
-  if (!product) return false
-
   const wmsCodes = (
     await prisma.warehouse.findMany({
       where: { warehouseType: 'wms' },
@@ -25,9 +19,10 @@ export async function tryMarkOrderableOnOms(prisma: PrismaService, sku: string):
 
   if (!wmsCodes.length) return false
 
+  const skuKeys = catalogSkuLookupKeys(sku)
   const inv = await prisma.inventory.findFirst({
     where: {
-      productId: product.id,
+      sku: { in: skuKeys },
       warehouseCode: { in: wmsCodes },
       availableQty: { gt: 0 },
     },
