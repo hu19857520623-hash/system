@@ -18,15 +18,15 @@ describe('billing charge fulfillment', () => {
         { sku: 'SKU-B', productName: '', qty: 0, pickedQty: 0 },
       ],
     })
-    expect(result.destination).toBe('JHB')
+    expect(result.destination).toBe('JHB1')
     expect(result.skuItems).toEqual([{ sku: 'SKU-A', productName: '蓝牙耳机', quantity: 3 }])
     expect(formatSkuSummary(result.skuItems)).toBe('SKU-A×3')
   })
 
   it('resolves hub filters to exact Takealot destination codes', () => {
-    expect(resolveDestinationFilter('jhb1')?.fbaCodes).toEqual(['JHB', 'JHB1'])
-    expect(resolveDestinationFilter('JHB3')?.fbaCodes).toEqual(['JHB3'])
-    expect(resolveDestinationFilter('JHB')?.fbaCodes).toEqual(['JHB', 'JHB1'])
+    expect(resolveDestinationFilter('jhb1')?.fbaCodes).toEqual(['JHB1'])
+    expect(resolveDestinationFilter('JHB3')?.fbaCodes).toEqual(['JHB3', 'JHB'])
+    expect(resolveDestinationFilter('JHB')?.fbaCodes).toEqual(['JHB'])
     expect(resolveDestinationFilter('JHB3')?.likes).toEqual([])
     expect(resolveDestinationFilter('本地配送')?.destTypes).toEqual(['local'])
     expect(resolveDestinationFilter('Cape Town')?.likes).toEqual(['Cape Town'])
@@ -37,7 +37,7 @@ describe('billing charge fulfillment', () => {
     expect(outboundChargeFulfillment({ fbaWarehouse: 'JHB' }).destination).toBe('JHB')
     expect(outboundChargeFulfillment({ fbaWarehouse: 'JHB3' }).destination).toBe('JHB3')
     expect(resolveDestinationFilter('JHB')?.fbaCodes).not.toContain('JHB3')
-    expect(resolveDestinationFilter('JHB3')?.fbaCodes).not.toContain('JHB')
+    expect(resolveDestinationFilter('JHB1')?.fbaCodes).not.toContain('JHB3')
   })
 
   it('builds an OR clause for destination SQL filters', () => {
@@ -47,7 +47,7 @@ describe('billing charge fulfillment', () => {
     expect(conds).toHaveLength(1)
     expect(conds[0]).toContain('dest_ob.fba_warehouse')
     expect(conds[0]).not.toContain('dest_wh.city LIKE ?')
-    expect(params).toEqual(['JHB3'])
+    expect(params).toEqual(['JHB3', 'JHB'])
   })
 
   it('appends recipient city and street for local delivery', () => {
@@ -60,12 +60,12 @@ describe('billing charge fulfillment', () => {
     expect(result.skuItems[0]).toEqual({ sku: 'SKU-C', productName: '纸箱', quantity: 2 })
   })
 
-  it('infers JHB from warehouse code when fba warehouse is missing', () => {
+  it('infers Takealot hub from warehouse code when fba warehouse is missing', () => {
     const result = outboundChargeFulfillment({
       warehouseCode: 'WMS-JHB-01',
       items: [{ sku: 'SKU-D', productName: '商品', qty: 1 }],
     })
-    expect(result.destination).toBe('JHB')
+    expect(result.destination).toBe('JHB3')
   })
 
   it('uses inbound warehouse as destination and actual qty', () => {
