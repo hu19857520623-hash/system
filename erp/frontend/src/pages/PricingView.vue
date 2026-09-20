@@ -532,7 +532,7 @@ async function submitReprice() {
 
     <template v-if="section === 'pool'">
     <el-alert type="info" :closable="false" show-icon style="margin-bottom:14px">
-      {{ PIPELINE_PRICING_ALERT }} · 货盘池客户代码统一为 TKL；「持有客户」列展示 OMS 申购后的客户持有明细，完整列表见「货盘持有」。
+      {{ PIPELINE_PRICING_ALERT }} · 货盘池客户代码统一为 TKL；OMS 申购后的客户持有请到「货盘持有」查看。
     </el-alert>
 
     <div class="stat-bar">
@@ -596,14 +596,6 @@ async function submitReprice() {
           <span :style="{ color: row.soldQty > 0 ? '#2563eb' : '#b0a89c' }">{{ row.soldQty?.toLocaleString?.() ?? 0 }}</span>
         </template>
       </el-table-column>
-      <el-table-column label="持有客户" min-width="140" show-overflow-tooltip>
-        <template #default="{ row }">
-          <template v-if="row.holderCount">
-            <span class="holder-summary">{{ row.holderSummary }}</span>
-          </template>
-          <span v-else class="text-muted">—</span>
-        </template>
-      </el-table-column>
       <el-table-column label="剩余" width="72" align="right">
         <template #default="{ row }">
           <span :style="{ fontWeight: row.remainingStockQty === 0 && row.visibleStockQty != null ? 600 : 400, color: row.remainingStockQty === 0 ? '#c95e60' : '#1f9d92' }">
@@ -657,7 +649,7 @@ async function submitReprice() {
           <template #default="{ row }"><span class="mono">{{ row.customerSku || '—' }}</span></template>
         </el-table-column>
         <el-table-column prop="productName" label="商品名" min-width="140" show-overflow-tooltip />
-        <el-table-column label="客户" min-width="120">
+        <el-table-column label="持有客户" min-width="140">
           <template #default="{ row }">
             <div class="mono">{{ row.customerCode }}</div>
             <div v-if="row.supplierName" class="cust-name">{{ row.supplierName }}</div>
@@ -751,17 +743,6 @@ async function submitReprice() {
           <span class="form-tip">剩余 = 可见库存 − 已售</span>
         </el-descriptions-item>
         <el-descriptions-item label="仓内可用">{{ editing.warehouseAvailableQty?.toLocaleString?.() ?? 0 }} <span class="form-tip">（海外仓实际上架数量）</span></el-descriptions-item>
-        <el-descriptions-item label="持有客户" :span="3">
-          <template v-if="editing.holderCount">
-            <span v-for="(holder, idx) in editing.holders" :key="holder.customerCode">
-              <span v-if="idx">、</span>
-              <strong>{{ holder.customerCode }}</strong>
-              {{ holder.customerName ? `（${holder.customerName}）` : '' }}
-              × {{ holder.quantity }}
-            </span>
-          </template>
-          <span v-else class="text-muted">暂无客户持有</span>
-        </el-descriptions-item>
         <el-descriptions-item label="同步时间">{{ editing.freightCallbackTime || '—' }}</el-descriptions-item>
       </el-descriptions>
 
@@ -996,7 +977,6 @@ async function submitReprice() {
 
 .stat-bar { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:14px; }
 .oms-flags { display:flex; flex-direction:column; gap:4px; }
-.holder-summary { color: #2563eb; font-size: 12px; }
 .text-muted { color:#718096; font-size:11px; }
 .desc-time { margin-left:8px; font-size:11px; color:#94a3b8; }
 .stat-item {
