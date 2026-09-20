@@ -157,6 +157,7 @@ export const returnsApi: ApiGroup
 export const inventoryApi: ApiGroup
 export const outboundApi: OutboundApi
 export const warehouseApi: ApiGroup
+export const takealotDestApi: ApiGroup
 export const warehouseZoneApi: ApiGroup
 export const locationApi: ApiGroup
 export const managementLoopApi: ApiGroup

@@ -14,7 +14,7 @@ const loading = ref(false)
 async function reload() {
   loading.value = true
   try {
-    const res = await takealotDestApi.list({ includeDisabled: 'true' })
+    const res = await takealotDestApi.list({ includeDisabled: 'true' }) as { items?: TakealotDestItem[] }
     rows.value = res.items || []
   } finally {
     loading.value = false
@@ -119,7 +119,7 @@ onMounted(reload)
       <el-table-column prop="label" label="显示名" width="100" />
       <el-table-column prop="city" label="城市" width="110" />
       <el-table-column label="匹配别名" min-width="160">
-        <template #default="{ row }"><span class="mono">{{ aliasesText(row) }}</span></template>
+        <template #default="{ row }"><span class="mono">{{ aliasesText(row as TakealotDestItem) }}</span></template>
       </el-table-column>
       <el-table-column prop="sortOrder" label="排序" width="70" align="center" />
       <el-table-column label="启用" width="80" align="center">
@@ -129,8 +129,8 @@ onMounted(reload)
       </el-table-column>
       <el-table-column v-if="canManage()" label="操作" width="120" fixed="right">
         <template #default="{ row }">
-          <el-button link type="primary" size="small" @click="openEdit(row)">编辑</el-button>
-          <el-button link size="small" @click="toggleRow(row)">{{ row.enabled ? '停用' : '启用' }}</el-button>
+          <el-button link type="primary" size="small" @click="openEdit(row as TakealotDestItem)">编辑</el-button>
+          <el-button link size="small" @click="toggleRow(row as TakealotDestItem)">{{ row.enabled ? '停用' : '启用' }}</el-button>
         </template>
       </el-table-column>
     </el-table>

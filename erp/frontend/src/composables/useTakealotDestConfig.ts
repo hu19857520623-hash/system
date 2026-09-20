@@ -23,7 +23,7 @@ export async function loadTakealotDestConfig(force = false) {
   if (inflight) return inflight
   loading.value = true
   inflight = takealotDestApi.list()
-    .then((res) => {
+    .then((res: { items?: TakealotDestItem[] }) => {
       items.value = res.items || []
       loaded.value = true
       applyTakealotDestRuntimeRows(items.value)
