@@ -197,7 +197,8 @@ export function requiredWritePermission(method: string, apiPath: string): string
   if (p === '/health' || p.startsWith('/erp/webhooks')) return null
   if (p === '/system-messages/read') return 'dashboard:read'
   if (p.includes('/recharge')) return 'billing:recharge'
-  if (p.startsWith('/billing')) return 'billing:recharge'
+  if (p.startsWith('/billing/pre-deduct')) return 'outbound:write'
+  if (p.startsWith('/billing')) return 'billing:read'
   if (p.startsWith('/erp/purchase')) return 'catalog:write'
   if (p.startsWith('/erp/products')) return 'product:write'
   if (p.startsWith('/erp/inbound') || p.startsWith('/inbound')) return 'inbound:write'

@@ -138,6 +138,8 @@ test('maps mutating OMS API paths to write permissions', () => {
   assert.equal(requiredWritePermission('POST', '/auth/change-password'), null)
   assert.equal(requiredWritePermission('POST', '/erp/outbound'), 'outbound:write')
   assert.equal(requiredWritePermission('POST', '/erp/customers/TKL0001/recharge'), 'billing:recharge')
+  assert.equal(requiredWritePermission('PUT', '/billing'), 'billing:read')
+  assert.equal(requiredWritePermission('DELETE', '/billing/pre-deduct/OUT-1'), 'outbound:write')
   assert.equal(requiredWritePermission('PUT', '/inbound-orders'), 'inbound:write')
   assert.equal(requiredWritePermission('PUT', '/erp/inbound/RVAFU260918001'), 'inbound:write')
   assert.equal(requiredWritePermission('POST', '/erp/inbound/RVAFU260918001/cancel'), 'inbound:write')
