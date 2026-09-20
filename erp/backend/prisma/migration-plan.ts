@@ -89,5 +89,6 @@ export const MANUAL_SQL_SCRIPTS = [
   'migrate_outbound_enhance.sql',
   'migrate_pre_purchase_confirmation.sql',
   'migrate_supplier_default_payment.sql',
+  'migrate_purchase_extra_costs.sql',
   'rename_jhb_warehouse.sql',
 ] as const
