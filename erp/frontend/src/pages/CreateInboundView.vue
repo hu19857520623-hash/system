@@ -719,18 +719,6 @@ async function saveDraft() {
   }
 }
 
-function emptyCarton(): CartonForm {
-  return {
-    boxCode: '',
-    lengthCm: 0,
-    widthCm: 0,
-    heightCm: 0,
-    grossWeightKg: 0,
-    remark: '',
-    items: [{ sku: '', qty: 1 }],
-  }
-}
-
 function normalizeCarton(carton: CartonForm) {
   carton.lengthCm = Number(carton.lengthCm) || 0
   carton.widthCm = Number(carton.widthCm) || 0
@@ -1273,7 +1261,7 @@ async function handleAttachmentFile(e: Event) {
                   size="small"
                   controls-position="right"
                   class="line-num-input"
-                  @change="() => clampLinePack(row)"
+                  @change="() => clampLinePack(row as InboundLine)"
                 />
               </template>
             </el-table-column>
@@ -1286,14 +1274,14 @@ async function handleAttachmentFile(e: Event) {
                   size="small"
                   controls-position="right"
                   class="line-num-input"
-                  @change="() => clampLinePack(row)"
+                  @change="() => clampLinePack(row as InboundLine)"
                 />
               </template>
             </el-table-column>
             <el-table-column label="合计" width="100" align="center">
               <template #default="{ row }">
                 <div class="num-cell">
-                  <span class="mono">{{ lineTotalQty(row).toLocaleString() }}</span>
+                  <span class="mono">{{ lineTotalQty(row as InboundLine).toLocaleString() }}</span>
                   <span v-if="row.sku" class="qty-cap-hint">可发 {{ getSkuAvailable(row.sku) }}</span>
                 </div>
               </template>

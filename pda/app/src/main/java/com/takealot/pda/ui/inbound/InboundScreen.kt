@@ -23,6 +23,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
@@ -326,13 +327,47 @@ fun InboundScreen(modeKey: String, onBack: () -> Unit, vm: InboundViewModel = vi
             TextButton(onClick = onBack) { Text(tr("back"), color = PdaAccent) }
         }
         ScanField(vm.scan, { vm.scan = it }, { vm.submitScan() }, scanLabel, enabled = !vm.busy)
+        var editingCartonCount by remember { mutableStateOf(false) }
+        var cartonDraft by remember { mutableStateOf("") }
         when (vm.mode) {
-            InboundMode.Receive -> {
-                QtyRow("实收箱数", vm.cartonCount) { vm.cartonCount = it.coerceAtLeast(1) }
-                QtyRow("每次件数", vm.qcIncrement) { vm.qcIncrement = it.coerceAtLeast(1) }
-            }
-            InboundMode.Qc -> QtyRow("每次件数", vm.qcIncrement) { vm.qcIncrement = it.coerceAtLeast(1) }
+            InboundMode.Receive -> QtyRow(
+                label = "实收箱数",
+                value = vm.cartonCount,
+                onChange = { vm.cartonCount = it.coerceAtLeast(1) },
+                onNumberClick = {
+                    cartonDraft = vm.cartonCount.toString()
+                    editingCartonCount = true
+                },
+            )
+            InboundMode.Qc -> QtyRow("每次件数", vm.qcIncrement, onChange = { vm.qcIncrement = it.coerceAtLeast(1) })
             else -> {}
+        }
+        if (editingCartonCount) {
+            AlertDialog(
+                onDismissRequest = { editingCartonCount = false },
+                title = { Text("实收箱数") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("点数字手填，或用 − / + 调整。", color = PdaMuted, fontSize = 13.sp)
+                        OutlinedTextField(
+                            value = cartonDraft,
+                            onValueChange = { raw -> cartonDraft = raw.filter { ch -> ch.isDigit() }.take(4) },
+                            label = { Text("箱数") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            colors = fieldColors(),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        vm.cartonCount = cartonDraft.toIntOrNull()?.coerceIn(1, 9999) ?: 1
+                        editingCartonCount = false
+                    }) { Text("确定", color = PdaAccent) }
+                },
+                dismissButton = { TextButton(onClick = { editingCartonCount = false }) { Text("取消") } },
+            )
         }
         FeedbackBar(vm.feedback)
         if (order == null) Text("先扫描单号绑定作业入库单", color = PdaMuted, fontSize = 13.sp)
@@ -431,7 +466,7 @@ private fun PutawayEditor(vm: InboundViewModel) {
     Panel {
         Text(item?.skuCode ?: "先扫 SKU", color = PdaText, fontWeight = FontWeight.Medium)
         OutlinedTextField(value = vm.locationCode, onValueChange = { vm.locationCode = it.uppercase() }, label = { Text("库位") }, singleLine = true, colors = fieldColors())
-        QtyRow("上架数量", vm.putawayQty) { vm.putawayQty = it.coerceAtLeast(1) }
+        QtyRow("上架数量", vm.putawayQty, onChange = { vm.putawayQty = it.coerceAtLeast(1) })
         if (item != null && !item.hasMeasuredDims()) {
             Text("需先测体积（cm）", color = PdaWarn, fontSize = 13.sp)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -451,12 +486,19 @@ private fun RowScope.DimField(label: String, value: String, onChange: (String) -
 }
 
 @Composable
-private fun QtyRow(label: String, value: Int, onChange: (Int) -> Unit) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+private fun QtyRow(label: String, value: Int, onChange: (Int) -> Unit, onNumberClick: (() -> Unit)? = null) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
         QtyButton("−") { onChange(value - 1) }
-        Column(Modifier.weight(1.2f), verticalArrangement = Arrangement.Center) {
+        Column(
+            Modifier.weight(1.2f).then(
+                if (onNumberClick != null) Modifier.clickable(onClick = onNumberClick) else Modifier,
+            ),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
             Text(label, color = PdaMuted, fontSize = 12.sp)
             Text("$value", color = PdaText, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+            if (onNumberClick != null) Text("点数字可手填", color = PdaMuted, fontSize = 11.sp)
         }
         QtyButton("+") { onChange(value + 1) }
     }
