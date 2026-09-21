@@ -248,6 +248,11 @@ jobs:
           test -f "$takealot_dest_sql" || { echo "Missing $takealot_dest_sql"; exit 1; }
           cat "$takealot_dest_sql" | docker compose exec -T mysql mysql -uroot -p"$mysql_pw" --default-character-set=utf8mb4 --batch takealot_erp
 
+          echo '=== Apply inbound carton spec columns ==='
+          inbound_carton_specs_sql="${PWD}/backend/prisma/scripts/migrate_inbound_carton_specs.sql"
+          test -f "$inbound_carton_specs_sql" || { echo "Missing $inbound_carton_specs_sql"; exit 1; }
+          cat "$inbound_carton_specs_sql" | docker compose exec -T mysql mysql -uroot -p"$mysql_pw" --default-character-set=utf8mb4 --batch takealot_erp
+
           echo '=== Build store-monitor ==='
           cd /opt/system/store-monitor
           docker build -t takealot/store-monitor:production . </dev/null
