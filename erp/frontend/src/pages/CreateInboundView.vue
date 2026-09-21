@@ -38,6 +38,9 @@ interface InboundLine {
   sku: string
   productName: string
   spec: string
+  /** 入库箱数 × 每箱数量，提交前由 syncLinePackQty 写入 expectedQty */
+  cartonCount: number
+  qtyPerCarton: number
   expectedQty: number
   unitPrice: number
   productId: number
@@ -51,6 +54,11 @@ interface InboundLine {
 
 interface CartonForm {
   boxCode: string
+  lengthCm: number
+  widthCm: number
+  heightCm: number
+  grossWeightKg: number
+  remark: string
   items: { sku: string; qty: number }[]
 }
 
@@ -232,7 +240,7 @@ onMounted(async () => {
     tab.value = 'form'
     await loadLogisticsStock(wh)
     if (sku) {
-      const line = buildLineFromSku(sku, 1)
+      const line = buildLineFromSku(sku, { totalQty: 1 })
       if (line) createForm.value.lines = [line]
     }
   }
@@ -307,7 +315,7 @@ const freightAllocLines = computed(() =>
 
 const missingDimSkus = computed(() =>
   createForm.value.lines
-    .filter((l) => l.sku && l.expectedQty > 0 && (!l.lengthCm || !l.widthCm || !l.heightCm))
+    .filter((l) => l.sku && lineTotalQty(l) > 0 && (!l.lengthCm || !l.widthCm || !l.heightCm))
     .map((l) => l.sku),
 )
 
@@ -322,13 +330,13 @@ const volumeTotals = computed(() => {
   let weight = 0
   let has = false
   createForm.value.lines.forEach((ln) => {
-    if (!ln.sku || !ln.expectedQty) return
+    if (!ln.sku || !lineTotalQty(ln)) return
     const lineCbm = calculateLineCbm(ln)
     if (lineCbm) {
       cbm += lineCbm
       has = true
     }
-    if (ln.weightKg) weight += ln.weightKg * ln.expectedQty
+    if (ln.weightKg) weight += ln.weightKg * lineTotalQty(ln)
   })
   return {
     cbm: has ? cbm.toFixed(3) : '—',
@@ -337,11 +345,11 @@ const volumeTotals = computed(() => {
 })
 
 const totalExpectedQty = computed(() =>
-  createForm.value.lines.reduce((s, l) => s + (Number(l.expectedQty) || 0), 0),
+  createForm.value.lines.reduce((s, l) => s + lineTotalQty(l), 0),
 )
 
 const totalAmount = computed(() =>
-  createForm.value.lines.reduce((s, l) => s + (Number(l.expectedQty) || 0) * (Number(l.unitPrice) || 0), 0),
+  createForm.value.lines.reduce((s, l) => s + lineTotalQty(l) * (Number(l.unitPrice) || 0), 0),
 )
 
 const canCreateInbound = computed(() => app.hasPerm('create_inbound.create'))
@@ -356,7 +364,7 @@ function mapDraftRow(d: any): DraftRow {
     id: d.id || d.draftNo,
     supplier: '—',
     sku: skuLabel || '—',
-    qty: lines.reduce((s: number, l: InboundLine) => s + (Number(l.expectedQty) || 0), 0),
+    qty: lines.reduce((s: number, l: InboundLine) => s + lineTotalQty(l), 0),
     savedAt: d.savedAt ? new Date(d.savedAt).toLocaleString('zh-CN') : '—',
     _form: form,
   }
@@ -376,9 +384,31 @@ async function loadDrafts() {
   }
 }
 
+function lineTotalQty(line: Pick<InboundLine, 'cartonCount' | 'qtyPerCarton' | 'expectedQty'>) {
+  const cartons = Math.max(0, Number(line.cartonCount) || 0)
+  const per = Math.max(0, Number(line.qtyPerCarton) || 0)
+  if (cartons > 0 && per > 0) return cartons * per
+  return Math.max(0, Number(line.expectedQty) || 0)
+}
+
+function syncLinePackQty(line: InboundLine) {
+  line.cartonCount = Math.max(1, Math.floor(Number(line.cartonCount) || 1))
+  line.qtyPerCarton = Math.max(1, Math.floor(Number(line.qtyPerCarton) || 1))
+  line.expectedQty = line.cartonCount * line.qtyPerCarton
+}
+
+function normalizeInboundLine(line: InboundLine) {
+  if (!line.cartonCount && !line.qtyPerCarton) {
+    const total = Math.max(1, Number(line.expectedQty) || 1)
+    line.cartonCount = 1
+    line.qtyPerCarton = total
+  }
+  syncLinePackQty(line)
+}
+
 function emptyLine(): InboundLine {
   return {
-    sku: '', productName: '', spec: '', expectedQty: 1, unitPrice: 0,
+    sku: '', productName: '', spec: '', cartonCount: 1, qtyPerCarton: 1, expectedQty: 1, unitPrice: 0,
     productId: 0, remark: '', lengthCm: 0, widthCm: 0, heightCm: 0, weightKg: 0, maxAvailable: 0,
   }
 }
@@ -392,19 +422,24 @@ function getLineMaxQty(line: any) {
   if (!available) return 1
   const usedElsewhere = createForm.value.lines
     .filter((l) => l.sku === line.sku && l !== line)
-    .reduce((s, l) => s + (Number(l.expectedQty) || 0), 0)
+    .reduce((s, l) => s + lineTotalQty(l), 0)
   return Math.max(1, available - usedElsewhere)
 }
 
-function clampLineQty(line: any, val?: number) {
+function clampLinePack(line: InboundLine) {
+  syncLinePackQty(line)
   const max = getLineMaxQty(line)
-  const n = Number(val ?? line.expectedQty) || 1
-  if (n > max) {
-    line.expectedQty = max
-    ElMessage.warning(`SKU「${line.sku}」入库数量不能超过本仓可发 ${max} 件`)
+  let total = lineTotalQty(line)
+  if (total <= max) return
+  if (line.qtyPerCarton <= max) {
+    line.cartonCount = Math.max(1, Math.floor(max / line.qtyPerCarton))
   } else {
-    line.expectedQty = Math.max(1, n)
+    line.cartonCount = 1
+    line.qtyPerCarton = max
   }
+  syncLinePackQty(line)
+  total = lineTotalQty(line)
+  ElMessage.warning(`SKU「${line.sku}」合计 ${total} 件，不能超过本仓可发 ${max} 件`)
 }
 
 async function loadLogisticsStock(code: string) {
@@ -477,9 +512,8 @@ function onLineSkuPick(line: any, sku: string) {
   line.heightCm = wh.heightCm
   line.weightKg = wh.weightKg
   line.maxAvailable = wh.available
-  if (!line.expectedQty || line.expectedQty > wh.available) {
-    line.expectedQty = Math.min(Math.max(1, line.expectedQty || 1), wh.available || 1)
-  }
+  normalizeInboundLine(line)
+  clampLinePack(line)
 }
 
 function addLine() {
@@ -512,7 +546,7 @@ function volumePctLabel(sku: string) {
 
 function buildLineFromSku(
   sku: string,
-  expectedQty: number,
+  pack: { cartonCount?: number; qtyPerCarton?: number; totalQty?: number },
   remark = '',
   dims?: { lengthCm?: number; widthCm?: number; heightCm?: number; weightKg?: number },
 ): InboundLine | null {
@@ -520,7 +554,15 @@ function buildLineFromSku(
   if (!wh) return null
   const line = emptyLine()
   onLineSkuPick(line, wh.sku)
-  line.expectedQty = Math.min(Math.max(1, expectedQty), wh.available || expectedQty)
+  if (pack.cartonCount && pack.qtyPerCarton) {
+    line.cartonCount = Math.max(1, Math.floor(pack.cartonCount))
+    line.qtyPerCarton = Math.max(1, Math.floor(pack.qtyPerCarton))
+  } else {
+    const total = Math.max(1, Math.floor(pack.totalQty ?? 1))
+    line.cartonCount = 1
+    line.qtyPerCarton = total
+  }
+  clampLinePack(line)
   line.remark = remark
   if (dims?.lengthCm) line.lengthCm = dims.lengthCm
   if (dims?.widthCm) line.widthCm = dims.widthCm
@@ -564,7 +606,10 @@ async function handleSkuImportFile(e: Event) {
     return
   }
   const header = parseCsvLine(lines[0]).map((h) => h.trim())
-  const { skuIdx, qtyIdx, lengthIdx, widthIdx, heightIdx, weightIdx, remarkIdx } = resolveInboundSkuColumns(header)
+  const {
+    skuIdx, qtyIdx, cartonCountIdx, qtyPerCartonIdx,
+    lengthIdx, widthIdx, heightIdx, weightIdx, remarkIdx,
+  } = resolveInboundSkuColumns(header)
   if (skuIdx < 0) {
     ElMessage.error('导入文件需包含 SKU 列，可先下载最新模板')
     return
@@ -577,6 +622,8 @@ async function handleSkuImportFile(e: Event) {
     const sku = cols[skuIdx]?.trim()
     if (!sku) continue
     const lineNo = i + 1
+    const cartonCount = cartonCountIdx >= 0 ? Number(cols[cartonCountIdx]) || 0 : 0
+    const qtyPerCarton = qtyPerCartonIdx >= 0 ? Number(cols[qtyPerCartonIdx]) || 0 : 0
     const qty = qtyIdx >= 0 ? Number(cols[qtyIdx]) || 0 : 0
     const remark = remarkIdx >= 0 ? cols[remarkIdx]?.trim() || '' : ''
     const dims = {
@@ -587,6 +634,8 @@ async function handleSkuImportFile(e: Event) {
     }
     const rowErr = validateInboundSkuImportRow({
       sku,
+      cartonCount,
+      qtyPerCarton,
       qty,
       lengthCm: dims.lengthCm,
       widthCm: dims.widthCm,
@@ -598,7 +647,14 @@ async function handleSkuImportFile(e: Event) {
       failures.push({ lineNo, sku, reason: rowErr })
       continue
     }
-    const built = buildLineFromSku(sku, qty, remark, dims)
+    const built = buildLineFromSku(
+      sku,
+      cartonCount > 0 && qtyPerCarton > 0
+        ? { cartonCount, qtyPerCarton }
+        : { totalQty: qty },
+      remark,
+      dims,
+    )
     if (!built) {
       failures.push({ lineNo, sku, reason: '未匹配到可发 SKU' })
       continue
@@ -627,8 +683,6 @@ function openCreate() {
   if (logisticsWarehouses.value[0]?.warehouseCode) {
     createForm.value.logisticsWhCode = logisticsWarehouses.value[0].warehouseCode
   }
-  const dest = overseasWarehouses.value.find((w) => w.warehouseCode === 'WMS-JHB-01') || overseasWarehouses.value[0]
-  if (dest) createForm.value.destWarehouseCode = dest.warehouseCode
   tab.value = 'form'
   if (!logisticsWarehouses.value.length) loadRefs()
   else if (createForm.value.logisticsWhCode) loadLogisticsStock(createForm.value.logisticsWhCode)
@@ -665,24 +719,79 @@ async function saveDraft() {
   }
 }
 
-function addMixedCarton() {
-  const firstSku = createForm.value.lines.find((l) => l.sku)?.sku || ''
-  createForm.value.cartons.push({
+function emptyCarton(): CartonForm {
+  return {
     boxCode: '',
-    items: [{ sku: firstSku, qty: 1 }],
-  })
+    lengthCm: 0,
+    widthCm: 0,
+    heightCm: 0,
+    grossWeightKg: 0,
+    remark: '',
+    items: [{ sku: '', qty: 1 }],
+  }
+}
+
+function normalizeCarton(carton: CartonForm) {
+  carton.lengthCm = Number(carton.lengthCm) || 0
+  carton.widthCm = Number(carton.widthCm) || 0
+  carton.heightCm = Number(carton.heightCm) || 0
+  carton.grossWeightKg = Number(carton.grossWeightKg) || 0
+  carton.remark = String(carton.remark || '')
+  if (!carton.items?.length) {
+    carton.items = [{ sku: '', qty: 1 }]
+  }
+}
+
+function cartonFromLine(line: InboundLine): CartonForm {
+  const per = Math.max(1, Number(line.qtyPerCarton) || 1)
+  return {
+    boxCode: '',
+    lengthCm: Number(line.lengthCm) || 0,
+    widthCm: Number(line.widthCm) || 0,
+    heightCm: Number(line.heightCm) || 0,
+    grossWeightKg: Number(line.weightKg) ? Number(line.weightKg) * per : 0,
+    remark: '',
+    items: [{ sku: line.sku, qty: per }],
+  }
+}
+
+function addCarton() {
+  const line = createForm.value.lines.find((l) => l.sku)
+  if (!line) {
+    ElMessage.warning('请先在上方 SKU 明细中选择 SKU')
+    return
+  }
+  createForm.value.cartons.push(cartonFromLine(line))
 }
 
 function addCartonLine(carton: CartonForm) {
-  carton.items.push({ sku: createForm.value.lines.find((l) => l.sku)?.sku || '', qty: 1 })
+  const sku = createForm.value.lines.find((l) => l.sku)?.sku || ''
+  const line = createForm.value.lines.find((l) => l.sku === sku)
+  carton.items.push({ sku, qty: Math.max(1, Number(line?.qtyPerCarton) || 1) })
 }
 
-function syncCartonsOnePerLine() {
-  const validLines = createForm.value.lines.filter((l) => l.sku && Number(l.expectedQty) > 0)
-  createForm.value.cartons = validLines.map((l) => ({
-    boxCode: '',
-    items: [{ sku: l.sku, qty: Number(l.expectedQty) }],
-  }))
+function buildDefaultCartonsFromLines(lines: InboundLine[]) {
+  return lines.flatMap((l) => {
+    const count = Math.max(1, Number(l.cartonCount) || 1)
+    return Array.from({ length: count }, () => cartonFromLine(l))
+  })
+}
+
+function cartonToPayload(c: CartonForm, idx: number) {
+  const lengthCm = Number(c.lengthCm) || 0
+  const widthCm = Number(c.widthCm) || 0
+  const heightCm = Number(c.heightCm) || 0
+  const grossWeightKg = Number(c.grossWeightKg) || 0
+  return {
+    boxCode: c.boxCode.trim() || undefined,
+    boxSeq: idx + 1,
+    lengthCm: lengthCm > 0 ? lengthCm : undefined,
+    widthCm: widthCm > 0 ? widthCm : undefined,
+    heightCm: heightCm > 0 ? heightCm : undefined,
+    grossWeightKg: grossWeightKg > 0 ? grossWeightKg : undefined,
+    remark: c.remark.trim() || undefined,
+    items: c.items.filter((i) => i.sku && i.qty > 0).map((i) => ({ sku: i.sku, qty: Number(i.qty) })),
+  }
 }
 
 function validateCartons(validLines: InboundLine[]) {
@@ -690,7 +799,7 @@ function validateCartons(validLines: InboundLine[]) {
   if (!cartons.length) return true
   const expected = new Map<string, number>()
   for (const l of validLines) {
-    expected.set(l.sku, (expected.get(l.sku) || 0) + Number(l.expectedQty))
+    expected.set(l.sku, (expected.get(l.sku) || 0) + lineTotalQty(l))
   }
   const packed = new Map<string, number>()
   for (const c of cartons) {
@@ -721,9 +830,14 @@ async function submitCreate() {
     ElMessage.warning('请填写入仓号后再提交')
     return
   }
-  const validLines = createForm.value.lines.filter((l) => l.sku && Number(l.expectedQty) > 0)
+  const validLines = createForm.value.lines.filter((l) => l.sku && lineTotalQty(l) > 0)
   if (!validLines.length) {
-    ElMessage.warning('请至少填写一条 SKU 明细及入库数量')
+    ElMessage.warning('请至少填写一条 SKU 明细（入库箱数 × 每箱数量）')
+    return
+  }
+  const badPack = validLines.find((l) => !l.cartonCount || !l.qtyPerCarton)
+  if (badPack) {
+    ElMessage.warning(`SKU「${badPack.sku}」请填写入库箱数与每箱数量`)
     return
   }
   const missingDim = validLines.find((l) => !l.lengthCm || !l.widthCm || !l.heightCm)
@@ -738,7 +852,7 @@ async function submitCreate() {
   }
   const skuTotals = new Map<string, number>()
   for (const l of validLines) {
-    skuTotals.set(l.sku, (skuTotals.get(l.sku) || 0) + Number(l.expectedQty))
+    skuTotals.set(l.sku, (skuTotals.get(l.sku) || 0) + lineTotalQty(l))
   }
   for (const [sku, total] of skuTotals) {
     const available = getSkuAvailable(sku)
@@ -750,13 +864,11 @@ async function submitCreate() {
 
   if (!validateCartons(validLines)) return
 
-  const cartonsPayload = createForm.value.cartons
-    .filter((c) => c.items.some((i) => i.sku && i.qty > 0))
-    .map((c, idx) => ({
-      boxCode: c.boxCode.trim() || undefined,
-      boxSeq: idx + 1,
-      items: c.items.filter((i) => i.sku && i.qty > 0).map((i) => ({ sku: i.sku, qty: Number(i.qty) })),
-    }))
+  let cartonsSource = createForm.value.cartons.filter((c) => c.items.some((i) => i.sku && i.qty > 0))
+  if (!cartonsSource.length) {
+    cartonsSource = buildDefaultCartonsFromLines(validLines)
+  }
+  const cartonsPayload = cartonsSource.map((c, idx) => cartonToPayload(c, idx))
 
   const ok = await withAction(async () => {
     await Promise.all(
@@ -786,7 +898,7 @@ async function submitCreate() {
         productId: l.productId || undefined,
         sku: l.sku,
         productName: l.productName,
-        expectedQty: Number(l.expectedQty),
+        expectedQty: lineTotalQty(l),
         remark: l.remark || undefined,
       })),
       cartons: cartonsPayload.length ? cartonsPayload : undefined,
@@ -863,6 +975,12 @@ async function downloadReceivingList(row: any) {
 function editDraft(row: any) {
   editingDraftId.value = row.id
   createForm.value = JSON.parse(JSON.stringify(row._form))
+  for (const line of createForm.value.lines) {
+    normalizeInboundLine(line)
+  }
+  for (const carton of createForm.value.cartons) {
+    normalizeCarton(carton)
+  }
   tab.value = 'form'
   if (createForm.value.logisticsWhCode) loadLogisticsStock(createForm.value.logisticsWhCode)
 }
@@ -964,8 +1082,14 @@ async function handleAttachmentFile(e: Event) {
               </el-form-item>
             </el-col>
             <el-col :span="12">
-              <el-form-item label="目的海外仓">
-                <el-select v-model="createForm.destWarehouseCode" style="width:100%">
+              <el-form-item label="目的海外仓" required>
+                <el-select
+                  v-model="createForm.destWarehouseCode"
+                  placeholder="请选择目的海外仓"
+                  filterable
+                  clearable
+                  style="width:100%"
+                >
                   <el-option
                     v-for="wh in overseasWarehouses"
                     :key="wh.warehouseCode"
@@ -1107,7 +1231,7 @@ async function handleAttachmentFile(e: Event) {
             仅展示当前中转仓<strong>已收货</strong>且可用库存 &gt; 0 的 SKU；无选项时请先到「物流中转仓」登记 PO 收货。
             当前可发 SKU <strong>{{ warehouseSkus.length }}</strong> 个
             <span v-if="skuLoading">（加载中…）</span>
-            · 选择 SKU 后请填写<strong>单件长、宽、高（cm）</strong>、<strong>重量（kg）</strong>；入库数量不可超过本仓可发库存
+            · 选择 SKU 后请填写<strong>入库箱数</strong>、<strong>每箱数量</strong>（合计件数 = 箱数 × 每箱数量，不可超过本仓可发库存）及<strong>单件尺寸与重量</strong>
             · 表格列较多时可<strong>横向滚动</strong>查看尺寸与海运费分摊
           </p>
           <div v-if="createForm.lines.length" class="lines-table-wrap">
@@ -1140,18 +1264,36 @@ async function handleAttachmentFile(e: Event) {
               </template>
             </el-table-column>
             <el-table-column prop="productName" label="商品名" min-width="140" show-overflow-tooltip />
-            <el-table-column label="入库数量" width="148" align="center">
+            <el-table-column label="入库箱数" width="118" align="center">
+              <template #default="{ row }">
+                <el-input-number
+                  v-model="row.cartonCount"
+                  :min="1"
+                  :max="9999"
+                  size="small"
+                  controls-position="right"
+                  class="line-num-input"
+                  @change="() => clampLinePack(row)"
+                />
+              </template>
+            </el-table-column>
+            <el-table-column label="每箱数量" width="118" align="center">
+              <template #default="{ row }">
+                <el-input-number
+                  v-model="row.qtyPerCarton"
+                  :min="1"
+                  :max="9999"
+                  size="small"
+                  controls-position="right"
+                  class="line-num-input"
+                  @change="() => clampLinePack(row)"
+                />
+              </template>
+            </el-table-column>
+            <el-table-column label="合计" width="100" align="center">
               <template #default="{ row }">
                 <div class="num-cell">
-                  <el-input-number
-                    v-model="row.expectedQty"
-                    :min="1"
-                    :max="getLineMaxQty(row)"
-                    size="small"
-                    controls-position="right"
-                    class="line-num-input"
-                    @change="(v: number | undefined) => clampLineQty(row, v)"
-                  />
+                  <span class="mono">{{ lineTotalQty(row).toLocaleString() }}</span>
                   <span v-if="row.sku" class="qty-cap-hint">可发 {{ getSkuAvailable(row.sku) }}</span>
                 </div>
               </template>
@@ -1215,23 +1357,37 @@ async function handleAttachmentFile(e: Event) {
           <div class="section-head">
             <div class="section-title">外箱装箱（每箱一张外箱标，扫箱收货时自动识别）</div>
             <div class="section-actions">
-              <el-button size="small" @click="syncCartonsOnePerLine">每 SKU 一箱</el-button>
-              <el-button size="small" type="primary" @click="addMixedCarton">添加混装箱</el-button>
+              <el-button size="small" type="primary" @click="addCarton">添加纸箱</el-button>
             </div>
           </div>
           <p class="sku-hint">
-            留空则提交后按每个 SKU 一行自动生成外箱（箱码如 RVAFU0430-260910-0002-1）。混装请配置每箱 SKU 与数量，须与上方明细总数一致。
+            点击「添加纸箱」录入外箱规格、箱内 SKU 与数量；箱内合计须与上方明细一致。未添加纸箱时，提交将按入库箱数/每箱数量自动生成外箱（箱码如 RVAFU0430-260910-0002-1）。
           </p>
-          <el-table v-if="createForm.cartons.length" :data="createForm.cartons" border size="small" class="lines-table">
-            <el-table-column label="#" width="50" align="center">
+          <div v-if="createForm.cartons.length" class="lines-table-wrap">
+          <el-table :data="createForm.cartons" border size="small" class="lines-table">
+            <el-table-column label="#" width="44" align="center" fixed="left">
               <template #default="{ $index }">{{ $index + 1 }}</template>
             </el-table-column>
-            <el-table-column label="箱码（可选）" width="180">
+            <el-table-column label="箱码（可选）" width="150" fixed="left">
               <template #default="{ row }">
                 <el-input v-model="row.boxCode" size="small" placeholder="留空自动生成" />
               </template>
             </el-table-column>
-            <el-table-column label="箱内 SKU / 数量" min-width="320">
+            <el-table-column label="外箱规格" min-width="360">
+              <template #default="{ row }">
+                <div class="carton-spec-row">
+                  <el-input-number v-model="row.lengthCm" :min="0" :precision="1" size="small" controls-position="right" class="carton-spec-input" placeholder="长" />
+                  <span class="carton-spec-x">×</span>
+                  <el-input-number v-model="row.widthCm" :min="0" :precision="1" size="small" controls-position="right" class="carton-spec-input" placeholder="宽" />
+                  <span class="carton-spec-x">×</span>
+                  <el-input-number v-model="row.heightCm" :min="0" :precision="1" size="small" controls-position="right" class="carton-spec-input" placeholder="高" />
+                  <span class="carton-spec-unit">cm</span>
+                  <el-input-number v-model="row.grossWeightKg" :min="0" :precision="3" size="small" controls-position="right" class="carton-spec-weight" placeholder="毛重" />
+                  <span class="carton-spec-unit">kg</span>
+                </div>
+              </template>
+            </el-table-column>
+            <el-table-column label="箱内 SKU / 数量" min-width="300">
               <template #default="{ row }">
                 <div v-for="(line, li) in row.items" :key="li" class="carton-line-row">
                   <el-select v-model="line.sku" filterable size="small" style="width:140px" placeholder="SKU">
@@ -1248,12 +1404,19 @@ async function handleAttachmentFile(e: Event) {
                 <el-button link type="primary" size="small" @click="addCartonLine(row as CartonForm)">+ SKU</el-button>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="80" align="center">
+            <el-table-column label="备注" width="120">
+              <template #default="{ row }">
+                <el-input v-model="row.remark" size="small" placeholder="可选" />
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="72" align="center" fixed="right">
               <template #default="{ $index }">
                 <el-button link type="danger" size="small" @click="createForm.cartons.splice($index, 1)">删除</el-button>
               </template>
             </el-table-column>
           </el-table>
+          </div>
+          <el-empty v-else description="尚未添加纸箱，可点击「添加纸箱」或留空由系统按明细自动生成" :image-size="56" />
         </section>
 
         <section class="form-section">
@@ -1593,6 +1756,11 @@ async function handleAttachmentFile(e: Event) {
 }
 .sku-option-qty { color: #8b95a8; font-size: 12px; white-space: nowrap; }
 .carton-line-row { display: flex; align-items: center; gap: 4px; margin-bottom: 6px; flex-wrap: wrap; }
+.carton-spec-row { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.carton-spec-input { width: 88px; }
+.carton-spec-weight { width: 96px; margin-left: 4px; }
+.carton-spec-x { color: var(--el-text-color-secondary); font-size: 12px; }
+.carton-spec-unit { font-size: 12px; color: var(--el-text-color-secondary); margin-right: 4px; }
 
 .inbound-summary {
   display: flex;

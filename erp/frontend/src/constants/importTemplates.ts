@@ -10,7 +10,9 @@ export interface ImportFieldDef {
 /** 入库 SKU 明细 — 与 CreateInboundView 手动行字段一致 */
 export const INBOUND_SKU_IMPORT_FIELDS: ImportFieldDef[] = [
   { key: 'sku', label: 'SKU', required: true, hint: '须在始发物流仓可发列表中' },
-  { key: 'qty', label: '预期入库数量', required: true, hint: '正整数，不超过可发库存' },
+  { key: 'cartonCount', label: '入库箱数', required: true, hint: '正整数' },
+  { key: 'qtyPerCarton', label: '每箱数量', required: true, hint: '正整数；合计 = 箱数 × 每箱数量' },
+  { key: 'qty', label: '预期入库数量', required: false, hint: '兼容旧模板；未填箱数/每箱时使用，视为 1 箱' },
   { key: 'length', label: '长(cm)', required: true },
   { key: 'width', label: '宽(cm)', required: true },
   { key: 'height', label: '高(cm)', required: true },
@@ -21,8 +23,8 @@ export const INBOUND_SKU_IMPORT_FIELDS: ImportFieldDef[] = [
 export const INBOUND_SKU_IMPORT_HEADERS = INBOUND_SKU_IMPORT_FIELDS.map((f) => f.label)
 
 export const INBOUND_SKU_SAMPLE_ROWS: unknown[][] = [
-  ['TK-99001', '100', '30', '20', '15', '0.5', ''],
-  ['TK-66105', '50', '25', '18', '10', '0.3', '急单'],
+  ['TK-99001', '10', '10', '', '30', '20', '15', '0.5', ''],
+  ['TK-66105', '5', '10', '', '25', '18', '10', '0.3', '急单'],
 ]
 
 export function downloadInboundSkuTemplate() {
@@ -33,6 +35,8 @@ export function resolveInboundSkuColumns(header: string[]) {
   const cols = header.map((h) => h.trim())
   return {
     skuIdx: findCsvColumn(cols, ['SKU', 'sku', '自定义编码']),
+    cartonCountIdx: findCsvColumn(cols, ['入库箱数', '箱数', 'cartoncount', 'cartons']),
+    qtyPerCartonIdx: findCsvColumn(cols, ['每箱数量', '每箱件数', 'qtypercarton', 'percarton']),
     qtyIdx: findCsvColumn(cols, ['预期入库数量', '数量', '预期数量', 'qty']),
     lengthIdx: findCsvColumn(cols, ['长(cm)', '长', 'lengthcm', 'length']),
     widthIdx: findCsvColumn(cols, ['宽(cm)', '宽', 'widthcm', 'width']),
@@ -44,6 +48,8 @@ export function resolveInboundSkuColumns(header: string[]) {
 
 export interface InboundSkuImportRow {
   sku: string
+  cartonCount: number
+  qtyPerCarton: number
   qty: number
   lengthCm: number
   widthCm: number
@@ -55,7 +61,14 @@ export interface InboundSkuImportRow {
 /** 校验单行导入数据是否与手动创建必填项一致 */
 export function validateInboundSkuImportRow(row: InboundSkuImportRow): string | null {
   if (!row.sku.trim()) return 'SKU 不能为空'
-  if (!row.qty || row.qty <= 0) return `${row.sku}：预期入库数量须大于 0`
+  const hasPack = row.cartonCount > 0 && row.qtyPerCarton > 0
+  const hasLegacyQty = row.qty > 0
+  if (!hasPack && !hasLegacyQty) {
+    return `${row.sku}：请填写入库箱数与每箱数量，或填写预期入库数量（兼容旧模板）`
+  }
+  if (hasPack && (!Number.isInteger(row.cartonCount) || !Number.isInteger(row.qtyPerCarton))) {
+    return `${row.sku}：入库箱数与每箱数量须为正整数`
+  }
   if (!row.lengthCm || !row.widthCm || !row.heightCm) return `${row.sku}：长、宽、高（cm）均为必填`
   if (!row.weightKg) return `${row.sku}：重量（kg）为必填`
   return null

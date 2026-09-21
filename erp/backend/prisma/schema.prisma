@@ -436,11 +436,16 @@ model InboundOrder {
 }
 
 model InboundCarton {
-  id         BigInt              @id @default(autoincrement())
-  inboundId  BigInt              @map("inbound_id")
-  boxCode    String              @map("box_code") @db.VarChar(50)
-  boxSeq     Int                 @map("box_seq")
-  status     String              @default("pending") @db.VarChar(20)
+  id            BigInt              @id @default(autoincrement())
+  inboundId     BigInt              @map("inbound_id")
+  boxCode       String              @map("box_code") @db.VarChar(50)
+  boxSeq        Int                 @map("box_seq")
+  lengthCm      Decimal?            @map("length_cm") @db.Decimal(10, 2)
+  widthCm       Decimal?            @map("width_cm") @db.Decimal(10, 2)
+  heightCm      Decimal?            @map("height_cm") @db.Decimal(10, 2)
+  grossWeightKg Decimal?            @map("gross_weight_kg") @db.Decimal(10, 3)
+  remark        String?             @db.VarChar(200)
+  status        String              @default("pending") @db.VarChar(20)
   receivedAt DateTime?           @map("received_at")
   receivedBy BigInt?             @map("received_by")
   createdAt  DateTime            @default(now()) @map("created_at")

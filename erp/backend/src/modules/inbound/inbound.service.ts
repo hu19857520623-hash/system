@@ -216,6 +216,11 @@ export class InboundService {
       id: Number(c.id),
       boxCode: c.boxCode,
       boxSeq: c.boxSeq,
+      lengthCm: c.lengthCm != null ? Number(c.lengthCm) : null,
+      widthCm: c.widthCm != null ? Number(c.widthCm) : null,
+      heightCm: c.heightCm != null ? Number(c.heightCm) : null,
+      grossWeightKg: c.grossWeightKg != null ? Number(c.grossWeightKg) : null,
+      remark: c.remark ?? null,
       status: c.status,
       receivedAt: c.receivedAt,
       items: c.items.map((i) => ({
@@ -298,6 +303,10 @@ export class InboundService {
     const sourceWh = await this.prisma.warehouse.findUnique({ where: { warehouseCode: sourceWarehouseCode } })
     if (!sourceWh || sourceWh.warehouseType !== 'logistics') {
       throw new BadRequestException('始发仓必须是物流中转仓')
+    }
+    const destWh = await this.prisma.warehouse.findUnique({ where: { warehouseCode: destWarehouseCode } })
+    if (!destWh || destWh.warehouseType !== 'wms') {
+      throw new BadRequestException('目的仓必须是海外仓')
     }
 
     const skuTotals = new Map<string, { productId: bigint; qty: number }>()
@@ -455,7 +464,16 @@ export class InboundService {
   private async persistCartons(
     tx: Pick<PrismaService, 'inboundCarton' | 'inboundCartonItem'>,
     order: { id: bigint; inboundNo: string; items: { id: bigint; productId: bigint; sku: string; expectedQty: number }[] },
-    cartonsInput?: { boxCode?: string; boxSeq?: number; items: { sku: string; qty: number }[] }[],
+    cartonsInput?: {
+      boxCode?: string
+      boxSeq?: number
+      lengthCm?: number
+      widthCm?: number
+      heightCm?: number
+      grossWeightKg?: number
+      remark?: string
+      items: { sku: string; qty: number }[]
+    }[],
     options?: { replace?: boolean },
   ) {
     const existing = await tx.inboundCarton.count({ where: { inboundId: order.id } })
@@ -517,11 +535,21 @@ export class InboundService {
       seq += 1
       const boxSeq = c.boxSeq ?? seq
       const boxCode = String(c.boxCode || '').trim() || buildCartonCode(order.inboundNo, boxSeq)
+      const lengthCm = Number(c.lengthCm)
+      const widthCm = Number(c.widthCm)
+      const heightCm = Number(c.heightCm)
+      const grossWeightKg = Number(c.grossWeightKg)
+      const cartonRemark = String(c.remark || '').trim()
       await tx.inboundCarton.create({
         data: {
           inboundId: order.id,
           boxCode,
           boxSeq,
+          lengthCm: lengthCm > 0 ? lengthCm : null,
+          widthCm: widthCm > 0 ? widthCm : null,
+          heightCm: heightCm > 0 ? heightCm : null,
+          grossWeightKg: grossWeightKg > 0 ? grossWeightKg : null,
+          remark: cartonRemark || null,
           items: {
             create: c.items.map((line) => {
               const item = itemBySku.get(String(line.sku).trim().toUpperCase())!
