@@ -38,7 +38,7 @@ describe('boxLabelTemplate', () => {
 
     expect(html).toContain('100mm 100mm')
     expect(html).toContain('Packing List')
-    expect(html).toContain('RVAFU0002-260731-0003-0001')
+    expect(html).toContain('RVAFU0002-260731-0001')
     expect(html).not.toContain('<p class="ref">RVAFU0002-260731-0003</p>')
     expect(html).toContain('AAE938')
     expect(html).toContain('AFU0002-9902297558367')
@@ -69,12 +69,12 @@ describe('barcodeLabelTemplate', () => {
       .toBe('TKL-TK-99001')
   })
 
-  it('uses 50x30mm page for sku labels', () => {
+  it('uses 50x50mm page for sku labels', () => {
     const html = buildBarcodeLabelHtml(
       buildBarcodeLabelArticle('TKL0001-SKU-JNB-10105', '<svg></svg>'),
       'test',
     )
-    expect(html).toContain('50mm 30mm')
+    expect(html).toContain('50mm 50mm')
     expect(html).toContain('TKL0001-SKU-JNB-10105')
     expect(BARCODE_LABEL_STYLE).toContain('.barcode-wrap')
   })

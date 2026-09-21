@@ -1349,7 +1349,7 @@ async function handleAttachmentFile(e: Event) {
             </div>
           </div>
           <p class="sku-hint">
-            点击「添加纸箱」录入外箱规格、箱内 SKU 与数量；箱内合计须与上方明细一致。未添加纸箱时，提交将按入库箱数/每箱数量自动生成外箱（箱码如 RVAFU0430-260910-0002-1）。
+            点击「添加纸箱」录入外箱规格、箱内 SKU 与数量；箱内合计须与上方明细一致。未添加纸箱时，提交将按入库箱数/每箱数量自动生成外箱（箱码如 RVFUR-260921-0001、0002、0003）。
           </p>
           <div v-if="createForm.cartons.length" class="lines-table-wrap">
           <el-table :data="createForm.cartons" border size="small" class="lines-table">

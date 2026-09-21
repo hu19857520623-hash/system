@@ -1,7 +1,7 @@
 /** 易仓同款入库清单 / Packing List HTML（A4）。条码为入库单号 RVAFU0430-260910-0002 及箱码 -1。 */
 
 import { code128Svg } from './code128'
-import { buildCartonCode } from './wms-doc-no'
+import { buildCartonCode, isGeneratedCartonCode } from './wms-doc-no'
 
 export type InboundReceivingListBox = {
   boxNo: number
@@ -84,7 +84,10 @@ function truncateName(name: string, max = 16) {
 }
 
 function boxCodeOf(inboundNo: string, box: InboundReceivingListBox) {
-  return String(box.boxCode || '').trim() || buildCartonCode(inboundNo, box.boxNo)
+  const stored = String(box.boxCode || '').trim()
+  const generated = buildCartonCode(inboundNo, box.boxNo)
+  if (!stored || isGeneratedCartonCode(stored, inboundNo, box.boxNo)) return generated
+  return stored
 }
 
 const STYLE = `@page{size:A4;margin:10mm}

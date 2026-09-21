@@ -27,7 +27,7 @@ describe('inbound receiving list', () => {
         }],
         cartons: [1, 2, 3, 4].map((boxSeq) => ({
           boxSeq,
-          boxCode: `RVAFU0430-260910-0002-${boxSeq}`,
+          boxCode: `RVAFU0430-260910-${String(boxSeq).padStart(4, '0')}`,
           items: [{ sku: 'AFU0430-719110', qty: 8 }],
         })),
       }),
@@ -36,8 +36,8 @@ describe('inbound receiving list', () => {
     expect(html).toContain('入库清单')
     expect(html).toContain('RVAFU0430-260910-0002')
     expect(html).toContain('aria-label="RVAFU0430-260910-0002"')
-    expect(html).toContain('RO:RVAFU0430-260910-0002-1')
-    expect(html).toContain('aria-label="RVAFU0430-260910-0002-1"')
+    expect(html).toContain('RO:RVAFU0430-260910-0001')
+    expect(html).toContain('aria-label="RVAFU0430-260910-0001"')
     expect(html).toContain('4pack')
     expect(html).toContain('首次到货')
     expect(html).toContain('1.400')

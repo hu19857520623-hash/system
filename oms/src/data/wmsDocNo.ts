@@ -62,16 +62,41 @@ export function buildOutboundNo(customerCode?: string | null, date = new Date(),
   return `${outboundNoPrefix(customerCode, date)}${padSeq(seq)}`
 }
 
+const RV_DOC_PREFIX = /^(RV[A-Z0-9]+-\d{6})-\d+$/i
+
+export function rvDocPrefix(docNo: string): string | null {
+  const m = RV_DOC_PREFIX.exec(String(docNo || '').trim())
+  return m ? m[1].toUpperCase() : null
+}
+
+function cartonBaseInbound(inboundNo: string): string {
+  const raw = String(inboundNo || '').trim()
+  const parsed = parseWmsScan(raw)
+  if (parsed?.kind === 'carton') return parsed.inboundNo || raw
+  if (parsed?.kind === 'inbound_no') return parsed.inboundNo || parsed.value
+  return raw
+}
+
+/** 箱唛：RVFUR-260921-0001 / 0002 / 0003，最后四位为箱序号 */
 export function buildCartonCode(inboundNo: string, boxSeq: number): string {
-  const inbound = String(inboundNo || '').trim()
   const seq = Math.max(1, Math.floor(Number(boxSeq) || 1))
-  if (!inbound) return String(seq)
-  const parsed = parseWmsScan(inbound)
-  if (parsed?.kind === 'carton' && parsed.boxSeq === seq) return parsed.value
-  if (parsed?.kind === 'carton') {
-    return `${parsed.inboundNo}-${seq}`
-  }
-  return `${inbound}-${seq}`
+  const raw = String(inboundNo || '').trim()
+  if (!raw) return padSeq(seq)
+  const base = cartonBaseInbound(raw)
+  const prefix = rvDocPrefix(base)
+  if (prefix) return `${prefix}-${padSeq(seq)}`
+  return `${base}-${padSeq(seq)}`
+}
+
+export function isGeneratedCartonCode(code: string, inboundNo: string, boxSeq?: number): boolean {
+  const token = String(code || '').trim().toUpperCase()
+  const inbound = String(inboundNo || '').trim().toUpperCase()
+  if (!token || !inbound) return false
+  if (boxSeq != null && token === buildCartonCode(inbound, boxSeq).toUpperCase()) return true
+  if (token === inbound) return true
+  if (token.startsWith(`${inbound}-`)) return true
+  const prefix = rvDocPrefix(inbound)
+  return Boolean(prefix && token.startsWith(`${prefix}-`) && /-\d+$/.test(token))
 }
 
 const RV_CARTON = /^(RV[A-Z0-9]+-\d{6}-\d{4})-(\d+)$/i
@@ -134,10 +159,20 @@ export function matchCartonByScan<T extends { boxCode: string; boxSeq: number }>
   const exact = cartons.find((c) => String(c.boxCode || '').trim().toUpperCase() === token)
   if (exact) return exact
 
-  const parsed = parseWmsScan(token)
   const orderNo = String(inboundNo || '').trim().toUpperCase()
+  const byGenerated = cartons.find((c) => buildCartonCode(orderNo, c.boxSeq).toUpperCase() === token)
+  if (byGenerated) return byGenerated
+
+  const parsed = parseWmsScan(token)
   if (parsed?.kind === 'carton' && parsed.inboundNo === orderNo) {
     return cartons.find((c) => c.boxSeq === parsed.boxSeq) || null
+  }
+
+  const scanPrefix = rvDocPrefix(token)
+  const orderPrefix = rvDocPrefix(orderNo)
+  if (scanPrefix && scanPrefix === orderPrefix) {
+    const seq = Number.parseInt(token.slice(token.lastIndexOf('-') + 1), 10)
+    if (Number.isFinite(seq)) return cartons.find((c) => c.boxSeq === seq) || null
   }
 
   const cSuffix = token.match(/-C(\d{3,})$/)

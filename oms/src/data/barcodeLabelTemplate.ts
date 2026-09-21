@@ -29,15 +29,15 @@ export function resolveBarcodeLabelCode(input: {
   return sku
 }
 
-export const BARCODE_LABEL_STYLE = `@page{size:50mm 30mm;margin:0}
+export const BARCODE_LABEL_STYLE = `@page{size:50mm 50mm;margin:0}
 *{box-sizing:border-box}
 html,body{margin:0;padding:0;background:#fff;color:#000;font-family:Arial,Helvetica,sans-serif}
 body{display:block}
-.label{width:50mm;height:30mm;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:1mm 1.5mm 0.5mm;overflow:hidden;page-break-after:always}
-.barcode-wrap{flex:1 1 auto;display:flex;align-items:center;justify-content:center;width:100%;min-height:0;max-height:22mm}
-.barcode-wrap svg{width:100%;height:auto;max-height:22mm;display:block}
-.code{margin:0;padding:0;font:700 8px/1.15 Arial,Helvetica,sans-serif;text-align:center;letter-spacing:.02em;white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis}
-@media print{html,body{width:50mm;height:30mm}.label{page-break-inside:avoid}}`
+.label{width:50mm;height:50mm;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:2mm 2mm 1.5mm;overflow:hidden;page-break-after:always}
+.barcode-wrap{flex:1 1 auto;display:flex;align-items:center;justify-content:center;width:100%;min-height:0;max-height:40mm}
+.barcode-wrap svg{width:38mm;height:38mm;display:block}
+.code{margin:1mm 0 0;padding:0;font:700 9px/1.15 Arial,Helvetica,sans-serif;text-align:center;letter-spacing:.02em;white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis}
+@media print{html,body{width:50mm;height:50mm}.label{page-break-inside:avoid}}`
 
 export function buildBarcodeLabelArticle(code: string, svgMarkup: string) {
   return `<article class="label"><div class="barcode-wrap">${svgMarkup}</div><p class="code">${escapeHtml(code)}</p></article>`
@@ -48,14 +48,22 @@ export function buildBarcodeLabelHtml(articles: string, title = '条码标签') 
 }
 
 export async function renderBarcodeSvg(code: string) {
-  const { default: JsBarcode } = await import('jsbarcode')
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
-  try {
-    JsBarcode(svg, code, { format: 'CODE128', width: 1.4, height: 48, margin: 0, displayValue: false })
-  } catch {
-    JsBarcode(svg, code.slice(0, 40), { format: 'CODE128', width: 1.2, height: 44, margin: 0, displayValue: false })
+  const { create } = await import('qrcode')
+  const payload = String(code || '').trim() || '0'
+  const modules = create(payload, { errorCorrectionLevel: 'M' }).modules
+  const quiet = 1
+  const n = modules.size
+  const dim = n + quiet * 2
+  const rects: string[] = []
+  for (let y = 0; y < n; y += 1) {
+    for (let x = 0; x < n; x += 1) {
+      if (modules.get(y, x)) {
+        rects.push(`<rect x="${x + quiet}" y="${y + quiet}" width="1" height="1"/>`)
+      }
+    }
   }
-  return svg.outerHTML
+  const label = payload.replace(/[<>&"]/g, (ch) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[ch] || ch))
+  return `<svg class="qr" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${dim} ${dim}" shape-rendering="crispEdges" role="img" aria-label="${label}">${rects.join('')}</svg>`
 }
 
 export async function buildBarcodeLabelsHtml(inputs: BarcodeLabelInput[], title = '条码标签') {

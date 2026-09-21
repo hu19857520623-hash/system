@@ -1,11 +1,12 @@
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from 'pdf-lib'
-import { code128Widths } from '@erp/shared/code128'
 import {
+  buildBarcodeLabelArticle,
+  buildBarcodeLabelHtml,
   normalizeBarcodeLabelCopies,
-  renderBarcodeLabelsHtml,
   resolveBarcodeLabelCode,
   type BarcodeLabelInput,
 } from '@erp/shared/barcode-label'
+import { qrModules, qrSvg } from './qr-code'
 
 export type SkuLabelLine = {
   sku: string
@@ -30,43 +31,26 @@ export function buildSkuLabelInputs(
   return inputs
 }
 
-/** 与商品主数据「打印 SKU 标签」同一模板：50×30mm 条码 + 条码文本 */
+/** 与商品主数据「打印 SKU 标签」同一模板：50×50mm 二维码 + 编码文本 */
 export function buildSkuLabelsHtml(
   lines: SkuLabelLine[],
   options: { customerCode?: string | null; title?: string } = {},
 ) {
-  return renderBarcodeLabelsHtml(
-    buildSkuLabelInputs(lines, options.customerCode),
-    options.title || 'SKU 标签',
-  )
+  const articles: string[] = []
+  for (const item of buildSkuLabelInputs(lines, options.customerCode)) {
+    const article = buildBarcodeLabelArticle(item.code, qrSvg(item.code))
+    const copies = normalizeBarcodeLabelCopies(item.copies)
+    for (let i = 0; i < copies; i += 1) articles.push(article)
+  }
+  return buildBarcodeLabelHtml(articles.join(''), options.title || 'SKU 标签')
 }
 
 const PT_PER_MM = 72 / 25.4
 const PAGE_W = 50 * PT_PER_MM
-const PAGE_H = 30 * PT_PER_MM
+const PAGE_H = 50 * PT_PER_MM
 
 function mm(value: number) {
   return value * PT_PER_MM
-}
-
-function drawCode128(page: PDFPage, text: string, x: number, y: number, width: number, height: number) {
-  const widths = code128Widths(text)
-  const modules = widths.reduce((sum, w) => sum + w, 0) || 1
-  const unit = width / modules
-  let cursor = x
-  widths.forEach((w, index) => {
-    const barW = w * unit
-    if (index % 2 === 0) {
-      page.drawRectangle({
-        x: cursor,
-        y,
-        width: Math.max(barW, 0.25),
-        height,
-        color: rgb(0, 0, 0),
-      })
-    }
-    cursor += barW
-  })
 }
 
 function expandSkuLabelCodes(lines: SkuLabelLine[], customerCode?: string | null) {
@@ -78,24 +62,44 @@ function expandSkuLabelCodes(lines: SkuLabelLine[], customerCode?: string | null
   return codes
 }
 
+function drawQr(page: PDFPage, text: string, x: number, y: number, size: number) {
+  const modules = qrModules(text)
+  const n = modules.size
+  const quiet = 1
+  const dim = n + quiet * 2
+  const cell = size / dim
+  for (let row = 0; row < n; row += 1) {
+    for (let col = 0; col < n; col += 1) {
+      if (!modules.get(row, col)) continue
+      page.drawRectangle({
+        x: x + (col + quiet) * cell,
+        y: y + (dim - 1 - (row + quiet)) * cell,
+        width: cell,
+        height: cell,
+        color: rgb(0, 0, 0),
+      })
+    }
+  }
+}
+
 function drawSkuLabelPage(page: PDFPage, code: string, fontBold: PDFFont) {
-  const padX = mm(1.5)
-  const padBottom = mm(0.5)
-  const textSize = 6
-  const textReserve = mm(4)
-  const barcodeW = PAGE_W - padX * 2
-  const barcodeH = Math.min(mm(22), PAGE_H - mm(1) - padBottom - textReserve)
-  const barcodeY = padBottom + textReserve
-  drawCode128(page, code, padX, barcodeY, barcodeW, barcodeH)
+  const padX = mm(2)
+  const padBottom = mm(1.5)
+  const textSize = 7
+  const textReserve = mm(6)
+  const qrSize = Math.min(mm(38), PAGE_W - padX * 2, PAGE_H - mm(2) - padBottom - textReserve)
+  const qrX = (PAGE_W - qrSize) / 2
+  const qrY = padBottom + textReserve
+  drawQr(page, code, qrX, qrY, qrSize)
 
   let size = textSize
-  const maxWidth = barcodeW
+  const maxWidth = PAGE_W - padX * 2
   const natural = fontBold.widthOfTextAtSize(code, size)
   if (natural > maxWidth) size = size * (maxWidth / natural)
   const textW = fontBold.widthOfTextAtSize(code, size)
   page.drawText(code, {
     x: Math.max(padX, (PAGE_W - textW) / 2),
-    y: padBottom + mm(0.6),
+    y: padBottom + mm(1),
     size,
     font: fontBold,
     color: rgb(0, 0, 0),

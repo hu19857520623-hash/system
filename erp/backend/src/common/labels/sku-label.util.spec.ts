@@ -20,11 +20,11 @@ describe('buildSkuLabelInputs', () => {
 })
 
 describe('buildSkuLabelsHtml', () => {
-  it('uses the 50x30mm barcode template shared with 商品主数据', () => {
+  it('uses the 50x50mm QR template shared with 商品主数据', () => {
     const html = buildSkuLabelsHtml([{ sku: 'SKU-JNB-10105', qty: 1 }], { customerCode: 'TKL0001' })
 
-    expect(html).toContain('50mm 30mm')
-    expect(html).toContain('class="barcode"')
+    expect(html).toContain('50mm 50mm')
+    expect(html).toContain('class="qr"')
     expect(html).toContain('TKL0001-SKU-JNB-10105')
   })
 
@@ -36,7 +36,7 @@ describe('buildSkuLabelsHtml', () => {
 })
 
 describe('buildSkuLabelsPdfBuffer', () => {
-  it('builds a 50x30mm pdf with one page per unit', async () => {
+  it('builds a 50x50mm pdf with one page per unit', async () => {
     const pdf = await buildSkuLabelsPdfBuffer([
       { sku: 'SKU-JNB-10105', qty: 2 },
     ], { customerCode: 'TKL0001' })
@@ -46,6 +46,6 @@ describe('buildSkuLabelsPdfBuffer', () => {
     expect(doc.getPageCount()).toBe(2)
     const { width, height } = doc.getPage(0).getSize()
     expect(width).toBeCloseTo(50 * 72 / 25.4, 1)
-    expect(height).toBeCloseTo(30 * 72 / 25.4, 1)
+    expect(height).toBeCloseTo(50 * 72 / 25.4, 1)
   })
 })

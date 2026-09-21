@@ -1,7 +1,7 @@
 /** 100×100mm 外箱唛（照抄 Takealot receiving_list Packing List） */
 
 import { code128Svg } from '@erp/shared/code128'
-import { buildCartonCode } from '@erp/shared/wms-doc-no'
+import { buildCartonCode, isGeneratedCartonCode } from '@erp/shared/wms-doc-no'
 
 export interface BoxLabelLine {
   sku: string
@@ -30,8 +30,9 @@ export function escapeHtml(value: string) {
 
 export function resolveBoxLabelCartonCode(data: Pick<BoxLabelData, 'referenceNo' | 'boxNo' | 'cartonCode'>) {
   const stored = String(data.cartonCode || '').trim()
-  if (stored) return stored
-  return buildCartonCode(data.referenceNo, data.boxNo)
+  const generated = buildCartonCode(data.referenceNo, data.boxNo)
+  if (!stored || isGeneratedCartonCode(stored, data.referenceNo, data.boxNo)) return generated
+  return stored
 }
 
 export const BOX_LABEL_STYLE = `@page{size:100mm 100mm;margin:0}

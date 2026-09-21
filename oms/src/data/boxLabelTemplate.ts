@@ -51,13 +51,14 @@ export function buildBoxLabelArticle(data: BoxLabelData) {
     .map(line => `<tr><td class="sku-cell">${escapeHtml(line.sku)}</td><td>${line.qty}</td></tr>`)
     .join('')
 
+  const cartonCode = buildCartonCode(data.referenceNo, data.boxNo)
   return `<article class="box-label">
   <h1 class="title">Packing List</h1>
   <div class="barcode-row">
-    <div class="barcode-wrap">${code128Svg(buildCartonCode(data.referenceNo, data.boxNo))}</div>
+    <div class="barcode-wrap">${code128Svg(cartonCode)}</div>
     <p class="box-no">${data.boxNo}</p>
   </div>
-  <p class="ref">${escapeHtml(data.referenceNo)}</p>
+  <p class="ref">${escapeHtml(cartonCode)}</p>
   <p class="wh">${escapeHtml(data.warehouseCode)}</p>
   <table>
     <thead><tr><th>SKU</th><th>PCS</th></tr></thead>

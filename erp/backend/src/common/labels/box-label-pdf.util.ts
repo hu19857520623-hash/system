@@ -1,6 +1,6 @@
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from 'pdf-lib'
 import { code128Widths } from '@erp/shared/code128'
-import { buildCartonCode } from '@erp/shared/wms-doc-no'
+import { buildCartonCode, isGeneratedCartonCode } from '@erp/shared/wms-doc-no'
 
 export interface BoxLabelLine {
   sku: string
@@ -49,8 +49,9 @@ function drawCode128(page: PDFPage, text: string, x: number, y: number, width: n
 
 function resolveBoxLabelCartonCode(data: Pick<BoxLabelData, 'referenceNo' | 'boxNo' | 'cartonCode'>) {
   const stored = String(data.cartonCode || '').trim()
-  if (stored) return stored
-  return buildCartonCode(data.referenceNo, data.boxNo)
+  const generated = buildCartonCode(data.referenceNo, data.boxNo)
+  if (!stored || isGeneratedCartonCode(stored, data.referenceNo, data.boxNo)) return generated
+  return stored
 }
 
 function drawBoxLabelPage(page: PDFPage, data: BoxLabelData, font: PDFFont, fontBold: PDFFont) {
