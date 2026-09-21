@@ -1,4 +1,5 @@
-import { buildSkuLabelInputs, buildSkuLabelsHtml } from './sku-label.util'
+import { PDFDocument } from 'pdf-lib'
+import { buildSkuLabelInputs, buildSkuLabelsHtml, buildSkuLabelsPdfBuffer } from './sku-label.util'
 
 describe('buildSkuLabelInputs', () => {
   it('prints one label per unit and prefers the bound barcode', () => {
@@ -31,5 +32,20 @@ describe('buildSkuLabelsHtml', () => {
     const html = buildSkuLabelsHtml([{ sku: 'TKL-TK-99001', qty: 3 }])
 
     expect(html.match(/<article class="label">/g)).toHaveLength(3)
+  })
+})
+
+describe('buildSkuLabelsPdfBuffer', () => {
+  it('builds a 50x30mm pdf with one page per unit', async () => {
+    const pdf = await buildSkuLabelsPdfBuffer([
+      { sku: 'SKU-JNB-10105', qty: 2 },
+    ], { customerCode: 'TKL0001' })
+
+    expect(pdf.subarray(0, 4).toString()).toBe('%PDF')
+    const doc = await PDFDocument.load(pdf)
+    expect(doc.getPageCount()).toBe(2)
+    const { width, height } = doc.getPage(0).getSize()
+    expect(width).toBeCloseTo(50 * 72 / 25.4, 1)
+    expect(height).toBeCloseTo(30 * 72 / 25.4, 1)
   })
 })

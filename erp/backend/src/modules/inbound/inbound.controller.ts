@@ -132,7 +132,7 @@ export class InboundController {
 
   @RequirePerms('create_inbound.label')
   @Get(':id/labels/sku')
-  @Header('Content-Type', 'text/html;charset=utf-8')
+  @Header('Content-Type', 'application/pdf')
   async skuLabel(@Param('id', ParseIntPipe) id: number, @Query('sku') sku: string, @Res() res: Response) {
     const file = await this.service.getSkuLabel(id, sku)
     res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(file.fileName)}"`)

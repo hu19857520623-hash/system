@@ -15,7 +15,7 @@ import { loadPlatformBarcodesByInternalSku, productScanFields } from '../../comm
 import { InventoryMutationService } from '../../common/inventory/inventory-mutation.service'
 import { buildInternalSku, deriveCustomerCodeFromInternalSku } from '../../common/sku-code.util'
 import { buildBoxLabelsPdfBuffer, buildInboundBoxLabelData } from '../../common/labels/box-label-pdf.util'
-import { buildSkuLabelsHtml } from '../../common/labels/sku-label.util'
+import { buildSkuLabelsHtml, buildSkuLabelsPdfBuffer } from '../../common/labels/sku-label.util'
 import { InboundFeeService } from './inbound-fee.service'
 import {
   buildInboundReceivingListHtml,
@@ -1586,9 +1586,17 @@ export class InboundService {
 
   async getSkuLabel(id: number, sku?: string) {
     const order = await this.detail(id)
-    const html = this.buildSkuLabelHtml(order, sku)
-    const fileName = `SKU标签_${order.inboundNo}.html`
-    this.files.write('labels', fileName, html)
+    const items = sku ? order.items.filter((i: any) => i.sku === sku) : order.items
+    const pdf = await buildSkuLabelsPdfBuffer(
+      (items || []).map((item: any) => ({
+        sku: item.sku,
+        barcode: item.barcode,
+        qty: item.expectedQty,
+      })),
+      { customerCode: order.omsCustomerCode },
+    )
+    const fileName = `SKU标签_${order.inboundNo}.pdf`
+    this.files.write('labels', fileName, pdf)
     const printDelta = (order.items || [])
       .filter((i: any) => !sku || i.sku === sku)
       .reduce((s: number, i: any) => s + Number(i.expectedQty || 0), 0)
@@ -1597,7 +1605,7 @@ export class InboundService {
       data: { labelPrintCount: { increment: Math.max(printDelta, 1) } },
     })
     await this.inboundFee.recordOperation(order, 'label', Math.max(printDelta, 1))
-    return { fileName, content: Buffer.from(html, 'utf-8'), mimeType: 'text/html;charset=utf-8' }
+    return { fileName, content: pdf, mimeType: 'application/pdf' }
   }
 
   async getOuterLabel(id: number) {
