@@ -290,6 +290,7 @@ export const purchaseApi = {
   listPendingMasterData: (params) => api.get('/purchase-orders/pending-master-data', params),
   listPendingSkuAssign: (params) => api.get('/purchase-orders/pending-sku-assign', params),
   assignPurchaser: (devId, data) => api.post(`/purchase-orders/assign-purchaser/${devId}`, data),
+  listPurchasers: () => api.get('/purchase-orders/purchasers'),
   detail: (id) => api.get(`/purchase-orders/${id}`),
   create: (data) => api.post('/purchase-orders', data),
   approve: (id, data) => api.post(`/purchase-orders/${id}/approve`, data || {}),

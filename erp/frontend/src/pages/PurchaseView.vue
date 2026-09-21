@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { erpConfirm, erpPrompt } from '@/utils/messageBox'
-import { purchaseApi, supplierApi, usersApi, productDevApi, warehouseApi, productApi } from '@/api/client.js'
+import { purchaseApi, supplierApi, productDevApi, warehouseApi, productApi } from '@/api/client.js'
 import { mapPurchaseOrder, mapPrePurchaseOrder, mapProductDev } from '@/api/mappers.ts'
 import { useListLoader, withAction } from '@/composables/useListLoader.ts'
 import { useTablePagination } from '@/composables/useTablePagination.ts'
@@ -689,13 +689,14 @@ const assignDevProfitRate = computed(() => {
 
 async function loadPurchaserOptions() {
   try {
-    const res = await usersApi.list({ roleCode: 'purchaser', pageSize: 100 })
+    const res = await purchaseApi.listPurchasers()
     purchaserOptions.value = (res.items || []).map((u: any) => ({
       id: Number(u.id),
-      label: u.realName || u.username,
+      label: u.label || u.realName || u.username,
     }))
   } catch {
     purchaserOptions.value = []
+    ElMessage.warning('采购员列表加载失败，请确认账号有「分配采购员」权限')
   }
 }
 

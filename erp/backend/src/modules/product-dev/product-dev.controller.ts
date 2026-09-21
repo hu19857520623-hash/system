@@ -22,7 +22,7 @@ export class ProductDevController {
     return this.service.servePriceImage(fileName, res)
   }
 
-  @RequirePerms('product_dev.view')
+  @RequireAnyPerm('product_dev.view', 'purchase.assign')
   @Get(':id')
   detail(@Param('id', ParseIntPipe) id: number) {
     return this.service.detail(id)

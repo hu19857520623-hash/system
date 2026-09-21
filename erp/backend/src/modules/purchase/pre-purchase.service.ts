@@ -438,4 +438,21 @@ export class PrePurchaseService {
 
     return { prePoId: id, poId: Number(result.id), poNo: result.poNo, status: result.status }
   }
+
+  /** Active purchasers for assign dialogs; callers gate with purchase.assign / products.edit. */
+  async listPurchaserOptions() {
+    const rows = await this.prisma.sysUser.findMany({
+      where: { roleCode: 'purchaser', status: 1 },
+      select: { id: true, username: true, realName: true },
+      orderBy: [{ realName: 'asc' }, { username: 'asc' }],
+    })
+    return {
+      items: rows.map((r) => ({
+        id: Number(r.id),
+        username: r.username,
+        realName: r.realName,
+        label: r.realName || r.username,
+      })),
+    }
+  }
 }

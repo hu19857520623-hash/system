@@ -110,6 +110,12 @@ export class PurchaseController {
     return this.service.listPendingSkuAssign(q)
   }
 
+  @RequireAnyPerm('purchase.assign', 'products.edit')
+  @Get('purchasers')
+  listPurchasers() {
+    return this.prePurchase.listPurchaserOptions()
+  }
+
   @RequirePerms('purchase.assign')
   @Post('assign-purchaser/:devId')
   assignPurchaser(
