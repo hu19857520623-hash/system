@@ -9,6 +9,7 @@ export interface BoxLabelLine {
 
 export interface BoxLabelData {
   referenceNo: string
+  cartonCode?: string
   boxNo: number
   warehouseCode: string
   lines: BoxLabelLine[]
@@ -46,10 +47,17 @@ function drawCode128(page: PDFPage, text: string, x: number, y: number, width: n
   })
 }
 
+function resolveBoxLabelCartonCode(data: Pick<BoxLabelData, 'referenceNo' | 'boxNo' | 'cartonCode'>) {
+  const stored = String(data.cartonCode || '').trim()
+  if (stored) return stored
+  return buildCartonCode(data.referenceNo, data.boxNo)
+}
+
 function drawBoxLabelPage(page: PDFPage, data: BoxLabelData, font: PDFFont, fontBold: PDFFont) {
   const origin = data.origin?.trim() || 'MADE IN CHINA'
   const boxIndex = data.boxIndex ?? data.boxNo
   const boxTotal = data.boxTotal ?? boxIndex
+  const cartonCode = resolveBoxLabelCartonCode(data)
   const lines = data.lines.length ? data.lines : [{ sku: '—', qty: 0 }]
   const tableRight = PAGE_W - PAD_X
   const pcsWidth = mm(14)
@@ -63,7 +71,7 @@ function drawBoxLabelPage(page: PDFPage, data: BoxLabelData, font: PDFFont, font
     color: rgb(0, 0, 0),
   })
 
-  drawCode128(page, buildCartonCode(data.referenceNo, data.boxNo), PAD_X, PAGE_H - mm(26), mm(69), mm(14))
+  drawCode128(page, cartonCode, PAD_X, PAGE_H - mm(26), mm(69), mm(14))
   const boxNo = String(data.boxNo)
   page.drawText(boxNo, {
     x: tableRight - fontBold.widthOfTextAtSize(boxNo, 20),
@@ -73,7 +81,7 @@ function drawBoxLabelPage(page: PDFPage, data: BoxLabelData, font: PDFFont, font
     color: rgb(0, 0, 0),
   })
 
-  page.drawText(data.referenceNo, {
+  page.drawText(cartonCode, {
     x: PAD_X + mm(12),
     y: PAGE_H - mm(32),
     size: 10,
@@ -199,6 +207,7 @@ export function buildInboundBoxLabelData(order: {
     }))
     return [{
       referenceNo: order.inboundNo,
+      cartonCode: buildCartonCode(order.inboundNo, 1),
       boxNo: 1,
       warehouseCode,
       lines: lines.length ? lines : [{ sku: '—', qty: 0 }],
@@ -214,8 +223,11 @@ export function buildInboundBoxLabelData(order: {
       sku: item.sku,
       qty: Math.max(0, Number(item.qty) || 0),
     }))
+    const cartonCode =
+      String(carton.boxCode || '').trim() || buildCartonCode(order.inboundNo, boxNo)
     return {
       referenceNo: order.inboundNo,
+      cartonCode,
       boxNo,
       warehouseCode,
       lines: lines.length ? lines : [{ sku: '—', qty: 0 }],

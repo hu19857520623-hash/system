@@ -13,7 +13,16 @@ describe('buildInboundBoxLabelData', () => {
     })
 
     expect(labels).toHaveLength(2)
-    expect(labels[0]).toMatchObject({ boxNo: 1, boxTotal: 2, lines: [{ sku: 'HX6', qty: 40 }] })
-    expect(labels[1]).toMatchObject({ boxNo: 2, boxTotal: 2, lines: [{ sku: 'HX6', qty: 40 }] })
+    expect(labels[0]).toMatchObject({
+      boxNo: 1,
+      boxTotal: 2,
+      cartonCode: 'IN-20260707001-0001',
+      lines: [{ sku: 'HX6', qty: 40 }],
+    })
+    expect(labels[1]).toMatchObject({
+      boxNo: 2,
+      cartonCode: 'IN-20260707001-0002',
+      lines: [{ sku: 'HX6', qty: 40 }],
+    })
   })
 })

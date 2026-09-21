@@ -1,7 +1,7 @@
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from 'pdf-lib'
 import { code128Widths } from '@erp/shared/code128'
 import type { BoxLabelData } from './boxLabelTemplate'
-import { buildCartonCode } from '@erp/shared/wms-doc-no'
+import { resolveBoxLabelCartonCode } from './boxLabelTemplate'
 
 const PT_PER_MM = 72 / 25.4
 const PAGE_W = 100 * PT_PER_MM
@@ -49,7 +49,8 @@ function drawBoxLabelPage(page: PDFPage, data: BoxLabelData, font: PDFFont, font
     color: rgb(0, 0, 0),
   })
 
-  drawCode128(page, buildCartonCode(data.referenceNo, data.boxNo), PAD_X, PAGE_H - mm(26), mm(69), mm(14))
+  const cartonCode = resolveBoxLabelCartonCode(data)
+  drawCode128(page, cartonCode, PAD_X, PAGE_H - mm(26), mm(69), mm(14))
   const boxNo = String(data.boxNo)
   page.drawText(boxNo, {
     x: tableRight - fontBold.widthOfTextAtSize(boxNo, 20),
@@ -59,7 +60,7 @@ function drawBoxLabelPage(page: PDFPage, data: BoxLabelData, font: PDFFont, font
     color: rgb(0, 0, 0),
   })
 
-  page.drawText(data.referenceNo, {
+  page.drawText(cartonCode, {
     x: PAD_X + mm(12),
     y: PAGE_H - mm(32),
     size: 10,

@@ -9,8 +9,10 @@ export interface BoxLabelLine {
 }
 
 export interface BoxLabelData {
-  /** 单号，如 RVAFU0002-260413-0001 */
+  /** 入库单号，如 RVAFU0002-260413-0001 */
   referenceNo: string
+  /** 外箱唯一编码（条码与印刷文字）；缺省时由 referenceNo + boxNo 生成 */
+  cartonCode?: string
   boxNo: number
   /** 目的仓代码，如 AAB163 */
   warehouseCode: string
@@ -24,6 +26,12 @@ export function escapeHtml(value: string) {
   return value.replace(/[<>&"]/g, (char) => (
     { '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[char] || char
   ))
+}
+
+export function resolveBoxLabelCartonCode(data: Pick<BoxLabelData, 'referenceNo' | 'boxNo' | 'cartonCode'>) {
+  const stored = String(data.cartonCode || '').trim()
+  if (stored) return stored
+  return buildCartonCode(data.referenceNo, data.boxNo)
 }
 
 export const BOX_LABEL_STYLE = `@page{size:100mm 100mm;margin:0}
@@ -53,13 +61,14 @@ export function buildBoxLabelArticle(data: BoxLabelData) {
     .map(line => `<tr><td class="sku-cell">${escapeHtml(line.sku)}</td><td>${line.qty}</td></tr>`)
     .join('')
 
+  const cartonCode = resolveBoxLabelCartonCode(data)
   return `<article class="box-label">
   <h1 class="title">Packing List</h1>
   <div class="barcode-row">
-    <div class="barcode-wrap">${code128Svg(buildCartonCode(data.referenceNo, data.boxNo))}</div>
+    <div class="barcode-wrap">${code128Svg(cartonCode)}</div>
     <p class="box-no">${data.boxNo}</p>
   </div>
-  <p class="ref">${escapeHtml(data.referenceNo)}</p>
+  <p class="ref">${escapeHtml(cartonCode)}</p>
   <p class="wh">${escapeHtml(data.warehouseCode)}</p>
   <table>
     <thead><tr><th>SKU</th><th>PCS</th></tr></thead>

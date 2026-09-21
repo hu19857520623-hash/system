@@ -10,6 +10,7 @@ import {
   printBoxLabels,
   type BoxLabelData,
 } from './boxLabelTemplate'
+import { buildCartonCode } from '@erp/shared/wms-doc-no'
 import { downloadBoxLabelsPdf } from './boxLabelPdf'
 
 export type InboundLabelKind = '箱唛' | 'SKU 标签'
@@ -83,6 +84,7 @@ export function buildBoxLabelData(order: InboundLabelOrder): BoxLabelData[] {
       : lines.filter(l => Math.max(1, Number(l.boxNo) || 1) === boxNo)
     return {
       referenceNo,
+      cartonCode: buildCartonCode(referenceNo, boxNo),
       boxNo,
       warehouseCode,
       origin: order.origin,

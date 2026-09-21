@@ -1,4 +1,4 @@
-/** 易仓同款单号：入库 RV{客户}-{YYMMDD}-{序号}，出库 DO{客户}-{YYMMDD}-{序号}，箱唛 {入库单号}-{箱号} */
+/** 易仓同款单号：入库 RV{客户}-{YYMMDD}-{序号}，出库 DO{客户}-{YYMMDD}-{序号}，箱唛 {入库单号}-{箱序号四位} */
 
 export const WMS_FALLBACK_CUSTOMER = 'TKL'
 
@@ -63,15 +63,18 @@ export function buildOutboundNo(customerCode?: string | null, date = new Date(),
 }
 
 export function buildCartonCode(inboundNo: string, boxSeq: number): string {
-  const inbound = String(inboundNo || '').trim()
   const seq = Math.max(1, Math.floor(Number(boxSeq) || 1))
-  if (!inbound) return String(seq)
-  const parsed = parseWmsScan(inbound)
+  const raw = String(inboundNo || '').trim()
+  if (!raw) return padSeq(seq)
+  const parsed = parseWmsScan(raw)
   if (parsed?.kind === 'carton' && parsed.boxSeq === seq) return parsed.value
-  if (parsed?.kind === 'carton') {
-    return `${parsed.inboundNo}-${seq}`
-  }
-  return `${inbound}-${seq}`
+  const baseInbound =
+    parsed?.kind === 'carton'
+      ? (parsed.inboundNo || raw)
+      : parsed?.kind === 'inbound_no'
+        ? (parsed.inboundNo || parsed.value)
+        : raw
+  return `${baseInbound}-${padSeq(seq)}`
 }
 
 const RV_CARTON = /^(RV[A-Z0-9]+-\d{6}-\d{4})-(\d+)$/i
