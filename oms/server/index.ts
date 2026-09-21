@@ -5,6 +5,7 @@ import { PrismaClient } from '@prisma/client'
 import bcrypt from 'bcryptjs'
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto'
 import { resolveOmsCorsOrigins } from './cors.js'
+import { selectCustomerInventoryState } from './customer-scope.util.js'
 import {
   assertCustomerCode,
   assertCustomerId,
@@ -860,9 +861,13 @@ app.use('/api', (req: AuthenticatedRequest, res, next) => {
         return
       }
       if (req.auth?.role !== 'sys_admin') {
-        const requested = collectRequestedCustomerScopes(req.body)
-        for (const id of requested.ids) if (!assertCustomerId(req, res, id)) return
-        for (const code of requested.codes) if (!assertCustomerCode(req, res, code)) return
+        // 货盘共享池会混在客户本地 inventory-state 里，由 PUT 处理函数剥离，不走整包扫 customerId。
+        const skipBodyCustomerSweep = req.method === 'PUT' && req.path === '/inventory-state'
+        if (!skipBodyCustomerSweep) {
+          const requested = collectRequestedCustomerScopes(req.body)
+          for (const id of requested.ids) if (!assertCustomerId(req, res, id)) return
+          for (const code of requested.codes) if (!assertCustomerCode(req, res, code)) return
+        }
         const customerPathMatch =
           req.path.match(/\/customers\/([^/]+)/)
           || req.path.match(/\/by-customer\/([^/]+)/)
@@ -2650,13 +2655,21 @@ app.patch('/api/accounts/:id', requireSysAdmin, async (req, res) => {
 
 app.put('/api/inventory-state', async (req, res) => {
   try {
-    const { inventory, products, purchases } = req.body as {
+    const body = req.body as {
       inventory: Record<string, unknown>[]
       products: Record<string, unknown>[]
       purchases: Record<string, unknown>[]
     }
     const scope = customerScope(req as AuthenticatedRequest)
+    let inventory = body.inventory || []
+    let products = body.products || []
+    let purchases = body.purchases || []
     if (scope) {
+      const selected = selectCustomerInventoryState(body, scope)
+      if (!selected.ok) return res.status(403).json({ error: selected.error })
+      inventory = selected.inventory
+      products = selected.products
+      purchases = selected.purchases
       const [existingProducts, existingInventory, existingPurchases] = await Promise.all([
         prisma.product.findMany({
           where: { id: { in: products.map(item => String(item.id)) } },
@@ -2667,7 +2680,7 @@ app.put('/api/inventory-state', async (req, res) => {
           select: { customerId: true },
         }),
         prisma.catalogPurchase.findMany({
-          where: { id: { in: (purchases || []).map(item => String(item.id)) } },
+          where: { id: { in: purchases.map(item => String(item.id)) } },
           select: { customerId: true },
         }),
       ])

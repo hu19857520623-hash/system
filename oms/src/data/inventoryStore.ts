@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react'
-import { apiPut } from '../api/client'
+import { apiPut, getStoredAuthSession } from '../api/client'
 import { notifyPersistFailed } from '../utils/userNotify'
 import { purchaseErpCatalog, type ErpCatalogItem, type ErpPurchaseResult } from '../api/erp'
 import type { InventoryItem, Product } from './mockData'
@@ -43,14 +43,31 @@ function emit() {
   listeners.forEach(fn => fn())
 }
 
+function persistPayload(): InventoryState {
+  const user = getStoredAuthSession()?.user
+  if (!user || user.role === 'sys_admin' || !user.customerId) return state
+  const customerId = user.customerId
+  return {
+    products: state.products
+      .filter(product => product.customerId === customerId || (!product.customerId && !product.inCatalog))
+      .map(product => ({ ...product, customerId })),
+    inventory: state.inventory
+      .filter(item => item.customerId === customerId || (!item.customerId && item.stockSource !== 'catalog'))
+      .map(item => ({ ...item, customerId })),
+    purchases: state.purchases
+      .filter(purchase => purchase.customerId === customerId)
+      .map(purchase => ({ ...purchase, customerId })),
+  }
+}
+
 function persistLocal() {
   emit()
-  void apiPut('/inventory-state', state).catch(err => notifyPersistFailed('库存', err))
+  void apiPut('/inventory-state', persistPayload()).catch(err => notifyPersistFailed('库存', err))
 }
 
 async function persistLocalOrThrow() {
   emit()
-  await apiPut('/inventory-state', state)
+  await apiPut('/inventory-state', persistPayload())
 }
 
 function subscribe(listener: () => void) {
