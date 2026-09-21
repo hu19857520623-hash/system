@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import { buildBoxLabelData, buildInboundLabelInputs } from './inboundLabelPrint'
-import { buildPurchaseBoxLabelOrder } from './purchaseBoxLabel'
 import { buildBoxLabelsPdf } from './boxLabelPdf'
 import { buildBoxLabelArticle, buildBoxLabelsHtml, BOX_LABEL_STYLE } from './boxLabelTemplate'
 import {
@@ -128,25 +127,5 @@ describe('inboundLabelPrint', () => {
     }, 'SKU 标签')
 
     expect(inputs).toEqual([{ code: 'TKL0001-SKU-2', copies: 3 }])
-  })
-})
-
-describe('purchaseBoxLabel', () => {
-  it('splits purchase lines into cartons by piecesPerCarton', () => {
-    const order = buildPurchaseBoxLabelOrder({
-      poNo: 'PO-100',
-      warehouseCode: 'AAE938',
-      warehouseName: '物流中转仓',
-      supplier: '测试供应商',
-      purchaseConfirmation: { piecesPerCarton: 20 },
-      items: [{ sku: 'TKL0001-TK-001', productName: '测试商品', quantity: 45 }],
-    })
-
-    expect(order.boxCount).toBe(3)
-    expect(order.referenceNo).toBe('PO-100')
-    expect(order.warehouseCode).toBe('AAE938')
-    expect(order.lineItems).toHaveLength(3)
-    expect(order.lineItems?.[0]).toMatchObject({ boxNo: 1, qty: 20, sku: 'TKL0001-TK-001' })
-    expect(order.lineItems?.[2]).toMatchObject({ boxNo: 3, qty: 5 })
   })
 })

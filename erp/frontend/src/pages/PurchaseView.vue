@@ -15,7 +15,6 @@ import {
   PIPELINE_PURCHASE_ORDERS,
 } from '@/constants/productPipeline.ts'
 import { productDevImageSrc } from '@/utils/productDevImage.ts'
-import { downloadPurchaseBoxLabels } from '@/features/labels/purchaseBoxLabel.ts'
 
 const app = useAppStore()
 
@@ -26,7 +25,6 @@ const canCreate = computed(() => app.hasPerm('purchase.create'))
 const canAssignPurchaser = computed(() => app.hasPerm('purchase.assign'))
 const canPoAudit = computed(() => app.hasPerm('purchase.po_audit'))
 const canMarkPaid = computed(() => app.hasPerm('purchase.mark_paid'))
-const canBoxLabel = computed(() => app.hasPerm('purchase.box_label'))
 const canSetActualQty = computed(() => app.hasPerm('product_audit.purchase_qty') || app.hasPerm('product_audit.approve'))
 
 const { loading, items: poItems, load } = useListLoader(async () => {
@@ -94,11 +92,6 @@ const tabs = computed(() => {
 
 function canShowPayment(statusKey?: string) {
   return ['finance_approved', 'at_logistics_wh', 'received', 'completed', 'approved'].includes(String(statusKey || ''))
-}
-
-/** 打款标记页仅保留打款操作，不展示物流/标签入口 */
-function showPoLogisticsActions() {
-  return mainTab.value !== 'payment'
 }
 
 function poTone(statusKey: string) {
@@ -877,17 +870,6 @@ async function markPoUnpaid(po?: { id: number }) {
   }, '已标记为未打款')
   if (ok) await refreshPoAfterPayment(target.id)
 }
-
-async function downloadPoBoxLabels(po?: any) {
-  const target = po || selectedPo.value
-  if (!target) return
-  try {
-    await downloadPurchaseBoxLabels(target)
-    ElMessage.success(`已下载外箱标 ${target.poNo}-箱唛.pdf`)
-  } catch (e: any) {
-    ElMessage.error(e?.message || '外箱标下载失败')
-  }
-}
 </script>
 
 <template>
@@ -1024,7 +1006,6 @@ async function downloadPoBoxLabels(po?: any) {
               <el-button v-if="row.paymentStatus !== 'paid'" link type="success" size="small" @click="markPoPaid(row as { id: number })">标记已打款</el-button>
               <el-button v-else link type="warning" size="small" @click="markPoUnpaid(row as { id: number })">标记未打款</el-button>
             </template>
-            <el-button v-if="showPoLogisticsActions() && canBoxLabel && canShowPayment(row.statusKey)" link type="primary" size="small" @click="downloadPoBoxLabels(row)">下载外箱标</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -1375,7 +1356,6 @@ async function downloadPoBoxLabels(po?: any) {
           <el-button v-if="selectedPo.paymentStatus !== 'paid'" type="success" @click="markPoPaid()">标记已打款</el-button>
           <el-button v-else type="warning" plain @click="markPoUnpaid()">标记未打款</el-button>
         </template>
-        <el-button v-if="showPoLogisticsActions() && canBoxLabel && canShowPayment(selectedPo?.statusKey)" type="primary" plain @click="downloadPoBoxLabels()">下载外箱标</el-button>
       </div>
     </template>
   </el-drawer>

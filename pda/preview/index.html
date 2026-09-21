@@ -229,8 +229,8 @@
       <label>作业仓库</label>
       <select><option>JHB1 约翰内斯堡 (JHB1)</option></select>
       <div class="sec inbound">入库 · INBOUND</div>
-      <div class="tile inbound" onclick="go('arrival')"><div class="t">到仓扫描</div><div class="d">只扫入库单号</div></div>
-      <div class="tile inbound" onclick="go('receive')"><div class="t">扫箱收货</div><div class="d">扫外箱标或 SKU</div></div>
+      <div class="tile inbound" onclick="go('arrival')"><div class="t">到仓扫描</div><div class="d">扫入库单号后自动确认箱数</div></div>
+      <div class="tile inbound" onclick="go('receive')"><div class="t">确认箱数</div><div class="d">扫箱唛和 SKU</div></div>
       <div class="tile inbound" onclick="go('qc')"><div class="t">清点</div><div class="d">扫 SKU 累加实收</div></div>
       <div class="tile inbound" onclick="go('putaway')"><div class="t">上架</div><div class="d">扫 SKU 再扫库位</div></div>
       <div class="sec outbound">出库 · OUTBOUND</div>
@@ -244,8 +244,8 @@
       <div class="row"><h2>到仓扫描</h2><button class="link" onclick="go('home')">返回</button></div>
       <label>扫入库单号</label>
       <input value="IN-20260819-0012" />
-      <button class="btn" onclick="document.getElementById('arr-ok').style.display='block'">提交扫描</button>
-      <div id="arr-ok" class="banner" style="display:none">IN-20260819-0012 到仓扫描成功</div>
+      <button class="btn" onclick="go('receive')">提交扫描</button>
+      <div id="arr-ok" class="banner" style="display:none">IN-20260819-0012 到仓扫描成功，已进入确认箱数</div>
       <div class="card doc-card inbound">
         <div class="row"><div><div class="entity-type">入库单</div><div class="doc-number">IN-20260819-0012</div></div><span class="chip">已到仓</span></div>
         <div class="kv"><span>仓库</span>JHB1</div>
@@ -254,8 +254,8 @@
     </div>
 
     <div id="receive" class="screen hidden">
-      <div class="row"><h2>扫箱收货</h2><button class="link" onclick="go('home')">返回</button></div>
-      <label>扫外箱标 / SKU</label>
+      <div class="row"><h2>确认箱数</h2><button class="link" onclick="go('home')">返回</button></div>
+      <label>扫箱唛或 SKU</label>
       <input placeholder="扫描后自动提交" />
       <div class="qty">
         <button>−</button>

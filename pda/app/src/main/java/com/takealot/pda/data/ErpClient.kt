@@ -156,21 +156,30 @@ class ErpClient(private val session: SessionStore) {
         gson.fromJson(postJson("/management-loop/stocktakes/$id/count", mapOf("lineId" to lineId, "qty" to qty)), StocktakePlan::class.java)
     }
 
-    private fun get(path: String): JsonElement = execute(request(path).get().build())
+    private fun get(path: String): JsonElement = execute(request(path).get().build(), requireAuth = true)
 
     private fun postJson(path: String, body: Any, auth: Boolean = true): JsonElement {
         val payload = gson.toJson(body).toRequestBody(jsonType)
-        return execute(request(path, auth).post(payload).build())
+        return execute(request(path, auth).post(payload).build(), requireAuth = auth)
     }
+
+    private fun bearerToken(): String = session.token.trim().removePrefix("Bearer ").trim()
 
     private fun request(path: String, auth: Boolean = true): Request.Builder {
         val builder = Request.Builder().url("${SessionStore.resolveBaseUrl(session.baseUrl)}$path")
-        if (auth && session.token.isNotBlank()) builder.header("Authorization", "Bearer ${session.token}")
+        if (auth) {
+            val token = bearerToken()
+            if (token.isBlank() || SessionStore.isJwtExpired(token)) {
+                session.invalidateAuth()
+                throw ErpException("登录已过期，请重新登录", 401)
+            }
+            builder.header("Authorization", "Bearer $token")
+        }
         builder.header("Accept", "application/json")
         return builder
     }
 
-    private fun execute(request: Request): JsonElement {
+    private fun execute(request: Request, requireAuth: Boolean): JsonElement {
         http.newCall(request).execute().use { resp ->
             val text = resp.body?.string().orEmpty()
             val root = try {
@@ -180,9 +189,20 @@ class ErpClient(private val session: SessionStore) {
             }
             val code = root.get("code")?.asInt ?: resp.code
             val message = root.get("message")?.asString ?: resp.message
+            val unauthorized = resp.code == 401 || code == 401 || message.equals("Unauthorized", ignoreCase = true)
+            if (unauthorized && requireAuth) {
+                session.invalidateAuth()
+                throw ErpException(friendly401(message), 401)
+            }
             if (!resp.isSuccessful || code != 0) throw ErpException(message.ifBlank { "请求失败 (${resp.code})" }, code)
             return root.get("data") ?: gson.toJsonTree(null)
         }
+    }
+
+    private fun friendly401(message: String): String {
+        val text = message.trim()
+        if (text.contains("过期") || text.contains("失效") || text.contains("重新登录") || text.contains("密码")) return text
+        return "登录已过期，请重新登录"
     }
 
     private fun String.encodeUrl() = java.net.URLEncoder.encode(this, "UTF-8")

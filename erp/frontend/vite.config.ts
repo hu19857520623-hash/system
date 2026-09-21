@@ -19,6 +19,8 @@ export default defineConfig({
     }),
   ],
   resolve: {
+    // shared/ 下同时有 tsc 产物的 .js 与源码 .ts；默认会先命中 CJS .js，导致命名 export 白屏。
+    extensions: ['.ts', '.tsx', '.mts', '.mjs', '.js', '.jsx', '.json'],
     alias: [
       {
         find: '@erp/shared/permissions.catalog',

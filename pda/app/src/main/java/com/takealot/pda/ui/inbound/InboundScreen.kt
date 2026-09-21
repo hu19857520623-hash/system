@@ -38,6 +38,7 @@ import com.takealot.pda.data.ErpException
 import com.takealot.pda.data.InboundItem
 import com.takealot.pda.data.InboundOrder
 import com.takealot.pda.data.PdaResumeWork
+import com.takealot.pda.scan.ScanCodeClassifier
 import com.takealot.pda.scan.ScanBus
 import com.takealot.pda.ui.components.BigButton
 import com.takealot.pda.ui.components.DocumentCard
@@ -62,7 +63,7 @@ import kotlinx.coroutines.launch
 
 enum class InboundMode(val key: String, val title: String, val scanLabel: String) {
     Arrival("arrival", "到仓扫描", "扫入库单号"),
-    Receive("receive", "确认箱数", "扫外箱标"),
+    Receive("receive", "确认箱数", "扫箱唛或 SKU"),
     Qc("qc", "清点", "扫 SKU / 已绑 990"),
     Putaway("putaway", "上架", "扫 SKU / 已绑 990 或库位");
     companion object { fun from(key: String) = entries.find { it.key == key } ?: Arrival }
@@ -114,16 +115,7 @@ class InboundViewModel : ViewModel() {
         try {
             when (mode) {
                 InboundMode.Arrival -> doArrival(code)
-                InboundMode.Receive -> {
-                    if (order == null) {
-                        ensureOrder(code) ?: return
-                        scan = ""
-                        return
-                    }
-                    val res = api.receiveBox(order!!.id, code)
-                    feedback = Feedback(true, res.message.orEmpty().ifBlank { "外箱已确认" })
-                    refreshOrder(); scan = ""
-                }
+                InboundMode.Receive -> doReceiveScan(code, recordId)
                 InboundMode.Qc -> {
                     ensureOrder(code) ?: return
                     val res = api.scanQc(order!!.id, code, qcIncrement, recordId)
@@ -145,10 +137,60 @@ class InboundViewModel : ViewModel() {
         if (wh.isBlank()) throw ErpException("请先在首页选择作业仓库")
         val res = api.arrivalScan(code, wh)
         order = res.order
-        order?.let { PdaApp.instance.workJournal.activate(PdaResumeWork("inbound", mode.key, it.id, it.no)) }
-        feedback = Feedback(true, res.message.orEmpty().ifBlank { if (res.alreadyScanned) "已到仓" else "到仓成功" })
         scan = ""
         if (order?.id != null) refreshOrder()
+        enterReceiveAfterArrival(
+            res.message.orEmpty().ifBlank { if (res.alreadyScanned) "已到仓" else "到仓成功" },
+        )
+    }
+
+    private fun enterReceiveAfterArrival(arrivalMessage: String) {
+        val current = order ?: return
+        val canReceive = session.hasPerm("inbound.receive")
+        val canQc = session.hasPerm("inbound.qc")
+        if (!canReceive && !canQc) {
+            current.let { PdaApp.instance.workJournal.activate(PdaResumeWork("inbound", mode.key, it.id, it.no)) }
+            feedback = Feedback(true, arrivalMessage)
+            return
+        }
+        mode = InboundMode.Receive
+        PdaApp.instance.workJournal.activate(PdaResumeWork("inbound", InboundMode.Receive.key, current.id, current.no))
+        val next = when {
+            canReceive && canQc -> "请扫箱唛或 SKU"
+            canReceive -> "请扫箱唛确认箱数"
+            else -> "请扫 SKU 清点"
+        }
+        feedback = Feedback(true, "$arrivalMessage，已进入确认箱数。$next")
+    }
+
+    private suspend fun doReceiveScan(code: String, recordId: String) {
+        if (order == null) {
+            ensureOrder(code) ?: return
+            scan = ""
+            return
+        }
+        val guess = ScanCodeClassifier.classify(code).typeKey
+        if (guess == "sku" || guess == "barcode") {
+            doReceiveSku(code, recordId)
+            return
+        }
+        try {
+            val res = api.receiveBox(order!!.id, code)
+            feedback = Feedback(true, res.message.orEmpty().ifBlank { "箱唛已确认" })
+            refreshOrder(); scan = ""
+        } catch (e: Exception) {
+            if (guess == "carton" || !session.hasPerm("inbound.qc")) throw e
+            doReceiveSku(code, recordId)
+        }
+    }
+
+    private suspend fun doReceiveSku(code: String, recordId: String) {
+        if (!session.hasPerm("inbound.qc")) {
+            throw ErpException("确认箱数环节请扫箱唛；SKU 清点需要清点权限")
+        }
+        val res = api.scanQc(order!!.id, code, qcIncrement, recordId)
+        feedback = Feedback(true, res.message.orEmpty().ifBlank { "${res.sku.orEmpty()} +${res.increment}" })
+        refreshOrder(); scan = ""
     }
 
     private suspend fun ensureOrder(code: String): InboundOrder? {
@@ -274,7 +316,7 @@ fun InboundScreen(modeKey: String, onBack: () -> Unit, vm: InboundViewModel = vi
     }
     val scanLabel = when (vm.mode) {
         InboundMode.Arrival -> tr("scan_inbound")
-        InboundMode.Receive -> tr("scan_carton")
+        InboundMode.Receive -> tr("scan_carton_or_sku")
         InboundMode.Qc -> tr("scan_sku")
         InboundMode.Putaway -> tr("scan_sku_location")
     }
@@ -285,7 +327,10 @@ fun InboundScreen(modeKey: String, onBack: () -> Unit, vm: InboundViewModel = vi
         }
         ScanField(vm.scan, { vm.scan = it }, { vm.submitScan() }, scanLabel, enabled = !vm.busy)
         when (vm.mode) {
-            InboundMode.Receive -> QtyRow("实收箱数", vm.cartonCount) { vm.cartonCount = it.coerceAtLeast(1) }
+            InboundMode.Receive -> {
+                QtyRow("实收箱数", vm.cartonCount) { vm.cartonCount = it.coerceAtLeast(1) }
+                QtyRow("每次件数", vm.qcIncrement) { vm.qcIncrement = it.coerceAtLeast(1) }
+            }
             InboundMode.Qc -> QtyRow("每次件数", vm.qcIncrement) { vm.qcIncrement = it.coerceAtLeast(1) }
             else -> {}
         }
@@ -307,7 +352,7 @@ fun InboundScreen(modeKey: String, onBack: () -> Unit, vm: InboundViewModel = vi
                 TextButton(onClick = { vm.clearOrder() }) { Text("换单", color = PdaAccent) }
             }
             if (vm.mode == InboundMode.Receive) {
-                BigButton("确认箱数", onClick = { vm.confirmCartonCount() }, enabled = !vm.busy && order != null, color = PdaOk)
+                BigButton("确认箱数", onClick = { vm.confirmCartonCount() }, enabled = !vm.busy, color = PdaOk)
             }
             if (order.statusKey == "exception") {
                 if (PdaApp.instance.session.hasPerm("inbound.handle_exception")) {
@@ -316,8 +361,8 @@ fun InboundScreen(modeKey: String, onBack: () -> Unit, vm: InboundViewModel = vi
                     Text("此异常单需由具备「异常放行」权限的主管处理", color = PdaWarn, fontSize = 13.sp)
                 }
             }
-            if (vm.mode == InboundMode.Qc) BigButton("提交清点", onClick = { vm.submitQc() }, enabled = !vm.busy && order.itemList.isNotEmpty(), color = PdaOk)
-            if (vm.mode == InboundMode.Qc && order.itemList.any { (it.actualQty ?: 0) != it.expectedQty }) {
+            if (vm.mode == InboundMode.Qc || vm.mode == InboundMode.Receive) BigButton("提交清点", onClick = { vm.submitQc() }, enabled = !vm.busy && order.itemList.isNotEmpty() && PdaApp.instance.session.hasPerm("inbound.qc"), color = PdaOk)
+            if ((vm.mode == InboundMode.Qc || vm.mode == InboundMode.Receive) && order.itemList.any { (it.actualQty ?: 0) != it.expectedQty }) {
                 val canConfirmDiff = PdaApp.instance.session.hasPerm("inbound.confirm_diff")
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(checked = vm.acceptDiff, onCheckedChange = { vm.acceptDiff = it }, enabled = canConfirmDiff)

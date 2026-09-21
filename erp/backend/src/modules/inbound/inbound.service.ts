@@ -15,6 +15,7 @@ import { loadPlatformBarcodesByInternalSku, productScanFields } from '../../comm
 import { InventoryMutationService } from '../../common/inventory/inventory-mutation.service'
 import { buildInternalSku, deriveCustomerCodeFromInternalSku } from '../../common/sku-code.util'
 import { buildBoxLabelsPdfBuffer, buildInboundBoxLabelData } from '../../common/labels/box-label-pdf.util'
+import { buildSkuLabelsHtml } from '../../common/labels/sku-label.util'
 import { InboundFeeService } from './inbound-fee.service'
 import {
   buildInboundReceivingListHtml,
@@ -1521,14 +1522,14 @@ export class InboundService {
 
   buildSkuLabelHtml(order: any, sku?: string) {
     const items = sku ? order.items.filter((i: any) => i.sku === sku) : order.items
-    const blocks = items.map((item: any) => `
-      <div style="width:50mm;height:30mm;border:1px solid #000;padding:4mm;font-family:Arial,sans-serif;page-break-after:always">
-        <div style="font-size:10px;font-weight:bold">${order.inboundNo}</div>
-        <div style="font-size:14px;font-weight:bold;margin:2mm 0">${item.sku}</div>
-        <div style="font-size:9px">${item.productName || ''}</div>
-        <div style="font-size:9px;margin-top:2mm">Qty: ${item.expectedQty}</div>
-      </div>`).join('')
-    return `<!DOCTYPE html><html><body>${blocks}</body></html>`
+    return buildSkuLabelsHtml(
+      (items || []).map((item: any) => ({
+        sku: item.sku,
+        barcode: item.barcode,
+        qty: item.expectedQty,
+      })),
+      { customerCode: order.omsCustomerCode, title: `SKU标签_${order.inboundNo}` },
+    )
   }
 
   buildOuterLabelHtml(order: any) {

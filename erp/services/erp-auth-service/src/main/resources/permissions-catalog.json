@@ -173,10 +173,6 @@
         {
           "id": "purchase.mark_paid",
           "label": "采购订单 · 标记打款"
-        },
-        {
-          "id": "purchase.box_label",
-          "label": "采购订单 · 下载外箱标"
         }
       ]
     },
@@ -286,7 +282,7 @@
         },
         {
           "id": "outbound.pick",
-          "label": "出库 · 拣货"
+          "label": "出库 · 拣货（网页）"
         },
         {
           "id": "outbound.pack",
@@ -331,7 +327,7 @@
         },
         {
           "id": "stocktake.count",
-          "label": "盘点 · 初盘/复盘"
+          "label": "盘点 · 初盘/复盘（网页录入）"
         },
         {
           "id": "stocktake.approve",
@@ -685,7 +681,6 @@
       "purchase.assign",
       "purchase.po_audit",
       "purchase.mark_paid",
-      "purchase.box_label",
       "logistics_wh.view",
       "logistics_wh.receive",
       "logistics_wh.manage",
@@ -774,7 +769,6 @@
       "purchase.assign",
       "purchase.po_audit",
       "purchase.mark_paid",
-      "purchase.box_label",
       "logistics_wh.view",
       "logistics_wh.receive",
       "logistics_wh.manage",
@@ -827,7 +821,6 @@
       "purchase.view",
       "purchase.create",
       "purchase.mark_paid",
-      "purchase.box_label",
       "logistics_wh.view",
       "logistics_wh.receive",
       "create_inbound.view",
@@ -1199,12 +1192,14 @@
   "deprecated": [
     "create_inbound.push",
     "mingrui.order",
-    "pricing.freight_callback"
+    "pricing.freight_callback",
+    "purchase.box_label"
   ],
   "aliases": {
     "create_inbound.push": null,
     "mingrui.order": "mingrui.manage",
-    "pricing.freight_callback": null
+    "pricing.freight_callback": null,
+    "purchase.box_label": null
   },
   "allPermCodes": [
     "dashboard.view",
@@ -1246,7 +1241,6 @@
     "purchase.assign",
     "purchase.po_audit",
     "purchase.mark_paid",
-    "purchase.box_label",
     "logistics_wh.view",
     "logistics_wh.receive",
     "logistics_wh.manage",

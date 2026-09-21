@@ -1,10 +1,16 @@
 package com.takealot.pda.data
 
 import android.content.Context
+import android.util.Base64
+import com.google.gson.JsonParser
 import com.takealot.pda.BuildConfig
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 
 class SessionStore(context: Context) {
     private val prefs = context.getSharedPreferences("pda_session", Context.MODE_PRIVATE)
+    private val authTickState = MutableStateFlow(0)
+    val authTick: StateFlow<Int> = authTickState
 
     init {
         migrateLanUrlToProduction()
@@ -15,7 +21,7 @@ class SessionStore(context: Context) {
         set(value) { prefs.edit().putString(KEY_BASE, resolveBaseUrl(value)).apply() }
     var token: String
         get() = prefs.getString(KEY_TOKEN, "") ?: ""
-        set(value) { prefs.edit().putString(KEY_TOKEN, value).apply() }
+        set(value) { prefs.edit().putString(KEY_TOKEN, value.trim().removePrefix("Bearer ").trim()).apply() }
     var userId: Int
         get() = prefs.getInt(KEY_USER_ID, 0)
         set(value) { prefs.edit().putInt(KEY_USER_ID, value).apply() }
@@ -45,7 +51,7 @@ class SessionStore(context: Context) {
         set(value) { prefs.edit().putString(KEY_PICK_SCAN, if (value == "piece") "piece" else "carton").apply() }
 
     val workstation: String get() = userWorkstation.ifBlank { deviceWorkstation }
-    val isLoggedIn: Boolean get() = token.isNotBlank()
+    val isLoggedIn: Boolean get() = token.isNotBlank() && !isJwtExpired(token)
     fun hasPerm(id: String) = permissionsCsv.split(',').any { it.trim() == id }
 
     fun saveLogin(token: String, user: AuthUser) {
@@ -55,11 +61,23 @@ class SessionStore(context: Context) {
         realName = user.name
         userWorkstation = user.workstation.orEmpty().trim()
         permissionsCsv = user.permSet.joinToString(",")
+        bumpAuth()
     }
 
     fun logout() {
-        prefs.edit().remove(KEY_TOKEN).remove(KEY_USER_ID).remove(KEY_USERNAME)
+        prefs.edit().remove(KEY_TOKEN).remove(KEY_USER_ID)
             .remove(KEY_REAL_NAME).remove(KEY_PERMS).remove(KEY_USER_STATION).apply()
+        bumpAuth()
+    }
+
+    /** 登录过期时清 token，保留用户名方便重新登录。 */
+    fun invalidateAuth() {
+        prefs.edit().remove(KEY_TOKEN).remove(KEY_PERMS).apply()
+        bumpAuth()
+    }
+
+    private fun bumpAuth() {
+        authTickState.value = authTickState.value + 1
     }
 
     /** 海外仓无法访问局域网开发机，启动时把旧地址改成正式环境。 */
@@ -88,7 +106,25 @@ class SessionStore(context: Context) {
             if (!value.startsWith("http://", ignoreCase = true) && !value.startsWith("https://", ignoreCase = true)) {
                 value = "https://$value"
             }
+            if (value.contains("erp.sztekeluo.com", ignoreCase = true) && value.startsWith("http://", ignoreCase = true)) {
+                value = "https://" + value.substring(7)
+            }
             return value
+        }
+
+        fun isJwtExpired(jwt: String): Boolean {
+            val parts = jwt.split('.')
+            if (parts.size < 2) return false
+            return try {
+                var payload = parts[1]
+                val pad = (4 - payload.length % 4) % 4
+                if (pad > 0) payload += "=".repeat(pad)
+                val json = String(Base64.decode(payload, Base64.URL_SAFE), Charsets.UTF_8)
+                val exp = JsonParser.parseString(json).asJsonObject.get("exp")?.asLong ?: return false
+                exp * 1000L <= System.currentTimeMillis()
+            } catch (_: Exception) {
+                false
+            }
         }
 
         private const val KEY_BASE = "base_url"

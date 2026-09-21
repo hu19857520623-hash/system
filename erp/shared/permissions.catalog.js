@@ -76,7 +76,6 @@ exports.PERM_GROUPS = [
             { id: 'purchase.assign', label: '采购订单 · 需求分配' },
             { id: 'purchase.po_audit', label: '采购订单 · 主管审核/驳回' },
             { id: 'purchase.mark_paid', label: '采购订单 · 标记打款' },
-            { id: 'purchase.box_label', label: '采购订单 · 下载外箱标' },
         ],
     },
     {
@@ -188,12 +187,14 @@ exports.DEPRECATED_PERM_CODES = [
     'create_inbound.push',
     'mingrui.order',
     'pricing.freight_callback',
+    'purchase.box_label',
 ];
 /** 旧码 → 新码；值为 null 表示直接删除 */
 exports.PERM_ALIASES = {
     'create_inbound.push': null,
     'mingrui.order': 'mingrui.manage',
     'pricing.freight_callback': null,
+    'purchase.box_label': null,
 };
 /** 角色默认权限模板（按中文角色名） */
 exports.ROLE_PERM_TEMPLATES = {
@@ -207,7 +208,7 @@ exports.ROLE_PERM_TEMPLATES = {
         'product_dev.view', 'product_dev.create', 'product_dev.edit',
         'product_audit.view', 'product_audit.approve', 'product_audit.reject', 'product_audit.label', 'product_audit.purchase_qty',
         'suppliers.view', 'suppliers.edit',
-        'purchase.view', 'purchase.create', 'purchase.assign', 'purchase.po_audit', 'purchase.mark_paid', 'purchase.box_label',
+        'purchase.view', 'purchase.create', 'purchase.assign', 'purchase.po_audit', 'purchase.mark_paid',
         'logistics_wh.view', 'logistics_wh.receive', 'logistics_wh.manage',
         'create_inbound.view', 'create_inbound.create', 'create_inbound.label',
         'mingrui.view', 'mingrui.manage',
@@ -235,7 +236,7 @@ exports.ROLE_PERM_TEMPLATES = {
         'dashboard.view', 'dashboard.kpi_inventory', 'dashboard.kpi_products', 'dashboard.kpi_suppliers', 'dashboard.kpi_purchase',
         'dashboard.kpi_audit', 'dashboard.kpi_sync', 'dashboard.trends_logistics', 'dashboard.pipeline_domestic', 'dashboard.pipeline_overseas',
         'products.view', 'suppliers.view', 'suppliers.edit',
-        'purchase.view', 'purchase.create', 'purchase.assign', 'purchase.po_audit', 'purchase.mark_paid', 'purchase.box_label',
+        'purchase.view', 'purchase.create', 'purchase.assign', 'purchase.po_audit', 'purchase.mark_paid',
         'logistics_wh.view', 'logistics_wh.receive', 'logistics_wh.manage',
         'create_inbound.view', 'create_inbound.create', 'create_inbound.label',
         'mingrui.view', 'mingrui.manage',
@@ -253,7 +254,7 @@ exports.ROLE_PERM_TEMPLATES = {
     采购: [
         'dashboard.view', 'dashboard.kpi_products', 'dashboard.kpi_suppliers', 'dashboard.kpi_purchase', 'dashboard.pipeline_domestic',
         'products.view', 'suppliers.view',
-        'purchase.view', 'purchase.create', 'purchase.mark_paid', 'purchase.box_label',
+        'purchase.view', 'purchase.create', 'purchase.mark_paid',
         'logistics_wh.view', 'logistics_wh.receive',
         'create_inbound.view', 'create_inbound.create', 'create_inbound.label',
         'mingrui.view', 'mingrui.manage',
@@ -450,7 +451,7 @@ exports.ROLE_SIDE_LABELS = {
     warehouse: '仓储职位',
     system: '系统',
 };
-/** 角色元数据（种子 / 管理页）。side=warehouse 为仓内岗位，仍用同一 ERP 网页，无独立 PDA App */
+/** 角色元数据（种子 / 管理页）。side=warehouse 表示仓内岗位，仍使用同一 ERP 网页，无独立 PDA/仓储端 App */
 exports.ROLE_DEFINITIONS = [
     { roleCode: 'admin', roleName: '系统管理员', templateKey: '系统管理员', description: '拥有全部业务权限', side: 'system' },
     { roleCode: 'ops', roleName: '运营', templateKey: '运营', description: '货盘定价、店铺监控与日常运营', side: 'office' },
@@ -539,7 +540,7 @@ function isKnownRoleCode(roleCode) {
 function isWarehouseStaffRole(roleCode) {
     return roleSide(roleCode) === 'warehouse';
 }
-/** 仓内岗位 + 系统管理员；与办公端共用 ERP，非独立客户端 */
+/** 仓内岗位（拣货/收货等）+ 系统管理员；与办公端共用 ERP 登录，非独立客户端 */
 function canUseWarehouseClient(roleCode) {
     const side = roleSide(roleCode);
     return side === 'warehouse' || side === 'system';

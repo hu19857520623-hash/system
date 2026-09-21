@@ -72,7 +72,6 @@ export const PERM_GROUPS: PermissionGroup[] = [
       { id: 'purchase.assign', label: '采购订单 · 需求分配' },
       { id: 'purchase.po_audit', label: '采购订单 · 主管审核/驳回' },
       { id: 'purchase.mark_paid', label: '采购订单 · 标记打款' },
-      { id: 'purchase.box_label', label: '采购订单 · 下载外箱标' },
     ],
   },
   {
@@ -185,6 +184,7 @@ export const DEPRECATED_PERM_CODES: readonly string[] = [
   'create_inbound.push',
   'mingrui.order',
   'pricing.freight_callback',
+  'purchase.box_label',
 ]
 
 /** 旧码 → 新码；值为 null 表示直接删除 */
@@ -192,6 +192,7 @@ export const PERM_ALIASES: Record<string, string | null> = {
   'create_inbound.push': null,
   'mingrui.order': 'mingrui.manage',
   'pricing.freight_callback': null,
+  'purchase.box_label': null,
 }
 
 /** 角色默认权限模板（按中文角色名） */
@@ -206,7 +207,7 @@ export const ROLE_PERM_TEMPLATES: Record<string, string[]> = {
     'product_dev.view', 'product_dev.create', 'product_dev.edit',
     'product_audit.view', 'product_audit.approve', 'product_audit.reject', 'product_audit.label', 'product_audit.purchase_qty',
     'suppliers.view', 'suppliers.edit',
-    'purchase.view', 'purchase.create', 'purchase.assign', 'purchase.po_audit', 'purchase.mark_paid', 'purchase.box_label',
+    'purchase.view', 'purchase.create', 'purchase.assign', 'purchase.po_audit', 'purchase.mark_paid',
     'logistics_wh.view', 'logistics_wh.receive', 'logistics_wh.manage',
     'create_inbound.view', 'create_inbound.create', 'create_inbound.label',
     'mingrui.view', 'mingrui.manage',
@@ -234,7 +235,7 @@ export const ROLE_PERM_TEMPLATES: Record<string, string[]> = {
     'dashboard.view', 'dashboard.kpi_inventory', 'dashboard.kpi_products', 'dashboard.kpi_suppliers', 'dashboard.kpi_purchase',
     'dashboard.kpi_audit', 'dashboard.kpi_sync', 'dashboard.trends_logistics', 'dashboard.pipeline_domestic', 'dashboard.pipeline_overseas',
     'products.view', 'suppliers.view', 'suppliers.edit',
-    'purchase.view', 'purchase.create', 'purchase.assign', 'purchase.po_audit', 'purchase.mark_paid', 'purchase.box_label',
+    'purchase.view', 'purchase.create', 'purchase.assign', 'purchase.po_audit', 'purchase.mark_paid',
     'logistics_wh.view', 'logistics_wh.receive', 'logistics_wh.manage',
     'create_inbound.view', 'create_inbound.create', 'create_inbound.label',
     'mingrui.view', 'mingrui.manage',
@@ -252,7 +253,7 @@ export const ROLE_PERM_TEMPLATES: Record<string, string[]> = {
   采购: [
     'dashboard.view', 'dashboard.kpi_products', 'dashboard.kpi_suppliers', 'dashboard.kpi_purchase', 'dashboard.pipeline_domestic',
     'products.view', 'suppliers.view',
-    'purchase.view', 'purchase.create', 'purchase.mark_paid', 'purchase.box_label',
+    'purchase.view', 'purchase.create', 'purchase.mark_paid',
     'logistics_wh.view', 'logistics_wh.receive',
     'create_inbound.view', 'create_inbound.create', 'create_inbound.label',
     'mingrui.view', 'mingrui.manage',

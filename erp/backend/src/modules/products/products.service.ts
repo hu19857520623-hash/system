@@ -15,6 +15,7 @@ import {
 } from '../../common/import-row-result.util'
 import { buildProductRemark } from '../../common/oms-sync-meta.util'
 import { buildInternalSku } from '../../common/sku-code.util'
+import { buildSkuLabelsHtml } from '../../common/labels/sku-label.util'
 import { CosObjectUrlService } from '../../common/cos-object-url.service'
 
 function num(v: unknown, fallback = 0): number {
@@ -629,14 +630,10 @@ export class ProductsService {
   }
 
   buildSkuLabelHtml(product: any) {
-    return `<!DOCTYPE html><html><body>
-      <div style="width:50mm;height:30mm;border:1px solid #000;padding:4mm;font-family:Arial,sans-serif">
-        <div style="font-size:14px;font-weight:bold">${product.sku}</div>
-        <div style="font-size:9px;margin:2mm 0">${product.productName || ''}</div>
-        <div style="font-size:8px">${product.spec || ''}</div>
-        <div style="font-size:8px;margin-top:2mm">${product.barcode || 'EAN pending'}</div>
-      </div>
-    </body></html>`
+    return buildSkuLabelsHtml(
+      [{ sku: product.sku, barcode: product.barcode, qty: 1 }],
+      { title: `SKU标签_${product.sku}` },
+    )
   }
 
   async getSkuLabel(sku: string) {

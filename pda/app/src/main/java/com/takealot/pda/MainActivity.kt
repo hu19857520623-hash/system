@@ -9,6 +9,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -55,7 +57,9 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun PdaRoot() {
     val session = PdaApp.instance.session
+    val authTick by session.authTick.collectAsState()
     var loggedIn by remember { mutableStateOf(session.isLoggedIn) }
+    LaunchedEffect(authTick) { loggedIn = session.isLoggedIn }
     Box(Modifier.fillMaxSize().background(PdaBg).systemBarsPadding()) {
         if (!loggedIn) LoginScreen(onLoggedIn = { loggedIn = true })
         else PdaNav(onLogout = { loggedIn = false })

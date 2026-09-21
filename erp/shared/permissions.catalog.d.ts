@@ -29,7 +29,7 @@ export type RoleDefinition = {
     description: string;
     side: RoleSide;
 };
-/** 角色元数据（种子 / 管理页）。side 决定能否出现在仓储端（拣货员 / 工位 / PDA） */
+/** 角色元数据（种子 / 管理页）。side=warehouse 表示仓内岗位，仍使用同一 ERP 网页，无独立 PDA/仓储端 App */
 export declare const ROLE_DEFINITIONS: readonly RoleDefinition[];
 /** 可被分配为线索归属人的销售角色 */
 export declare const LEAD_ASSIGNEE_ROLE_CODES: readonly ["cs", "sales_manager"];
@@ -44,12 +44,12 @@ export declare function normalizePermCodes(codes: string[]): string[];
 export declare function defaultPermsForRoleCode(roleCode: string): string[];
 export declare function templatePermsForRoleName(roleName: string): string[];
 export declare function roleDefinition(roleCode: string): RoleDefinition | undefined;
-/** 未知职位按办公处理，避免误入仓储端 */
+/** 未知职位按办公处理，避免误标为仓内岗位 */
 export declare function roleSide(roleCode: string): RoleSide;
 export declare function catalogRoleName(roleCode: string, fallback?: string): string;
 export declare function isKnownRoleCode(roleCode: string): boolean;
 export declare function isWarehouseStaffRole(roleCode: string): boolean;
-/** 仓储端（PDA / 拣货员 / 工位）可用的职位：仓库 + 系统管理员 */
+/** 仓内岗位（拣货/收货等）+ 系统管理员；与办公端共用 ERP 登录，非独立客户端 */
 export declare function canUseWarehouseClient(roleCode: string): boolean;
 export declare const WAREHOUSE_STAFF_ROLE_CODES: string[];
 export declare const OFFICE_ROLE_CODES: string[];

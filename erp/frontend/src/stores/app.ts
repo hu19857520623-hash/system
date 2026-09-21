@@ -215,6 +215,8 @@ const NAV_ROUTE_MAP: Record<string, string> = {
 
 const ROLE_TEMPLATES = ROLE_PERM_TEMPLATES
 
+let initAuthPromise: Promise<boolean> | null = null
+
 export const useAppStore = defineStore('app', {
   state: () => ({
     authReady: false,
@@ -320,22 +322,33 @@ export const useAppStore = defineStore('app', {
     },
     async initAuth() {
       if (this.authReady) return this.isAuthenticated
-      const token = getAccessToken()
-      if (!token) {
-        this.authReady = true
-        return false
+      if (!initAuthPromise) {
+        initAuthPromise = (async () => {
+          const tokenAtStart = getAccessToken()
+          if (!tokenAtStart) {
+            this.authReady = true
+            return false
+          }
+          try {
+            const profile = await authApi.profile()
+            if (getAccessToken() !== tokenAtStart) return this.isAuthenticated
+            this.applyProfile(profile)
+          } catch {
+            // 过期 token 的 profile 可能晚于新登录返回；勿清掉刚写入的新会话。
+            if (getAccessToken() === tokenAtStart) {
+              clearAccessToken()
+              this.authenticatedUser = null
+              this.isAuthenticated = false
+            }
+          } finally {
+            this.authReady = true
+          }
+          return this.isAuthenticated
+        })().finally(() => {
+          initAuthPromise = null
+        })
       }
-      try {
-        const profile = await authApi.profile()
-        this.applyProfile(profile)
-      } catch {
-        clearAccessToken()
-        this.authenticatedUser = null
-        this.isAuthenticated = false
-      } finally {
-        this.authReady = true
-      }
-      return this.isAuthenticated
+      return initAuthPromise
     },
     async login(username: string, password: string) {
       const res = await authApi.login({ username, password })
@@ -343,6 +356,7 @@ export const useAppStore = defineStore('app', {
       setAccessToken(res.token)
       const profile = await authApi.profile()
       this.applyProfile(profile)
+      this.authReady = true
     },
     async refreshProfile() {
       const profile = await authApi.profile()
