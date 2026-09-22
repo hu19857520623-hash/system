@@ -8,7 +8,7 @@ import { PricingService } from '../pricing/pricing.service'
 import { notifyOms } from '../../common/oms-notify.util'
 import { fetchOmsInboundRows, mergeInboundPaginate } from './oms-inbound-bridge.util'
 import { buildInboundRemark, parseOmsInboundMeta, stripOmsSystemTags } from '../../common/oms-sync-meta.util'
-import { resolveBillingDimensions } from '../../common/product-dimension.util'
+import { numDim, resolveBillingDimensions } from '../../common/product-dimension.util'
 import { unitCostRmb } from '../../common/inventory/inventory-lot-cost.util'
 import { parseInboundQcScanInput } from './inbound-qc-scan.util'
 import { findInboundItemByScan as matchInboundItemByScan } from './inbound-item-scan.util'
@@ -635,7 +635,14 @@ export class InboundService {
     const prodMap = new Map(products.map((p) => [Number(p.id), p]))
     const allocInput = order.items.map((item) => {
       const prod = prodMap.get(Number(item.productId))
-      const dims = resolveBillingDimensions(prod || {})
+      const dims = resolveBillingDimensions({
+        lengthCm: numDim(prod?.lengthCm),
+        widthCm: numDim(prod?.widthCm),
+        heightCm: numDim(prod?.heightCm),
+        measuredLengthCm: numDim(prod?.measuredLengthCm),
+        measuredWidthCm: numDim(prod?.measuredWidthCm),
+        measuredHeightCm: numDim(prod?.measuredHeightCm),
+      })
       return {
         id: item.id,
         sku: item.sku,
