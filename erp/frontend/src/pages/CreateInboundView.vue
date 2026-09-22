@@ -1201,11 +1201,17 @@ async function clearFreight() {
   try {
     const data = await inboundApi.clearSeaFreight(id)
     detailOrder.value = data
-    toast('海运费已删除')
+    toast('海运费已清除，入库单仍保留')
     await load()
   } catch (e: any) {
-    ElMessage.error(e?.message || '删除海运费失败')
+    ElMessage.error(e?.message || '清除海运费失败')
   }
+}
+
+async function handleInboundDownload(command: string, row: any) {
+  if (command === 'list') return downloadReceivingList(row)
+  if (command === 'sku') return downloadLabel(row)
+  if (command === 'outer') return downloadOuterLabel(row)
 }
 
 async function downloadLabel(row: any) {
@@ -1783,12 +1789,24 @@ async function handleAttachmentFile(e: Event) {
             <el-tag :type="row.tone === 'ok' ? 'success' : row.tone === 'err' ? 'danger' : row.tone === 'warn' ? 'warning' : 'info'" size="small">{{ row.statusLabel }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="340" fixed="right">
+        <el-table-column label="操作" width="200" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="openDetail(row)">详情</el-button>
-            <el-button link type="primary" size="small" @click="downloadReceivingList(row)">入库清单</el-button>
-            <el-button link type="primary" size="small" @click="downloadLabel(row)">标签</el-button>
-            <el-button link type="primary" size="small" @click="downloadOuterLabel(row)">外箱标</el-button>
+            <el-dropdown
+              trigger="click"
+              placement="bottom-end"
+              popper-class="table-row-dropdown"
+              @command="(cmd) => handleInboundDownload(cmd, row)"
+            >
+              <el-button link type="primary" size="small" @click.stop>下载标签</el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="list">入库清单</el-dropdown-item>
+                  <el-dropdown-item command="sku">标签</el-dropdown-item>
+                  <el-dropdown-item command="outer">外箱标</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
             <el-button
               v-if="inboundIsErpManaged(row)"
               link
