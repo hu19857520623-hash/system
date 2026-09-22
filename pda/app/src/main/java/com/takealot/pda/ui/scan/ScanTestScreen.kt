@@ -73,7 +73,13 @@ fun ScanTestScreen(onBack: () -> Unit) {
             TextButton(onClick = onBack) { Text(tr("back"), color = PdaAccent) }
         }
         Text(tr("scan_test_hint"), color = PdaMuted, fontSize = 13.sp)
-        ScanField(scan, { scan = it }, { accept(scan) }, tr("scan_test_field"))
+        ScanField(
+            scan,
+            { scan = it },
+            { accept(scan) },
+            tr("scan_test_field"),
+            showKeyboardOnFocus = true,
+        )
         FeedbackBar(feedback)
         val current = last
         if (current != null) {

@@ -17,8 +17,8 @@ android {
         applicationId = "com.takealot.pda"
         minSdk = 24
         targetSdk = 34
-        versionCode = 4
-        versionName = "1.0.3"
+        versionCode = 5
+        versionName = "1.0.4"
         buildConfigField("String", "ERP_API_BASE_URL", "\"$configuredApiBaseUrl\"")
     }
     buildTypes {

@@ -30,6 +30,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -58,21 +59,36 @@ data class Feedback(val ok: Boolean, val message: String)
 
 @Composable
 fun ScanField(
-    value: String, onValueChange: (String) -> Unit, onSubmit: () -> Unit,
-    label: String, enabled: Boolean = true, autoFocus: Boolean = true, focusNonce: Any = Unit,
+    value: String,
+    onValueChange: (String) -> Unit,
+    onSubmit: () -> Unit,
+    label: String,
+    enabled: Boolean = true,
+    autoFocus: Boolean = false,
+    showKeyboardOnFocus: Boolean = false,
+    focusNonce: Any = Unit,
 ) {
     val focus = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
     LaunchedEffect(autoFocus, enabled, focusNonce) {
         if (autoFocus && enabled) {
             delay(40)
             runCatching { focus.requestFocus() }
+            keyboard?.hide()
         }
     }
     OutlinedTextField(
-        value = value, onValueChange = onValueChange,
+        value = value,
+        onValueChange = onValueChange,
         modifier = Modifier.fillMaxWidth().focusRequester(focus),
-        enabled = enabled, singleLine = true, label = { Text(label) },
-        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done, keyboardType = KeyboardType.Ascii),
+        enabled = enabled,
+        singleLine = true,
+        label = { Text(label) },
+        keyboardOptions = KeyboardOptions(
+            imeAction = ImeAction.Done,
+            keyboardType = KeyboardType.Ascii,
+            showKeyboardOnFocus = showKeyboardOnFocus,
+        ),
         keyboardActions = KeyboardActions(onDone = { onSubmit() }),
         colors = fieldColors(),
     )
