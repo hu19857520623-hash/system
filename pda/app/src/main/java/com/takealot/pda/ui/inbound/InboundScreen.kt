@@ -1,5 +1,8 @@
 package com.takealot.pda.ui.inbound
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -468,31 +471,48 @@ fun InboundScreen(modeKey: String, onBack: () -> Unit, vm: InboundViewModel = vi
                 }
             }
             if (vm.mode == InboundMode.Putaway) PutawayEditor(vm)
-            if (vm.mode == InboundMode.Qc || vm.mode == InboundMode.Receive) QcMeasureEditor(vm)
             Text("SKU 明细", color = PdaInbound, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            val showInlineMeasure = vm.mode == InboundMode.Qc || vm.mode == InboundMode.Receive
             order.itemList.forEach { item ->
-                SkuCard(
-                    sku = item.skuCode,
-                    bound990 = item.bound990,
-                    progress = "${item.actualQty ?: 0}/${item.expectedQty}",
-                    done = (item.actualQty ?: 0) == item.expectedQty,
-                    selected = item.id == vm.selectedItemId,
-                    onClick = {
-                        vm.selectedItemId = item.id
-                        vm.putawayQty = item.remainingPutaway.coerceAtLeast(1)
-                        vm.lengthCm = item.lengthCm?.takeIf { it > 0 }?.toString().orEmpty()
-                        vm.widthCm = item.widthCm?.takeIf { it > 0 }?.toString().orEmpty()
-                        vm.heightCm = item.heightCm?.takeIf { it > 0 }?.toString().orEmpty()
-                        vm.weightKg = item.weightKg?.takeIf { it > 0 }?.toString().orEmpty()
-                    },
+                val selected = item.id == vm.selectedItemId
+                Column(
+                    Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    Text(item.productName.orEmpty(), color = PdaMuted, fontSize = 12.sp)
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("待上架 ${item.remainingPutaway}", color = PdaText, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                        Text("应收 ${item.expectedQty} · 实收 ${item.actualQty ?: 0}", color = PdaMuted, fontSize = 12.sp)
+                    SkuCard(
+                        sku = item.skuCode,
+                        bound990 = item.bound990,
+                        progress = "${item.actualQty ?: 0}/${item.expectedQty}",
+                        done = (item.actualQty ?: 0) == item.expectedQty,
+                        selected = selected,
+                        onClick = {
+                            vm.selectedItemId = item.id
+                            vm.putawayQty = item.remainingPutaway.coerceAtLeast(1)
+                            vm.lengthCm = item.lengthCm?.takeIf { it > 0 }?.toString().orEmpty()
+                            vm.widthCm = item.widthCm?.takeIf { it > 0 }?.toString().orEmpty()
+                            vm.heightCm = item.heightCm?.takeIf { it > 0 }?.toString().orEmpty()
+                            vm.weightKg = item.weightKg?.takeIf { it > 0 }?.toString().orEmpty()
+                        },
+                    ) {
+                        Text(item.productName.orEmpty(), color = PdaMuted, fontSize = 12.sp)
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("待上架 ${item.remainingPutaway}", color = PdaText, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                            Text("应收 ${item.expectedQty} · 实收 ${item.actualQty ?: 0}", color = PdaMuted, fontSize = 12.sp)
+                        }
+                        if ((item.actualQty ?: 0) != item.expectedQty) {
+                            Text("差异 ${(item.actualQty ?: 0) - item.expectedQty}", color = PdaWarn, fontSize = 12.sp)
+                        }
+                        if (vm.mode == InboundMode.Putaway && !item.hasMeasuredDims()) {
+                            Text("缺少商品尺寸：请转「清点」扫描并测量", color = PdaWarn, fontSize = 12.sp)
+                        }
                     }
-                    if ((item.actualQty ?: 0) != item.expectedQty) Text("差异 ${(item.actualQty ?: 0) - item.expectedQty}", color = PdaWarn, fontSize = 12.sp)
-                    if (vm.mode == InboundMode.Putaway && !item.hasMeasuredDims()) Text("缺少商品尺寸：请转「清点」扫描并测量", color = PdaWarn, fontSize = 12.sp)
+                    AnimatedVisibility(
+                        visible = selected && showInlineMeasure,
+                        enter = expandVertically(),
+                        exit = shrinkVertically(),
+                    ) {
+                        QcMeasureEditor(vm)
+                    }
                 }
             }
         }
@@ -527,10 +547,9 @@ private fun ExceptionReleaseDialog(vm: InboundViewModel) {
 
 @Composable
 private fun QcMeasureEditor(vm: InboundViewModel) {
-    val item = vm.selectedItem ?: return
     Panel {
-        Text("测量 · ${item.skuCode}", color = PdaText, fontWeight = FontWeight.Medium)
-        Text("填写长宽高与重量，确认后回写 ERP 商品资料", color = PdaMuted, fontSize = 12.sp)
+        Text("测量尺寸与重量", color = PdaText, fontWeight = FontWeight.Medium, fontSize = 14.sp)
+        Text("确认后回写 ERP 商品资料", color = PdaMuted, fontSize = 12.sp)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             DimField("长(cm)", vm.lengthCm) { vm.lengthCm = it.filter { ch -> ch.isDigit() || ch == '.' } }
             DimField("宽(cm)", vm.widthCm) { vm.widthCm = it.filter { ch -> ch.isDigit() || ch == '.' } }
