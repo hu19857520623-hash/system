@@ -323,34 +323,37 @@ class InboundViewModel : ViewModel() {
             scan = ""; return
         }
         if (selectedItemId == null) { feedback = Feedback(false, "请先扫描待上架 SKU"); return }
-        locationCode = code.trim().uppercase(); scan = ""; submitPutaway()
+        locationCode = code.trim().uppercase(); scan = ""; doPutaway()
     }
 
     fun submitPutaway() {
+        viewModelScope.launch {
+            busy = true
+            try { doPutaway() }
+            catch (e: Exception) { feedback = Feedback(false, e.message ?: "上架失败") }
+            finally { busy = false }
+        }
+    }
+
+    private suspend fun doPutaway() {
         val o = order ?: return
         val item = selectedItem ?: run { feedback = Feedback(false, "请先扫描 SKU"); return }
         if (locationCode.isBlank()) { feedback = Feedback(false, "请扫描库位"); return }
         if (!item.hasMeasuredDims()) { feedback = Feedback(false, "${item.skuCode} 请先填写并保存体积"); return }
-        viewModelScope.launch {
-            busy = true
-            try {
-                val qty = putawayQty.coerceIn(1, item.remainingPutaway.coerceAtLeast(1))
-                val loc = locationCode
-                api.putaway(o.id, item.id, loc, qty)
-                locationCode = ""; refreshOrder()
-                val remaining = order?.itemList?.sumOf { it.remainingPutaway } ?: 0
-                if (remaining <= 0) {
-                    feedback = Feedback(true, "${item.skuCode} → $loc ×$qty；本单已全部上架")
-                    clearOrder()
-                    loadPendingPutaway()
-                } else {
-                    feedback = Feedback(true, "${item.skuCode} → $loc ×$qty；请扫描下一件 SKU")
-                    val next = order?.itemList?.firstOrNull { it.remainingPutaway > 0 }
-                    selectedItemId = next?.id
-                    putawayQty = next?.remainingPutaway?.coerceAtLeast(1) ?: 1
-                }
-            } catch (e: Exception) { feedback = Feedback(false, e.message ?: "上架失败") }
-            finally { busy = false }
+        val qty = putawayQty.coerceIn(1, item.remainingPutaway.coerceAtLeast(1))
+        val loc = locationCode
+        api.putaway(o.id, item.id, loc, qty)
+        locationCode = ""; refreshOrder()
+        val remaining = order?.itemList?.sumOf { it.remainingPutaway } ?: 0
+        if (remaining <= 0) {
+            feedback = Feedback(true, "${item.skuCode} → $loc ×$qty；本单已全部上架")
+            clearOrder()
+            loadPendingPutaway()
+        } else {
+            feedback = Feedback(true, "${item.skuCode} → $loc ×$qty；请扫描下一件 SKU")
+            val next = order?.itemList?.firstOrNull { it.remainingPutaway > 0 }
+            selectedItemId = next?.id
+            putawayQty = next?.remainingPutaway?.coerceAtLeast(1) ?: 1
         }
     }
 

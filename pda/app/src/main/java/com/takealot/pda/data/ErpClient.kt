@@ -10,15 +10,19 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.io.IOException
+import java.net.SocketTimeoutException
 import java.util.concurrent.TimeUnit
 
 class ErpClient(private val session: SessionStore) {
     private val gson = Gson()
     private val jsonType = "application/json; charset=utf-8".toMediaType()
     private val http = OkHttpClient.Builder()
-        .connectTimeout(12, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
-        .writeTimeout(20, TimeUnit.SECONDS)
+        .connectTimeout(25, TimeUnit.SECONDS)
+        .readTimeout(45, TimeUnit.SECONDS)
+        .writeTimeout(45, TimeUnit.SECONDS)
+        .callTimeout(50, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
         .build()
 
     suspend fun login(username: String, password: String): AuthUser = withContext(Dispatchers.IO) {
@@ -206,21 +210,28 @@ class ErpClient(private val session: SessionStore) {
     }
 
     private fun execute(request: Request, requireAuth: Boolean): JsonElement {
-        http.newCall(request).execute().use { resp ->
-            val text = resp.body?.string().orEmpty()
+        val resp = try {
+            http.newCall(request).execute()
+        } catch (e: SocketTimeoutException) {
+            throw ErpException("连接 ERP 超时，仓库网络到广州较慢，请再扫一次重试")
+        } catch (e: IOException) {
+            throw ErpException("无法连接 ERP，请检查 Wi-Fi 后重试")
+        }
+        resp.use {
+            val text = it.body?.string().orEmpty()
             val root = try {
                 JsonParser.parseString(text).asJsonObject
             } catch (_: Exception) {
-                throw ErpException(if (text.isBlank()) "服务器无响应 (${resp.code})" else text.take(160))
+                throw ErpException(if (text.isBlank()) "服务器无响应 (${it.code})" else text.take(160))
             }
-            val code = root.get("code")?.asInt ?: resp.code
-            val message = root.get("message")?.asString ?: resp.message
-            val unauthorized = resp.code == 401 || code == 401 || message.equals("Unauthorized", ignoreCase = true)
+            val code = root.get("code")?.asInt ?: it.code
+            val message = root.get("message")?.asString ?: it.message
+            val unauthorized = it.code == 401 || code == 401 || message.equals("Unauthorized", ignoreCase = true)
             if (unauthorized && requireAuth) {
                 session.invalidateAuth()
                 throw ErpException(friendly401(message), 401)
             }
-            if (!resp.isSuccessful || code != 0) throw ErpException(message.ifBlank { "请求失败 (${resp.code})" }, code)
+            if (!it.isSuccessful || code != 0) throw ErpException(message.ifBlank { "请求失败 (${it.code})" }, code)
             return root.get("data") ?: gson.toJsonTree(null)
         }
     }
