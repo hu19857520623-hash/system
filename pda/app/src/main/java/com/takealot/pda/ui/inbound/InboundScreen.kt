@@ -186,8 +186,8 @@ class InboundViewModel : ViewModel() {
     }
 
     private suspend fun doQcScan(code: String, recordId: String) {
+        val guess = ScanCodeClassifier.classify(code).typeKey
         if (order == null) {
-            val guess = ScanCodeClassifier.classify(code).typeKey
             if (guess == "inbound_no" || guess == "carton") {
                 ensureOrder(code) ?: return
                 scan = ""
@@ -195,6 +195,14 @@ class InboundViewModel : ViewModel() {
                 return
             }
             throw ErpException("请先扫描入库单号绑定作业单，再扫 SKU")
+        }
+        if (guess == "inbound_no") {
+            scan = ""
+            throw ErpException("这是入库单号，清点请扫该 SKU / 条码 / 已绑 990")
+        }
+        if (guess == "carton") {
+            scan = ""
+            throw ErpException("清点请扫 SKU；箱唛请在「确认箱数」扫描")
         }
         applySkuScan(code, recordId)
     }
@@ -393,32 +401,41 @@ fun InboundScreen(modeKey: String, onBack: () -> Unit, vm: InboundViewModel = vi
         if (vm.mode == InboundMode.Qc) {
             Text("扫 SKU、商品条码或已绑 990，每扫一次按下方件数累加", color = PdaMuted, fontSize = 12.sp)
         }
-        var editingCartonCount by remember { mutableStateOf(false) }
-        var cartonDraft by remember { mutableStateOf("") }
+        var qtyDialog by remember { mutableStateOf<String?>(null) }
+        var qtyDraft by remember { mutableStateOf("") }
         when (vm.mode) {
             InboundMode.Receive -> QtyRow(
                 label = "实收箱数",
                 value = vm.cartonCount,
                 onChange = { vm.cartonCount = it.coerceAtLeast(1) },
                 onNumberClick = {
-                    cartonDraft = vm.cartonCount.toString()
-                    editingCartonCount = true
+                    qtyDraft = vm.cartonCount.toString()
+                    qtyDialog = "carton"
                 },
             )
-            InboundMode.Qc -> QtyRow("每次件数", vm.qcIncrement, onChange = { vm.qcIncrement = it.coerceAtLeast(1) })
+            InboundMode.Qc -> QtyRow(
+                label = "每次件数",
+                value = vm.qcIncrement,
+                onChange = { vm.qcIncrement = it.coerceAtLeast(1) },
+                onNumberClick = {
+                    qtyDraft = vm.qcIncrement.toString()
+                    qtyDialog = "qc"
+                },
+            )
             else -> {}
         }
-        if (editingCartonCount) {
+        if (qtyDialog != null) {
+            val isCarton = qtyDialog == "carton"
             AlertDialog(
-                onDismissRequest = { editingCartonCount = false },
-                title = { Text("实收箱数") },
+                onDismissRequest = { qtyDialog = null },
+                title = { Text(if (isCarton) "实收箱数" else "每次件数") },
                 text = {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("点数字手填，或用 − / + 调整。", color = PdaMuted, fontSize = 13.sp)
                         OutlinedTextField(
-                            value = cartonDraft,
-                            onValueChange = { raw -> cartonDraft = raw.filter { ch -> ch.isDigit() }.take(4) },
-                            label = { Text("箱数") },
+                            value = qtyDraft,
+                            onValueChange = { raw -> qtyDraft = raw.filter { ch -> ch.isDigit() }.take(4) },
+                            label = { Text(if (isCarton) "箱数" else "件数") },
                             singleLine = true,
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                             colors = fieldColors(),
@@ -428,11 +445,12 @@ fun InboundScreen(modeKey: String, onBack: () -> Unit, vm: InboundViewModel = vi
                 },
                 confirmButton = {
                     TextButton(onClick = {
-                        vm.cartonCount = cartonDraft.toIntOrNull()?.coerceIn(1, 9999) ?: 1
-                        editingCartonCount = false
+                        val n = qtyDraft.toIntOrNull()?.coerceIn(1, 9999) ?: 1
+                        if (isCarton) vm.cartonCount = n else vm.qcIncrement = n
+                        qtyDialog = null
                     }) { Text("确定", color = PdaAccent) }
                 },
-                dismissButton = { TextButton(onClick = { editingCartonCount = false }) { Text("取消") } },
+                dismissButton = { TextButton(onClick = { qtyDialog = null }) { Text("取消") } },
             )
         }
         FeedbackBar(vm.feedback)
@@ -564,7 +582,7 @@ private fun QcMeasureEditor(vm: InboundViewModel) {
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
             colors = fieldColors(),
         )
-        BigButton("确认", onClick = { vm.saveMeasure() }, enabled = !vm.busy, color = PdaOk)
+        BigButton("保存尺寸", onClick = { vm.saveMeasure() }, enabled = !vm.busy, color = PdaOk)
     }
 }
 

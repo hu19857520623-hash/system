@@ -870,9 +870,14 @@ export class InboundService {
       throw new NotFoundException(`扫描码 ${parsed.skuToken} 不属于入库单 ${order.inboundNo}`)
     }
 
-    const increment = canCount ? parsed.increment : 0
+    const requestedCount = parsed.increment > 0
+    if (requestedCount && !canCount) {
+      throw new BadRequestException('该入库单已提交清点，不能再累加实收，请到「上架」作业；改尺寸请点 SKU 后保存测量')
+    }
+
+    const increment = canCount && requestedCount ? parsed.increment : 0
     const current = item.actualQty ?? 0
-    const newActual = canCount ? current + increment : current
+    const newActual = increment > 0 ? current + increment : current
 
     const hasDims = [parsed.lengthCm, parsed.widthCm, parsed.heightCm].every(
       (v) => v != null && Number(v) > 0,
@@ -880,7 +885,7 @@ export class InboundService {
     const weightRaw = Number(data.weightKg)
     const hasWeight = Number.isFinite(weightRaw) && weightRaw > 0
 
-    if (increment <= 0 && !hasDims && !hasWeight) {
+    if (!requestedCount && !hasDims && !hasWeight) {
       throw new BadRequestException('请填写长宽高或重量后再确认')
     }
 
