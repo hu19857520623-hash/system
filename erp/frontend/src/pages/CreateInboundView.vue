@@ -12,7 +12,6 @@ import { useAppStore } from '@/stores/app'
 import { getInboundStatusMeta } from '@/constants/index.js'
 import ListPagination from '@/components/ListPagination.vue'
 import { PIPELINE_INBOUND_CALLOUT } from '@/constants/productPipeline.ts'
-import { erpConfirm } from '@/utils/messageBox'
 import {
   allocateSeaFreight,
   calculateCbmLabel,
