@@ -77,6 +77,7 @@ data class InboundItem(
     val lengthCm: Double? = null,
     val widthCm: Double? = null,
     val heightCm: Double? = null,
+    val weightKg: Double? = null,
     val dimensionsSource: String? = null,
 ) {
     val skuCode get() = sku.orEmpty()

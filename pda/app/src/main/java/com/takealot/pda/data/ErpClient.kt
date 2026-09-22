@@ -71,11 +71,26 @@ class ErpClient(private val session: SessionStore) {
         )
     }
 
-    suspend fun scanQc(id: Int, scanCode: String, increment: Int = 1, clientRequestId: String? = null): ScanActionResult = withContext(Dispatchers.IO) {
-        gson.fromJson(
-            postJson("/inbound/$id/scan-qc", mapOf("scanCode" to scanCode, "increment" to increment, "clientRequestId" to clientRequestId)),
-            ScanActionResult::class.java,
+    suspend fun scanQc(
+        id: Int,
+        scanCode: String,
+        increment: Int = 1,
+        clientRequestId: String? = null,
+        lengthCm: Double? = null,
+        widthCm: Double? = null,
+        heightCm: Double? = null,
+        weightKg: Double? = null,
+    ): ScanActionResult = withContext(Dispatchers.IO) {
+        val body = mutableMapOf<String, Any?>(
+            "scanCode" to scanCode,
+            "increment" to increment,
+            "clientRequestId" to clientRequestId,
         )
+        if (lengthCm != null && lengthCm > 0) body["lengthCm"] = lengthCm
+        if (widthCm != null && widthCm > 0) body["widthCm"] = widthCm
+        if (heightCm != null && heightCm > 0) body["heightCm"] = heightCm
+        if (weightKg != null && weightKg > 0) body["weightKg"] = weightKg
+        gson.fromJson(postJson("/inbound/$id/scan-qc", body), ScanActionResult::class.java)
     }
 
     suspend fun submitQc(id: Int, items: List<Map<String, Any?>>, acceptDiff: Boolean): Unit = withContext(Dispatchers.IO) {
@@ -83,12 +98,23 @@ class ErpClient(private val session: SessionStore) {
         Unit
     }
 
-    suspend fun measureDimensions(id: Int, inboundItemId: Int, lengthCm: Double, widthCm: Double, heightCm: Double) =
-        withContext(Dispatchers.IO) {
-            postJson("/inbound/$id/measure-dimensions", mapOf("items" to listOf(mapOf(
-                "inboundItemId" to inboundItemId, "lengthCm" to lengthCm, "widthCm" to widthCm, "heightCm" to heightCm,
-            ))))
-        }
+    suspend fun measureDimensions(
+        id: Int,
+        inboundItemId: Int,
+        lengthCm: Double,
+        widthCm: Double,
+        heightCm: Double,
+        weightKg: Double? = null,
+    ) = withContext(Dispatchers.IO) {
+        val row = mutableMapOf<String, Any?>(
+            "inboundItemId" to inboundItemId,
+            "lengthCm" to lengthCm,
+            "widthCm" to widthCm,
+            "heightCm" to heightCm,
+        )
+        if (weightKg != null && weightKg > 0) row["weightKg"] = weightKg
+        postJson("/inbound/$id/measure-dimensions", mapOf("items" to listOf(row)))
+    }
 
     suspend fun putaway(id: Int, inboundItemId: Int, locationCode: String, qty: Int) = withContext(Dispatchers.IO) {
         postJson("/inbound/$id/putaway", mapOf("items" to listOf(mapOf(

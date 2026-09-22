@@ -33,6 +33,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.ImeAction
@@ -58,11 +59,14 @@ data class Feedback(val ok: Boolean, val message: String)
 @Composable
 fun ScanField(
     value: String, onValueChange: (String) -> Unit, onSubmit: () -> Unit,
-    label: String, enabled: Boolean = true, autoFocus: Boolean = true,
+    label: String, enabled: Boolean = true, autoFocus: Boolean = true, focusNonce: Any = Unit,
 ) {
     val focus = remember { FocusRequester() }
-    LaunchedEffect(autoFocus, enabled) {
-        if (autoFocus && enabled) runCatching { focus.requestFocus() }
+    LaunchedEffect(autoFocus, enabled, focusNonce) {
+        if (autoFocus && enabled) {
+            delay(40)
+            runCatching { focus.requestFocus() }
+        }
     }
     OutlinedTextField(
         value = value, onValueChange = onValueChange,
@@ -108,7 +112,7 @@ fun LanguageSwitcher() {
 fun BigButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, color: Color = PdaAccent) {
     Button(
         onClick = onClick, enabled = enabled,
-        modifier = modifier.fillMaxWidth().height(52.dp),
+        modifier = modifier.fillMaxWidth().height(52.dp).focusProperties { canFocus = false },
         shape = RoundedCornerShape(10.dp),
         colors = ButtonDefaults.buttonColors(
             containerColor = color, contentColor = Color(0xFF1A1204),
@@ -230,7 +234,7 @@ fun KeyValue(label: String, value: String) {
 @Composable
 fun RowScope.QtyButton(label: String, onClick: () -> Unit) {
     Button(
-        onClick = onClick, modifier = Modifier.weight(1f).height(44.dp),
+        onClick = onClick, modifier = Modifier.weight(1f).height(44.dp).focusProperties { canFocus = false },
         colors = ButtonDefaults.buttonColors(containerColor = PdaSurface2, contentColor = PdaText),
         shape = RoundedCornerShape(8.dp),
     ) { Text(label, fontSize = 18.sp) }

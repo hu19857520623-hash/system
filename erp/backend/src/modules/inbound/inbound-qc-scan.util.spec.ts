@@ -8,6 +8,16 @@ describe('parseInboundQcScanInput', () => {
     })
   })
 
+  it('allows zero increment for measure-only saves', () => {
+    expect(parseInboundQcScanInput('SKU-A', 0, { lengthCm: 10, widthCm: 20, heightCm: 30 })).toEqual({
+      skuToken: 'SKU-A',
+      increment: 0,
+      lengthCm: 10,
+      widthCm: 20,
+      heightCm: 30,
+    })
+  })
+
   it('parses json payload with dimensions', () => {
     const parsed = parseInboundQcScanInput('{"sku":"SKU-A","lengthCm":10,"widthCm":20,"heightCm":30,"qty":2}')
     expect(parsed).toEqual({

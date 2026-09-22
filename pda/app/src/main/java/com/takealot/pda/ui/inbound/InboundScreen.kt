@@ -27,6 +27,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -86,6 +87,7 @@ class InboundViewModel : ViewModel() {
     var lengthCm by mutableStateOf("")
     var widthCm by mutableStateOf("")
     var heightCm by mutableStateOf("")
+    var weightKg by mutableStateOf("")
     var acceptDiff by mutableStateOf(false)
     var exceptionReason by mutableStateOf("")
     var showExceptionRelease by mutableStateOf(false)
@@ -117,12 +119,7 @@ class InboundViewModel : ViewModel() {
             when (mode) {
                 InboundMode.Arrival -> doArrival(code)
                 InboundMode.Receive -> doReceiveScan(code, recordId)
-                InboundMode.Qc -> {
-                    ensureOrder(code) ?: return
-                    val res = api.scanQc(order!!.id, code, qcIncrement, recordId)
-                    feedback = Feedback(true, res.message.orEmpty().ifBlank { "${res.sku.orEmpty()} +${res.increment}" })
-                    refreshOrder(); scan = ""
-                }
+                InboundMode.Qc -> doQcScan(code, recordId)
                 InboundMode.Putaway -> handlePutawayScan(code)
             }
             journal.acknowledge(recordId, feedback?.message)
@@ -157,7 +154,7 @@ class InboundViewModel : ViewModel() {
         mode = InboundMode.Receive
         PdaApp.instance.workJournal.activate(PdaResumeWork("inbound", InboundMode.Receive.key, current.id, current.no))
         val next = when {
-            canReceive && canQc -> "请扫箱唛或 SKU"
+            canReceive && canQc -> "请扫箱唛确认箱数，也可直接扫 SKU 清点"
             canReceive -> "请扫箱唛确认箱数"
             else -> "请扫 SKU 清点"
         }
@@ -170,28 +167,59 @@ class InboundViewModel : ViewModel() {
             scan = ""
             return
         }
-        val guess = ScanCodeClassifier.classify(code).typeKey
-        if (guess == "sku" || guess == "barcode") {
-            doReceiveSku(code, recordId)
+        if (matchesCurrentSku(code)) {
+            applySkuScan(code, recordId)
             return
         }
         try {
             val res = api.receiveBox(order!!.id, code)
-            feedback = Feedback(true, res.message.orEmpty().ifBlank { "箱唛已确认" })
+            feedback = Feedback(true, res.message.orEmpty().ifBlank { "箱唛已确认，可继续扫箱唛或 SKU" })
             refreshOrder(); scan = ""
         } catch (e: Exception) {
-            if (guess == "carton" || !session.hasPerm("inbound.qc")) throw e
-            doReceiveSku(code, recordId)
+            val msg = e.message.orEmpty()
+            if (msg.contains("已确认") || msg.contains("请先在「到仓扫描」")) throw e
+            applySkuScan(code, recordId)
         }
     }
 
-    private suspend fun doReceiveSku(code: String, recordId: String) {
+    private suspend fun doQcScan(code: String, recordId: String) {
+        if (order == null) {
+            val guess = ScanCodeClassifier.classify(code).typeKey
+            if (guess == "inbound_no" || guess == "carton") {
+                ensureOrder(code) ?: return
+                scan = ""
+                feedback = Feedback(true, "已绑定 ${order?.no.orEmpty()}，请扫 SKU 或条码清点")
+                return
+            }
+            throw ErpException("请先扫描入库单号绑定作业单，再扫 SKU")
+        }
+        applySkuScan(code, recordId)
+    }
+
+    private fun matchesCurrentSku(code: String): Boolean =
+        order?.itemList?.any { it.matchesScan(code) } == true
+
+    private suspend fun applySkuScan(code: String, recordId: String) {
         if (!session.hasPerm("inbound.qc")) {
-            throw ErpException("确认箱数环节请扫箱唛；SKU 清点需要清点权限")
+            throw ErpException("扫 SKU 需要清点权限，请用仓库账号或在电脑端开通「入库 · 清点」")
         }
         val res = api.scanQc(order!!.id, code, qcIncrement, recordId)
-        feedback = Feedback(true, res.message.orEmpty().ifBlank { "${res.sku.orEmpty()} +${res.increment}" })
+        if (res.itemId > 0) selectedItemId = res.itemId
+        val sku = res.sku.orEmpty().ifBlank { code }
+        feedback = Feedback(
+            true,
+            res.message.orEmpty().ifBlank { "$sku +${res.increment}（实收 ${res.actualQty}/${res.expectedQty}）" },
+        )
         refreshOrder(); scan = ""
+    }
+
+    private fun enterQcAfterReceive(prefix: String) {
+        if (!session.hasPerm("inbound.qc")) return
+        val current = order ?: return
+        mode = InboundMode.Qc
+        PdaApp.instance.workJournal.activate(PdaResumeWork("inbound", InboundMode.Qc.key, current.id, current.no))
+        val text = prefix.trim().ifBlank { "箱数已确认" }
+        feedback = Feedback(true, "$text，已进入清点。请继续扫 SKU")
     }
 
     private suspend fun ensureOrder(code: String): InboundOrder? {
@@ -257,14 +285,36 @@ class InboundViewModel : ViewModel() {
     }
 
     fun saveMeasure() {
-        val o = order ?: return; val item = selectedItem ?: return
-        val l = lengthCm.toDoubleOrNull() ?: 0.0; val w = widthCm.toDoubleOrNull() ?: 0.0; val h = heightCm.toDoubleOrNull() ?: 0.0
-        if (l <= 0 || w <= 0 || h <= 0) { feedback = Feedback(false, "请填写有效长宽高（cm）"); return }
+        val o = order ?: return
+        val item = selectedItem ?: run { feedback = Feedback(false, "请先点选 SKU"); return }
+        val l = lengthCm.toDoubleOrNull() ?: 0.0
+        val w = widthCm.toDoubleOrNull() ?: 0.0
+        val h = heightCm.toDoubleOrNull() ?: 0.0
+        val weight = weightKg.toDoubleOrNull()?.takeIf { it > 0 }
+        if (l <= 0 || w <= 0 || h <= 0) {
+            feedback = Feedback(false, "请填写有效长宽高（cm）")
+            return
+        }
         viewModelScope.launch {
             busy = true
-            try { api.measureDimensions(o.id, item.id, l, w, h); refreshOrder(); feedback = Feedback(true, "${item.skuCode} 尺寸已保存") }
-            catch (e: Exception) { feedback = Feedback(false, e.message ?: "保存尺寸失败") }
-            finally { busy = false }
+            try {
+                when (mode) {
+                    InboundMode.Putaway ->
+                        api.measureDimensions(o.id, item.id, l, w, h, weight)
+                    InboundMode.Qc, InboundMode.Receive ->
+                        api.scanQc(o.id, item.skuCode, 0, null, l, w, h, weight)
+                    else -> {
+                        feedback = Feedback(false, "当前步骤不可保存测量")
+                        return@launch
+                    }
+                }
+                refreshOrder()
+                feedback = Feedback(true, "${item.skuCode} 长宽高重量已保存")
+            } catch (e: Exception) {
+                feedback = Feedback(false, e.message ?: "保存失败")
+            } finally {
+                busy = false
+            }
         }
     }
 
@@ -285,8 +335,8 @@ class InboundViewModel : ViewModel() {
             busy = true; feedback = null
             try {
                 val res = api.recordReceivedCartonCount(id, cartonCount)
-                feedback = Feedback(true, res.message.orEmpty().ifBlank { "实收箱数已登记" })
                 refreshOrder()
+                enterQcAfterReceive(res.message.orEmpty().ifBlank { "实收箱数已登记" })
             } catch (e: Exception) {
                 feedback = Feedback(false, e.message ?: "登记箱数失败")
             } finally { busy = false }
@@ -324,9 +374,22 @@ fun InboundScreen(modeKey: String, onBack: () -> Unit, vm: InboundViewModel = vi
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(screenTitle, color = PdaText, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
-            TextButton(onClick = onBack) { Text(tr("back"), color = PdaAccent) }
+            Text(
+                tr("back"),
+                color = PdaAccent,
+                modifier = Modifier
+                    .focusProperties { canFocus = false }
+                    .clickable(onClick = onBack)
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+            )
         }
-        ScanField(vm.scan, { vm.scan = it }, { vm.submitScan() }, scanLabel, enabled = !vm.busy)
+        ScanField(vm.scan, { vm.scan = it }, { vm.submitScan() }, scanLabel, enabled = true, focusNonce = "${vm.mode.key}-${vm.busy}")
+        if (vm.mode == InboundMode.Receive) {
+            Text("可扫箱唛记箱数，也可扫 SKU / 条码 / 990 累加实收", color = PdaMuted, fontSize = 12.sp)
+        }
+        if (vm.mode == InboundMode.Qc) {
+            Text("扫 SKU、商品条码或已绑 990，每扫一次按下方件数累加", color = PdaMuted, fontSize = 12.sp)
+        }
         var editingCartonCount by remember { mutableStateOf(false) }
         var cartonDraft by remember { mutableStateOf("") }
         when (vm.mode) {
@@ -405,6 +468,7 @@ fun InboundScreen(modeKey: String, onBack: () -> Unit, vm: InboundViewModel = vi
                 }
             }
             if (vm.mode == InboundMode.Putaway) PutawayEditor(vm)
+            if (vm.mode == InboundMode.Qc || vm.mode == InboundMode.Receive) QcMeasureEditor(vm)
             Text("SKU 明细", color = PdaInbound, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
             order.itemList.forEach { item ->
                 SkuCard(
@@ -419,6 +483,7 @@ fun InboundScreen(modeKey: String, onBack: () -> Unit, vm: InboundViewModel = vi
                         vm.lengthCm = item.lengthCm?.takeIf { it > 0 }?.toString().orEmpty()
                         vm.widthCm = item.widthCm?.takeIf { it > 0 }?.toString().orEmpty()
                         vm.heightCm = item.heightCm?.takeIf { it > 0 }?.toString().orEmpty()
+                        vm.weightKg = item.weightKg?.takeIf { it > 0 }?.toString().orEmpty()
                     },
                 ) {
                     Text(item.productName.orEmpty(), color = PdaMuted, fontSize = 12.sp)
@@ -461,6 +526,30 @@ private fun ExceptionReleaseDialog(vm: InboundViewModel) {
 }
 
 @Composable
+private fun QcMeasureEditor(vm: InboundViewModel) {
+    val item = vm.selectedItem ?: return
+    Panel {
+        Text("测量 · ${item.skuCode}", color = PdaText, fontWeight = FontWeight.Medium)
+        Text("填写长宽高与重量，确认后回写 ERP 商品资料", color = PdaMuted, fontSize = 12.sp)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            DimField("长(cm)", vm.lengthCm) { vm.lengthCm = it.filter { ch -> ch.isDigit() || ch == '.' } }
+            DimField("宽(cm)", vm.widthCm) { vm.widthCm = it.filter { ch -> ch.isDigit() || ch == '.' } }
+            DimField("高(cm)", vm.heightCm) { vm.heightCm = it.filter { ch -> ch.isDigit() || ch == '.' } }
+        }
+        OutlinedTextField(
+            value = vm.weightKg,
+            onValueChange = { vm.weightKg = it.filter { ch -> ch.isDigit() || ch == '.' } },
+            label = { Text("重量(kg)") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            colors = fieldColors(),
+        )
+        BigButton("确认", onClick = { vm.saveMeasure() }, enabled = !vm.busy, color = PdaOk)
+    }
+}
+
+@Composable
 private fun PutawayEditor(vm: InboundViewModel) {
     val item = vm.selectedItem
     Panel {
@@ -474,6 +563,15 @@ private fun PutawayEditor(vm: InboundViewModel) {
                 DimField("宽", vm.widthCm) { vm.widthCm = it }
                 DimField("高", vm.heightCm) { vm.heightCm = it }
             }
+            OutlinedTextField(
+                value = vm.weightKg,
+                onValueChange = { vm.weightKg = it.filter { ch -> ch.isDigit() || ch == '.' } },
+                label = { Text("重量(kg)") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                colors = fieldColors(),
+            )
             BigButton("保存尺寸", onClick = { vm.saveMeasure() }, enabled = !vm.busy)
         }
         BigButton("确认上架", onClick = { vm.submitPutaway() }, enabled = !vm.busy && item != null, color = PdaOk)

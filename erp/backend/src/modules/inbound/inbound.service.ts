@@ -812,6 +812,7 @@ export class InboundService {
       lengthCm?: number
       widthCm?: number
       heightCm?: number
+      weightKg?: number
       clientRequestId?: string
     },
     operatorId?: number,
@@ -876,6 +877,12 @@ export class InboundService {
     const hasDims = [parsed.lengthCm, parsed.widthCm, parsed.heightCm].every(
       (v) => v != null && Number(v) > 0,
     )
+    const weightRaw = Number(data.weightKg)
+    const hasWeight = Number.isFinite(weightRaw) && weightRaw > 0
+
+    if (increment <= 0 && !hasDims && !hasWeight) {
+      throw new BadRequestException('请填写长宽高或重量后再确认')
+    }
 
     await this.prisma.$transaction(async (tx) => {
       if (canCount && increment > 0) {
@@ -884,14 +891,19 @@ export class InboundService {
           data: { actualQty: newActual },
         })
       }
-      if (hasDims) {
+      if (hasDims || hasWeight) {
         await tx.product.update({
           where: { id: item.productId },
           data: {
-            measuredLengthCm: parsed.lengthCm,
-            measuredWidthCm: parsed.widthCm,
-            measuredHeightCm: parsed.heightCm,
-            measuredAt: new Date(),
+            ...(hasDims
+              ? {
+                  measuredLengthCm: parsed.lengthCm,
+                  measuredWidthCm: parsed.widthCm,
+                  measuredHeightCm: parsed.heightCm,
+                  measuredAt: new Date(),
+                }
+              : {}),
+            ...(hasWeight ? { weightKg: weightRaw } : {}),
           },
         })
       }
@@ -918,14 +930,19 @@ export class InboundService {
         lengthCm: parsed.lengthCm,
         widthCm: parsed.widthCm,
         heightCm: parsed.heightCm,
+        weightKg: hasWeight ? weightRaw : null,
         clientRequestId: clientRequestId || null,
       },
     })
 
+    const weightText = hasWeight ? ` · 重量 ${weightRaw} kg` : ''
+
     return {
       message: canCount
-        ? `[清点] ${item.sku} +${increment} 件（累计 ${line.actualQty ?? newActual}/${line.expectedQty}）${dimText}`
-        : `[测量] ${item.sku} 尺寸已更新${dimText}`,
+        ? increment > 0
+          ? `[清点] ${item.sku} +${increment} 件（累计 ${line.actualQty ?? newActual}/${line.expectedQty}）${dimText}${weightText}`
+          : `[测量] ${item.sku} 已更新${dimText}${weightText}`
+        : `[测量] ${item.sku} 尺寸已更新${dimText}${weightText}`,
       sku: line.sku,
       increment,
       expectedQty: line.expectedQty,
@@ -1199,6 +1216,8 @@ export class InboundService {
         const lengthCm = Number(group.lengthCm)
         const widthCm = Number(group.widthCm)
         const heightCm = Number(group.heightCm)
+        const weightKg = Number(group.weightKg)
+        const hasWeight = Number.isFinite(weightKg) && weightKg > 0
         if (![lengthCm, widthCm, heightCm].every((v) => Number.isFinite(v) && v > 0)) {
           throw new BadRequestException(`${item.sku} 请填写有效的长宽高（cm）`)
         }
@@ -1210,6 +1229,7 @@ export class InboundService {
             measuredWidthCm: widthCm,
             measuredHeightCm: heightCm,
             measuredAt: new Date(),
+            ...(hasWeight ? { weightKg } : {}),
           },
         })
       }

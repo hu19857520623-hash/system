@@ -30,9 +30,10 @@ export function parseInboundQcScanInput(
   const text = String(raw || '').trim()
   if (!text) throw new Error('请扫描或输入 SKU')
 
-  const overrideIncrement = incrementOverride != null && Number(incrementOverride) > 0
-    ? Math.floor(Number(incrementOverride))
-    : undefined
+  const overrideIncrement =
+    incrementOverride != null && Number.isFinite(Number(incrementOverride))
+      ? Math.max(0, Math.floor(Number(incrementOverride)))
+      : undefined
 
   const bodyLength = positiveNum(dims?.lengthCm)
   const bodyWidth = positiveNum(dims?.widthCm)
@@ -48,7 +49,7 @@ export function parseInboundQcScanInput(
       const heightCm = bodyHeight ?? positiveNum(obj.heightCm ?? obj.height ?? obj.h)
       return {
         skuToken,
-        increment: overrideIncrement ?? pickIncrement(obj, 1),
+        increment: overrideIncrement != null ? overrideIncrement : pickIncrement(obj, 1),
         lengthCm,
         widthCm,
         heightCm,
@@ -71,7 +72,8 @@ export function parseInboundQcScanInput(
       const incrementRaw = delimited.length >= 5 ? positiveNum(delimited[4]) : undefined
       return {
         skuToken: delimited[0],
-        increment: overrideIncrement ?? (incrementRaw ? Math.floor(incrementRaw) : 1),
+        increment:
+          overrideIncrement != null ? overrideIncrement : incrementRaw ? Math.floor(incrementRaw) : 1,
         lengthCm,
         widthCm,
         heightCm,
@@ -81,7 +83,7 @@ export function parseInboundQcScanInput(
 
   return {
     skuToken: text,
-    increment: overrideIncrement ?? 1,
+    increment: overrideIncrement != null ? overrideIncrement : 1,
     lengthCm: bodyLength,
     widthCm: bodyWidth,
     heightCm: bodyHeight,
