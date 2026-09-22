@@ -572,12 +572,21 @@ function inboundReceivingStarted(order: any): boolean {
   return false
 }
 
-function inboundCanDelete(order: any): boolean {
+function inboundIsErpManaged(order: any): boolean {
   if (!canCreateInbound.value) return false
   const raw = order?._raw || order
   if (!raw || raw.readOnly || String(raw.id).startsWith('oms-')) return false
-  if (inboundNumericId(order) == null && inboundNumericId(raw) == null) return false
-  return !inboundReceivingStarted(raw)
+  return inboundNumericId(order) != null || inboundNumericId(raw) != null
+}
+
+function inboundCanDelete(order: any): boolean {
+  const raw = order?._raw || order
+  return inboundIsErpManaged(order) && !inboundReceivingStarted(raw)
+}
+
+function inboundDeleteHint(order: any): string {
+  if (!inboundIsErpManaged(order)) return ''
+  return inboundCanDelete(order) ? '' : '已开始收货的入库单不能删除'
 }
 
 function inboundStatusLabel(order: any) {
@@ -1187,7 +1196,7 @@ async function submitFreight() {
 async function clearFreight() {
   const id = inboundNumericId(detailOrder.value)
   if (!id || !detailCanEditFreight.value) return
-  const ok = await confirmAction('确认删除本单海运费？货盘与批次成本中的海运费也会清零。', '删除海运费')
+  const ok = await confirmAction('确认清除本单海运费？货盘与批次成本中的海运费也会清零。入库单本身不会删除。', '清除海运费')
   if (!ok) return
   try {
     const data = await inboundApi.clearSeaFreight(id)
@@ -1774,25 +1783,27 @@ async function handleAttachmentFile(e: Event) {
             <el-tag :type="row.tone === 'ok' ? 'success' : row.tone === 'err' ? 'danger' : row.tone === 'warn' ? 'warning' : 'info'" size="small">{{ row.statusLabel }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="290" fixed="right">
+        <el-table-column label="操作" width="340" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="openDetail(row)">详情</el-button>
             <el-button link type="primary" size="small" @click="downloadReceivingList(row)">入库清单</el-button>
             <el-button link type="primary" size="small" @click="downloadLabel(row)">标签</el-button>
             <el-button link type="primary" size="small" @click="downloadOuterLabel(row)">外箱标</el-button>
             <el-button
-              v-if="inboundCanDelete(row)"
+              v-if="inboundIsErpManaged(row)"
               link
               type="danger"
               size="small"
+              :disabled="!inboundCanDelete(row)"
+              :title="inboundDeleteHint(row)"
               @click="removeInbound(row)"
-            >删除</el-button>
+            >删除入库单</el-button>
           </template>
         </el-table-column>
       </el-table>
       <el-empty v-if="!loading && !filteredInbounds.length" description="暂无入库单，点击「新建入库单」开始创建" />
       <ListPagination v-model:page="inboundPage" v-model:page-size="inboundPageSize" :total="inboundTotal" />
-      <p class="text-muted footer-note">入库单创建后进入待收货（在途）；可下载入库清单供人工清点，仓库在「到仓扫描」完成收货、清点与上架。</p>
+      <p class="text-muted footer-note">入库单创建后进入待收货（在途）。未开始收货前可删除整张入库单，海外仓作业中会同步消失；已开始收货后不能删除。可下载入库清单供人工清点，仓库在「到仓扫描」完成收货、清点与上架。</p>
     </template>
   </el-card>
 
@@ -1867,13 +1878,14 @@ async function handleAttachmentFile(e: Event) {
       >补录海运费</el-button>
       <el-button
         v-if="detailCanEditFreight && detailHasFreight"
-        type="danger"
         plain
         @click="clearFreight"
-      >删除海运费</el-button>
+      >清除海运费</el-button>
       <el-button
-        v-if="inboundCanDelete(detailOrder)"
+        v-if="inboundIsErpManaged(detailOrder)"
         type="danger"
+        :disabled="!inboundCanDelete(detailOrder)"
+        :title="inboundDeleteHint(detailOrder)"
         @click="removeInbound(detailOrder)"
       >删除入库单</el-button>
       <el-button type="primary" @click="detailVisible = false">关闭</el-button>
