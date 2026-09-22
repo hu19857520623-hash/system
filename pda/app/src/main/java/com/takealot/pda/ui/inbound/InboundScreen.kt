@@ -95,6 +95,7 @@ class InboundViewModel : ViewModel() {
     var exceptionReason by mutableStateOf("")
     var showExceptionRelease by mutableStateOf(false)
     var pendingOrders by mutableStateOf<List<InboundOrder>>(emptyList())
+    var putawayDoneNo by mutableStateOf<String?>(null)
     val selectedItem: InboundItem? get() = order?.itemList?.find { it.id == selectedItemId }
 
     fun bindMode(key: String) {
@@ -346,9 +347,8 @@ class InboundViewModel : ViewModel() {
         locationCode = ""; refreshOrder()
         val remaining = order?.itemList?.sumOf { it.remainingPutaway } ?: 0
         if (remaining <= 0) {
-            feedback = Feedback(true, "${item.skuCode} → $loc ×$qty；本单已全部上架")
-            clearOrder()
-            loadPendingPutaway()
+            putawayDoneNo = o.no
+            feedback = Feedback(true, "${o.no} 上架完成")
         } else {
             feedback = Feedback(true, "${item.skuCode} → $loc ×$qty；请扫描下一件 SKU")
             val next = order?.itemList?.firstOrNull { it.remainingPutaway > 0 }
@@ -428,6 +428,13 @@ class InboundViewModel : ViewModel() {
                 feedback = Feedback(false, e.message ?: "登记箱数失败")
             } finally { busy = false }
         }
+    }
+
+    fun finishPutawayDone() {
+        val no = putawayDoneNo
+        putawayDoneNo = null
+        clearOrder()
+        feedback = Feedback(true, "${no.orEmpty()} 上架完成，已返回待上架列表")
     }
 
     fun clearOrder() {
@@ -665,6 +672,16 @@ fun InboundScreen(modeKey: String, onBack: () -> Unit, vm: InboundViewModel = vi
         }
     }
     if (vm.showExceptionRelease) ExceptionReleaseDialog(vm)
+    if (vm.putawayDoneNo != null) {
+        AlertDialog(
+            onDismissRequest = { vm.finishPutawayDone() },
+            title = { Text("上架完成") },
+            text = { Text("${vm.putawayDoneNo} 全部 SKU 已上架。", color = PdaMuted, fontSize = 14.sp) },
+            confirmButton = {
+                TextButton(onClick = { vm.finishPutawayDone() }) { Text("返回上架", color = PdaAccent) }
+            },
+        )
+    }
 }
 
 @Composable
