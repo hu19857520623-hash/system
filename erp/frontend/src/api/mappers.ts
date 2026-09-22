@@ -594,6 +594,7 @@ export function mapPricing(row: any) {
     visibleStockQty: row.visibleStockQty != null ? Number(row.visibleStockQty) : null,
     soldQty: row.soldQty ?? 0,
     remainingStockQty: row.remainingStockQty ?? 0,
+    inTransitQty: row.inTransitQty ?? 0,
     catalogStockPool: row.catalogStockPool ?? 0,
     warehouseAvailableQty: row.warehouseAvailableQty ?? 0,
     poNo: row.poNo || '',

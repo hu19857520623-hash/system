@@ -3,13 +3,29 @@ import { PrismaService } from '../../common/prisma/prisma.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
 import { tryMarkOrderableOnOms } from './oms-catalog.util'
 import { OperationLogService } from '../operation-log/operation-log.service'
-import { syncCatalogFromInbound, type SyncInboundCatalogInput } from './catalog-sync.util'
+import {
+  applyInboundActualToCatalog,
+  reconcileCatalogFromCompletedInbounds,
+  syncCatalogFromInbound,
+  type SyncInboundCatalogInput,
+} from './catalog-sync.util'
 import {
   getOmsCatalogSkuForDisplay,
   listOmsCatalogForDisplay,
   pushCatalogStockToOms,
 } from './oms-catalog-sync.util'
 import { catalogStockPool, remainingCatalogStock } from './catalog-stock.util'
+import {
+  addQtyForCatalogSku,
+  buildCatalogSkuIndex,
+  CATALOG_INBOUND_CANCELLED_STATUSES,
+  CATALOG_PO_EXCLUDED_STATUSES,
+  catalogInTransitQty,
+  emptyCatalogPipelineQty,
+  finishCatalogPipelineQty,
+  openInboundRemaining,
+  type CatalogPipelineQty,
+} from './catalog-pipeline-qty.util'
 import { CATALOG_CUSTOMER_CODE, catalogBaseSkuFromInternal, catalogSkuLookupKeys, toCatalogInternalSku } from '../../common/catalog-customer.util'
 
 function num(v: any, fallback = 0): number {
@@ -34,10 +50,16 @@ export class PricingService {
     private opLog: OperationLogService,
   ) {}
 
-  private serialize(row: any, warehouseAvailableQty?: number) {
+  private serialize(row: any, warehouseAvailableQty?: number, pipeline?: CatalogPipelineQty) {
     const soldQty = row.soldQty ?? 0
     const catalogPool = catalogStockPool(row)
     const remainingStockQty = remainingCatalogStock(row)
+    const purchaseQty = (pipeline?.purchaseQty || 0) > 0 ? pipeline!.purchaseQty : (row.purchaseQty || 0)
+    const inTransitQty = catalogInTransitQty({
+      purchaseTotal: purchaseQty,
+      inboundExpectedTotal: pipeline?.inboundExpectedTotal ?? 0,
+      openInboundRemaining: pipeline?.openInboundRemaining ?? 0,
+    })
     return {
       id: Number(row.id),
       sku: row.sku,
@@ -46,11 +68,12 @@ export class PricingService {
       name: row.productName,
       spec: row.spec,
       cost: num(row.costRmb),
-      purchaseQty: row.purchaseQty,
+      purchaseQty,
       inboundQty: row.inboundQty ?? 0,
       visibleStockQty: row.visibleStockQty != null ? Number(row.visibleStockQty) : null,
       soldQty,
       remainingStockQty,
+      inTransitQty,
       catalogStockPool: catalogPool,
       warehouseAvailableQty: warehouseAvailableQty ?? 0,
       poNo: row.poNo,
@@ -170,6 +193,52 @@ export class PricingService {
     return map
   }
 
+  /** 货盘采购合计 / 在途：按全部采购单与未完结入库单现算，不覆盖写入 */
+  private async loadCatalogPipelineQtyBySku(skus: string[]) {
+    const map = new Map<string, CatalogPipelineQty>()
+    for (const sku of skus) map.set(sku, emptyCatalogPipelineQty())
+    if (!skus.length) return map
+
+    const lookup = [...new Set(skus.flatMap((sku) => catalogSkuLookupKeys(sku)))]
+    const index = buildCatalogSkuIndex(skus)
+    const purchase = new Map<string, number>()
+    const inboundExpected = new Map<string, number>()
+    const openRemaining = new Map<string, number>()
+
+    const [poItems, inboundItems] = await Promise.all([
+      this.prisma.purchaseOrderItem.findMany({
+        where: {
+          sku: { in: lookup },
+          order: { status: { notIn: CATALOG_PO_EXCLUDED_STATUSES } },
+        },
+        select: { sku: true, quantity: true },
+      }),
+      this.prisma.inboundOrderItem.findMany({
+        where: {
+          sku: { in: lookup },
+          order: { status: { notIn: CATALOG_INBOUND_CANCELLED_STATUSES } },
+        },
+        select: { sku: true, expectedQty: true, actualQty: true, order: { select: { status: true } } },
+      }),
+    ])
+
+    for (const item of poItems) addQtyForCatalogSku(index, purchase, item.sku, item.quantity)
+    for (const item of inboundItems) {
+      addQtyForCatalogSku(index, inboundExpected, item.sku, item.expectedQty)
+      addQtyForCatalogSku(
+        index,
+        openRemaining,
+        item.sku,
+        openInboundRemaining(item.expectedQty, item.actualQty, item.order.status),
+      )
+    }
+
+    for (const sku of skus) {
+      map.set(sku, finishCatalogPipelineQty(sku, purchase, inboundExpected, openRemaining))
+    }
+    return map
+  }
+
   private async resolveMarketFromDev(productName: string, sku: string): Promise<number> {
     if (sku) {
       const bySku = await this.prisma.productDev.findFirst({
@@ -238,7 +307,7 @@ export class PricingService {
     if (q.keyword) {
       where.OR = [{ sku: { contains: q.keyword } }, { productName: { contains: q.keyword } }]
     }
-    const [rows, total] = await Promise.all([
+    const [rawRows, total] = await Promise.all([
       this.prisma.productPricing.findMany({
         where,
         include: { histories: { orderBy: { id: 'desc' }, take: 20 }, priceRecords: { orderBy: { id: 'asc' } } },
@@ -248,11 +317,16 @@ export class PricingService {
       }),
       this.prisma.productPricing.count({ where }),
     ])
-    const stockMap = await this.loadWarehouseAvailableBySku(rows.map((r) => r.sku))
-    const holdersMap = await this.loadCatalogHoldersBySku(rows.map((r) => r.sku))
+    const rows = await reconcileCatalogFromCompletedInbounds(this.prisma, rawRows)
+    const skus = rows.map((r) => r.sku)
+    const [stockMap, holdersMap, pipelineMap] = await Promise.all([
+      this.loadWarehouseAvailableBySku(skus),
+      this.loadCatalogHoldersBySku(skus),
+      this.loadCatalogPipelineQtyBySku(skus),
+    ])
     const items = await Promise.all(rows.map(async (r) => {
       const ready = await this.ensureOrderableIfWarehouseReady(r, stockMap.get(r.sku) || 0)
-      return this.attachHolderFields(this.serialize(ready, stockMap.get(r.sku) || 0), holdersMap)
+      return this.attachHolderFields(this.serialize(ready, stockMap.get(r.sku) || 0, pipelineMap.get(r.sku)), holdersMap)
     }))
     return {
       items,
@@ -268,16 +342,25 @@ export class PricingService {
       include: { histories: { orderBy: { id: 'desc' } }, priceRecords: { orderBy: { id: 'asc' } } },
     })
     if (!row) throw new NotFoundException('货盘库存记录不存在')
-    const enriched = await this.ensureMarketPrice(row)
-    const stockMap = await this.loadWarehouseAvailableBySku([enriched.sku])
+    const [healed] = await reconcileCatalogFromCompletedInbounds(this.prisma, [row])
+    const enriched = await this.ensureMarketPrice(healed)
+    const [stockMap, holdersMap, pipelineMap] = await Promise.all([
+      this.loadWarehouseAvailableBySku([enriched.sku]),
+      this.loadCatalogHoldersBySku([enriched.sku]),
+      this.loadCatalogPipelineQtyBySku([enriched.sku]),
+    ])
     const ready = await this.ensureOrderableIfWarehouseReady(enriched, stockMap.get(enriched.sku) || 0)
-    const holdersMap = await this.loadCatalogHoldersBySku([ready.sku])
-    return this.attachHolderFields(this.serialize(ready, stockMap.get(ready.sku) || 0), holdersMap)
+    return this.attachHolderFields(this.serialize(ready, stockMap.get(ready.sku) || 0, pipelineMap.get(ready.sku)), holdersMap)
   }
 
   /** 入库发运创建时自动同步货盘库存（海运费、入库数量等） */
   async syncFromInbound(input: SyncInboundCatalogInput) {
     return syncCatalogFromInbound(this.prisma, input)
+  }
+
+  /** 入库完结后按实收回写货盘本批入库 */
+  async applyInboundActual(input: { inboundNo: string; lines: { sku: string; actualQty: number }[] }) {
+    return applyInboundActualToCatalog(this.prisma, input)
   }
 
   async create(data: any) {

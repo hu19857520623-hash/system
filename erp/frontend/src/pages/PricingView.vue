@@ -40,6 +40,7 @@ interface PriceItem {
   visibleStockQty: number | null
   soldQty: number
   remainingStockQty: number
+  inTransitQty: number
   catalogStockPool: number
   warehouseAvailableQty: number
   holderCount?: number
@@ -570,7 +571,7 @@ async function submitReprice() {
         <template #default="{ row }"><span class="mono">{{ row.sku }}</span></template>
       </el-table-column>
       <el-table-column prop="name" label="商品名" min-width="130" />
-      <el-table-column prop="purchaseQty" label="采购数量" width="90" align="right">
+      <el-table-column prop="purchaseQty" label="采购数量" width="96" align="right">
         <template #default="{ row }">{{ row.purchaseQty.toLocaleString() }}</template>
       </el-table-column>
       <el-table-column label="采购成本" width="88" align="right">
@@ -596,10 +597,10 @@ async function submitReprice() {
           <span :style="{ color: row.soldQty > 0 ? '#2563eb' : '#b0a89c' }">{{ row.soldQty?.toLocaleString?.() ?? 0 }}</span>
         </template>
       </el-table-column>
-      <el-table-column label="剩余" width="72" align="right">
+      <el-table-column label="在途" width="72" align="right">
         <template #default="{ row }">
-          <span :style="{ fontWeight: row.remainingStockQty === 0 && row.visibleStockQty != null ? 600 : 400, color: row.remainingStockQty === 0 ? '#c95e60' : '#1f9d92' }">
-            {{ row.remainingStockQty?.toLocaleString?.() ?? '—' }}
+          <span :style="{ fontWeight: row.inTransitQty > 0 ? 600 : 400, color: row.inTransitQty > 0 ? '#c2780a' : '#b0a89c' }">
+            {{ row.inTransitQty?.toLocaleString?.() ?? 0 }}
           </span>
         </template>
       </el-table-column>
@@ -702,8 +703,8 @@ async function submitReprice() {
             <strong>{{ editing.visibleStockQty != null ? editing.visibleStockQty.toLocaleString() : '—' }}</strong>
           </div>
           <div class="erp-detail__metric is-accent">
-            <label>剩余库存</label>
-            <strong>{{ editing.remainingStockQty?.toLocaleString?.() ?? '—' }}</strong>
+            <label>在途</label>
+            <strong>{{ editing.inTransitQty?.toLocaleString?.() ?? 0 }}</strong>
           </div>
         </template>
       </DetailSheet>
@@ -724,23 +725,24 @@ async function submitReprice() {
         <el-descriptions-item label="内部 SKU">{{ editing.sku }}</el-descriptions-item>
         <el-descriptions-item label="采购单">{{ editing.poNo || '—' }}</el-descriptions-item>
         <el-descriptions-item label="入库单">{{ editing.inboundNo || '—' }}</el-descriptions-item>
-        <el-descriptions-item label="采购数量">{{ editing.purchaseQty.toLocaleString() }} <span class="form-tip">（采购审核时按实际采购单写入）</span></el-descriptions-item>
+        <el-descriptions-item label="采购数量">{{ editing.purchaseQty.toLocaleString() }} <span class="form-tip">（全部已审采购单合计）</span></el-descriptions-item>
         <el-descriptions-item label="采购成本">¥ {{ editing.cost }} <span class="form-tip">（实际单价）</span></el-descriptions-item>
         <el-descriptions-item label="海运费/件">¥ {{ editing.seaFreight }}</el-descriptions-item>
         <el-descriptions-item label="国内费用/件">¥ {{ editing.domesticFee }} <span class="form-tip">（采购单国内运费分摊）</span></el-descriptions-item>
         <el-descriptions-item label="汇率(¥→R)">{{ editing.exchangeRate }}</el-descriptions-item>
-        <el-descriptions-item label="本批入库">{{ editing.inboundQty ? editing.inboundQty.toLocaleString() : '—' }} <span class="form-tip">（入库发运时自动同步）</span></el-descriptions-item>
+        <el-descriptions-item label="本批入库">{{ editing.inboundQty ? editing.inboundQty.toLocaleString() : '—' }} <span class="form-tip">（发运按预期写入，完结后按实收回写）</span></el-descriptions-item>
         <el-descriptions-item label="对客户可见库存">
           <span v-if="editing.visibleStockQty != null">{{ editing.visibleStockQty.toLocaleString() }}</span>
           <span v-else style="color:#b0a89c">—</span>
         </el-descriptions-item>
-        <el-descriptions-item label="已售 / 剩余">
+        <el-descriptions-item label="已售">
           <span style="font-weight:600">{{ editing.soldQty?.toLocaleString?.() ?? 0 }}</span>
-          <span class="text-muted" style="margin:0 6px">/</span>
-          <span :class="editing.remainingStockQty === 0 ? 'erp-money is-neg' : 'erp-money'">
-            {{ editing.remainingStockQty?.toLocaleString?.() ?? '—' }}
+        </el-descriptions-item>
+        <el-descriptions-item label="在途">
+          <span :class="editing.inTransitQty > 0 ? 'erp-money' : 'text-muted'" style="font-weight:600">
+            {{ editing.inTransitQty?.toLocaleString?.() ?? 0 }}
           </span>
-          <span class="form-tip">剩余 = 可见库存 − 已售</span>
+          <span class="form-tip">未到仓收货的采购量</span>
         </el-descriptions-item>
         <el-descriptions-item label="仓内可用">{{ editing.warehouseAvailableQty?.toLocaleString?.() ?? 0 }} <span class="form-tip">（海外仓实际上架数量）</span></el-descriptions-item>
         <el-descriptions-item label="同步时间">{{ editing.freightCallbackTime || '—' }}</el-descriptions-item>

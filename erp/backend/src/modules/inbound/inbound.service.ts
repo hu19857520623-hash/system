@@ -147,6 +147,21 @@ export class InboundService {
 
     const cartons = await this.loadCartons(Number(row.id), row.inboundNo, row.items)
 
+    const displayStatus = normalizeInboundStatus(row.status)
+    if (displayStatus === 'completed') {
+      try {
+        await this.pricing.applyInboundActual({
+          inboundNo: row.inboundNo,
+          lines: row.items.map((i) => ({
+            sku: i.sku,
+            actualQty: Number(i.actualQty ?? 0),
+          })),
+        })
+      } catch (err) {
+        console.warn('[inbound-detail] catalog actual qty sync skipped:', err)
+      }
+    }
+
     return {
       ...row,
       id: Number(row.id),
@@ -1409,6 +1424,17 @@ export class InboundService {
     }).then(async (result) => {
       if (result.allDone) {
         const skus = result.items.map((i: { sku: string }) => i.sku).filter(Boolean)
+        try {
+          await this.pricing.applyInboundActual({
+            inboundNo: result.inboundNo || order.inboundNo,
+            lines: result.items.map((i: { sku: string; actualQty?: number | null; putawayQty?: number | null }) => ({
+              sku: i.sku,
+              actualQty: Number(i.actualQty ?? i.putawayQty ?? 0),
+            })),
+          })
+        } catch (err) {
+          console.warn('[putaway] catalog actual qty sync skipped:', err)
+        }
         try {
           await tryMarkOrderableOnOmsForSkus(this.prisma, skus)
         } catch (err) {

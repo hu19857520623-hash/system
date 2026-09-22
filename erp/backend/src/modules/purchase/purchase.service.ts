@@ -838,17 +838,20 @@ export class PurchaseService {
       const product = await this.syncProductMasterFromLine(tx, po, line, domesticPerUnit)
       productLines.push({ line, product })
 
-      const pricingData = {
-        productName: line.productName || line.sku,
-        costRmb: unitPrice,
-        purchaseQty: qty,
-        poNo: po.poNo,
-        domesticFee: domesticPerUnit,
-      }
       const catalogSku = toCatalogInternalSku(line.sku)
       const existing = await tx.productPricing.findFirst({
         where: { sku: { in: catalogSkuLookupKeys(line.sku) } },
       })
+      const samePo = existing?.poNo === po.poNo
+      const pricingData = {
+        productName: line.productName || line.sku,
+        costRmb: unitPrice,
+        purchaseQty: existing
+          ? (samePo ? existing.purchaseQty : (existing.purchaseQty ?? 0) + qty)
+          : qty,
+        poNo: po.poNo,
+        domesticFee: domesticPerUnit,
+      }
       if (existing) {
         await tx.productPricing.update({ where: { sku: existing.sku }, data: pricingData })
       } else {
