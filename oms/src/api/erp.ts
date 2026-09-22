@@ -125,6 +125,7 @@ export type ErpInboundOrder = {
   items: { sku: string; expectedQty: number; receivedQty: number; productName?: string }[]
   cartons?: ErpInboundCarton[]
   idempotent?: boolean
+  deleted?: boolean
 }
 
 export type ErpOutboundPreDeductLine = {

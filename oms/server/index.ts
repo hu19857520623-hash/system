@@ -1527,9 +1527,15 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
     }
 
     if (type === 'inbound.status') {
-      const inbound = data as unknown as ErpInboundOrder
+      const inbound = data as unknown as ErpInboundOrder & { deleted?: boolean }
       if (!inbound.inboundNo) return res.status(400).json({ error: '缺少 inboundNo' })
       const existing = await prisma.inboundOrder.findFirst({ where: { inboundNo: inbound.inboundNo } })
+      if (inbound.deleted) {
+        if (existing) {
+          await prisma.inboundOrder.delete({ where: { id: existing.id } })
+        }
+        return res.json({ ok: true, type, deleted: true })
+      }
       const palletInbound = inbound.inboundType === '货盘入库' || inbound.stockSource === 'catalog'
       if (palletInbound && !existing) {
         return res.json({ ok: true, type, skipped: 'pallet inbound is ERP-only' })

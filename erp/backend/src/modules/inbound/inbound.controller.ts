@@ -196,6 +196,28 @@ export class InboundController {
     return this.service.create(body, userId)
   }
 
+  @RequirePerms('create_inbound.create')
+  @Post(':id/sea-freight')
+  applySeaFreight(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: { mode?: string; totalAmount?: number },
+    @CurrentUser('userId') userId: number,
+  ) {
+    return this.service.applySeaFreight(id, body, userId)
+  }
+
+  @RequirePerms('create_inbound.create')
+  @Delete(':id/sea-freight')
+  clearSeaFreight(@Param('id', ParseIntPipe) id: number, @CurrentUser('userId') userId: number) {
+    return this.service.clearSeaFreight(id, userId)
+  }
+
+  @RequirePerms('create_inbound.create')
+  @Delete(':id')
+  remove(@Param('id', ParseIntPipe) id: number, @CurrentUser('userId') userId: number) {
+    return this.service.remove(id, userId)
+  }
+
   @RequirePerms('inbound.receive')
   @Post(':id/receive-box')
   receiveBox(@Param('id', ParseIntPipe) id: number, @Body() body: any, @CurrentUser('userId') userId: number) {

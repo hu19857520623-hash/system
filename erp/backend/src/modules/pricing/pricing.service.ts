@@ -5,6 +5,7 @@ import { tryMarkOrderableOnOms } from './oms-catalog.util'
 import { OperationLogService } from '../operation-log/operation-log.service'
 import {
   applyInboundActualToCatalog,
+  applyInboundSeaFreightToCatalog,
   reconcileCatalogFromCompletedInbounds,
   syncCatalogFromInbound,
   type SyncInboundCatalogInput,
@@ -361,6 +362,14 @@ export class PricingService {
   /** 入库完结后按实收回写货盘本批入库 */
   async applyInboundActual(input: { inboundNo: string; lines: { sku: string; actualQty: number }[] }) {
     return applyInboundActualToCatalog(this.prisma, input)
+  }
+
+  async applyInboundSeaFreight(input: {
+    inboundNo: string
+    lines: Array<{ sku: string; seaFreightPerUnit: number }>
+    action?: string
+  }) {
+    return applyInboundSeaFreightToCatalog(this.prisma, input)
   }
 
   async create(data: any) {

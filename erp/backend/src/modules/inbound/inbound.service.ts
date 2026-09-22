@@ -9,6 +9,7 @@ import { notifyOms } from '../../common/oms-notify.util'
 import { fetchOmsInboundRows, mergeInboundPaginate } from './oms-inbound-bridge.util'
 import { buildInboundRemark, parseOmsInboundMeta, stripOmsSystemTags } from '../../common/oms-sync-meta.util'
 import { resolveBillingDimensions } from '../../common/product-dimension.util'
+import { unitCostRmb } from '../../common/inventory/inventory-lot-cost.util'
 import { parseInboundQcScanInput } from './inbound-qc-scan.util'
 import { findInboundItemByScan as matchInboundItemByScan } from './inbound-item-scan.util'
 import { loadPlatformBarcodesByInternalSku, productScanFields } from '../../common/platform-barcode-lookup.util'
@@ -31,6 +32,12 @@ import {
   matchCartonByScan,
   nextSeqFromNos,
 } from '@erp/shared/wms-doc-no'
+import {
+  allocateInboundSeaFreight,
+  parseSeaFreightMode,
+  patchInboundRemarkSeaFreight,
+} from './inbound-sea-freight.util'
+import { inboundReceivingStarted } from './inbound-delete.util'
 
 /** 在途，等待到仓扫描 */
 const PENDING_RECEIPT_STATUSES = new Set([
@@ -277,6 +284,9 @@ export class InboundService {
       widthCm: billing.widthCm,
       heightCm: billing.heightCm,
       weightKg: prod?.weightKg != null ? Number(prod.weightKg) : null,
+      seaFreightPerUnit: item.seaFreightPerUnit != null ? Number(item.seaFreightPerUnit) : 0,
+      costRmb: item.costRmb != null ? Number(item.costRmb) : null,
+      domesticFeePerUnit: item.domesticFeePerUnit != null ? Number(item.domesticFeePerUnit) : null,
       dimensionsSource: billing.source === 'none' ? null : billing.source,
       barcode: scan.barcode,
       platformBarcode: scan.platformBarcode,
@@ -473,6 +483,246 @@ export class InboundService {
 
       return result
     })
+  }
+
+  async remove(id: number, operatorId?: number) {
+    const order = await this.prisma.inboundOrder.findUnique({
+      where: { id: BigInt(id) },
+      include: { items: true, cartons: true },
+    })
+    if (!order) throw new NotFoundException('入库单不存在')
+    if (inboundReceivingStarted(order)) {
+      throw new BadRequestException('已开始收货的入库单不能删除')
+    }
+
+    const sourceWarehouseCode = String(order.sourceWarehouseCode || '').trim()
+    const skuTotals = new Map<string, { productId: bigint; qty: number }>()
+    for (const item of order.items) {
+      const qty = Number(item.expectedQty || 0)
+      if (!item.sku || qty <= 0 || !item.productId) continue
+      const prev = skuTotals.get(item.sku)
+      skuTotals.set(item.sku, { productId: item.productId, qty: (prev?.qty ?? 0) + qty })
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      if (sourceWarehouseCode) {
+        for (const [sku, { productId, qty }] of skuTotals) {
+          const inv = await tx.inventory.findUnique({
+            where: { productId_warehouseCode: { productId, warehouseCode: sourceWarehouseCode } },
+          })
+          if (inv) {
+            const before = inv.totalQty
+            const after = before + qty
+            await tx.inventory.update({
+              where: { id: inv.id },
+              data: {
+                totalQty: after,
+                availableQty: inv.availableQty + qty,
+              },
+            })
+            await tx.inventoryLog.create({
+              data: {
+                productId,
+                sku,
+                warehouseCode: sourceWarehouseCode,
+                changeType: 'inbound_release',
+                changeQty: qty,
+                beforeQty: before,
+                afterQty: after,
+                referenceNo: order.inboundNo,
+                operatorId: operatorId ? BigInt(operatorId) : undefined,
+                remark: '删除入库单，退回中转仓库存',
+              },
+            })
+          } else {
+            await tx.inventory.create({
+              data: {
+                productId,
+                sku,
+                warehouseCode: sourceWarehouseCode,
+                totalQty: qty,
+                availableQty: qty,
+                lockedQty: 0,
+              },
+            })
+            await tx.inventoryLog.create({
+              data: {
+                productId,
+                sku,
+                warehouseCode: sourceWarehouseCode,
+                changeType: 'inbound_release',
+                changeQty: qty,
+                beforeQty: 0,
+                afterQty: qty,
+                referenceNo: order.inboundNo,
+                operatorId: operatorId ? BigInt(operatorId) : undefined,
+                remark: '删除入库单，重建中转仓库存',
+              },
+            })
+          }
+        }
+      }
+
+      await tx.inboundArrivalScan.deleteMany({ where: { inboundId: order.id } })
+      await tx.inboundPutawayItem.deleteMany({ where: { inboundId: order.id } })
+      const cartonIds = order.cartons.map((carton) => carton.id)
+      if (cartonIds.length) {
+        await tx.inboundCartonItem.deleteMany({ where: { cartonId: { in: cartonIds } } })
+      }
+      await tx.inboundCarton.deleteMany({ where: { inboundId: order.id } })
+      await tx.inboundOrderItem.deleteMany({ where: { inboundId: order.id } })
+      await tx.$executeRawUnsafe('DELETE FROM inbound_attachment WHERE inbound_id = ?', Number(order.id))
+      await tx.inboundOrder.delete({ where: { id: order.id } })
+    })
+
+    if (order.omsCustomerCode) {
+      try {
+        const payload = this.mapInboundForOms({ ...order, status: 'cancelled' })
+        void notifyOms('inbound.status', order.omsCustomerCode, {
+          ...payload,
+          deleted: true,
+        } as unknown as Record<string, unknown>)
+      } catch (err) {
+        console.warn('[inbound] OMS delete notify skipped:', err)
+      }
+    }
+
+    await this.opLog.log({
+      operatorId,
+      module: 'inbound',
+      action: 'delete',
+      targetType: 'inbound_order',
+      targetId: order.inboundNo,
+      detail: {
+        sourceWarehouseCode,
+        destWarehouseCode: order.warehouseCode,
+        itemCount: order.items.length,
+        restored: Boolean(sourceWarehouseCode),
+      },
+    })
+
+    return { ok: true, inboundNo: order.inboundNo }
+  }
+
+  async applySeaFreight(id: number, body: { mode?: string; totalAmount?: number }, operatorId?: number) {
+    const mode = parseSeaFreightMode(body?.mode)
+    const totalAmount = Math.round(Number(body?.totalAmount) * 100) / 100
+    if (!Number.isFinite(totalAmount) || totalAmount <= 0) {
+      throw new BadRequestException('请填写大于 0 的海运费总额')
+    }
+    return this.writeSeaFreight(id, { mode, totalAmount }, operatorId)
+  }
+
+  async clearSeaFreight(id: number, operatorId?: number) {
+    return this.writeSeaFreight(id, null, operatorId)
+  }
+
+  private async writeSeaFreight(
+    id: number,
+    next: { mode: 'lcl' | 'fcl'; totalAmount: number } | null,
+    operatorId?: number,
+  ) {
+    const order = await this.prisma.inboundOrder.findUnique({
+      where: { id: BigInt(id) },
+      include: { items: true },
+    })
+    if (!order) throw new NotFoundException('入库单不存在')
+    if (order.status === 'cancelled') throw new BadRequestException('已作废的入库单不能修改海运费')
+
+    const products = order.items.length
+      ? await this.prisma.product.findMany({ where: { id: { in: order.items.map((i) => i.productId) } } })
+      : []
+    const prodMap = new Map(products.map((p) => [Number(p.id), p]))
+    const allocInput = order.items.map((item) => {
+      const prod = prodMap.get(Number(item.productId))
+      const dims = resolveBillingDimensions(prod || {})
+      return {
+        id: item.id,
+        sku: item.sku,
+        productId: item.productId,
+        expectedQty: Number(item.expectedQty || 0),
+        lengthCm: dims.lengthCm,
+        widthCm: dims.widthCm,
+        heightCm: dims.heightCm,
+        costRmb: item.costRmb,
+        domesticFeePerUnit: item.domesticFeePerUnit,
+      }
+    })
+
+    let allocated = allocInput.map((line) => ({ ...line, lineFreight: 0, unitFreight: 0, volumePct: 0, lineCbm: 0 }))
+    if (next) {
+      const missing = allocInput.filter((line) => !line.lengthCm || !line.widthCm || !line.heightCm)
+      if (missing.length) {
+        throw new BadRequestException(`请先补齐尺寸再分摊海运费：${missing.map((l) => l.sku).join('、')}`)
+      }
+      allocated = allocateInboundSeaFreight(allocInput, next.totalAmount)
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      for (const line of allocated) {
+        const unit = next ? line.unitFreight : 0
+        await tx.inboundOrderItem.update({
+          where: { id: line.id },
+          data: { seaFreightPerUnit: unit },
+        })
+        if (line.productId && Number(line.productId) > 0) {
+          await tx.product.update({
+            where: { id: line.productId },
+            data: { seaFreightPerUnit: unit },
+          })
+        }
+        const lots = await tx.inventoryLocation.findMany({
+          where: { inboundNo: order.inboundNo, productId: line.productId },
+        })
+        for (const lot of lots) {
+          await tx.inventoryLocation.update({
+            where: { id: lot.id },
+            data: {
+              seaFreightPerUnit: unit,
+              unitCostRmb: unitCostRmb({
+                costRmb: lot.costRmb,
+                seaFreightPerUnit: unit,
+                domesticFeePerUnit: lot.domesticFeePerUnit,
+              }),
+            },
+          })
+        }
+      }
+      await tx.inboundOrder.update({
+        where: { id: order.id },
+        data: {
+          remark: patchInboundRemarkSeaFreight(
+            order.remark,
+            next ? { mode: next.mode, total: next.totalAmount } : null,
+          ),
+        },
+      })
+    })
+
+    try {
+      await this.pricing.applyInboundSeaFreight({
+        inboundNo: order.inboundNo,
+        action: next ? '入库海运费补录' : '入库海运费清除',
+        lines: allocated.map((line) => ({
+          sku: line.sku,
+          seaFreightPerUnit: next ? line.unitFreight : 0,
+        })),
+      })
+    } catch (err) {
+      console.warn('[inbound] catalog sea freight sync skipped:', err)
+    }
+
+    await this.opLog.log({
+      operatorId,
+      module: 'inbound',
+      action: next ? 'sea_freight_backfill' : 'sea_freight_clear',
+      targetType: 'inbound_order',
+      targetId: order.inboundNo,
+      detail: next
+        ? { mode: next.mode, totalAmount: next.totalAmount, skuCount: allocated.length }
+        : { cleared: true, skuCount: allocated.length },
+    })
+    return this.detail(id)
   }
 
   /** 写入外箱装箱明细（未传则按 SKU 行自动生成一箱） */

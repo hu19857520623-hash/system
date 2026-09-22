@@ -3,7 +3,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { warehouseApi, inboundApi, inventoryApi, productApi } from '@/api/client.js'
-import { mapInbound } from '@/api/mappers.ts'
+import { mapInbound, fmtTime } from '@/api/mappers.ts'
 import { useListLoader, withAction } from '@/composables/useListLoader.ts'
 import { useTablePagination } from '@/composables/useTablePagination.ts'
 import { useRowActions } from '@/composables/useRowActions'
@@ -12,6 +12,7 @@ import { useAppStore } from '@/stores/app'
 import { getInboundStatusMeta } from '@/constants/index.js'
 import ListPagination from '@/components/ListPagination.vue'
 import { PIPELINE_INBOUND_CALLOUT } from '@/constants/productPipeline.ts'
+import { erpConfirm } from '@/utils/messageBox'
 import {
   allocateSeaFreight,
   calculateCbmLabel,
@@ -29,7 +30,7 @@ const DRAFT_KEY = 'erp-inbound-drafts' // legacy localStorage key — migrated t
 
 const app = useAppStore()
 const route = useRoute()
-const { showDetail, confirmAction, toast } = useRowActions()
+const { confirmAction, toast } = useRowActions()
 
 const tab = ref<'form' | 'drafts' | 'list'>('list')
 const inboundSearchQ = ref('')
@@ -106,6 +107,7 @@ const { loading, items: inbounds, load } = useListLoader(async () => {
         warehouseNo: meta.warehouseNo,
         arrival: meta.arrival,
         displayRemark: meta.userRemark,
+        seaFreight: meta.seaFreight,
         cbm,
         _raw: r,
       }
@@ -200,6 +202,10 @@ function parseInboundMeta(remark?: string) {
   const raw = remark || ''
   const warehouseNo = raw.match(/入仓:([^\s]+)/)?.[1] || ''
   const arrival = raw.match(/到货:(\d{4}-\d{2}-\d{2})/)?.[1] || ''
+  const seaMatch = raw.match(/海运:(LCL|FCL)\/([0-9.]+)/i)
+  const seaFreight = seaMatch && Number(seaMatch[2]) > 0
+    ? { mode: seaMatch[1].toUpperCase() === 'FCL' ? 'fcl' as const : 'lcl' as const, total: Number(seaMatch[2]) }
+    : null
   const userRemark = raw
     .replace(/\[.*?\]/g, '')
     .replace(/入仓:[^\s]+/g, '')
@@ -208,7 +214,7 @@ function parseInboundMeta(remark?: string) {
     .replace(/承运:[^\s]+/g, '')
     .replace(/运单:[^\s]+/g, '')
     .trim()
-  return { warehouseNo, arrival, userRemark: userRemark || '—' }
+  return { warehouseNo, arrival, userRemark: userRemark || '—', seaFreight }
 }
 
 async function loadRefs() {
@@ -301,6 +307,14 @@ function emptyForm() {
 }
 
 const createForm = ref(emptyForm())
+const canEditFreight = computed(() => app.hasPerm('create_inbound.create'))
+
+const detailVisible = ref(false)
+const detailLoading = ref(false)
+const detailOrder = ref<any>(null)
+const freightVisible = ref(false)
+const freightSubmitting = ref(false)
+const freightForm = ref({ mode: 'lcl' as 'lcl' | 'fcl', amount: '' })
 
 const seaFreightTotal = computed(() => {
   const mode = createForm.value.seaFreightMode
@@ -531,6 +545,207 @@ function formatCubic(l: number, w: number, h: number) {
 
 function formatMoney(n: number) {
   return `¥ ${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
+
+function inboundNumericId(row: any): number | null {
+  const id = Number(row?._raw?.id ?? row?.id)
+  return Number.isFinite(id) && id > 0 ? id : null
+}
+
+const RECEIVING_STARTED_STATUSES = new Set([
+  'receiving',
+  'pending_putaway',
+  'completed',
+  'confirmed',
+  'exception',
+  'cancelled',
+])
+
+function inboundReceivingStarted(order: any): boolean {
+  const raw = order?._raw || order
+  const status = String(raw?.status || '')
+  if (RECEIVING_STARTED_STATUSES.has(status)) return true
+  if (raw?.receivedAt) return true
+  const items = raw?.items || []
+  if (items.some((item: any) => Number(item.actualQty ?? 0) > 0 || Number(item.putawayQty ?? 0) > 0)) return true
+  const cartons = raw?.cartons || []
+  if (cartons.some((carton: any) => carton.status === 'received')) return true
+  return false
+}
+
+function inboundCanDelete(order: any): boolean {
+  if (!canCreateInbound.value) return false
+  const raw = order?._raw || order
+  if (!raw || raw.readOnly || String(raw.id).startsWith('oms-')) return false
+  if (inboundNumericId(order) == null && inboundNumericId(raw) == null) return false
+  return !inboundReceivingStarted(raw)
+}
+
+function inboundStatusLabel(order: any) {
+  return getInboundStatusMeta(order?.displayStatus || order?.status).label
+}
+
+function inboundSeaFreight(order: any) {
+  const fromRemark = parseInboundMeta(order?.remark).seaFreight
+  if (fromRemark) return fromRemark
+  const items = order?.items || []
+  const total = items.reduce((sum: number, item: any) => {
+    const unit = Number(item.seaFreightPerUnit || 0)
+    const qty = Number(item.expectedQty || 0)
+    return sum + unit * qty
+  }, 0)
+  if (!(total > 0)) return null
+  return { mode: 'lcl' as const, total: Math.round(total * 100) / 100 }
+}
+
+const detailItems = computed(() => (detailOrder.value?.items || []) as any[])
+const detailHasFreight = computed(() => Boolean(inboundSeaFreight(detailOrder.value)))
+const detailCanEditFreight = computed(() => {
+  const order = detailOrder.value
+  if (!order || !canEditFreight.value) return false
+  if (order.readOnly || String(order.id).startsWith('oms-')) return false
+  if ((order.status || '') === 'cancelled') return false
+  return inboundNumericId(order) != null
+})
+const detailFreightTotal = computed(() => {
+  const raw = freightForm.value.amount
+  const n = parseFloat(String(raw || '').replace(/,/g, ''))
+  return Number.isFinite(n) && n > 0 ? n : 0
+})
+const detailFreightLines = computed(() =>
+  allocateSeaFreight(
+    detailItems.value.map((item) => ({
+      sku: item.sku,
+      expectedQty: Number(item.expectedQty || 0),
+      lengthCm: Number(item.lengthCm || 0),
+      widthCm: Number(item.widthCm || 0),
+      heightCm: Number(item.heightCm || 0),
+    })),
+    detailFreightTotal.value,
+  ),
+)
+const detailMissingDimSkus = computed(() =>
+  detailItems.value
+    .filter((item) => item.sku && (!item.lengthCm || !item.widthCm || !item.heightCm))
+    .map((item) => item.sku),
+)
+
+function itemLineFreight(item: any) {
+  const unit = Number(item.seaFreightPerUnit || 0)
+  const qty = Number(item.expectedQty || 0)
+  return unit > 0 ? unit * qty : 0
+}
+
+function fillFormFromOrder(order: any) {
+  const raw = order?._raw || order
+  const meta = parseInboundMeta(raw?.remark)
+  const freight = inboundSeaFreight(raw)
+  const items = raw?.items || []
+  const cartons = raw?.cartons || []
+  const lines: InboundLine[] = items.map((item: any) => {
+    const qty = Math.max(1, Number(item.expectedQty || 0))
+    const matchingCartons = cartons.filter((carton: any) =>
+      (carton.items || []).some((ci: any) => ci.sku === item.sku),
+    )
+    let cartonCount = matchingCartons.length || 1
+    let qtyPerCarton = Math.max(1, Math.floor(qty / cartonCount))
+    if (cartonCount * qtyPerCarton !== qty) {
+      cartonCount = 1
+      qtyPerCarton = qty
+    }
+    const line: InboundLine = {
+      sku: item.sku,
+      productName: item.productName || '',
+      spec: item.spec || '',
+      cartonCount,
+      qtyPerCarton,
+      expectedQty: qty,
+      unitPrice: Number(item.costRmb || 0),
+      productId: Number(item.productId || 0),
+      remark: item.remark || '',
+      lengthCm: Number(item.lengthCm || 0),
+      widthCm: Number(item.widthCm || 0),
+      heightCm: Number(item.heightCm || 0),
+      weightKg: Number(item.weightKg || 0),
+      maxAvailable: qty,
+    }
+    normalizeInboundLine(line)
+    line.expectedQty = qty
+    return line
+  })
+  const formCartons: CartonForm[] = cartons.map((carton: any) => ({
+    boxCode: '',
+    lengthCm: Number(carton.lengthCm || 0),
+    widthCm: Number(carton.widthCm || 0),
+    heightCm: Number(carton.heightCm || 0),
+    grossWeightKg: Number(carton.grossWeightKg || 0),
+    remark: carton.remark || '',
+    items: (carton.items || []).map((ci: any) => ({
+      sku: ci.sku,
+      qty: Number(ci.qty || 0),
+    })).filter((ci: { sku: string; qty: number }) => ci.sku && ci.qty > 0),
+  })).filter((carton: CartonForm) => carton.items.length)
+
+  createForm.value = {
+    inboundNo: '',
+    logisticsWhCode: raw?.sourceWarehouseCode || '',
+    destWarehouseCode: raw?.warehouseCode || '',
+    plannedDate: meta.arrival || '',
+    warehouseNo: meta.warehouseNo || raw?.warehouseNo || '',
+    remark: meta.userRemark === '—' ? '' : meta.userRemark,
+    seaFreightMode: freight?.mode === 'fcl' ? 'fcl' : 'lcl',
+    seaFreightAmounts: {
+      lcl: freight && freight.mode !== 'fcl' && freight.total ? String(freight.total) : '',
+      fcl: freight?.mode === 'fcl' && freight.total ? String(freight.total) : '',
+    },
+    lines,
+    cartons: formCartons,
+  }
+}
+
+async function copyDeletedInbound(snapshot: any) {
+  editingDraftId.value = null
+  fillFormFromOrder(snapshot)
+  tab.value = 'form'
+  if (createForm.value.logisticsWhCode) {
+    await loadLogisticsStock(createForm.value.logisticsWhCode)
+  }
+  toast('已填入原单内容，请核对后提交（将生成新入库单号）')
+}
+
+async function removeInbound(row?: any) {
+  const source = row || detailOrder.value
+  const id = inboundNumericId(source)
+  if (!id) return
+  if (!inboundCanDelete(source)) {
+    ElMessage.warning('已开始收货的入库单不能删除')
+    return
+  }
+  const inboundNo = source.inboundNo || source.id
+  const ok = await confirmAction(
+    `确认删除入库单 ${inboundNo}？海外仓作业中的该单也会一并删除。已开始收货的单据无法删除。`,
+    '删除入库单',
+  )
+  if (!ok) return
+
+  let snapshot = source._raw || source
+  try {
+    snapshot = await inboundApi.detail(id)
+  } catch {
+    // 用列表快照兜底
+  }
+
+  try {
+    await inboundApi.remove(id)
+    detailVisible.value = false
+    detailOrder.value = null
+    toast(`已删除 ${inboundNo}`)
+    await load()
+    const copy = await confirmAction('是否用原单内容复制一份新的入库单？提交后会生成新单号。', '复制新建')
+    if (copy) await copyDeletedInbound(snapshot)
+  } catch (e: any) {
+    ElMessage.error(e?.message || '删除失败')
+  }
 }
 
 function freightLabel(sku: string, field: 'lineFreight' | 'unitFreight') {
@@ -916,14 +1131,73 @@ async function submitCreate() {
   }
 }
 
-function detail(row: any) {
-  showDetail(`入库单 · ${row.id}`, [
-    ['入库单号', row.id],
-    ['入仓号', row.warehouseNo || '—'], ['目的仓', row.warehouse], ['SKU', row.sku],
-    ['总数量', row.qty.toLocaleString()], ['总立方', row.cbm !== '—' ? `${row.cbm} m³` : '—'],
-    ['预计到货', row.arrival || '—'], ['状态', row.statusLabel], ['创建时间', row.time],
-    ['备注', row.displayRemark],
-  ])
+async function openDetail(row: any) {
+  const id = inboundNumericId(row)
+  detailVisible.value = true
+  detailLoading.value = true
+  detailOrder.value = row._raw || row
+  try {
+    if (id && !row._raw?.readOnly && !String(row._raw?.id || '').startsWith('oms-')) {
+      detailOrder.value = await inboundApi.detail(id)
+    }
+  } catch (e: any) {
+    ElMessage.error(e?.message || '加载详情失败')
+    detailVisible.value = false
+  } finally {
+    detailLoading.value = false
+  }
+}
+
+function openFreightDialog() {
+  const current = inboundSeaFreight(detailOrder.value)
+  freightForm.value = {
+    mode: current?.mode === 'fcl' ? 'fcl' : 'lcl',
+    amount: current?.total ? String(current.total) : '',
+  }
+  freightVisible.value = true
+}
+
+async function submitFreight() {
+  const id = inboundNumericId(detailOrder.value)
+  if (!id || !detailCanEditFreight.value) return
+  if (!detailFreightTotal.value) {
+    ElMessage.warning('请填写海运费总额')
+    return
+  }
+  if (detailMissingDimSkus.value.length) {
+    ElMessage.warning(`请先补齐尺寸：${detailMissingDimSkus.value.join('、')}`)
+    return
+  }
+  freightSubmitting.value = true
+  try {
+    const data = await inboundApi.applySeaFreight(id, {
+      mode: freightForm.value.mode,
+      totalAmount: detailFreightTotal.value,
+    })
+    detailOrder.value = data
+    freightVisible.value = false
+    toast('海运费已补录并同步货盘')
+    await load()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '补录海运费失败')
+  } finally {
+    freightSubmitting.value = false
+  }
+}
+
+async function clearFreight() {
+  const id = inboundNumericId(detailOrder.value)
+  if (!id || !detailCanEditFreight.value) return
+  const ok = await confirmAction('确认删除本单海运费？货盘与批次成本中的海运费也会清零。', '删除海运费')
+  if (!ok) return
+  try {
+    const data = await inboundApi.clearSeaFreight(id)
+    detailOrder.value = data
+    toast('海运费已删除')
+    await load()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '删除海运费失败')
+  }
 }
 
 async function downloadLabel(row: any) {
@@ -1501,12 +1775,19 @@ async function handleAttachmentFile(e: Event) {
             <el-tag :type="row.tone === 'ok' ? 'success' : row.tone === 'err' ? 'danger' : row.tone === 'warn' ? 'warning' : 'info'" size="small">{{ row.statusLabel }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="240" fixed="right">
+        <el-table-column label="操作" width="290" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" size="small" @click="detail(row)">详情</el-button>
+            <el-button link type="primary" size="small" @click="openDetail(row)">详情</el-button>
             <el-button link type="primary" size="small" @click="downloadReceivingList(row)">入库清单</el-button>
             <el-button link type="primary" size="small" @click="downloadLabel(row)">标签</el-button>
             <el-button link type="primary" size="small" @click="downloadOuterLabel(row)">外箱标</el-button>
+            <el-button
+              v-if="inboundCanDelete(row)"
+              link
+              type="danger"
+              size="small"
+              @click="removeInbound(row)"
+            >删除</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -1515,6 +1796,151 @@ async function handleAttachmentFile(e: Event) {
       <p class="text-muted footer-note">入库单创建后进入待收货（在途）；可下载入库清单供人工清点，仓库在「到仓扫描」完成收货、清点与上架。</p>
     </template>
   </el-card>
+
+  <el-dialog
+    v-model="detailVisible"
+    :title="`入库详情 · ${detailOrder?.inboundNo || ''}`"
+    width="960px"
+    class="create-inbound-detail erp-detail"
+    destroy-on-close
+  >
+    <div v-loading="detailLoading">
+      <template v-if="detailOrder">
+        <el-descriptions :column="3" border size="small" class="detail-desc">
+          <el-descriptions-item label="入库单号"><span class="mono">{{ detailOrder.inboundNo }}</span></el-descriptions-item>
+          <el-descriptions-item label="状态">{{ inboundStatusLabel(detailOrder) }}</el-descriptions-item>
+          <el-descriptions-item label="目的仓"><span class="mono">{{ detailOrder.warehouseCode || '—' }}</span></el-descriptions-item>
+          <el-descriptions-item label="始发仓"><span class="mono">{{ detailOrder.sourceWarehouseCode || '—' }}</span></el-descriptions-item>
+          <el-descriptions-item label="入仓号">{{ parseInboundMeta(detailOrder.remark).warehouseNo || detailOrder.warehouseNo || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="预计到货">{{ parseInboundMeta(detailOrder.remark).arrival || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="跟踪号">{{ detailOrder.trackingNo || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="创建时间">{{ fmtTime(detailOrder.createdAt) || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="海运费">
+            <template v-if="inboundSeaFreight(detailOrder)">
+              {{ inboundSeaFreight(detailOrder)!.mode === 'fcl' ? '整柜 FCL' : '拼柜 LCL' }}
+              · {{ formatMoney(inboundSeaFreight(detailOrder)!.total) }}
+            </template>
+            <span v-else class="text-muted">未填写</span>
+          </el-descriptions-item>
+          <el-descriptions-item label="客户备注" :span="3">{{ parseInboundMeta(detailOrder.remark).userRemark }}</el-descriptions-item>
+        </el-descriptions>
+
+        <div class="detail-section-title">SKU 明细（{{ detailItems.length }}）</div>
+        <el-table :data="detailItems" border size="small" class="detail-sku-table">
+          <el-table-column prop="sku" label="SKU" min-width="130" show-overflow-tooltip>
+            <template #default="{ row }"><span class="mono">{{ row.sku }}</span></template>
+          </el-table-column>
+          <el-table-column prop="productName" label="品名" min-width="140" show-overflow-tooltip>
+            <template #default="{ row }">{{ row.productName || '—' }}</template>
+          </el-table-column>
+          <el-table-column prop="spec" label="规格" width="100" show-overflow-tooltip>
+            <template #default="{ row }">{{ row.spec || '—' }}</template>
+          </el-table-column>
+          <el-table-column label="预期" width="78" align="right">
+            <template #default="{ row }">{{ Number(row.expectedQty || 0).toLocaleString() }}</template>
+          </el-table-column>
+          <el-table-column label="实收" width="78" align="right">
+            <template #default="{ row }">{{ row.actualQty != null ? Number(row.actualQty).toLocaleString() : '—' }}</template>
+          </el-table-column>
+          <el-table-column label="尺寸 cm" width="120">
+            <template #default="{ row }">{{ formatCubic(Number(row.lengthCm), Number(row.widthCm), Number(row.heightCm)) }}</template>
+          </el-table-column>
+          <el-table-column label="单件海运" width="96" align="right">
+            <template #default="{ row }">
+              {{ Number(row.seaFreightPerUnit) > 0 ? formatMoney(Number(row.seaFreightPerUnit)) : '—' }}
+            </template>
+          </el-table-column>
+          <el-table-column label="行海运" width="104" align="right">
+            <template #default="{ row }">
+              {{ itemLineFreight(row) > 0 ? formatMoney(itemLineFreight(row)) : '—' }}
+            </template>
+          </el-table-column>
+        </el-table>
+        <el-empty v-if="!detailItems.length" description="该入库单没有 SKU 明细" :image-size="64" />
+      </template>
+    </div>
+    <template #footer>
+      <el-button
+        v-if="detailCanEditFreight"
+        type="primary"
+        plain
+        @click="openFreightDialog"
+      >补录海运费</el-button>
+      <el-button
+        v-if="detailCanEditFreight && detailHasFreight"
+        type="danger"
+        plain
+        @click="clearFreight"
+      >删除海运费</el-button>
+      <el-button
+        v-if="inboundCanDelete(detailOrder)"
+        type="danger"
+        @click="removeInbound(detailOrder)"
+      >删除入库单</el-button>
+      <el-button type="primary" @click="detailVisible = false">关闭</el-button>
+    </template>
+  </el-dialog>
+
+  <el-dialog
+    v-model="freightVisible"
+    :title="`补录海运费 · ${detailOrder?.inboundNo || ''}`"
+    width="720px"
+    class="create-inbound-freight"
+    destroy-on-close
+  >
+    <p class="section-desc">选择运输方式并填写本票海运费总额，系统按各 SKU 体积占比分摊到单件，并同步货盘库存。</p>
+    <div class="sea-mode-row">
+      <el-radio-group v-model="freightForm.mode" size="small">
+        <el-radio-button value="lcl">拼柜 (LCL)</el-radio-button>
+        <el-radio-button value="fcl">整柜 (FCL)</el-radio-button>
+      </el-radio-group>
+    </div>
+    <el-form-item :label="freightForm.mode === 'fcl' ? '整柜海运费(RMB)' : '拼柜海运费(RMB)'">
+      <el-input v-model="freightForm.amount" type="number" min="0" step="0.01" placeholder="填写海运费总额" style="width:240px" />
+    </el-form-item>
+    <el-alert
+      v-if="detailFreightTotal && detailMissingDimSkus.length"
+      type="warning"
+      :closable="false"
+      show-icon
+      class="alloc-hint"
+      :title="`缺少尺寸，无法分摊：${detailMissingDimSkus.join('、')}`"
+    />
+    <div v-if="detailFreightTotal && detailFreightLines.length" class="alloc-panel">
+      <div class="alloc-panel-head">
+        <div class="alloc-panel-title">
+          <span class="alloc-mode-tag">{{ freightForm.mode === 'fcl' ? '整柜 FCL' : '拼柜 LCL' }}</span>
+          <span>分摊预览</span>
+        </div>
+        <div class="alloc-panel-meta">
+          <span>总额 <strong class="num">{{ formatMoney(detailFreightTotal) }}</strong></span>
+          <span class="meta-divider">|</span>
+          <span>{{ detailFreightLines.length }} 个 SKU</span>
+        </div>
+      </div>
+      <div class="alloc-grid">
+        <div class="alloc-grid-head">
+          <span>SKU</span>
+          <span class="align-right">体积占比</span>
+          <span class="align-right">分摊海运费</span>
+          <span class="align-right">单件海运费</span>
+        </div>
+        <div v-for="row in detailFreightLines" :key="row.sku" class="alloc-grid-row">
+          <span class="sku-code">{{ row.sku }}</span>
+          <span class="align-right">
+            <span v-if="row.lineCbm" class="pct-badge">{{ row.volumePct.toFixed(1) }}%</span>
+            <span v-else class="num muted">—</span>
+          </span>
+          <span class="num money align-right">{{ row.lineFreight ? formatMoney(row.lineFreight) : '—' }}</span>
+          <span class="num align-right">{{ row.unitFreight ? formatMoney(row.unitFreight) : '—' }}</span>
+        </div>
+      </div>
+    </div>
+    <template #footer>
+      <el-button @click="freightVisible = false">取消</el-button>
+      <el-button type="primary" :loading="freightSubmitting" @click="submitFreight">保存并同步货盘</el-button>
+    </template>
+  </el-dialog>
 </template>
 
 <style scoped>
@@ -1811,4 +2237,12 @@ async function handleAttachmentFile(e: Event) {
 
 :deep(.form-section .el-form-item) { margin-bottom: 12px; }
 :deep(.form-section .el-form-item__label) { font-size: 13px; color: #5c5348; }
+.detail-desc { margin-bottom: 12px; }
+.detail-section-title {
+  font-weight: 600;
+  font-size: 13px;
+  color: #2b2b2b;
+  margin: 8px 0 8px;
+}
+.detail-sku-table { width: 100%; }
 </style>

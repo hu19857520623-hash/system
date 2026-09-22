@@ -327,6 +327,9 @@ export const inboundApi = {
   downloadReceivingList: (id) => openHtmlPrint(`/inbound/${id}/receiving-list`),
   downloadOmsAttachment: (inboundId, attachmentId) =>
     downloadRequest(`/inbound/${inboundId}/attachments/${attachmentId}`),
+  applySeaFreight: (id, data) => api.post(`/inbound/${id}/sea-freight`, data),
+  clearSeaFreight: (id) => api.delete(`/inbound/${id}/sea-freight`),
+  remove: (id) => api.delete(`/inbound/${id}`),
 }
 
 // ── 退件 ──

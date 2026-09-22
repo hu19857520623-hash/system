@@ -209,3 +209,47 @@ export async function reconcileCatalogFromCompletedInbounds<
   }
   return out
 }
+
+/** 补录/清除入库海运费时只回写货盘海运费，不改本批入库数量 */
+export async function applyInboundSeaFreightToCatalog(
+  prisma: PrismaService,
+  input: { inboundNo: string; lines: Array<{ sku: string; seaFreightPerUnit: number }>; action?: string },
+) {
+  const action = input.action || '入库海运费补录'
+  const results: { sku: string; seaFreight: number }[] = []
+  for (const line of input.lines) {
+    const baseSku = String(line.sku || '').trim()
+    if (!baseSku) continue
+    const keys = catalogSkuLookupKeys(baseSku)
+    const row = await prisma.productPricing.findFirst({ where: { sku: { in: keys } } })
+    if (!row) continue
+    if (row.inboundNo && row.inboundNo !== input.inboundNo) continue
+
+    const seaFreight = Math.round(num(line.seaFreightPerUnit) * 100) / 100
+    const updated = await prisma.productPricing.update({
+      where: { id: row.id },
+      data: {
+        seaFreight,
+        inboundNo: input.inboundNo,
+        freightCallbackAt: new Date(),
+      },
+    })
+    await prisma.productPricingHistory.create({
+      data: {
+        pricingId: updated.id,
+        operatorRole: '系统',
+        action,
+        detail: `入库单 ${input.inboundNo} 海运费 ¥${row.seaFreight ?? 0}/件 → ¥${seaFreight}/件`,
+      },
+    })
+    if (updated.visibleOnOms) {
+      try {
+        await pushCatalogStockToOms(prisma, updated.sku)
+      } catch (err) {
+        console.warn('[catalog] OMS stock push after sea freight skipped:', err)
+      }
+    }
+    results.push({ sku: updated.sku, seaFreight })
+  }
+  return results
+}
