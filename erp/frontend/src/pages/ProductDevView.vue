@@ -110,12 +110,26 @@ const form = ref<DevForm>(emptyForm())
 const priceImageUploading = ref(false)
 const alibabaImageUploading = ref(false)
 
-async function fileToBase64(file: File) {
-  const buf = await file.arrayBuffer()
-  const bytes = new Uint8Array(buf)
-  let binary = ''
-  bytes.forEach((b) => { binary += String.fromCharCode(b) })
-  return btoa(binary)
+const DEV_IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp'])
+
+function isDevImageFile(file: File) {
+  if (file.type.startsWith('image/')) return true
+  const name = file.name || ''
+  const dot = name.lastIndexOf('.')
+  const ext = dot >= 0 ? name.slice(dot).toLowerCase() : ''
+  return DEV_IMAGE_EXTS.has(ext)
+}
+
+function fileToBase64(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = String(reader.result || '')
+      resolve(result.includes(',') ? result.slice(result.indexOf(',') + 1) : result)
+    }
+    reader.onerror = () => reject(new Error('读取图片失败'))
+    reader.readAsDataURL(file)
+  })
 }
 
 async function uploadDevImage(
@@ -124,8 +138,8 @@ async function uploadDevImage(
   uploading: { value: boolean },
   successText: string,
 ) {
-  if (!file.type.startsWith('image/')) {
-    ElMessage.warning('请上传图片文件')
+  if (!isDevImageFile(file)) {
+    ElMessage.warning('请上传 JPG / PNG / GIF / WebP 图片')
     return
   }
   if (file.size > 5 * 1024 * 1024) {
@@ -448,7 +462,7 @@ async function submitForm() {
           <div class="upload-block">
             <el-upload
               :show-file-list="false"
-              accept="image/jpeg,image/png,image/gif,image/webp,.jpg,.jpeg,.png,.gif,.webp"
+              accept="image/*,.jpg,.jpeg,.png,.gif,.webp"
               :disabled="priceImageUploading"
               :http-request="handlePriceImageUpload"
             >
@@ -477,7 +491,7 @@ async function submitForm() {
           <div class="upload-block">
             <el-upload
               :show-file-list="false"
-              accept="image/jpeg,image/png,image/gif,image/webp,.jpg,.jpeg,.png,.gif,.webp"
+              accept="image/*,.jpg,.jpeg,.png,.gif,.webp"
               :disabled="alibabaImageUploading"
               :http-request="handleAlibabaImageUpload"
             >
