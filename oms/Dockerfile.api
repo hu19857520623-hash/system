@@ -54,6 +54,7 @@ COPY --from=prod-deps --chown=oms:oms /app/node_modules ./node_modules
 COPY --from=builder --chown=oms:oms /app/prisma ./prisma
 COPY --chown=oms:oms server ./server
 COPY --chown=oms:oms src/data/chargeType.ts ./src/data/chargeType.ts
+COPY --chown=oms:oms src/data/platformBarcodeScope.ts ./src/data/platformBarcodeScope.ts
 
 USER oms
 EXPOSE 3001
