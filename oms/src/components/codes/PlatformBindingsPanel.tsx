@@ -28,6 +28,7 @@ import {
   type PlatformBindingTab,
   type PlatformBindingFilters,
 } from '../../data/platformBindingUtils'
+import { mappingBelongsToCustomer } from '../../data/platformBarcodeScope'
 import { AdminCustomerFilter, AdminCustomerCell } from '../admin/AdminCustomerFilter'
 import { useDataScope } from '../../auth/useDataScope'
 import { useRole } from '../../auth/RoleContext'
@@ -67,6 +68,7 @@ export default function PlatformBindingsPanel() {
   const mappings = usePlatformSkuMappings()
   const stores = useStores()
   const [searchParams] = useSearchParams()
+  const bindingCustomerId = dataScope.bindingCustomerId ?? undefined
 
   const [list, setList] = useState<PlatformSkuMapping[]>(() => [...mappings])
   const [tab, setTab] = useState<PlatformBindingTab>('all')
@@ -93,7 +95,9 @@ export default function PlatformBindingsPanel() {
     }))
     if (canWrite) {
       const matches = dataScope.scope(mappings).filter(mapping =>
-        mapping.platform === 'Takealot' && mapping.platformBarcode === barcode)
+        mapping.platform === 'Takealot'
+        && mapping.platformBarcode === barcode
+        && mappingBelongsToCustomer(mapping, bindingCustomerId))
       const active = matches.find(mapping => mapping.status === 'active' && mapping.lines.some(line => line.internalSku))
       if (active) return
       setEditing(matches.length === 1 ? matches[0] : null)
@@ -104,7 +108,7 @@ export default function PlatformBindingsPanel() {
       })
       setModalOpen(true)
     }
-  }, [searchParams, canWrite, dataScope, mappings])
+  }, [searchParams, canWrite, dataScope, mappings, bindingCustomerId])
 
   const persistList = async (next: PlatformSkuMapping[]) => {
     const before = list
@@ -151,6 +155,11 @@ export default function PlatformBindingsPanel() {
   }
 
   const handleSave = async (form: BindingFormState, prev: PlatformSkuMapping | null) => {
+    const customerId = bindingCustomerId ?? prev?.customerId
+    if (!customerId) {
+      window.alert('请先筛选客户。同一货盘 SKU 在每个客户下绑定的 990 条码相互独立，不能写成全平台共用。')
+      return
+    }
     const takealotStore = firstTakealotStore(stores)
     const store = takealotStore ?? stores.find(s => s.id === form.storeId)
     const validLines = form.lines.filter(l => l.internalSku)
@@ -164,7 +173,7 @@ export default function PlatformBindingsPanel() {
     if (prev) {
       next = list.map(m => m.id === prev.id ? {
         ...m,
-        customerId: dataScope.activeCustomerId ?? m.customerId,
+        customerId,
         sellerId: store?.sellerId ?? m.sellerId,
         platform: 'Takealot',
         storeId: store?.id ?? form.storeId,
@@ -182,7 +191,7 @@ export default function PlatformBindingsPanel() {
     } else {
       next = [...list, {
         id: `pb-${Date.now()}`,
-        customerId: dataScope.activeCustomerId ?? undefined,
+        customerId,
         sellerId: store?.sellerId,
         platform: 'Takealot',
         storeId: store?.id ?? form.storeId,
@@ -226,6 +235,10 @@ export default function PlatformBindingsPanel() {
   }
 
   const handleImportBindings = async () => {
+    if (!bindingCustomerId) {
+      window.alert('请先筛选客户再导入。同一货盘 SKU 在每个客户下绑定的 990 条码相互独立。')
+      return
+    }
     try {
       const result = await importCsvFile(
         PLATFORM_BINDING_COLUMNS,
@@ -236,7 +249,8 @@ export default function PlatformBindingsPanel() {
         async () => {
           const takealotStore = firstTakealotStore(stores)
           const imported: PlatformSkuMapping[] = result.data.map(row => ({
-            id: `pb-import-${Date.now()}-${row.platformBarcode}`,
+            id: `pb-import-${bindingCustomerId}-${Date.now()}-${row.platformBarcode}`,
+            customerId: bindingCustomerId,
             platform: 'Takealot',
             storeId: takealotStore?.id ?? row.storeId,
             storeName: takealotStore?.name ?? row.storeName,
@@ -282,7 +296,7 @@ export default function PlatformBindingsPanel() {
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-text-secondary">
           {dataScope.isAdmin
-            ? '全平台 990 条码与仓库 SKU 映射，用于出库识别标签'
+            ? '全平台 990 条码按客户隔离：同一货盘 SKU 分销给不同客户后，各客户绑定自己的 Takealot 990，互不共用'
             : '将 Takealot 990 条码对应到仓库 SKU，用于出库识别标签；不会从平台拉单扣库存'}
         </p>
         {canWrite && (
@@ -437,7 +451,7 @@ export default function PlatformBindingsPanel() {
       <PlatformBindingModal
         open={modalOpen}
         editing={editing}
-        customerId={dataScope.activeCustomerId ?? undefined}
+        customerId={bindingCustomerId}
         initialValues={queryPrefill}
         onClose={() => { setModalOpen(false); setEditing(null); setQueryPrefill(undefined) }}
         onSave={handleSave}

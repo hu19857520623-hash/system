@@ -6,6 +6,7 @@ import bcrypt from 'bcryptjs'
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto'
 import { resolveOmsCorsOrigins } from './cors.js'
 import { selectCustomerInventoryState } from './customer-scope.util.js'
+import { holdingEanFromCatalogPool } from '../src/data/platformBarcodeScope.js'
 import {
   assertCustomerCode,
   assertCustomerId,
@@ -1132,7 +1133,7 @@ app.post('/api/erp/purchase', async (req, res) => {
             safetyStock: 0,
             spec: pool?.spec || '',
             customCode: pool?.customCode ?? null,
-            ean: pool?.ean ?? null,
+            ean: holdingEanFromCatalogPool(pool?.ean) ?? null,
             warehouse: pool?.warehouse || account?.warehouse || 'jhb1',
             pendingShelving: 0,
             pendingOutbound: 0,

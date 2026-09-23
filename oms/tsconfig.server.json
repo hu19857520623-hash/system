@@ -16,5 +16,5 @@
     "forceConsistentCasingInFileNames": true,
     "types": ["node"]
   },
-  "include": ["server/**/*.ts", "src/data/chargeType.ts"]
+  "include": ["server/**/*.ts", "src/data/chargeType.ts", "src/data/platformBarcodeScope.ts"]
 }

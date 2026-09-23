@@ -49,16 +49,16 @@ const defaultFilters: ProductFilters = {
   weightMin: '', weightMax: '', valueMin: '', valueMax: '',
 }
 
-function displaySku(p: Product) {
-  return getPrimaryPlatformBarcode(p.internalSku) ?? getCustomerSkuDisplay(p)
+function displaySku(p: Product, customerId?: string | null) {
+  return getPrimaryPlatformBarcode(p.internalSku, customerId ?? undefined) ?? getCustomerSkuDisplay(p)
 }
 
-function applyProductFilters(list: Product[], f: ProductFilters, tab: string) {
+function applyProductFilters(list: Product[], f: ProductFilters, tab: string, customerId?: string | null) {
   return list.filter(p => {
     if (tab !== 'all' && p.productStatus !== tab) return false
     if (!matchTriState(p.hasBattery, f.battery)) return false
     if (!matchTriState(p.hasBoxSpec, f.boxSpec)) return false
-    const skuVal = `${displaySku(p)} ${p.internalSku}`
+    const skuVal = `${displaySku(p, customerId)} ${p.internalSku}`
     if (!matchText(skuVal, f.sku, f.skuMode)) return false
     if (!matchText(p.customCode ?? '', f.customCode, f.customCodeMode)) return false
     if (!matchText(p.name, f.productName, f.productNameMode)) return false
@@ -73,6 +73,7 @@ function applyProductFilters(list: Product[], f: ProductFilters, tab: string) {
 
 export default function Products() {
   const dataScope = useDataScope()
+  const barcodeCustomerId = dataScope.bindingCustomerId
   const products = useProducts()
   const [tab, setTab] = useState('all')
   const [filtersOpen, setFiltersOpen] = useState(true)
@@ -86,7 +87,10 @@ export default function Products() {
     [dataScope, products],
   )
 
-  const filtered = useMemo(() => applyProductFilters(myProducts, applied, tab), [myProducts, applied, tab])
+  const filtered = useMemo(
+    () => applyProductFilters(myProducts, applied, tab, barcodeCustomerId),
+    [myProducts, applied, tab, barcodeCustomerId],
+  )
   const selectedProducts = useMemo(
     () => myProducts.filter(product => selected.has(product.id)),
     [myProducts, selected],
@@ -98,14 +102,14 @@ export default function Products() {
   }, [filtered, page, pageSize])
 
   const tabCounts = useMemo(() => {
-    const base = applyProductFilters(myProducts, applied, 'all')
+    const base = applyProductFilters(myProducts, applied, 'all', barcodeCustomerId)
     return {
       all: base.length,
       available: base.filter(p => p.productStatus === 'available').length,
       draft: base.filter(p => p.productStatus === 'draft').length,
       discarded: base.filter(p => p.productStatus === 'discarded').length,
     }
-  }, [myProducts, applied])
+  }, [myProducts, applied, barcodeCustomerId])
 
   const setDraftField = <K extends keyof ProductFilters>(key: K, value: ProductFilters[K]) => {
     setDraft(prev => ({ ...prev, [key]: value }))
@@ -141,7 +145,7 @@ export default function Products() {
       return
     }
     const inputs = items.map(product => ({
-      code: product.internalSku.trim() || displaySku(product),
+      code: product.internalSku.trim() || displaySku(product, barcodeCustomerId),
       copies: 1,
     })).filter(item => item.code)
     await printBarcodeLabels(inputs, 'SKU 标签')
@@ -253,7 +257,7 @@ export default function Products() {
                 </td>
                 <td className="table-cell align-top">
                   <Link to={`/products/${p.id}`} className="font-mono text-xs font-medium text-primary-600 hover:underline">
-                    {displaySku(p)}
+                    {displaySku(p, barcodeCustomerId)}
                   </Link>
                 </td>
                 <AdminCustomerCell customerId={p.customerId} scope={dataScope} />

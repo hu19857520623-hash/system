@@ -17,6 +17,9 @@ export function useDataScope() {
 
   const activeCustomerId = admin ? null : customerId
   const activeCustomerCode = admin ? '全平台' : customerCode
+  const bindingCustomerId = admin
+    ? (customerFilter !== 'all' ? customerFilter : null)
+    : activeCustomerId
 
   return useMemo(() => ({
     role,
@@ -24,6 +27,7 @@ export function useDataScope() {
     customerFilter,
     setCustomerFilter,
     activeCustomerId,
+    bindingCustomerId,
     activeCustomerCode,
     customerOptions: accounts.filter(a => a.status === 'active'),
     scope: <T extends { customerId?: string }>(items: T[]) =>
@@ -43,7 +47,7 @@ export function useDataScope() {
         items,
         role,
         admin ? customerFilter : 'all',
-        getPrimaryPlatformBarcode,
+        sku => getPrimaryPlatformBarcode(sku, bindingCustomerId ?? undefined),
         activeCustomerId,
       ),
     getCustomerCode: (id?: string) => (
@@ -51,7 +55,7 @@ export function useDataScope() {
         ? customerCode
         : getCustomerCode(id, accounts)
     ),
-  }), [role, admin, customerFilter, accounts, activeCustomerId, activeCustomerCode])
+  }), [role, admin, customerFilter, accounts, activeCustomerId, bindingCustomerId, activeCustomerCode])
 }
 
 export type DataScope = ReturnType<typeof useDataScope>

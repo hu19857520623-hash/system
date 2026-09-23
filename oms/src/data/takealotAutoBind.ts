@@ -4,7 +4,8 @@ import type {
   StockSource,
   StoreAccount,
 } from './mockData'
-import { productMatchesSellerSku } from './skuCode'
+import { mappingBelongsToCustomer } from './platformBarcodeScope'
+import { productMatchesSellerSku, productVisibleToCustomer } from './skuCode'
 import type { TakealotLineItem } from './takealotDocParser'
 
 export type BindableProduct = Pick<Product, 'internalSku' | 'name'> &
@@ -28,7 +29,7 @@ export function findProductsBySellerSku<T extends BindableProduct>(
   customerId?: string,
 ): T[] {
   const scoped = customerId
-    ? products.filter(product => !product.customerId || product.customerId === customerId)
+    ? products.filter(product => productVisibleToCustomer(product, customerId))
     : products
   return scoped.filter(product => productMatchesSellerSku(product, sellerSku))
 }
@@ -43,7 +44,7 @@ function mappingsForBarcode(
   return mappings.filter(mapping =>
     mapping.platform === 'Takealot'
     && mapping.platformBarcode === barcode
-    && (!mapping.customerId || mapping.customerId === customerId)
+    && mappingBelongsToCustomer(mapping, customerId)
     && (
       !sellerId
       || mapping.sellerId === sellerId

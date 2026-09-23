@@ -2,16 +2,18 @@ import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { ChevronLeft } from 'lucide-react'
 import ProductForm, { useProductById } from '../components/products/ProductForm'
 import { getPrimaryPlatformBarcode } from '../data/platformBindingUtils'
+import { useDataScope } from '../auth/useDataScope'
 
 export default function ProductCreate() {
   const { id } = useParams()
+  const dataScope = useDataScope()
   const [searchParams] = useSearchParams()
   const copyId = searchParams.get('copy') || undefined
   const product = useProductById(id || copyId)
   const isEdit = Boolean(id)
   const isCopy = !isEdit && Boolean(copyId && product)
   const skuLabel = product
-    ? (getPrimaryPlatformBarcode(product.internalSku) ?? product.internalSku)
+    ? (getPrimaryPlatformBarcode(product.internalSku, dataScope.bindingCustomerId ?? undefined) ?? product.internalSku)
     : ''
 
   return (

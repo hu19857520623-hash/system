@@ -9,6 +9,16 @@ export function isCatalogPoolCustomerId(customerId?: string | null): boolean {
   return !customerId || customerId === CATALOG_CUSTOMER_ID
 }
 
+/** 客户可绑定/出库引用的商品：自己的 SKU，以及货盘池 SKU */
+export function productVisibleToCustomer(
+  product: { customerId?: string | null },
+  customerId?: string | null,
+): boolean {
+  if (!customerId) return true
+  if (!product.customerId || product.customerId === customerId) return true
+  return isCatalogPoolCustomerId(product.customerId)
+}
+
 /** 客户可见 SKU（不含客户代码前缀） */
 export function sanitizeCustomerSkuPart(value: string): string {
   return value.trim().replace(/\s+/g, '-').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 24)

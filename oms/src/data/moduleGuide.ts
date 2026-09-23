@@ -55,11 +55,11 @@ export const MODULE_GUIDES: Record<string, ModuleGuide> = {
   },
   codes: {
     title: '990码绑定',
-    desc: 'Takealot 990 条码 ↔ 仓库 SKU，用于出库识别标签。',
+    desc: 'Takealot 990 条码按客户绑定到仓库 SKU，用于出库识别标签。',
     features: [
       '绑定 990 条码到仓库 SKU，支持组合品',
-      'Tab：待绑定 / 已绑定 / 条码不一致 / 待审核',
-      '导入绑定、出库时按 990 码识别商品',
+      '货盘分销后同一 SKU 在每个客户下绑定各自的 990，互不共用',
+      '导入绑定、出库时按当前客户的 990 码识别商品',
     ],
     status: 'ready',
   },

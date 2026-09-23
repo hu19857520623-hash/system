@@ -7,9 +7,10 @@ import { statusLabels, formatCurrency } from '../data/mockData'
 import { getPrimaryPlatformBarcode } from '../data/platformBindingUtils'
 import { useProducts } from '../data/inventoryStore'
 import { useProductById } from '../components/products/ProductForm'
+import { useDataScope } from '../auth/useDataScope'
 
-function displaySku(internalSku: string) {
-  return getPrimaryPlatformBarcode(internalSku) ?? internalSku
+function displaySku(internalSku: string, customerId?: string | null) {
+  return getPrimaryPlatformBarcode(internalSku, customerId ?? undefined) ?? internalSku
 }
 
 function DetailField({ label, value }: { label: string; value: React.ReactNode }) {
@@ -23,6 +24,7 @@ function DetailField({ label, value }: { label: string; value: React.ReactNode }
 
 export default function ProductDetail() {
   const { id } = useParams()
+  const dataScope = useDataScope()
   const product = useProductById(id)
   const allProducts = useProducts()
 
@@ -37,7 +39,7 @@ export default function ProductDetail() {
     )
   }
 
-  const skuLabel = displaySku(product.internalSku)
+  const skuLabel = displaySku(product.internalSku, dataScope.bindingCustomerId)
 
   return (
     <div className="page-shell">

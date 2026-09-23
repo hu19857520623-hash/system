@@ -15,6 +15,7 @@ import {
   normalizeProductsWithSkuPrefix,
   remapInventorySku,
 } from './skuCode'
+import { holdingEanFromCatalogPool } from './platformBarcodeScope'
 
 export interface CatalogPurchase {
   id: string
@@ -221,7 +222,7 @@ function applyErpPurchaseLocally(
       safetyStock: 0,
       spec: pool?.spec || product?.spec || '',
       customCode: pool?.customCode,
-      ean: pool?.ean,
+      ean: holdingEanFromCatalogPool(pool?.ean),
       warehouse: pool?.warehouse || product?.category || 'jhb1',
       pendingShelving: 0,
       pendingOutbound: 0,

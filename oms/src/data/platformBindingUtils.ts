@@ -7,30 +7,31 @@ import {
   PLATFORM_BINDING_STATUS_LABELS,
 } from './mockData'
 import { getProductsSnapshot } from './inventoryStore'
-import { getCustomerSkuDisplay, productMatchesSellerSku } from './skuCode'
+import {
+  mappingBelongsToCustomer,
+  mappingsForInternalSku,
+  pickPrimaryPlatformBarcode,
+} from './platformBarcodeScope'
+import { getCustomerSkuDisplay, productMatchesSellerSku, productVisibleToCustomer } from './skuCode'
 import { getPlatformSkuMappingsSnapshot, getStoresSnapshot } from './entityStore'
 
 export { PLATFORM_BINDING_STATUS_LABELS }
 
-/** 内部 SKU 的主平台条码（已绑定且生效） */
-export function getPrimaryPlatformBarcode(internalSku: string): string | undefined {
-  const active = getPlatformSkuMappingsSnapshot().find(
-    m => m.status === 'active'
-      && m.lines.some(l => l.internalSku === internalSku),
-  )
-  return active?.platformBarcode
+/** 内部 SKU 在当前客户下的主平台条码（已绑定且生效）。990 按客户绑定，货盘 SKU 不共用。 */
+export function getPrimaryPlatformBarcode(internalSku: string, customerId?: string): string | undefined {
+  return pickPrimaryPlatformBarcode(getPlatformSkuMappingsSnapshot(), internalSku, customerId)
 }
 
-/** 内部 SKU 关联的所有平台映射 */
-export function getMappingsForSku(internalSku: string): PlatformSkuMapping[] {
-  return getPlatformSkuMappingsSnapshot().filter(m => m.lines.some(l => l.internalSku === internalSku))
+/** 内部 SKU 关联的平台映射（可按客户隔离） */
+export function getMappingsForSku(internalSku: string, customerId?: string): PlatformSkuMapping[] {
+  return mappingsForInternalSku(getPlatformSkuMappingsSnapshot(), internalSku, customerId)
 }
 
 /** 按 SKU / 自定义编号 / 品名模糊搜索商品 */
 export function searchProductsFuzzy(query: string, limit = 10, customerId?: string) {
   const q = query.trim().toLowerCase()
   let catalog = getProductsSnapshot()
-  if (customerId) catalog = catalog.filter(p => !p.customerId || p.customerId === customerId)
+  if (customerId) catalog = catalog.filter(p => productVisibleToCustomer(p, customerId))
   if (!q) return catalog.slice(0, limit)
   return catalog.filter(p => {
     const hay = [
@@ -51,7 +52,7 @@ export function searchProductsFuzzy(query: string, limit = 10, customerId?: stri
 export function findProductByCode(code: string, customerId?: string) {
   const catalog = getProductsSnapshot()
   const scoped = customerId
-    ? catalog.filter(p => !p.customerId || p.customerId === customerId)
+    ? catalog.filter(p => productVisibleToCustomer(p, customerId))
     : catalog
   const q = code.trim()
   if (!q) return undefined
@@ -63,8 +64,10 @@ export function findProductByCode(code: string, customerId?: string) {
   if (byCustomer) return byCustomer
 
   const mapping = getPlatformSkuMappingsSnapshot().find(
-    m => m.platformBarcode === code
-      || (m.status === 'active' && m.lines.some(l => scoped.some(p => p.internalSku === l.internalSku && l.internalSku === code))),
+    m => mappingBelongsToCustomer(m, customerId) && (
+      m.platformBarcode === q
+      || (m.status === 'active' && m.lines.some(l => scoped.some(p => p.internalSku === l.internalSku && l.internalSku === code)))
+    ),
   )
   if (!mapping?.lines[0]) return undefined
   return scoped.find(p => p.internalSku === mapping.lines[0].internalSku)
@@ -147,7 +150,7 @@ export function resolvePlatformBarcode(
   let mappings = getPlatformSkuMappingsSnapshot().filter(mapping =>
     mapping.platform === platform
     && mapping.platformBarcode === normalized
-    && (!scope.customerId || !mapping.customerId || mapping.customerId === scope.customerId))
+    && mappingBelongsToCustomer(mapping, scope.customerId))
 
   if (scope.sellerId) {
     const scopedStores = findTakealotStoresForSeller(scope.sellerId, scope.customerId)

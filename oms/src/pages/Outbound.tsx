@@ -33,6 +33,7 @@ import {
   type PlatformBarcodeResolution,
 } from '../data/platformBindingUtils'
 import { applyTakealotShippingNoteBindings } from '../data/takealotAutoBind'
+import { mappingBelongsToCustomer } from '../data/platformBarcodeScope'
 import {
   calculateOutboundPreDeduct, warehouseIdToRegion,
   enabledDispatchRules, findDispatchRuleForRegion, regionLabel,
@@ -826,7 +827,7 @@ export default function Outbound() {
     const matches = platformMappings.filter(mapping =>
       mapping.platform === 'Takealot'
       && mapping.platformBarcode === quickBindTarget.barcode
-      && (!customerId || !mapping.customerId || mapping.customerId === customerId)
+      && mappingBelongsToCustomer(mapping, customerId)
       && (
         !effectiveTakealotSellerId
         || mapping.sellerId === effectiveTakealotSellerId
