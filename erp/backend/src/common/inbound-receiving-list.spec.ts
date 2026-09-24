@@ -5,7 +5,7 @@ import {
 } from '@erp/shared/inbound-receiving-list'
 
 describe('inbound receiving list', () => {
-  it('prints the 易仓 inbound barcode and per-carton packing pages', () => {
+  it('prints only the merged-SKU receiving list page', () => {
     const html = buildInboundReceivingListHtml({
       inboundNo: 'RVAFU0430-260910-0002',
       createdAt: '2026-09-10 11:49:59',
@@ -36,9 +36,9 @@ describe('inbound receiving list', () => {
     expect(html).toContain('入库清单')
     expect(html).toContain('RVAFU0430-260910-0002')
     expect(html).toContain('aria-label="RVAFU0430-260910-0002"')
-    expect(html).toContain('RO:RVAFU0430-260910-0001')
-    expect(html).toContain('aria-label="RVAFU0430-260910-0001"')
-    expect(html).toContain('4pack')
+    expect(html).not.toContain('RO:RVAFU0430-260910-0001')
+    expect(html).not.toContain('aria-label="RVAFU0430-260910-0001"')
+    expect(html).not.toContain('4pack')
     expect(html).toContain('首次到货')
     expect(html).toContain('1.400')
     expect(html).toContain('35.00*12.00*6.50')
