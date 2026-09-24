@@ -2253,6 +2253,31 @@ export class InboundService {
     return resolved
   }
 
+  /**
+   * OMS submits a row for each carton, so the same SKU can legitimately occur
+   * more than once in the payload.  Inbound order items represent products,
+   * not cartons: combine those rows before persisting the order item.  Carton
+   * rows deliberately continue to use the unmerged source rows.
+   */
+  private mergeOmsAsnItemsBySku(
+    lines: { productId: bigint; sku: string; qty: number; productName: string; boxNo: number }[],
+  ) {
+    const merged = new Map<string, { productId: bigint; sku: string; qty: number; productName: string; boxNo: number }>()
+    for (const line of lines) {
+      const key = line.sku.trim().toUpperCase()
+      const current = merged.get(key)
+      if (!current) {
+        merged.set(key, { ...line })
+        continue
+      }
+      if (current.productId !== line.productId) {
+        throw new BadRequestException(`SKU ${line.sku} 对应了多个商品档案，不能合并入库明细`)
+      }
+      current.qty += line.qty
+    }
+    return [...merged.values()]
+  }
+
   private buildOmsAsnRemark(data: {
     remark?: string
     source?: string
@@ -2344,6 +2369,10 @@ export class InboundService {
     }
 
     const resolved = await this.resolveOmsAsnLines(data.items, customerCode)
+    // OMS sends one line per carton.  The warehouse-facing inbound order must
+    // keep a single item per SKU, while persistCartons below still retains the
+    // original per-carton quantities.
+    const inboundItems = this.mergeOmsAsnItemsBySku(resolved)
     const remarkParts = this.buildOmsAsnRemark(data, customerCode)
 
     const order = await this.prisma.inboundOrder.create({
@@ -2363,7 +2392,7 @@ export class InboundService {
         contactPhone: data.contactPhone?.trim() || null,
         status: 'pending_receipt',
         items: {
-          create: resolved.map((l) => ({
+          create: inboundItems.map((l) => ({
             productId: l.productId,
             sku: l.sku,
             expectedQty: l.qty,
@@ -2394,7 +2423,7 @@ export class InboundService {
       action: 'oms_asn_create',
       targetType: 'inbound_order',
       targetId: inboundNo,
-      detail: { customerCode, warehouseCode, itemCount: resolved.length },
+      detail: { customerCode, warehouseCode, itemCount: inboundItems.length },
     })
 
     const fresh = await this.prisma.inboundOrder.findUnique({
@@ -2476,6 +2505,7 @@ export class InboundService {
     }
 
     const resolved = await this.resolveOmsAsnLines(data.items, customerCode)
+    const inboundItems = this.mergeOmsAsnItemsBySku(resolved)
     const remarkParts = this.buildOmsAsnRemark(data, customerCode)
 
     const order = await this.prisma.$transaction(async (tx) => {
@@ -2496,7 +2526,7 @@ export class InboundService {
           contactPhone: data.contactPhone?.trim() || existing.contactPhone,
           ...(mode === 'reactivate' ? { status: 'pending_receipt' } : {}),
           items: {
-            create: resolved.map((l) => ({
+            create: inboundItems.map((l) => ({
               productId: l.productId,
               sku: l.sku,
               expectedQty: l.qty,
@@ -2529,7 +2559,7 @@ export class InboundService {
       action: mode === 'reactivate' ? 'oms_asn_reactivate' : 'oms_asn_update',
       targetType: 'inbound_order',
       targetId: no,
-      detail: { customerCode, warehouseCode, itemCount: resolved.length },
+      detail: { customerCode, warehouseCode, itemCount: inboundItems.length },
     })
 
     await this.pushInboundStatusToOms(no)
