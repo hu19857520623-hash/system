@@ -77,15 +77,13 @@ function cartonBaseInbound(inboundNo: string): string {
   return raw
 }
 
-/** 箱唛：RVFUR-260921-0001 / 0002 / 0003，最后四位为箱序号 */
+/** 箱唛：入库单号-箱序号，例如 RVFUR-260921-0001-1 / -2 / -3。 */
 export function buildCartonCode(inboundNo: string, boxSeq: number): string {
   const seq = Math.max(1, Math.floor(Number(boxSeq) || 1))
   const raw = String(inboundNo || '').trim()
-  if (!raw) return padSeq(seq)
+  if (!raw) return String(seq)
   const base = cartonBaseInbound(raw)
-  const prefix = rvDocPrefix(base)
-  if (prefix) return `${prefix}-${padSeq(seq)}`
-  return `${base}-${padSeq(seq)}`
+  return `${base}-${seq}`
 }
 
 export function isGeneratedCartonCode(code: string, inboundNo: string, boxSeq?: number): boolean {

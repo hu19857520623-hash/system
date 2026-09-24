@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { PDFDocument } from 'pdf-lib'
 import { buildBoxLabelsPdf } from './boxLabelPdf.ts'
 import { buildBoxLabelArticle } from './boxLabelTemplate.ts'
+import { buildCartonCode } from './wmsDocNo.ts'
 
 test('builds a 100mm square box-label PDF without country-of-origin text', async () => {
   const label = {
@@ -15,6 +16,8 @@ test('builds a 100mm square box-label PDF without country-of-origin text', async
   }
   const article = buildBoxLabelArticle(label)
   assert.doesNotMatch(article, /MADE IN CHINA/i)
+  assert.match(article, /RVTKL005-260924-0001-1/)
+  assert.equal(buildCartonCode(label.referenceNo, 3), 'RVTKL005-260924-0001-3')
 
   const pdf = await PDFDocument.load(await buildBoxLabelsPdf([label]))
   const { width, height } = pdf.getPage(0).getSize()
