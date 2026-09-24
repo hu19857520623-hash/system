@@ -1481,9 +1481,9 @@ export class InboundService {
   async resolveException(id: number, body: { reason?: string }, operatorId?: number) {
     const order = await this.detail(id)
     if (order.status !== 'exception') {
-      throw new BadRequestException('仅异常状态的入库单可放行上架')
+      throw new BadRequestException('仅异常状态的入库单可确认继续作业')
     }
-    const reason = String(body?.reason || '').trim()
+    const reason = String(body?.reason || '收货人员确认清点异常').trim()
     if (reason.length < 2) throw new BadRequestException('请填写不少于 2 个字的异常放行原因')
     const updated = await this.prisma.inboundOrder.update({
       where: { id: BigInt(id) },

@@ -88,7 +88,12 @@ const canScan = computed(() => app.hasPerm('inbound.arrival_scan'))
 const canReceive = computed(() => app.hasPerm('inbound.receive'))
 const canQc = computed(() => app.hasPerm('inbound.qc'))
 const canPutaway = computed(() => app.hasPerm('inbound.putaway'))
-const canResolve = computed(() => app.hasPerm('inbound.handle_exception') || app.hasPerm('inbound.confirm_diff'))
+const canResolve = computed(() =>
+  canQc.value
+  || canPutaway.value
+  || app.hasPerm('inbound.handle_exception')
+  || app.hasPerm('inbound.confirm_diff'),
+)
 
 const activeStatusLabel = computed(() => {
   const o = activeOrder.value
@@ -519,7 +524,7 @@ async function submitQcAndMeasure() {
   const order = activeOrder.value
 
   if (order.status === 'exception') {
-    ElMessage.warning('该单处于异常状态，请先点击「异常放行」')
+    ElMessage.warning('该单处于异常状态，请先点击「确认并继续」')
     return
   }
 
@@ -555,7 +560,7 @@ async function submitQcAndMeasure() {
     activeOrder.value = refreshed
     if (refreshed.status === 'exception') {
       buildQcLines(refreshed)
-      ElMessage.warning('清点存在异常或数量差异，需主管放行后继续测量')
+      ElMessage.warning('清点存在异常或数量差异，请确认后继续测量')
       return
     }
   } else if (order.status !== 'pending_putaway') {
@@ -660,7 +665,7 @@ async function submitPutawayScan() {
     return
   }
   if (activeOrder.value.status === 'exception') {
-    ElMessage.warning('入库单处于异常状态，请先点击「异常放行」后再上架')
+    ElMessage.warning('入库单处于异常状态，请先点击「确认并继续」后再上架')
     return
   }
   if (activeOrder.value.status !== 'pending_putaway') {
@@ -700,7 +705,7 @@ async function submitPutawayScan() {
 async function submitPutawayAll() {
   if (!canPutaway.value || !activeOrder.value) return
   if (activeOrder.value.status === 'exception') {
-    ElMessage.warning('入库单处于异常状态，请先点击「异常放行」后再上架')
+    ElMessage.warning('入库单处于异常状态，请先点击「确认并继续」后再上架')
     return
   }
   if (activeOrder.value.status !== 'pending_putaway') {
@@ -757,7 +762,7 @@ async function resolveAndPutaway() {
   const ok = await withAction(async () => {
     await inboundApi.resolveException(activeOrder.value.id)
     await loadActiveOrder(activeOrder.value.id, orderNeedsMeasure(activeOrder.value) ? 'qc' : 'putaway')
-  }, '已放行，可继续作业')
+  }, '已确认异常，可继续作业')
   if (ok && workStep.value === 'putaway') await loadLocations()
 }
 
@@ -1038,8 +1043,8 @@ onMounted(async () => {
     <div v-show="workStep === 'qc'" v-loading="loadingOrder" class="panel">
       <template v-if="activeOrder && canShowQcStep(activeOrder)">
         <el-alert v-if="activeOrder.status === 'exception'" type="error" :closable="false" show-icon style="margin-bottom:12px">
-          该单清点异常，需主管放行后才能继续测量。
-          <el-button v-if="canResolve" link type="primary" @click="resolveAndPutaway">异常放行</el-button>
+          该单清点存在异常，请确认后继续测量。
+          <el-button v-if="canResolve" link type="primary" @click="resolveAndPutaway">确认并继续</el-button>
         </el-alert>
         <el-alert v-else type="info" :closable="false" show-icon style="margin-bottom:12px">
           本环节确认 SKU 实收件数（支持 1 SKU 一箱扫 1 次、或一箱多件时设置「每次件数」后扫 SKU / 已绑 990 累加）；测量机回传长宽高会自动填入（也支持 JSON 或「SKU|长|宽|高」）。确认后点击「提交清点与测量」。
@@ -1177,8 +1182,8 @@ onMounted(async () => {
             </template>
           </el-table-column>
         </el-table>
-        <div v-if="canResolve && canEditQcQty" class="qc-footer">
-          <el-checkbox v-model="qcAcceptDiff">确认接受数量差异（需主管权限）</el-checkbox>
+        <div v-if="canQc && canEditQcQty" class="qc-footer">
+          <el-checkbox v-model="qcAcceptDiff">确认接受数量差异</el-checkbox>
         </div>
         <div class="panel-actions putaway-footer">
           <span class="footer-hint">提交后将保存清点结果与实测尺寸</span>
@@ -1208,8 +1213,8 @@ onMounted(async () => {
     <div v-show="workStep === 'putaway'" v-loading="loadingOrder" class="panel">
       <template v-if="activeOrder">
         <el-alert v-if="activeOrder.status === 'exception'" type="error" :closable="false" show-icon style="margin-bottom:12px">
-          该单清点异常，需主管放行后才能上架。
-          <el-button v-if="canResolve" link type="primary" @click="resolveAndPutaway">放行上架</el-button>
+          该单清点存在异常，请确认后继续上架。
+          <el-button v-if="canResolve" link type="primary" @click="resolveAndPutaway">确认并继续</el-button>
         </el-alert>
 
         <el-descriptions :column="3" border size="small" class="order-summary">
