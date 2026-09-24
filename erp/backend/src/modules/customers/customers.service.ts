@@ -142,18 +142,38 @@ export class CustomersService {
     return this.listSkuInventory(BigInt(customer.id))
   }
 
-  /** OMS P1：客户库存视图（货盘持有 + 海外仓库存）。 */
+  /** OMS P1：客户库存视图（货盘持有 + 客户自有海外仓库存）。 */
   async inventoryViewForOms(customerCode: string, warehouseCode = 'WMS-JHB-01') {
     const customer = await this.findByCodeForOms(customerCode)
-    const holdings = await this.listSkuInventory(BigInt(customer.id))
-    const skus = holdings.map((holding) => holding.sku)
-    const products = skus.length
-      ? await this.prisma.product.findMany({ where: { sku: { in: skus } } })
+    const [holdings, inboundItems] = await Promise.all([
+      this.listSkuInventory(BigInt(customer.id)),
+      this.prisma.inboundOrderItem.findMany({
+        where: {
+          order: {
+            omsCustomerCode: customer.customerCode,
+            status: { in: ['completed', 'confirmed'] },
+          },
+        },
+        select: { productId: true, sku: true },
+      }),
+    ])
+    const catalogSkus = holdings.map((holding) => holding.sku)
+    const ownedProductIdValues = [...new Set(inboundItems.map(item => item.productId.toString()))]
+    const ownedProductIds = ownedProductIdValues.map(BigInt)
+    const products = catalogSkus.length || ownedProductIds.length
+      ? await this.prisma.product.findMany({
+        where: {
+          OR: [
+            ...(catalogSkus.length ? [{ sku: { in: catalogSkus } }] : []),
+            ...(ownedProductIds.length ? [{ id: { in: ownedProductIds } }] : []),
+          ],
+        },
+      })
       : []
-    const productIds = products.map((product) => product.id)
-    const inventoryRows = productIds.length
+    const inventoryProductIds = products.map((product) => product.id)
+    const inventoryRows = inventoryProductIds.length
       ? await this.prisma.inventory.findMany({
-          where: { productId: { in: productIds }, warehouseCode },
+          where: { productId: { in: inventoryProductIds }, warehouseCode },
         })
       : []
     const productBySku = new Map(products.map((product) => [product.sku, product]))
@@ -161,7 +181,7 @@ export class CustomersService {
       inventoryRows.map((inventory) => [Number(inventory.productId), inventory]),
     )
 
-    const items = holdings.map((holding) => {
+    const catalogItems = holdings.map((holding) => {
       const product = productBySku.get(holding.sku)
       const inventory = product
         ? inventoryByProductId.get(Number(product.id))
@@ -176,12 +196,38 @@ export class CustomersService {
       }
     })
 
+    // A customer-owned SKU is linked to the customer by its OMS ASN. Unlike a
+    // catalog holding, it has no customer_sku_inventory record, so include it
+    // directly from completed inbound orders and the warehouse inventory.
+    const ownedProductIdSet = new Set(ownedProductIdValues)
+    const ownedItems = products
+      .filter(product => ownedProductIdSet.has(product.id.toString()))
+      .map((product) => {
+        const inventory = inventoryByProductId.get(Number(product.id))
+        return {
+          id: Number(product.id),
+          customerId: Number(customer.id),
+          sku: product.sku,
+          productName: product.productName,
+          quantity: 0,
+          unitPrice: product.costRmb == null ? null : Number(product.costRmb),
+          pricingId: null,
+          updatedAt: product.updatedAt,
+          status: product.status,
+          warehouseCode,
+          warehouseAvailable: inventory?.availableQty ?? 0,
+          warehouseLocked: inventory?.lockedQty ?? 0,
+          warehouseTotal: inventory?.totalQty ?? 0,
+          stockSource: 'owned' as const,
+        }
+      })
+
     return {
       customerCode: customer.customerCode,
       customerName: customer.customerName,
       warehouseCode,
-      items,
-      total: items.length,
+      items: [...catalogItems, ...ownedItems],
+      total: catalogItems.length + ownedItems.length,
     }
   }
 

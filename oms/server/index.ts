@@ -1770,7 +1770,14 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
         remainingQty?: number
         reason?: string
         stockSource?: string
-        items?: { sku: string; qty: number }[]
+        warehouseCode?: string
+        items?: Array<{
+          sku: string
+          qty?: number
+          availableQty?: number
+          lockedQty?: number
+          pendingShelvingQty?: number
+        }>
       }
       if (payload.action === 'catalog_reclaim' && customerId && payload.sku && payload.quantity) {
         const sku = String(payload.sku).trim()
@@ -1826,6 +1833,56 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
                   pendingOutbound: Math.max(0, inv.pendingOutbound - qty),
                   shipped: inv.shipped + qty,
                 },
+          })
+        }
+      }
+      if (customerId && payload.stockSource === 'owned') {
+        const warehouse = toOmsWarehouseCode(payload.warehouseCode, 'jhb1')
+        for (const line of payload.items || []) {
+          const sku = String(line.sku || '').trim()
+          if (!sku) continue
+          const available = Math.max(0, Math.floor(Number(line.availableQty) || 0))
+          const locked = Math.max(0, Math.floor(Number(line.lockedQty) || 0))
+          const pendingShelving = Math.max(0, Math.floor(Number(line.pendingShelvingQty) || 0))
+          const product = await prisma.product.findFirst({
+            where: { customerId, internalSku: sku },
+          })
+          if (!product) continue
+
+          const inventory = await prisma.inventoryItem.findFirst({
+            where: { customerId, sku, stockSource: 'owned' },
+          })
+          const inventoryData = {
+            name: product.name,
+            image: product.image,
+            available,
+            locked,
+            inTransit: 0,
+            safetyStock: inventory?.safetyStock ?? 0,
+            spec: product.spec,
+            customCode: product.customCode,
+            ean: inventory?.ean ?? null,
+            warehouse,
+            pendingShelving,
+            pendingOutbound: inventory?.pendingOutbound ?? 0,
+            defective: inventory?.defective ?? 0,
+            shipped: inventory?.shipped ?? 0,
+            warningQty: inventory?.warningQty ?? 0,
+            price: product.price,
+            declaredNameEn: product.declaredNameEn,
+            categoryPath: product.categoryPath,
+            stockSource: 'owned',
+          }
+          if (inventory) {
+            await prisma.inventoryItem.update({ where: { id: inventory.id }, data: inventoryData })
+          } else {
+            await prisma.inventoryItem.create({
+              data: { id: `erp-owned-${customerId}-${sku}`, customerId, sku, ...inventoryData },
+            })
+          }
+          await prisma.product.update({
+            where: { id: product.id },
+            data: { availableQty: available, lockedQty: locked },
           })
         }
       }

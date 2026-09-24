@@ -228,7 +228,7 @@ export type ErpInventoryViewItem = ErpSkuHolding & {
   warehouseAvailable: number
   warehouseLocked: number
   warehouseTotal: number
-  stockSource: 'catalog'
+  stockSource: 'catalog' | 'owned'
 }
 
 export function createErpInbound(body: {

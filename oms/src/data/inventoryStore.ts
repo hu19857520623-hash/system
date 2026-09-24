@@ -617,30 +617,35 @@ export function getInventorySnapshot(): InventoryItem[] {
   return state.inventory
 }
 
-/** P1：用 ERP 客户库存视图刷新货盘持有展示 */
+/** 用 ERP 客户库存视图刷新货盘持有与自有仓存展示。 */
 export async function refreshInventoryFromErp(customerId: string, customerCode: string): Promise<number> {
   const { syncErpInventoryView } = await import('../api/erp')
   const data = await syncErpInventoryView(customerCode)
   for (const item of data.items || []) {
+    const stockSource = item.stockSource === 'owned' ? 'owned' : 'catalog'
+    const available = Math.max(0, Number(item.warehouseAvailable) || 0)
+    const locked = stockSource === 'catalog'
+      ? Math.max(0, Number(item.quantity) || 0)
+      : Math.max(0, Number(item.warehouseLocked) || 0)
     const idx = state.inventory.findIndex(
-      i => i.sku === item.sku && i.stockSource === 'catalog' && i.customerId === customerId,
+      i => i.sku === item.sku && i.stockSource === stockSource && i.customerId === customerId,
     )
     if (idx >= 0) {
-      state.inventory[idx].locked = item.quantity
-      state.inventory[idx].available = item.warehouseAvailable
+      state.inventory[idx].locked = locked
+      state.inventory[idx].available = available
       state.inventory[idx].name = item.productName
       state.inventory[idx].price = item.unitPrice ?? state.inventory[idx].price
       state.inventory[idx].warehouse = item.warehouseCode
     } else {
       const safeSku = item.sku.replace(/[^A-Za-z0-9_-]/g, '_')
       state.inventory.unshift({
-        id: `erp-inv-${customerId}-${item.id}-${safeSku}`,
+        id: `erp-inv-${customerId}-${stockSource}-${item.id}-${safeSku}`,
         customerId,
         sku: item.sku,
         name: item.productName,
         image: '',
-        available: item.warehouseAvailable,
-        locked: item.quantity,
+        available,
+        locked,
         inTransit: 0,
         safetyStock: 0,
         spec: '',
@@ -651,8 +656,15 @@ export async function refreshInventoryFromErp(customerId: string, customerCode: 
         shipped: 0,
         warningQty: 0,
         price: item.unitPrice ?? 0,
-        stockSource: 'catalog',
+        stockSource,
       })
+    }
+    if (stockSource === 'owned') {
+      const product = state.products.find(p => p.customerId === customerId && p.internalSku === item.sku)
+      if (product) {
+        product.availableQty = available
+        product.lockedQty = locked
+      }
     }
   }
   persistLocal()

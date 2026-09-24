@@ -2071,6 +2071,14 @@ export class InboundService {
       items: (carton.items || []).map((item) => ({ sku: item.sku, qty: item.qty })),
     }))
     const meta = parseOmsInboundMeta(order.remark)
+    const totalExpectedQty = items.reduce((s, i) => s + i.expectedQty, 0)
+    const totalReceivedQty = items.reduce((s, i) => s + i.receivedQty, 0)
+    // A short-received ASN can be physically put away, but must not be shown
+    // to OMS as fully shelved. The `partial` status keeps the shortage clear.
+    const omsStatus = displayStatus === 'completed'
+      && totalReceivedQty < totalExpectedQty
+      ? 'partial'
+      : this.toOmsInboundStatus(displayStatus)
     return {
       id: Number(order.id),
       inboundNo: order.inboundNo,
@@ -2078,7 +2086,7 @@ export class InboundService {
       trackingNo: order.trackingNo,
       status: order.status,
       displayStatus,
-      omsStatus: this.toOmsInboundStatus(displayStatus),
+      omsStatus,
       omsCustomerCode: order.omsCustomerCode ?? null,
       remark: stripOmsSystemTags(order.remark),
       source: meta.source || null,
@@ -2094,8 +2102,8 @@ export class InboundService {
       arrivedAt: order.arrivedAt ?? null,
       receivedAt: order.receivedAt ?? null,
       putawayAt: order.putawayAt ?? null,
-      totalExpectedQty: items.reduce((s, i) => s + i.expectedQty, 0),
-      totalReceivedQty: items.reduce((s, i) => s + i.receivedQty, 0),
+      totalExpectedQty,
+      totalReceivedQty,
       items,
       cartons,
     }
@@ -2650,9 +2658,30 @@ export class InboundService {
       const payload = this.mapInboundForOms(row)
       void notifyOms('inbound.status', row.omsCustomerCode, payload as unknown as Record<string, unknown>)
       if (payload.omsStatus === 'shelved' || payload.omsStatus === 'partial') {
+        const inventoryRows = await this.prisma.inventory.findMany({
+          where: {
+            warehouseCode: row.warehouseCode,
+            productId: { in: row.items.map(item => item.productId) },
+          },
+          select: { productId: true, availableQty: true, lockedQty: true },
+        })
+        const inventoryByProductId = new Map(
+          inventoryRows.map(item => [item.productId.toString(), item]),
+        )
         void notifyOms('inventory.changed', row.omsCustomerCode, {
           reason: 'inbound_' + payload.omsStatus,
           inboundNo: row.inboundNo,
+          stockSource: 'owned',
+          warehouseCode: row.warehouseCode,
+          items: row.items.map(item => {
+            const inventory = inventoryByProductId.get(item.productId.toString())
+            return {
+              sku: item.sku,
+              availableQty: inventory?.availableQty ?? 0,
+              lockedQty: inventory?.lockedQty ?? 0,
+              pendingShelvingQty: Math.max(0, Number(item.actualQty ?? 0) - Number(item.putawayQty ?? 0)),
+            }
+          }),
         })
       }
     } catch (err) {
