@@ -77,6 +77,16 @@ export class PricingController {
     return this.service.syncOms(id, role)
   }
 
+  @RequirePerms('pricing.sync_oms')
+  @Post(':id/share-status')
+  setShareStatus(
+    @Param('id', ParseIntPipe) id: number,
+    @Body('status') status: unknown,
+    @CurrentUser('realName') role: string,
+  ) {
+    return this.service.setShareStatus(id, status, role)
+  }
+
   @RequirePerms('pricing.set')
   @Post(':id/reprice')
   reprice(

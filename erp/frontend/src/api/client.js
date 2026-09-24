@@ -461,6 +461,7 @@ export const pricingApi = {
   freightCallback: (id, data) => api.post(`/pricing/${id}/freight-callback`, data || {}),
   confirm: (id, data) => api.post(`/pricing/${id}/confirm`, data),
   syncOms: (id) => api.post(`/pricing/${id}/sync-oms`),
+  setShareStatus: (id, status) => api.post(`/pricing/${id}/share-status`, { status }),
   reprice: (id, data) => api.post(`/pricing/${id}/reprice`, data),
   omsPurchase: (data) => api.post('/pricing/oms/purchase', data),
   omsCatalog: (params) => api.get('/pricing/oms/catalog', params),

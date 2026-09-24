@@ -8,7 +8,7 @@
     "dev:web": "vite",
     "dev:api": "tsx server/index.ts",
     "build": "tsc && tsc -p tsconfig.server.json && vite build",
-    "test": "tsx --test server/auth.test.ts server/cors.test.ts server/login-rate-limit.test.ts server/bootstrap-admin.test.ts server/billing-sync.util.test.ts server/customer-scope.util.test.ts src/data/platformBarcodeScope.test.ts src/data/takealotAutoBind.scope.test.ts",
+    "test": "tsx --test server/auth.test.ts server/cors.test.ts server/login-rate-limit.test.ts server/bootstrap-admin.test.ts server/billing-sync.util.test.ts server/customer-scope.util.test.ts src/data/platformBarcodeScope.test.ts src/data/takealotAutoBind.scope.test.ts src/data/omsAsnItem.test.ts src/data/skuCode.test.ts src/data/boxLabelPdf.test.ts src/data/inboundReceivingList.test.ts",
     "test:auth": "tsx --test server/auth.test.ts",
     "verify:auth": "tsx scripts/verify-oms-auth.ts",
     "reset:bootstrap-admin": "tsx server/reset-bootstrap-admin-cli.ts",

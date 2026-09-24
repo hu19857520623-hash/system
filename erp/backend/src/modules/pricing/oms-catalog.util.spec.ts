@@ -7,6 +7,30 @@ jest.mock('./oms-catalog-sync.util', () => ({
 }))
 
 describe('tryMarkOrderableOnOms', () => {
+  it('does not reopen a catalog row that was manually stopped', async () => {
+    const catalogRow = {
+      id: 23n,
+      sku: 'TKL-FUR-BED-MAT-003',
+      visibleOnOms: true,
+      orderableOnOms: false,
+      shareStatus: 'stopped',
+    }
+    const prisma = {
+      productPricing: {
+        findUnique: jest.fn().mockResolvedValue(catalogRow),
+        findFirst: jest.fn(),
+        update: jest.fn(),
+      },
+      warehouse: { findMany: jest.fn() },
+      inventory: { findFirst: jest.fn() },
+      productPricingHistory: { create: jest.fn() },
+    } as unknown as PrismaService
+
+    await expect(tryMarkOrderableOnOms(prisma, 'FUR-BED-MAT-003')).resolves.toBe(false)
+    expect(prisma.productPricing.update).not.toHaveBeenCalled()
+    expect(prisma.warehouse.findMany).not.toHaveBeenCalled()
+  })
+
   it('prefers the TKL catalog row when a base-SKU pricing row also exists', async () => {
     const catalogRow = {
       id: 22n,

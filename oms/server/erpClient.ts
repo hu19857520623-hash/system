@@ -154,7 +154,7 @@ export function updateOmsCustomer(
 
 export function resetOmsPortalPassword(
   customerCode: string,
-  body: { username: string; temporaryPassword: string },
+  body: { username?: string; temporaryPassword: string },
 ) {
   const template = String(
     process.env.ERP_OMS_RESET_PASSWORD_PATH
@@ -183,6 +183,7 @@ export type ErpCatalogItem = {
   remainingStockQty: number
   visibleOnOms: boolean
   orderableOnOms: boolean
+  shareStatus: 'enabled' | 'stopped'
   syncedAt: string
 }
 
@@ -290,6 +291,16 @@ export type ErpInboundOrder = {
   cartons?: { boxSeq: number; boxCode?: string; items: { sku: string; qty: number }[] }[]
   idempotent?: boolean
   deleted?: boolean
+}
+
+export type ErpInboundAsnItem = {
+  sku: string
+  qty: number
+  productName?: string
+  boxNo?: number
+  lengthCm?: number
+  widthCm?: number
+  heightCm?: number
 }
 
 export type ErpOutboundPreDeductLine = {
@@ -403,7 +414,7 @@ export function createErpInboundAsn(body: {
   eta?: string
   contact?: string
   contactPhone?: string
-  items: { sku: string; qty: number; productName?: string; boxNo?: number }[]
+  items: ErpInboundAsnItem[]
   attachments?: { fileName: string; contentBase64: string; fileType?: string }[]
 }) {
   return erpRequest<ErpInboundOrder>('/inbound/oms/asn', {
@@ -426,7 +437,7 @@ export function updateErpInboundAsn(inboundNo: string, body: {
   eta?: string
   contact?: string
   contactPhone?: string
-  items: { sku: string; qty: number; productName?: string; boxNo?: number }[]
+  items: ErpInboundAsnItem[]
   attachments?: { fileName: string; contentBase64: string; fileType?: string }[]
 }) {
   return erpRequest<ErpInboundOrder>(`/inbound/oms/asn/${encodeURIComponent(inboundNo)}`, {
@@ -456,7 +467,7 @@ export function reactivateErpInboundAsn(inboundNo: string, body: {
   eta?: string
   contact?: string
   contactPhone?: string
-  items: { sku: string; qty: number; productName?: string; boxNo?: number }[]
+  items: ErpInboundAsnItem[]
   attachments?: { fileName: string; contentBase64: string; fileType?: string }[]
 }) {
   return erpRequest<ErpInboundOrder>(`/inbound/oms/asn/${encodeURIComponent(inboundNo)}/reactivate`, {
@@ -801,6 +812,7 @@ export function fetchErpAnnouncements() {
 
 export function createErpProduct(body: {
   sku: string
+  customerSku: string
   productName: string
   customerCode?: string
   spec?: string
@@ -816,6 +828,7 @@ export function createErpProduct(body: {
   declaredNameEn?: string
   declaredNameCn?: string
   unit?: string
+  hasBattery?: boolean
   remark?: string
 }) {
   return erpRequest<{
@@ -829,4 +842,29 @@ export function createErpProduct(body: {
     method: 'POST',
     body: JSON.stringify(body),
   })
+}
+
+type OmsProductUpdate = Omit<Parameters<typeof createErpProduct>[0], 'sku'>
+
+export function updateErpProduct(sku: string, body: OmsProductUpdate) {
+  return erpRequest<{ id: number; sku: string; productName: string; status: string }>(`/products/oms/${encodeURIComponent(sku)}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  })
+}
+
+export function disableErpProduct(sku: string) {
+  return erpRequest<{ id: number; sku: string; status: string }>(`/products/oms/${encodeURIComponent(sku)}/disable`, {
+    method: 'POST',
+  })
+}
+
+export function enableErpProduct(sku: string) {
+  return erpRequest<{ id: number; sku: string; status: string }>(`/products/oms/${encodeURIComponent(sku)}/enable`, {
+    method: 'POST',
+  })
+}
+
+export function deleteErpProduct(sku: string) {
+  return erpRequest<{ id: number }>(`/products/oms/${encodeURIComponent(sku)}`, { method: 'DELETE' })
 }

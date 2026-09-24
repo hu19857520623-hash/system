@@ -94,6 +94,7 @@ export class PricingService {
       omsSyncTime: fmtTime(row.omsSyncAt),
       visibleOnOms: Boolean(row.visibleOnOms),
       orderableOnOms: Boolean(row.orderableOnOms),
+      shareStatus: row.shareStatus === 'stopped' ? 'stopped' : 'enabled',
       visibleOnOmsAt: fmtTime(row.visibleOnOmsAt),
       orderableOnOmsAt: fmtTime(row.orderableOnOmsAt),
       history: (row.histories || []).map((h: any) => ({
@@ -288,12 +289,13 @@ export class PricingService {
     sku: string
     visibleOnOms: boolean
     orderableOnOms: boolean
+    shareStatus?: string | null
     visibleStockQty?: number | null
     inboundQty?: number | null
     purchaseQty?: number | null
     soldQty?: number | null
   }>(row: T, warehouseAvailableQty: number): Promise<T> {
-    if (row.visibleOnOms && !row.orderableOnOms && remainingCatalogStock(row) > 0 && warehouseAvailableQty > 0) {
+    if (row.shareStatus !== 'stopped' && row.visibleOnOms && !row.orderableOnOms && remainingCatalogStock(row) > 0 && warehouseAvailableQty > 0) {
       if (await tryMarkOrderableOnOms(this.prisma, row.sku)) {
         return { ...row, orderableOnOms: true, orderableOnOmsAt: new Date() } as T
       }
@@ -528,6 +530,70 @@ export class PricingService {
     await tryMarkOrderableOnOms(this.prisma, row.sku)
     const refreshed = await this.prisma.productPricing.findUnique({ where: { id: BigInt(id) } })
     if (refreshed) await pushCatalogStockToOms(this.prisma, refreshed.sku)
+    return this.detail(id)
+  }
+
+  /**
+   * 切换货盘共享状态。停止只关掉新的 OMS 申购，不触碰客户已购买持仓，
+   * 因此既有出库单和后续基于持仓的出库仍可正常完成。
+   */
+  async setShareStatus(id: number, status: unknown, role: string) {
+    if (status !== 'enabled' && status !== 'stopped') {
+      throw new BadRequestException('共享状态仅支持 enabled 或 stopped')
+    }
+    const row = await this.prisma.productPricing.findUnique({ where: { id: BigInt(id) } })
+    if (!row) throw new NotFoundException('货盘库存记录不存在')
+    if (row.pricingStatus !== 'synced') {
+      throw new BadRequestException('请先完成定价并同步 OMS，再设置共享状态')
+    }
+
+    if (status === 'stopped') {
+      const holders = await this.loadCatalogHoldersBySku([row.sku])
+      const holderCount = (holders.get(row.sku) || []).length
+      await this.prisma.productPricing.update({
+        where: { id: BigInt(id) },
+        data: {
+          shareStatus: 'stopped',
+          // 保持可见，客户能辨识商品已停售；仅关闭新的申购入口。
+          visibleOnOms: true,
+          orderableOnOms: false,
+        },
+      })
+      await this.addHistory(
+        BigInt(id),
+        role,
+        '停止共享',
+        `已停止新的 OMS 申购；${holderCount ? `现有 ${holderCount} 个客户持仓及已建出库单不受影响` : '暂无客户持仓'}`,
+      )
+    } else {
+      if (remainingCatalogStock(row) <= 0) {
+        throw new BadRequestException('OMS 展示剩余库存为 0，不能开启共享')
+      }
+      const stockMap = await this.loadWarehouseAvailableBySku([row.sku])
+      const warehouseAvailableQty = stockMap.get(row.sku) || 0
+      if (warehouseAvailableQty <= 0) {
+        throw new BadRequestException('海外仓暂无可用库存，不能开启共享')
+      }
+      const now = new Date()
+      await this.prisma.productPricing.update({
+        where: { id: BigInt(id) },
+        data: {
+          shareStatus: 'enabled',
+          visibleOnOms: true,
+          visibleOnOmsAt: row.visibleOnOmsAt ?? now,
+          orderableOnOms: true,
+          orderableOnOmsAt: now,
+        },
+      })
+      await this.addHistory(
+        BigInt(id),
+        role,
+        '开启共享',
+        `OMS 已恢复新客户申购；海外仓可用库存 ${warehouseAvailableQty} 件，展示剩余 ${remainingCatalogStock(row)} 件`,
+      )
+    }
+
+    await pushCatalogStockToOms(this.prisma, row.sku)
     return this.detail(id)
   }
 

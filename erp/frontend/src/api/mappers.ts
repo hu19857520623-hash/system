@@ -614,6 +614,7 @@ export function mapPricing(row: any) {
     omsSyncTime: row.omsSyncTime || fmtTime(row.omsSyncAt),
     visibleOnOms: Boolean(row.visibleOnOms),
     orderableOnOms: Boolean(row.orderableOnOms),
+    shareStatus: row.shareStatus === 'stopped' ? 'stopped' : 'enabled',
     visibleOnOmsAt: row.visibleOnOmsAt || fmtTime(row.visibleOnOmsAt),
     orderableOnOmsAt: row.orderableOnOmsAt || fmtTime(row.orderableOnOmsAt),
     history: row.history || [],

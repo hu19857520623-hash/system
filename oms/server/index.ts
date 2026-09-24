@@ -17,10 +17,8 @@ import {
   isImpersonatedSession,
   isPortalIdentityActive,
   isStrongPassword,
-  isValidUsername,
   issueAccessToken,
   normalizeEmail,
-  normalizeUsername,
   requestedUsername,
   OMS_ROLES,
   requireInternalToken,
@@ -52,6 +50,10 @@ import {
   reactivateErpInboundAsn,
   createErpOutbound,
   createErpProduct,
+  updateErpProduct,
+  disableErpProduct,
+  enableErpProduct,
+  deleteErpProduct,
   createErpRecharge,
   createErpReturn,
   cancelErpReturn as cancelErpReturnApi,
@@ -697,7 +699,9 @@ async function resetCustomerTemporaryPassword(
     include: { portalUser: { select: { username: true } } },
   })
   if (!account) return { status: 404, error: '客户不存在' } as const
+  const username = requestedUsername({ username: requestedLogin }) || undefined
   const updated = await resetOmsPortalPassword(account.code, {
+    username,
     temporaryPassword,
   })
   return { status: 200, data: updated } as const
@@ -1306,6 +1310,7 @@ app.post('/api/erp/products', async (req, res) => {
   try {
     const body = req.body as {
       sku?: string
+      customerSku?: string
       productName?: string
       name?: string
       customerCode?: string
@@ -1323,6 +1328,7 @@ app.post('/api/erp/products', async (req, res) => {
       declaredNameEn?: string
       declaredNameCn?: string
       unit?: string
+      hasBattery?: boolean
       remark?: string
     }
     let customerCode = authenticatedCustomerCode(req, body.customerCode)
@@ -1330,8 +1336,13 @@ app.post('/api/erp/products', async (req, res) => {
       const account = await prisma.customerAccount.findUnique({ where: { id: String(body.customerId) } })
       customerCode = account?.code || ''
     }
+    const customerSku = String(body.customerSku || '').trim()
+    if (!customerSku) return res.status(400).json({ error: '请填写客户 SKU' })
+    if (customerSku.length >= 12) return res.status(400).json({ error: '客户 SKU 须少于 12 位' })
+
     const result = await createErpProduct({
       sku: String(body.sku || ''),
+      customerSku,
       productName: String(body.productName || body.name || ''),
       customerCode: customerCode || undefined,
       spec: body.spec,
@@ -1347,9 +1358,65 @@ app.post('/api/erp/products', async (req, res) => {
       declaredNameEn: body.declaredNameEn,
       declaredNameCn: body.declaredNameCn,
       unit: body.unit,
+      hasBattery: body.hasBattery,
       remark: body.remark,
     })
     res.json(result)
+  } catch (e) {
+    sendErpError(res, e)
+  }
+})
+
+function scopedOmsProductSku(req: express.Request, sku: string, customerCode?: string) {
+  const value = String(sku || '').trim()
+  const scopeCode = authenticatedCustomerCode(req, customerCode).toUpperCase()
+  if (!value) return { error: '缺少商品 SKU' }
+  if (scopeCode && !value.toUpperCase().startsWith(`${scopeCode}-`)) {
+    return { error: '无权操作其他客户的商品' }
+  }
+  return { sku: value }
+}
+
+/** OMS 商品资料编辑、废弃、恢复与删除。 */
+app.put('/api/erp/products/:sku', async (req, res) => {
+  try {
+    const body = req.body as Parameters<typeof updateErpProduct>[1]
+    const scope = scopedOmsProductSku(req, req.params.sku, body.customerCode)
+    if ('error' in scope) return res.status(403).json({ error: scope.error })
+    const customerSku = String(body.customerSku || '').trim()
+    if (!customerSku) return res.status(400).json({ error: '请填写客户 SKU' })
+    if (customerSku.length >= 12) return res.status(400).json({ error: '客户 SKU 须少于 12 位' })
+    res.json(await updateErpProduct(scope.sku, { ...body, customerSku }))
+  } catch (e) {
+    sendErpError(res, e)
+  }
+})
+
+app.post('/api/erp/products/:sku/disable', async (req, res) => {
+  try {
+    const scope = scopedOmsProductSku(req, req.params.sku)
+    if ('error' in scope) return res.status(403).json({ error: scope.error })
+    res.json(await disableErpProduct(scope.sku))
+  } catch (e) {
+    sendErpError(res, e)
+  }
+})
+
+app.post('/api/erp/products/:sku/enable', async (req, res) => {
+  try {
+    const scope = scopedOmsProductSku(req, req.params.sku)
+    if ('error' in scope) return res.status(403).json({ error: scope.error })
+    res.json(await enableErpProduct(scope.sku))
+  } catch (e) {
+    sendErpError(res, e)
+  }
+})
+
+app.delete('/api/erp/products/:sku', async (req, res) => {
+  try {
+    const scope = scopedOmsProductSku(req, req.params.sku)
+    if ('error' in scope) return res.status(403).json({ error: scope.error })
+    res.json(await deleteErpProduct(scope.sku))
   } catch (e) {
     sendErpError(res, e)
   }
@@ -1911,6 +1978,16 @@ function isErpPalletInboundRecord(row: {
 }
 
 /** P1：预约入库 ASN */
+type OmsAsnRequestItem = {
+  sku: string
+  qty: number
+  productName?: string
+  boxNo?: number
+  lengthCm?: number
+  widthCm?: number
+  heightCm?: number
+}
+
 function mapOmsAsnRequest(body: {
   inboundNo?: string
   customerCode?: string
@@ -1925,7 +2002,7 @@ function mapOmsAsnRequest(body: {
   eta?: string
   contact?: string
   contactPhone?: string
-  items?: { sku: string; qty: number; productName?: string; boxNo?: number }[]
+  items?: OmsAsnRequestItem[]
   attachments?: { fileName: string; contentBase64?: string; fileType?: string; url?: string }[]
 }, customerCode: string) {
   const attachments = (body.attachments || []).map(a => {
@@ -1976,7 +2053,7 @@ app.post('/api/erp/inbound', async (req, res) => {
       eta?: string
       contact?: string
       contactPhone?: string
-      items?: { sku: string; qty: number; productName?: string; boxNo?: number }[]
+      items?: OmsAsnRequestItem[]
       attachments?: { fileName: string; contentBase64?: string; fileType?: string; url?: string }[]
     }
     let customerCode = authenticatedCustomerCode(req, body.customerCode)
@@ -2012,7 +2089,7 @@ app.put('/api/erp/inbound/:inboundNo', async (req, res) => {
       eta?: string
       contact?: string
       contactPhone?: string
-      items?: { sku: string; qty: number; productName?: string; boxNo?: number }[]
+      items?: OmsAsnRequestItem[]
       attachments?: { fileName: string; contentBase64?: string; fileType?: string; url?: string }[]
     }
     let customerCode = authenticatedCustomerCode(req, body.customerCode)
@@ -2065,7 +2142,7 @@ app.post('/api/erp/inbound/:inboundNo/reactivate', async (req, res) => {
       eta?: string
       contact?: string
       contactPhone?: string
-      items?: { sku: string; qty: number; productName?: string; boxNo?: number }[]
+      items?: OmsAsnRequestItem[]
       attachments?: { fileName: string; contentBase64?: string; fileType?: string; url?: string }[]
     }
     let customerCode = authenticatedCustomerCode(req, body.customerCode)
@@ -2698,6 +2775,7 @@ app.put('/api/inventory-state', async (req, res) => {
     }
 
     const skuSeen = new Set<string>()
+    const customerSkuSeen = new Set<string>()
     for (const p of products) {
       const sku = String(p.internalSku || '').trim().toLowerCase()
       if (!sku) {
@@ -2707,6 +2785,20 @@ app.put('/api/inventory-state', async (req, res) => {
         return res.status(400).json({ error: `重复 SKU：${String(p.internalSku).trim()}` })
       }
       skuSeen.add(sku)
+
+      const customerSku = String(p.customerSku || '').trim()
+      if (!customerSku) {
+        return res.status(400).json({ error: '产品缺少客户 SKU' })
+      }
+      if (customerSku.length >= 12) {
+        return res.status(400).json({ error: `客户 SKU 须少于 12 位：${customerSku}` })
+      }
+      const customerId = scope ?? String(p.customerId || '').trim()
+      const customerSkuKey = `${customerId.toLowerCase()}\u0000${customerSku.toLowerCase()}`
+      if (customerSkuSeen.has(customerSkuKey)) {
+        return res.status(400).json({ error: `重复 SKU：${customerSku}` })
+      }
+      customerSkuSeen.add(customerSkuKey)
     }
 
     await prisma.$transaction(async tx => {
@@ -2715,7 +2807,7 @@ app.put('/api/inventory-state', async (req, res) => {
         const data = {
           customerId: scope ?? (p.customerId as string | null | undefined) ?? null,
           internalSku: String(p.internalSku),
-          customerSku: (p.customerSku as string | null | undefined) ?? null,
+          customerSku: String(p.customerSku || '').trim(),
           name: String(p.name),
           spec: String(p.spec),
           image: String(p.image),

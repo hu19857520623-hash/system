@@ -12,7 +12,7 @@ import type {
 import { findProductByCode, firstTakealotStore } from './platformBindingUtils'
 import type { ReturnLineItem } from './returnStore'
 import { RETURN_PROCESS_OPTIONS, RETURN_WAREHOUSE_OPTIONS } from './returnStore'
-import { getCustomerSkuDisplay } from './skuCode'
+import { getCustomerSkuDisplay, validateCustomerSku } from './skuCode'
 import type { CsvColumn } from './csvImportExport'
 import { columnHeader, downloadCsv, downloadTemplate, sourceLineNoFromRecord } from './csvImportExport'
 import type { ImportRowFailure } from '../utils/importFailureDetail'
@@ -376,7 +376,7 @@ export function parsePlatformBindings(
 // ─── 产品导入（与 ProductForm 核心字段一致） ───
 
 export const PRODUCT_COLUMNS: CsvColumn[] = [
-  { key: 'internalSku', header: '产品SKU', required: true, hint: '客户自定义编码，可重复' },
+  { key: 'internalSku', header: '产品SKU', required: true, hint: '客户自定义编码，最多 11 位且不可重复' },
   { key: 'name', header: '产品名称', required: true, hint: '中文名称' },
   { key: 'declaredNameEn', header: '产品名称EN', required: true, hint: '英文名称' },
   { key: 'customCode', header: '自定义编号', required: false },
@@ -407,6 +407,11 @@ export function parseProducts(records: Record<string, string>[], customerId?: st
     const customerSku = row.internalSku.trim()
     if (!customerSku) {
       pushParseFailure(failures, errors, lineNo, '产品SKU 不能为空')
+      return
+    }
+    const skuError = validateCustomerSku(customerSku)
+    if (skuError) {
+      pushParseFailure(failures, errors, lineNo, skuError, customerSku)
       return
     }
 

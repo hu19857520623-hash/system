@@ -1,4 +1,4 @@
-import { apiGet, apiPost, apiPut } from './client'
+import { apiDelete, apiGet, apiPost, apiPut } from './client'
 import type { OutboundRecipient } from '../data/mockData'
 
 export type ErpCatalogItem = {
@@ -18,6 +18,7 @@ export type ErpCatalogItem = {
   remainingStockQty: number
   visibleOnOms: boolean
   orderableOnOms: boolean
+  shareStatus: 'enabled' | 'stopped'
   syncedAt: string
 }
 
@@ -99,6 +100,16 @@ export type ErpInboundCarton = {
   boxSeq: number
   boxCode?: string
   items: { sku: string; qty: number }[]
+}
+
+export type ErpInboundAsnItem = {
+  sku: string
+  qty: number
+  productName?: string
+  boxNo?: number
+  lengthCm?: number
+  widthCm?: number
+  heightCm?: number
 }
 
 export type ErpInboundOrder = {
@@ -236,7 +247,7 @@ export function createErpInbound(body: {
   contact?: string
   contactPhone?: string
   attachments?: { fileType?: string; fileName: string; contentBase64?: string; url?: string }[]
-  items: { sku: string; qty: number; productName?: string; boxNo?: number }[]
+  items: ErpInboundAsnItem[]
 }) {
   return apiPost<ErpInboundOrder>('/erp/inbound', body)
 }
@@ -257,7 +268,7 @@ export function updateErpInbound(inboundNo: string, body: {
   contact?: string
   contactPhone?: string
   attachments?: { fileType?: string; fileName: string; contentBase64?: string; url?: string }[]
-  items: { sku: string; qty: number; productName?: string; boxNo?: number }[]
+  items: ErpInboundAsnItem[]
 }) {
   return apiPut<ErpInboundOrder>(`/erp/inbound/${encodeURIComponent(inboundNo)}`, body)
 }
@@ -285,7 +296,7 @@ export function reactivateErpInbound(inboundNo: string, body: {
   contact?: string
   contactPhone?: string
   attachments?: { fileType?: string; fileName: string; contentBase64?: string; url?: string }[]
-  items: { sku: string; qty: number; productName?: string; boxNo?: number }[]
+  items: ErpInboundAsnItem[]
 }) {
   return apiPost<ErpInboundOrder>(`/erp/inbound/${encodeURIComponent(inboundNo)}/reactivate`, body)
 }
@@ -592,4 +603,20 @@ export function createErpProduct(body: {
   remark?: string
 }) {
   return apiPost<{ id: number; sku: string; productName: string; status: string }>('/erp/products', body)
+}
+
+export function updateErpProduct(sku: string, body: Omit<Parameters<typeof createErpProduct>[0], 'sku'>) {
+  return apiPut<{ id: number; sku: string; productName: string; status: string }>(`/erp/products/${encodeURIComponent(sku)}`, body)
+}
+
+export function disableErpProduct(sku: string) {
+  return apiPost<{ id: number; sku: string; status: string }>(`/erp/products/${encodeURIComponent(sku)}/disable`, {})
+}
+
+export function enableErpProduct(sku: string) {
+  return apiPost<{ id: number; sku: string; status: string }>(`/erp/products/${encodeURIComponent(sku)}/enable`, {})
+}
+
+export function deleteErpProduct(sku: string) {
+  return apiDelete<{ id: number }>(`/erp/products/${encodeURIComponent(sku)}`)
 }

@@ -512,10 +512,17 @@ export class ProductsService {
       patch[key] = transform ? transform(data[key]) : data[key]
     }
     assign('productName', (v) => String(v || '').trim())
+    assign('customerSku', (v) => (v == null || v === '' ? null : String(v).trim()))
     assign('spu', (v) => (v == null || v === '' ? null : String(v).trim()))
     assign('spec', (v) => (v == null || v === '' ? null : String(v).trim()))
+    assign('category', (v) => (v == null || v === '' ? null : String(v).trim()))
+    assign('brand', (v) => (v == null || v === '' ? null : String(v).trim()))
     assign('barcode', (v) => (v == null || v === '' ? null : String(v).trim()))
     assign('remark', (v) => (v == null || v === '' ? null : String(v).trim()))
+    assign('declaredNameEn', (v) => (v == null || v === '' ? null : String(v).trim()))
+    assign('declaredNameCn', (v) => (v == null || v === '' ? null : String(v).trim()))
+    assign('unit', (v) => (v == null || v === '' ? null : String(v).trim()))
+    assign('hasBattery', (v) => Boolean(v))
     assign('costRmb', (v) => num(v))
     assign('lengthCm', (v) => (v == null || v === '' ? null : num(v)))
     assign('widthCm', (v) => (v == null || v === '' ? null : num(v)))
@@ -621,6 +628,42 @@ export class ProductsService {
     await this.detail(id)
     await this.prisma.product.delete({ where: { id: BigInt(id) } })
     return { id }
+  }
+
+  async updateFromOms(sku: string, data: any) {
+    const row = await this.findBySku(sku)
+    const customerSku = String(data.customerSku || '').trim()
+    if (!customerSku) throw new BadRequestException('请填写客户 SKU')
+    if (customerSku.length >= 12) throw new BadRequestException('客户 SKU 须少于 12 位')
+
+    const customerCode = String(data.customerCode || '').trim().toUpperCase()
+    if (customerCode) {
+      const duplicate = await this.prisma.product.findFirst({
+        where: {
+          customerSku,
+          sku: { startsWith: `${customerCode}-` },
+          id: { not: row.id },
+        },
+        select: { id: true },
+      })
+      if (duplicate) throw new BadRequestException(`重复 SKU：${customerSku}`)
+    }
+    return this.update(Number(row.id), data)
+  }
+
+  async disableFromOms(sku: string) {
+    const row = await this.findBySku(sku)
+    return this.disable(Number(row.id))
+  }
+
+  async enableFromOms(sku: string) {
+    const row = await this.findBySku(sku)
+    return this.enable(Number(row.id))
+  }
+
+  async removeFromOms(sku: string) {
+    const row = await this.findBySku(sku)
+    return this.remove(Number(row.id))
   }
 
   async findBySku(sku: string) {
@@ -741,7 +784,19 @@ export class ProductsService {
     const customerSku = String(data.customerSku || data.sku || data.internalSku || '').trim()
     const productName = String(data.productName || data.name || '').trim()
     if (!customerSku) throw new BadRequestException('请填写 SKU')
+    if (customerSku.length >= 12) throw new BadRequestException('客户 SKU 须少于 12 位')
     if (!productName) throw new BadRequestException('请填写商品名称')
+
+    if (customerCode) {
+      const duplicate = await this.prisma.product.findFirst({
+        where: {
+          customerSku,
+          sku: { startsWith: `${customerCode.toUpperCase()}-` },
+        },
+        select: { sku: true },
+      })
+      if (duplicate) throw new BadRequestException(`重复 SKU：${customerSku}`)
+    }
 
     let sku = String(data.internalSku || data.sku || '').trim()
     if (customerCode && (!sku || sku === customerSku || !sku.toUpperCase().startsWith(`${customerCode.toUpperCase()}-`))) {

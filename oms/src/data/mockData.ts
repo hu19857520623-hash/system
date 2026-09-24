@@ -655,9 +655,9 @@ export function sanitizeCustomerInboundType(type?: string | null): InboundType {
 }
 
 export function isErpPalletInbound(order: {
-  inboundType?: string
-  stockSource?: string
-  source?: string
+  inboundType?: string | null
+  stockSource?: string | null
+  source?: string | null
 }) {
   const pallet = order.inboundType === '货盘入库' || order.stockSource === 'catalog'
   if (!pallet) return false
@@ -713,8 +713,11 @@ export interface Product {
   catalogSoldQty?: number
   catalogVisibleOnOms?: boolean
   catalogOrderableOnOms?: boolean
+  catalogShareStatus?: 'enabled' | 'stopped'
   catalogSyncedAt?: string
   productStatus: ProductStatus
+  /** 废弃前的状态，用于从回收站恢复。 */
+  discardedFrom?: Exclude<ProductStatus, 'discarded'>
   /** 手动创建或模板导入，决定保存并审核是否自动通过 */
   productSource?: ProductSource
   hasBattery: boolean
@@ -1189,7 +1192,8 @@ export const platformSkuMappings: PlatformSkuMapping[] = [
 export type FulfillmentWarehouseId = 'jhb1' | 'jhb3' | 'cpt1' | 'cpt2' | 'dbn'
 
 export interface FulfillmentWarehouse {
-  id: FulfillmentWarehouseId
+  /** ERP 可配置目的仓，不能限制为前端内置仓位枚举。 */
+  id: string
   city: string
 }
 

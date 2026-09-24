@@ -14,6 +14,7 @@ import {
   listInternalSkusForCustomer,
   normalizeProductsWithSkuPrefix,
   remapInventorySku,
+  validateCustomerSku,
 } from './skuCode'
 import { holdingEanFromCatalogPool } from './platformBarcodeScope'
 
@@ -311,6 +312,7 @@ export async function mergeErpCatalogIntoState(items: ErpCatalogItem[]) {
       existing.catalogSoldQty = item.soldQty
       existing.catalogVisibleOnOms = item.visibleOnOms
       existing.catalogOrderableOnOms = item.orderableOnOms
+      existing.catalogShareStatus = item.shareStatus
       existing.catalogSyncedAt = item.syncedAt
       existing.inCatalog = true
       existing.productStatus = item.orderableOnOms ? 'available' : 'draft'
@@ -341,6 +343,7 @@ export async function mergeErpCatalogIntoState(items: ErpCatalogItem[]) {
         catalogSoldQty: item.soldQty,
         catalogVisibleOnOms: item.visibleOnOms,
         catalogOrderableOnOms: item.orderableOnOms,
+        catalogShareStatus: item.shareStatus,
         catalogSyncedAt: item.syncedAt,
         productStatus: item.orderableOnOms ? 'available' : 'draft',
         hasBattery: false,
@@ -657,16 +660,24 @@ export async function importProducts(
 ): Promise<{ ok: true; count: number } | { ok: false; error: string }> {
   const prepared: Product[] = []
   const existing = [...state.products.map(p => p.internalSku)]
+  const importedCustomerSkus = new Set<string>()
   for (const item of items) {
     const customerSku = (item.customerSku || item.internalSku || '').trim()
-    if (!customerSku) return { ok: false, error: '导入数据缺少 SKU' }
+    const skuError = validateCustomerSku(customerSku)
+    if (skuError) return { ok: false, error: `导入数据 SKU 无效：${skuError}` }
     const code = opts?.customerCode?.trim()
     if (!code || code === '—') return { ok: false, error: '导入前请绑定客户编码' }
+    const customerId = opts?.customerId || item.customerId
+    const key = normalizeSkuKey(customerSku)
+    if (importedCustomerSkus.has(key) || findProductByCustomerSku(customerSku, customerId)) {
+      return { ok: false, error: duplicateSkuMessage(customerSku) }
+    }
+    importedCustomerSkus.add(key)
     try {
       const internalSku = buildInternalSku(code, customerSku, [...existing, ...prepared.map(p => p.internalSku)])
       prepared.push({
         ...item,
-        customerId: opts?.customerId || item.customerId,
+        customerId,
         customerSku,
         internalSku,
       })
@@ -699,13 +710,13 @@ export function findProductBySku(sku: string, excludeProductId?: string) {
   )
 }
 
-/** 按客户可见 SKU 查找（可重复时返回首个匹配） */
+/** 按客户可见 SKU 查找（同一客户内唯一，忽略大小写）。 */
 export function findProductByCustomerSku(customerSku: string, customerId?: string, excludeProductId?: string) {
   const key = normalizeSkuKey(customerSku)
   if (!key) return undefined
   return state.products.find(p => {
     if (excludeProductId && p.id === excludeProductId) return false
-    if (customerId && p.customerId && p.customerId !== customerId) return false
+    if (customerId ? p.customerId !== customerId : Boolean(p.customerId)) return false
     const display = (p.customerSku || getCustomerSkuDisplay(p)).trim().toLowerCase()
     return display === key
   })
@@ -719,11 +730,17 @@ function duplicateSkuMessage(sku: string) {
 export async function upsertLocalProduct(product: Product): Promise<{ ok: true } | { ok: false; error: string }> {
   const internalSku = product.internalSku.trim()
   if (!internalSku) return { ok: false, error: '请填写 SKU' }
-  if (!product.customerSku?.trim()) return { ok: false, error: '请填写 SKU' }
+  const customerSku = product.customerSku?.trim() || ''
+  const skuError = validateCustomerSku(customerSku)
+  if (skuError) return { ok: false, error: skuError }
 
   const duplicate = findProductBySku(internalSku, product.id)
   if (duplicate) {
     return { ok: false, error: duplicateSkuMessage(internalSku) }
+  }
+  const duplicateCustomerSku = findProductByCustomerSku(customerSku, product.customerId, product.id)
+  if (duplicateCustomerSku) {
+    return { ok: false, error: duplicateSkuMessage(customerSku) }
   }
 
   const before = structuredClone(state)
@@ -731,7 +748,7 @@ export async function upsertLocalProduct(product: Product): Promise<{ ok: true }
   const payload: Product = {
     ...product,
     internalSku,
-    customerSku: product.customerSku.trim(),
+    customerSku,
   }
   if (idx >= 0) {
     const next = [...state.products]
@@ -777,6 +794,49 @@ export async function updateLocalProducts(
   return count
 }
 
+/** 移入商品回收站；保留原状态以便恢复。 */
+export async function discardLocalProduct(productId: string): Promise<boolean> {
+  const product = state.products.find(item => item.id === productId)
+  if (!product || product.productStatus === 'discarded') return false
+  await updateLocalProducts([productId], {
+    productStatus: 'discarded',
+    discardedFrom: product.productStatus,
+  })
+  return true
+}
+
+/** 从商品回收站恢复为废弃前的状态。 */
+export async function restoreLocalProduct(productId: string): Promise<boolean> {
+  const product = state.products.find(item => item.id === productId)
+  if (!product || product.productStatus !== 'discarded') return false
+  await updateLocalProducts([productId], {
+    productStatus: product.discardedFrom || 'available',
+    discardedFrom: undefined,
+  })
+  return true
+}
+
+/** 永久删除已废弃商品及其同客户本地库存展示记录；历史单据不受影响。 */
+export async function permanentlyDeleteLocalProduct(productId: string): Promise<boolean> {
+  const product = state.products.find(item => item.id === productId)
+  if (!product || product.productStatus !== 'discarded') return false
+
+  const before = structuredClone(state)
+  state.products = state.products.filter(item => item.id !== productId)
+  state.inventory = state.inventory.filter(item => {
+    if (item.sku !== product.internalSku) return true
+    return Boolean(product.customerId && item.customerId !== product.customerId)
+  })
+  try {
+    await persistLocalOrThrow()
+  } catch (error) {
+    state = before
+    emit()
+    throw error
+  }
+  return true
+}
+
 /** 审核通过：草稿/审核中 → 可用 */
 export async function approveProducts(productIds: Iterable<string>): Promise<number> {
   const ids = new Set(productIds)
@@ -808,16 +868,21 @@ export function prepareNewProductSkus(
   customerSku: string,
   customerCode: string,
   customerId?: string,
+  excludeProductId?: string,
 ): { customerSku: string; internalSku: string } | { ok: false; error: string } {
   const trimmed = customerSku.trim()
-  if (!trimmed) return { ok: false, error: '请填写 SKU' }
+  const skuError = validateCustomerSku(trimmed)
+  if (skuError) return { ok: false, error: skuError }
   const code = customerCode.trim()
   if (!code || code === '—') return { ok: false, error: '当前账号未绑定客户编码' }
+  if (findProductByCustomerSku(trimmed, customerId, excludeProductId)) {
+    return { ok: false, error: duplicateSkuMessage(trimmed) }
+  }
   try {
     const internalSku = buildInternalSku(
       code,
       trimmed,
-      listInternalSkusForCustomer(state.products, customerId),
+      listInternalSkusForCustomer(state.products.filter(product => product.id !== excludeProductId), customerId),
     )
     return { customerSku: trimmed, internalSku }
   } catch (e) {

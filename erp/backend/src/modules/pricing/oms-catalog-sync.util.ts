@@ -25,6 +25,7 @@ export type OmsCatalogStockPayload = {
   remainingStockQty: number
   visibleOnOms: boolean
   orderableOnOms: boolean
+  shareStatus: 'enabled' | 'stopped'
   syncedAt: string
 }
 
@@ -39,6 +40,7 @@ export function buildOmsCatalogPayload(pricing: {
   soldQty?: number | null
   visibleOnOms?: boolean
   orderableOnOms?: boolean
+  shareStatus?: string | null
   lengthCm?: unknown
   widthCm?: unknown
   heightCm?: unknown
@@ -62,6 +64,7 @@ export function buildOmsCatalogPayload(pricing: {
     remainingStockQty: remainingCatalogStock(pricing),
     visibleOnOms: Boolean(pricing.visibleOnOms),
     orderableOnOms: Boolean(pricing.orderableOnOms),
+    shareStatus: pricing.shareStatus === 'stopped' ? 'stopped' : 'enabled',
     syncedAt: new Date().toISOString(),
   }
 }

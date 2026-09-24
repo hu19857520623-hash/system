@@ -24,7 +24,7 @@ export class CreateOmsProductDto {
   @IsOptional()
   @Transform(trimOptional)
   @IsString()
-  @MaxLength(50)
+  @MaxLength(11)
   customerSku?: string
 
   @IsOptional()

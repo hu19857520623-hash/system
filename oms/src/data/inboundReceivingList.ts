@@ -1,7 +1,7 @@
 /** 易仓同款入库清单 / Packing List HTML（A4）。与 erp/shared/inbound-receiving-list.ts 保持一致。 */
 
 import { code128Svg } from './code128'
-import { buildCartonCode, isGeneratedCartonCode } from './wmsDocNo'
+import { buildCartonCode } from './wmsDocNo'
 
 export type InboundReceivingListBox = {
   boxNo: number
@@ -83,13 +83,6 @@ function truncateName(name: string, max = 16) {
   return `${text.slice(0, max)}...`
 }
 
-function boxCodeOf(inboundNo: string, box: InboundReceivingListBox) {
-  const stored = String(box.boxCode || '').trim()
-  const generated = buildCartonCode(inboundNo, box.boxNo)
-  if (!stored || isGeneratedCartonCode(stored, inboundNo, box.boxNo)) return generated
-  return stored
-}
-
 const STYLE = `@page{size:A4;margin:10mm}
 *{box-sizing:border-box}
 html,body{margin:0;padding:0;background:#fff;color:#000;font:12px/1.4 Arial,"Microsoft YaHei","PingFang SC",sans-serif}
@@ -116,14 +109,6 @@ table.grid th{font-weight:700;background:#fff}
 .qty{width:58px}
 .recv{width:58px}
 .foot{display:flex;justify-content:space-between;align-items:flex-end;margin-top:10px;font-size:12px}
-.pack-head{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:2mm}
-.pack-title{margin:4mm 0 0;font:700 28px/1 Arial,sans-serif;flex:1;text-align:center}
-.pack-badge{display:flex;align-items:stretch;margin-top:1mm}
-.pack-a{width:18mm;height:14mm;background:#000;color:#fff;font:700 32px/14mm Arial,sans-serif;text-align:center}
-.pack-n{width:18mm;height:14mm;border:1px solid #000;border-left:0;font:700 13px/14mm Arial,sans-serif;text-align:center}
-.pack-meta{display:flex;justify-content:space-between;align-items:flex-end;margin:1mm 0 4mm;font-size:12px}
-.pack-ref{margin-top:6px}
-.pack-bottom{margin-top:8px;text-align:right;font:700 18px/1 Arial,sans-serif}
 @media print{html,body{width:auto}.sheet{min-height:0}}`
 
 function skuInfoHtml(sku: InboundReceivingListSku) {
@@ -201,73 +186,11 @@ function receivingSheet(doc: InboundReceivingListDoc) {
 </section>`
 }
 
-function packingSheets(doc: InboundReceivingListDoc) {
-  const inboundNo = String(doc.inboundNo || '').trim()
-  const byBox = new Map<number, { box: InboundReceivingListBox; lines: { sku: string; customCode?: string; name: string; qty: number }[] }>()
-  for (const sku of doc.skus) {
-    for (const box of sku.boxes) {
-      const current = byBox.get(box.boxNo) || { box, lines: [] }
-      current.lines.push({
-        sku: sku.sku,
-        customCode: sku.customCode,
-        name: sku.name,
-        qty: box.expectedQty,
-      })
-      byBox.set(box.boxNo, current)
-    }
-  }
-  const pages = [...byBox.entries()].sort((a, b) => a[0] - b[0])
-  const total = pages.length || 1
-  if (!pages.length) return ''
-
-  return pages.map(([boxNo, page], index) => {
-    const cartonCode = boxCodeOf(inboundNo, { ...page.box, boxNo })
-    const rows = page.lines.map((line, lineIndex) => `<tr>
-      <td>${lineIndex + 1}</td>
-      <td>${escapeHtml(line.sku)}</td>
-      <td>${escapeHtml(line.customCode || '')}</td>
-      <td>${escapeHtml(line.name)}</td>
-      <td>${line.qty}</td>
-    </tr>`).join('')
-    return `<section class="sheet">
-  <div class="pack-head">
-    <div class="barcode-wrap">${code128Svg(cartonCode, 40)}</div>
-    <h1 class="pack-title">Packing List</h1>
-    <div class="pack-badge">
-      <div class="pack-a">A</div>
-      <div class="pack-n">${total}pack</div>
-    </div>
-    <p class="page-flag">${index + 1}/${total} P</p>
-  </div>
-  <div class="pack-meta">
-    <div>RO:${escapeHtml(cartonCode)}</div>
-    <div>Wh:${escapeHtml(doc.destWarehouse || 'TKL')}</div>
-    <div>Customer<br/>Code : ${escapeHtml(doc.customerCode || '')}</div>
-  </div>
-  <table class="grid">
-    <thead>
-      <tr>
-        <th class="num">No.</th>
-        <th>Product Code</th>
-        <th>Custom coding</th>
-        <th>Product Name</th>
-        <th class="qty">Qty</th>
-      </tr>
-    </thead>
-    <tbody>${rows}</tbody>
-  </table>
-  <div class="pack-ref">Ref No : ${escapeHtml(doc.referenceNo || '')}</div>
-  <div class="pack-bottom">${index + 1} / ${total} b</div>
-</section>`
-  }).join('')
-}
-
 export function buildInboundReceivingListHtml(doc: InboundReceivingListDoc) {
   const inboundNo = String(doc.inboundNo || '').trim() || 'inbound'
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>入库清单 ${escapeHtml(inboundNo)}</title>
 <style>${STYLE}</style></head><body>
 ${receivingSheet(doc)}
-${packingSheets(doc)}
 <script>window.onload=function(){window.print()}<\/script>
 </body></html>`
 }

@@ -9,6 +9,8 @@ import {
 } from './entityStore'
 import { createErpInbound, updateErpInbound, cancelErpInbound, reactivateErpInbound, syncErpInbounds, type ErpInboundOrder } from '../api/erp'
 import { getCustomerCode } from './dataScope'
+import { findProductByCode } from './platformBindingUtils'
+import { buildOmsAsnItem } from './omsAsnItem'
 import { buildInboundNo, inboundNoPrefix, nextSeqFromNos } from './wmsDocNo'
 
 export { pushInbound as addInboundOrder, updateInboundOrder, upsertInboundOrder }
@@ -125,12 +127,8 @@ function erpAsnPayload(order: InboundOrder, customerCode: string) {
     eta: order.eta,
     contact: order.contact,
     contactPhone: order.contactPhone,
-    items: (order.lineItems || []).map(l => ({
-      sku: l.sku,
-      qty: l.qty,
-      productName: l.name,
-      boxNo: l.boxNo,
-    })),
+    items: (order.lineItems || []).map(line =>
+      buildOmsAsnItem(line, findProductByCode(line.sku, order.customerId))),
     attachments: (order.attachments || []).map(a => ({
       fileType: a.kind || 'other',
       fileName: a.fileName,

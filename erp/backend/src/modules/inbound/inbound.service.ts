@@ -18,6 +18,7 @@ import { buildInternalSku, deriveCustomerCodeFromInternalSku } from '../../commo
 import { buildBoxLabelsPdfBuffer, buildInboundBoxLabelData } from '../../common/labels/box-label-pdf.util'
 import { buildSkuLabelsHtml, buildSkuLabelsPdfBuffer } from '../../common/labels/sku-label.util'
 import { InboundFeeService } from './inbound-fee.service'
+import { normalizeOmsAsnCustomerDimensions } from './oms-asn-dimensions.util'
 import {
   buildInboundReceivingListHtml,
   formatInboundListDateTime,
@@ -38,6 +39,16 @@ import {
   patchInboundRemarkSeaFreight,
 } from './inbound-sea-freight.util'
 import { inboundReceivingStarted } from './inbound-delete.util'
+
+type OmsAsnLineInput = {
+  sku: string
+  qty: number
+  productName?: string
+  boxNo?: number
+  lengthCm?: number
+  widthCm?: number
+  heightCm?: number
+}
 
 /** 在途，等待到仓扫描 */
 const PENDING_RECEIPT_STATUSES = new Set([
@@ -892,6 +903,15 @@ export class InboundService {
       await this.startReceive(id, operatorId)
     }
 
+    const scannedCartonCount = await this.prisma.inboundCarton.count({
+      where: { inboundId: BigInt(id), status: 'received' },
+    })
+    if (count < scannedCartonCount) {
+      throw new BadRequestException(
+        `已扫码确认 ${scannedCartonCount} 箱，实收箱数不能改小`,
+      )
+    }
+
     await this.prisma.inboundOrder.update({
       where: { id: BigInt(id) },
       data: { receivedCartonCount: count },
@@ -976,9 +996,18 @@ export class InboundService {
       const receivedCount = await tx.inboundCarton.count({
         where: { inboundId: BigInt(inboundId), status: 'received' },
       })
+      const currentOrder = await tx.inboundOrder.findUnique({
+        where: { id: BigInt(inboundId) },
+        select: { receivedCartonCount: true },
+      })
       await tx.inboundOrder.update({
         where: { id: BigInt(inboundId) },
-        data: { receivedCartonCount: receivedCount },
+        data: {
+          receivedCartonCount: Math.max(
+            receivedCount,
+            currentOrder?.receivedCartonCount ?? 0,
+          ),
+        },
       })
     })
 
@@ -2188,7 +2217,7 @@ export class InboundService {
   }
 
   private async resolveOmsAsnLines(
-    linesInput: { sku: string; qty: number; productName?: string; boxNo?: number }[] | undefined,
+    linesInput: OmsAsnLineInput[] | undefined,
     customerCode: string,
   ) {
     const lines = Array.isArray(linesInput) ? linesInput : []
@@ -2199,6 +2228,20 @@ export class InboundService {
       const qty = Math.floor(Number(line.qty ?? 0))
       if (!sku || qty <= 0) throw new BadRequestException('SKU 与入库数量无效')
       const product = await this.ensureProductBySku(sku, line.productName, customerCode)
+      let dimensions
+      try {
+        dimensions = normalizeOmsAsnCustomerDimensions(line)
+      } catch (error) {
+        throw new BadRequestException(
+          `SKU ${sku} 客户尺寸无效：${error instanceof Error ? error.message : String(error)}`,
+        )
+      }
+      if (dimensions) {
+        await this.prisma.product.update({
+          where: { id: product.id },
+          data: dimensions,
+        })
+      }
       resolved.push({
         productId: product.id,
         sku: product.sku,
@@ -2275,7 +2318,7 @@ export class InboundService {
     eta?: string
     contact?: string
     contactPhone?: string
-    items: { sku: string; qty: number; productName?: string; boxNo?: number }[]
+    items: OmsAsnLineInput[]
     attachments?: { fileName: string; contentBase64: string; fileType?: string }[]
   }) {
     const customerCode = String(data.customerCode || '').trim()
@@ -2374,7 +2417,7 @@ export class InboundService {
     eta?: string
     contact?: string
     contactPhone?: string
-    items: { sku: string; qty: number; productName?: string; boxNo?: number }[]
+    items: OmsAsnLineInput[]
     attachments?: { fileName: string; contentBase64: string; fileType?: string }[]
   }) {
     return data

@@ -253,6 +253,11 @@ jobs:
           test -f "$inbound_carton_specs_sql" || { echo "Missing $inbound_carton_specs_sql"; exit 1; }
           cat "$inbound_carton_specs_sql" | docker compose exec -T mysql mysql -uroot -p"$mysql_pw" --default-character-set=utf8mb4 --batch takealot_erp
 
+          echo '=== Apply pricing share status ==='
+          pricing_share_sql="${PWD}/backend/prisma/scripts/migrate_pricing_share_status.sql"
+          test -f "$pricing_share_sql" || { echo "Missing $pricing_share_sql"; exit 1; }
+          cat "$pricing_share_sql" | docker compose exec -T mysql mysql -uroot -p"$mysql_pw" --default-character-set=utf8mb4 --batch takealot_erp
+
           echo '=== Build store-monitor ==='
           cd /opt/system/store-monitor
           docker build -t takealot/store-monitor:production . </dev/null

@@ -87,9 +87,9 @@ export function scopeOutboundForRole<T extends CustomerScoped & { source?: strin
 
 /** 入库单：客户账户不展示 ERP 货盘入库（货盘只在 ERP 入库） */
 export function scopeInboundForRole<T extends CustomerScoped & {
-  inboundType?: string
-  stockSource?: string
-  source?: string
+  inboundType?: string | null
+  stockSource?: string | null
+  source?: string | null
 }>(
   items: T[],
   role: OmsRole,

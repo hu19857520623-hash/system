@@ -26,7 +26,11 @@ export default function ProductCreate() {
           {isEdit ? `修改产品：${skuLabel}` : isCopy ? `复制产品：${skuLabel}` : '创建产品'}
         </h1>
         <p className="mt-1 text-sm text-text-muted">
-          {isEdit ? 'SKU 主数据请在 ERP 维护' : '填写申报与规格，保存后写入 ERP 主数据'}
+          {isEdit
+            ? product?.productStatus === 'draft'
+              ? '草稿可继续编辑；保存并提交后将创建 ERP 主数据并变为可用'
+            : '编辑后将同步 ERP 商品主数据'
+            : '可先保存为草稿，确认资料后再保存并提交至 ERP'}
         </p>
       </div>
       <ProductForm product={product} mode={isEdit ? 'edit' : 'create'} />

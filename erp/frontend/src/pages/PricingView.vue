@@ -62,6 +62,7 @@ interface PriceItem {
   omsSyncTime: string
   visibleOnOms: boolean
   orderableOnOms: boolean
+  shareStatus: 'enabled' | 'stopped'
   visibleOnOmsAt: string
   orderableOnOmsAt: string
   history: PriceHistory[]
@@ -410,6 +411,31 @@ async function syncRow(id: number) {
   if (ok) load()
 }
 
+async function setShareStatus(row: PriceItem, status: 'enabled' | 'stopped') {
+  const action = status === 'stopped' ? '停止共享' : '开启共享'
+  const message = status === 'stopped'
+    ? `停止 ${row.sku} 的新客户申购吗？已有客户持仓和已建出库单仍可正常出库。`
+    : `开启 ${row.sku} 的共享吗？有海外仓可用库存时，客户将可以继续申购。`
+  try {
+    await erpConfirm(message, action, {
+      type: status === 'stopped' ? 'warning' : 'info',
+      confirmButtonText: action,
+      cancelButtonText: '取消',
+    })
+  } catch {
+    return
+  }
+  const ok = await withAction(async () => {
+    await pricingApi.setShareStatus(row.id, status)
+  }, `${row.sku} 已${action}`)
+  if (ok) {
+    if (editing.value?.id === row.id) {
+      editing.value = mapPricing(await pricingApi.detail(row.id)) as PriceItem
+    }
+    load()
+  }
+}
+
 function trendOf(records: PriceRecord[], idx: number): 'down' | 'up' | 'flat' {
   if (idx === 0) return 'flat'
   const cur = records[idx].price, prev = records[idx - 1].price
@@ -621,17 +647,25 @@ async function submitReprice() {
       <el-table-column label="OMS货盘" width="120">
         <template #default="{ row }">
           <div class="oms-flags">
-            <el-tag v-if="row.orderableOnOms" type="success" size="small">可下单</el-tag>
+            <el-tag v-if="row.shareStatus === 'stopped'" type="danger" size="small">停止共享</el-tag>
+            <el-tag v-else-if="row.orderableOnOms" type="success" size="small">共享开启</el-tag>
             <el-tag v-else-if="row.visibleOnOms" type="warning" size="small">可见</el-tag>
             <span v-else class="text-muted">未上架</span>
           </div>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="160" fixed="right">
+      <el-table-column label="操作" width="210" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" size="small" @click="openPricing(row.id)">{{ needMyAction(row) ? '去处理' : '查看详情' }}</el-button>
           <el-button v-if="row.pricingStatus === 'priced' && canSyncOms" link type="success" size="small" @click="syncRow(row.id)">同步OMS</el-button>
           <el-button v-if="row.pricingStatus === 'synced' && canSyncOms" link type="warning" size="small" @click="openReprice(row.id)">调价</el-button>
+          <el-button
+            v-if="row.pricingStatus === 'synced' && canSyncOms"
+            link
+            :type="row.shareStatus === 'stopped' ? 'success' : 'danger'"
+            size="small"
+            @click="setShareStatus(row as PriceItem, row.shareStatus === 'stopped' ? 'enabled' : 'stopped')"
+          >{{ row.shareStatus === 'stopped' ? '开启共享' : '停止共享' }}</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -815,6 +849,19 @@ async function submitReprice() {
           <el-descriptions-item label="允许下单">
             <el-tag :type="editing.orderableOnOms ? 'success' : 'warning'" size="small">{{ editing.orderableOnOms ? '是' : '否（待海外仓库存）' }}</el-tag>
             <span v-if="editing.orderableOnOmsAt" class="desc-time">{{ editing.orderableOnOmsAt }}</span>
+          </el-descriptions-item>
+          <el-descriptions-item label="共享状态">
+            <el-tag :type="editing.shareStatus === 'stopped' ? 'danger' : 'success'" size="small">
+              {{ editing.shareStatus === 'stopped' ? '停止' : '开启' }}
+            </el-tag>
+            <el-button
+              v-if="canSyncOms"
+              link
+              :type="editing.shareStatus === 'stopped' ? 'success' : 'danger'"
+              size="small"
+              style="margin-left:8px"
+              @click="setShareStatus(editing, editing.shareStatus === 'stopped' ? 'enabled' : 'stopped')"
+            >{{ editing.shareStatus === 'stopped' ? '开启共享' : '停止共享' }}</el-button>
           </el-descriptions-item>
           <el-descriptions-item label="OMS 展示剩余">
             <span style="font-weight:600;color:#1f9d92">{{ editing.remainingStockQty?.toLocaleString?.() ?? '—' }}</span>

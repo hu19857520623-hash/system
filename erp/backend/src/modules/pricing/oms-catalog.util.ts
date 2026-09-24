@@ -10,6 +10,8 @@ export async function tryMarkOrderableOnOms(prisma: PrismaService, sku: string):
   const internalSku = toCatalogInternalSku(sku)
   const pricing = await prisma.productPricing.findUnique({ where: { sku: internalSku } })
     ?? await prisma.productPricing.findFirst({ where: { sku: { in: catalogSkuLookupKeys(sku) } } })
+  // 人工停止共享优先级高于库存自动开售，补货或重新查询均不得把它重新打开。
+  if (pricing?.shareStatus === 'stopped') return false
   if (!pricing?.visibleOnOms || pricing.orderableOnOms) return Boolean(pricing?.orderableOnOms)
 
   if (remainingCatalogStock(pricing) <= 0) return false

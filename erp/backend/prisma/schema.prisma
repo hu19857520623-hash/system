@@ -1336,6 +1336,7 @@ model ProductPricing {
   omsSyncAt         DateTime? @map("oms_sync_at")
   visibleOnOms      Boolean   @default(false) @map("visible_on_oms")
   orderableOnOms    Boolean   @default(false) @map("orderable_on_oms")
+  shareStatus       String    @default("enabled") @map("share_status") @db.VarChar(10)
   visibleOnOmsAt    DateTime? @map("visible_on_oms_at")
   orderableOnOmsAt  DateTime? @map("orderable_on_oms_at")
   createdAt         DateTime  @default(now()) @map("created_at")

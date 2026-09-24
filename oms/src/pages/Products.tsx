@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Plus, Printer, Copy } from 'lucide-react'
+import { Plus, Printer, Copy, Pencil, Ban, RotateCcw, Trash2 } from 'lucide-react'
 import {
   Badge, Button, Card, PageHeader, MonoCode, Table, TableFooter,
 } from '../components/ui'
@@ -9,13 +9,19 @@ import {
   inputCls, matchTriState, matchText, type TriState, type SearchMode,
 } from '../components/ui/filters'
 import { Product, statusLabels, formatCurrency } from '../data/mockData'
-import { useProducts } from '../data/inventoryStore'
+import {
+  discardLocalProduct,
+  permanentlyDeleteLocalProduct,
+  restoreLocalProduct,
+  useProducts,
+} from '../data/inventoryStore'
 import { getPrimaryPlatformBarcode } from '../data/platformBindingUtils'
 import { printBarcodeLabels } from '../data/barcodeLabelTemplate'
 import { getCustomerSkuDisplay } from '../data/skuCode'
 import { useDataScope } from '../auth/useDataScope'
 import { AdminCustomerFilter, AdminCustomerCell } from '../components/admin/AdminCustomerFilter'
 import { exportProducts } from '../data/importTemplates'
+import { deleteErpProduct, disableErpProduct, enableErpProduct } from '../api/erp'
 
 const statusTabs = [
   { id: 'all', label: '全部' },
@@ -149,6 +155,51 @@ export default function Products() {
       copies: 1,
     })).filter(item => item.code)
     await printBarcodeLabels(inputs, 'SKU 标签')
+  }
+
+  const isSubmittedProduct = (product: Product) => (
+    product.productStatus === 'available'
+    || product.productStatus === 'reviewing'
+    || (product.productStatus === 'discarded' && product.discardedFrom !== 'draft')
+  )
+
+  const handleDiscard = async (product: Product) => {
+    if (!window.confirm(`确认废弃商品「${displaySku(product, barcodeCustomerId)}」？可在“废弃”页恢复。`)) return
+    try {
+      if (isSubmittedProduct(product)) await disableErpProduct(product.internalSku)
+      await discardLocalProduct(product.id)
+      setSelected(previous => {
+        const next = new Set(previous)
+        next.delete(product.id)
+        return next
+      })
+    } catch (error) {
+      window.alert(`废弃商品失败：${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  const handleRestore = async (product: Product) => {
+    try {
+      if (isSubmittedProduct(product)) await enableErpProduct(product.internalSku)
+      await restoreLocalProduct(product.id)
+    } catch (error) {
+      window.alert(`恢复商品失败：${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  const handlePermanentDelete = async (product: Product) => {
+    if (!window.confirm(`确认永久删除商品「${displaySku(product, barcodeCustomerId)}」？关联的本地库存展示记录将一并删除，且无法恢复。`)) return
+    try {
+      if (isSubmittedProduct(product)) await deleteErpProduct(product.internalSku)
+      await permanentlyDeleteLocalProduct(product.id)
+      setSelected(previous => {
+        const next = new Set(previous)
+        next.delete(product.id)
+        return next
+      })
+    } catch (error) {
+      window.alert(`永久删除商品失败：${error instanceof Error ? error.message : String(error)}`)
+    }
   }
 
   return (
@@ -287,6 +338,18 @@ export default function Products() {
                 </td>
                 <td className="table-cell">
                   <div className="flex flex-wrap items-center gap-1 text-xs">
+                    {!p.inCatalog && p.productStatus !== 'discarded' && (
+                      <>
+                        <Link to={`/products/${p.id}/edit`} className="inline-flex items-center gap-0.5 font-medium text-primary-600 hover:underline"><Pencil className="h-3 w-3" /> {p.productStatus === 'draft' ? '编辑草稿' : '编辑商品'}</Link>
+                        <button type="button" onClick={() => void handleDiscard(p)} className="inline-flex items-center gap-0.5 font-medium text-amber-700 hover:underline"><Ban className="h-3 w-3" /> 废弃商品</button>
+                      </>
+                    )}
+                    {!p.inCatalog && p.productStatus === 'discarded' && (
+                      <>
+                        <button type="button" onClick={() => void handleRestore(p)} className="inline-flex items-center gap-0.5 font-medium text-emerald-700 hover:underline"><RotateCcw className="h-3 w-3" /> 恢复</button>
+                        <button type="button" onClick={() => void handlePermanentDelete(p)} className="inline-flex items-center gap-0.5 font-medium text-red-700 hover:underline"><Trash2 className="h-3 w-3" /> 永久删除</button>
+                      </>
+                    )}
                     <Link to={`/products/new?copy=${encodeURIComponent(p.id)}`} className="inline-flex items-center gap-0.5 font-medium text-primary-600 hover:underline"><Copy className="h-3 w-3" /> 复制新建</Link>
                   </div>
                 </td>

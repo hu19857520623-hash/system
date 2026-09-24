@@ -352,7 +352,11 @@ export default function Catalog() {
                 <div className="relative aspect-[5/4] overflow-hidden bg-surface-subtle">
                   <img src={p.image} alt={p.name} className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105" />
                   <div className="absolute left-2 top-2 scale-90 origin-top-left"><Badge status="active" label={p.category} /></div>
-                  {!p.catalogOrderableOnOms ? (
+                  {p.catalogShareStatus === 'stopped' ? (
+                    <div className="absolute right-2 top-2 rounded-md bg-red-600 px-1.5 py-0.5 text-[9px] font-semibold text-white shadow-sm">
+                      已停止共享
+                    </div>
+                  ) : !p.catalogOrderableOnOms ? (
                     <div className="absolute right-2 top-2 rounded-md bg-slate-600 px-1.5 py-0.5 text-[9px] font-semibold text-white shadow-sm">
                       暂不可下单
                     </div>
@@ -377,7 +381,7 @@ export default function Catalog() {
                         </p>
                         <p>
                           ERP {p.catalogVisibleOnOms ? '已发布' : '未发布'} ·
-                          {p.catalogOrderableOnOms ? ' 可下单' : ' 不可下单'}
+                          {p.catalogShareStatus === 'stopped' ? ' 已停止共享' : p.catalogOrderableOnOms ? ' 可下单' : ' 待库存'}
                         </p>
                         {p.catalogSyncedAt && (
                           <p>SKU 同步 {new Date(p.catalogSyncedAt).toLocaleString()}</p>

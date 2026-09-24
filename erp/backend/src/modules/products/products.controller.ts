@@ -40,6 +40,31 @@ export class ProductsController {
     return this.service.createFromOms(body)
   }
 
+  /** OMS 商品资料及生命周期操作。 */
+  @OmsBridge()
+  @Put('oms/:sku')
+  updateFromOms(@Param('sku') sku: string, @Body() body: CreateOmsProductDto) {
+    return this.service.updateFromOms(sku, body)
+  }
+
+  @OmsBridge()
+  @Post('oms/:sku/disable')
+  disableFromOms(@Param('sku') sku: string) {
+    return this.service.disableFromOms(sku)
+  }
+
+  @OmsBridge()
+  @Post('oms/:sku/enable')
+  enableFromOms(@Param('sku') sku: string) {
+    return this.service.enableFromOms(sku)
+  }
+
+  @OmsBridge()
+  @Delete('oms/:sku')
+  removeFromOms(@Param('sku') sku: string) {
+    return this.service.removeFromOms(sku)
+  }
+
   @RequirePerms('products.view')
   @Get(':id')
   detail(@Param('id', ParseIntPipe) id: number) {

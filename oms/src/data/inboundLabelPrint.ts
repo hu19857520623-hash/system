@@ -8,10 +8,9 @@ import {
 } from './barcodeLabelTemplate'
 import {
   buildBoxLabelsHtml,
-  downloadBoxLabelsHtml,
-  printBoxLabels,
   type BoxLabelData,
 } from './boxLabelTemplate'
+import { downloadBoxLabelsPdf, openBoxLabelsPdf } from './boxLabelPdf'
 
 export type InboundLabelKind = '箱唛' | 'SKU 标签'
 
@@ -93,7 +92,7 @@ export async function printInboundLabels(order: InboundOrder, kind: InboundLabel
       window.alert('没有可打印的箱唛')
       return false
     }
-    return printBoxLabels(labels, `${order.inboundNo}-${kind}`)
+    return openBoxLabelsPdf(labels)
   }
   const inputs = buildInboundLabelInputs(order, kind, customerCode)
   if (!inputs.length) {
@@ -103,9 +102,9 @@ export async function printInboundLabels(order: InboundOrder, kind: InboundLabel
   return printBarcodeLabels(inputs, `${order.inboundNo}-${kind}`)
 }
 
-export function downloadInboundLabelHtml(order: InboundOrder, kind: InboundLabelKind, customerCode?: string) {
+export async function downloadInboundLabelHtml(order: InboundOrder, kind: InboundLabelKind, customerCode?: string) {
   if (kind === '箱唛') {
-    downloadBoxLabelsHtml(buildBoxLabelData(order, customerCode), `${order.inboundNo}-${kind}`)
+    await downloadBoxLabelsPdf(buildBoxLabelData(order, customerCode), `${order.inboundNo}-${kind}`)
     return
   }
   const inputs = buildInboundLabelInputs(order, kind, customerCode)

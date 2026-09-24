@@ -4,10 +4,11 @@ import { Button } from '../ui'
 import { FormSection, FormGrid, FormField, formInput, formSelect } from '../ui/form'
 import { Product } from '../../data/mockData'
 import { upsertLocalProduct, prepareNewProductSkus, updateLocalProducts, useProducts } from '../../data/inventoryStore'
-import { createErpProduct } from '../../api/erp'
+import { createErpProduct, updateErpProduct } from '../../api/erp'
 import { useRole } from '../../auth/RoleContext'
 import { getCustomerCode, getCustomerIdForRole } from '../../data/dataScope'
 import { getCustomerSkuDisplay } from '../../data/skuCode'
+import { validateCustomerSku } from '../../data/skuCode'
 
 interface ProductFormProps {
   product?: Product
@@ -17,9 +18,9 @@ interface ProductFormProps {
 function ProductEditBlocked({ product }: { product: Product }) {
   return (
     <div className="rounded-xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-900">
-      <p className="font-medium">SKU 主数据请在 ERP 维护</p>
+      <p className="font-medium">废弃商品请先恢复后再编辑</p>
       <p className="mt-1 text-xs text-amber-800/90">
-        OMS 此处修改只会写入本地缓存，不会同步 ERP，也无法上传证书或主图。请使用 ERP 产品管理更新资料。
+        可在“废弃”页恢复该商品；恢复后即可在 OMS 编辑并同步 ERP。
       </p>
       <Link to={`/products/${product.id}`} className="mt-3 inline-block text-xs font-medium text-primary-600 hover:underline">
         返回产品详情
@@ -28,7 +29,7 @@ function ProductEditBlocked({ product }: { product: Product }) {
   )
 }
 
-function ProductCreateForm({ product, mode = 'create' }: ProductFormProps) {
+function ProductEditorForm({ product, mode = 'create' }: ProductFormProps) {
   const navigate = useNavigate()
   const { role } = useRole()
 
@@ -48,15 +49,21 @@ function ProductCreateForm({ product, mode = 'create' }: ProductFormProps) {
   const [hasBattery, setHasBattery] = useState(product?.hasBattery ? 'yes' : 'no')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const submittedProduct = Boolean(product && product.productStatus !== 'draft')
 
-  const handleSave = async () => {
+  const handleSave = async (action: 'draft' | 'submit' | 'update') => {
     setError('')
     const customerSku = sku.trim()
     if (!customerSku || !name.trim()) {
       setError('请填写 SKU 与产品名称')
       return
     }
-    if (!lengthCm || !widthCm || !heightCm || lengthCm <= 0 || widthCm <= 0 || heightCm <= 0) {
+    const skuError = validateCustomerSku(customerSku)
+    if (skuError) {
+      setError(skuError)
+      return
+    }
+    if (action !== 'draft' && (!lengthCm || !widthCm || !heightCm || lengthCm <= 0 || widthCm <= 0 || heightCm <= 0)) {
       setError('请填写有效的长宽高（cm），客户上传产品时必须申报尺寸')
       return
     }
@@ -64,15 +71,16 @@ function ProductCreateForm({ product, mode = 'create' }: ProductFormProps) {
     const customerId = getCustomerIdForRole(role) || product?.customerId
     const customerCode = getCustomerCode(customerId ?? undefined)
     const isCreate = mode === 'create' || !product
-    const prepared = isCreate
-      ? prepareNewProductSkus(customerSku, customerCode, customerId ?? undefined)
+    const isDraft = product?.productStatus === 'draft'
+    const prepared = isCreate || isDraft
+      ? prepareNewProductSkus(customerSku, customerCode, customerId ?? undefined, isDraft ? product?.id : undefined)
       : null
     if (prepared && 'ok' in prepared && prepared.ok === false) {
       setError(prepared.error)
       return
     }
 
-    const internalSku = isCreate
+    const internalSku = isCreate || isDraft
       ? (prepared as { customerSku: string; internalSku: string }).internalSku
       : product!.internalSku
     const productId = isCreate ? `p-${internalSku}` : product!.id
@@ -83,7 +91,7 @@ function ProductCreateForm({ product, mode = 'create' }: ProductFormProps) {
         id: productId,
         customerId: customerId || product?.customerId,
         internalSku,
-        customerSku: isCreate ? customerSku : (product?.customerSku || customerSku),
+        customerSku,
         name: name.trim(),
         spec: nameEn || product?.spec || '',
         image: product?.image || '',
@@ -100,51 +108,58 @@ function ProductCreateForm({ product, mode = 'create' }: ProductFormProps) {
         widthCm: widthCm || 0,
         heightCm: heightCm || 0,
         inCatalog: product?.inCatalog ?? false,
-        productStatus: 'draft',
+        productStatus: action === 'update' ? product!.productStatus : 'draft',
         productSource: product?.productSource ?? 'manual',
         hasBattery: hasBattery === 'yes',
         certUploaded: product?.certUploaded ?? false,
-        hasBoxSpec: product?.hasBoxSpec ?? false,
+        hasBoxSpec: lengthCm > 0 && widthCm > 0 && heightCm > 0,
         declaredNameEn: nameEn || declaredCn,
         declaredNameCn: declaredCn || name,
         declaredValue: declaredValue || 0,
         unit,
+      }
+      const erpBody = {
+        customerSku,
+        productName: name.trim(),
+        customerCode: customerCode !== '—' ? customerCode : undefined,
+        customerId: customerId || undefined,
+        barcode: customCode || undefined,
+        lengthCm: lengthCm || undefined,
+        widthCm: widthCm || undefined,
+        heightCm: heightCm || undefined,
+        weightKg: weightKg || undefined,
+        declaredValue: declaredValue || undefined,
+        declaredNameEn: nameEn || undefined,
+        declaredNameCn: declaredCn || undefined,
+        unit: unit || undefined,
+        costRmb: declaredValue || undefined,
+        spec: nameEn || undefined,
+        hasBattery: hasBattery === 'yes',
+      }
+      if (action === 'update') {
+        await updateErpProduct(internalSku, erpBody)
       }
       const saved = await upsertLocalProduct(local)
       if (!saved.ok) {
         window.alert(saved.error)
         return
       }
-      if (isCreate) {
+      if (action === 'submit') {
         try {
           await createErpProduct({
             sku: internalSku,
-            customerSku,
-            productName: name.trim(),
-            customerCode: customerCode !== '—' ? customerCode : undefined,
-            customerId: customerId || undefined,
-            barcode: customCode || undefined,
-            lengthCm: lengthCm || undefined,
-            widthCm: widthCm || undefined,
-            heightCm: heightCm || undefined,
-            weightKg: weightKg || undefined,
-            declaredValue: declaredValue || undefined,
-            declaredNameEn: nameEn || undefined,
-            declaredNameCn: declaredCn || undefined,
-            unit: unit || undefined,
-            costRmb: declaredValue || undefined,
-            spec: nameEn || undefined,
-            hasBattery: hasBattery === 'yes',
+            ...erpBody,
           })
           await updateLocalProducts([productId], { productStatus: 'available' })
         } catch (error) {
           await updateLocalProducts([productId], { productStatus: 'draft' })
-          window.alert(`ERP 创建失败，商品资料已保留在“草稿”中：${error instanceof Error ? error.message : String(error)}`)
-          navigate('/products')
+          setError(`ERP 提交失败，商品资料已保留在“草稿”中：${error instanceof Error ? error.message : String(error)}`)
           return
         }
+        navigate('/products')
+        return
       }
-      navigate('/products')
+      navigate(action === 'update' ? `/products/${productId}` : `/products/${productId}/edit`)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       if (/重复\s*SKU|SKU.*已存在|已被使用/i.test(msg)) {
@@ -160,13 +175,15 @@ function ProductCreateForm({ product, mode = 'create' }: ProductFormProps) {
   return (
     <div className="space-y-4 pb-24">
       <p className="text-xs text-text-muted">
-        保存后将创建 ERP 主数据 SKU；证书、主图等请在 ERP 产品管理中维护。
+        {submittedProduct
+          ? '保存修改会同步 ERP 商品主数据。'
+          : '“保存”仅保存为草稿，可继续编辑；“保存并提交”会创建 ERP 主数据，商品随即变为可用。'}
       </p>
 
       <FormSection num={1} title="产品信息">
         <FormGrid cols={3}>
-          <FormField label="产品 SKU" required hint="客户自定义编码，可重复；系统会自动加客户代码前缀">
-            <input value={sku} onChange={e => setSku(e.target.value)} placeholder="如 HX6" className={formInput()} />
+          <FormField label="产品 SKU" required hint={submittedProduct ? '商品提交后 SKU 已锁定；如需修改 SKU，请先废弃后重新创建。' : '客户自定义编码，最多 11 位且同一客户内不可重复；系统会自动加客户代码前缀'}>
+            <input value={sku} maxLength={11} disabled={submittedProduct} onChange={e => setSku(e.target.value)} placeholder="如 HX6" className={formInput()} />
           </FormField>
           <FormField label="产品名称" required hint="中文/英文/数字/连字符/下划线，最多 150 字符">
             <input value={name} onChange={e => setName(e.target.value)} className={formInput()} />
@@ -226,9 +243,20 @@ function ProductCreateForm({ product, mode = 'create' }: ProductFormProps) {
       <div className="fixed bottom-0 left-0 right-0 z-30 border-t border-border-light bg-white/95 px-6 py-4 backdrop-blur-sm lg:pl-[260px]">
         <div className="mx-auto flex max-w-[1280px] justify-center gap-3">
           <Button variant="secondary" onClick={() => navigate('/products')} disabled={saving}>取消</Button>
-          <Button disabled={saving} onClick={() => void handleSave()}>
-            {saving ? '保存中…' : '保存并创建 ERP SKU'}
-          </Button>
+          {submittedProduct ? (
+            <Button disabled={saving} onClick={() => void handleSave('update')}>
+              {saving ? '保存中…' : '保存修改'}
+            </Button>
+          ) : (
+            <>
+              <Button variant="secondary" disabled={saving} onClick={() => void handleSave('draft')}>
+                {saving ? '保存中…' : '保存'}
+              </Button>
+              <Button disabled={saving} onClick={() => void handleSave('submit')}>
+                {saving ? '提交中…' : '保存并提交'}
+              </Button>
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -236,10 +264,10 @@ function ProductCreateForm({ product, mode = 'create' }: ProductFormProps) {
 }
 
 export default function ProductForm({ product, mode = 'create' }: ProductFormProps) {
-  if (mode === 'edit' && product) {
+  if (mode === 'edit' && product?.productStatus === 'discarded') {
     return <ProductEditBlocked product={product} />
   }
-  return <ProductCreateForm product={product} mode={mode} />
+  return <ProductEditorForm product={product} mode={mode} />
 }
 
 export function useProductById(id?: string) {

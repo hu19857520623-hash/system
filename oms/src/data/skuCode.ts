@@ -4,6 +4,14 @@ import type { Product } from './mockData'
 export const CATALOG_CUSTOMER_CODE = 'TKL'
 export const CATALOG_CUSTOMER_ID = 'tkl'
 
+/** 客户在 OMS 中填写的 SKU：最多 11 个字符，且不能只由空白组成。 */
+export function validateCustomerSku(value: string): string | null {
+  const sku = value.trim()
+  if (!sku) return '请填写 SKU'
+  if (sku.length >= 12) return '客户 SKU 须少于 12 位'
+  return null
+}
+
 /** 货盘共享池库存行是否归属平台货盘客户 */
 export function isCatalogPoolCustomerId(customerId?: string | null): boolean {
   return !customerId || customerId === CATALOG_CUSTOMER_ID

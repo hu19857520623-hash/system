@@ -127,7 +127,7 @@ export default function Outbound() {
   const editOrder = editId ? outboundOrders.find(order => order.id === editId && order.status === 'draft') : undefined
   const { role, can } = useRole()
   const [takealotDestWarehouse, setTakealotDestWarehouse] = useState<string>(DEFAULT_TAKEALOT_DEST_WAREHOUSE)
-  const [fulfillmentWarehouses, setFulfillmentWarehouses] = useState(() => getFulfillmentWarehouses())
+  const [fulfillmentWarehouses] = useState(() => getFulfillmentWarehouses())
   const [platform, setPlatform] = useState<string>(PLATFORM_OPTIONS[0])
   const [outboundType, setOutboundType] = useState<string>('Takealot入仓')
   const [refNo, setRefNo] = useState('')

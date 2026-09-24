@@ -53,6 +53,11 @@ export default function ProductDetail() {
               产品：<MonoCode>{skuLabel}</MonoCode>
             </h1>
             <Badge status={product.productStatus} label={statusLabels[product.productStatus]} />
+            {!product.inCatalog && product.productStatus !== 'discarded' && (
+              <Link to={`/products/${product.id}/edit`} className="text-sm font-medium text-primary-600 hover:underline">
+                {product.productStatus === 'draft' ? '编辑草稿' : '编辑商品'}
+              </Link>
+            )}
           </div>
         </div>
       </div>

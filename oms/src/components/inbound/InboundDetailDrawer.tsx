@@ -74,9 +74,9 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged }: 
     }
   }
 
-  const handleDownload = (kind: InboundLabelKind) => {
-    downloadInboundLabelHtml(order, kind)
-    showFeedback('ok', `已下载${kind} HTML 文件`)
+  const handleDownload = async (kind: InboundLabelKind) => {
+    await downloadInboundLabelHtml(order, kind)
+    showFeedback('ok', kind === '箱唛' ? '已下载 100×100mm 箱唛 PDF' : `已下载${kind} HTML 文件`)
   }
 
   const handleCancel = async () => {
@@ -303,7 +303,7 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged }: 
             </Button>
           )}
           {order.status !== 'voided' && INBOUND_DOWNLOAD_ITEMS.map(l => (
-            <Button key={l} variant="secondary" size="sm" onClick={() => handleDownload(l as InboundLabelKind)}>
+            <Button key={l} variant="secondary" size="sm" onClick={() => void handleDownload(l as InboundLabelKind)}>
               <Download className="h-3 w-3" />{l}
             </Button>
           ))}

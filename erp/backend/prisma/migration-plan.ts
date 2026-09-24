@@ -23,6 +23,7 @@ export const MIGRATION_ORDER = [
   'migrate_sop_p1_print_billing.sql',
   'migrate_product_image.sql',
   'migrate_pricing_oms_flags.sql',
+  'migrate_pricing_share_status.sql',
   'migrate_runtime_tables.sql',
   'migrate_operation_log.sql',
   'migrate_inbound_oms_customer.sql',
