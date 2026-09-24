@@ -621,6 +621,35 @@ export function getInventorySnapshot(): InventoryItem[] {
 export async function refreshInventoryFromErp(customerId: string, customerCode: string): Promise<number> {
   const { syncErpInventoryView } = await import('../api/erp')
   const data = await syncErpInventoryView(customerCode)
+
+  // Before ERP returned an explicit stock source, OMS stored every ERP mirror
+  // as a catalog row (`erp-inv-*`). Keep real catalog holdings, but remove an
+  // old mirror once ERP confirms the SKU is owned stock only.
+  const ownedSkus = new Set(
+    (data.items || [])
+      .filter(item => item.stockSource === 'owned')
+      .map(item => item.sku),
+  )
+  const catalogSkus = new Set(
+    (data.items || [])
+      .filter(item => item.stockSource !== 'owned')
+      .map(item => item.sku),
+  )
+  const staleLegacyCatalogMirrors = state.inventory.filter(item => (
+    item.customerId === customerId
+    && item.stockSource === 'catalog'
+    && item.id.startsWith('erp-inv-')
+    && ownedSkus.has(item.sku)
+    && !catalogSkus.has(item.sku)
+  ))
+  if (staleLegacyCatalogMirrors.length) {
+    await Promise.all(staleLegacyCatalogMirrors.map(item => (
+      apiDelete(`/inventory-state/inventory/${encodeURIComponent(item.id)}`)
+    )))
+    const staleIds = new Set(staleLegacyCatalogMirrors.map(item => item.id))
+    state.inventory = state.inventory.filter(item => !staleIds.has(item.id))
+  }
+
   for (const item of data.items || []) {
     const stockSource = item.stockSource === 'owned' ? 'owned' : 'catalog'
     const available = Math.max(0, Number(item.warehouseAvailable) || 0)

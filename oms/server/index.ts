@@ -3086,6 +3086,33 @@ app.delete('/api/inventory-state/products/:id', async (req, res) => {
   }
 })
 
+/**
+ * Remove only obsolete ERP catalog mirrors created before stock source was
+ * synchronized. Normal inventory rows cannot be deleted through this route.
+ */
+app.delete('/api/inventory-state/inventory/:id', async (req, res) => {
+  try {
+    const id = String(req.params.id || '').trim()
+    if (!id.startsWith('erp-inv-')) {
+      return res.status(400).json({ error: '仅可清理旧 ERP 库存镜像' })
+    }
+    const inventory = await prisma.inventoryItem.findUnique({ where: { id } })
+    if (!inventory) return res.json({ ok: true })
+    const scope = customerScope(req as AuthenticatedRequest)
+    if (scope && inventory.customerId !== scope) {
+      return res.status(403).json({ error: 'Cross-customer mutation denied' })
+    }
+    if (inventory.stockSource !== 'catalog') {
+      return res.status(400).json({ error: '仅可清理旧货盘库存镜像' })
+    }
+    await prisma.inventoryItem.delete({ where: { id } })
+    res.json({ ok: true })
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: String(e) })
+  }
+})
+
 app.put('/api/outbound-orders', async (req, res) => {
   try {
     const orders = req.body as Record<string, unknown>[]
