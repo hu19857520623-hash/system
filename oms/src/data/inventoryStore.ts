@@ -824,16 +824,37 @@ export async function restoreLocalProduct(productId: string): Promise<boolean> {
   return true
 }
 
+/** 当前 SKU 是否仍有会阻止永久删除的运营库存。 */
+export function hasLocalProductStock(productId: string): boolean {
+  const product = state.products.find(item => item.id === productId)
+  if (!product) return false
+  return state.inventory.some(item => (
+    item.sku === product.internalSku
+    && (item.customerId ?? null) === (product.customerId ?? null)
+    && (
+      item.available > 0
+      || item.locked > 0
+      || item.inTransit > 0
+      || item.pendingShelving > 0
+      || item.pendingOutbound > 0
+      || item.defective > 0
+    )
+  ))
+}
+
 /** 永久删除已废弃商品及其同客户本地库存展示记录；历史单据不受影响。 */
 export async function permanentlyDeleteLocalProduct(productId: string): Promise<boolean> {
   const product = state.products.find(item => item.id === productId)
   if (!product || product.productStatus !== 'discarded') return false
+  if (hasLocalProductStock(productId)) {
+    throw new Error('该 SKU 仍有库存，不能永久删除；请先清空库存')
+  }
 
   const before = structuredClone(state)
   state.products = state.products.filter(item => item.id !== productId)
   state.inventory = state.inventory.filter(item => {
     if (item.sku !== product.internalSku) return true
-    return Boolean(product.customerId && item.customerId !== product.customerId)
+    return (item.customerId ?? null) !== (product.customerId ?? null)
   })
   try {
     await apiDelete(`/inventory-state/products/${encodeURIComponent(productId)}`)

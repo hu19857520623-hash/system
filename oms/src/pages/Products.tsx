@@ -8,13 +8,15 @@ import {
   TriToggle, SearchField, RangeField, FilterActions, DropdownBtn,
   inputCls, matchTriState, matchText, type TriState, type SearchMode,
 } from '../components/ui/filters'
-import { Product, statusLabels, formatCurrency } from '../data/mockData'
+import { Product, type InboundOrder, statusLabels, formatCurrency } from '../data/mockData'
 import {
   discardLocalProduct,
+  hasLocalProductStock,
   permanentlyDeleteLocalProduct,
   restoreLocalProduct,
   useProducts,
 } from '../data/inventoryStore'
+import { useInboundOrders } from '../data/entityStore'
 import { getPrimaryPlatformBarcode } from '../data/platformBindingUtils'
 import { printBarcodeLabels } from '../data/barcodeLabelTemplate'
 import { getCustomerSkuDisplay } from '../data/skuCode'
@@ -59,6 +61,14 @@ function displaySku(p: Product, customerId?: string | null) {
   return getPrimaryPlatformBarcode(p.internalSku, customerId ?? undefined) ?? getCustomerSkuDisplay(p)
 }
 
+function inboundOrderUsesSku(order: InboundOrder, product: Product) {
+  if ((order.customerId ?? null) !== (product.customerId ?? null)) return false
+  if (order.lineItems?.some(line => line.sku.trim() === product.internalSku)) return true
+  return String(order.skuHint || '')
+    .split(/[\s,，、]+/)
+    .some(sku => sku.trim() === product.internalSku)
+}
+
 function applyProductFilters(list: Product[], f: ProductFilters, tab: string, customerId?: string | null) {
   return list.filter(p => {
     if (tab !== 'all' && p.productStatus !== tab) return false
@@ -81,6 +91,7 @@ export default function Products() {
   const dataScope = useDataScope()
   const barcodeCustomerId = dataScope.bindingCustomerId
   const products = useProducts()
+  const inboundOrders = useInboundOrders()
   const [tab, setTab] = useState('all')
   const [filtersOpen, setFiltersOpen] = useState(true)
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -170,6 +181,12 @@ export default function Products() {
     && (error as { status?: unknown }).status === 404
   )
 
+  const permanentDeleteBlockReason = (product: Product): string | undefined => {
+    if (hasLocalProductStock(product.id)) return '该 SKU 仍有库存，不能永久删除；请先清空库存。'
+    const inbound = inboundOrders.find(order => inboundOrderUsesSku(order, product))
+    return inbound ? `该 SKU 已关联入库单 ${inbound.inboundNo}，不能永久删除。` : undefined
+  }
+
   const handleDiscard = async (product: Product) => {
     if (!window.confirm(`确认废弃商品「${displaySku(product, barcodeCustomerId)}」？可在“废弃”页恢复。`)) return
     try {
@@ -203,6 +220,11 @@ export default function Products() {
   }
 
   const handlePermanentDelete = async (product: Product) => {
+    const blockReason = permanentDeleteBlockReason(product)
+    if (blockReason) {
+      window.alert(blockReason)
+      return
+    }
     if (!window.confirm(`确认永久删除商品「${displaySku(product, barcodeCustomerId)}」？关联的本地库存展示记录将一并删除，且无法恢复。`)) return
     try {
       if (isSubmittedProduct(product)) await deleteErpProduct(product.internalSku)
@@ -362,7 +384,7 @@ export default function Products() {
                     {!p.inCatalog && p.productStatus === 'discarded' && (
                       <>
                         <button type="button" onClick={() => void handleRestore(p)} className="inline-flex items-center gap-0.5 font-medium text-emerald-700 hover:underline"><RotateCcw className="h-3 w-3" /> 恢复</button>
-                        <button type="button" onClick={() => void handlePermanentDelete(p)} className="inline-flex items-center gap-0.5 font-medium text-red-700 hover:underline"><Trash2 className="h-3 w-3" /> 永久删除</button>
+                        <button type="button" disabled={Boolean(permanentDeleteBlockReason(p))} title={permanentDeleteBlockReason(p)} onClick={() => void handlePermanentDelete(p)} className="inline-flex items-center gap-0.5 font-medium text-red-700 hover:underline disabled:cursor-not-allowed disabled:opacity-40"><Trash2 className="h-3 w-3" /> 永久删除</button>
                       </>
                     )}
                     <Link to={`/products/new?copy=${encodeURIComponent(p.id)}`} className="inline-flex items-center gap-0.5 font-medium text-primary-600 hover:underline"><Copy className="h-3 w-3" /> 复制新建</Link>

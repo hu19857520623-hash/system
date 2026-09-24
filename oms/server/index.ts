@@ -2965,12 +2965,53 @@ app.delete('/api/inventory-state/products/:id', async (req, res) => {
     if (scope && product.customerId !== scope) {
       return res.status(403).json({ error: 'Cross-customer mutation denied' })
     }
+    if (product.productStatus !== 'discarded') {
+      return res.status(400).json({ error: '仅废弃商品可永久删除' })
+    }
+    // 已出库数量是历史累计值，不属于现存库存；其余正数库存都会阻止删除。
+    const stockExists = await prisma.inventoryItem.findFirst({
+      where: {
+        sku: product.internalSku,
+        customerId: product.customerId,
+        OR: [
+          { available: { gt: 0 } },
+          { locked: { gt: 0 } },
+          { inTransit: { gt: 0 } },
+          { pendingShelving: { gt: 0 } },
+          { pendingOutbound: { gt: 0 } },
+          { defective: { gt: 0 } },
+        ],
+      },
+      select: { id: true },
+    })
+    if (stockExists) {
+      return res.status(400).json({ error: '该 SKU 仍有库存，不能永久删除；请先清空库存' })
+    }
+
+    // lineItems is stored as JSON; skuHint covers historical inbound records
+    // that were created before line items were persisted.
+    const inboundOrders = await prisma.inboundOrder.findMany({
+      where: { customerId: product.customerId },
+      select: { inboundNo: true, skuHint: true, lineItems: true },
+    })
+    const usedInbound = inboundOrders.find((order) => {
+      const hintSkus = String(order.skuHint || '')
+        .split(/[\s,，、]+/)
+        .map(item => item.trim())
+        .filter(Boolean)
+      if (hintSkus.includes(product.internalSku)) return true
+      const lines = parseJson<Array<{ sku?: unknown }>>(String(order.lineItems || ''), [])
+      return lines.some(line => String(line.sku || '').trim() === product.internalSku)
+    })
+    if (usedInbound) {
+      return res.status(400).json({ error: `该 SKU 已关联入库单 ${usedInbound.inboundNo}，不能永久删除` })
+    }
     await prisma.$transaction([
       prisma.product.delete({ where: { id } }),
       prisma.inventoryItem.deleteMany({
         where: {
           sku: product.internalSku,
-          ...(product.customerId ? { customerId: product.customerId } : {}),
+          customerId: product.customerId,
         },
       }),
     ])
