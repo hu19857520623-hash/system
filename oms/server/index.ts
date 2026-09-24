@@ -1877,7 +1877,14 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
             await prisma.inventoryItem.update({ where: { id: inventory.id }, data: inventoryData })
           } else {
             await prisma.inventoryItem.create({
-              data: { id: `erp-owned-${customerId}-${sku}`, customerId, sku, ...inventoryData },
+              // The inventory table id is VARCHAR(50); keep the mirror id
+              // short even when an imported SKU itself is long.
+              data: {
+                id: `erp-owned-${createHash('sha256').update(`${customerId}:${sku}`).digest('hex').slice(0, 24)}`,
+                customerId,
+                sku,
+                ...inventoryData,
+              },
             })
           }
           await prisma.product.update({

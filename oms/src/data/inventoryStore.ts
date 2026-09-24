@@ -637,9 +637,10 @@ export async function refreshInventoryFromErp(customerId: string, customerCode: 
       state.inventory[idx].price = item.unitPrice ?? state.inventory[idx].price
       state.inventory[idx].warehouse = item.warehouseCode
     } else {
-      const safeSku = item.sku.replace(/[^A-Za-z0-9_-]/g, '_')
       state.inventory.unshift({
-        id: `erp-inv-${customerId}-${stockSource}-${item.id}-${safeSku}`,
+        // ERP item ids are globally unique per stock source; never append the
+        // SKU here because oms_inventoryitem.id is limited to 50 characters.
+        id: `erp-${stockSource[0]}-${item.id}`,
         customerId,
         sku: item.sku,
         name: item.productName,
