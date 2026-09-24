@@ -39,6 +39,7 @@ export function buildOmsCatalogPayload(pricing: {
   purchaseQty?: number | null
   soldQty?: number | null
   visibleOnOms?: boolean
+  pricingStatus?: string | null
   orderableOnOms?: boolean
   shareStatus?: string | null
   lengthCm?: unknown
@@ -62,7 +63,10 @@ export function buildOmsCatalogPayload(pricing: {
     catalogStockPool: catalogStockPool(pricing),
     soldQty: pricing.soldQty ?? 0,
     remainingStockQty: remainingCatalogStock(pricing),
-    visibleOnOms: Boolean(pricing.visibleOnOms),
+    // Older OMS syncs recorded `pricingStatus = synced` but predate the
+    // visibleOnOms flag. Treat those rows as published as well so they are not
+    // silently hidden from the OMS catalog.
+    visibleOnOms: Boolean(pricing.visibleOnOms) || pricing.pricingStatus === 'synced',
     orderableOnOms: Boolean(pricing.orderableOnOms),
     shareStatus: pricing.shareStatus === 'stopped' ? 'stopped' : 'enabled',
     syncedAt: new Date().toISOString(),
@@ -128,7 +132,12 @@ export async function pushCatalogStockToOms(
 /** OMS 展示层拉取货盘列表（含剩余库存） */
 export async function listOmsCatalogForDisplay(prisma: PrismaService): Promise<OmsCatalogStockPayload[]> {
   const rows = await prisma.productPricing.findMany({
-    where: { visibleOnOms: true },
+    where: {
+      OR: [
+        { visibleOnOms: true },
+        { pricingStatus: 'synced' },
+      ],
+    },
     orderBy: { id: 'desc' },
   })
   const products = rows.length
@@ -148,7 +157,7 @@ export async function getOmsCatalogSkuForDisplay(
   sku: string,
 ): Promise<OmsCatalogStockPayload | null> {
   const pricing = await prisma.productPricing.findFirst({ where: { sku: { in: catalogSkuLookupKeys(sku) } } })
-  if (!pricing?.visibleOnOms) return null
+  if (!pricing || (!pricing.visibleOnOms && pricing.pricingStatus !== 'synced')) return null
   const product = await prisma.product.findFirst({ where: { sku: { in: catalogSkuLookupKeys(sku) } } })
   return buildOmsCatalogPayload(mergeProductDimensions(pricing, product))
 }

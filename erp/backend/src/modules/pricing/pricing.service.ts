@@ -598,6 +598,13 @@ export class PricingService {
   }
 
   async listOmsCatalogForOms() {
+    // Backfill the publication flag for catalog rows synchronized by older
+    // ERP versions. A `synced` row is an explicit OMS publication; leaving the
+    // newly added boolean false made it disappear from the OMS catalog.
+    await this.prisma.productPricing.updateMany({
+      where: { pricingStatus: 'synced', visibleOnOms: false },
+      data: { visibleOnOms: true, visibleOnOmsAt: new Date() },
+    })
     const items = await listOmsCatalogForDisplay(this.prisma)
     return { items, total: items.length, syncedAt: new Date().toISOString() }
   }
