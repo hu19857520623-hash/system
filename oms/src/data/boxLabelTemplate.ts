@@ -40,11 +40,10 @@ table{width:100%;border-collapse:collapse;margin:0}
 th,td{border:0.35mm solid #000;padding:1.2mm 1.5mm;font:400 12.8pt/1.2 Arial,Helvetica,sans-serif;text-align:left;vertical-align:middle}
 th:last-child,td:last-child{text-align:center;width:14mm}
 .sku-cell{word-break:break-all}
-.footer{margin-top:10mm;display:flex;justify-content:space-between;align-items:flex-end;font:400 12pt/1.2 Arial,Helvetica,sans-serif}
+.footer{margin-top:10mm;display:flex;justify-content:flex-end;align-items:flex-end;font:400 12pt/1.2 Arial,Helvetica,sans-serif}
 @media print{html,body{width:100mm;height:100mm}.box-label{page-break-inside:avoid}}`
 
 export function buildBoxLabelArticle(data: BoxLabelData) {
-  const origin = data.origin?.trim() || 'MADE IN CHINA'
   const boxIndex = data.boxIndex ?? data.boxNo
   const boxTotal = data.boxTotal ?? boxIndex
   const rows = (data.lines.length ? data.lines : [{ sku: '—', qty: 0 }])
@@ -64,7 +63,7 @@ export function buildBoxLabelArticle(data: BoxLabelData) {
     <thead><tr><th>SKU</th><th>PCS</th></tr></thead>
     <tbody>${rows}</tbody>
   </table>
-  <footer class="footer"><span>${escapeHtml(origin)}</span><span>${boxIndex}/${boxTotal}</span></footer>
+  <footer class="footer"><span>${boxIndex}/${boxTotal}</span></footer>
 </article>`
 }
 
