@@ -635,11 +635,18 @@ export function parseReturnOrders(records: Record<string, string>[]): ParseResul
   return finishParse([...groups.values()], errors, failures)
 }
 
-export function exportProducts(products: Product[]) {
+/**
+ * Export the SKU the customer entered, not the customer-code-prefixed internal
+ * SKU used to keep records unique between customers.
+ */
+export function exportProducts(
+  products: Product[],
+  getCustomerCode?: (customerId?: string) => string,
+) {
   const rows = [PRODUCT_COLUMNS.map(columnHeader)]
   for (const p of products) {
     rows.push([
-      p.customerSku || getCustomerSkuDisplay(p),
+      p.customerSku || getCustomerSkuDisplay(p, getCustomerCode?.(p.customerId)),
       p.name,
       p.declaredNameEn,
       p.customCode ?? '',

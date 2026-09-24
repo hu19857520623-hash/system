@@ -137,14 +137,14 @@ export default function Products() {
     setPage(1)
   }
 
-  const handleExportAll = () => exportProducts(filtered)
+  const handleExportAll = () => exportProducts(filtered, dataScope.getCustomerCode)
   const handleExportSelected = () => {
     const picked = filtered.filter(p => selected.has(p.id))
     if (picked.length === 0) {
       window.alert('请先勾选要导出的产品')
       return
     }
-    exportProducts(picked)
+    exportProducts(picked, dataScope.getCustomerCode)
   }
 
   const toggleAll = () => {
