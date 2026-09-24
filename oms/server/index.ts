@@ -2770,10 +2770,14 @@ function inventoryProductStateData(product: Record<string, unknown>, scopedCusto
   }
 }
 
-function validateInventoryProductState(product: Record<string, unknown>) {
+function validateInventoryProductState(
+  product: Record<string, unknown>,
+  options?: { allowLegacyCustomerSku?: boolean },
+) {
   const internalSku = String(product.internalSku || '').trim()
   if (!internalSku) return '产品缺少 SKU'
   const customerSku = String(product.customerSku || '').trim()
+  if (options?.allowLegacyCustomerSku) return undefined
   if (!customerSku) return '产品缺少客户 SKU'
   if (customerSku.length >= 12) return `客户 SKU 须少于 12 位：${customerSku}`
   return undefined
@@ -2822,7 +2826,9 @@ app.put('/api/inventory-state', async (req, res) => {
     // New product creation and editing still enforce SKU uniqueness in the
     // dedicated OMS/ERP product endpoints and client form validation.
     for (const p of products) {
-      const invalid = validateInventoryProductState(p)
+      const invalid = validateInventoryProductState(p, {
+        allowLegacyCustomerSku: String(p.productStatus || '') === 'discarded',
+      })
       if (invalid) return res.status(400).json({ error: invalid })
     }
 
@@ -2902,7 +2908,10 @@ app.put('/api/inventory-state/products/:id', async (req, res) => {
     if (!id || !product || String(product.id || '') !== id) {
       return res.status(400).json({ error: '商品卡 ID 无效' })
     }
-    const invalid = validateInventoryProductState(product)
+    const isDiscarding = String(product.productStatus || '') === 'discarded'
+    const invalid = validateInventoryProductState(product, {
+      allowLegacyCustomerSku: isDiscarding,
+    })
     if (invalid) return res.status(400).json({ error: invalid })
 
     const scope = customerScope(req as AuthenticatedRequest)
@@ -2919,7 +2928,7 @@ app.put('/api/inventory-state/products/:id', async (req, res) => {
     }
 
     const data = inventoryProductStateData(product, scope)
-    if (data.productStatus !== 'discarded') {
+    if (!isDiscarding) {
       const duplicate = await prisma.product.findFirst({
         where: {
           id: { not: id },
