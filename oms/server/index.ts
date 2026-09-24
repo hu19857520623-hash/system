@@ -2774,17 +2774,16 @@ app.put('/api/inventory-state', async (req, res) => {
       ) return res.status(403).json({ error: 'Cross-customer mutation denied' })
     }
 
-    const skuSeen = new Set<string>()
-    const customerSkuSeen = new Set<string>()
+    // This endpoint persists a complete OMS client snapshot.  Older data can
+    // legitimately contain duplicate SKU cards, and rejecting that snapshot
+    // would prevent users from discarding or correcting those legacy cards.
+    // New product creation and editing still enforce SKU uniqueness in the
+    // dedicated OMS/ERP product endpoints and client form validation.
     for (const p of products) {
-      const sku = String(p.internalSku || '').trim().toLowerCase()
+      const sku = String(p.internalSku || '').trim()
       if (!sku) {
         return res.status(400).json({ error: '产品缺少 SKU' })
       }
-      if (skuSeen.has(sku)) {
-        return res.status(400).json({ error: `重复 SKU：${String(p.internalSku).trim()}` })
-      }
-      skuSeen.add(sku)
 
       const customerSku = String(p.customerSku || '').trim()
       if (!customerSku) {
@@ -2793,12 +2792,6 @@ app.put('/api/inventory-state', async (req, res) => {
       if (customerSku.length >= 12) {
         return res.status(400).json({ error: `客户 SKU 须少于 12 位：${customerSku}` })
       }
-      const customerId = scope ?? String(p.customerId || '').trim()
-      const customerSkuKey = `${customerId.toLowerCase()}\u0000${customerSku.toLowerCase()}`
-      if (customerSkuSeen.has(customerSkuKey)) {
-        return res.status(400).json({ error: `重复 SKU：${customerSku}` })
-      }
-      customerSkuSeen.add(customerSkuKey)
     }
 
     await prisma.$transaction(async tx => {

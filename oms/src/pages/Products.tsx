@@ -163,10 +163,25 @@ export default function Products() {
     || (product.productStatus === 'discarded' && product.discardedFrom !== 'draft')
   )
 
+  const isErpProductMissing = (error: unknown) => (
+    typeof error === 'object'
+    && error !== null
+    && 'status' in error
+    && (error as { status?: unknown }).status === 404
+  )
+
   const handleDiscard = async (product: Product) => {
     if (!window.confirm(`确认废弃商品「${displaySku(product, barcodeCustomerId)}」？可在“废弃”页恢复。`)) return
     try {
-      if (isSubmittedProduct(product)) await disableErpProduct(product.internalSku)
+      if (isSubmittedProduct(product)) {
+        try {
+          await disableErpProduct(product.internalSku)
+        } catch (error) {
+          // Historical OMS cards may not have a corresponding ERP product.
+          // They can still be safely moved to the OMS recycle bin.
+          if (!isErpProductMissing(error)) throw error
+        }
+      }
       await discardLocalProduct(product.id)
       setSelected(previous => {
         const next = new Set(previous)
