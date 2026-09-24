@@ -2737,6 +2737,48 @@ app.patch('/api/accounts/:id', requireSysAdmin, async (req, res) => {
   }
 })
 
+function inventoryProductStateData(product: Record<string, unknown>, scopedCustomerId?: string | null) {
+  return {
+    customerId: scopedCustomerId ?? (product.customerId as string | null | undefined) ?? null,
+    internalSku: String(product.internalSku),
+    customerSku: String(product.customerSku || '').trim(),
+    name: String(product.name),
+    spec: String(product.spec),
+    image: String(product.image),
+    price: Number(product.price),
+    cost: Number(product.cost),
+    availableQty: Number(product.availableQty),
+    lockedQty: Number(product.lockedQty),
+    customCode: (product.customCode as string | null | undefined) ?? null,
+    category: String(product.category),
+    categoryPath: String(product.categoryPath),
+    weight: String(product.weight),
+    weightKg: Number(product.weightKg),
+    lengthCm: Number(product.lengthCm),
+    widthCm: Number(product.widthCm),
+    heightCm: Number(product.heightCm),
+    inCatalog: Boolean(product.inCatalog),
+    productStatus: String(product.productStatus),
+    hasBattery: Boolean(product.hasBattery),
+    certUploaded: Boolean(product.certUploaded),
+    hasBoxSpec: Boolean(product.hasBoxSpec),
+    outerBoxBarcode: (product.outerBoxBarcode as string | null | undefined) ?? null,
+    declaredNameEn: String(product.declaredNameEn),
+    declaredNameCn: String(product.declaredNameCn),
+    declaredValue: Number(product.declaredValue),
+    unit: String(product.unit),
+  }
+}
+
+function validateInventoryProductState(product: Record<string, unknown>) {
+  const internalSku = String(product.internalSku || '').trim()
+  if (!internalSku) return '产品缺少 SKU'
+  const customerSku = String(product.customerSku || '').trim()
+  if (!customerSku) return '产品缺少客户 SKU'
+  if (customerSku.length >= 12) return `客户 SKU 须少于 12 位：${customerSku}`
+  return undefined
+}
+
 app.put('/api/inventory-state', async (req, res) => {
   try {
     const body = req.body as {
@@ -2780,53 +2822,14 @@ app.put('/api/inventory-state', async (req, res) => {
     // New product creation and editing still enforce SKU uniqueness in the
     // dedicated OMS/ERP product endpoints and client form validation.
     for (const p of products) {
-      const sku = String(p.internalSku || '').trim()
-      if (!sku) {
-        return res.status(400).json({ error: '产品缺少 SKU' })
-      }
-
-      const customerSku = String(p.customerSku || '').trim()
-      if (!customerSku) {
-        return res.status(400).json({ error: '产品缺少客户 SKU' })
-      }
-      if (customerSku.length >= 12) {
-        return res.status(400).json({ error: `客户 SKU 须少于 12 位：${customerSku}` })
-      }
+      const invalid = validateInventoryProductState(p)
+      if (invalid) return res.status(400).json({ error: invalid })
     }
 
     await prisma.$transaction(async tx => {
       for (const p of products) {
         const id = String(p.id)
-        const data = {
-          customerId: scope ?? (p.customerId as string | null | undefined) ?? null,
-          internalSku: String(p.internalSku),
-          customerSku: String(p.customerSku || '').trim(),
-          name: String(p.name),
-          spec: String(p.spec),
-          image: String(p.image),
-          price: Number(p.price),
-          cost: Number(p.cost),
-          availableQty: Number(p.availableQty),
-          lockedQty: Number(p.lockedQty),
-          customCode: (p.customCode as string | null | undefined) ?? null,
-          category: String(p.category),
-          categoryPath: String(p.categoryPath),
-          weight: String(p.weight),
-          weightKg: Number(p.weightKg),
-          lengthCm: Number(p.lengthCm),
-          widthCm: Number(p.widthCm),
-          heightCm: Number(p.heightCm),
-          inCatalog: Boolean(p.inCatalog),
-          productStatus: String(p.productStatus),
-          hasBattery: Boolean(p.hasBattery),
-          certUploaded: Boolean(p.certUploaded),
-          hasBoxSpec: Boolean(p.hasBoxSpec),
-          outerBoxBarcode: (p.outerBoxBarcode as string | null | undefined) ?? null,
-          declaredNameEn: String(p.declaredNameEn),
-          declaredNameCn: String(p.declaredNameCn),
-          declaredValue: Number(p.declaredValue),
-          unit: String(p.unit),
-        }
+        const data = inventoryProductStateData(p, scope)
         await tx.product.upsert({
           where: { id },
           create: { id, ...data },
@@ -2885,6 +2888,84 @@ app.put('/api/inventory-state', async (req, res) => {
     })
 
     res.json({ ok: true })
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: String(e) })
+  }
+})
+
+/** Persist one product card without making legacy duplicate cards block the operation. */
+app.put('/api/inventory-state/products/:id', async (req, res) => {
+  try {
+    const product = (req.body as { product?: Record<string, unknown> })?.product
+    const id = String(req.params.id || '').trim()
+    if (!id || !product || String(product.id || '') !== id) {
+      return res.status(400).json({ error: '商品卡 ID 无效' })
+    }
+    const invalid = validateInventoryProductState(product)
+    if (invalid) return res.status(400).json({ error: invalid })
+
+    const scope = customerScope(req as AuthenticatedRequest)
+    const existing = await prisma.product.findUnique({
+      where: { id },
+      select: { customerId: true },
+    })
+    const requestedCustomerId = String(product.customerId || '').trim() || null
+    if (scope && (
+      (requestedCustomerId && requestedCustomerId !== scope)
+      || (existing?.customerId && existing.customerId !== scope)
+    )) {
+      return res.status(403).json({ error: 'Cross-customer mutation denied' })
+    }
+
+    const data = inventoryProductStateData(product, scope)
+    if (data.productStatus !== 'discarded') {
+      const duplicate = await prisma.product.findFirst({
+        where: {
+          id: { not: id },
+          customerId: data.customerId,
+          productStatus: { not: 'discarded' },
+          OR: [
+            { internalSku: data.internalSku },
+            { customerSku: data.customerSku },
+          ],
+        },
+        select: { id: true },
+      })
+      if (duplicate) return res.status(400).json({ error: `重复 SKU：${data.customerSku}` })
+    }
+
+    await prisma.product.upsert({
+      where: { id },
+      create: { id, ...data },
+      update: data,
+    })
+    res.json({ ok: true })
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: String(e) })
+  }
+})
+
+app.delete('/api/inventory-state/products/:id', async (req, res) => {
+  try {
+    const id = String(req.params.id || '').trim()
+    const scope = customerScope(req as AuthenticatedRequest)
+    const product = await prisma.product.findUnique({ where: { id } })
+    if (!product) return res.status(404).json({ error: '商品卡不存在' })
+    if (scope && product.customerId !== scope) {
+      return res.status(403).json({ error: 'Cross-customer mutation denied' })
+    }
+    await prisma.$transaction([
+      prisma.product.delete({ where: { id } }),
+      prisma.inventoryItem.deleteMany({
+        where: {
+          sku: product.internalSku,
+          ...(product.customerId ? { customerId: product.customerId } : {}),
+        },
+      }),
+    ])
+    res.status(204).end()
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: String(e) })

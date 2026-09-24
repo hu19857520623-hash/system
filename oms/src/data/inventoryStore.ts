@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react'
-import { apiPut, getStoredAuthSession } from '../api/client'
+import { apiDelete, apiPut, getStoredAuthSession } from '../api/client'
 import { notifyPersistFailed } from '../utils/userNotify'
 import { purchaseErpCatalog, type ErpCatalogItem, type ErpPurchaseResult } from '../api/erp'
 import type { InventoryItem, Product } from './mockData'
@@ -70,6 +70,11 @@ function persistLocal() {
 async function persistLocalOrThrow() {
   emit()
   await apiPut('/inventory-state', persistPayload())
+}
+
+async function persistProductOrThrow(product: Product) {
+  emit()
+  await apiPut(`/inventory-state/products/${encodeURIComponent(product.id)}`, { product })
 }
 
 function subscribe(listener: () => void) {
@@ -758,7 +763,7 @@ export async function upsertLocalProduct(product: Product): Promise<{ ok: true }
     state.products = [payload, ...state.products]
   }
   try {
-    await persistLocalOrThrow()
+    await persistProductOrThrow(payload)
   } catch (error) {
     state = before
     emit()
@@ -776,15 +781,18 @@ export async function updateLocalProducts(
   if (ids.size === 0) return 0
   const before = structuredClone(state)
   let count = 0
+  const updated: Product[] = []
   state.products = state.products.map(product => {
     if (!ids.has(product.id)) return product
     count += 1
     const patch = typeof buildPatch === 'function' ? buildPatch(product) : buildPatch
-    return { ...product, ...patch, id: product.id, internalSku: product.internalSku }
+    const next = { ...product, ...patch, id: product.id, internalSku: product.internalSku }
+    updated.push(next)
+    return next
   })
   if (count > 0) {
     try {
-      await persistLocalOrThrow()
+      await Promise.all(updated.map(product => persistProductOrThrow(product)))
     } catch (error) {
       state = before
       emit()
@@ -828,7 +836,7 @@ export async function permanentlyDeleteLocalProduct(productId: string): Promise<
     return Boolean(product.customerId && item.customerId !== product.customerId)
   })
   try {
-    await persistLocalOrThrow()
+    await apiDelete(`/inventory-state/products/${encodeURIComponent(productId)}`)
   } catch (error) {
     state = before
     emit()
