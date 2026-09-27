@@ -374,6 +374,14 @@ jobs:
           wait_healthy erp-web
           wait_healthy erp-mysql-backup
 
+          echo '=== Verify ERP OMS catalog endpoint ==='
+          catalog_json="$(
+            curl --fail --silent --show-error --max-time 30 \
+              https://www.erp.sztekeluo.com/api/pricing/oms/catalog \
+              -H "x-oms-internal-token: ${OMS_INTERNAL_TOKEN}"
+          )"
+          CATALOG_JSON="$catalog_json" python3 -c "import json,os; payload=json.loads(os.environ['CATALOG_JSON']); data=payload.get('data') or payload; print('OMS catalog total:', data.get('total'), 'syncedAt:', data.get('syncedAt'))"
+
           cd /opt/system/erp
           echo '=== Best-effort customer import via running erp-api ==='
           if [ -f backend/data/customers-import.json ]; then

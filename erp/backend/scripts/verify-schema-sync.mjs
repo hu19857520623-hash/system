@@ -20,7 +20,17 @@ const checks = [
   { table: 'warehouse', columns: ['required_outbound_files'] },
   { table: 'inbound_order', columns: ['oms_customer_code', 'inbound_type', 'delivery_method', 'reference_no', 'eta'] },
   { table: 'product', columns: ['sea_freight_per_unit', 'domestic_fee_per_unit', 'customer_sku', 'declared_name_en', 'declared_name_cn', 'unit', 'has_battery'] },
-  { table: 'product_pricing', columns: ['inbound_qty', 'sold_qty', 'visible_stock_qty'] },
+  {
+    table: 'product_pricing',
+    columns: [
+      'inbound_qty',
+      'sold_qty',
+      'visible_stock_qty',
+      'visible_on_oms',
+      'orderable_on_oms',
+      'share_status',
+    ],
+  },
   { table: 'customer_sku_inventory', columns: ['customer_id', 'sku', 'quantity'] },
   { table: 'inbound_carton', columns: ['inbound_id', 'box_code'] },
   { table: 'inbound_carton_item', columns: ['carton_id', 'sku'] },

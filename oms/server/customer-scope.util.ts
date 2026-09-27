@@ -15,6 +15,11 @@ export function isCatalogPoolRecord(record: InventoryStateRecord): boolean {
   return Boolean(record.inCatalog) || String(record.stockSource || '') === 'catalog'
 }
 
+/** ERP catalog mirrors and discarded legacy cards are not new customer SKUs. */
+export function mayUseLegacyCustomerSku(record: InventoryStateRecord): boolean {
+  return String(record.productStatus || '') === 'discarded' || isCatalogPoolRecord(record)
+}
+
 export function selectCustomerInventoryState(
   body: {
     inventory?: InventoryStateRecord[]

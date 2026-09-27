@@ -5,7 +5,7 @@ import { PrismaClient } from '@prisma/client'
 import bcrypt from 'bcryptjs'
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto'
 import { resolveOmsCorsOrigins } from './cors.js'
-import { selectCustomerInventoryState } from './customer-scope.util.js'
+import { mayUseLegacyCustomerSku, selectCustomerInventoryState } from './customer-scope.util.js'
 import { holdingEanFromCatalogPool } from '../src/data/platformBarcodeScope.js'
 import {
   assertCustomerCode,
@@ -2891,7 +2891,9 @@ app.put('/api/inventory-state', async (req, res) => {
     // dedicated OMS/ERP product endpoints and client form validation.
     for (const p of products) {
       const invalid = validateInventoryProductState(p, {
-        allowLegacyCustomerSku: String(p.productStatus || '') === 'discarded',
+        // ERP catalog mirrors use ERP-controlled SKUs and are not customer SKU
+        // creation. They may legitimately exceed the 11-character rule.
+        allowLegacyCustomerSku: mayUseLegacyCustomerSku(p),
       })
       if (invalid) return res.status(400).json({ error: invalid })
     }

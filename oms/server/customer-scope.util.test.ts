@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {
   isCatalogPoolRecord,
   isCatalogPoolScope,
+  mayUseLegacyCustomerSku,
   selectCustomerInventoryState,
 } from './customer-scope.util.js'
 
@@ -13,6 +14,19 @@ test('recognizes the shared catalog pool customer', () => {
   assert.equal(isCatalogPoolRecord({ customerId: 'tkl', inCatalog: true }), true)
   assert.equal(isCatalogPoolRecord({ customerId: '', stockSource: 'catalog' }), true)
   assert.equal(isCatalogPoolRecord({ customerId: 'customer-1', stockSource: 'catalog' }), false)
+})
+
+test('ERP catalog mirrors bypass customer SKU length validation', () => {
+  assert.equal(mayUseLegacyCustomerSku({
+    customerId: 'tkl',
+    inCatalog: true,
+    customerSku: 'LONG-ERP-CATALOG-SKU',
+  }), true)
+  assert.equal(mayUseLegacyCustomerSku({
+    customerId: 'customer-1',
+    inCatalog: false,
+    customerSku: 'LONG-CUSTOMER-SKU',
+  }), false)
 })
 
 test('drops catalog pool rows and keeps the authenticated customer inventory state', () => {

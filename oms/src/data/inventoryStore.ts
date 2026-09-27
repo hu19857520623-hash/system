@@ -291,7 +291,6 @@ export async function purchaseCatalogProductViaErp(
 
 /** 用 ERP 货盘目录覆盖本地展示用商品/库存池（归属平台货盘客户 TKL） */
 export async function mergeErpCatalogIntoState(items: ErpCatalogItem[]) {
-  const before = structuredClone(state)
   const existingSkus = listInternalSkusForCustomer(state.products, CATALOG_CUSTOMER_ID)
   for (const item of items) {
     const internalSku = item.sku.trim()
@@ -411,9 +410,10 @@ export async function mergeErpCatalogIntoState(items: ErpCatalogItem[]) {
   try {
     await persistLocalOrThrow()
   } catch (error) {
-    state = before
-    emit()
-    throw error
+    // ERP is the catalog source of truth. A cache write problem must not erase
+    // catalog rows that were just fetched successfully; the page refreshes the
+    // catalog from ERP again on every visit.
+    notifyPersistFailed('货盘目录缓存', error)
   }
 }
 
