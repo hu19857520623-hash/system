@@ -199,7 +199,7 @@ export default function Accounts() {
         contactEmail: email,
         omsType: createDraft.omsType,
         warehouse: createDraft.warehouse.trim(),
-        permissionTemplate: createDraft.permissionTemplate,
+        permissions: permissionsForAccountType(createDraft.permissionTemplate),
         temporaryPassword: createDraft.temporaryPassword,
       })
       const responseRecord = response && typeof response === 'object'

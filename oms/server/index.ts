@@ -2608,6 +2608,7 @@ app.post('/api/accounts', requireSysAdmin, async (req, res) => {
       omsType?: 'ecommerce' | 'catalog' | 'hybrid'
       warehouse?: string
       permissions?: string[]
+      permissionTemplate?: 'ecommerce' | 'catalog' | 'hybrid'
       username?: string
       loginEmail?: string
       temporaryPassword?: string
@@ -2658,14 +2659,27 @@ app.post('/api/accounts', requireSysAdmin, async (req, res) => {
     if (!isStrongPassword(String(body.temporaryPassword))) {
       return res.status(400).json({ error: '临时密码须为 6-128 位' })
     }
-    if (!Array.isArray(body.permissions)) {
+    const hasPermissions = body.permissions !== undefined
+    const permissionTemplate = String(body.permissionTemplate || '').trim()
+    if (hasPermissions && !Array.isArray(body.permissions)) {
       return res.status(400).json({ error: 'permissions 必须是数组' })
+    }
+    if (permissionTemplate && !['ecommerce', 'catalog', 'hybrid'].includes(permissionTemplate)) {
+      return res.status(400).json({ error: '权限模板无效' })
+    }
+    if (hasPermissions && permissionTemplate) {
+      return res.status(400).json({ error: '权限模板与显式权限只能选择一种' })
+    }
+    if (!hasPermissions && !permissionTemplate) {
+      return res.status(400).json({ error: '请选择权限模板或显式权限' })
     }
     const allowedCustomerPermissions = new Set<string>(
       SYS_ADMIN_PERMISSIONS.filter(permission => !permission.startsWith('account:')),
     )
-    const permissions = [...new Set(body.permissions.map(String))]
-    if (permissions.some(permission => !allowedCustomerPermissions.has(permission))) {
+    const permissions = Array.isArray(body.permissions)
+      ? [...new Set(body.permissions.map(String))]
+      : undefined
+    if (permissions?.some(permission => !allowedCustomerPermissions.has(permission))) {
       return res.status(400).json({ error: 'permissions 包含无效或管理员专属权限' })
     }
 
@@ -2678,7 +2692,9 @@ app.post('/api/accounts', requireSysAdmin, async (req, res) => {
       contactPhone,
       omsType: body.omsType!,
       warehouse: String(body.warehouse).trim(),
-      permissions,
+      ...(permissions
+        ? { permissions }
+        : { permissionTemplate: permissionTemplate as 'ecommerce' | 'catalog' | 'hybrid' }),
       temporaryPassword: String(body.temporaryPassword),
     })
     res.status(201).json(provisioned)

@@ -75,7 +75,7 @@ function internalHeaders() {
   return { 'x-oms-internal-token': token }
 }
 
-export type ErpOmsProvisionRequest = {
+type ErpOmsProvisionBaseRequest = {
   customerCode?: string
   customerName: string
   companyName?: string
@@ -84,11 +84,15 @@ export type ErpOmsProvisionRequest = {
   contactPhone?: string
   omsType: 'ecommerce' | 'catalog' | 'hybrid'
   warehouse: string
-  permissions: string[]
   /** @deprecated 由 contactPhone 自动派生 */
   username?: string
   temporaryPassword: string
 }
+
+export type ErpOmsProvisionRequest = ErpOmsProvisionBaseRequest & (
+  | { permissions: string[]; permissionTemplate?: never }
+  | { permissionTemplate: 'ecommerce' | 'catalog' | 'hybrid'; permissions?: never }
+)
 
 export type ErpOmsProvisionResponse = {
   customer: {
