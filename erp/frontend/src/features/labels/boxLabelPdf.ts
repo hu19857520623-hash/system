@@ -33,7 +33,6 @@ function drawCode128(page: PDFPage, text: string, x: number, y: number, width: n
 }
 
 function drawBoxLabelPage(page: PDFPage, data: BoxLabelData, font: PDFFont, fontBold: PDFFont) {
-  const origin = data.origin?.trim() || 'MADE IN CHINA'
   const boxIndex = data.boxIndex ?? data.boxNo
   const boxTotal = data.boxTotal ?? boxIndex
   const lines = data.lines.length ? data.lines : [{ sku: '—', qty: 0 }]
@@ -141,7 +140,6 @@ function drawBoxLabelPage(page: PDFPage, data: BoxLabelData, font: PDFFont, font
 
   const footerY = Math.min(tableBottom - mm(12), mm(36))
   const footerRight = `${boxIndex}/${boxTotal}`
-  page.drawText(origin, { x: PAD_X, y: footerY, size: 12, font, color: rgb(0, 0, 0) })
   page.drawText(footerRight, {
     x: tableRight - font.widthOfTextAtSize(footerRight, 12),
     y: footerY,

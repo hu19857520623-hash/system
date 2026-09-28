@@ -38,11 +38,11 @@ describe('boxLabelTemplate', () => {
 
     expect(html).toContain('100mm 100mm')
     expect(html).toContain('Packing List')
-    expect(html).toContain('RVAFU0002-260731-0001')
+    expect(html).toContain('RVAFU0002-260731-0003-1')
     expect(html).not.toContain('<p class="ref">RVAFU0002-260731-0003</p>')
     expect(html).toContain('AAE938')
     expect(html).toContain('AFU0002-9902297558367')
-    expect(html).toContain('MADE IN CHINA')
+    expect(html).not.toMatch(/MADE IN CHINA/i)
     expect(html).toContain('1/1')
     expect(html).toContain('class="barcode"')
     expect(html).toContain('<svg')
