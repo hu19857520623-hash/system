@@ -845,7 +845,12 @@ function authenticatedCustomerCode(req: express.Request, supplied: unknown) {
 }
 
 app.use('/api', (req: AuthenticatedRequest, res, next) => {
-  if (req.path === '/health' || req.path === '/erp/webhooks/events' || /^\/erp\/product-image\/[A-Za-z0-9._-]+$/.test(req.path)) {
+  if (
+    req.path === '/health'
+    || req.path === '/erp/webhooks/events'
+    || /^\/erp\/product-image\/[A-Za-z0-9._-]+$/.test(req.path)
+    || /^\/erp\/catalog-image\/(?:products|product-dev)\/[A-Za-z0-9._-]+$/.test(req.path)
+  ) {
     next()
     return
   }
