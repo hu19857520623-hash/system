@@ -79,3 +79,5 @@ pda/preview/index.html
 ```
 
 真实运行前必须先由 ERP/OMS 建好单据并完成拣货员分配。JSON 中的 SKU、库位、数量、箱规和重量必须来自实物或真实单据；示例值只说明结构，不能作为验收数据。
+
+每次提交到 `main` 后，GitHub Actions 的 `PDA Android build` 质量门禁还会用生产 ERP 地址构建可安装的 Debug APK，并以 `pda-debug-<commit>` 工件保留 14 天。绿灯表示安装包是在不包含本机未提交文件的干净代码上构建成功。
