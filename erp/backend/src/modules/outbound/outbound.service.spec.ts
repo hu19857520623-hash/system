@@ -186,6 +186,30 @@ describe('OutboundService cropped label storage', () => {
   })
 })
 
+describe('OutboundService POD status', () => {
+  it('does not report uploaded from a POD code when no downloadable POD attachment exists', async () => {
+    const { service, prisma } = buildService()
+    prisma.outboundAttachment.findFirst.mockResolvedValue(null)
+
+    await expect((service as any).resolvePodStatus({
+      id: 52n,
+      status: 'delivered',
+      podCode: 'POD-TKL005-FIT-260928',
+    })).resolves.toBe('pending')
+  })
+
+  it('reports uploaded only when a POD attachment is stored', async () => {
+    const { service, prisma } = buildService()
+    prisma.outboundAttachment.findFirst.mockResolvedValue({ id: 27n, fileType: 'pod' })
+
+    await expect((service as any).resolvePodStatus({
+      id: 52n,
+      status: 'delivered',
+      podCode: 'POD-TKL005-FIT-260928',
+    })).resolves.toBe('uploaded')
+  })
+})
+
 describe('OutboundService.createFromOms transaction', () => {
   const now = new Date('2026-08-18T00:00:00Z')
   const freshOrder = {

@@ -2237,7 +2237,6 @@ th{background:#f5f5f5}
   }): Promise<'uploaded' | 'pending' | 'not_required'> {
     if (order.status === 'shipped' || order.status === 'exception') return 'pending'
     if (order.status === 'delivered') {
-      if (order.podCode) return 'uploaded'
       const podAtt = await this.prisma.outboundAttachment.findFirst({
         where: { outboundId: order.id, fileType: 'pod' },
       })
