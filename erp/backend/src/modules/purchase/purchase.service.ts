@@ -5,6 +5,7 @@ import { OperationLogService } from '../operation-log/operation-log.service'
 import { allocatePoDomesticFreight } from '../../common/po-domestic-freight.util'
 import { computePoFinanceApprovalCosts } from '../../common/po-finance-cost.util'
 import { catalogSkuLookupKeys, toCatalogInternalSku } from '../../common/catalog-customer.util'
+import { resolveProductPhysicalWeightKg } from '../../common/product-physical-weight.util'
 
 function fmtTime(d: Date | null | undefined): string {
   if (!d) return ''
@@ -233,7 +234,9 @@ export class PurchaseService {
             lengthCm: row.packageLengthCm ?? row.productLengthCm ?? undefined,
             widthCm: row.packageWidthCm ?? row.productWidthCm ?? undefined,
             heightCm: row.packageHeightCm ?? row.productHeightCm ?? undefined,
-            weightKg: row.volumetricWeightKg ?? undefined,
+            // ProductDev only stores dimensional/volumetric weight. Keep the
+            // physical weight empty until purchase confirmation or receiving.
+            weightKg: undefined,
             costRmb: row.estimatedCost ?? undefined,
             takealotUrl: row.takealotUrl ?? undefined,
             imageUrl: row.takealotPriceImageUrl ?? row.alibaba1688ImageUrl ?? undefined,
@@ -697,7 +700,7 @@ export class PurchaseService {
       lengthCm: prePo?.packageLengthCm ?? dev?.packageLengthCm ?? dev?.productLengthCm ?? undefined,
       widthCm: prePo?.packageWidthCm ?? dev?.packageWidthCm ?? dev?.productWidthCm ?? undefined,
       heightCm: prePo?.packageHeightCm ?? dev?.packageHeightCm ?? dev?.productHeightCm ?? undefined,
-      weightKg: prePo?.packageWeightKg ?? prePo?.volumetricWeightKg ?? dev?.volumetricWeightKg ?? undefined,
+      weightKg: resolveProductPhysicalWeightKg(prePo, dev),
       costRmb: line.unitPrice,
       domesticFeePerUnit: domesticFeePerUnit > 0 ? domesticFeePerUnit : undefined,
       takealotUrl: prePo?.productLink ?? dev?.takealotUrl ?? undefined,
