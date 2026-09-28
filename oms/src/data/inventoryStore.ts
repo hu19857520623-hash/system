@@ -303,6 +303,7 @@ export async function mergeErpCatalogIntoState(items: ErpCatalogItem[]) {
       existing.internalSku = internalSku
       existing.customerSku = customerSku
       existing.name = item.productName || existing.name
+      existing.image = item.imageUrl || ''
       existing.spec = item.spec || existing.spec
       existing.price = item.price
       existing.availableQty = item.remainingStockQty
@@ -329,7 +330,7 @@ export async function mergeErpCatalogIntoState(items: ErpCatalogItem[]) {
         customerSku,
         name: item.productName,
         spec: item.spec || '',
-        image: 'https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=400&h=300&fit=crop',
+        image: item.imageUrl || '',
         price: item.price,
         cost: 0,
         availableQty: item.remainingStockQty,
@@ -368,6 +369,7 @@ export async function mergeErpCatalogIntoState(items: ErpCatalogItem[]) {
       state.inventory[poolIdx].customerId = CATALOG_CUSTOMER_ID
       state.inventory[poolIdx].available = item.remainingStockQty
       state.inventory[poolIdx].name = item.productName
+      state.inventory[poolIdx].image = item.imageUrl || ''
       state.inventory[poolIdx].price = item.price
       state.inventory[poolIdx].spec = item.spec || state.inventory[poolIdx].spec
     } else {
@@ -376,7 +378,7 @@ export async function mergeErpCatalogIntoState(items: ErpCatalogItem[]) {
         customerId: CATALOG_CUSTOMER_ID,
         sku: internalSku,
         name: item.productName,
-        image: 'https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=400&h=300&fit=crop',
+        image: item.imageUrl || '',
         available: item.remainingStockQty,
         locked: 0,
         inTransit: 0,

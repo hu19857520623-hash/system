@@ -175,6 +175,7 @@ export function resetOmsPortalPassword(
 export type ErpCatalogItem = {
   sku: string
   productName: string
+  imageUrl: string | null
   spec: string | null
   lengthCm: number
   widthCm: number
@@ -238,12 +239,27 @@ export function getErpApiBase() {
   return ERP_API_BASE
 }
 
-export function fetchErpCatalog() {
-  return erpRequest<{ items: ErpCatalogItem[]; total: number; syncedAt: string }>('/pricing/oms/catalog')
+function catalogImageUrlForOms(imageUrl: string | null) {
+  const value = String(imageUrl || '').trim()
+  if (!value) return null
+  if (/^https?:\/\//i.test(value)) return value
+  const match = value.match(/^\/api\/(products|product-dev)\/images\/([A-Za-z0-9._-]+)$/i)
+  if (!match) return null
+  return `/api/erp/catalog-image/${match[1]}/${encodeURIComponent(match[2])}`
 }
 
-export function fetchErpCatalogSku(sku: string) {
-  return erpRequest<ErpCatalogItem>(`/pricing/oms/catalog/${encodeURIComponent(sku)}`)
+function mapCatalogImage(item: ErpCatalogItem): ErpCatalogItem {
+  return { ...item, imageUrl: catalogImageUrlForOms(item.imageUrl) }
+}
+
+export async function fetchErpCatalog() {
+  const result = await erpRequest<{ items: ErpCatalogItem[]; total: number; syncedAt: string }>('/pricing/oms/catalog')
+  return { ...result, items: result.items.map(mapCatalogImage) }
+}
+
+export async function fetchErpCatalogSku(sku: string) {
+  const item = await erpRequest<ErpCatalogItem>(`/pricing/oms/catalog/${encodeURIComponent(sku)}`)
+  return mapCatalogImage(item)
 }
 
 export function purchaseErpCatalog(body: {

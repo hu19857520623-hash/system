@@ -13,6 +13,7 @@ export type OmsCatalogStockPayload = {
   customerCode: string
   customerSku: string
   productName: string
+  imageUrl: string | null
   spec: string | null
   lengthCm: number
   widthCm: number
@@ -32,6 +33,7 @@ export type OmsCatalogStockPayload = {
 export function buildOmsCatalogPayload(pricing: {
   sku: string
   productName: string
+  imageUrl?: string | null
   spec?: string | null
   finalPrice?: unknown
   visibleStockQty?: number | null
@@ -53,6 +55,7 @@ export function buildOmsCatalogPayload(pricing: {
     customerCode: CATALOG_CUSTOMER_CODE,
     customerSku: catalogBaseSkuFromInternal(pricing.sku),
     productName: pricing.productName,
+    imageUrl: pricing.imageUrl || null,
     spec: pricing.spec ?? null,
     lengthCm: num(pricing.lengthCm),
     widthCm: num(pricing.widthCm),
@@ -81,7 +84,10 @@ function mergeProductDimensions<
 >(
   pricing: T,
   product?: {
+    id: bigint
     spec: string | null
+    imageUrl: string | null
+    images?: Array<{ imageUrl: string }>
     lengthCm: unknown
     widthCm: unknown
     heightCm: unknown
@@ -90,6 +96,7 @@ function mergeProductDimensions<
     measuredWidthCm: unknown
     measuredHeightCm: unknown
   } | null,
+  resolveImageUrl: (url: string) => string = (url) => url,
 ) {
   const hasMeasured =
     num(product?.measuredLengthCm) > 0 &&
@@ -97,6 +104,10 @@ function mergeProductDimensions<
     num(product?.measuredHeightCm) > 0
   return {
     ...pricing,
+    imageUrl: (() => {
+      const raw = product?.images?.[0]?.imageUrl || product?.imageUrl || ''
+      return raw ? resolveImageUrl(raw) || null : null
+    })(),
     spec: pricing.spec ?? product?.spec ?? null,
     lengthCm: hasMeasured ? product?.measuredLengthCm : product?.lengthCm,
     widthCm: hasMeasured ? product?.measuredWidthCm : product?.widthCm,
@@ -130,7 +141,10 @@ export async function pushCatalogStockToOms(
 }
 
 /** OMS 展示层拉取货盘列表（含剩余库存） */
-export async function listOmsCatalogForDisplay(prisma: PrismaService): Promise<OmsCatalogStockPayload[]> {
+export async function listOmsCatalogForDisplay(
+  prisma: PrismaService,
+  resolveImageUrl: (url: string) => string = (url) => url,
+): Promise<OmsCatalogStockPayload[]> {
   const rows = await prisma.productPricing.findMany({
     where: {
       OR: [
@@ -141,23 +155,40 @@ export async function listOmsCatalogForDisplay(prisma: PrismaService): Promise<O
     orderBy: { id: 'desc' },
   })
   const products = rows.length
-    ? await prisma.product.findMany({
+      ? await prisma.product.findMany({
         where: { sku: { in: [...new Set(rows.flatMap((row) => catalogSkuLookupKeys(row.sku)))] } },
+        include: {
+          images: {
+            orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+            take: 1,
+            select: { imageUrl: true },
+          },
+        },
       })
     : []
   const productBySku = new Map(products.map(product => [product.sku, product]))
   return rows.map(row => {
     const product = catalogSkuLookupKeys(row.sku).map((key) => productBySku.get(key)).find(Boolean)
-    return buildOmsCatalogPayload(mergeProductDimensions(row, product))
+    return buildOmsCatalogPayload(mergeProductDimensions(row, product, resolveImageUrl))
   })
 }
 
 export async function getOmsCatalogSkuForDisplay(
   prisma: PrismaService,
   sku: string,
+  resolveImageUrl: (url: string) => string = (url) => url,
 ): Promise<OmsCatalogStockPayload | null> {
   const pricing = await prisma.productPricing.findFirst({ where: { sku: { in: catalogSkuLookupKeys(sku) } } })
   if (!pricing || (!pricing.visibleOnOms && pricing.pricingStatus !== 'synced')) return null
-  const product = await prisma.product.findFirst({ where: { sku: { in: catalogSkuLookupKeys(sku) } } })
-  return buildOmsCatalogPayload(mergeProductDimensions(pricing, product))
+  const product = await prisma.product.findFirst({
+    where: { sku: { in: catalogSkuLookupKeys(sku) } },
+    include: {
+      images: {
+        orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+        take: 1,
+        select: { imageUrl: true },
+      },
+    },
+  })
+  return buildOmsCatalogPayload(mergeProductDimensions(pricing, product, resolveImageUrl))
 }

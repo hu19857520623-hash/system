@@ -6,6 +6,7 @@ export type ErpCatalogItem = {
   customerCode: string
   customerSku: string
   productName: string
+  imageUrl: string | null
   spec: string | null
   lengthCm: number
   widthCm: number

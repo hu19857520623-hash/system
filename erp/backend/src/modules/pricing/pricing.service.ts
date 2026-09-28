@@ -28,6 +28,7 @@ import {
   type CatalogPipelineQty,
 } from './catalog-pipeline-qty.util'
 import { CATALOG_CUSTOMER_CODE, catalogBaseSkuFromInternal, catalogSkuLookupKeys, toCatalogInternalSku } from '../../common/catalog-customer.util'
+import { CosObjectUrlService } from '../../common/cos-object-url.service'
 
 function num(v: any, fallback = 0): number {
   if (v == null) return fallback
@@ -49,6 +50,7 @@ export class PricingService {
   constructor(
     private prisma: PrismaService,
     private opLog: OperationLogService,
+    private cosUrls: CosObjectUrlService,
   ) {}
 
   private serialize(row: any, warehouseAvailableQty?: number, pipeline?: CatalogPipelineQty) {
@@ -605,12 +607,12 @@ export class PricingService {
       where: { pricingStatus: 'synced', visibleOnOms: false },
       data: { visibleOnOms: true, visibleOnOmsAt: new Date() },
     })
-    const items = await listOmsCatalogForDisplay(this.prisma)
+    const items = await listOmsCatalogForDisplay(this.prisma, (url) => this.cosUrls.resolve(url))
     return { items, total: items.length, syncedAt: new Date().toISOString() }
   }
 
   async getOmsCatalogSkuForOms(sku: string) {
-    const item = await getOmsCatalogSkuForDisplay(this.prisma, sku.trim())
+    const item = await getOmsCatalogSkuForDisplay(this.prisma, sku.trim(), (url) => this.cosUrls.resolve(url))
     if (!item) throw new NotFoundException(`SKU ${sku} 未在 OMS 货盘展示`)
     return item
   }

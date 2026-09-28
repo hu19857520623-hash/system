@@ -1323,6 +1323,26 @@ app.get('/api/erp/product-image/:fileName', async (req, res) => {
   }
 })
 
+app.get('/api/erp/catalog-image/:source/:fileName', async (req, res) => {
+  const source = String(req.params.source || '')
+  const fileName = String(req.params.fileName || '')
+  if (!['products', 'product-dev'].includes(source)
+    || !/^[A-Za-z0-9._-]+\.(?:jpe?g|png|gif|webp)$/i.test(fileName)) {
+    return res.status(400).end()
+  }
+  try {
+    const response = await fetch(
+      `${getErpApiBase()}/${source}/images/${encodeURIComponent(fileName)}`,
+    )
+    if (!response.ok) return res.status(response.status).end()
+    res.setHeader('Content-Type', response.headers.get('content-type') || 'application/octet-stream')
+    res.setHeader('Cache-Control', 'public, max-age=86400')
+    res.send(Buffer.from(await response.arrayBuffer()))
+  } catch (error) {
+    sendErpError(res, error)
+  }
+})
+
 app.post('/api/erp/product-image', async (req, res) => {
   try {
     if (!authenticatedCustomerCode(req, null)) return res.status(403).json({ error: '请使用客户账号上传商品图片' })

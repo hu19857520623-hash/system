@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ClipboardList, RefreshCw, ShoppingCart, Trash2 } from 'lucide-react'
+import { ClipboardList, ImageOff, RefreshCw, ShoppingCart, Trash2 } from 'lucide-react'
 import { Badge, Button, Card, Drawer, MonoCode, PageHeader, SearchInput, Table, Tabs } from '../components/ui'
 import { formatCurrency } from '../data/mockData'
 import {
@@ -28,6 +28,29 @@ interface CatalogCartLine {
 }
 
 interface CheckoutLine extends CatalogCartLine {}
+
+function CatalogProductImage({ src, alt }: { src: string; alt: string }) {
+  const [failed, setFailed] = useState(false)
+  useEffect(() => setFailed(false), [src])
+
+  if (!src || failed) {
+    return (
+      <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-slate-100 text-slate-400">
+        <ImageOff className="h-9 w-9" />
+        <span className="text-xs">暂无商品图片</span>
+      </div>
+    )
+  }
+
+  return (
+    <img
+      src={src}
+      alt={alt}
+      onError={() => setFailed(true)}
+      className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+    />
+  )
+}
 
 function lineTotal(line: { price: number; qty: number }) {
   return Math.round(line.price * line.qty * 100) / 100
@@ -350,7 +373,7 @@ export default function Catalog() {
             return (
               <Card key={p.id} className="group overflow-hidden transition-all duration-200 hover:-translate-y-0.5 hover:shadow-card">
                 <div className="relative aspect-[5/4] overflow-hidden bg-surface-subtle">
-                  <img src={p.image} alt={p.name} className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105" />
+                  <CatalogProductImage src={p.image} alt={p.name} />
                   <div className="absolute left-2 top-2 scale-90 origin-top-left"><Badge status="active" label={p.category} /></div>
                   {p.catalogShareStatus === 'stopped' ? (
                     <div className="absolute right-2 top-2 rounded-md bg-red-600 px-1.5 py-0.5 text-[9px] font-semibold text-white shadow-sm">
