@@ -552,7 +552,11 @@ export function mergeTakealotParsed(...parts: Partial<TakealotParsedDoc>[]): Tak
           existing.productTitle = existing.productTitle || item.productTitle
           existing.barcode = existing.barcode || item.barcode
           existing.tsin = existing.tsin || item.tsin
-          if (item.sku) existing.sku = item.sku
+          // Unit-label rows use the barcode as a temporary SKU. Preserve the
+          // seller SKU from the shipping note when both refer to the same EAN.
+          if (item.sku && (!existing.sku || existing.sku === existing.barcode || item.sku !== item.barcode)) {
+            existing.sku = item.sku
+          }
           existing.expectedQty ??= item.expectedQty
           existing.observedLabelCount =
             (existing.observedLabelCount || 0) + (item.observedLabelCount || 0) || undefined

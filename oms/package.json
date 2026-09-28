@@ -8,9 +8,10 @@
     "dev:web": "vite",
     "dev:api": "tsx server/index.ts",
     "build": "tsc && tsc -p tsconfig.server.json && vite build",
-    "test": "tsx --test server/auth.test.ts server/cors.test.ts server/login-rate-limit.test.ts server/bootstrap-admin.test.ts server/billing-sync.util.test.ts server/customer-scope.util.test.ts src/data/platformBarcodeScope.test.ts src/data/takealotAutoBind.scope.test.ts src/data/omsAsnItem.test.ts src/data/skuCode.test.ts src/data/boxLabelPdf.test.ts src/data/inboundReceivingList.test.ts src/data/takealotDocParser.test.ts",
+    "test": "tsx --test server/auth.test.ts server/cors.test.ts server/login-rate-limit.test.ts server/bootstrap-admin.test.ts server/billing-sync.util.test.ts server/customer-scope.util.test.ts src/data/platformBarcodeScope.test.ts src/data/takealotAutoBind.scope.test.ts src/data/omsAsnItem.test.ts src/data/skuCode.test.ts src/data/boxLabelPdf.test.ts src/data/inboundReceivingList.test.ts src/data/takealotDocParser.test.ts src/data/csvImportExport.test.ts",
     "test:auth": "tsx --test server/auth.test.ts",
     "verify:auth": "tsx scripts/verify-oms-auth.ts",
+    "verify:takealot:files": "tsx scripts/verify-real-takealot-files.ts",
     "reset:bootstrap-admin": "tsx server/reset-bootstrap-admin-cli.ts",
     "build:single": "tsc && tsc -p tsconfig.server.json && vite build --mode singlefile && node scripts/copy-single-html.mjs",
     "preview": "vite preview",
@@ -41,7 +42,8 @@
     "qrcode": "^1.5.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-router-dom": "^6.28.0"
+    "react-router-dom": "^6.28.0",
+    "read-excel-file": "^9.3.10"
   },
   "devDependencies": {
     "@types/bcryptjs": "^3.0.0",

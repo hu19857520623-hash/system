@@ -215,6 +215,7 @@ function skuFromRecord(record: Record<string, string>): string | undefined {
 export function mapCsvRows(
   rows: string[][],
   columns: CsvColumn[],
+  lineOffset = 0,
 ): { records: Record<string, string>[]; errors: string[]; failures: ImportRowFailure[] } {
   const failures: ImportRowFailure[] = []
   const pushFailure = (lineNo: number, reason: string, record?: Record<string, string>) => {
@@ -268,13 +269,13 @@ export function mapCsvRows(
     for (const col of columns) {
       if (col.required && !record[col.key]) {
         const reason = `${columnHeader(col)} 不能为空`
-        pushFailure(i + 1, reason, record)
+        pushFailure(i + 1 + lineOffset, reason, record)
         rowInvalid = true
       }
     }
 
     if (!rowInvalid) {
-      record[CSV_SOURCE_LINE_KEY] = String(i + 1)
+      record[CSV_SOURCE_LINE_KEY] = String(i + 1 + lineOffset)
       records.push(record)
     }
   }
@@ -283,21 +284,64 @@ export function mapCsvRows(
   return { records, errors: errorLines, failures }
 }
 
-export function pickCsvFile(accept = '.csv,.xls,.xlsx,text/csv,application/vnd.ms-excel'): Promise<string> {
+/** Read actual Excel workbooks as cells; keep CSV and HTML-based .xls templates compatible. */
+export async function readImportFileText(
+  file: File,
+  columns?: CsvColumn[],
+): Promise<{ text: string; lineOffset: number }> {
+  const bytes = new Uint8Array(await file.arrayBuffer())
+  const isZipWorkbook = bytes[0] === 0x50 && bytes[1] === 0x4b
+  const isBinaryWorkbook = bytes[0] === 0xd0 && bytes[1] === 0xcf
+  if (isBinaryWorkbook) {
+    throw new Error('旧版二进制 .xls 暂不支持，请在 Excel 中另存为 .xlsx 后重新导入')
+  }
+  if (!isZipWorkbook && !isBinaryWorkbook) {
+    return { text: normalizeImportFileText(new TextDecoder('utf-8').decode(bytes)), lineOffset: 0 }
+  }
+
+  const { default: readExcelFile } = await import('read-excel-file/universal')
+  const workbook = await readExcelFile(file)
+  const sheets = workbook.map(sheet => ({
+    rows: sheet.data.map(row => row.map(value => value == null ? '' : String(value))),
+  }))
+  const selected = sheets.find(({ rows }) => {
+    if (!columns) return rows.some(row => row.some(value => value.trim()))
+    return rows.some(row => {
+      const headers = new Set(row.map(normalizeHeader))
+      return columns.filter(col => col.required).every(col =>
+        headers.has(normalizeHeader(columnHeader(col))) || headers.has(normalizeHeader(col.header)))
+    })
+  })
+  if (!selected) throw new Error(columns ? 'Excel 工作簿中找不到导入模板的必填列' : 'Excel 工作簿没有数据')
+  const headerIndex = columns
+    ? selected.rows.findIndex(row => {
+      const headers = new Set(row.map(normalizeHeader))
+      return columns.filter(col => col.required).every(col =>
+        headers.has(normalizeHeader(columnHeader(col))) || headers.has(normalizeHeader(col.header)))
+    })
+    : 0
+  return { text: rowsToCsv(selected.rows.slice(headerIndex)), lineOffset: headerIndex }
+}
+
+export function pickCsvFile(
+  accept = '.csv,.xls,.xlsx,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  columns?: CsvColumn[],
+): Promise<{ text: string; lineOffset: number }> {
   return new Promise((resolve, reject) => {
     const input = document.createElement('input')
     input.type = 'file'
     input.accept = accept
-    input.onchange = () => {
+    input.onchange = async () => {
       const file = input.files?.[0]
       if (!file) {
         reject(new Error('cancelled'))
         return
       }
-      const reader = new FileReader()
-      reader.onload = () => resolve(normalizeImportFileText(String(reader.result ?? '')))
-      reader.onerror = () => reject(reader.error ?? new Error('read failed'))
-      reader.readAsText(file, 'UTF-8')
+      try {
+        resolve(await readImportFileText(file, columns))
+      } catch (error) {
+        reject(error)
+      }
     }
     input.click()
   })
@@ -309,9 +353,9 @@ export async function importCsvFile<T>(
   columns: CsvColumn[],
   parse: (records: Record<string, string>[]) => CsvParseResult<T>,
 ): Promise<{ data: T[]; errors: string[]; failures: ImportRowFailure[] }> {
-  const text = await pickCsvFile()
-  const rows = parseCsv(text)
-  const mapped = mapCsvRows(rows, columns)
+  const fileContent = await pickCsvFile(undefined, columns)
+  const rows = parseCsv(fileContent.text)
+  const mapped = mapCsvRows(rows, columns, fileContent.lineOffset)
   if (mapped.records.length === 0 && mapped.failures.length > 0) {
     return { data: [], errors: mapped.errors, failures: mapped.failures }
   }
