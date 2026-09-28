@@ -5,6 +5,7 @@ import { PaginationDto } from '../../common/dto/pagination.dto'
 import { CurrentUser } from '../../common/decorators/current-user.decorator'
 import { Public } from '../../common/decorators/public.decorator'
 import { RequireAnyPerm, RequirePerms } from '../../common/decorators/require-perms.decorator'
+import { OmsBridge } from '../../common/decorators/oms-bridge.decorator'
 
 @Controller('product-dev')
 export class ProductDevController {
@@ -38,6 +39,13 @@ export class ProductDevController {
   @Post('price-image')
   uploadPriceImage(@Body() body: { fileName?: string; contentBase64?: string }) {
     return this.service.savePriceImage(body)
+  }
+
+  /** OMS 商品草稿上传图片，提交 ERP 商品时复用返回的图片地址。 */
+  @OmsBridge()
+  @Post('oms/product-image')
+  uploadOmsProductImage(@Body() body: { fileName?: string; contentBase64?: string }) {
+    return this.service.saveOmsProductImage(body)
   }
 
   @RequirePerms('product_dev.edit')

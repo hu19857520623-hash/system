@@ -605,6 +605,13 @@ export function createErpProduct(body: {
   return apiPost<{ id: number; sku: string; productName: string; status: string }>('/erp/products', body)
 }
 
+export function uploadErpProductDraftImage(fileName: string, contentBase64: string) {
+  return apiPost<{ imageUrl: string; erpImageUrl: string }>('/erp/product-image', {
+    fileName,
+    contentBase64,
+  })
+}
+
 export function updateErpProduct(sku: string, body: Omit<Parameters<typeof createErpProduct>[0], 'sku'>) {
   return apiPut<{ id: number; sku: string; productName: string; status: string }>(`/erp/products/${encodeURIComponent(sku)}`, body)
 }

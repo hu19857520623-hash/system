@@ -6,6 +6,7 @@ import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
 import { FileStoreService } from '../../common/file-store.service'
 import { OperationLogService } from '../operation-log/operation-log.service'
 import { PrePurchaseService } from '../purchase/pre-purchase.service'
+import { validateOmsProductImage } from './oms-product-image.util'
 
 const PRICE_IMAGE_MIME: Record<string, string> = {
   '.jpg': 'image/jpeg',
@@ -137,6 +138,10 @@ export class ProductDevService {
     const safeName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext}`
     this.files.write('product-dev-images', safeName, buf)
     return { imageUrl: `/api/product-dev/images/${safeName}` }
+  }
+
+  saveOmsProductImage(data: { fileName?: string; contentBase64?: string }) {
+    return this.savePriceImage(validateOmsProductImage(data))
   }
 
   servePriceImage(fileName: string, res: Response) {

@@ -12,6 +12,7 @@ import { Product, type InboundOrder, statusLabels, formatCurrency } from '../dat
 import {
   discardLocalProduct,
   hasLocalProductStock,
+  importProducts,
   permanentlyDeleteLocalProduct,
   restoreLocalProduct,
   useProducts,
@@ -22,7 +23,10 @@ import { printBarcodeLabels } from '../data/barcodeLabelTemplate'
 import { getCustomerSkuDisplay } from '../data/skuCode'
 import { useDataScope } from '../auth/useDataScope'
 import { AdminCustomerFilter, AdminCustomerCell } from '../components/admin/AdminCustomerFilter'
-import { exportProducts } from '../data/importTemplates'
+import { downloadProductTemplate, exportProducts, parseProducts, PRODUCT_COLUMNS } from '../data/importTemplates'
+import { importCsvFile } from '../data/csvImportExport'
+import { reportLineImportResult } from '../utils/lineImportResult'
+import { notifyIfUserError } from '../utils/userNotify'
 import { deleteErpProduct, disableErpProduct, enableErpProduct } from '../api/erp'
 
 const statusTabs = [
@@ -138,6 +142,29 @@ export default function Products() {
   }
 
   const handleExportAll = () => exportProducts(filtered, dataScope.getCustomerCode)
+  const handleImportDrafts = async () => {
+    const customerId = dataScope.activeCustomerId
+    const customerCode = dataScope.activeCustomerCode
+    if (!customerId || !customerCode || customerCode === '—') {
+      window.alert('请先使用已绑定客户编码的客户账号导入商品')
+      return
+    }
+    try {
+      const result = await importCsvFile(PRODUCT_COLUMNS, rows => parseProducts(rows, customerId))
+      await reportLineImportResult(result, async () => {
+        const saved = await importProducts(
+          result.data.map(product => ({ ...product, productStatus: 'draft' as const })),
+          { customerId, customerCode },
+        )
+        if (!saved.ok) throw new Error(saved.error)
+      }, {
+        successMessage: count => `已将 ${count} 个商品保存为草稿，请核对后逐个提交至 ERP`,
+        csvFilename: 'OMS-商品导入失败明细',
+      })
+    } catch (error) {
+      notifyIfUserError(error, '商品导入失败')
+    }
+  }
   const handleExportSelected = () => {
     const picked = filtered.filter(p => selected.has(p.id))
     if (picked.length === 0) {
@@ -304,6 +331,10 @@ export default function Products() {
         </div>
         <div className="flex flex-wrap gap-2">
           <Link to="/products/new"><Button variant="toolbar" size="sm"><Plus className="h-3.5 w-3.5" /> 创建产品</Button></Link>
+          {!dataScope.isAdmin && <DropdownBtn variant="toolbar" label="导入商品" items={[
+            { label: '批量导入草稿', onClick: () => void handleImportDrafts() },
+            { label: '下载导入模板', onClick: downloadProductTemplate },
+          ]} />}
           <Button variant="toolbar" size="sm" onClick={() => void printBarcodes()}><Printer className="h-3.5 w-3.5" /> 打印条码</Button>
           <DropdownBtn variant="toolbar" label="导出" items={[
             { label: '导出全部', onClick: handleExportAll },

@@ -200,7 +200,7 @@ export function requiredWritePermission(method: string, apiPath: string): string
   if (p.startsWith('/billing/pre-deduct')) return 'outbound:write'
   if (p.startsWith('/billing')) return 'billing:read'
   if (p.startsWith('/erp/purchase')) return 'catalog:write'
-  if (p.startsWith('/erp/products')) return 'product:write'
+  if (p.startsWith('/erp/products') || p === '/erp/product-image') return 'product:write'
   if (p.startsWith('/erp/inbound') || p.startsWith('/inbound')) return 'inbound:write'
   if (p.startsWith('/erp/outbound') || p.startsWith('/outbound')) return 'outbound:write'
   if (p.startsWith('/erp/returns') || p.startsWith('/return')) return 'returns:write'

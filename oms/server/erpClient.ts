@@ -833,6 +833,7 @@ export function createErpProduct(body: {
   declaredNameCn?: string
   unit?: string
   hasBattery?: boolean
+  imageUrl?: string
   remark?: string
 }) {
   return erpRequest<{
@@ -843,6 +844,13 @@ export function createErpProduct(body: {
     customerCode: string | null
     createdAt?: string
   }>('/products/oms', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+export function uploadErpOmsProductImage(body: { fileName: string; contentBase64: string }) {
+  return erpRequest<{ imageUrl: string }>('/product-dev/oms/product-image', {
     method: 'POST',
     body: JSON.stringify(body),
   })

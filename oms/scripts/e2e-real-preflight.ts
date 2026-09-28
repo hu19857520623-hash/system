@@ -4,7 +4,8 @@
 import { readFile, stat } from 'node:fs/promises'
 import { execFileSync } from 'node:child_process'
 import { basename } from 'node:path'
-import { parseCsv, readImportFileText } from '../src/data/csvImportExport'
+import { mapCsvRows, parseCsv, readImportFileText } from '../src/data/csvImportExport'
+import { PRODUCT_COLUMNS, parseProducts } from '../src/data/importTemplates'
 
 type Check = { name: string; ok: boolean; detail: string }
 const checks: Check[] = []
@@ -42,6 +43,22 @@ async function file(name: string, envName: string, signature?: string) {
   }
 }
 
+async function imageFile(name: string, envName: string) {
+  const path = setting(envName)
+  if (!path) return add(name, false, `缺少 ${envName}`)
+  try {
+    const bytes = await readFile(path)
+    const isJpeg = bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff
+    const isPng = bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+    const isGif = ['GIF87a', 'GIF89a'].includes(bytes.toString('ascii', 0, 6))
+    const isWebp = bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP'
+    add(name, bytes.length > 0 && bytes.length <= 5 * 1024 * 1024 && (isJpeg || isPng || isGif || isWebp),
+      `${basename(path)}：${bytes.length} bytes；${bytes.length > 5 * 1024 * 1024 ? '超过 5MB' : '检查图片格式'}`)
+  } catch (error) {
+    add(name, false, `文件不可读：${(error as Error).message}`)
+  }
+}
+
 async function workbook() {
   const path = setting('E2E_XLSX_FILE')
   if (!path) return add('真实 XLSX 商品数据', false, '缺少 E2E_XLSX_FILE')
@@ -50,13 +67,12 @@ async function workbook() {
     if (bytes[0] !== 0x50 || bytes[1] !== 0x4b) {
       return add('真实 XLSX 商品数据', false, '不是 .xlsx 工作簿')
     }
-    const result = await readImportFileText(new File([bytes], basename(path)))
-    const rows = parseCsv(result.text)
-    const headers = new Set((rows[0] || []).map(value => value.trim().toLowerCase()))
-    const hasSku = headers.has('sku') || headers.has('产品sku')
-    const hasPrice = [...headers].some(value => /价格|价值|price|cost/.test(value))
-    add('真实 XLSX 商品数据', rows.length > 1 && hasSku && hasPrice,
-      `${basename(path)}：${Math.max(rows.length - 1, 0)} 条，SKU 列=${hasSku}，财务列=${hasPrice}`)
+    const result = await readImportFileText(new File([bytes], basename(path)), PRODUCT_COLUMNS)
+    const mapped = mapCsvRows(parseCsv(result.text), PRODUCT_COLUMNS, result.lineOffset)
+    const parsed = parseProducts(mapped.records)
+    const errors = [...mapped.errors, ...parsed.errors]
+    add('真实 XLSX 商品数据', parsed.data.length > 0 && errors.length === 0,
+      `${basename(path)}：合格 ${parsed.data.length} 条，错误 ${errors.length} 条${errors.length ? `；首条：${errors[0]}` : ''}`)
   } catch (error) {
     add('真实 XLSX 商品数据', false, `解析失败：${(error as Error).message}`)
   }
@@ -89,8 +105,8 @@ const pdfInputs = (flow: 'CATALOG' | 'ECOMMERCE', title: string) => [
 await Promise.all([
   health('ERP API', 'ERP_E2E_BASE', '/auth/health'),
   health('OMS API', 'OMS_E2E_BASE', '/api/health'),
-  file('ERP 选品商品图片', 'E2E_ERP_IMAGE_FILE'),
-  file('电商客户商品图片', 'E2E_ECOMMERCE_IMAGE_FILE'),
+  imageFile('ERP 选品商品图片', 'E2E_ERP_IMAGE_FILE'),
+  imageFile('电商客户商品图片', 'E2E_ECOMMERCE_IMAGE_FILE'),
   ...pdfInputs('CATALOG', '货盘客户'),
   ...pdfInputs('ECOMMERCE', '电商客户'),
   workbook(),

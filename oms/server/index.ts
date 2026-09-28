@@ -50,6 +50,7 @@ import {
   reactivateErpInboundAsn,
   createErpOutbound,
   createErpProduct,
+  uploadErpOmsProductImage,
   updateErpProduct,
   disableErpProduct,
   enableErpProduct,
@@ -844,7 +845,7 @@ function authenticatedCustomerCode(req: express.Request, supplied: unknown) {
 }
 
 app.use('/api', (req: AuthenticatedRequest, res, next) => {
-  if (req.path === '/health' || req.path === '/erp/webhooks/events') {
+  if (req.path === '/health' || req.path === '/erp/webhooks/events' || /^\/erp\/product-image\/[A-Za-z0-9._-]+$/.test(req.path)) {
     next()
     return
   }
@@ -1306,6 +1307,37 @@ app.get('/api/erp/announcements', async (_req, res) => {
 })
 
 /** P2：建品 */
+app.get('/api/erp/product-image/:fileName', async (req, res) => {
+  const fileName = String(req.params.fileName || '')
+  if (!/^[A-Za-z0-9._-]+\.(?:jpe?g|png|gif|webp)$/i.test(fileName)) {
+    return res.status(400).end()
+  }
+  try {
+    const response = await fetch(`${getErpApiBase()}/product-dev/images/${encodeURIComponent(fileName)}`)
+    if (!response.ok) return res.status(response.status).end()
+    res.setHeader('Content-Type', response.headers.get('content-type') || 'application/octet-stream')
+    res.setHeader('Cache-Control', 'public, max-age=86400')
+    res.send(Buffer.from(await response.arrayBuffer()))
+  } catch (error) {
+    sendErpError(res, error)
+  }
+})
+
+app.post('/api/erp/product-image', async (req, res) => {
+  try {
+    if (!authenticatedCustomerCode(req, null)) return res.status(403).json({ error: '请使用客户账号上传商品图片' })
+    const body = req.body as { fileName?: string; contentBase64?: string }
+    const result = await uploadErpOmsProductImage({
+      fileName: String(body.fileName || ''),
+      contentBase64: String(body.contentBase64 || ''),
+    })
+    const fileName = result.imageUrl.split('/').pop() || ''
+    res.json({ imageUrl: `/api/erp/product-image/${encodeURIComponent(fileName)}`, erpImageUrl: result.imageUrl })
+  } catch (error) {
+    sendErpError(res, error)
+  }
+})
+
 app.post('/api/erp/products', async (req, res) => {
   try {
     const body = req.body as {
@@ -1329,6 +1361,7 @@ app.post('/api/erp/products', async (req, res) => {
       declaredNameCn?: string
       unit?: string
       hasBattery?: boolean
+      imageUrl?: string
       remark?: string
     }
     let customerCode = authenticatedCustomerCode(req, body.customerCode)
@@ -1339,6 +1372,9 @@ app.post('/api/erp/products', async (req, res) => {
     const customerSku = String(body.customerSku || '').trim()
     if (!customerSku) return res.status(400).json({ error: '请填写客户 SKU' })
     if (customerSku.length >= 12) return res.status(400).json({ error: '客户 SKU 须少于 12 位' })
+    if (body.imageUrl && !/^\/api\/product-dev\/images\/[A-Za-z0-9._-]+$/.test(body.imageUrl)) {
+      return res.status(400).json({ error: '商品图片地址无效' })
+    }
 
     const result = await createErpProduct({
       sku: String(body.sku || ''),
@@ -1359,6 +1395,7 @@ app.post('/api/erp/products', async (req, res) => {
       declaredNameCn: body.declaredNameCn,
       unit: body.unit,
       hasBattery: body.hasBattery,
+      imageUrl: body.imageUrl,
       remark: body.remark,
     })
     res.json(result)
