@@ -76,16 +76,14 @@ function cartonBaseInbound(inboundNo) {
         return parsed.inboundNo || parsed.value;
     return raw;
 }
+/** 箱唛：入库单号-箱序号，例如 RVFUR-260921-0001-1 / -2 / -3。 */
 function buildCartonCode(inboundNo, boxSeq) {
     const seq = Math.max(1, Math.floor(Number(boxSeq) || 1));
     const raw = String(inboundNo || '').trim();
     if (!raw)
-        return padSeq(seq);
+        return String(seq);
     const base = cartonBaseInbound(raw);
-    const prefix = rvDocPrefix(base);
-    if (prefix)
-        return `${prefix}-${padSeq(seq)}`;
-    return `${base}-${padSeq(seq)}`;
+    return `${base}-${seq}`;
 }
 function isGeneratedCartonCode(code, inboundNo, boxSeq) {
     const token = String(code || '').trim().toUpperCase();

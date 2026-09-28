@@ -15,11 +15,11 @@ describe('wms-doc-no', () => {
   it('builds 易仓-style inbound / outbound / carton codes', () => {
     expect(buildInboundNo('AFU0430', day, 2)).toBe('RVAFU0430-260910-0002')
     expect(buildOutboundNo('AFU0167', day, 5)).toBe('DOAFU0167-260910-0005')
-    expect(buildCartonCode('RVAFU0430-260910-0002', 1)).toBe('RVAFU0430-260910-0001')
-    expect(buildCartonCode('RVAFU0430-260910-0002', 2)).toBe('RVAFU0430-260910-0002')
-    expect(buildCartonCode('RVFUR-260921-0001', 1)).toBe('RVFUR-260921-0001')
-    expect(buildCartonCode('RVFUR-260921-0001', 3)).toBe('RVFUR-260921-0003')
-    expect(buildCartonCode('RVAFU0430-260910-0002-1', 1)).toBe('RVAFU0430-260910-0001')
+    expect(buildCartonCode('RVAFU0430-260910-0002', 1)).toBe('RVAFU0430-260910-0002-1')
+    expect(buildCartonCode('RVAFU0430-260910-0002', 2)).toBe('RVAFU0430-260910-0002-2')
+    expect(buildCartonCode('RVFUR-260921-0001', 1)).toBe('RVFUR-260921-0001-1')
+    expect(buildCartonCode('RVFUR-260921-0001', 3)).toBe('RVFUR-260921-0001-3')
+    expect(buildCartonCode('RVAFU0430-260910-0002-1', 1)).toBe('RVAFU0430-260910-0002-1')
   })
 
   it('parses 易仓 and legacy scans without treating SKU as a document', () => {
