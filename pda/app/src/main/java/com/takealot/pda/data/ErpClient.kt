@@ -161,8 +161,30 @@ class ErpClient(private val session: SessionStore) {
         gson.fromJson(postJson("/outbound/$id/start-review", emptyMap<String, Any>()), OutboundOrder::class.java)
     }
 
-    suspend fun pack(id: Int) = withContext(Dispatchers.IO) {
-        postJson("/outbound/$id/pack", mapOf("reviewSource" to "pda"))
+    suspend fun pack(id: Int, cartons: List<Map<String, Double>> = emptyList()) = withContext(Dispatchers.IO) {
+        postJson(
+            "/outbound/$id/pack",
+            mapOf("reviewSource" to "pda", "cartons" to cartons),
+        )
+    }
+
+    suspend fun ship(
+        id: Int,
+        trackingNo: String = "",
+        carrier: String = "",
+        logisticsProduct: String = "",
+    ): OutboundOrder = withContext(Dispatchers.IO) {
+        gson.fromJson(
+            postJson(
+                "/outbound/$id/ship",
+                mapOf(
+                    "trackingNo" to trackingNo.trim(),
+                    "carrier" to carrier.trim(),
+                    "logisticsProduct" to logisticsProduct.trim(),
+                ),
+            ),
+            OutboundOrder::class.java,
+        )
     }
 
     suspend fun stocktakes(warehouseCode: String? = null, status: String? = null, stocktakeNo: String? = null): List<StocktakePlan> =

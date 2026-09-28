@@ -1,0 +1,40 @@
+{
+  "warehouseCode": "WMS-JHB-01",
+  "inbound": {
+    "orderNo": "REAL-INBOUND-NO",
+    "cartonCodes": ["REAL-INBOUND-NO-1"],
+    "items": [
+      {
+        "scanCode": "REAL-SKU",
+        "qty": 1,
+        "locationCode": "A-01-01"
+      }
+    ]
+  },
+  "outbound": {
+    "orderNo": "REAL-OUTBOUND-NO",
+    "allocations": [
+      {
+        "locationCode": "A-01-01",
+        "scanCode": "REAL-SKU"
+      }
+    ],
+    "items": [
+      {
+        "scanCode": "REAL-SKU",
+        "qty": 1
+      }
+    ],
+    "cartons": [
+      {
+        "lengthCm": 40,
+        "widthCm": 30,
+        "heightCm": 25,
+        "grossWeightKg": 8.5
+      }
+    ],
+    "trackingNo": "",
+    "carrier": "",
+    "logisticsProduct": ""
+  }
+}

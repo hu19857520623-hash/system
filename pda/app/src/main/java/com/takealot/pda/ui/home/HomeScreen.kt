@@ -161,6 +161,7 @@ fun HomeScreen(onInbound: (String) -> Unit, onOutbound: (String) -> Unit, onStoc
         Text("${tr("outbound")} · OUTBOUND", color = PdaOutbound, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 8.dp))
         WorkTile(tr("pick"), tr("pick_hint"), PdaOutbound, session.hasPerm("outbound.pick") && warehouseCode.isNotBlank(), warehouseCode.isBlank()) { onOutbound("pick") }
         WorkTile(tr("review"), tr("review_hint"), PdaOutbound, session.hasPerm("outbound.pack") && warehouseCode.isNotBlank(), warehouseCode.isBlank()) { onOutbound("review") }
+        WorkTile(tr("ship"), tr("ship_hint"), PdaOutbound, session.hasPerm("outbound.ship") && warehouseCode.isNotBlank(), warehouseCode.isBlank()) { onOutbound("ship") }
         Text("${tr("stocktake")} · STOCKTAKE", color = PdaStocktake, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 8.dp))
         WorkTile(tr("stocktake"), tr("stocktake_hint"), PdaStocktake, session.hasPerm("stocktake.count") && warehouseCode.isNotBlank(), warehouseCode.isBlank()) { onStocktake() }
     }

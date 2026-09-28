@@ -63,5 +63,19 @@ pda/preview/index.html
 | 入库-清点 | 扫 SKU 累加实收，提交清点 | `POST /api/inbound/:id/scan-qc`、`/qc` |
 | 入库-上架 | 扫 SKU → 扫库位 | `POST /api/inbound/:id/putaway` |
 | 出库-拣货 | 仅扫已分配给本工位/账号的出库单；默认按箱扫（一次记满库位件数），可切逐件 | `GET /api/outbound/:id/pick-suggestions`、`POST /api/outbound/:id/pick` |
-| 出库-复核 | 扫 SKU 复核后提交 | `POST /api/outbound/:id/start-review`、`/pack` |
+| 出库-复核 | 扫 SKU 复核；OMS 单逐箱录入实测长宽高和毛重，提交后计算实际费用 | `POST /api/outbound/:id/start-review`、`/pack` |
+| 出库-发运 | 扫描已打包出库单，填写可选物流信息并确认发运；扣减仓库库存并同步 OMS 状态与费用 | `POST /api/outbound/:id/ship` |
 | 在库-盘点 | 扫盘点单，按库位/SKU 提交实盘 | `GET /api/management-loop/stocktakes`、`POST /api/management-loop/stocktakes/:id/count` |
+
+## 真实设备自动化与证据
+
+先让 PDA 使用真实 ERP 仓库账号登录并选择作业仓库，再复制并填写 `scripts/e2e-real-device.example.json`。脚本会通过 PDA 扫码广播完成到仓、清点、上架、拣货、复核、外箱实测和发运，并为每个阶段保存截图、UI 层级及 `result.json`：
+
+```powershell
+.\scripts\e2e-real-device.ps1 `
+  -ManifestPath .\scripts\e2e-real-device.real.json `
+  -Flow All `
+  -AdbPath "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe"
+```
+
+真实运行前必须先由 ERP/OMS 建好单据并完成拣货员分配。JSON 中的 SKU、库位、数量、箱规和重量必须来自实物或真实单据；示例值只说明结构，不能作为验收数据。
