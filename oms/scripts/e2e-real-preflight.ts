@@ -41,6 +41,114 @@ async function health(name: string, envName: string, path: string) {
   }
 }
 
+async function responseJson(response: Response): Promise<Record<string, unknown>> {
+  try {
+    return await response.json() as Record<string, unknown>
+  } catch {
+    return {}
+  }
+}
+
+async function erpLogin() {
+  const base = setting('ERP_E2E_BASE')
+  const username = setting('ERP_E2E_USERNAME')
+  const password = setting('ERP_E2E_PASSWORD')
+  if (!base || !username || !password) {
+    return add(
+      'ERP 仓库/采购测试账号',
+      false,
+      '缺少 ERP_E2E_BASE、ERP_E2E_USERNAME 或 ERP_E2E_PASSWORD',
+    )
+  }
+  try {
+    const response = await fetch(endpoint(base, '/auth/login'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+      signal: AbortSignal.timeout(8000),
+    })
+    const payload = await responseJson(response)
+    const data = payload.data as Record<string, unknown> | undefined
+    const user = data?.user as Record<string, unknown> | undefined
+    const permissions = Array.isArray(user?.permissions) ? user.permissions.map(String) : []
+    const required = [
+      'product_dev.create',
+      'purchase.create',
+      'purchase.po_audit',
+      'create_inbound.create',
+      'inbound.arrival_scan',
+      'inbound.receive',
+      'inbound.qc',
+      'inbound.putaway',
+      'outbound.pick',
+      'outbound.pack',
+      'outbound.ship',
+    ]
+    const missing = required.filter(permission => !permissions.includes(permission))
+    const authenticated = response.ok && payload.code === 0 && Boolean(data?.token)
+    const ok = authenticated && missing.length === 0
+    add(
+      'ERP 仓库/采购测试账号',
+      ok,
+      !authenticated
+        ? `登录失败：HTTP ${response.status}`
+        : missing.length
+          ? `登录成功，但缺少端到端流程权限：${missing.join('、')}`
+          : `登录成功；角色 ${String(user?.roleCode || '未知')}`,
+    )
+  } catch (error) {
+    add('ERP 仓库/采购测试账号', false, `登录验证失败：${(error as Error).message}`)
+  }
+}
+
+async function omsLogin(
+  title: string,
+  usernameEnv: string,
+  passwordEnv: string,
+  expectedRole: 'catalog' | 'ecommerce',
+  requiredPermissions: string[],
+) {
+  const base = setting('OMS_E2E_BASE')
+  const username = setting(usernameEnv)
+  const password = setting(passwordEnv)
+  if (!base || !username || !password) {
+    return add(title, false, `缺少 OMS_E2E_BASE、${usernameEnv} 或 ${passwordEnv}`)
+  }
+  try {
+    const response = await fetch(endpoint(base, '/api/auth/login'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+      signal: AbortSignal.timeout(8000),
+    })
+    const payload = await responseJson(response)
+    const user = payload.user as Record<string, unknown> | undefined
+    const permissions = Array.isArray(user?.permissions) ? user.permissions.map(String) : []
+    const role = String(user?.role || '')
+    const type = String(user?.type || '')
+    const missing = requiredPermissions.filter(permission => !permissions.includes(permission))
+    const authenticated = response.ok && Boolean(payload.token)
+    const roleMatches = role === expectedRole && type === expectedRole
+    const passwordReady = user?.mustChangePassword !== true
+    const ok = authenticated && roleMatches && passwordReady && missing.length === 0
+    add(
+      title,
+      ok,
+      !authenticated
+        ? `登录失败：HTTP ${response.status}`
+        : !roleMatches
+          ? `账号类型不符：role=${role || '未知'}，type=${type || '未知'}，应为 ${expectedRole}`
+          : !passwordReady
+            ? '登录成功，但必须先修改临时密码'
+            : missing.length
+              ? `登录成功，但缺少端到端流程权限：${missing.join('、')}`
+              : `登录成功；客户代码 ${String(user?.customerCode || '未知')}`,
+    )
+  } catch (error) {
+    add(title, false, `登录验证失败：${(error as Error).message}`)
+  }
+}
+
 async function file(name: string, envName: string, signature?: string) {
   const path = setting(envName)
   if (!path) return add(name, false, `缺少 ${envName}`)
@@ -182,6 +290,21 @@ async function shipmentIdentity(
 await Promise.all([
   health('ERP API', 'ERP_E2E_BASE', '/auth/health'),
   health('OMS API', 'OMS_E2E_BASE', '/api/health'),
+  erpLogin(),
+  omsLogin(
+    'OMS 货盘客户测试账号',
+    'OMS_E2E_CATALOG_USERNAME',
+    'OMS_E2E_CATALOG_PASSWORD',
+    'catalog',
+    ['catalog:read', 'catalog:write', 'outbound:read', 'outbound:write'],
+  ),
+  omsLogin(
+    'OMS 电商客户测试账号',
+    'OMS_E2E_ECOMMERCE_USERNAME',
+    'OMS_E2E_ECOMMERCE_PASSWORD',
+    'ecommerce',
+    ['product:read', 'product:write', 'inbound:read', 'inbound:write', 'outbound:read', 'outbound:write'],
+  ),
   imageFile('ERP 选品商品图片', 'E2E_ERP_IMAGE_FILE'),
   imageFile('电商客户商品图片', 'E2E_ECOMMERCE_IMAGE_FILE'),
   ...pdfInputs('CATALOG', '货盘客户'),
@@ -204,14 +327,6 @@ add(
     ? `货盘 ${catalogBooking.bookingRef}；电商 ${ecommerceBooking.bookingRef}`
     : '需先成功解析货盘与电商两份预约单的业务身份',
 )
-for (const [name, username, password] of [
-  ['ERP 仓库/采购测试账号', 'ERP_E2E_USERNAME', 'ERP_E2E_PASSWORD'],
-  ['OMS 货盘客户测试账号', 'OMS_E2E_CATALOG_USERNAME', 'OMS_E2E_CATALOG_PASSWORD'],
-  ['OMS 电商客户测试账号', 'OMS_E2E_ECOMMERCE_USERNAME', 'OMS_E2E_ECOMMERCE_PASSWORD'],
-]) {
-  add(name, Boolean(setting(username) && setting(password)),
-    setting(username) && setting(password) ? '凭据已提供（尚未执行登录验证）' : `缺少 ${username} 或 ${password}`)
-}
 device()
 
 console.log(JSON.stringify({ ready: checks.every(check => check.ok), checks }, null, 2))
