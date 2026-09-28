@@ -142,6 +142,10 @@ jobs:
           cd /opt/system/oms
           docker compose build oms-api oms-web </dev/null
 
+          echo '=== Apply OMS product source schema ==='
+          docker compose run -T --rm --no-deps --entrypoint npx oms-api \
+            prisma db execute --file prisma/scripts/migrate_product_source.sql </dev/null
+
           echo '=== Build ERP ==='
           cd /opt/system/erp
           docker compose build erp-api erp-web </dev/null

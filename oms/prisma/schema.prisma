@@ -137,6 +137,7 @@ model Product {
   heightCm        Float
   inCatalog       Boolean
   productStatus   String           @db.VarChar(30)
+  productSource   String?          @db.VarChar(20)
   hasBattery      Boolean
   certUploaded    Boolean
   hasBoxSpec      Boolean

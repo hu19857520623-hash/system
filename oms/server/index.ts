@@ -2876,6 +2876,9 @@ function inventoryProductStateData(product: Record<string, unknown>, scopedCusto
     heightCm: Number(product.heightCm),
     inCatalog: Boolean(product.inCatalog),
     productStatus: String(product.productStatus),
+    productSource: product.productSource === 'manual' || product.productSource === 'import'
+      ? product.productSource
+      : null,
     hasBattery: Boolean(product.hasBattery),
     certUploaded: Boolean(product.certUploaded),
     hasBoxSpec: Boolean(product.hasBoxSpec),
