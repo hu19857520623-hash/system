@@ -1,0 +1,42 @@
+{
+  "evidenceOutput": "e2e-real-evidence-report.json",
+  "erp": {
+    "productDevId": 0,
+    "purchaseOrderId": 0,
+    "inboundId": 0,
+    "outboundId": 0,
+    "productSku": "REPLACE-WITH-REAL-SKU",
+    "productImageFile": "REPLACE-WITH-REAL-IMAGE.jpg",
+    "pdaResult": "REPLACE-WITH-ERP-PDA-EVIDENCE/result.json"
+  },
+  "catalog": {
+    "customerCode": "REPLACE-WITH-CATALOG-CUSTOMER-CODE",
+    "purchaseNo": "REPLACE-WITH-REAL-PURCHASE-NO",
+    "outboundNo": "REPLACE-WITH-REAL-OUTBOUND-NO",
+    "shipmentFiles": [
+      "REPLACE-WITH-OUTER-LABEL.pdf",
+      "REPLACE-WITH-BOOKING.pdf",
+      "REPLACE-WITH-SHIPPING-NOTE.pdf",
+      "REPLACE-WITH-PRODUCT-LABEL.pdf"
+    ],
+    "pdaResult": "REPLACE-WITH-CATALOG-PDA-EVIDENCE/result.json",
+    "podFile": "REPLACE-WITH-CATALOG-POD.pdf"
+  },
+  "ecommerce": {
+    "customerCode": "REPLACE-WITH-ECOMMERCE-CUSTOMER-CODE",
+    "xlsxFile": "REPLACE-WITH-REAL-OMS-TEMPLATE.xlsx",
+    "xlsxProductSkus": ["REPLACE-WITH-XLSX-SKU"],
+    "manualProductSku": "REPLACE-WITH-MANUAL-SKU",
+    "manualProductImageFile": "REPLACE-WITH-REAL-IMAGE.jpg",
+    "inboundNo": "REPLACE-WITH-REAL-INBOUND-NO",
+    "outboundNo": "REPLACE-WITH-REAL-OUTBOUND-NO",
+    "shipmentFiles": [
+      "REPLACE-WITH-OUTER-LABEL.pdf",
+      "REPLACE-WITH-BOOKING.pdf",
+      "REPLACE-WITH-SHIPPING-NOTE.pdf",
+      "REPLACE-WITH-PRODUCT-LABEL.pdf"
+    ],
+    "pdaResult": "REPLACE-WITH-ECOMMERCE-PDA-EVIDENCE/result.json",
+    "podFile": "REPLACE-WITH-ECOMMERCE-POD.pdf"
+  }
+}
