@@ -12,6 +12,7 @@
     "test:auth": "tsx --test server/auth.test.ts",
     "verify:auth": "tsx scripts/verify-oms-auth.ts",
     "verify:takealot:files": "tsx scripts/verify-real-takealot-files.ts",
+    "e2e:real:preflight": "tsx scripts/e2e-real-preflight.ts",
     "reset:bootstrap-admin": "tsx server/reset-bootstrap-admin-cli.ts",
     "build:single": "tsc && tsc -p tsconfig.server.json && vite build --mode singlefile && node scripts/copy-single-html.mjs",
     "preview": "vite preview",
