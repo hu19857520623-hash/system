@@ -16,12 +16,12 @@ describe('buildInboundBoxLabelData', () => {
     expect(labels[0]).toMatchObject({
       boxNo: 1,
       boxTotal: 2,
-      cartonCode: 'IN-20260707001-0001',
+      cartonCode: 'IN-20260707001-1',
       lines: [{ sku: 'HX6', qty: 40 }],
     })
     expect(labels[1]).toMatchObject({
       boxNo: 2,
-      cartonCode: 'IN-20260707001-0002',
+      cartonCode: 'IN-20260707001-2',
       lines: [{ sku: 'HX6', qty: 40 }],
     })
   })
