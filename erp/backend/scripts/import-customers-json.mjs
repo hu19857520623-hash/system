@@ -119,13 +119,13 @@ async function upsertPortalUser(accountId, item, passwordHash, omsStatus, nowIso
         `INSERT INTO \`oms_PortalUser\`
           (\`id\`, \`customerId\`, \`username\`, \`passwordHash\`, \`role\`, \`status\`,
            \`mustChangePassword\`, \`createdAt\`, \`updatedAt\`, \`lastLoginAt\`)
-         VALUES (?, ?, ?, ?, ?, ?, TRUE, ?, ?, NULL)
+         VALUES (?, ?, ?, ?, ?, ?, FALSE, ?, ?, NULL)
          ON DUPLICATE KEY UPDATE
           \`username\` = VALUES(\`username\`),
           \`passwordHash\` = VALUES(\`passwordHash\`),
           \`role\` = VALUES(\`role\`),
           \`status\` = VALUES(\`status\`),
-          \`mustChangePassword\` = TRUE,
+          \`mustChangePassword\` = FALSE,
           \`updatedAt\` = VALUES(\`updatedAt\`)`,
         portalUserId,
         accountId,

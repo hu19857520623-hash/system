@@ -433,9 +433,7 @@ export function mapCustomer(row: any) {
         ? '登录已停用'
         : omsLastLogin
           ? '已登录'
-          : portalMustChangePassword
-            ? '待首次登录 · 首登改密'
-            : '尚未登录'
+          : '尚未登录'
   return {
     id: row.id,
     code: row.customerCode,

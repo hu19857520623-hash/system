@@ -57,7 +57,7 @@ export interface PortalTemporaryPasswordResult {
   portalUsername?: string
   portalLoginEmail: string
   portalStatus: 'active' | 'disabled'
-  mustChangePassword: true
+  mustChangePassword: false
 }
 
 export interface CustomerUpdateRequest {

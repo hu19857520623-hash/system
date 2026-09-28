@@ -598,7 +598,16 @@ onMounted(async () => {
             </el-col>
             <el-col :span="24">
               <el-form-item label="重置密码">
-                <el-input v-model="editForm.password" type="password" show-password placeholder="留空不修改" style="max-width:280px" />
+                <el-input
+                  v-model="editForm.password"
+                  type="password"
+                  show-password
+                  autocomplete="new-password"
+                  :disabled="false"
+                  :readonly="false"
+                  placeholder="请输入至少 6 位新密码；留空不修改"
+                  style="max-width:280px"
+                />
               </el-form-item>
             </el-col>
           </el-row>

@@ -151,7 +151,10 @@ export function verifyAccessToken(token: string): AuthClaims {
     customerCode: decoded.customerCode == null ? null : String(decoded.customerCode),
     role: role as OmsRole,
     permissions,
-    mustChangePassword: Boolean(decoded.mustChangePassword),
+    // First-login password changes are no longer enforced.  Keep the claim in
+    // the session contract so older clients remain compatible, but always
+    // report it as disabled (including for tokens issued before this change).
+    mustChangePassword: false,
     impersonatedBy: decoded.impersonatedBy == null ? null : String(decoded.impersonatedBy),
   }
   if (

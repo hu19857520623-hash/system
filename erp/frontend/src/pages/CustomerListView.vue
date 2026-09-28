@@ -333,7 +333,7 @@ async function submitPortalPassword() {
   const actionLabel = row.portalReady ? '重置临时密码' : '设置临时密码'
   try {
     await erpConfirm(
-      `${actionLabel}后现有密码立即失效，客户下次登录必须修改密码。确认继续？`,
+      `${actionLabel}后现有密码立即失效，新密码可直接用于登录。确认继续？`,
       `确认${actionLabel}`,
       { type: 'warning', confirmButtonText: '确认', cancelButtonText: '取消' },
     )
@@ -716,7 +716,7 @@ onMounted(() => {
           <el-form-item label="临时密码">
             <el-input :model-value="DEFAULT_OMS_TEMPORARY_PASSWORD" disabled />
           </el-form-item>
-          <p class="password-note">临时密码固定为 123456，无需填写；客户首次登录必须修改。</p>
+          <p class="password-note">临时密码固定为 123456，无需填写；客户可直接使用该密码登录。</p>
         </div>
       </el-form>
       <template #footer>
@@ -742,7 +742,7 @@ onMounted(() => {
               <strong class="mono">123456</strong>
             </div>
             <el-alert
-              title="客户首次登录后必须修改密码。"
+              title="客户可直接使用初始密码登录。"
               type="info"
               :closable="false"
               show-icon
@@ -928,8 +928,8 @@ onMounted(() => {
     >
       <el-alert
         :title="passwordCustomer?.portalReady
-          ? '保存后现有密码立即失效，客户下次登录必须修改密码。'
-          : '设置后门户账号可登录，客户首次登录必须修改密码。'"
+          ? '保存后现有密码立即失效，新密码可直接用于登录。'
+          : '设置后门户账号可直接登录。'"
         type="warning"
         :closable="false"
         show-icon

@@ -248,10 +248,7 @@ export default function Accounts() {
       setFeedback({ kind: 'error', message: '该客户尚未开通 OMS 登录账号。' })
       return
     }
-    const detail = account.portalUser.mustChangePassword
-      ? '该账号首次登录需改密；模拟登录会跳过改密页，便于管理员排查。'
-      : ''
-    if (!window.confirm(`以 ${account.code}（${username}）身份登录 OMS？${detail}`)) return
+    if (!window.confirm(`以 ${account.code}（${username}）身份登录 OMS？`)) return
 
     setImpersonatingId(account.id)
     setFeedback(null)
@@ -291,7 +288,7 @@ export default function Accounts() {
         await refreshAccountList()
         setFeedback({
           kind: 'success',
-          message: `${accountCode} 的临时密码已重置，客户下次登录必须修改密码。`,
+          message: `${accountCode} 的密码已重置，客户可直接使用新密码登录。`,
         })
       } catch (refreshError) {
         setFeedback({
@@ -569,7 +566,7 @@ export default function Accounts() {
             <div className="border-b border-border-light px-6 py-4">
               <h3 className="font-semibold text-text-primary">重置临时密码 · {resetting.code}</h3>
               <p className="mt-1 text-xs text-text-muted">
-                保存后现有密码立即失效，客户下次登录必须修改密码。
+                保存后现有密码立即失效，客户可直接使用新密码登录。
               </p>
             </div>
             <div className="space-y-4 px-6 py-5">

@@ -79,6 +79,7 @@ test('customer-less system administrator claims are valid', () => {
   assert.equal(isLoginAllowed('active', undefined, true, 'sys_admin', null), true)
   assert.deepEqual(verifyAccessToken(issueAccessToken(adminClaims)), {
     ...adminClaims,
+    mustChangePassword: false,
     impersonatedBy: null,
   })
 })
@@ -130,7 +131,7 @@ test('accepts a valid bearer JWT', () => {
   let nextCalled = false
   authenticateApi(req, res, (() => { nextCalled = true }) as NextFunction)
   assert.equal(nextCalled, true)
-  assert.deepEqual(req.auth, { ...claims, impersonatedBy: null })
+  assert.deepEqual(req.auth, { ...claims, mustChangePassword: false, impersonatedBy: null })
 })
 
 test('maps mutating OMS API paths to write permissions', () => {

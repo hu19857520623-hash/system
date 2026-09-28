@@ -83,7 +83,7 @@ export async function findBootstrapPortalAdmin(
 export async function ensureConfiguredPortalAdmin(prisma: PrismaClient) {
   const credentials = resolveBootstrapCredentials()
   if (!credentials) return { action: 'skipped' as const }
-  const { username, password, useDevFallback } = credentials
+  const { username, password } = credentials
   const now = new Date().toISOString()
   const existing = await findBootstrapPortalAdmin(prisma, username)
 
@@ -125,8 +125,7 @@ export async function ensureConfiguredPortalAdmin(prisma: PrismaClient) {
       passwordHash: await bcrypt.hash(password, 12),
       role: 'sys_admin',
       status: 'active',
-      mustChangePassword: useDevFallback
-        || process.env.OMS_PORTAL_ADMIN_MUST_CHANGE_PASSWORD !== 'false',
+      mustChangePassword: false,
       createdAt: now,
       updatedAt: now,
     },

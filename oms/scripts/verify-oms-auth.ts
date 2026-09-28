@@ -41,7 +41,7 @@ async function main() {
       passwordHash: await bcrypt.hash(temporaryPassword, 4),
       role: 'sys_admin',
       status: 'active',
-      mustChangePassword: true,
+      mustChangePassword: false,
       createdAt: now,
       updatedAt: now,
     },
@@ -65,11 +65,10 @@ async function main() {
     const loginToken = String(login.body.token || '')
     assert.ok(loginToken)
 
-    const blockedBootstrap = await request('/bootstrap', {
+    const bootstrap = await request('/bootstrap', {
       headers: { Authorization: `Bearer ${loginToken}` },
     })
-    assert.equal(blockedBootstrap.status, 403)
-    assert.equal(blockedBootstrap.body.code, 'PASSWORD_CHANGE_REQUIRED')
+    assert.equal(bootstrap.status, 200)
 
     const changed = await request('/auth/change-password', {
       method: 'POST',
@@ -100,7 +99,7 @@ async function main() {
 
     console.log(
       'OMS auth verification passed: unauthorized=401 invalid-login=401 '
-      + 'login=200 password-change=200 disabled=401',
+      + 'login=200 bootstrap=200 password-change=200 disabled=401',
     )
   } finally {
     await prisma.portalUser.deleteMany({ where: { id: userId } })

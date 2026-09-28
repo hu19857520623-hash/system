@@ -101,7 +101,7 @@ describe('CustomerProvisioningService unified ERP/OMS provisioning', () => {
         omsId: 'erp-customer-cus-042',
         portalReady: true,
         portalLoginEmail: '13800138000',
-        mustChangePassword: true,
+        mustChangePassword: false,
       },
     })
     const serialized = JSON.stringify(
@@ -245,7 +245,7 @@ describe('CustomerProvisioningService unified ERP/OMS provisioning', () => {
 
     expect(result.oms).toMatchObject({
       portalLoginEmail: '13800138000',
-      mustChangePassword: true,
+      mustChangePassword: false,
     })
     expect(tx.$executeRaw).toHaveBeenCalledTimes(1)
     const update = tx.$executeRaw.mock.calls[0]

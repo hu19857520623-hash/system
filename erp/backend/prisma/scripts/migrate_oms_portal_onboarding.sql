@@ -114,7 +114,7 @@ CREATE TABLE IF NOT EXISTS `oms_PortalUser` (
   `passwordHash` VARCHAR(255) NOT NULL,
   `role` VARCHAR(30) NOT NULL,
   `status` VARCHAR(30) NOT NULL,
-  `mustChangePassword` BOOLEAN NOT NULL DEFAULT TRUE,
+  `mustChangePassword` BOOLEAN NOT NULL DEFAULT FALSE,
   `createdAt` VARCHAR(40) NOT NULL,
   `updatedAt` VARCHAR(40) NOT NULL,
   `lastLoginAt` VARCHAR(40) NULL,

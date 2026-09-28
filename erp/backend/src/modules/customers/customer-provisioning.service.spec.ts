@@ -95,7 +95,7 @@ describe('CustomerProvisioningService', () => {
     expect(result.oms).toMatchObject({
       portalReady: true,
       portalLoginEmail: '13800138000',
-      mustChangePassword: true,
+      mustChangePassword: false,
     })
     expect(bcrypt.hash).toHaveBeenCalledWith('abcdef', 12)
     const serialized = JSON.stringify(

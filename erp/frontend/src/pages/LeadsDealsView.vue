@@ -668,7 +668,7 @@ onMounted(async () => {
     append-to-body
     :close-on-click-modal="false"
   >
-    <p class="oms-hint">填写联系电话后为该成交客户开通 OMS 账号。手机号即登录账号；临时密码固定为 123456，客户首次登录必须修改。</p>
+    <p class="oms-hint">填写联系电话后为该成交客户开通 OMS 账号。手机号即登录账号；临时密码固定为 123456，账号可直接登录。</p>
     <el-form ref="omsFormRef" :model="omsForm" :rules="omsRules" label-width="108px">
       <el-form-item label="客户代码" prop="customerCode" required>
         <el-input v-model="omsForm.customerCode" placeholder="如 CUS-001" maxlength="30" />
@@ -720,7 +720,7 @@ onMounted(async () => {
   </el-dialog>
 
   <el-dialog v-model="omsSuccessVisible" width="520px" destroy-on-close append-to-body>
-    <el-result icon="success" title="OMS 账号已开通" sub-title="请把登录手机号和初始密码 123456 交给客户，并提醒首次登录必须改密">
+    <el-result icon="success" title="OMS 账号已开通" sub-title="请把登录手机号和初始密码 123456 交给客户，账号可直接登录">
       <template #extra>
         <div v-if="omsSuccess" class="oms-success">
           <div><span>客户代码</span><strong>{{ omsSuccess.customerCode }}</strong></div>

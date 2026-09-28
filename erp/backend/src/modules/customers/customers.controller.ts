@@ -37,7 +37,7 @@ export class CustomersController {
     return this.service.importLegacyFromFile()
   }
 
-  /** OMS server：由内部调用方重置临时密码，且强制首次登录改密。 */
+  /** OMS server：由内部调用方重置 OMS 登录密码。 */
   @OmsBridge()
   @Post('oms/reset-temporary-password')
   setPortalTemporaryPasswordFromOms(

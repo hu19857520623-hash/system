@@ -258,11 +258,11 @@ export class CustomerProvisioningService {
                   \`passwordHash\` = ${passwordHash},
                   \`role\` = ${portalType},
                   \`status\` = ${status},
-                  \`mustChangePassword\` = TRUE,
+                  \`mustChangePassword\` = FALSE,
                   \`updatedAt\` = ${now}
               WHERE \`id\` = ${account.portalUserId}
             `)
-            mustChangePassword = true
+            mustChangePassword = false
           } else {
             await tx.$executeRaw(Prisma.sql`
               UPDATE \`oms_portaluser\`
@@ -291,7 +291,7 @@ export class CustomerProvisioningService {
           )
           portalUsername = normalizedUsername
           portalReady = true
-          mustChangePassword = true
+          mustChangePassword = false
         }
 
         return {
@@ -364,7 +364,7 @@ export class CustomerProvisioningService {
             portalUsername: username,
             portalLoginEmail: username,
             portalStatus: status,
-            mustChangePassword: true,
+            mustChangePassword: false,
           },
         }
       })
@@ -561,7 +561,7 @@ export class CustomerProvisioningService {
       portalUsername: portal.username,
       portalLoginEmail: portal.username,
       portalStatus: status,
-      mustChangePassword: true,
+      mustChangePassword: false,
     }
   }
 
@@ -615,7 +615,7 @@ export class CustomerProvisioningService {
             \`passwordHash\` = ${passwordHash},
             \`role\` = ${portalType},
             \`status\` = ${status},
-            \`mustChangePassword\` = TRUE,
+            \`mustChangePassword\` = FALSE,
             \`updatedAt\` = ${now}
         WHERE \`id\` = ${existingPortalUserId}
       `)
@@ -634,7 +634,7 @@ export class CustomerProvisioningService {
         ${passwordHash},
         ${portalType},
         ${status},
-        TRUE,
+        FALSE,
         ${now},
         ${now},
         NULL

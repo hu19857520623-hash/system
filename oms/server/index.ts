@@ -14,7 +14,6 @@ import {
   customerScope,
   getJwtSecret,
   isLoginAllowed,
-  isImpersonatedSession,
   isPortalIdentityActive,
   isStrongPassword,
   issueAccessToken,
@@ -426,7 +425,10 @@ async function buildBootstrap(auth: AuthClaims) {
       lastLoginAt: true,
     },
   })
-  const portalByCustomer = new Map(portalUsers.map(user => [user.customerId, user]))
+  const portalByCustomer = new Map(portalUsers.map(user => [
+    user.customerId,
+    { ...user, mustChangePassword: false },
+  ]))
   const accountsWithReadiness = all.accounts.map(account => ({
     ...account,
     portalUser: portalByCustomer.get(account.id) ?? null,
@@ -526,7 +528,9 @@ function claimsForIdentity(identity: PortalIdentity): AuthClaims {
     customerCode: identity.customerAccount?.code ?? null,
     role: identity.role as OmsRole,
     permissions: currentPermissions(identity),
-    mustChangePassword: identity.mustChangePassword,
+    // Password changes remain available from account settings, but they are
+    // not a prerequisite for using OMS.
+    mustChangePassword: false,
   }
 }
 
@@ -714,12 +718,6 @@ app.post(
   requireSysAdmin,
   async (req: AuthenticatedRequest, res) => {
     try {
-      if (req.auth?.mustChangePassword) {
-        return res.status(403).json({
-          error: '首次登录必须先修改密码',
-          code: 'PASSWORD_CHANGE_REQUIRED',
-        })
-      }
       const account = await prisma.customerAccount.findUnique({
         where: { id: String(req.params.id) },
       })
@@ -765,12 +763,6 @@ app.post(
   requireSysAdmin,
   async (req, res) => {
     try {
-      if ((req as AuthenticatedRequest).auth?.mustChangePassword) {
-        return res.status(403).json({
-          error: '首次登录必须先修改密码',
-          code: 'PASSWORD_CHANGE_REQUIRED',
-        })
-      }
       const result = await resetCustomerTemporaryPassword(
         String(req.params.id),
         req.body?.username ?? req.body?.loginEmail,
@@ -858,19 +850,6 @@ app.use('/api', (req: AuthenticatedRequest, res, next) => {
     try {
       if (!(await refreshAuthenticatedIdentity(req, res))) return
       if (!assertApiWritePermission(req, res)) return
-      if (
-        req.auth?.mustChangePassword
-        && !isImpersonatedSession(req.auth)
-        && req.path !== '/auth/me'
-        && req.path !== '/auth/change-password'
-        && req.path !== '/auth/logout'
-      ) {
-        res.status(403).json({
-          error: '首次登录必须先修改密码',
-          code: 'PASSWORD_CHANGE_REQUIRED',
-        })
-        return
-      }
       if (req.auth?.role !== 'sys_admin') {
         // 货盘共享池会混在客户本地 inventory-state 里，由 PUT 处理函数剥离，不走整包扫 customerId。
         const skipBodyCustomerSweep = req.method === 'PUT' && req.path === '/inventory-state'
@@ -2869,6 +2848,9 @@ app.patch('/api/accounts/:id', requireSysAdmin, async (req, res) => {
     })
     res.json({
       ...updated,
+      portalUser: updated.portalUser
+        ? { ...updated.portalUser, mustChangePassword: false }
+        : null,
       permissions: parseJson(updated.permissions, []),
       priceTemplateByRegion: updated.priceTemplateByRegion
         ? parseJson<Record<string, string | null>>(updated.priceTemplateByRegion, {})

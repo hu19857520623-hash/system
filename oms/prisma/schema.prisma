@@ -48,7 +48,7 @@ model PortalUser {
   passwordHash       String           @db.VarChar(255)
   role               String           @db.VarChar(30)
   status             String           @db.VarChar(30)
-  mustChangePassword Boolean          @default(true)
+  mustChangePassword Boolean          @default(false)
   createdAt          String           @db.VarChar(40)
   updatedAt          String           @db.VarChar(40)
   lastLoginAt        String?          @db.VarChar(40)

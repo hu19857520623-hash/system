@@ -49,7 +49,7 @@ export default function ChangePassword() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-surface-muted p-6">
       <Card padding className="w-full max-w-md shadow-card">
-        <h1 className="text-xl font-semibold text-text-primary">首次登录，请修改密码</h1>
+        <h1 className="text-xl font-semibold text-text-primary">修改密码</h1>
         <p className="mt-2 text-sm text-text-muted">完成密码修改后才能进入业务系统。</p>
         <form className="mt-6 space-y-4" onSubmit={submit}>
           <FormField label="当前临时密码" required>
