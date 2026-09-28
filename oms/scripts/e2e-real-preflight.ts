@@ -6,17 +6,33 @@ import { execFileSync } from 'node:child_process'
 import { basename } from 'node:path'
 import { mapCsvRows, parseCsv, readImportFileText } from '../src/data/csvImportExport'
 import { PRODUCT_COLUMNS, parseProducts } from '../src/data/importTemplates'
+import {
+  detectTakealotDocKind,
+  mergeTakealotParsed,
+  parseTakealotDocumentText,
+  parseTakealotFilename,
+  takealotIdentityConflicts,
+} from '../src/data/takealotDocParser'
+import { extractPdfTextModelFromData } from '../src/data/takealotPdfText'
 
 type Check = { name: string; ok: boolean; detail: string }
 const checks: Check[] = []
 const add = (name: string, ok: boolean, detail: string) => checks.push({ name, ok, detail })
 const setting = (name: string) => String(process.env[name] || '').trim()
 
+function endpoint(base: string, path: string) {
+  const normalizedBase = base.replace(/\/$/, '')
+  if (normalizedBase.endsWith('/api') && path.startsWith('/api/')) {
+    return `${normalizedBase}${path.slice(4)}`
+  }
+  return `${normalizedBase}${path}`
+}
+
 async function health(name: string, envName: string, path: string) {
   const base = setting(envName)
   if (!base) return add(name, false, `缺少 ${envName}`)
   try {
-    const response = await fetch(`${base.replace(/\/$/, '')}${path}`, {
+    const response = await fetch(endpoint(base, path), {
       signal: AbortSignal.timeout(8000),
     })
     add(name, response.ok, `HTTP ${response.status}`)
@@ -102,6 +118,67 @@ const pdfInputs = (flow: 'CATALOG' | 'ECOMMERCE', title: string) => [
   file(`${title}商品标签 PDF`, `E2E_${flow}_PRODUCT_LABEL_PDF`, '%PDF-'),
 ]
 
+type ShipmentIdentity = {
+  bookingRef: string
+  poNumber?: string
+  sellerId?: string
+  warehouseCode?: string
+}
+
+async function shipmentIdentity(
+  flow: 'CATALOG' | 'ECOMMERCE',
+  title: string,
+): Promise<ShipmentIdentity | undefined> {
+  const inputs = [
+    ['OUTER_LABEL_PDF', '外箱标'],
+    ['BOOKING_PDF', '预约单'],
+    ['SHIPPING_NOTE_PDF', '发货清单'],
+    ['PRODUCT_LABEL_PDF', 'SKU 标签'],
+  ] as const
+  const paths = inputs.map(([suffix]) => setting(`E2E_${flow}_${suffix}`))
+  if (paths.some(path => !path)) return undefined
+  try {
+    const parts = []
+    for (const [index, path] of paths.entries()) {
+      const bytes = await readFile(path)
+      const model = await extractPdfTextModelFromData(new Uint8Array(bytes))
+      const kind = detectTakealotDocKind(basename(path), model.text)
+      const expectedKind = inputs[index][1]
+      if (kind !== expectedKind) {
+        add(`${title}四份发货文件业务身份`, false, `${basename(path)} 被识别为“${kind}”，应为“${expectedKind}”`)
+        return undefined
+      }
+      parts.push(
+        parseTakealotFilename(basename(path)),
+        parseTakealotDocumentText(model.text, kind),
+      )
+    }
+    const conflicts = takealotIdentityConflicts(parts)
+    const parsed = mergeTakealotParsed(...parts)
+    const ok = Boolean(parsed.bookingRef && parsed.poNumber && parsed.sellerId && parsed.warehouseCode)
+      && conflicts.length === 0
+    add(
+      `${title}四份发货文件业务身份`,
+      ok,
+      ok
+        ? `预约号 ${parsed.bookingRef}；PO ${parsed.poNumber}；卖家 ${parsed.sellerId}；仓库 ${parsed.warehouseCode}`
+        : conflicts.length
+          ? `业务字段冲突：${conflicts.join('；')}`
+          : '四份发货文件合并后缺少预约号、PO、卖家或仓库字段',
+    )
+    if (!ok || !parsed.bookingRef) return undefined
+    return {
+      bookingRef: parsed.bookingRef,
+      poNumber: parsed.poNumber,
+      sellerId: parsed.sellerId,
+      warehouseCode: parsed.warehouseCode,
+    }
+  } catch (error) {
+    add(`${title}四份发货文件业务身份`, false, `解析失败：${(error as Error).message}`)
+    return undefined
+  }
+}
+
 await Promise.all([
   health('ERP API', 'ERP_E2E_BASE', '/auth/health'),
   health('OMS API', 'OMS_E2E_BASE', '/api/health'),
@@ -111,11 +188,22 @@ await Promise.all([
   ...pdfInputs('ECOMMERCE', '电商客户'),
   workbook(),
 ])
-const catalogBooking = setting('E2E_CATALOG_BOOKING_PDF')
-const ecommerceBooking = setting('E2E_ECOMMERCE_BOOKING_PDF')
-add('两类客户使用不同的真实预约单', Boolean(
-  catalogBooking && ecommerceBooking && catalogBooking !== ecommerceBooking,
-), '货盘与电商流程不可重复使用同一份预约单')
+const [catalogBooking, ecommerceBooking] = await Promise.all([
+  shipmentIdentity('CATALOG', '货盘客户'),
+  shipmentIdentity('ECOMMERCE', '电商客户'),
+])
+const distinctBookings = Boolean(
+  catalogBooking
+  && ecommerceBooking
+  && catalogBooking.bookingRef !== ecommerceBooking.bookingRef,
+)
+add(
+  '两类客户使用不同的真实预约单',
+  distinctBookings,
+  catalogBooking && ecommerceBooking
+    ? `货盘 ${catalogBooking.bookingRef}；电商 ${ecommerceBooking.bookingRef}`
+    : '需先成功解析货盘与电商两份预约单的业务身份',
+)
 for (const [name, username, password] of [
   ['ERP 仓库/采购测试账号', 'ERP_E2E_USERNAME', 'ERP_E2E_PASSWORD'],
   ['OMS 货盘客户测试账号', 'OMS_E2E_CATALOG_USERNAME', 'OMS_E2E_CATALOG_PASSWORD'],
