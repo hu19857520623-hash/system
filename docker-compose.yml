@@ -196,6 +196,7 @@ services:
     environment:
       LISTEN_HOST: 0.0.0.0
       PORT: 3456
+      TAKEALOT_EGRESS_PROXY_URL: ${TAKEALOT_EGRESS_PROXY_URL:-}
     ports:
       - "127.0.0.1:3456:3456"
     networks:

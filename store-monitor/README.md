@@ -180,6 +180,14 @@ https://marketplace-api.takealot.com/v1/status
 3. 使用 **南非或欧美节点** 的 VPN（Takealot 是南非平台）
 4. 联系 Takealot 卖家支持，说明 API 访问被 Cloudflare 拦截
 
+生产服务器如已有可信的南非/欧美 HTTP(S) 出口代理，可在部署环境设置：
+
+```bash
+TAKEALOT_EGRESS_PROXY_URL=http://用户名:密码@代理主机:端口
+```
+
+也支持无认证的 HTTP(S)/SOCKS5 代理。认证 SOCKS5 不受 Chromium 支持，请改用 HTTP(S) 代理。该配置只用于访问 Takealot，不会代理 ERP/OMS 内部流量；不要使用公开免费代理，以免泄露店铺 API Key。
+
 > 你电脑能跑、别人电脑不能跑：若对方浏览器 `/status` 正常，请让对方换 **v1.0.2** 并运行网络自检。
 
 ---

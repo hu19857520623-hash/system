@@ -5,7 +5,8 @@
   "description": "Takealot 卖家数据中心 - 高保真 API 数据展示界面",
   "scripts": {
     "start": "node server/index.js",
-    "dev": "node server/index.js"
+    "dev": "node server/index.js",
+    "test": "node --test server/*.test.js"
   },
   "dependencies": {
     "express": "^4.21.2",

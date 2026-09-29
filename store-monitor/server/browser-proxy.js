@@ -1,9 +1,11 @@
 const fs = require('fs');
 const path = require('path');
 const puppeteer = require('puppeteer-core');
+const { proxyConfig } = require('./egress-proxy');
 
 const API_ORIGIN = 'https://marketplace-api.takealot.com';
 const PROFILE_DIR = path.join(__dirname, '../data/chrome-profile');
+const EGRESS_PROXY = proxyConfig();
 
 const CHROME_CANDIDATES = [
   process.env.CHROME_PATH,
@@ -86,6 +88,8 @@ async function launchBrowser({ visible = false } = {}) {
     `--user-data-dir=${PROFILE_DIR}`,
   ];
 
+  if (EGRESS_PROXY) args.push(`--proxy-server=${EGRESS_PROXY.serverUrl}`);
+
   if (!visible) {
     args.push('--window-position=-32000,-32000', '--window-size=800,600');
   }
@@ -122,6 +126,7 @@ async function proxyViaBrowser(targetUrl, method, headers, body) {
   await stealthPage(page);
 
   try {
+    if (EGRESS_PROXY?.auth) await page.authenticate(EGRESS_PROXY.auth);
     await page.setUserAgent(
       headers['User-Agent'] ||
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
@@ -202,6 +207,7 @@ async function runVisibleBootstrap() {
       browser = await launchBrowser({ visible: true });
       const page = await browser.newPage();
       await stealthPage(page);
+      if (EGRESS_PROXY?.auth) await page.authenticate(EGRESS_PROXY.auth);
       await page.goto(`${API_ORIGIN}/v1/status`, {
         waitUntil: 'domcontentloaded',
         timeout: 120000,

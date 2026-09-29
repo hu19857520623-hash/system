@@ -4,6 +4,7 @@ const fs = require('fs');
 const https = require('https');
 const { spawn } = require('child_process');
 const os = require('os');
+const { proxyConfig, proxySummary, curlConfigLine } = require('./egress-proxy');
 const {
   proxyViaBrowser,
   testBrowserAccess,
@@ -17,6 +18,7 @@ const PORT = process.env.PORT || 3456;
 const LISTEN_HOST = process.env.LISTEN_HOST || '127.0.0.1';
 const TAKEALOT_BASE = 'https://marketplace-api.takealot.com/v1';
 const DATA_DIR = path.join(__dirname, '../data/snapshots');
+const EGRESS_PROXY = proxyConfig();
 
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -101,6 +103,7 @@ function proxyViaCurl(url, method, headers, body) {
   return new Promise((resolve, reject) => {
     const curlBin = process.platform === 'win32' ? 'curl.exe' : 'curl';
     const args = [
+      '--disable',
       '-sS',
       '-L',
       '--max-time',
@@ -110,6 +113,9 @@ function proxyViaCurl(url, method, headers, body) {
       '-w',
       '\n__HTTP_CODE__%{http_code}',
     ];
+
+    if (EGRESS_PROXY) args.push('--proxy', EGRESS_PROXY.serverUrl);
+    if (EGRESS_PROXY?.auth) args.push('--config', '-');
 
     Object.entries(headers).forEach(([k, v]) => {
       if (v != null && v !== '') args.push('-H', `${k}: ${v}`);
@@ -123,6 +129,7 @@ function proxyViaCurl(url, method, headers, body) {
     args.push(url);
 
     const proc = spawn(curlBin, args, { windowsHide: true });
+    proc.stdin.end(curlConfigLine(EGRESS_PROXY));
     let stdout = '';
     let stderr = '';
 
@@ -266,6 +273,7 @@ app.get('/api/diag', async (_req, res) => {
     version: '1.1.0',
     platform: os.platform(),
     browserInstalled: Boolean(findBrowserExecutable()),
+    egressProxy: proxySummary(EGRESS_PROXY),
     channels: { chrome, curl, node },
     recommendation: chrome.ok
       ? '使用本地代理（Chrome 通道可用）'
