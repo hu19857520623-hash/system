@@ -29,6 +29,7 @@ import {
 } from './catalog-pipeline-qty.util'
 import { CATALOG_CUSTOMER_CODE, catalogBaseSkuFromInternal, catalogSkuLookupKeys, toCatalogInternalSku } from '../../common/catalog-customer.util'
 import { CosObjectUrlService } from '../../common/cos-object-url.service'
+import { readableDisplayText } from '../../common/display-text.util'
 
 function num(v: any, fallback = 0): number {
   if (v == null) return fallback
@@ -110,7 +111,7 @@ export class PricingService {
         marketPrice: num(r.marketPrice),
         price: num(r.price),
         operator: r.operator,
-        note: r.note || '',
+        note: readableDisplayText(r.note, '手动调价'),
       })),
     }
   }
@@ -138,7 +139,7 @@ export class PricingService {
       const list = holdersByLookupSku.get(row.sku) || []
       list.push({
         customerCode: customer.customerCode,
-        customerName: customer.customerName,
+        customerName: readableDisplayText(customer.customerName, customer.customerCode),
         quantity: row.quantity,
       })
       holdersByLookupSku.set(row.sku, list)
@@ -640,7 +641,7 @@ export class PricingService {
         marketPrice: data.marketPrice,
         price: data.price ?? data.finalPrice,
         operator: role,
-        note: data.note || '????',
+        note: data.note || '手动调价',
       },
     })
     await this.addHistory(

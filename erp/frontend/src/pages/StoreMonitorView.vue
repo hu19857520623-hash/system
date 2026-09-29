@@ -31,6 +31,9 @@ const enabledCount = computed(() => stores.value.filter(row => row.enabled && ro
 const channelCount = computed(() =>
   Object.values(diag.value?.channels || {}).filter((channel: any) => channel?.ok).length,
 )
+const canRunBrowserBootstrap = computed(() =>
+  canManage.value && diag.value?.browserInstalled && diag.value?.platform === 'win32',
+)
 const serviceLabel = computed(() => ({
   checking: '正在检测',
   online: '代理在线',
@@ -217,8 +220,8 @@ onMounted(loadSession)
           <p class="command-kicker">TAKEALOT OPERATIONS</p>
           <h1>店铺监控</h1>
           <p>
-            Takealot 经营看板嵌入 ERP，数据经<strong>本机代理</strong>（默认 127.0.0.1:3456 + Chrome）拉取；
-            非云端内置实时服务。店铺槽位与 API Key 存 ERP，看板需代理在线。
+            Takealot 经营看板嵌入 ERP，数据经<strong>监控代理</strong>的 Chromium、curl 或 Node 通道拉取；
+            店铺槽位与 API Key 存 ERP，看板需代理在线且至少一条通道可用。
           </p>
         </div>
       </div>
@@ -256,9 +259,9 @@ onMounted(loadSession)
       <div>
         <strong>Takealot 接口通道不可用（{{ channelCount }}/3）</strong>
         <span>
-          服务器访问 Takealot 常被 Cloudflare 拦截；生产 Docker 内也没有 Chrome 转发通道。
-          建议在<strong>本机 Windows</strong>运行 <code>store-monitor/启动.bat</code>（需 Chrome）做本地监控；
-          或换南非/欧美 VPN 后点击「修复浏览器通道」。
+          当前代理通道均不可用，可能被 Cloudflare 或服务器网络出口拦截。
+          生产环境会自动尝试容器内 Chromium；如仍失败，请更换可用网络出口。
+          本地 Windows 可运行 <code>store-monitor/启动.bat</code>，并使用「修复浏览器通道」完成人工验证。
         </span>
       </div>
       <el-button type="primary" plain @click="checkService">重新检测</el-button>
@@ -266,8 +269,8 @@ onMounted(loadSession)
 
     <div v-else-if="serviceState === 'offline'" class="setup-callout">
       <div>
-        <strong>Takealot 代理未启动（127.0.0.1:3456）</strong>
-        <span>店铺看板依赖本机 Chrome 通道。请运行仓库根目录 dev-local.ps1，或单独启动 store-monitor。</span>
+        <strong>Takealot 监控代理未启动</strong>
+        <span>生产环境请检查监控容器；本地开发请运行仓库根目录 dev-local.ps1，或单独启动 store-monitor。</span>
       </div>
       <el-button type="primary" plain @click="checkService">重新检测</el-button>
     </div>
@@ -275,7 +278,7 @@ onMounted(loadSession)
     <div v-if="canManage && !loading && configuredCount === 0" class="setup-callout">
       <div>
         <strong>还没有接入店铺</strong>
-        <span>配置 Takealot API Key 后，在本机代理在线时看板才会拉取店铺数据。</span>
+        <span>配置 Takealot API Key 后，在监控代理在线且通道可用时看板才会拉取店铺数据。</span>
       </div>
       <el-button type="primary" plain @click="configOpen = true">立即配置</el-button>
     </div>
@@ -284,13 +287,13 @@ onMounted(loadSession)
       <div class="monitor-bar">
         <div class="monitor-bar__title">
           <span class="live-indicator" :class="`is-${serviceState}`" />
-          <span>Takealot 经营看板（本机代理）</span>
+          <span>Takealot 经营看板（监控代理）</span>
           <small v-if="diag">连接通道 {{ channelCount }}/3 · 非 ERP 直连 Takealot</small>
-          <small v-else>需本机 store-monitor 代理</small>
+          <small v-else>需 store-monitor 代理</small>
         </div>
         <div class="monitor-bar__actions">
           <button type="button" @click="checkService">重新检测接口</button>
-          <button v-if="canManage" type="button" :disabled="bootstrapBusy" @click="runBrowserBootstrap">
+          <button v-if="canRunBrowserBootstrap" type="button" :disabled="bootstrapBusy" @click="runBrowserBootstrap">
             {{ bootstrapBusy ? '验证中…' : '修复浏览器通道' }}
           </button>
         </div>
@@ -299,13 +302,13 @@ onMounted(loadSession)
       <div class="monitor-stage">
         <div v-if="serviceState === 'offline'" class="frame-offline">
           <strong>看板未加载</strong>
-          <p>Takealot 代理离线时无法展示 iframe 看板。请在本机启动 <code>store-monitor</code> 或运行 <code>dev-local.ps1</code>，再点击「重新检测」。</p>
+          <p>Takealot 代理离线时无法展示 iframe 看板。生产环境请检查监控容器；本地开发请启动 <code>store-monitor</code> 或运行 <code>dev-local.ps1</code>，再点击「重新检测」。</p>
         </div>
         <template v-else>
           <div v-if="loading || !frameReady" class="frame-loading">
             <span class="loading-orbit" />
-            <strong>{{ loading ? '正在读取店铺权限' : '正在加载本机代理看板' }}</strong>
-            <small>经 127.0.0.1:3456 转发 Takealot 数据</small>
+            <strong>{{ loading ? '正在读取店铺权限' : '正在加载监控代理看板' }}</strong>
+            <small>经 store-monitor 转发 Takealot 数据</small>
           </div>
           <iframe
             v-if="!loading && session"
@@ -313,7 +316,7 @@ onMounted(loadSession)
             ref="frameRef"
             class="monitor-frame"
             :src="iframeSrc"
-            title="Takealot 店铺监控（本机代理）"
+            title="Takealot 店铺监控（监控代理）"
             @load="onFrameLoad"
           />
         </template>

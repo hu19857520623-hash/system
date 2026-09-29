@@ -4,6 +4,7 @@ import { PrismaService } from '../../common/prisma/prisma.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
 import { notifyOms } from '../../common/oms-notify.util'
 import { parseOmsOutboundPreDeduct } from '../../common/oms-sync-meta.util'
+import { readableDisplayText } from '../../common/display-text.util'
 import { CreateBillingChargeDto, CreateBillingOrderDto, GenerateBillingDto } from './dto/billing.dto'
 import {
   applyDestinationSqlFilter,
@@ -219,7 +220,7 @@ export class BillingService {
     const customers = customerIds.length
       ? await this.prisma.customer.findMany({ where: { id: { in: customerIds.map((id) => BigInt(id)) } } })
       : []
-    const nameMap = new Map(customers.map((c) => [Number(c.id), c.customerName || c.customerCode]))
+    const nameMap = new Map(customers.map((c) => [Number(c.id), readableDisplayText(c.customerName, c.customerCode)]))
     const codeMap = new Map(customers.map((c) => [Number(c.id), c.customerCode]))
     const items = rows.map((r) => {
       const customerCode = codeMap.get(Number(r.customer_id)) || null
@@ -479,7 +480,7 @@ export class BillingService {
     const customers = customerIds.length
       ? await this.prisma.customer.findMany({ where: { id: { in: customerIds } } })
       : []
-    const nameMap = new Map(customers.map((c) => [Number(c.id), c.customerName || c.customerCode]))
+    const nameMap = new Map(customers.map((c) => [Number(c.id), readableDisplayText(c.customerName, c.customerCode)]))
     const items = rows.map((r) => ({
       ...r,
       id: Number(r.id),
@@ -500,7 +501,7 @@ export class BillingService {
       ...row,
       id: Number(row.id),
       customerId: Number(row.customerId),
-      customerName: customer?.customerName || customer?.customerCode,
+      customerName: readableDisplayText(customer?.customerName, customer?.customerCode),
       totalAmount: Number(row.totalAmount),
       items: row.items.map((i) => ({ ...i, id: Number(i.id), amount: Number(i.amount) })),
     }
@@ -563,7 +564,7 @@ export class BillingService {
           ...order,
           id: Number(order.id),
           customerId,
-          customerName: customer?.customerName || customer?.customerCode,
+          customerName: readableDisplayText(customer?.customerName, customer?.customerCode),
           totalAmount: Number(order.totalAmount),
           chargeCount: charges.length,
         })
@@ -643,7 +644,7 @@ export class BillingService {
     } as any)
     return {
       customerCode: code,
-      customerName: customer.customerName,
+      customerName: readableDisplayText(customer.customerName, customer.customerCode),
       balance: Number(customer.balance),
       items: result.items,
       total: result.total,

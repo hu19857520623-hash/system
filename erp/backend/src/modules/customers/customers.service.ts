@@ -5,6 +5,7 @@ import { Prisma, type Customer } from '@prisma/client'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
 import { notifyOms } from '../../common/oms-notify.util'
+import { readableDisplayText } from '../../common/display-text.util'
 import {
   buildOmsOnlyListItem,
   enrichErpWithOms,
@@ -75,6 +76,15 @@ export class CustomersService {
         .filter((row) => !erpCodes.has(row.code))
         .map((row) => buildOmsOnlyListItem(row)),
     ]
+    merged = merged.map((row) => {
+      const customerName = readableDisplayText(row.customerName, row.customerCode)
+      return {
+        ...row,
+        customerName,
+        companyName: readableDisplayText(row.companyName, customerName),
+        contactName: readableDisplayText(row.contactName, customerName),
+      }
+    })
 
     if (q.portalOnly === '1' || q.portalOnly === 'true') {
       merged = merged.filter((row) => Boolean(row.oms))
@@ -224,7 +234,7 @@ export class CustomersService {
 
     return {
       customerCode: customer.customerCode,
-      customerName: customer.customerName,
+      customerName: readableDisplayText(customer.customerName, customer.customerCode),
       warehouseCode,
       items: [...catalogItems, ...ownedItems],
       total: catalogItems.length + ownedItems.length,
@@ -496,7 +506,7 @@ export class CustomersService {
     return {
       ...result,
       customerCode: customer.customerCode,
-      customerName: customer.customerName,
+      customerName: readableDisplayText(customer.customerName, customer.customerCode),
     }
   }
 
@@ -560,10 +570,10 @@ export class CustomersService {
     return {
       id: Number(row.id),
       customerCode: row.customerCode,
-      customerName: row.customerName,
-      companyName: row.companyName,
+      customerName: readableDisplayText(row.customerName, row.customerCode),
+      companyName: readableDisplayText(row.companyName, row.customerCode),
       contactEmail: row.contactEmail,
-      contactName: row.contactName,
+      contactName: readableDisplayText(row.contactName, row.customerCode),
       contactPhone: row.contactPhone,
       balance: Number(row.balance),
       status: row.status,

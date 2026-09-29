@@ -10,6 +10,7 @@ import {
   isCatalogInternalSku,
 } from './catalog-customer.util'
 import { deriveCustomerCodeFromInternalSku, deriveCustomerSkuFromInternalSku } from './sku-code.util'
+import { readableDisplayText } from './display-text.util'
 import {
   JHB_WAREHOUSE_CODE,
   JHB_WAREHOUSE_NAME,
@@ -92,9 +93,10 @@ export function resolveCustomerIdentity(input: {
 
   const mappedName =
     customerCode && input.customerNameByCode?.get(customerCode.toUpperCase())
-  const customerName =
-    mappedName
-    || String(input.customerName || '').trim()
+  const customerName = readableDisplayText(
+    mappedName || input.customerName,
+    customerCode,
+  )
 
   return { customerCode, customerSku, customerName }
 }

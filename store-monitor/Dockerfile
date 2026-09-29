@@ -3,13 +3,22 @@
 ARG DOCKER_REGISTRY=docker.io/library/
 
 FROM ${DOCKER_REGISTRY}node:22-alpine AS runner
-RUN apk add --no-cache curl \
+RUN apk add --no-cache \
+      ca-certificates \
+      chromium \
+      curl \
+      font-noto-cjk \
+      freetype \
+      harfbuzz \
+      nss \
     && addgroup -g 1001 -S monitor \
     && adduser -S monitor -u 1001 -G monitor
 WORKDIR /app
 ENV NODE_ENV=production \
     PORT=3456 \
-    LISTEN_HOST=0.0.0.0
+    LISTEN_HOST=0.0.0.0 \
+    CHROME_PATH=/usr/bin/chromium \
+    PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 
 COPY package.json package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm \

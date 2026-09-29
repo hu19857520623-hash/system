@@ -15,6 +15,7 @@ import { OutboundBillingService } from './outbound-billing.service'
 import { InventoryMutationService } from '../../common/inventory/inventory-mutation.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
 import { toCsv } from '../../common/csv.util'
+import { readableDisplayText } from '../../common/display-text.util'
 import {
   APPOINTMENT_LABELS,
   OUTBOUND_STATUSES,
@@ -338,7 +339,7 @@ export class OutboundService {
     const custMap = new Map(
       customers.map((c) => [
         Number(c.id),
-        { name: c.customerName || c.customerCode, code: c.customerCode },
+        { name: readableDisplayText(c.customerName, c.customerCode), code: c.customerCode },
       ]),
     )
     const userMap = new Map(
@@ -1817,7 +1818,7 @@ th{background:#f5f5f5}
       outboundNo: order.outboundNo,
       customerId: order.customerId ? Number(order.customerId) : null,
       customerCode: order.customerCode ?? null,
-      customerName: order.customerName ?? null,
+      customerName: readableDisplayText(order.customerName, order.customerCode ?? '') || null,
       warehouseCode: order.warehouseCode,
       status: order.status,
       omsStatus: toOmsOutboundStatus(order.status),
@@ -1911,7 +1912,7 @@ th{background:#f5f5f5}
         ...this.mapOutboundForOms({
           ...existing,
           customerCode,
-          customerName: customer.customerName,
+          customerName: readableDisplayText(customer.customerName, customerCode),
         }),
         idempotent: true,
       }
@@ -2073,7 +2074,7 @@ th{background:#f5f5f5}
       ...this.mapOutboundForOms({
         ...fresh!,
         customerCode,
-        customerName: customer.customerName,
+        customerName: readableDisplayText(customer.customerName, customerCode),
       }),
       idempotent: false,
       erpId: created?.id ?? Number(fresh!.id),
@@ -2096,7 +2097,7 @@ th{background:#f5f5f5}
         this.mapOutboundForOms({
           ...r,
           customerCode: code,
-          customerName: customer.customerName,
+          customerName: readableDisplayText(customer.customerName, code),
         }),
       ),
       total: rows.length,
@@ -2166,7 +2167,7 @@ th{background:#f5f5f5}
     if (row.customerId) {
       const c = await this.prisma.customer.findUnique({ where: { id: row.customerId } })
       customerCode = c?.customerCode ?? null
-      customerName = c?.customerName ?? null
+      customerName = readableDisplayText(c?.customerName, c?.customerCode) || null
     }
     return this.mapOutboundForOms({ ...row, customerCode, customerName })
   }
