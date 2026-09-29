@@ -3,7 +3,9 @@
 ARG DOCKER_REGISTRY=docker.io/library/
 
 FROM ${DOCKER_REGISTRY}node:22-alpine AS runner
-RUN apk add --no-cache \
+ARG APK_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/alpine
+RUN sed -i "s#https://dl-cdn.alpinelinux.org/alpine#${APK_MIRROR}#g" /etc/apk/repositories \
+    && apk add --no-cache \
       ca-certificates \
       chromium \
       curl \
