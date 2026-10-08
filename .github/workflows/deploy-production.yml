@@ -49,6 +49,11 @@ jobs:
             --exclude='tmp/' \
             -e "ssh $SSH_OPTS" \
             ./ ubuntu@175.178.50.202:/opt/system/
+          # Keep backend source aligned with the checkout. Stale untracked
+          # files on the server are otherwise included in the Docker build.
+          rsync -az --delete \
+            -e "ssh $SSH_OPTS" \
+            ./erp/backend/src/ ubuntu@175.178.50.202:/opt/system/erp/backend/src/
 
       - name: Build and restart ERP and OMS
         run: |
