@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
-import { leadApi } from '@/api/client.js'
+import { ElMessage, type TableInstance } from 'element-plus'
+import { leadApi, triggerBrowserDownload } from '@/api/client.js'
 import { fmtTime, mapLead, formatLeadContact, looksLikeLeadPhone } from '@/api/mappers.ts'
 import { useListLoader, withAction } from '@/composables/useListLoader.ts'
 import { useServerPagination } from '@/composables/useTablePagination.ts'
@@ -70,9 +70,19 @@ const searchQ = ref('')
 const salesUsers = ref<SalesUser[]>([])
 const followSalesOptions = ref<string[]>([])
 const { page, pageSize, total, resetPage } = useServerPagination()
+const leadTableRef = ref<TableInstance>()
+const selectedLeads = ref<any[]>([])
 
-const { loading, items: rawItems, load } = useListLoader(async () => {
-  const params: Record<string, string | number> = { page: page.value, pageSize: pageSize.value }
+function leadRowKey(row: any) {
+  return String(row._raw.id)
+}
+
+function handleSelectionChange(rows: any[]) {
+  selectedLeads.value = rows
+}
+
+function currentFilters() {
+  const params: Record<string, string | number> = {}
   if (statusFilter.value) params.status = statusFilter.value
   if (sourceFilter.value) params.source = sourceFilter.value
   if (assigneeFilter.value !== '') params.assigneeId = assigneeFilter.value
@@ -82,7 +92,30 @@ const { loading, items: rawItems, load } = useListLoader(async () => {
     params.createdAtTo = createdRange.value[1]
   }
   if (searchQ.value.trim()) params.keyword = searchQ.value.trim()
-  const res = await leadApi.list(params)
+  return params
+}
+
+const exporting = ref(false)
+async function exportLeads() {
+  if (exporting.value) return
+  exporting.value = true
+  try {
+    const selectedIds = selectedLeads.value.map(leadRowKey)
+    const { blob, fileName } = await leadApi.exportCsv({
+      ...currentFilters(),
+      ...(selectedIds.length ? { leadIds: selectedIds.join(',') } : {}),
+    })
+    triggerBrowserDownload(blob, fileName)
+    ElMessage.success(selectedIds.length ? `已导出所选 ${selectedIds.length} 条线索` : '已按筛选条件导出全部匹配线索')
+  } catch (error: any) {
+    ElMessage.error(error?.message || '线索导出失败')
+  } finally {
+    exporting.value = false
+  }
+}
+
+const { loading, items: rawItems, load } = useListLoader(async () => {
+  const res = await leadApi.list({ ...currentFilters(), page: page.value, pageSize: pageSize.value })
   total.value = res.total ?? 0
   return { items: (res.items || []).map(mapLead) }
 })
@@ -315,6 +348,8 @@ async function importLeads() {
 }
 
 function applyFilters() {
+  leadTableRef.value?.clearSelection()
+  selectedLeads.value = []
   resetPage()
   load()
 }
@@ -449,6 +484,9 @@ onMounted(async () => {
             <el-button type="primary" size="small" @click="openNewLead">新建线索</el-button>
             <el-button size="small" link type="primary" @click="downloadLeadsImportTemplate">下载模板</el-button>
             <el-button size="small" @click="importLeads">导入</el-button>
+            <el-button size="small" :loading="exporting" @click="exportLeads">
+              {{ selectedLeads.length ? `导出所选（${selectedLeads.length}）` : '按筛选导出' }}
+            </el-button>
           </div>
         </div>
       </template>
@@ -503,7 +541,17 @@ onMounted(async () => {
         <el-button @click="resetFilters">重置</el-button>
       </div>
 
-      <el-table :data="leads" stripe border style="width: 100%" size="small">
+      <el-table
+        ref="leadTableRef"
+        :data="leads"
+        :row-key="leadRowKey"
+        stripe
+        border
+        style="width: 100%"
+        size="small"
+        @selection-change="handleSelectionChange"
+      >
+        <el-table-column type="selection" width="44" reserve-selection />
         <el-table-column prop="id" label="线索编号" width="140">
           <template #default="{ row }">
             <span style="font-family: var(--font-mono); font-size: 12px">{{ row.id }}</span>

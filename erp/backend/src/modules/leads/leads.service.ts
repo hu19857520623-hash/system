@@ -32,6 +32,7 @@ import {
 import { CustomersService } from '../customers/customers.service'
 import { CreateCustomerDto } from '../customers/dto/customer.dto'
 import { PermissionsService } from '../../common/permissions/permissions.service'
+import { LEADS_EXPORT_LIMIT, leadsExportCsv } from './leads-export.util'
 
 const DEAL_FILE_MAX_BYTES = 10 * 1024 * 1024
 const DEAL_FILE_MAX_COUNT = 30
@@ -78,14 +79,24 @@ export class LeadsService {
       latestFollowAtFrom?: string
       latestFollowAtTo?: string
       followSales?: string
+      leadIds?: string
       mine?: string
       followMine?: string
     },
     currentUser?: AuthUser,
+    exportAll = false,
   ) {
     const { page, pageSize } = getPagination(q)
     const where: any = {}
     const and: any[] = []
+    if (q.leadIds !== undefined) {
+      const rawIds = q.leadIds.split(',').map((id) => id.trim())
+      if (!rawIds.length || rawIds.length > LEADS_EXPORT_LIMIT
+        || rawIds.some((id) => !/^[1-9]\d*$/.test(id) || BigInt(id) > 9223372036854775807n)) {
+        throw new BadRequestException('所选线索编号无效或数量超过导出上限')
+      }
+      where.id = { in: [...new Set(rawIds)].map((id) => BigInt(id)) }
+    }
     const statuses = String(q.statuses || '')
       .split(',')
       .map((s) => s.trim())
@@ -173,12 +184,12 @@ export class LeadsService {
     }
     if (and.length) where.AND = and
 
-    const includeDeals =
-      q.status === 'deal' || Boolean(q.dealStatus || q.shopType || q.dealDateFrom || q.dealDateTo)
+    const includeDeals = !exportAll && (
+      q.status === 'deal' || Boolean(q.dealStatus || q.shopType || q.dealDateFrom || q.dealDateTo))
     const findArgs = {
       where,
-      skip: (page - 1) * pageSize,
-      take: pageSize,
+      skip: exportAll ? 0 : (page - 1) * pageSize,
+      take: exportAll ? LEADS_EXPORT_LIMIT + 1 : pageSize,
       orderBy: { id: 'desc' as const },
       include: {
         followUps: { orderBy: { id: 'desc' as const }, take: 1 },
@@ -206,6 +217,9 @@ export class LeadsService {
         select: { id: true, username: true, realName: true },
       }),
     ])
+    if (exportAll && rows.length > LEADS_EXPORT_LIMIT) {
+      throw new BadRequestException(`单次最多导出 ${LEADS_EXPORT_LIMIT} 条线索，请缩小筛选范围后重试`)
+    }
     const customerIds = [...new Set(rows.map((r) => r.customerId).filter(Boolean))] as bigint[]
     const customerRows = customerIds.length
       ? await this.prisma.customer.findMany({
@@ -229,6 +243,15 @@ export class LeadsService {
       }
     })
     return { items, total, page, pageSize }
+  }
+
+  async exportCsv(q: Parameters<LeadsService['list']>[0], currentUser: AuthUser) {
+    const { items } = await this.list(q, currentUser, true)
+    if (!items.length) throw new BadRequestException('当前筛选条件下没有可导出的线索')
+    return {
+      fileName: `线索池_${Date.now()}.csv`,
+      content: Buffer.from(leadsExportCsv(items), 'utf-8'),
+    }
   }
 
   private async followSalesScope(

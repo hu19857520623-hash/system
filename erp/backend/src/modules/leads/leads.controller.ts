@@ -28,6 +28,16 @@ export class LeadsController {
     return this.service.importFromCsv(body.content, userId)
   }
 
+  @RequirePerms('leads_pool.view')
+  @Get('export')
+  async exportCsv(@Query() q: LeadsListQueryDto, @CurrentUser() user: AuthUser, @Res() res: Response) {
+    const file = await this.service.exportCsv(q, user)
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(file.fileName)}"`)
+    res.setHeader('Cache-Control', 'no-store')
+    res.send(file.content)
+  }
+
   @RequirePerms('leads_pool.create')
   @Get('assignees')
   assignees(@CurrentUser('userId') userId: number) {

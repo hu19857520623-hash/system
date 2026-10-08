@@ -5,6 +5,10 @@ import { PaginationDto } from '../../common/dto/pagination.dto'
 export class LeadsListQueryDto extends PaginationDto {
   @IsOptional()
   @IsString()
+  leadIds?: string
+
+  @IsOptional()
+  @IsString()
   status?: string
 
   @IsOptional()

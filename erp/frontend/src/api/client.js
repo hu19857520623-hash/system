@@ -215,6 +215,10 @@ export const permissionsApi = {
 
 export const leadApi = {
   list: (params) => api.get('/leads', params),
+  exportCsv: (params) => {
+    const query = new URLSearchParams(params || {}).toString()
+    return downloadRequest(`/leads/export${query ? `?${query}` : ''}`)
+  },
   assignees: () => api.get('/leads/assignees'),
   followSales: () => api.get('/leads/follow-sales'),
   detail: (id) => api.get(`/leads/${id}`),
