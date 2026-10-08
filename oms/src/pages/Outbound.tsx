@@ -79,6 +79,7 @@ import {
 import { apiPut } from '../api/client'
 import { notifyIfUserError } from '../utils/userNotify'
 import { getFulfillmentWarehouses } from '../data/fulfillmentWarehouseConfig'
+import { restoreTakealotDraftAttachments } from '../data/takealotDraftRestore'
 
 const SHIP_WAREHOUSE_ID = 'jhb'
 const DEFAULT_TAKEALOT_DEST_WAREHOUSE = 'jhb3'
@@ -390,6 +391,35 @@ export default function Outbound() {
     () => Object.values(takealotLabelResults).flatMap(result => result.crops),
     [takealotLabelResults],
   )
+
+  useEffect(() => {
+    if (!editOrder || !isTakealot) {
+      setParseBusy(false)
+      return
+    }
+    let cancelled = false
+    setParseBusy(true)
+    setParseErrors([])
+    void restoreTakealotDraftAttachments(editOrder.attachments || [], {
+      extractText: extractPdfTextFromFile,
+      parseLabels: parseTakealotProductLabelPdf,
+    }).then(result => {
+      if (cancelled) return
+      takealotParsedParts.current = result.parts
+      setTakealotParsedDoc(result.parsed)
+      setTakealotParseHint(result.parsed ? describeTakealotParsed(result.parsed) : '')
+      setTakealotLabelResults(result.labelResults)
+      setParseErrors(result.errors)
+      setAttachments(result.attachments)
+    }).catch(error => {
+      if (!cancelled) setParseErrors([`草稿文件校验失败：${error instanceof Error ? error.message : String(error)}`])
+    }).finally(() => {
+      if (!cancelled) setParseBusy(false)
+    })
+    return () => { cancelled = true }
+    // Restoring once per draft avoids overwriting subsequent edits or reuploads.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editOrder?.id, isTakealot])
 
   const takealotValidationRows = useMemo<TakealotValidationRow[]>(() => {
     if (!takealotParsedDoc) return []
@@ -910,6 +940,10 @@ export default function Outbound() {
   }
 
   const handleSubmit = async (asDraft = false) => {
+    if (parseBusy) {
+      window.alert('正在校验已上传文件，请稍候')
+      return
+    }
     const submitCustomerId = getCustomerIdForRole(role) ?? undefined
     const type: OutboundType = outboundTypeFromLabel(outboundType)
     const stockLines = lines.length > 0
@@ -1777,7 +1811,7 @@ export default function Outbound() {
       </div>
 
       <div className="fixed bottom-0 left-0 right-0 z-30 border-t border-border-light bg-white/95 px-6 py-4 backdrop-blur-sm lg:pl-[220px]">
-        <div className="mx-auto flex max-w-[1280px] items-center justify-between gap-3">
+        <div className="mx-auto flex max-w-[1280px] flex-wrap items-center justify-between gap-3">
           <p className="hidden text-xs text-text-muted sm:block">
             {feeEstimate
               ? `提交将预扣 ${formatCurrency(feeEstimate.total)} · 锁定库存并进入拣货`
@@ -1785,15 +1819,20 @@ export default function Outbound() {
           </p>
           <div className="flex gap-2">
             <Button variant="secondary" onClick={goRecords}>取消</Button>
-            <Button variant="secondary" onClick={() => void handleSubmit(true)}>保存草稿</Button>
+            <Button variant="secondary" disabled={parseBusy} onClick={() => void handleSubmit(true)}>保存草稿</Button>
             <Button
-              disabled={isTakealot && takealotValidationBlockers.length > 0}
+              disabled={parseBusy || (isTakealot && takealotValidationBlockers.length > 0)}
               title={isTakealot && takealotValidationBlockers.length ? '请先修复 Takealot 文件校验阻塞项' : undefined}
               onClick={() => void handleSubmit(false)}
             >
-              提交并锁定库存
+              {parseBusy ? '正在校验文件…' : '提交并锁定库存'}
             </Button>
           </div>
+          {isTakealot && !parseBusy && takealotValidationBlockers.length > 0 && (
+            <p className="w-full text-xs text-red-600" role="status">
+              暂不能提交：{takealotValidationBlockers[0]}{takealotValidationBlockers.length > 1 ? `（共 ${takealotValidationBlockers.length} 项，请查看上方文件校验）` : ''}
+            </p>
+          )}
         </div>
       </div>
 
