@@ -320,7 +320,7 @@ model OutboundOrder {
   exceptionCode         String?          @db.VarChar(50)
   exceptionReason       String?          @db.Text
   lineItems             String?          @db.Text // JSON
-  attachments           String?          @db.Text // JSON [{kind,fileName,url,uploadedAt}]
+  attachments           String?          @db.LongText // JSON including uploaded PDF/image data URLs
 
   @@map("oms_outboundorder")
 }

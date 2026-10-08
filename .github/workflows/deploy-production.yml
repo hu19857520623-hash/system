@@ -152,6 +152,11 @@ jobs:
             prisma db execute --schema prisma/schema.prisma \
             --file prisma/scripts/migrate_disable_first_login_password_change.sql </dev/null
 
+          echo '=== Expand OMS outbound attachment storage ==='
+          docker compose run -T --rm --no-deps --entrypoint npx oms-api \
+            prisma db execute --schema prisma/schema.prisma \
+            --file prisma/scripts/migrate_outbound_attachments_longtext.sql </dev/null
+
           echo '=== Build ERP ==='
           cd /opt/system/erp
           docker compose build erp-api erp-web </dev/null

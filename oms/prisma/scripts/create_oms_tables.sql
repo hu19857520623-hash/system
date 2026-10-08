@@ -328,7 +328,7 @@ CREATE TABLE IF NOT EXISTS `oms_OutboundOrder` (
     `exceptionCode` VARCHAR(50) NULL,
     `exceptionReason` TEXT NULL,
     `lineItems` TEXT NULL,
-    `attachments` TEXT NULL,
+    `attachments` LONGTEXT NULL,
     UNIQUE INDEX `oms_OutboundOrder_outboundNo_key`(`outboundNo`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
