@@ -394,7 +394,6 @@ export const outboundApi = {
   downloadPickList: (id) => openHtmlPrint(`/outbound/${id}/pick-list`),
   pack: (id, data) => api.post(`/outbound/${id}/pack`, data || {}),
   deliver: (id, data) => api.post(`/outbound/${id}/deliver`, data || {}),
-  setAppointment: (id, data) => api.post(`/outbound/${id}/appointment`, data),
   ship: (id, data) => api.post(`/outbound/${id}/ship`, data || {}),
   cancel: (id) => api.post(`/outbound/${id}/cancel`),
   assignPicker: (data) => api.post('/outbound/assign-picker', data),

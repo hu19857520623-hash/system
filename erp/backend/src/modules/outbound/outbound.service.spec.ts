@@ -472,4 +472,26 @@ describe('OutboundService.assignPicker', () => {
       pickerWorkstation: '工位A',
     })
   })
+
+  it('reassigns a picking order without restarting its picking time', async () => {
+    const { service, prisma } = serviceWithUsers()
+    prisma.sysUser.findUnique.mockResolvedValue({ id: 8n, status: 1, roleCode: 'warehouse', username: 'warehouse' })
+    prisma.outboundOrder.findMany.mockResolvedValue([{ id: 1n, outboundNo: 'OB1', status: 'picking', pickerId: 3n }])
+    prisma.outboundOrder.updateMany.mockResolvedValue({ count: 1 })
+
+    await expect(service.assignPicker([1], 8)).resolves.toMatchObject({ pickerId: 8 })
+    expect(prisma.outboundOrder.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: [1n] }, status: 'picking' },
+      data: { pickerId: 8n },
+    })
+  })
+
+  it('rejects reassignment after picking is complete', async () => {
+    const { service, prisma } = serviceWithUsers()
+    prisma.sysUser.findUnique.mockResolvedValue({ id: 8n, status: 1, roleCode: 'warehouse', username: 'warehouse' })
+    prisma.outboundOrder.findMany.mockResolvedValue([{ id: 1n, outboundNo: 'OB1', status: 'picked' }])
+
+    await expect(service.assignPicker([1], 8)).rejects.toThrow('仅待拣货或拣货中状态')
+    expect(prisma.outboundOrder.updateMany).not.toHaveBeenCalled()
+  })
 })

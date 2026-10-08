@@ -1009,19 +1009,27 @@ export class OutboundService {
       where: { id: { in: ids.map((id) => BigInt(id)) } },
     })
     if (orders.length !== ids.length) throw new BadRequestException('部分出库单不存在')
-    const invalid = orders.filter((o) => o.status !== 'pending_pick')
+    const invalid = orders.filter((o) => !['pending_pick', 'picking'].includes(o.status))
     if (invalid.length) {
-      throw new BadRequestException(`仅待拣货状态可分配拣货员：${invalid.map((o) => o.outboundNo).join('、')}`)
+      throw new BadRequestException(`仅待拣货或拣货中状态可分配拣货员：${invalid.map((o) => o.outboundNo).join('、')}`)
+    }
+    const reassigning = orders.every((o) => o.status === 'picking')
+    if (!reassigning && orders.some((o) => o.status === 'picking')) {
+      throw new BadRequestException('请分别分配待拣货和拣货中的出库单')
     }
 
-    await this.prisma.outboundOrder.updateMany({
-      where: { id: { in: ids.map((id) => BigInt(id)) } },
-      data: {
-        pickerId: BigInt(pickerId),
-        status: 'picking',
-        pickingStartedAt: new Date(),
+    const updated = await this.prisma.outboundOrder.updateMany({
+      where: {
+        id: { in: ids.map((id) => BigInt(id)) },
+        status: reassigning ? 'picking' : 'pending_pick',
       },
+      data: reassigning
+        ? { pickerId: BigInt(pickerId) }
+        : { pickerId: BigInt(pickerId), status: 'picking', pickingStartedAt: new Date() },
     })
+    if (updated.count !== ids.length) {
+      throw new BadRequestException('出库单状态已变化，请刷新后重试')
+    }
     return {
       updated: ids.length,
       pickerId,

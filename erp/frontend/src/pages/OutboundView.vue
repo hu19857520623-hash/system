@@ -70,7 +70,6 @@ const assignVisible = ref(false)
 const problemVisible = ref(false)
 const exceptionVisible = ref(false)
 const packVisible = ref(false)
-const appointmentVisible = ref(false)
 const relabelVisible = ref(false)
 const podUploadVisible = ref(false)
 const detailVisible = ref(false)
@@ -78,7 +77,6 @@ const detailLoading = ref(false)
 const detailOrder = ref<any>(null)
 const pickOrder = ref<any>(null)
 const packOrder = ref<any>(null)
-const appointmentOrder = ref<any>(null)
 const relabelOrder = ref<any>(null)
 const deliverOrder = ref<any>(null)
 const shipOrder = ref<any>(null)
@@ -90,12 +88,11 @@ const packReviewSource = ref<'pda' | 'pick_list'>('pick_list')
 const packCartons = ref<{ lengthCm: string; widthCm: string; heightCm: string; grossWeightKg: string }[]>([
   { lengthCm: '', widthCm: '', heightCm: '', grossWeightKg: '' },
 ])
-const appointmentStatus = ref('')
-const appointmentDate = ref('')
 const deliverPodFile = ref<File | null>(null)
 const podFileInputRef = ref<HTMLInputElement | null>(null)
 const assignPickerId = ref<number | null>(null)
 const assignTargetIds = ref<number[]>([])
+const reassigningPicker = ref(false)
 const problemRemark = ref('')
 const exceptionRemark = ref('')
 const problemType = ref('')
@@ -239,9 +236,6 @@ function handleRowCommand(command: string, row: any) {
     case 'uploadPod':
       openPodUpload(row)
       break
-    case 'appointment':
-      openAppointment(row)
-      break
     case 'problem':
       openProblem(row)
       break
@@ -266,15 +260,6 @@ function handleRowCommand(command: string, row: any) {
     default:
       break
   }
-}
-
-function openAppointmentForSelected() {
-  const row = selectedRows.value[0]
-  if (!row) {
-    ElMessage.warning('请先勾选一条出库单')
-    return
-  }
-  openAppointment(row)
 }
 
 function resetFilters() {
@@ -417,6 +402,7 @@ function rowCommands(row: any): RowAction[] {
     cmds.push({ key: 'assignPicker', command: 'assignPicker', label: '分配拣货员' })
   }
   if (status === 'picking' && canPick.value) {
+    cmds.push({ key: 'assignPicker', command: 'assignPicker', label: '重新分配拣货员' })
     cmds.push({ key: 'downloadPick', command: 'downloadPick', label: '下载拣货清单' })
     cmds.push({ key: 'pick', command: 'pick', label: '完成拣货' })
   }
@@ -434,10 +420,6 @@ function rowCommands(row: any): RowAction[] {
   if (['delivered', 'partial_delivered'].includes(status) && canCreate.value && !rowHasPod(row)) {
     cmds.push({ key: 'uploadPod', command: 'uploadPod', label: '上传POD签收单' })
   }
-  if (canCreate.value && row.destType === 'fba' && status !== 'cancelled') {
-    cmds.push({ key: 'appointment', command: 'appointment', label: '预约派送' })
-  }
-
   appendAttachmentCommands(cmds, row)
 
   if (canCreate.value && !['cancelled', 'shipped', 'delivered', 'partial_delivered', 'delivery_failed'].includes(status)) {
@@ -766,25 +748,6 @@ async function submitPack() {
     : `${packOrder.value.outboundNo} 复核打包完成`)
 }
 
-function openAppointment(row: any) {
-  appointmentOrder.value = row
-  appointmentStatus.value = row.appointmentStatus || (row.appointmentDate ? 'scheduled' : 'pending')
-  appointmentDate.value = row.appointmentDate || ''
-  appointmentVisible.value = true
-}
-
-async function submitAppointment() {
-  if (!appointmentOrder.value || !canCreate.value) return
-  await withAction(async () => {
-    await outboundApi.setAppointment(appointmentOrder.value.id, {
-      appointmentStatus: appointmentStatus.value,
-      appointmentDate: appointmentDate.value || null,
-    })
-    appointmentVisible.value = false
-    await reloadAll()
-  }, `${appointmentOrder.value.outboundNo} 预约已更新`)
-}
-
 function rowHasPod(row: any) {
   return !!(row.podCode || (row.attachments || []).some((a: any) => a.fileType === 'pod'))
 }
@@ -883,13 +846,15 @@ function skipPodUpload() {
 function openAssignPicker(row?: any) {
   if (!canPick.value) return
   const rows = row ? [row] : assignableSelected.value
-  const ids = rows.filter((r) => r.status === 'pending_pick').map((r) => r.id)
+  const reassigning = row?.status === 'picking'
+  const ids = rows.filter((r) => r.status === (reassigning ? 'picking' : 'pending_pick')).map((r) => r.id)
   if (!ids.length) {
-    ElMessage.warning(row ? '仅待拣货状态可分配拣货员' : '请勾选待拣货的出库单')
+    ElMessage.warning(row ? '仅待拣货或拣货中状态可分配拣货员' : '请勾选待拣货的出库单')
     return
   }
   assignTargetIds.value = ids
-  assignPickerId.value = pickerUsers.value[0]?.id ?? null
+  reassigningPicker.value = reassigning
+  assignPickerId.value = reassigning ? row.pickerId ?? null : pickerUsers.value[0]?.id ?? null
   assignVisible.value = true
 }
 
@@ -903,6 +868,7 @@ async function submitAssignPicker() {
     return
   }
   const count = assignTargetIds.value.length
+  const reassigning = reassigningPicker.value
   await withAction(async () => {
     await outboundApi.assignPicker({
       ids: assignTargetIds.value,
@@ -913,7 +879,7 @@ async function submitAssignPicker() {
     assignTargetIds.value = []
     filterStatus.value = 'picking'
     await reloadAll()
-  }, `已分配 ${count} 单`)
+  }, reassigning ? `已重新分配 ${count} 单` : `已分配 ${count} 单`)
 }
 
 function openProblem(row: any) {
@@ -1197,7 +1163,6 @@ function statusTag(status: string) {
 
       <div class="table-toolbar">
         <div class="toolbar-left">
-          <el-button v-if="canCreate" size="small" @click="openAppointmentForSelected">预约派送</el-button>
           <el-button
             v-if="canPick"
             size="small"
@@ -1402,30 +1367,6 @@ function statusTag(status: string) {
       </template>
     </el-dialog>
 
-    <!-- 平台预约 -->
-    <el-dialog v-model="appointmentVisible" :title="`平台预约 · ${appointmentOrder?.outboundNo || ''}`" width="420px">
-      <el-form label-width="100px">
-        <el-form-item label="预约状态">
-          <el-select v-model="appointmentStatus" placeholder="预约状态" style="width:100%">
-            <el-option v-for="a in APPOINTMENT_STATUSES" :key="a.value" :label="a.label" :value="a.value" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="预约送仓日">
-          <el-date-picker
-            v-model="appointmentDate"
-            type="date"
-            value-format="YYYY-MM-DD"
-            placeholder="独立字段，可筛选/导出"
-            style="width:100%"
-          />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="appointmentVisible = false">取消</el-button>
-        <el-button type="primary" @click="submitAppointment">保存</el-button>
-      </template>
-    </el-dialog>
-
     <!-- 上传 POD 签收单（确认送达后） -->
     <el-dialog v-model="podUploadVisible" :title="`上传POD签收单 · ${deliverOrder?.outboundNo || ''}`" width="440px">
       <div class="pick-hint">请上传平台仓签收回执（PDF / JPG / PNG），无需扫描或输入 POD 码。</div>
@@ -1453,14 +1394,15 @@ function statusTag(status: string) {
     />
 
     <!-- 分配拣货员 -->
-    <el-dialog v-model="assignVisible" title="分配拣货员" width="360px">
-      <p class="dialog-hint">已选 {{ assignTargetIds.length }} 单（仅待拣货）。须先分配拣货员，才能在 ERP 网页完成拣货确认。</p>
+    <el-dialog v-model="assignVisible" :title="reassigningPicker ? '重新分配拣货员' : '分配拣货员'" width="360px">
+      <p class="dialog-hint" v-if="reassigningPicker">已选 {{ assignTargetIds.length }} 单（拣货中）。重新分配后，新拣货员可继续完成拣货。</p>
+      <p class="dialog-hint" v-else>已选 {{ assignTargetIds.length }} 单（仅待拣货）。须先分配拣货员，才能在 ERP 网页完成拣货确认。</p>
       <el-select v-model="assignPickerId" placeholder="选择工位 / 拣货员" filterable style="width:100%">
         <el-option v-for="u in pickerUsers" :key="u.id" :label="u.label" :value="u.id" />
       </el-select>
       <template #footer>
         <el-button @click="assignVisible = false">取消</el-button>
-        <el-button type="primary" @click="submitAssignPicker">确认分配</el-button>
+        <el-button type="primary" @click="submitAssignPicker">{{ reassigningPicker ? '确认重新分配' : '确认分配' }}</el-button>
       </template>
     </el-dialog>
 
