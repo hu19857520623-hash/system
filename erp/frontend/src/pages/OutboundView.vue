@@ -173,16 +173,6 @@ const filterTabs = computed(() => [
   { value: 'all' as const, label: '全部', count: statusCounts.value.all },
 ])
 
-async function copyText(text: string) {
-  if (!text) return
-  try {
-    await navigator.clipboard.writeText(text)
-    ElMessage.success('已复制')
-  } catch {
-    ElMessage.error('复制失败')
-  }
-}
-
 function cargoTypeLabel(row: any) {
   return row.cargoTypeLabel || row.cargoType || '—'
 }
@@ -1240,12 +1230,9 @@ function statusTag(status: string) {
         <el-table-column label="NO." width="52" align="center" fixed="left">
           <template #default="{ $index }">{{ rowIndex($index) }}</template>
         </el-table-column>
-        <el-table-column label="出库单号" min-width="160" show-overflow-tooltip fixed="left">
+        <el-table-column label="出库单号" min-width="240" show-overflow-tooltip fixed="left">
           <template #default="{ row }">
-            <span class="order-no-link mono">{{ row.outboundNo }}</span>
-            <el-button link type="primary" size="small" class="copy-btn" @click="copyText(row.outboundNo)">
-              复制
-            </el-button>
+            <span class="mono">{{ row.outboundNo }}</span>
           </template>
         </el-table-column>
         <el-table-column label="客户" min-width="140" show-overflow-tooltip>
@@ -1670,13 +1657,6 @@ function statusTag(status: string) {
 }
 .outbound-table {
   width: 100%;
-}
-.order-no-link {
-  color: var(--el-color-primary);
-}
-.copy-btn {
-  margin-left: 4px;
-  vertical-align: baseline;
 }
 .problem-tag {
   margin-left: 4px;
