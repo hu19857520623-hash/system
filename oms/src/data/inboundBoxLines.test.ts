@@ -1,8 +1,27 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { buildInboundBoxLines, validateInboundBoxLines } from './inboundBoxLines.ts'
+import { buildInboundBoxLines, buildInboundSkuSelection, validateInboundBoxLines } from './inboundBoxLines.ts'
 
 const input = { sku: ' SKU-1 ', name: '产品', boxCount: 3, qtyPerBox: 10, packType: '自带包装', stockType: '以仓库为准' }
+
+test('selected SKUs expand into consecutive boxes and preserve manually edited existing lines', () => {
+  const existing = buildInboundBoxLines([], input)
+  existing[0].boxNo = 7
+  const added = buildInboundSkuSelection(existing, [{ sku: 'A', name: '产品 A' }, { sku: 'B', name: '产品 B' }],
+    { boxCount: 2, qtyPerBox: 4, packType: '仓库包装', stockType: '以箱为准' })
+  assert.deepEqual(added.map(line => [line.sku, line.boxNo, line.qty]), [['A', 8, 4], ['A', 9, 4], ['B', 10, 4], ['B', 11, 4]])
+  assert.equal(existing.length, 3)
+  assert.equal(existing[0].boxNo, 7)
+  assert.equal(new Set(added.map(line => line.id)).size, 4)
+})
+
+test('invalid or empty selections fail without changing existing inbound lines', () => {
+  const existing = buildInboundBoxLines([], input)
+  assert.throws(() => buildInboundSkuSelection(existing, [], input), /请选择 SKU/)
+  assert.throws(() => buildInboundSkuSelection(existing, [{ sku: 'A', name: 'A' }], { ...input, qtyPerBox: 0 }), /每箱数量/)
+  assert.throws(() => buildInboundSkuSelection(existing, [{ sku: 'A', name: 'A' }, { sku: 'B', name: 'B' }], { ...input, boxCount: 10000 }), /10000/)
+  assert.equal(existing.length, 3)
+})
 
 test('one line per box with unique row IDs and per-box quantities', () => {
   const lines = buildInboundBoxLines([], input)

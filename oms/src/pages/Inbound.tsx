@@ -18,13 +18,14 @@ import {
   parseInboundLines,
 } from '../data/importTemplates'
 import { ImportTemplateLegend } from '../components/ui/ImportTemplateLegend'
-import SkuFuzzyPicker from '../components/ui/SkuFuzzyPicker'
+import OutboundSkuPickerModal, { type OutboundSkuPickerConfirmRow, type OutboundSkuPickerLine } from '../components/outbound/OutboundSkuPickerModal'
 import type { DeliveryMethod, FileAttachment, InboundStatus, InboundType } from '../data/mockData'
 import { CUSTOMER_INBOUND_TYPES, sanitizeCustomerInboundType } from '../data/mockData'
 import { useInboundOrders } from '../data/entityStore'
-import { buildInboundBoxLines, validateInboundBoxLines, type InboundBoxLine } from '../data/inboundBoxLines'
+import { buildInboundSkuSelection, validateInboundBoxLines, type InboundBoxLine } from '../data/inboundBoxLines'
 
 const INBOUND_WAREHOUSE_ID = 'jhb1'
+const EMPTY_SKU_SELECTION: OutboundSkuPickerLine[] = []
 
 export default function Inbound() {
   const navigate = useNavigate()
@@ -46,7 +47,7 @@ export default function Inbound() {
   const [referenceNo, setReferenceNo] = useState('')
   const [platformRef, setPlatformRef] = useState('')
   const [remark, setRemark] = useState('')
-  const [skuInput, setSkuInput] = useState('')
+  const [skuPickerOpen, setSkuPickerOpen] = useState(false)
   const [boxCountInput, setBoxCountInput] = useState('')
   const [qtyPerBoxInput, setQtyPerBoxInput] = useState('')
   const [packTypeInput, setPackTypeInput] = useState('自带包装')
@@ -104,21 +105,20 @@ export default function Inbound() {
     }
   }, [editId, reorderId, inboundOrders, navigate, targetOrder])
 
-  const addLine = () => {
-    const prod = findProductByCode(skuInput)
+  const addPickerLines = (rows: OutboundSkuPickerConfirmRow[]) => {
     try {
-      const added = buildInboundBoxLines(lines, {
-        sku: skuInput,
-        name: prod?.name ?? skuInput.trim(),
+      const added = buildInboundSkuSelection(lines, rows, {
         boxCount: Number(boxCountInput),
         qtyPerBox: Number(qtyPerBoxInput),
         packType: packTypeInput,
         stockType: stockTypeInput,
       })
       setLines(prev => [...prev, ...added])
-      setSkuInput(''); setBoxCountInput(''); setQtyPerBoxInput('')
+      setBoxCountInput(''); setQtyPerBoxInput('')
+      return true
     } catch (err) {
       window.alert(err instanceof Error ? err.message : '添加货品失败')
+      return false
     }
   }
 
@@ -348,6 +348,7 @@ export default function Inbound() {
           title="货品选择"
           action={
             <div className="flex flex-wrap gap-2">
+              <Button size="sm" onClick={() => setSkuPickerOpen(true)}><Plus className="h-3.5 w-3.5" /> 增加</Button>
               <Button variant="secondary" size="sm" onClick={downloadInboundLineTemplate}>下载模板</Button>
               <Button variant="secondary" size="sm" onClick={() => void handleBatchUploadLines()}>
                 <Upload className="h-3.5 w-3.5" /> 批量上传
@@ -356,38 +357,8 @@ export default function Inbound() {
           }
         >
           <ImportTemplateLegend columns={INBOUND_LINE_COLUMNS} />
-          <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
-            <FormField label="SKU" required>
-              <SkuFuzzyPicker
-                value={skuInput}
-                onChange={setSkuInput}
-                customerId={getCustomerIdForRole(role) ?? undefined}
-              />
-            </FormField>
-            <FormField label="箱数" required hint="正整数">
-              <input value={boxCountInput} onChange={e => setBoxCountInput(e.target.value)} type="number" min={1} step={1} className={formInput()} />
-            </FormField>
-            <FormField label="每箱数量" required hint="正整数">
-              <input value={qtyPerBoxInput} onChange={e => setQtyPerBoxInput(e.target.value)} type="number" min={1} step={1} className={formInput()} />
-            </FormField>
-            <FormField label="包装类型">
-              <select className={formSelect()} value={packTypeInput} onChange={e => setPackTypeInput(e.target.value)}>
-                <option>自带包装</option>
-                <option>仓库包装</option>
-              </select>
-            </FormField>
-            <FormField label="箱库存类型">
-              <select className={formSelect()} value={stockTypeInput} onChange={e => setStockTypeInput(e.target.value)}>
-                <option>以仓库为准</option>
-                <option>以箱为准</option>
-              </select>
-            </FormField>
-            <div className="flex items-end gap-2">
-              <Button size="sm" onClick={addLine}><Plus className="h-3.5 w-3.5" /> 添加</Button>
-              <Button variant="secondary" size="sm" onClick={() => setLines([])}>清除</Button>
-            </div>
-          </div>
-          <p className="mb-3 text-xs text-text-muted">每箱生成一行，箱号从当前最大箱号继续编号；添加后可在下方直接修改明细。</p>
+          <p className="mb-3 text-xs text-text-muted">点击「增加」选择 SKU 并填写箱数与每箱数量；箱号自动连续生成，添加后可直接修改明细。</p>
+          {lines.length > 0 && <div className="mb-3 flex justify-end"><Button variant="secondary" size="sm" onClick={() => setLines([])}>清除货品</Button></div>}
 
           <Card className="overflow-hidden">
             <Table>
@@ -404,7 +375,7 @@ export default function Inbound() {
               </thead>
               <tbody className="table-body">
                 {lines.length === 0 ? (
-                  <tr><td colSpan={7} className="table-cell py-8 text-center text-xs text-text-muted">暂无货品，请填写 SKU、箱数和每箱数量后点击「添加」，或使用批量上传</td></tr>
+                  <tr><td colSpan={7} className="table-cell py-8 text-center text-xs text-text-muted">暂无货品，请点击「增加」选择 SKU，或使用批量上传</td></tr>
                 ) : lines.map(row => (
                   <tr key={row.id} className="table-row">
                     <td className="table-cell">
@@ -484,6 +455,33 @@ export default function Inbound() {
           </div>
         </div>
       </div>
+      <OutboundSkuPickerModal
+        open={skuPickerOpen}
+        onClose={() => setSkuPickerOpen(false)}
+        purpose="inbound"
+        customerId={getCustomerIdForRole(role) ?? undefined}
+        catalogOnly={false}
+        stockSource="owned"
+        lines={EMPTY_SKU_SELECTION}
+        onConfirm={addPickerLines}
+        configuration={<>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <FormField label="箱数（每个 SKU）" required hint="正整数">
+              <input value={boxCountInput} onChange={e => setBoxCountInput(e.target.value)} type="number" min={1} step={1} className={formInput()} />
+            </FormField>
+            <FormField label="每箱数量" required hint="正整数">
+              <input value={qtyPerBoxInput} onChange={e => setQtyPerBoxInput(e.target.value)} type="number" min={1} step={1} className={formInput()} />
+            </FormField>
+            <FormField label="包装类型">
+              <select className={formSelect()} value={packTypeInput} onChange={e => setPackTypeInput(e.target.value)}><option>自带包装</option><option>仓库包装</option></select>
+            </FormField>
+            <FormField label="箱库存类型">
+              <select className={formSelect()} value={stockTypeInput} onChange={e => setStockTypeInput(e.target.value)}><option>以仓库为准</option><option>以箱为准</option></select>
+            </FormField>
+          </div>
+          <p className="mt-2 text-xs text-text-muted">所选每个 SKU 按以上箱数添加，无库存的商品也可预约入库。不同 SKU 数量不同时可分次添加，或添加后修改明细。</p>
+        </>}
+      />
     </div>
   )
 }

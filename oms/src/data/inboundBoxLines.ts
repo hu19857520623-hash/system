@@ -43,3 +43,17 @@ export function validateInboundBoxLines(lines: InboundBoxLine[]): string | undef
   }
   if (!Number.isSafeInteger(lines.reduce((total, line) => total + line.qty, 0))) return '货品总数量超出支持范围'
 }
+
+export function buildInboundSkuSelection(
+  existing: InboundBoxLine[],
+  products: { sku: string; name: string }[],
+  config: { boxCount: number; qtyPerBox: number; packType: string; stockType: string },
+): InboundBoxLine[] {
+  if (!products.length) throw new Error('请选择 SKU')
+  if (products.length * config.boxCount > 10000) throw new Error('单次最多添加 10000 箱，请分次添加或批量上传')
+  const added: InboundBoxLine[] = []
+  for (const product of products) {
+    added.push(...buildInboundBoxLines([...existing, ...added], { ...product, ...config }))
+  }
+  return added
+}

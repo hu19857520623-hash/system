@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { RefreshCw, X } from 'lucide-react'
 import { Button, MonoCode, Table } from '../ui'
 import { formInput } from '../ui/form'
@@ -9,7 +9,7 @@ import {
   listShippableOutboundItems,
 } from '../../data/inventoryStore'
 import { findProductByCode } from '../../data/platformBindingUtils'
-import { getCustomerSkuDisplay } from '../../data/skuCode'
+import { getCustomerSkuDisplay, productVisibleToCustomer } from '../../data/skuCode'
 
 const PAGE_SIZE = 10
 const MAX_SKU_TOKENS = 200
@@ -47,7 +47,9 @@ type Props = {
   stockSource: StockSource | 'auto'
   lines: OutboundSkuPickerLine[]
   initialSearch?: string
-  onConfirm: (rows: OutboundSkuPickerConfirmRow[]) => void
+  purpose?: 'outbound' | 'inbound'
+  configuration?: ReactNode
+  onConfirm: (rows: OutboundSkuPickerConfirmRow[]) => void | boolean
 }
 
 type RowItem =
@@ -97,6 +99,8 @@ export default function OutboundSkuPickerModal({
   stockSource,
   lines,
   initialSearch = '',
+  purpose = 'outbound',
+  configuration,
   onConfirm,
 }: Props) {
   const [skuDraft, setSkuDraft] = useState('')
@@ -115,6 +119,7 @@ export default function OutboundSkuPickerModal({
     const holdingKeys = new Set(holdings.flatMap(item => [item.sku.toLowerCase()]))
     let list = getProductsSnapshot()
     list = list.filter(p => {
+      if (purpose === 'inbound') return productVisibleToCustomer(p, customerId)
       const ownedByCustomer = !customerId || !p.customerId || p.customerId === customerId
       const hasHolding = holdingKeys.has(p.internalSku.toLowerCase())
         || (p.customerSku ? holdingKeys.has(p.customerSku.toLowerCase()) : false)
@@ -122,7 +127,7 @@ export default function OutboundSkuPickerModal({
       return ownedByCustomer || hasHolding
     })
     return list
-  }, [customerId, catalogOnly, open, refreshKey])
+  }, [customerId, catalogOnly, open, refreshKey, purpose])
 
   const lineByInternalSku = useMemo(() => {
     const map = new Map<string, OutboundSkuPickerLine>()
@@ -161,7 +166,7 @@ export default function OutboundSkuPickerModal({
       getCustomerSkuDisplay(p).toLowerCase(),
     ].filter(Boolean)))
     let products = catalog.filter(
-      p => lineByInternalSku.has(p.internalSku)
+      p => purpose === 'inbound' || lineByInternalSku.has(p.internalSku)
         || getOutboundShippableQty(p.internalSku, stockSource, customerId) > 0,
     )
     products = products.filter(p => productMatchesSkuTokens(p, skuTokens) && productMatchesName(p, nameFilter))
@@ -181,7 +186,7 @@ export default function OutboundSkuPickerModal({
     for (const [internalSku, line] of lineByInternalSku) {
       pushOrphan(internalSku, line)
     }
-    for (const holding of listShippableOutboundItems(customerId, { catalogOnly })) {
+    for (const holding of purpose === 'inbound' ? [] : listShippableOutboundItems(customerId, { catalogOnly })) {
       pushOrphan(holding.sku, {
         id: `inv-${holding.sku}`,
         sku: holding.sku,
@@ -207,7 +212,7 @@ export default function OutboundSkuPickerModal({
       .map(product => ({ kind: 'product' as const, product }))
 
     return [...orphans, ...sortedProducts]
-  }, [catalog, skuTokens, nameFilter, lineByInternalSku, stockSource, customerId, catalogOnly])
+  }, [catalog, skuTokens, nameFilter, lineByInternalSku, stockSource, customerId, catalogOnly, purpose])
 
   const total = listItems.length
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
@@ -301,8 +306,7 @@ export default function OutboundSkuPickerModal({
         needsRelabel: existing?.needsRelabel,
       })
     }
-    onConfirm(rows)
-    onClose()
+    if (onConfirm(rows) !== false) onClose()
   }
 
   const selectedCount = Object.values(checked).filter(Boolean).length
@@ -322,7 +326,7 @@ export default function OutboundSkuPickerModal({
       >
         <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3">
           <h3 id="outbound-sku-picker-title" className="text-base font-semibold text-slate-800">
-            SKU库存
+            {purpose === 'inbound' ? '选择入库 SKU' : 'SKU库存'}
           </h3>
           <button
             type="button"
@@ -362,6 +366,8 @@ export default function OutboundSkuPickerModal({
             <Button size="sm" onClick={runSearch}>查询</Button>
           </div>
         </div>
+
+        {configuration && <div className="border-b border-slate-100 px-5 py-3">{configuration}</div>}
 
         <div className="flex items-center justify-end gap-1 border-b border-slate-100 px-3 py-1.5">
           <button
