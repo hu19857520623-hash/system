@@ -51,6 +51,7 @@ import com.takealot.pda.ui.components.SkuCard
 import com.takealot.pda.ui.components.StatusChip
 import com.takealot.pda.ui.components.fieldColors
 import com.takealot.pda.ui.theme.PdaAccent
+import com.takealot.pda.ui.theme.PdaErr
 import com.takealot.pda.ui.theme.PdaMuted
 import com.takealot.pda.ui.theme.PdaOk
 import com.takealot.pda.ui.theme.PdaOutbound
@@ -98,6 +99,7 @@ class OutboundViewModel : ViewModel() {
     var carrier by mutableStateOf("")
     var logisticsProduct by mutableStateOf("")
     var feedback by mutableStateOf<Feedback?>(null)
+    var lastRejectedScan by mutableStateOf<String?>(null)
     var busy by mutableStateOf(false)
     var pendingScanCount by androidx.compose.runtime.mutableIntStateOf(0)
     var showShortPickDialog by mutableStateOf(false)
@@ -173,7 +175,8 @@ class OutboundViewModel : ViewModel() {
         pendingScanCount += 1
         if (!scanQueue.trySend(code).isSuccess) {
             pendingScanCount = (pendingScanCount - 1).coerceAtLeast(0)
-            feedback = Feedback(false, "扫码队列已满，请稍后重试")
+            lastRejectedScan = "未计数 · $code：扫码队列已满，请重新扫描"
+            feedback = Feedback(false, lastRejectedScan!!)
         }
     }
 
@@ -181,8 +184,9 @@ class OutboundViewModel : ViewModel() {
         busy = true; feedback = Feedback(false, "正在处理 $code…", processing = true)
         val journal = PdaApp.instance.workJournal
         val recordId = journal.beginScan("outbound", mode, code, order?.id, order?.no)
+        var pickCountApplied = false
         try {
-            if (order == null) { openByCode(code); scan = ""; journal.acknowledge(recordId, feedback?.message); return }
+            if (order == null) { openByCode(code); journal.acknowledge(recordId, feedback?.message); return }
             if (mode == "ship") {
                 throw ErpException("已绑定出库单，请点击确认发运")
             }
@@ -196,16 +200,19 @@ class OutboundViewModel : ViewModel() {
                     scannedPickLocation = locationTask.locationCode
                     selectedSku = locationTask.taskKey
                     feedback = Feedback(true, "库位 ${locationTask.locationCode}，请扫描本库位待拣 SKU")
-                    scan = ""; saveProgress(); journal.acknowledge(recordId, feedback?.message); return
+                    saveProgress(); journal.acknowledge(recordId, feedback?.message); return
                 }
                 val selected = lines.pickTaskAtLocation(scannedPickLocation, code)
                 if (selected != null) {
-                    selectedSku = selected.taskKey
                     val nextQty = nextPickQty(selected.scannedQty, selected.qty)
-                    lines = lines.map { if (it.taskKey == selected.taskKey) it.copy(scannedQty = nextQty) else it }
+                    val nextLines = lines.map { if (it.taskKey == selected.taskKey) it.copy(scannedQty = nextQty) else it }
+                    saveProgress(nextLines, selected.taskKey)
+                    lines = nextLines
+                    selectedSku = selected.taskKey
+                    pickCountApplied = true
                     val modeHint = if (pickScanMode == "carton") "按箱" else "逐件"
-                    feedback = Feedback(true, "$modeHint ${selected.locationCode} · ${selected.sku} $nextQty/${selected.qty}")
-                    scan = ""; saveProgress(); journal.acknowledge(recordId, feedback?.message); return
+                    feedback = Feedback(true, "已计数 · $code\n$modeHint ${selected.locationCode} · ${selected.sku} $nextQty/${selected.qty}", pickCounted = true)
+                    journal.acknowledge(recordId, feedback?.message); return
                 }
                 val skuTask = lines.firstOrNull { !it.done && !it.taskKey.endsWith("@SHORT") && it.matchesScan(code) }
                 if (skuTask != null) {
@@ -224,16 +231,21 @@ class OutboundViewModel : ViewModel() {
                     selectedSku = line.taskKey
                     lines = lines.map { if (it.taskKey == line.taskKey) it.copy(scannedQty = nextQty) else it }
                     feedback = Feedback(true, "${line.sku} $nextQty/${line.qty}")
-                    scan = ""; saveProgress(); journal.acknowledge(recordId, feedback?.message); return
+                    saveProgress(); journal.acknowledge(recordId, feedback?.message); return
                 }
                 if (lines.any { it.matchesScan(code) }) {
                     throw ErpException("该 SKU 已复核完成，请扫描下一件")
                 }
             }
-            openByCode(code); scan = ""
+            openByCode(code)
             journal.acknowledge(recordId, feedback?.message)
         } catch (e: Exception) {
-            feedback = Feedback(false, e.message ?: "扫描失败")
+            val message = e.message ?: "扫描失败"
+            if (order != null && mode == "pick") {
+                lastRejectedScan = if (pickCountApplied) "已计数 · $code：作业日志保存失败，请勿重复扫描；$message"
+                    else "未计数 · $code：$message"
+                feedback = Feedback(false, lastRejectedScan!!)
+            } else feedback = Feedback(false, message)
             if (order != null && mode != "ship" && e.message.orEmpty().contains("未找到出库单")) {
                 unknownScanCode = code
                 unknownScanRemark = ""
@@ -339,14 +351,14 @@ class OutboundViewModel : ViewModel() {
         session.pickScanMode = pickScanMode
     }
 
-    private fun saveProgress() {
+    private fun saveProgress(progressLines: List<LocalPickLine> = lines, selectedTask: String? = selectedSku) {
         val current = order ?: return
         PdaApp.instance.workJournal.savePickProgress(
             PdaPickProgress(
                 orderId = current.id,
                 mode = mode,
-                selectedSku = selectedSku,
-                lines = lines.map { PdaPickProgressLine(it.id, it.scannedQty, it.locationCode, it.taskKey) },
+                selectedSku = selectedTask,
+                lines = progressLines.map { PdaPickProgressLine(it.id, it.scannedQty, it.locationCode, it.taskKey) },
             ),
         )
     }
@@ -511,7 +523,7 @@ fun OutboundScreen(modeKey: String, onBack: () -> Unit, vm: OutboundViewModel = 
         "review" -> tr("review")
         else -> tr("ship")
     }
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(title, color = PdaText, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
             TextButton(onClick = onBack) { Text(tr("back"), color = PdaAccent) }
@@ -528,133 +540,144 @@ fun OutboundScreen(modeKey: String, onBack: () -> Unit, vm: OutboundViewModel = 
             { vm.scan = it },
             { vm.submitScan() },
             scanLabel,
-            enabled = !vm.busy && !reviewAwaitingStart && (vm.mode != "ship" || vm.order == null),
+            enabled = !reviewAwaitingStart && (vm.mode != "ship" || vm.order == null),
+            autoFocus = vm.unknownScanCode == null && !vm.showShortPickDialog,
+            focusNonce = listOf(vm.order?.id, vm.unknownScanCode, vm.showShortPickDialog, reviewAwaitingStart),
         )
         ScanQueueStatus(vm.pendingScanCount, vm.busy)
         FeedbackBar(vm.feedback)
-        val order = vm.order
-        if (order == null) {
-            Text("待作业", color = PdaMuted, fontSize = 13.sp)
-            if (vm.list.isEmpty()) Text(
-                if (vm.mode == "pick") "没有分配给你的拣货任务，请先在电脑端分配拣货员" else "暂无任务，可直接扫描出库单号",
-                color = PdaMuted,
-                fontSize = 13.sp,
-            )
-            vm.list.forEach { row ->
+        vm.lastRejectedScan?.let { rejected ->
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(rejected, color = PdaErr, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                TextButton(onClick = { vm.lastRejectedScan = null }) { Text("知道了") }
+            }
+        }
+        if (vm.mode == "pick") Text("设备滴声仅表示解码；以「已计数」和数量变化确认拣货", color = PdaWarn, fontSize = 12.sp)
+        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            val order = vm.order
+            if (order == null) {
+                Text("待作业", color = PdaMuted, fontSize = 13.sp)
+                if (vm.list.isEmpty()) Text(
+                    if (vm.mode == "pick") "没有分配给你的拣货任务，请先在电脑端分配拣货员" else "暂无任务，可直接扫描出库单号",
+                    color = PdaMuted,
+                    fontSize = 13.sp,
+                )
+                vm.list.forEach { row ->
+                    DocumentCard(
+                        typeLabel = when (vm.mode) { "pick" -> "拣货单"; "review" -> "复核单"; else -> "发运单" },
+                        number = row.no,
+                        accent = PdaOutbound,
+                        status = { StatusChip(outboundStatusLabel(row.statusKey), "warn") },
+                        onClick = { vm.openOrder(row.id) },
+                    ) {
+                        Text("${row.customerName.orEmpty()} · ${row.skuSummary.orEmpty().ifBlank { "${row.totalQty} 件" }}", color = PdaMuted, fontSize = 12.sp)
+                    }
+                }
+            } else {
                 DocumentCard(
                     typeLabel = when (vm.mode) { "pick" -> "拣货单"; "review" -> "复核单"; else -> "发运单" },
-                    number = row.no,
+                    number = order.no,
                     accent = PdaOutbound,
-                    status = { StatusChip(outboundStatusLabel(row.statusKey), "warn") },
-                    onClick = { vm.openOrder(row.id) },
+                    status = { StatusChip(outboundStatusLabel(order.statusKey), "warn") },
                 ) {
-                    Text("${row.customerName.orEmpty()} · ${row.skuSummary.orEmpty().ifBlank { "${row.totalQty} 件" }}", color = PdaMuted, fontSize = 12.sp)
+                    KeyValue("客户", order.customerName.orEmpty())
+                    KeyValue("仓库", order.warehouseCode.orEmpty())
+                    TextButton(onClick = { vm.clearOrder() }) { Text("换单", color = PdaAccent) }
                 }
-            }
-        } else {
-            DocumentCard(
-                typeLabel = when (vm.mode) { "pick" -> "拣货单"; "review" -> "复核单"; else -> "发运单" },
-                number = order.no,
-                accent = PdaOutbound,
-                status = { StatusChip(outboundStatusLabel(order.statusKey), "warn") },
-            ) {
-                KeyValue("客户", order.customerName.orEmpty())
-                KeyValue("仓库", order.warehouseCode.orEmpty())
-                TextButton(onClick = { vm.clearOrder() }) { Text("换单", color = PdaAccent) }
-            }
-            if (reviewAwaitingStart) {
-                Text("该单已拣货。确认实物与单据一致后，再开始复核；开始后会记录复核人。", color = PdaWarn, fontSize = 13.sp)
-                BigButton("开始复核", onClick = { vm.startReview() }, enabled = !vm.busy, color = PdaWarn)
-            }
-            if (vm.mode == "pick") {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton(
-                        onClick = { vm.applyPickScanMode("carton") },
-                        modifier = Modifier.weight(1f).background(
-                            if (vm.pickScanMode == "carton") PdaAccent.copy(alpha = 0.25f) else PdaSurface2,
-                            RoundedCornerShape(8.dp),
-                        ),
-                    ) { Text("按箱扫", color = if (vm.pickScanMode == "carton") PdaAccent else PdaMuted) }
-                    TextButton(
-                        onClick = { vm.applyPickScanMode("piece") },
-                        modifier = Modifier.weight(1f).background(
-                            if (vm.pickScanMode == "piece") PdaAccent.copy(alpha = 0.25f) else PdaSurface2,
-                            RoundedCornerShape(8.dp),
-                        ),
-                    ) { Text("逐件扫", color = if (vm.pickScanMode == "piece") PdaAccent else PdaMuted) }
+                if (reviewAwaitingStart) {
+                    Text("该单已拣货。确认实物与单据一致后，再开始复核；开始后会记录复核人。", color = PdaWarn, fontSize = 13.sp)
+                    BigButton("开始复核", onClick = { vm.startReview() }, enabled = !vm.busy, color = PdaWarn)
                 }
-                Text(
-                    if (vm.pickScanMode == "carton") "扫一次 SKU 记本库位剩余件数，不必逐件" else "每扫一次 SKU +1",
-                    color = PdaMuted,
-                    fontSize = 12.sp,
-                )
-            }
-            if (vm.mode != "ship") {
-                Text("SKU 明细", color = PdaOutbound, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                vm.lines.forEach { line ->
-                    SkuCard(
-                        sku = line.sku,
-                        bound990 = line.bound990,
-                        progress = "${line.scannedQty}/${line.qty}",
-                        done = line.done,
-                        selected = line.taskKey == vm.selectedSku,
-                        onClick = {},
-                    ) {
-                        Text(line.productName, color = PdaMuted, fontSize = 12.sp)
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("拣货库位", color = PdaMuted, fontSize = 11.sp)
-                            Text(line.locationCode.ifBlank { "未填" }, color = PdaText, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                if (vm.mode == "pick") {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextButton(
+                            onClick = { vm.applyPickScanMode("carton") },
+                            modifier = Modifier.weight(1f).background(
+                                if (vm.pickScanMode == "carton") PdaAccent.copy(alpha = 0.25f) else PdaSurface2,
+                                RoundedCornerShape(8.dp),
+                            ),
+                        ) { Text("按箱扫", color = if (vm.pickScanMode == "carton") PdaAccent else PdaMuted) }
+                        TextButton(
+                            onClick = { vm.applyPickScanMode("piece") },
+                            modifier = Modifier.weight(1f).background(
+                                if (vm.pickScanMode == "piece") PdaAccent.copy(alpha = 0.25f) else PdaSurface2,
+                                RoundedCornerShape(8.dp),
+                            ),
+                        ) { Text("逐件扫", color = if (vm.pickScanMode == "piece") PdaAccent else PdaMuted) }
+                    }
+                    Text(
+                        if (vm.pickScanMode == "carton") "扫一次 SKU 记本库位剩余件数，不必逐件" else "每扫一次 SKU +1",
+                        color = PdaMuted,
+                        fontSize = 12.sp,
+                    )
+                }
+                if (vm.mode != "ship") {
+                    Text("SKU 明细", color = PdaOutbound, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    vm.lines.forEach { line ->
+                        SkuCard(
+                            sku = line.sku,
+                            bound990 = line.bound990,
+                            progress = "${line.scannedQty}/${line.qty}",
+                            done = line.done,
+                            selected = line.taskKey == vm.selectedSku,
+                            onClick = {},
+                        ) {
+                            Text(line.productName, color = PdaMuted, fontSize = 12.sp)
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("拣货库位", color = PdaMuted, fontSize = 11.sp)
+                                Text(line.locationCode.ifBlank { "未填" }, color = PdaText, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                            if (vm.mode == "pick") Text(
+                                if (vm.pickScanMode == "carton") "先扫库位，再扫 SKU 或已绑 990；按箱一次记满 ${line.qty}" else "先扫库位，再扫 SKU 或已绑 990；逐件扫满 ${line.qty}",
+                                color = PdaAccent,
+                                fontSize = 12.sp,
+                            )
+                            else Text("逐件扫描 SKU 或已绑 990，扫满 ${line.qty} 件", color = PdaAccent, fontSize = 12.sp)
                         }
-                        if (vm.mode == "pick") Text(
-                            if (vm.pickScanMode == "carton") "先扫库位，再扫 SKU 或已绑 990；按箱一次记满 ${line.qty}" else "先扫库位，再扫 SKU 或已绑 990；逐件扫满 ${line.qty}",
-                            color = PdaAccent,
-                            fontSize = 12.sp,
-                        )
-                        else Text("逐件扫描 SKU 或已绑 990，扫满 ${line.qty} 件", color = PdaAccent, fontSize = 12.sp)
                     }
                 }
-            }
-            if (vm.mode == "review" && order.omsPreDeduct != null) {
-                OutboundCartonMeasureEditor(vm)
-            }
-            when (vm.mode) {
-                "pick" -> {
-                    BigButton("提交拣货", onClick = { vm.submitPick() }, enabled = !vm.busy && vm.lines.isNotEmpty() && vm.lines.all { it.done }, color = PdaOk)
-                    if (vm.lines.any { !it.done }) {
-                        BigButton("登记短拣", onClick = { vm.showShortPickDialog = true }, enabled = !vm.busy, color = PdaWarn)
-                    }
+                if (vm.mode == "review" && order.omsPreDeduct != null) {
+                    OutboundCartonMeasureEditor(vm)
                 }
-                "review" -> BigButton("提交复核并计算费用", onClick = { vm.submitReview() }, enabled = !vm.busy && !reviewAwaitingStart && vm.lines.isNotEmpty(), color = PdaOk)
-                else -> {
-                    Panel {
-                        Text("物流信息（可选）", color = PdaOutbound, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                        OutlinedTextField(
-                            value = vm.trackingNo,
-                            onValueChange = { vm.trackingNo = it },
-                            label = { Text("跟踪号") },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = fieldColors(),
-                        )
-                        OutlinedTextField(
-                            value = vm.carrier,
-                            onValueChange = { vm.carrier = it },
-                            label = { Text("承运商") },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = fieldColors(),
-                        )
-                        OutlinedTextField(
-                            value = vm.logisticsProduct,
-                            onValueChange = { vm.logisticsProduct = it },
-                            label = { Text("物流产品") },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = fieldColors(),
-                        )
+                when (vm.mode) {
+                    "pick" -> {
+                        BigButton("提交拣货", onClick = { vm.submitPick() }, enabled = !vm.busy && vm.lines.isNotEmpty() && vm.lines.all { it.done }, color = PdaOk)
+                        if (vm.lines.any { !it.done }) {
+                            BigButton("登记短拣", onClick = { vm.showShortPickDialog = true }, enabled = !vm.busy, color = PdaWarn)
+                        }
                     }
-                    Text("确认后将扣减仓库库存，并向 OMS 回传已发运状态和实际费用。", color = PdaWarn, fontSize = 13.sp)
-                    BigButton("确认发运", onClick = { vm.submitShip() }, enabled = !vm.busy, color = PdaOk)
+                    "review" -> BigButton("提交复核并计算费用", onClick = { vm.submitReview() }, enabled = !vm.busy && !reviewAwaitingStart && vm.lines.isNotEmpty(), color = PdaOk)
+                    else -> {
+                        Panel {
+                            Text("物流信息（可选）", color = PdaOutbound, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                            OutlinedTextField(
+                                value = vm.trackingNo,
+                                onValueChange = { vm.trackingNo = it },
+                                label = { Text("跟踪号") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = fieldColors(),
+                            )
+                            OutlinedTextField(
+                                value = vm.carrier,
+                                onValueChange = { vm.carrier = it },
+                                label = { Text("承运商") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = fieldColors(),
+                            )
+                            OutlinedTextField(
+                                value = vm.logisticsProduct,
+                                onValueChange = { vm.logisticsProduct = it },
+                                label = { Text("物流产品") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = fieldColors(),
+                            )
+                        }
+                        Text("确认后将扣减仓库库存，并向 OMS 回传已发运状态和实际费用。", color = PdaWarn, fontSize = 13.sp)
+                        BigButton("确认发运", onClick = { vm.submitShip() }, enabled = !vm.busy, color = PdaOk)
+                    }
                 }
             }
         }

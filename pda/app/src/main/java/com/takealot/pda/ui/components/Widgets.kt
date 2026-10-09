@@ -37,6 +37,11 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.font.FontWeight
@@ -55,7 +60,13 @@ import com.takealot.pda.ui.theme.PdaText
 import com.takealot.pda.ui.theme.PdaWarn
 import kotlinx.coroutines.delay
 
-data class Feedback(val ok: Boolean, val message: String, val processing: Boolean = false)
+data class Feedback(
+    val ok: Boolean,
+    val message: String,
+    val processing: Boolean = false,
+    val pickCounted: Boolean = false,
+    val eventId: Long = System.nanoTime(),
+)
 
 @Composable
 fun ScanField(
@@ -80,7 +91,12 @@ fun ScanField(
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
-        modifier = Modifier.fillMaxWidth().focusRequester(focus),
+        modifier = Modifier.fillMaxWidth().focusRequester(focus).onPreviewKeyEvent { event ->
+            if (enabled && (event.key == Key.Enter || event.key == Key.NumPadEnter)) {
+                if (event.type == KeyEventType.KeyDown) onSubmit()
+                true
+            } else false
+        },
         enabled = enabled,
         singleLine = true,
         label = { Text(label) },
@@ -141,7 +157,7 @@ fun BigButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, 
 fun FeedbackBar(feedback: Feedback?) {
     if (feedback == null) return
     val context = LocalContext.current
-    LaunchedEffect(feedback.ok, feedback.message) {
+    LaunchedEffect(feedback.eventId) {
         val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) (context.getSystemService(VibratorManager::class.java))?.defaultVibrator
         else context.getSystemService(Vibrator::class.java)
         if (feedback.processing) return@LaunchedEffect
@@ -158,6 +174,11 @@ fun FeedbackBar(feedback: Feedback?) {
         try {
             tone.startTone(if (feedback.ok) ToneGenerator.TONE_PROP_ACK else ToneGenerator.TONE_PROP_NACK, if (feedback.ok) 90 else 180)
             delay(if (feedback.ok) 100 else 190)
+            if (feedback.pickCounted) {
+                delay(80)
+                tone.startTone(ToneGenerator.TONE_PROP_ACK, 90)
+                delay(100)
+            }
         } finally {
             tone.release()
         }
