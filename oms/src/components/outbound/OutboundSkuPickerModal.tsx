@@ -8,7 +8,7 @@ import {
   getOutboundShippableQty,
   listShippableOutboundItems,
 } from '../../data/inventoryStore'
-import { findProductByCode } from '../../data/platformBindingUtils'
+import { findProductByCode, getPlatformBarcodeAliases } from '../../data/platformBindingUtils'
 import { getCustomerSkuDisplay, productVisibleToCustomer } from '../../data/skuCode'
 
 const PAGE_SIZE = 10
@@ -68,19 +68,20 @@ function parseSkuTokens(raw: string): string[] {
     .slice(0, MAX_SKU_TOKENS)
 }
 
-function productSkuHaystack(p: Product): string[] {
+function productSkuHaystack(p: Product, customerId?: string): string[] {
   return [
     getCustomerSkuDisplay(p),
     p.customerSku,
     p.internalSku,
     p.customCode,
     p.outerBoxBarcode,
+    ...getPlatformBarcodeAliases(p.internalSku, customerId ?? p.customerId),
   ].filter((s): s is string => Boolean(s)).map(s => s.toLowerCase())
 }
 
-function productMatchesSkuTokens(p: Product, tokens: string[]): boolean {
+function productMatchesSkuTokens(p: Product, tokens: string[], customerId?: string): boolean {
   if (tokens.length === 0) return true
-  const hay = productSkuHaystack(p)
+  const hay = productSkuHaystack(p, customerId)
   return tokens.some(tok => hay.some(h => h === tok || h.includes(tok)))
 }
 
@@ -169,7 +170,7 @@ export default function OutboundSkuPickerModal({
       p => purpose === 'inbound' || lineByInternalSku.has(p.internalSku)
         || getOutboundShippableQty(p.internalSku, stockSource, customerId) > 0,
     )
-    products = products.filter(p => productMatchesSkuTokens(p, skuTokens) && productMatchesName(p, nameFilter))
+    products = products.filter(p => productMatchesSkuTokens(p, skuTokens, customerId) && productMatchesName(p, nameFilter))
 
     const orphans: RowItem[] = []
     const seenOrphans = new Set<string>()
@@ -429,6 +430,9 @@ export default function OutboundSkuPickerModal({
                     </td>
                     <td className="table-cell px-3 text-xs">
                       <MonoCode>{displaySku}</MonoCode>
+                      {getPlatformBarcodeAliases(key, customerId).map(code => (
+                        <p key={code} className="mt-1 text-[11px] text-slate-500">990 辅助码：<span className="font-mono">{code}</span></p>
+                      ))}
                     </td>
                     <td className="table-cell px-3 text-xs text-slate-700">{QUALITY_LABEL}</td>
                     <td className="table-cell px-3 text-xs tabular-nums text-slate-800">{shippable}</td>

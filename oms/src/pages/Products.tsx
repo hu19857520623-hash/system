@@ -19,7 +19,7 @@ import {
   approveProducts,
 } from '../data/inventoryStore'
 import { useInboundOrders } from '../data/entityStore'
-import { getPrimaryPlatformBarcode } from '../data/platformBindingUtils'
+import { getPlatformBarcodeAliases } from '../data/platformBindingUtils'
 import { printBarcodeLabels } from '../data/barcodeLabelTemplate'
 import { getCustomerSkuDisplay } from '../data/skuCode'
 import { useDataScope } from '../auth/useDataScope'
@@ -64,8 +64,8 @@ const defaultFilters: ProductFilters = {
   weightMin: '', weightMax: '', valueMin: '', valueMax: '',
 }
 
-function displaySku(p: Product, customerId?: string | null) {
-  return getPrimaryPlatformBarcode(p.internalSku, customerId ?? undefined) ?? getCustomerSkuDisplay(p)
+function displaySku(p: Product) {
+  return getCustomerSkuDisplay(p)
 }
 
 function inboundOrderUsesSku(order: InboundOrder, product: Product) {
@@ -81,8 +81,8 @@ function applyProductFilters(list: Product[], f: ProductFilters, tab: string, cu
     if (tab !== 'all' && p.productStatus !== tab) return false
     if (!matchTriState(p.hasBattery, f.battery)) return false
     if (!matchTriState(p.hasBoxSpec, f.boxSpec)) return false
-    const skuVal = `${displaySku(p, customerId)} ${p.internalSku}`
-    if (!matchText(skuVal, f.sku, f.skuMode)) return false
+    const skuValues = [displaySku(p), p.internalSku, ...getPlatformBarcodeAliases(p.internalSku, customerId ?? p.customerId)]
+    if (!skuValues.some(value => matchText(value, f.sku, f.skuMode))) return false
     if (!matchText(p.customCode ?? '', f.customCode, f.customCodeMode)) return false
     if (!matchText(p.name, f.productName, f.productNameMode)) return false
     if (f.outerBarcode && !(p.outerBoxBarcode ?? '').includes(f.outerBarcode)) return false
@@ -242,7 +242,7 @@ export default function Products() {
   }
 
   const handleDiscard = async (product: Product) => {
-    if (!window.confirm(`确认废弃商品「${displaySku(product, barcodeCustomerId)}」？可在“废弃”页恢复。`)) return
+    if (!window.confirm(`确认废弃商品「${displaySku(product)}」？可在“废弃”页恢复。`)) return
     try {
       if (isSubmittedProduct(product)) {
         try {
@@ -279,7 +279,7 @@ export default function Products() {
       window.alert(blockReason)
       return
     }
-    if (!window.confirm(`确认永久删除商品「${displaySku(product, barcodeCustomerId)}」？关联的本地库存展示记录将一并删除，且无法恢复。`)) return
+    if (!window.confirm(`确认永久删除商品「${displaySku(product)}」？关联的本地库存展示记录将一并删除，且无法恢复。`)) return
     try {
       if (isSubmittedProduct(product)) await deleteErpProduct(product.internalSku)
       await permanentlyDeleteLocalProduct(product.id)
@@ -404,8 +404,11 @@ export default function Products() {
                 </td>
                 <td className="table-cell align-top">
                   <Link to={`/products/${p.id}`} className="font-mono text-xs font-medium text-primary-600 hover:underline">
-                    {displaySku(p, barcodeCustomerId)}
+                    {getCustomerSkuDisplay(p, dataScope.getCustomerCode(p.customerId))}
                   </Link>
+                  {getPlatformBarcodeAliases(p.internalSku, barcodeCustomerId ?? p.customerId).map(code => (
+                    <p key={code} className="mt-1 text-[11px] text-text-muted">990 辅助码：<span className="font-mono">{code}</span></p>
+                  ))}
                 </td>
                 <AdminCustomerCell customerId={p.customerId} scope={dataScope} />
                 <td className="table-cell">

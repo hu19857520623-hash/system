@@ -27,6 +27,13 @@ export function getMappingsForSku(internalSku: string, customerId?: string): Pla
   return mappingsForInternalSku(getPlatformSkuMappingsSnapshot(), internalSku, customerId)
 }
 
+/** 990 是可展示和搜索的辅助码，不能替代客户 SKU。 */
+export function getPlatformBarcodeAliases(internalSku: string, customerId?: string): string[] {
+  return [...new Set(getMappingsForSku(internalSku, customerId)
+    .filter(mapping => mapping.status === 'active')
+    .map(mapping => mapping.platformBarcode.trim()).filter(Boolean))]
+}
+
 /** 按 SKU / 自定义编号 / 品名模糊搜索商品 */
 export function searchProductsFuzzy(query: string, limit = 10, customerId?: string) {
   const q = query.trim().toLowerCase()
@@ -43,6 +50,7 @@ export function searchProductsFuzzy(query: string, limit = 10, customerId?: stri
       p.declaredNameEn,
       p.declaredNameCn,
       p.outerBoxBarcode,
+      ...getPlatformBarcodeAliases(p.internalSku, customerId),
     ].filter(Boolean).join(' ').toLowerCase()
     return hay.includes(q)
   }).slice(0, limit)

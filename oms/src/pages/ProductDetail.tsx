@@ -4,14 +4,11 @@ import {
   Badge, Card, MonoCode,
 } from '../components/ui'
 import { statusLabels, formatCurrency } from '../data/mockData'
-import { getPrimaryPlatformBarcode } from '../data/platformBindingUtils'
+import { getPlatformBarcodeAliases } from '../data/platformBindingUtils'
+import { getCustomerSkuDisplay } from '../data/skuCode'
 import { useProducts } from '../data/inventoryStore'
 import { useProductById } from '../components/products/ProductForm'
 import { useDataScope } from '../auth/useDataScope'
-
-function displaySku(internalSku: string, customerId?: string | null) {
-  return getPrimaryPlatformBarcode(internalSku, customerId ?? undefined) ?? internalSku
-}
 
 function DetailField({ label, value }: { label: string; value: React.ReactNode }) {
   return (
@@ -39,7 +36,8 @@ export default function ProductDetail() {
     )
   }
 
-  const skuLabel = displaySku(product.internalSku, dataScope.bindingCustomerId)
+  const skuLabel = getCustomerSkuDisplay(product, dataScope.getCustomerCode(product.customerId))
+  const auxiliaryCodes = getPlatformBarcodeAliases(product.internalSku, dataScope.bindingCustomerId ?? product.customerId)
 
   return (
     <div className="page-shell">
@@ -66,6 +64,7 @@ export default function ProductDetail() {
         <div className="grid gap-x-6 gap-y-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5">
           <DetailField label="产品状态" value={statusLabels[product.productStatus]} />
           <DetailField label="SKU" value={<MonoCode>{skuLabel}</MonoCode>} />
+          <DetailField label="990 辅助码" value={auxiliaryCodes.length ? auxiliaryCodes.map(code => <div key={code}><MonoCode>{code}</MonoCode></div>) : '—'} />
           <DetailField label="内部 SKU" value={<MonoCode>{product.internalSku}</MonoCode>} />
           <DetailField label="自定义编号" value={product.customCode ? <MonoCode>{product.customCode}</MonoCode> : '—'} />
           <DetailField label="产品名称" value={product.name} />
