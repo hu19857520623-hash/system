@@ -7,6 +7,8 @@ import {
   customerInboundTypeLabel, customerInboundStockLabel,
 } from '../../data/mockData'
 import { useRole } from '../../auth/RoleContext'
+import { useDataScope } from '../../auth/useDataScope'
+import { getCustomerSkuDisplay } from '../../data/skuCode'
 import { isSysAdmin } from '../../data/dataScope'
 import { INBOUND_DOWNLOAD_ITEMS } from '../../data/customerShipFlows'
 import { downloadInboundLabelHtml, printInboundLabels, type InboundLabelKind } from '../../data/inboundLabelPrint'
@@ -35,6 +37,7 @@ const TIMELINE: Record<string, string[]> = {
 
 export default function InboundDetailDrawer({ order, onClose, onOrderChanged }: InboundDetailDrawerProps) {
   const { role } = useRole()
+  const dataScope = useDataScope()
   const customerView = !isSysAdmin(role)
   const [feedback, setFeedback] = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
   const [voiding, setVoiding] = useState(false)
@@ -50,6 +53,15 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged }: 
   if (!order) return null
 
   const timeline = TIMELINE[order.status] ?? ['已提交预约']
+  const customerCode = dataScope.getCustomerCode(order.customerId)
+  const skuLabelOrder = {
+    ...order,
+    skuHint: getCustomerSkuDisplay({ internalSku: order.skuHint ?? '' }, customerCode),
+    lineItems: order.lineItems?.map(line => {
+      const product = products.find(p => p.internalSku === line.sku && p.customerId === order.customerId)
+      return { ...line, sku: getCustomerSkuDisplay(product ?? { internalSku: line.sku }, customerCode) }
+    }),
+  }
 
   const showFeedback = (type: 'ok' | 'err', text: string) => {
     setFeedback({ type, text })
@@ -57,7 +69,7 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged }: 
   }
 
   const handlePrint = async (kind: InboundLabelKind) => {
-    const ok = await printInboundLabels(order, kind)
+    const ok = await printInboundLabels(kind === 'SKU 标签' ? skuLabelOrder : order, kind)
     if (ok) {
       showFeedback('ok', `已打开${kind}打印预览`)
     }
@@ -75,7 +87,7 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged }: 
   }
 
   const handleDownload = async (kind: InboundLabelKind) => {
-    await downloadInboundLabelHtml(order, kind)
+    await downloadInboundLabelHtml(kind === 'SKU 标签' ? skuLabelOrder : order, kind)
     showFeedback('ok', kind === '箱唛' ? '已下载 100×100mm 箱唛 PDF' : `已下载${kind} HTML 文件`)
   }
 
