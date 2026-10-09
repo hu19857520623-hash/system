@@ -37,6 +37,7 @@ import com.takealot.pda.data.PdaPickProgress
 import com.takealot.pda.data.PdaPickProgressLine
 import com.takealot.pda.data.PdaResumeWork
 import com.takealot.pda.data.outboundStatusLabel
+import com.takealot.pda.data.pickTaskAtLocation
 import com.takealot.pda.scan.ScanBus
 import com.takealot.pda.ui.components.BigButton
 import com.takealot.pda.ui.components.DocumentCard
@@ -90,6 +91,7 @@ class OutboundViewModel : ViewModel() {
     var lines by mutableStateOf<List<LocalPickLine>>(emptyList())
     var locationSuggestions by mutableStateOf<Map<Int, List<String>>>(emptyMap())
     var selectedSku by mutableStateOf<String?>(null)
+    private var scannedPickLocation: String? = null
     var pickScanMode by mutableStateOf("carton")
     var cartons by mutableStateOf(listOf(OutboundCartonDraft()))
     var trackingNo by mutableStateOf("")
@@ -122,6 +124,7 @@ class OutboundViewModel : ViewModel() {
         }
         pickScanMode = session.pickScanMode
         feedback = null; scan = ""; order = null; lines = emptyList()
+        selectedSku = null; scannedPickLocation = null
         cartons = listOf(OutboundCartonDraft())
         trackingNo = ""; carrier = ""; logisticsProduct = ""
         loadList()
@@ -190,12 +193,14 @@ class OutboundViewModel : ViewModel() {
                 val normalized = code.trim().uppercase()
                 val locationTask = lines.firstOrNull { !it.done && !it.taskKey.endsWith("@SHORT") && it.locationCode.uppercase() == normalized }
                 if (locationTask != null) {
+                    scannedPickLocation = locationTask.locationCode
                     selectedSku = locationTask.taskKey
-                    feedback = Feedback(true, "库位 ${locationTask.locationCode}，请扫 ${locationTask.sku}")
+                    feedback = Feedback(true, "库位 ${locationTask.locationCode}，请扫描本库位待拣 SKU")
                     scan = ""; saveProgress(); journal.acknowledge(recordId, feedback?.message); return
                 }
-                val selected = lines.firstOrNull { it.taskKey == selectedSku }
-                if (selected != null && selected.matchesScan(code)) {
+                val selected = lines.pickTaskAtLocation(scannedPickLocation, code)
+                if (selected != null) {
+                    selectedSku = selected.taskKey
                     val nextQty = nextPickQty(selected.scannedQty, selected.qty)
                     lines = lines.map { if (it.taskKey == selected.taskKey) it.copy(scannedQty = nextQty) else it }
                     val modeHint = if (pickScanMode == "carton") "按箱" else "逐件"
@@ -309,6 +314,7 @@ class OutboundViewModel : ViewModel() {
         }
         // 每次打开/恢复任务都必须重新扫描实物库位，不能通过点选或历史选择绕过库位校验。
         selectedSku = null
+        scannedPickLocation = null
         PdaApp.instance.workJournal.activate(PdaResumeWork("outbound", mode, nextOrder.id, nextOrder.no))
         shortageNotice?.let { feedback = Feedback(false, it) }
     }
@@ -493,7 +499,7 @@ class OutboundViewModel : ViewModel() {
         }
     }
 
-    fun clearOrder() { order?.let { PdaApp.instance.workJournal.clearPickProgress(it.id, mode) }; order = null; lines = emptyList(); selectedSku = null; scan = ""; unknownScanCode = null; PdaApp.instance.workJournal.clearActive("outbound") }
+    fun clearOrder() { order?.let { PdaApp.instance.workJournal.clearPickProgress(it.id, mode) }; order = null; lines = emptyList(); selectedSku = null; scannedPickLocation = null; scan = ""; unknownScanCode = null; PdaApp.instance.workJournal.clearActive("outbound") }
 }
 
 @Composable

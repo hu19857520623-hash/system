@@ -87,7 +87,7 @@ jobs:
       - name: Build installable PDA APK
         run: |
           chmod +x ./gradlew
-          ./gradlew :app:assembleDebug \
+          ./gradlew :app:testDebugUnitTest :app:assembleDebug \
             -PPDA_API_BASE_URL=https://www.erp.sztekeluo.com/api \
             --no-daemon
         working-directory: pda
