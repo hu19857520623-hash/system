@@ -1,4 +1,5 @@
 import 'dotenv/config'
+import { ownedInventorySnapshot } from './owned-inventory-snapshot.util.js'
 import { applicationCache, cachedFulfillmentWarehouses } from './cache.js'
 import express from 'express'
 import cors from 'cors'
@@ -1887,9 +1888,7 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
         for (const line of payload.items || []) {
           const sku = String(line.sku || '').trim()
           if (!sku) continue
-          const available = Math.max(0, Math.floor(Number(line.availableQty) || 0))
-          const locked = Math.max(0, Math.floor(Number(line.lockedQty) || 0))
-          const pendingShelving = Math.max(0, Math.floor(Number(line.pendingShelvingQty) || 0))
+          if (!ownedInventorySnapshot(line)) continue
           const product = await prisma.product.findFirst({
             where: { customerId, internalSku: sku },
           })
@@ -1898,12 +1897,13 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
           const inventory = await prisma.inventoryItem.findFirst({
             where: { customerId, sku, stockSource: 'owned' },
           })
+          const { available, locked, pendingShelving } = ownedInventorySnapshot(line, inventory?.pendingShelving ?? 0)!
           const inventoryData = {
             name: product.name,
             image: product.image,
             available,
             locked,
-            inTransit: 0,
+            inTransit: payload.reason?.startsWith('outbound_') ? inventory?.inTransit ?? 0 : 0,
             safetyStock: inventory?.safetyStock ?? 0,
             spec: product.spec,
             customCode: product.customCode,

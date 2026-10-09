@@ -2461,11 +2461,27 @@ th{background:#f5f5f5}
         })
       }
       if (mapped.status === 'shipped' || mapped.status === 'cancelled') {
+        let inventoryItems: Array<Record<string, unknown>> = mapped.items
+        if (mapped.stockSource === 'owned') {
+          const rows = await this.prisma.inventory.findMany({
+            where: {
+              warehouseCode: mapped.warehouseCode,
+              productId: { in: mapped.items.map(item => BigInt(item.productId)) },
+            },
+            select: { productId: true, availableQty: true, lockedQty: true },
+          })
+          const byProduct = new Map(rows.map(row => [row.productId.toString(), row]))
+          inventoryItems = mapped.items.flatMap(item => {
+            const inventory = byProduct.get(String(item.productId))
+            return inventory ? [{ ...item, availableQty: inventory.availableQty, lockedQty: inventory.lockedQty }] : []
+          })
+        }
         void notifyOms('inventory.changed', mapped.customerCode, {
           reason: 'outbound_' + mapped.status,
           outboundNo: mapped.outboundNo,
           stockSource: mapped.stockSource,
-          items: mapped.items,
+          warehouseCode: mapped.warehouseCode,
+          items: inventoryItems,
         })
       }
     } catch (err) {
