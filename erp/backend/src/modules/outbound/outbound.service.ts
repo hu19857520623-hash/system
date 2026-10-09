@@ -492,7 +492,7 @@ export class OutboundService {
         include: {
           items: true,
           attachments: {
-            where: { fileType: { notIn: ['skuLabel', 'outerLabel'] } },
+            where: { fileType: { notIn: ['skuLabel'] } },
             orderBy: { id: 'asc' },
           },
         },
