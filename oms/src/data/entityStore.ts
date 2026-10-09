@@ -9,6 +9,7 @@ import type {
 } from './mockData'
 import type { ReturnOrder } from './returnStore'
 import { notifyError, notifyPersistFailed } from '../utils/userNotify'
+import { mergeInboundOrder, reconcileInboundIds } from './inboundOrderIdentity'
 
 export type AnnouncementItem = {
   id: string
@@ -117,14 +118,19 @@ export function setInboundOrders(list: InboundOrder[]) {
 
 export function persistInboundOrders(list: InboundOrder[]) {
   setInboundOrders(list)
-  void apiPut('/inbound-orders', list).catch(err => notifyPersistFailed('入库单', err))
+  void saveInboundOrders(list).catch(err => notifyPersistFailed('入库单', err))
+}
+
+async function saveInboundOrders(list: InboundOrder[]) {
+  const result = await apiPut<{ identities?: { id: string; inboundNo: string }[] }>('/inbound-orders', list)
+  if (result.identities?.length) setInboundOrders(reconcileInboundIds(state.inboundOrders, result.identities))
 }
 
 export async function persistInboundOrdersOrThrow(list: InboundOrder[]) {
   const before = state.inboundOrders
   setInboundOrders(list)
   try {
-    await apiPut('/inbound-orders', list)
+    await saveInboundOrders(list)
   } catch (err) {
     setInboundOrders(before)
     throw err
@@ -132,13 +138,12 @@ export async function persistInboundOrdersOrThrow(list: InboundOrder[]) {
 }
 
 function nextInboundOrdersWithUpsert(order: InboundOrder, base = state.inboundOrders) {
-  const idx = base.findIndex(o => o.inboundNo === order.inboundNo || o.id === order.id)
-  if (idx >= 0) {
-    const next = [...base]
-    next[idx] = { ...next[idx], ...order }
-    return next
-  }
-  return [order, ...base.filter(o => o.id !== order.id && o.inboundNo !== order.inboundNo)]
+  return mergeInboundOrder(order, base)
+}
+
+/** ERP polling updates the view; database persistence belongs to explicit saves/webhooks. */
+export function cacheInboundOrder(order: InboundOrder) {
+  setInboundOrders(nextInboundOrdersWithUpsert(order))
 }
 
 export function addInboundOrder(order: InboundOrder) {

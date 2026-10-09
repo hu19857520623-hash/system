@@ -2,6 +2,7 @@ import type { DeliveryMethod, InboundOrder, InboundStatus, InboundType } from '.
 import { isErpPalletInbound, sanitizeCustomerInboundType } from './mockData'
 import {
   addInboundOrder as pushInbound,
+  cacheInboundOrder,
   getInboundOrdersSnapshot,
   updateInboundOrder,
   upsertInboundOrder,
@@ -256,7 +257,7 @@ export async function refreshInboundsFromErp(customerId: string): Promise<number
   const data = await syncErpInbounds(customerCode)
   for (const item of data.items || []) {
     if (isErpPalletInbound(item)) continue
-    applyErpInboundToLocal(item, customerId)
+    cacheInboundOrder(buildInboundOrderFromErp(item, customerId))
   }
   return data.total
 }

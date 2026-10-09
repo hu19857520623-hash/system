@@ -1,4 +1,5 @@
 import 'dotenv/config'
+import { InboundIdentityError, saveInboundOrder } from './inbound-order-persistence.util.js'
 import { ownedInventorySnapshot } from './owned-inventory-snapshot.util.js'
 import { applicationCache, cachedFulfillmentWarehouses } from './cache.js'
 import express from 'express'
@@ -3705,16 +3706,11 @@ app.put('/api/inbound-orders', async (req, res) => {
   try {
     const list = req.body as Record<string, unknown>[]
     const scope = customerScope(req as AuthenticatedRequest)
-    if (scope) {
-      const existing = await prisma.inboundOrder.findMany({
-        where: { id: { in: list.map(item => String(item.id)) } },
-        select: { customerId: true },
-      })
-      if (existing.some(item => item.customerId !== scope)) {
-        return res.status(403).json({ error: 'Cross-customer mutation denied' })
-      }
+    if (!Array.isArray(list) || list.some(o => !o || !String(o.id || '').trim() || !String(o.inboundNo || '').trim())) {
+      return res.status(400).json({ error: '入库单缺少标识或单号' })
     }
-    await prisma.$transaction(async tx => {
+    const identities = await prisma.$transaction(async tx => {
+      const saved = []
       for (const o of list) {
         const id = String(o.id)
         const data = {
@@ -3743,17 +3739,18 @@ app.put('/api/inbound-orders', async (req, res) => {
             lineItems: o.lineItems ? JSON.stringify(o.lineItems) : null,
             attachments: o.attachments ? JSON.stringify(o.attachments) : null,
         }
-        await tx.inboundOrder.upsert({
-          where: { id },
-          create: { id, ...data },
-          update: data,
-        })
+        saved.push(await saveInboundOrder(tx, id, data, scope))
       }
+      return saved
     })
-    res.json({ ok: true })
+    res.json({ ok: true, identities })
   } catch (e) {
     console.error(e)
-    res.status(500).json({ error: String(e) })
+    if (e instanceof InboundIdentityError) return res.status(e.status).json({ error: e.message })
+    if ((e as { code?: string }).code === 'P2002') {
+      return res.status(409).json({ error: '入库单号已存在或刚被同步，请刷新后重试' })
+    }
+    res.status(500).json({ error: '入库单保存失败，请稍后重试' })
   }
 })
 
