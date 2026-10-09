@@ -1,3 +1,4 @@
+import { assertGlobalSkuAvailable } from '../../common/global-sku.util'
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
@@ -226,6 +227,7 @@ export class PurchaseService {
 
       let product = await tx.product.findUnique({ where: { sku } })
       if (!product) {
+        await assertGlobalSkuAvailable(tx, { sku })
         product = await tx.product.create({
           data: {
             sku,
@@ -717,6 +719,7 @@ export class PurchaseService {
     if (product) {
       product = await tx.product.update({ where: { sku: line.sku }, data: productData })
     } else {
+      await assertGlobalSkuAvailable(tx, { sku: line.sku })
       product = await tx.product.create({ data: { sku: line.sku, ...productData } })
     }
 

@@ -2,6 +2,7 @@ import type { PrismaService } from '../../common/prisma/prisma.service'
 import { catalogSkuLookupKeys, toCatalogInternalSku } from '../../common/catalog-customer.util'
 import { receivedCatalogQtyPatch } from './catalog-stock.util'
 import { pushCatalogStockToOms } from './oms-catalog-sync.util'
+import { assertGlobalSkuAvailable } from '../../common/global-sku.util'
 
 function num(v: unknown, fallback = 0): number {
   if (v == null || v === '') return fallback
@@ -72,6 +73,7 @@ export async function syncCatalogFromInbound(prisma: PrismaService, input: SyncI
         data: baseData,
       })
     } else {
+      await assertGlobalSkuAvailable(prisma, { sku, customerSku: baseSku, excludeErpSku: baseSku, mirrorOmsSku: sku })
       row = await prisma.productPricing.create({
         data: {
           sku,

@@ -15,6 +15,7 @@ import {
 } from '../../common/import-row-result.util'
 import { buildProductRemark } from '../../common/oms-sync-meta.util'
 import { buildInternalSku } from '../../common/sku-code.util'
+import { assertGlobalSkuAvailable } from '../../common/global-sku.util'
 import { buildSkuLabelsHtml } from '../../common/labels/sku-label.util'
 import { CosObjectUrlService } from '../../common/cos-object-url.service'
 import { createHash } from 'crypto'
@@ -444,6 +445,7 @@ export class ProductsService {
     const productName = String(data.productName || '').trim()
     if (!sku) throw new BadRequestException('请填写 SKU')
     if (!productName) throw new BadRequestException('请填写商品名称')
+    await assertGlobalSkuAvailable(this.prisma, { sku, customerSku: data.customerSku, mirrorOmsSku: String(data.remark || '').includes('OMS客户:') ? sku : undefined })
 
     const [existingProduct, existingDev] = await Promise.all([
       this.prisma.product.findUnique({ where: { sku } }),
@@ -463,7 +465,9 @@ export class ProductsService {
       throw new BadRequestException('无效的商品状态')
     }
 
-    const row = await this.prisma.product.create({
+    const row = await this.prisma.$transaction(async tx => {
+      await assertGlobalSkuAvailable(tx, { sku, customerSku: data.customerSku, mirrorOmsSku: String(data.remark || "").includes("OMS客户:") ? sku : undefined })
+      return tx.product.create({
       data: {
         sku,
         productName,
@@ -493,7 +497,8 @@ export class ProductsService {
         syncStatus: 'pending',
         remark: data.remark?.trim() || null,
       },
-    })
+      })
+    }, { isolationLevel: "Serializable" })
 
     await this.opLog.log({
       operatorId,
@@ -530,6 +535,10 @@ export class ProductsService {
 
   async update(id: number, data: any, operatorId?: number) {
     const before = await this.detail(id)
+    const beforeSku = data.customerSku !== undefined ? await this.prisma.product.findUnique({ where: { id: BigInt(id) }, select: { customerSku: true } }) : null
+    if (data.customerSku !== undefined && String(data.customerSku || '').trim() !== String(beforeSku?.customerSku || '').trim()) {
+      await assertGlobalSkuAvailable(this.prisma, { sku: before.sku, customerSku: data.customerSku, excludeErpSku: before.sku, mirrorOmsSku: before.sku })
+    }
     const patch: Record<string, unknown> = {}
     const assign = (key: string, transform?: (v: unknown) => unknown) => {
       if (data[key] === undefined) return
@@ -660,18 +669,7 @@ export class ProductsService {
     if (!customerSku) throw new BadRequestException('请填写客户 SKU')
     if (customerSku.length >= 12) throw new BadRequestException('客户 SKU 须少于 12 位')
 
-    const customerCode = String(data.customerCode || '').trim().toUpperCase()
-    if (customerCode) {
-      const duplicate = await this.prisma.product.findFirst({
-        where: {
-          customerSku,
-          sku: { startsWith: `${customerCode}-` },
-          id: { not: row.id },
-        },
-        select: { id: true },
-      })
-      if (duplicate) throw new BadRequestException(`重复 SKU：${customerSku}`)
-    }
+    if (customerSku !== String(row.customerSku || '').trim()) await assertGlobalSkuAvailable(this.prisma, { sku, customerSku, excludeErpSku: sku, mirrorOmsSku: sku })
     return this.update(Number(row.id), data)
   }
 
@@ -810,17 +808,6 @@ export class ProductsService {
     if (!customerSku) throw new BadRequestException('请填写 SKU')
     if (customerSku.length >= 12) throw new BadRequestException('客户 SKU 须少于 12 位')
     if (!productName) throw new BadRequestException('请填写商品名称')
-
-    if (customerCode) {
-      const duplicate = await this.prisma.product.findFirst({
-        where: {
-          customerSku,
-          sku: { startsWith: `${customerCode.toUpperCase()}-` },
-        },
-        select: { sku: true },
-      })
-      if (duplicate) throw new BadRequestException(`重复 SKU：${customerSku}`)
-    }
 
     let sku = String(data.internalSku || data.sku || '').trim()
     if (customerCode && (!sku || sku === customerSku || !sku.toUpperCase().startsWith(`${customerCode.toUpperCase()}-`))) {

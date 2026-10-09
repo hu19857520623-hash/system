@@ -1,3 +1,4 @@
+import { assertGlobalSkuAvailable } from '../../common/global-sku.util'
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
 import type { Response } from 'express'
 import * as path from 'path'
@@ -180,6 +181,7 @@ export class ProductDevService {
       this.prisma.product.findUnique({ where: { sku: trimmed } }),
     ])
     if (inDev || inProduct) throw new BadRequestException(`重复 SKU：${trimmed}`)
+    await assertGlobalSkuAvailable(this.prisma, { sku: trimmed })
     return trimmed
   }
 

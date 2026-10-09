@@ -29,6 +29,7 @@ import {
 } from './catalog-pipeline-qty.util'
 import { CATALOG_CUSTOMER_CODE, catalogBaseSkuFromInternal, catalogSkuLookupKeys, toCatalogInternalSku } from '../../common/catalog-customer.util'
 import { CosObjectUrlService } from '../../common/cos-object-url.service'
+import { assertGlobalSkuAvailable } from '../../common/global-sku.util'
 import { readableDisplayText } from '../../common/display-text.util'
 
 function num(v: any, fallback = 0): number {
@@ -378,6 +379,9 @@ export class PricingService {
   }
 
   async create(data: any) {
+    if (/^TKL[0-9]+-/i.test(String(data.sku || ''))) throw new BadRequestException('客户 SKU 不能作为货盘商品创建')
+    const sku = toCatalogInternalSku(data.sku)
+    await assertGlobalSkuAvailable(this.prisma, { sku, customerSku: catalogBaseSkuFromInternal(sku), excludeErpSku: catalogBaseSkuFromInternal(sku), mirrorOmsSku: sku })
     return this.prisma.productPricing.create({
       data: {
         sku: toCatalogInternalSku(data.sku),

@@ -211,7 +211,7 @@ function ProductEditorForm({ product, mode = 'create' }: ProductFormProps) {
 
       <FormSection num={1} title="产品信息">
         <FormGrid cols={3}>
-          <FormField label="产品 SKU" required hint={submittedProduct ? '商品提交后 SKU 已锁定；如需修改 SKU，请先废弃后重新创建。' : '客户自定义编码，最多 11 位且同一客户内不可重复；系统会自动加客户代码前缀'}>
+          <FormField label="产品 SKU" required hint={submittedProduct ? '商品提交后 SKU 已锁定；如需变更，请创建使用新编号的商品。' : '客户自定义编码，最多 11 位；与所有客户及 ERP SKU 全局不可重复'}>
             <input value={sku} maxLength={11} disabled={submittedProduct} onChange={e => setSku(e.target.value)} placeholder="如 HX6" className={formInput()} />
           </FormField>
           <FormField label="产品名称" required hint="中文/英文/数字/连字符/下划线，最多 150 字符">

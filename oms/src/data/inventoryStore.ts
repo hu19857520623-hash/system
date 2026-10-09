@@ -759,15 +759,14 @@ export function findProductBySku(sku: string, excludeProductId?: string) {
   )
 }
 
-/** 按客户可见 SKU 查找（同一客户内唯一，忽略大小写）。 */
-export function findProductByCustomerSku(customerSku: string, customerId?: string, excludeProductId?: string) {
+/** 客户 SKU 全局唯一，忽略大小写；不按客户归属过滤。 */
+export function findProductByCustomerSku(customerSku: string, _customerId?: string, excludeProductId?: string) {
   const key = normalizeSkuKey(customerSku)
   if (!key) return undefined
   return state.products.find(p => {
     if (excludeProductId && p.id === excludeProductId) return false
-    if (customerId ? p.customerId !== customerId : Boolean(p.customerId)) return false
     const display = (p.customerSku || getCustomerSkuDisplay(p)).trim().toLowerCase()
-    return display === key
+    return display === key || p.internalSku.trim().toLowerCase() === key
   })
 }
 

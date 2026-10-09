@@ -1,4 +1,6 @@
 import 'dotenv/config'
+import { assertGlobalSkuAvailable, GlobalSkuConflict } from './global-sku.util.js'
+import { Prisma } from '@prisma/client'
 import { InboundIdentityError, saveInboundOrder } from './inbound-order-persistence.util.js'
 import { ownedInventorySnapshot } from './owned-inventory-snapshot.util.js'
 import { applicationCache, cachedFulfillmentWarehouses } from './cache.js'
@@ -2981,6 +2983,8 @@ app.put('/api/inventory-state', async (req, res) => {
       for (const p of products) {
         const id = String(p.id)
         const data = inventoryProductStateData(p, scope)
+        const previous = await tx.product.findUnique({ where: { id }, select: { internalSku: true, customerSku: true } })
+        if (!previous || previous.internalSku !== data.internalSku || previous.customerSku !== data.customerSku) await assertInventorySkuAvailable(tx, data, id)
         await tx.product.upsert({
           where: { id },
           create: { id, ...data },
@@ -3036,16 +3040,23 @@ app.put('/api/inventory-state', async (req, res) => {
           update: data,
         })
       }
-    })
+    }, { isolationLevel: "Serializable" })
 
     res.json({ ok: true })
   } catch (e) {
     console.error(e)
+    if (e instanceof GlobalSkuConflict) return res.status(400).json({ error: e.message })
     res.status(500).json({ error: String(e) })
   }
 })
 
-/** Persist one product card without making legacy duplicate cards block the operation. */
+async function assertInventorySkuAvailable(db: any, data: any, id: string) {
+  const account = data.customerId ? await db.customerAccount.findUnique({ where: { id: data.customerId }, select: { code: true } }) : null
+  const mirrors = await db.$queryRaw(Prisma.sql`SELECT sku FROM product WHERE sku = ${data.internalSku} AND (customer_sku = ${data.customerSku} OR customer_sku IS NULL) AND ((remark LIKE ${`%OMS客户:${account?.code || '__none__'} ·%`} OR remark = ${`OMS客户:${account?.code || '__none__'}`}) OR (${Boolean(data.inCatalog)} AND sku NOT REGEXP '^TKL[0-9]+-')) LIMIT 1`) as Array<{ sku: string }>
+  await assertGlobalSkuAvailable(db, { sku: data.internalSku, customerSku: data.customerSku, excludeOmsId: id, excludeErpSku: mirrors[0]?.sku })
+}
+
+/** Persist one product card without making unchanged legacy duplicate cards block the operation. */
 app.put('/api/inventory-state/products/:id', async (req, res) => {
   try {
     const product = (req.body as { product?: Record<string, unknown> })?.product
@@ -3062,7 +3073,7 @@ app.put('/api/inventory-state/products/:id', async (req, res) => {
     const scope = customerScope(req as AuthenticatedRequest)
     const existing = await prisma.product.findUnique({
       where: { id },
-      select: { customerId: true },
+      select: { customerId: true, internalSku: true, customerSku: true, productStatus: true },
     })
     const requestedCustomerId = String(product.customerId || '').trim() || null
     if (scope && (
@@ -3073,30 +3084,19 @@ app.put('/api/inventory-state/products/:id', async (req, res) => {
     }
 
     const data = inventoryProductStateData(product, scope)
-    if (!isDiscarding) {
-      const duplicate = await prisma.product.findFirst({
-        where: {
-          id: { not: id },
-          customerId: data.customerId,
-          productStatus: { not: 'discarded' },
-          OR: [
-            { internalSku: data.internalSku },
-            { customerSku: data.customerSku },
-          ],
-        },
-        select: { id: true },
-      })
-      if (duplicate) return res.status(400).json({ error: `重复 SKU：${data.customerSku}` })
-    }
+    await prisma.$transaction(async tx => {
+    if (!isDiscarding && (!existing || existing.internalSku !== data.internalSku || existing.customerSku !== data.customerSku || existing.productStatus === 'discarded')) await assertInventorySkuAvailable(tx, data, id)
 
-    await prisma.product.upsert({
+    await tx.product.upsert({
       where: { id },
       create: { id, ...data },
       update: data,
     })
+    }, { isolationLevel: "Serializable" })
     res.json({ ok: true })
   } catch (e) {
     console.error(e)
+    if (e instanceof GlobalSkuConflict) return res.status(400).json({ error: e.message })
     res.status(500).json({ error: String(e) })
   }
 })

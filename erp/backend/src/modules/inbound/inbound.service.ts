@@ -1,3 +1,4 @@
+import { assertGlobalSkuAvailable } from '../../common/global-sku.util'
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { FileStoreService } from '../../common/file-store.service'
@@ -2307,6 +2308,7 @@ export class InboundService {
       createCustomerSku = trimmed.slice(0, 50)
     }
 
+    await assertGlobalSkuAvailable(this.prisma, { sku: createSku, customerSku: createCustomerSku, mirrorOmsSku: createSku })
     const created = await this.prisma.product.create({
       data: {
         sku: createSku,
