@@ -24,7 +24,7 @@ export const MANUAL_PLATFORMS = ['Makro', 'Temu'] as const
 
 /** 电商客户：自有商品 → 入库 → Takealot 预约 → OMS 出库 */
 export const ECOMMERCE_SHIP_FLOW: ShipFlowStep[] = [
-  { id: 'open', order: 1, title: 'OMS 开户', desc: '联系工作人员开通 OMS 账号，管理员分配模块权限', module: '账号与报表中心' },
+  { id: 'open', order: 1, title: 'OMS 开户', desc: '联系工作人员开通 OMS 账号，管理员分配模块权限', module: '账号管理' },
   { id: 'recharge', order: 2, title: '充值余额', desc: '账户充值后用于仓储、操作与物流费用扣款', route: '/billing/recharge', module: '平台与费用中心' },
   { id: 'product', order: 3, title: '创建商品信息', desc: '维护 SKU、申报信息、规格与绑码', route: '/products/new', module: '商品与编码中心' },
   { id: 'inbound-create', order: 4, title: '预约入库', desc: '填写入库预报单：目的仓、预计到货与货品明细', route: '/inbound', module: '仓储履约预约中心' },
@@ -40,7 +40,7 @@ export const ECOMMERCE_SHIP_FLOW: ShipFlowStep[] = [
 
 /** 货盘客户：选品购货 → Takealot 预约 → OMS 出库 */
 export const CATALOG_SHIP_FLOW: ShipFlowStep[] = [
-  { id: 'open', order: 1, title: 'OMS 开户', desc: '联系工作人员开通 OMS 账号', module: '账号与报表中心' },
+  { id: 'open', order: 1, title: 'OMS 开户', desc: '联系工作人员开通 OMS 账号', module: '账号管理' },
   { id: 'recharge', order: 2, title: '充值余额', desc: '充值后用于货盘购货与履约费用', route: '/billing/recharge', module: '平台与费用中心' },
   { id: 'catalog-buy', order: 3, title: '货盘选品购买', desc: '在 OMS 货盘选品并下单购货，形成货盘库存', route: '/catalog', module: '商品与编码中心' },
   {
@@ -53,7 +53,7 @@ export const CATALOG_SHIP_FLOW: ShipFlowStep[] = [
 
 /** 手工订单：其他平台（Makro、Temu 等），不经 Takealot */
 export const MANUAL_SHIP_FLOW: ShipFlowStep[] = [
-  { id: 'open', order: 1, title: 'OMS 开户', desc: '联系工作人员开通 OMS 账号', module: '账号与报表中心' },
+  { id: 'open', order: 1, title: 'OMS 开户', desc: '联系工作人员开通 OMS 账号', module: '账号管理' },
   { id: 'recharge', order: 2, title: '充值余额', desc: '账户充值', route: '/billing/recharge', module: '平台与费用中心' },
   { id: 'product', order: 3, title: '商品与入库', desc: '创建商品并完成入库（自有库存）', route: '/inbound', module: '仓储履约预约中心' },
   { id: 'oms-outbound', order: 4, title: 'OMS 手工出库', desc: `创建出库单（来源=手工录入），适用 ${MANUAL_PLATFORMS.join('、')} 等非 Takealot 平台`, route: '/outbound', module: '仓储履约预约中心' },

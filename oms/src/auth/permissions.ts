@@ -18,7 +18,6 @@ export type Permission =
   | 'returns:read' | 'returns:write'
   | 'billing:read' | 'billing:recharge'
   | 'store:manage'
-  | 'report:read'
   | 'account:manage' | 'account:disable' | 'account:assign'
 
 export const ROLE_LABELS: Record<OmsRole, string> = {
@@ -91,7 +90,6 @@ export const PERMISSION_GROUPS: { label: string; permissions: Permission[] }[] =
   { label: '物流', permissions: ['logistics:read'] },
   { label: '退件', permissions: ['returns:read', 'returns:write'] },
   { label: '费用', permissions: ['billing:read', 'billing:recharge'] },
-  { label: '报表', permissions: ['report:read'] },
 ]
 
 export const ALL_CUSTOMER_PERMISSIONS: Permission[] = PERMISSION_GROUPS.flatMap(g => g.permissions)
@@ -113,7 +111,6 @@ const ECOMMERCE_PERMISSIONS: Permission[] = [
   'logistics:read',
   'returns:read', 'returns:write',
   'billing:read',
-  'report:read',
 ]
 
 const CATALOG_PERMISSIONS: Permission[] = [
@@ -126,7 +123,6 @@ const CATALOG_PERMISSIONS: Permission[] = [
   'inventory:read',
   'logistics:read',
   'billing:read',
-  'report:read',
 ]
 
 const HYBRID_PERMISSIONS: Permission[] = [
@@ -173,7 +169,6 @@ export const ROUTE_PERMISSIONS: Record<string, Permission> = {
   '/billing/recharge': 'billing:recharge',
   '/system/price-template': 'account:manage',
   '/system/region-template': 'account:manage',
-  '/reports': 'report:read',
   '/accounts': 'account:manage',
 }
 

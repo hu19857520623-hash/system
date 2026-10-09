@@ -5,6 +5,8 @@ import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import java.io.IOException
 import java.util.UUID
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * Keeps the current handheld task and recent scan attempts on-device.
@@ -30,6 +32,11 @@ data class PdaScanRecord(
     val createdAt: Long = System.currentTimeMillis(),
     val state: String = "pending",
     val message: String? = null,
+    val retryAction: String? = null,
+    val retryQuantity: Int? = null,
+    val retryExtra: String? = null,
+    val retryEndpoint: String? = null,
+    val retryBodyJson: String? = null,
 )
 
 data class PdaPickProgressLine(
@@ -53,11 +60,13 @@ class PdaWorkJournal(context: Context) {
     private val recordsType = object : TypeToken<List<PdaScanRecord>>() {}.type
     private val resumeType = object : TypeToken<List<PdaResumeWork>>() {}.type
     private val pickProgressType = object : TypeToken<List<PdaPickProgress>>() {}.type
+    private val _scanRecords = MutableStateFlow(loadRecords())
+    val scanRecords = _scanRecords.asStateFlow()
 
     @Synchronized
     fun beginScan(module: String, mode: String, scanCode: String, orderId: Int? = null, orderNo: String? = null): String {
         val record = PdaScanRecord(module = module, mode = mode, scanCode = scanCode, orderId = orderId, orderNo = orderNo)
-        saveRecords((records() + record).takeLast(MAX_RECORDS))
+        saveRecords(_scanRecords.value + record)
         return record.id
     }
 
@@ -70,7 +79,27 @@ class PdaWorkJournal(context: Context) {
     @Synchronized
     fun fail(id: String, message: String? = null) = update(id, "failed", message)
 
-    fun isRetriable(error: Throwable): Boolean = error is IOException
+    @Synchronized
+    fun prepareRetry(id: String, action: String, quantity: Int? = null, extra: String? = null) {
+        saveRecords(_scanRecords.value.map {
+            if (it.id == id) it.copy(retryAction = action, retryQuantity = quantity, retryExtra = extra) else it
+        })
+    }
+
+    @Synchronized
+    fun preparePostRetry(id: String, endpoint: String, body: Map<String, Any?>) {
+        val payload = body + ("clientRequestId" to id)
+        saveRecords(_scanRecords.value.map {
+            if (it.id == id) it.copy(
+                retryAction = "post",
+                retryEndpoint = endpoint,
+                retryBodyJson = gson.toJson(payload),
+            ) else it
+        })
+    }
+
+    fun isRetriable(error: Throwable): Boolean =
+        error is IOException || (error is ErpException && error.retriable)
 
     @Synchronized
     fun activate(work: PdaResumeWork) {
@@ -107,14 +136,26 @@ class PdaWorkJournal(context: Context) {
     }
 
     private fun update(id: String, state: String, message: String?) {
-        saveRecords(records().map { if (it.id == id) it.copy(state = state, message = message) else it })
+        saveRecords(_scanRecords.value.map { if (it.id == id) it.copy(state = state, message = message) else it })
     }
 
-    private fun records(): List<PdaScanRecord> = gson.fromJson<List<PdaScanRecord>>(prefs.getString(KEY_RECORDS, null), recordsType).orEmpty()
+    fun pendingRecords(): List<PdaScanRecord> = _scanRecords.value.filter { it.state == "pending" }
+    fun recentProblemRecords(): List<PdaScanRecord> = _scanRecords.value
+        .filter { it.state == "pending" || it.state == "failed" }
+        .sortedByDescending { it.createdAt }
+
+    @Synchronized
+    fun dismiss(id: String) = update(id, "dismissed", "已人工确认")
+
+    private fun loadRecords(): List<PdaScanRecord> = gson.fromJson<List<PdaScanRecord>>(prefs.getString(KEY_RECORDS, null), recordsType).orEmpty()
     private fun resumes(): List<PdaResumeWork> = gson.fromJson<List<PdaResumeWork>>(prefs.getString(KEY_RESUMES, null), resumeType).orEmpty()
     private fun pickProgress(): List<PdaPickProgress> = gson.fromJson<List<PdaPickProgress>>(prefs.getString(KEY_PICK_PROGRESS, null), pickProgressType).orEmpty()
     private fun saveRecords(value: List<PdaScanRecord>) {
-        prefs.edit().putString(KEY_RECORDS, gson.toJson(value.takeLast(MAX_RECORDS))).apply()
+        val pending = value.filter { it.state == "pending" }.takeLast(MAX_PENDING_RECORDS)
+        val completed = value.filter { it.state != "pending" }.takeLast(MAX_RECORDS)
+        val next = (pending + completed).sortedBy { it.createdAt }
+        prefs.edit().putString(KEY_RECORDS, gson.toJson(next)).apply()
+        _scanRecords.value = next
     }
 
     companion object {
@@ -122,5 +163,6 @@ class PdaWorkJournal(context: Context) {
         private const val KEY_RESUMES = "resumes"
         private const val KEY_PICK_PROGRESS = "pick_progress"
         private const val MAX_RECORDS = 120
+        private const val MAX_PENDING_RECORDS = 500
     }
 }

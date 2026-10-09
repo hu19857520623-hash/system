@@ -2,7 +2,7 @@ import { NavLink, Outlet, useLocation, useNavigate, Link } from 'react-router-do
 import { useEffect, useMemo, useState } from 'react'
 import {
   LayoutDashboard, ShoppingCart, Package, MapPin,
-  RotateCcw, Receipt, CreditCard, BarChart3, Bell, LogOut,
+  RotateCcw, Receipt, CreditCard, Bell, LogOut,
   Boxes, Link2, ArrowDownToLine, ArrowUpFromLine, Layers, Search, Users,
   ChevronDown, ChevronUp, ClipboardList, FileCheck, Truck, Wallet,
   MonitorCog,
@@ -84,7 +84,6 @@ const accordionNav: NavAccordion[] = [
     items: [
       { to: '/billing', label: '费用账单', icon: Receipt, end: true },
       { to: '/billing/recharge', label: '账户充值', icon: CreditCard, end: true },
-      { to: '/reports', label: '报表中心', icon: BarChart3, end: true },
     ],
   },
   {

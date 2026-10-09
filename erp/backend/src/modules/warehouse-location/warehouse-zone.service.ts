@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { OperationLogService } from '../operation-log/operation-log.service'
+import { CacheService } from '../../common/cache/cache.service'
 
 const ZONE_TYPES = new Set(['storage', 'staging', 'qc', 'return'])
 const PARTITION_LETTERS = /^[A-Z]$/
@@ -10,21 +11,26 @@ export class WarehouseZoneService {
   constructor(
     private prisma: PrismaService,
     private opLog: OperationLogService,
+    private cache: CacheService,
   ) {}
 
   async list(warehouseCode?: string) {
     const where: any = {}
     if (warehouseCode) where.warehouseCode = warehouseCode
-    const rows = await this.prisma.warehouseZone.findMany({
-      where,
-      orderBy: [{ warehouseCode: 'asc' }, { zoneCode: 'asc' }],
-      include: { _count: { select: { locations: true } } },
-    })
-    return rows.map((r) => ({
-      ...r,
-      id: Number(r.id),
-      locationCount: r._count.locations,
-    }))
+    const [rows, counts] = await Promise.all([
+      this.cache.remember('warehouse-zones', `erp:warehouse-zones:${encodeURIComponent(JSON.stringify([warehouseCode ?? null]))}`, 120,
+        async () => {
+          const records = await this.prisma.warehouseZone.findMany({
+            where, orderBy: [{ warehouseCode: 'asc' }, { zoneCode: 'asc' }],
+          })
+          return records.map(r => JSON.parse(JSON.stringify({ ...r, id: Number(r.id) }))) as Record<string, any>[]
+        }),
+      this.prisma.warehouseZone.findMany({
+        where, select: { id: true, _count: { select: { locations: true } } },
+      }),
+    ])
+    const countMap = new Map(counts.map(r => [Number(r.id), r._count.locations]))
+    return rows.map(r => ({ ...r, _count: { locations: countMap.get(r.id) ?? 0 }, locationCount: countMap.get(r.id) ?? 0 }))
   }
 
   async create(data: any, operatorId?: number) {
@@ -53,6 +59,7 @@ export class WarehouseZoneService {
         remark: data.remark || null,
       },
     })
+    await this.cache.invalidate('warehouse-zones')
     await this.opLog.log({
       operatorId,
       module: 'warehouse_location',
@@ -80,6 +87,7 @@ export class WarehouseZoneService {
         remark: data.remark !== undefined ? data.remark : undefined,
       },
     })
+    await this.cache.invalidate('warehouse-zones')
     await this.opLog.log({
       operatorId,
       module: 'warehouse_location',

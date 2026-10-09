@@ -13,6 +13,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
 import java.net.SocketTimeoutException
 import java.util.concurrent.TimeUnit
+import java.util.UUID
 
 class ErpClient(private val session: SessionStore) {
     private val gson = Gson()
@@ -64,13 +65,20 @@ class ErpClient(private val session: SessionStore) {
         gson.fromJson(postJson("/inbound/arrival-scan", mapOf("scanCode" to scanCode, "warehouseCode" to warehouseCode)), ArrivalScanResult::class.java)
     }
 
-    suspend fun receiveBox(id: Int, scanCode: String): ScanActionResult = withContext(Dispatchers.IO) {
-        gson.fromJson(postJson("/inbound/$id/receive-box", mapOf("scanCode" to scanCode)), ScanActionResult::class.java)
+    suspend fun receiveBox(id: Int, scanCode: String, clientRequestId: String = UUID.randomUUID().toString()): ScanActionResult = withContext(Dispatchers.IO) {
+        gson.fromJson(postJson("/inbound/$id/receive-box", mapOf("scanCode" to scanCode, "clientRequestId" to clientRequestId)), ScanActionResult::class.java)
     }
 
-    suspend fun recordReceivedCartonCount(id: Int, receivedCartonCount: Int): ScanActionResult = withContext(Dispatchers.IO) {
+    suspend fun recordReceivedCartonCount(id: Int, receivedCartonCount: Int, differenceReason: String = "", clientRequestId: String = UUID.randomUUID().toString()): ScanActionResult = withContext(Dispatchers.IO) {
         gson.fromJson(
-            postJson("/inbound/$id/received-carton-count", mapOf("receivedCartonCount" to receivedCartonCount)),
+            postJson("/inbound/$id/received-carton-count", mapOf("receivedCartonCount" to receivedCartonCount, "differenceReason" to differenceReason.trim(), "clientRequestId" to clientRequestId)),
+            ScanActionResult::class.java,
+        )
+    }
+
+    suspend fun reportInboundException(id: Int, exceptionType: String, scanCode: String = "", remark: String = ""): ScanActionResult = withContext(Dispatchers.IO) {
+        gson.fromJson(
+            postJson("/inbound/$id/report-exception", mapOf("exceptionType" to exceptionType, "scanCode" to scanCode.trim(), "remark" to remark.trim())),
             ScanActionResult::class.java,
         )
     }
@@ -97,8 +105,8 @@ class ErpClient(private val session: SessionStore) {
         gson.fromJson(postJson("/inbound/$id/scan-qc", body), ScanActionResult::class.java)
     }
 
-    suspend fun submitQc(id: Int, items: List<Map<String, Any?>>, acceptDiff: Boolean): Unit = withContext(Dispatchers.IO) {
-        postJson("/inbound/$id/qc", mapOf("items" to items, "acceptDiff" to acceptDiff))
+    suspend fun submitQc(id: Int, items: List<Map<String, Any?>>, acceptDiff: Boolean, clientRequestId: String = UUID.randomUUID().toString()): Unit = withContext(Dispatchers.IO) {
+        postJson("/inbound/$id/qc", mapOf("items" to items, "acceptDiff" to acceptDiff, "clientRequestId" to clientRequestId))
         Unit
     }
 
@@ -120,11 +128,11 @@ class ErpClient(private val session: SessionStore) {
         postJson("/inbound/$id/measure-dimensions", mapOf("items" to listOf(row)))
     }
 
-    suspend fun putaway(id: Int, inboundItemId: Int, locationCode: String, qty: Int) = withContext(Dispatchers.IO) {
+    suspend fun putaway(id: Int, inboundItemId: Int, locationCode: String, qty: Int, clientRequestId: String = UUID.randomUUID().toString()) = withContext(Dispatchers.IO) {
         postJson("/inbound/$id/putaway", mapOf("items" to listOf(mapOf(
             "inboundItemId" to inboundItemId,
             "lines" to listOf(mapOf("locationCode" to locationCode, "qty" to qty)),
-        ))))
+        )), "clientRequestId" to clientRequestId))
     }
 
     suspend fun resolveException(id: Int, reason: String) = withContext(Dispatchers.IO) {
@@ -153,18 +161,30 @@ class ErpClient(private val session: SessionStore) {
         gson.fromJson(get("/outbound/$id/pick-suggestions"), PickSuggestions::class.java)
     }
 
-    suspend fun pick(id: Int, items: List<Map<String, Any?>>) = withContext(Dispatchers.IO) {
-        postJson("/outbound/$id/pick", mapOf("pickSource" to "pda", "items" to items))
+    suspend fun pick(id: Int, items: List<Map<String, Any?>>, clientRequestId: String = UUID.randomUUID().toString()) = withContext(Dispatchers.IO) {
+        postJson("/outbound/$id/pick", mapOf("pickSource" to "pda", "items" to items, "clientRequestId" to clientRequestId))
     }
 
     suspend fun startReview(id: Int): OutboundOrder = withContext(Dispatchers.IO) {
         gson.fromJson(postJson("/outbound/$id/start-review", emptyMap<String, Any>()), OutboundOrder::class.java)
     }
 
-    suspend fun pack(id: Int, cartons: List<Map<String, Double>> = emptyList()) = withContext(Dispatchers.IO) {
+    suspend fun pack(id: Int, cartons: List<Map<String, Double>> = emptyList(), clientRequestId: String = UUID.randomUUID().toString()) = withContext(Dispatchers.IO) {
         postJson(
             "/outbound/$id/pack",
-            mapOf("reviewSource" to "pda", "cartons" to cartons),
+            mapOf("reviewSource" to "pda", "cartons" to cartons, "clientRequestId" to clientRequestId),
+        )
+    }
+
+    suspend fun setOutboundProblem(id: Int, problemType: String, remark: String, clientRequestId: String = UUID.randomUUID().toString()): OutboundOrder = withContext(Dispatchers.IO) {
+        gson.fromJson(
+            postJson("/outbound/$id/problem", mapOf(
+                "markType" to "problem",
+                "problemType" to problemType,
+                "problemRemark" to remark.trim(),
+                "clientRequestId" to clientRequestId,
+            )),
+            OutboundOrder::class.java,
         )
     }
 
@@ -173,6 +193,7 @@ class ErpClient(private val session: SessionStore) {
         trackingNo: String = "",
         carrier: String = "",
         logisticsProduct: String = "",
+        clientRequestId: String = UUID.randomUUID().toString(),
     ): OutboundOrder = withContext(Dispatchers.IO) {
         gson.fromJson(
             postJson(
@@ -181,6 +202,7 @@ class ErpClient(private val session: SessionStore) {
                     "trackingNo" to trackingNo.trim(),
                     "carrier" to carrier.trim(),
                     "logisticsProduct" to logisticsProduct.trim(),
+                    "clientRequestId" to clientRequestId,
                 ),
             ),
             OutboundOrder::class.java,
@@ -204,8 +226,15 @@ class ErpClient(private val session: SessionStore) {
         gson.fromJson(get("/management-loop/stocktakes/$id"), StocktakePlan::class.java)
     }
 
-    suspend fun stocktakeCount(id: Int, lineId: Int, qty: Int): StocktakePlan = withContext(Dispatchers.IO) {
-        gson.fromJson(postJson("/management-loop/stocktakes/$id/count", mapOf("lineId" to lineId, "qty" to qty)), StocktakePlan::class.java)
+    suspend fun stocktakeCount(id: Int, lineId: Int, qty: Int, clientRequestId: String = UUID.randomUUID().toString()): StocktakePlan = withContext(Dispatchers.IO) {
+        gson.fromJson(postJson("/management-loop/stocktakes/$id/count", mapOf("lineId" to lineId, "qty" to qty, "clientRequestId" to clientRequestId)), StocktakePlan::class.java)
+    }
+
+    suspend fun retryPending(record: PdaScanRecord) = withContext(Dispatchers.IO) {
+        val endpoint = record.retryEndpoint.orEmpty()
+        val body = record.retryBodyJson.orEmpty()
+        if (endpoint.isBlank() || body.isBlank()) throw ErpException("待同步记录缺少请求内容")
+        postJson(endpoint, JsonParser.parseString(body))
     }
 
     private fun get(path: String): JsonElement = execute(request(path).get().build(), requireAuth = true)
@@ -235,9 +264,9 @@ class ErpClient(private val session: SessionStore) {
         val resp = try {
             http.newCall(request).execute()
         } catch (e: SocketTimeoutException) {
-            throw ErpException("连接 ERP 超时，仓库网络到广州较慢，请再扫一次重试")
+            throw ErpException("连接 ERP 超时，已保存到待同步记录", retriable = true)
         } catch (e: IOException) {
-            throw ErpException("无法连接 ERP，请检查 Wi-Fi 后重试")
+            throw ErpException("无法连接 ERP，已保存到待同步记录", retriable = true)
         }
         resp.use {
             val text = it.body?.string().orEmpty()

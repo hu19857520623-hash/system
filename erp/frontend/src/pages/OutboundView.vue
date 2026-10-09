@@ -52,7 +52,6 @@ const {
   statusCounts,
   reloadAll,
   search,
-  rowIndex,
   buildQueryParams,
 } = useOutboundList()
 
@@ -1192,9 +1191,6 @@ function statusTag(status: string) {
         @selection-change="handleSelectionChange"
       >
         <el-table-column type="selection" width="42" fixed="left" />
-        <el-table-column label="NO." width="52" align="center" fixed="left">
-          <template #default="{ $index }">{{ rowIndex($index) }}</template>
-        </el-table-column>
         <el-table-column label="出库单号" min-width="240" show-overflow-tooltip fixed="left">
           <template #default="{ row }">
             <span class="mono">{{ row.outboundNo }}</span>
@@ -1206,9 +1202,9 @@ function statusTag(status: string) {
         <el-table-column label="目的地" min-width="130" show-overflow-tooltip>
           <template #default="{ row }">{{ row.destination || '—' }}</template>
         </el-table-column>
-        <el-table-column label="收件人" min-width="150" show-overflow-tooltip>
+        <el-table-column label="参考号" min-width="150" show-overflow-tooltip>
           <template #default="{ row }">
-            {{ row.recipient ? `${row.recipient.name} · ${row.recipient.phone}` : '—' }}
+            <span class="mono">{{ row.fbaNo || '—' }}</span>
           </template>
         </el-table-column>
         <el-table-column label="物流产品" width="110" show-overflow-tooltip>
@@ -1489,8 +1485,25 @@ function statusTag(status: string) {
             <el-table-column prop="pickedQty" label="已拣" width="80" align="right">
               <template #default="{ row }">{{ row.pickedQty ?? 0 }}</template>
             </el-table-column>
-            <el-table-column prop="locationCode" label="库位" width="100">
-              <template #default="{ row }"><span class="mono">{{ row.locationCode || '—' }}</span></template>
+            <el-table-column label="库位" min-width="200">
+              <template #default="{ row }">
+                <template v-if="row.pickAllocations?.length">
+                  <div v-for="allocation in row.pickAllocations" :key="allocation.id" class="mono">
+                    {{ allocation.locationCode }}（{{ allocation.qty }} 件）
+                  </div>
+                </template>
+                <template v-else-if="row.suggestedLocations?.length">
+                  <el-tag size="small" type="info">建议拣货库位</el-tag>
+                  <div v-for="location in row.suggestedLocations" :key="location.locationCode" class="mono">
+                    {{ location.locationCode }}（拣 {{ location.pickQty }} / 库存 {{ location.available }}）
+                  </div>
+                </template>
+                <span v-else-if="row.locationCode" class="mono">{{ row.locationCode }}</span>
+                <span v-else>{{ row.locationUncovered > 0 ? '暂无可用库位库存' : '—' }}</span>
+                <div v-if="row.suggestedLocations?.length && row.locationUncovered > 0" style="color: var(--el-color-danger)">
+                  库位库存不足 {{ row.locationUncovered }} 件
+                </div>
+              </template>
             </el-table-column>
             <el-table-column label="发货批次" min-width="180">
               <template #default="{ row }">

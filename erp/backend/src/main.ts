@@ -18,6 +18,7 @@ const JSON_BODY_LIMIT = '20mb'
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { bodyParser: false })
+  app.enableShutdownHooks()
   const config = app.get(ConfigService)
 
   app.use(json({ limit: JSON_BODY_LIMIT }))

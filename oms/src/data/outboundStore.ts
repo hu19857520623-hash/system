@@ -133,6 +133,8 @@ export function applyErpOutboundToLocal(erp: ErpOutboundOrder, base?: Partial<Ou
     takealotBookingRef: existing?.takealotBookingRef || base?.takealotBookingRef || erp.takealotBookingRef || undefined,
     shipmentDueDate: existing?.shipmentDueDate || base?.shipmentDueDate || erp.shipmentDueDate || undefined,
     remark: erp.remark || existing?.remark || base?.remark || undefined,
+    exceptionCode: erp.exceptionCode !== undefined ? erp.exceptionCode || undefined : existing?.exceptionCode || base?.exceptionCode,
+    exceptionReason: erp.exceptionReason !== undefined ? erp.exceptionReason || undefined : existing?.exceptionReason || base?.exceptionReason,
     lineItems: erp.items?.map(i => ({
       sku: i.sku,
       name: i.productName || i.sku,

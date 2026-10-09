@@ -44,6 +44,12 @@ services:
       NODE_ENV: production
       PORT: 3000
       LISTEN_HOST: 0.0.0.0
+      REDIS_CACHE_ENABLED: ${REDIS_CACHE_ENABLED:-false}
+      REDIS_HOST: ${REDIS_HOST:-erp-redis}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      REDIS_USERNAME: ${REDIS_USERNAME:-}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      REDIS_CACHE_PREFIX: ${REDIS_CACHE_PREFIX:-takealot:cache:v1:}
       DATABASE_URL: mysql://root:${ERP_MYSQL_ROOT_PASSWORD}@mysql:3306/takealot_erp
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in erp/.env (at least 32 characters)}
       JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}

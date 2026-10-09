@@ -195,7 +195,7 @@ export const customerAccounts: CustomerAccount[] = [
       'product:read', 'product:write', 'code:read', 'code:apply',
       'inbound:read', 'inbound:write', 'outbound:read', 'outbound:write',
       'inventory:read', 'logistics:read', 'returns:read', 'returns:write',
-      'billing:read', 'report:read',
+      'billing:read',
     ],
     warehouse: 'jhb1', createdAt: '2025-11-12', lastLoginAt: '2026-07-08 09:30',
     priceTemplateByRegion: { jhb: 'pt-jhb-std', cpt: 'pt-cpt-std', dbn: 'pt-dbn-std' },
@@ -208,7 +208,7 @@ export const customerAccounts: CustomerAccount[] = [
       'dashboard:read', 'catalog:read', 'catalog:write',
       'product:read', 'code:read', 'inbound:read', 'inbound:write',
       'outbound:read', 'outbound:write', 'inventory:read', 'logistics:read',
-      'billing:read', 'report:read',
+      'billing:read',
     ],
     warehouse: 'jhb1', createdAt: '2026-01-20', lastLoginAt: '2026-07-07 16:45',
     priceTemplateByRegion: { jhb: 'pt-jhb-vip', cpt: 'pt-cpt-vip', dbn: 'pt-dbn-vip' },
@@ -242,7 +242,7 @@ export const customerAccounts: CustomerAccount[] = [
       'product:read', 'product:write', 'code:read', 'code:apply',
       'inbound:read', 'inbound:write', 'outbound:read', 'outbound:write',
       'inventory:read', 'logistics:read', 'returns:read', 'returns:write',
-      'billing:read', 'report:read',
+      'billing:read',
     ],
     warehouse: 'jhb1', createdAt: '2026-05-22', lastLoginAt: '2026-07-08 08:15',
   },
@@ -495,13 +495,6 @@ export const logisticsRecords: LogisticsRecord[] = [
   { id: '2', refNo: 'ORD-260705012', outboundNo: 'OUT-20260705002', carrier: '快递', trackingNo: 'DHL-ZA-8829103', status: 'delivered', destination: 'Takealot JHB 仓', updatedAt: '2026-07-06 18:45', podStatus: 'uploaded', podFileName: 'POD-OUT-20260705002.pdf', podUploadedAt: '2026-07-06 20:10' },
   { id: '3', refNo: 'CAT-SEL-20260705', outboundNo: 'OUT-20260705003', carrier: '—', trackingNo: '—', status: 'exception', destination: 'Takealot JNB 仓', updatedAt: '2026-07-05 09:12', podStatus: 'pending' },
 ]
-
-export const reportSummary = {
-  orderTrend: [{ month: '3月', orders: 820, gmv: 285000 }, { month: '4月', orders: 910, gmv: 312000 }, { month: '5月', orders: 1050, gmv: 358000 }, { month: '6月', orders: 1180, gmv: 402000 }],
-  inventoryTurnover: 28,
-  fulfillmentRate: 97.2,
-  feeBreakdown: [{ type: '仓储费', pct: 42 }, { type: '操作费', pct: 28 }, { type: '物流费', pct: 30 }],
-}
 
 export const statusLabels: Record<string, string> = {
   pending_payment: '待付款', pending_review: '待审核', pending_ship: '待发货',

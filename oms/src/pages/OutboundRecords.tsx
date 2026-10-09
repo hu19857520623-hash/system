@@ -255,7 +255,9 @@ export default function OutboundRecords() {
               const feeSummary = r.outbound ? buildOutboundFeeSummary(r.outbound, feeRecords) : null
               return (
               <tr key={r.id} className="table-row">
-                <td className="table-cell"><MonoCode>{r.outboundNo}</MonoCode></td>
+                <td className="table-cell">
+                  {r.outbound ? <Link to={`/outbound?detail=${encodeURIComponent(r.outbound.id)}`} className={actionLinkClass()}><MonoCode>{r.outboundNo}</MonoCode></Link> : <MonoCode>{r.outboundNo}</MonoCode>}
+                </td>
                 <td className="table-cell text-xs">
                   {r.refNo ? <MonoCode>{r.refNo}</MonoCode> : <span className="text-text-muted">—</span>}
                 </td>
@@ -313,7 +315,7 @@ export default function OutboundRecords() {
                 <td className="table-cell text-xs text-text-muted whitespace-nowrap">{r.createdAt}</td>
                 <td className="table-cell align-top">
                   <div className="flex min-w-[72px] flex-col gap-0.5">
-                    <TableActionLink onClick={() => setDetailRow(r)}>查看</TableActionLink>
+                    {r.outbound ? <Link to={`/outbound?detail=${encodeURIComponent(r.outbound.id)}`} className={actionLinkClass()}>查看</Link> : <TableActionLink onClick={() => setDetailRow(r)}>查看</TableActionLink>}
                     {r.outbound?.status === 'draft' && (
                       <Link to={`/outbound?edit=${encodeURIComponent(r.outbound.id)}`} className={actionLinkClass()}>
                         编辑

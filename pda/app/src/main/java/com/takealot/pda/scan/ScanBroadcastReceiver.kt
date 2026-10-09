@@ -17,7 +17,7 @@ class ScanBroadcastReceiver : BroadcastReceiver() {
         for (key in keys) {
             val v = extras.getString(key)
             if (!v.isNullOrBlank()) {
-                ScanBus.emit(v)
+                ScanBus.emit(v, intent.action.orEmpty(), key)
                 return
             }
         }

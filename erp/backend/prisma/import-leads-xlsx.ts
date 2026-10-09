@@ -4,6 +4,7 @@
  */
 import * as XLSX from 'xlsx'
 import { PrismaClient } from '@prisma/client'
+import { resolveFollowSales, resolveLeadStatus } from '../src/modules/leads/leads-follow-sales.util'
 
 const DEFAULT_XLSX =
   'd:\\wx\\xwechat_files\\wxid_a0xp3budymkt12_1059\\msg\\file\\2026-06\\客户管理(1).xlsx'
@@ -169,7 +170,8 @@ async function main() {
       再对接: sales2,
       销售情况: salesInfo,
     })
-    const statusKey = mapStatus(status)
+    const followSales = resolveFollowSales(null, fullRemark)
+    const statusKey = resolveLeadStatus(mapStatus(status), followSales)
     const createdAt = parseDate(consultTime) || new Date()
     const assigneeId = resolveAssignee(sales, sales2)
 
@@ -181,6 +183,7 @@ async function main() {
         contactPhone,
         source: trunc(mapSource(channel), 30),
         status: statusKey,
+        followSales: trunc(followSales, 50) || null,
         remark: fullRemark || null,
         assigneeId,
         createdAt,

@@ -53,7 +53,7 @@ import com.takealot.pda.ui.theme.PdaSurface2
 import com.takealot.pda.ui.theme.PdaText
 
 @Composable
-fun HomeScreen(onInbound: (String) -> Unit, onOutbound: (String) -> Unit, onStocktake: () -> Unit, onSettings: () -> Unit) {
+fun HomeScreen(onInbound: (String) -> Unit, onOutbound: (String) -> Unit, onStocktake: () -> Unit, onSettings: () -> Unit, onSync: () -> Unit) {
     val session = PdaApp.instance.session
     val api = PdaApp.instance.api
     var warehouses by remember { mutableStateOf<List<Warehouse>>(emptyList()) }
@@ -64,6 +64,9 @@ fun HomeScreen(onInbound: (String) -> Unit, onOutbound: (String) -> Unit, onStoc
     var stocktakeTodo by remember { mutableStateOf(0) }
     val networkOnline = rememberNetworkOnline()
     val scannerReady by ScanBus.receiverActive.collectAsState()
+    val scannerHealth by ScanBus.health.collectAsState()
+    val scanRecords by PdaApp.instance.workJournal.scanRecords.collectAsState()
+    val pendingSync = scanRecords.count { it.state == "pending" }
 
     LaunchedEffect(Unit) {
         runCatching { api.warehouses("overseas") }.onSuccess { list ->
@@ -115,7 +118,13 @@ fun HomeScreen(onInbound: (String) -> Unit, onOutbound: (String) -> Unit, onStoc
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 StatusItem("网络", if (networkOnline) "已连接" else "已断开", networkOnline, Modifier.weight(1f))
-                StatusItem("扫码枪", if (scannerReady) "已就绪" else "未连接", scannerReady, Modifier.weight(1f))
+                val scannerText = when {
+                    !scannerReady -> "未连接"
+                    scannerHealth.lastScanAt == null -> "等待测试扫码"
+                    scannerHealth.droppedCount > 0 -> "有 ${scannerHealth.droppedCount} 条未投递"
+                    else -> "已收到 ${scannerHealth.lastCode.takeLast(8)}"
+                }
+                StatusItem("扫码枪", scannerText, scannerReady && scannerHealth.lastScanAt != null && scannerHealth.droppedCount == 0, Modifier.weight(1f))
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 StatusItem("工位", session.workstation.ifBlank { "未设置" }, session.workstation.isNotBlank(), Modifier.weight(1f))
@@ -136,6 +145,9 @@ fun HomeScreen(onInbound: (String) -> Unit, onOutbound: (String) -> Unit, onStoc
             }
         }
         val active = PdaApp.instance.workJournal.latestActive()
+        if (pendingSync > 0) {
+            WorkTile("待同步记录", "$pendingSync 条操作尚未得到 ERP 确认，点击处理", PdaErr, true, onClick = onSync)
+        }
         if (active != null) {
             WorkTile(tr("resume"), "${active.orderNo} · ${active.mode}", PdaAccent, true) {
                 when (active.module) {

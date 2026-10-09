@@ -185,6 +185,8 @@ export type ErpOutboundOrder = {
   platform?: string | null
   status: string
   omsStatus: string
+  exceptionCode?: string | null
+  exceptionReason?: string | null
   fbaNo?: string | null
   fbaWarehouse?: string | null
   destination?: string | null
@@ -604,6 +606,14 @@ export function createErpProduct(body: {
   remark?: string
 }) {
   return apiPost<{ id: number; sku: string; productName: string; status: string }>('/erp/products', body)
+}
+
+export function fetchErpOutboundByNo(outboundNo: string) {
+  return apiGet<ErpOutboundOrder>(`/erp/outbound/${encodeURIComponent(outboundNo)}`)
+}
+
+export function cancelErpOutbound(outboundNo: string, customerCode: string) {
+  return apiPost<ErpOutboundOrder>(`/erp/outbound/${encodeURIComponent(outboundNo)}/cancel`, { customerCode })
 }
 
 export function uploadErpProductDraftImage(fileName: string, contentBase64: string) {

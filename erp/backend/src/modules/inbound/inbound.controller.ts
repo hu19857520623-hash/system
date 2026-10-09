@@ -228,7 +228,7 @@ export class InboundController {
   @Post(':id/received-carton-count')
   recordReceivedCartonCount(
     @Param('id', ParseIntPipe) id: number,
-    @Body() body: { receivedCartonCount?: number },
+    @Body() body: { receivedCartonCount?: number; differenceReason?: string; clientRequestId?: string },
     @CurrentUser('userId') userId: number,
   ) {
     return this.service.recordReceivedCartonCount(id, body, userId)
@@ -250,6 +250,12 @@ export class InboundController {
   @Post(':id/scan-qc')
   scanQc(@Param('id', ParseIntPipe) id: number, @Body() body: any, @CurrentUser('userId') userId: number) {
     return this.service.scanQc(id, body, userId)
+  }
+
+  @RequireAnyPerm('inbound.receive', 'inbound.qc', 'inbound.putaway')
+  @Post(':id/report-exception')
+  reportException(@Param('id', ParseIntPipe) id: number, @Body() body: any, @CurrentUser('userId') userId: number) {
+    return this.service.reportException(id, body, userId)
   }
 
   @RequirePerms('inbound.qc')

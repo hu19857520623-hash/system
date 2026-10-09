@@ -566,7 +566,16 @@ export class OutboundService {
     })
     if (!row) throw new NotFoundException('出库单不存在')
     const [item] = await this.enrichOrders([row])
-    return item
+    const pickStatus = row.status === 'exception' ? row.exceptionFromStatus : row.status
+    const showSuggestions = pickStatus === 'pending_pick' || pickStatus === 'picking'
+    const items = await Promise.all(item.items.map(async (line) => {
+      if (!showSuggestions || line.pickAllocations.length || line.pickedQty > 0) {
+        return { ...line, suggestedLocations: [], locationUncovered: 0 }
+      }
+      const plan = await this.suggestPickLocations(row.warehouseCode, line.sku, line.qty)
+      return { ...line, suggestedLocations: plan.suggestions, locationUncovered: plan.uncovered }
+    }))
+    return { ...item, items }
   }
 
   private async allocateOutboundNo(customerCode?: string, customerId?: number | string | bigint | null) {
@@ -1047,8 +1056,14 @@ export class OutboundService {
       exceptionType?: string
       /** @deprecated 请使用 markType */
       isProblem?: boolean
+      clientRequestId?: string
     },
+    operatorId?: number,
   ) {
+    const clientRequestId = String(payload.clientRequestId || '').trim().slice(0, 100)
+    if (clientRequestId && await this.opLog.hasClientRequest('outbound', 'set_problem', clientRequestId)) {
+      return { ...(await this.detail(id)), duplicate: true }
+    }
     const order = await this.prisma.outboundOrder.findUnique({ where: { id: BigInt(id) } })
     if (!order) throw new NotFoundException('出库单不存在')
     if (order.status === 'cancelled') throw new BadRequestException('已取消单不可变更标记')
@@ -1120,6 +1135,23 @@ export class OutboundService {
         break
       default:
         throw new BadRequestException('无效的 markType')
+    }
+    await this.opLog.log({
+      operatorId,
+      module: 'outbound',
+      action: 'set_problem',
+      targetType: 'outbound_order',
+      targetId: order.outboundNo,
+      detail: {
+        markType,
+        problemType: payload.problemType || null,
+        exceptionType: payload.exceptionType || null,
+        problemRemark: payload.problemRemark?.trim() || null,
+        clientRequestId: clientRequestId || null,
+      },
+    })
+    if (markType === 'exception' || markType === 'clear_exception') {
+      await this.pushOutboundStatusToOms(order.outboundNo)
     }
     return this.detail(id)
   }
@@ -1279,9 +1311,14 @@ th{background:#f5f5f5}
         allocations?: { locationCode: string; qty: number }[]
       }[]
       pickSource?: PickSource
+      clientRequestId?: string
     },
     operatorId?: number,
   ) {
+    const clientRequestId = String(payload.clientRequestId || '').trim().slice(0, 100)
+    if (clientRequestId && await this.opLog.hasClientRequest('outbound', 'pick', clientRequestId)) {
+      return { ...(await this.detail(id)), duplicate: true }
+    }
     const order = await this.prisma.outboundOrder.findUnique({
       where: { id: BigInt(id) },
       include: { items: true },
@@ -1403,8 +1440,24 @@ th{background:#f5f5f5}
       if (transitioned.count !== 1) {
         throw new BadRequestException('出库单状态已变化，请刷新后重试')
       }
+      if (clientRequestId) await tx.operationLog.create({
+        data: {
+          operatorId: operatorId ? BigInt(operatorId) : undefined,
+          module: 'outbound',
+          action: 'pick',
+          targetType: 'outbound_order',
+          targetId: order.outboundNo,
+          detail: {
+            pickSource,
+            allocations: resolvedLines.flatMap((line) =>
+              line.allocations.map((allocation) => ({ sku: line.item.sku, ...allocation })),
+            ),
+            clientRequestId: clientRequestId || null,
+          },
+        },
+      })
     })
-    await this.opLog.log({
+    if (!clientRequestId) await this.opLog.log({
       operatorId,
       module: 'outbound',
       action: 'pick',
@@ -1415,6 +1468,7 @@ th{background:#f5f5f5}
         allocations: resolvedLines.flatMap((line) =>
           line.allocations.map((allocation) => ({ sku: line.item.sku, ...allocation })),
         ),
+        clientRequestId: null,
       },
     })
     return {
@@ -1454,9 +1508,14 @@ th{background:#f5f5f5}
       palletInfo?: string
       reviewSource?: ReviewSource
       cartons?: OutboundCartonInput[]
+      clientRequestId?: string
     },
     operatorId?: number,
   ) {
+    const clientRequestId = String(payload?.clientRequestId || '').trim().slice(0, 100)
+    if (clientRequestId && await this.opLog.hasClientRequest('outbound', 'pack', clientRequestId)) {
+      return { ...(await this.detail(id)), duplicate: true }
+    }
     const order = await this.prisma.outboundOrder.findUnique({
       where: { id: BigInt(id) },
       include: { items: true },
@@ -1517,17 +1576,37 @@ th{background:#f5f5f5}
       )
     }
 
-    await this.prisma.outboundOrder.update({
-      where: { id: BigInt(id) },
-      data: {
-        status: nextStatus,
-        reviewerId: operatorId ? BigInt(operatorId) : order.reviewerId,
-        reviewedAt: new Date(),
-        reviewSource,
-        isPalletized: payload?.isPalletized ?? order.isPalletized,
-        palletInfo: payload?.palletInfo?.trim() || order.palletInfo,
-        remark,
-      },
+    await this.prisma.$transaction(async (tx) => {
+      await tx.outboundOrder.update({
+        where: { id: BigInt(id) },
+        data: {
+          status: nextStatus,
+          reviewerId: operatorId ? BigInt(operatorId) : order.reviewerId,
+          reviewedAt: new Date(),
+          reviewSource,
+          isPalletized: payload?.isPalletized ?? order.isPalletized,
+          palletInfo: payload?.palletInfo?.trim() || order.palletInfo,
+          remark,
+        },
+      })
+      if (clientRequestId) await tx.operationLog.create({
+        data: {
+          operatorId: operatorId ? BigInt(operatorId) : undefined,
+          module: 'outbound',
+          action: 'pack',
+          targetType: 'outbound_order',
+          targetId: order.outboundNo,
+          detail: { reviewSource, cartonCount: cartonsInput.length, clientRequestId },
+        },
+      })
+    })
+    if (!clientRequestId) await this.opLog.log({
+      operatorId,
+      module: 'outbound',
+      action: 'pack',
+      targetType: 'outbound_order',
+      targetId: order.outboundNo,
+      detail: { reviewSource, cartonCount: cartonsInput.length, clientRequestId: null },
     })
     return this.detail(id)
   }
@@ -1589,7 +1668,11 @@ th{background:#f5f5f5}
     return detail
   }
 
-  async ship(id: number, operatorId?: number, payload?: { trackingNo?: string; carrier?: string; logisticsProduct?: string }) {
+  async ship(id: number, operatorId?: number, payload?: { trackingNo?: string; carrier?: string; logisticsProduct?: string; clientRequestId?: string }) {
+    const clientRequestId = String(payload?.clientRequestId || '').trim().slice(0, 100)
+    if (clientRequestId && await this.opLog.hasClientRequest('outbound', 'ship', clientRequestId)) {
+      return { ...(await this.detail(id)), duplicate: true }
+    }
     const order = await this.prisma.outboundOrder.findUnique({
       where: { id: BigInt(id) },
       include: { items: true, pickAllocations: true },
@@ -1655,6 +1738,24 @@ th{background:#f5f5f5}
       if (transitioned.count !== 1) {
         throw new BadRequestException('出库单状态已变化，发运操作已回滚，请刷新后重试')
       }
+      if (clientRequestId) await tx.operationLog.create({
+        data: {
+          operatorId: operatorId ? BigInt(operatorId) : undefined,
+          module: 'outbound',
+          action: 'ship',
+          targetType: 'outbound_order',
+          targetId: order.outboundNo,
+          detail: { clientRequestId: clientRequestId || null },
+        },
+      })
+    })
+    if (!clientRequestId) await this.opLog.log({
+      operatorId,
+      module: 'outbound',
+      action: 'ship',
+      targetType: 'outbound_order',
+      targetId: order.outboundNo,
+      detail: { clientRequestId: null },
     })
 
     const shipCharges = await this.outboundBilling.recordShipCharges(order)
@@ -1667,12 +1768,29 @@ th{background:#f5f5f5}
     return detail
   }
 
-  async cancel(id: number) {
+  async cancelFromOms(outboundNo: string, customerCode: string) {
+    const customer = await this.prisma.customer.findUnique({
+      where: { customerCode: String(customerCode || '').trim() },
+    })
+    const order = customer && await this.prisma.outboundOrder.findFirst({
+      where: { outboundNo: String(outboundNo || '').trim(), customerId: customer.id },
+      select: { id: true },
+    })
+    if (!order) throw new NotFoundException('出库单不存在')
+    await this.cancel(Number(order.id), { customerId: customer!.id, pendingOnly: true })
+    return this.getByOutboundNoForOms(outboundNo)
+  }
+
+  async cancel(id: number, restriction?: { customerId: bigint; pendingOnly: true }) {
     const order = await this.prisma.outboundOrder.findUnique({
       where: { id: BigInt(id) },
       include: { items: true, pickAllocations: true },
     })
     if (!order) throw new NotFoundException('出库单不存在')
+    if (restriction && order.customerId !== restriction.customerId) throw new NotFoundException('出库单不存在')
+    if (restriction?.pendingOnly && order.status !== 'pending_pick') {
+      throw new BadRequestException('仅待拣货的出库单可以撤回，仓库开始拣货后不能撤回')
+    }
     if (isPostShipStatus(order.status)) throw new BadRequestException('已发运不可取消')
     if (order.status === 'cancelled') throw new BadRequestException('出库单已取消')
     const stockSource = parseStockSourceFromRemark(order.remark)
@@ -1808,6 +1926,8 @@ th{background:#f5f5f5}
     attachments?: any[]
     customerName?: string | null
     customerCode?: string | null
+    exceptionType?: string | null
+    problemRemark?: string | null
   }) {
     const meta = parseOmsOutboundMeta(order.remark)
     const preDeduct = parseOmsOutboundPreDeduct(order.remark)
@@ -1830,6 +1950,8 @@ th{background:#f5f5f5}
       warehouseCode: order.warehouseCode,
       status: order.status,
       omsStatus: toOmsOutboundStatus(order.status),
+      exceptionCode: order.status === 'exception' ? order.exceptionType || null : null,
+      exceptionReason: order.status === 'exception' ? order.problemRemark || null : null,
       trackingNo: order.trackingNo,
       carrier: order.carrier,
       logisticsProduct: order.logisticsProduct,

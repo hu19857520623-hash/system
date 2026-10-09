@@ -13,6 +13,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -44,6 +45,7 @@ import com.takealot.pda.ui.components.FeedbackBar
 import com.takealot.pda.ui.components.KeyValue
 import com.takealot.pda.ui.components.Panel
 import com.takealot.pda.ui.components.ScanField
+import com.takealot.pda.ui.components.ScanQueueStatus
 import com.takealot.pda.ui.components.SkuCard
 import com.takealot.pda.ui.components.StatusChip
 import com.takealot.pda.ui.components.fieldColors
@@ -57,6 +59,8 @@ import com.takealot.pda.ui.theme.PdaText
 import com.takealot.pda.ui.theme.PdaWarn
 import com.takealot.pda.ui.i18n.tr
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 
 data class OutboundCartonDraft(
     val lengthCm: String = "",
@@ -93,6 +97,22 @@ class OutboundViewModel : ViewModel() {
     var logisticsProduct by mutableStateOf("")
     var feedback by mutableStateOf<Feedback?>(null)
     var busy by mutableStateOf(false)
+    var pendingScanCount by androidx.compose.runtime.mutableIntStateOf(0)
+    var showShortPickDialog by mutableStateOf(false)
+    var shortPickReason by mutableStateOf("")
+    var unknownScanCode by mutableStateOf<String?>(null)
+    var unknownScanRemark by mutableStateOf("")
+    private val scanQueue = Channel<String>(64)
+
+    init {
+        viewModelScope.launch {
+            for (code in scanQueue) {
+                pendingScanCount = (pendingScanCount - 1).coerceAtLeast(0)
+                while (busy) delay(40)
+                runScan(code)
+            }
+        }
+    }
 
     fun bindMode(key: String) {
         mode = when (key) {
@@ -133,19 +153,29 @@ class OutboundViewModel : ViewModel() {
                         pageSize = 50,
                     ).items.orEmpty()
                 }
-                list = rows.distinctBy { it.id }
+                list = rows.distinctBy { it.id }.filterNot { it.isProblem }
             } catch (e: Exception) { feedback = Feedback(false, e.message ?: "加载任务失败") }
         }
     }
 
-    fun onHardwareScan(code: String) { scan = code; submitScan() }
+    fun onHardwareScan(code: String) { enqueueScan(code) }
     fun submitScan() {
-        val code = scan.trim(); if (code.isEmpty() || busy) return
-        viewModelScope.launch { runScan(code) }
+        enqueueScan(scan)
+    }
+
+    private fun enqueueScan(raw: String) {
+        val code = raw.trim()
+        if (code.isEmpty()) return
+        scan = ""
+        pendingScanCount += 1
+        if (!scanQueue.trySend(code).isSuccess) {
+            pendingScanCount = (pendingScanCount - 1).coerceAtLeast(0)
+            feedback = Feedback(false, "扫码队列已满，请稍后重试")
+        }
     }
 
     private suspend fun runScan(code: String) {
-        busy = true; feedback = null
+        busy = true; feedback = Feedback(false, "正在处理 $code…", processing = true)
         val journal = PdaApp.instance.workJournal
         val recordId = journal.beginScan("outbound", mode, code, order?.id, order?.no)
         try {
@@ -158,7 +188,7 @@ class OutboundViewModel : ViewModel() {
             }
             if (mode == "pick") {
                 val normalized = code.trim().uppercase()
-                val locationTask = lines.firstOrNull { !it.done && it.locationCode.uppercase() == normalized }
+                val locationTask = lines.firstOrNull { !it.done && !it.taskKey.endsWith("@SHORT") && it.locationCode.uppercase() == normalized }
                 if (locationTask != null) {
                     selectedSku = locationTask.taskKey
                     feedback = Feedback(true, "库位 ${locationTask.locationCode}，请扫 ${locationTask.sku}")
@@ -172,9 +202,12 @@ class OutboundViewModel : ViewModel() {
                     feedback = Feedback(true, "$modeHint ${selected.locationCode} · ${selected.sku} $nextQty/${selected.qty}")
                     scan = ""; saveProgress(); journal.acknowledge(recordId, feedback?.message); return
                 }
-                val skuTask = lines.firstOrNull { !it.done && it.matchesScan(code) }
+                val skuTask = lines.firstOrNull { !it.done && !it.taskKey.endsWith("@SHORT") && it.matchesScan(code) }
                 if (skuTask != null) {
                     throw ErpException("请先扫描库位 ${skuTask.locationCode}，再扫描 ${skuTask.sku}")
+                }
+                if (lines.any { !it.done && it.taskKey.endsWith("@SHORT") && it.matchesScan(code) }) {
+                    throw ErpException("该 SKU 存在库存缺口，请点击「登记短拣」")
                 }
                 if (lines.any { it.matchesScan(code) }) {
                     throw ErpException("该 SKU 本单已拣完，请扫描下一件或提交拣货")
@@ -196,6 +229,10 @@ class OutboundViewModel : ViewModel() {
             journal.acknowledge(recordId, feedback?.message)
         } catch (e: Exception) {
             feedback = Feedback(false, e.message ?: "扫描失败")
+            if (order != null && mode != "ship" && e.message.orEmpty().contains("未找到出库单")) {
+                unknownScanCode = code
+                unknownScanRemark = ""
+            }
             if (journal.isRetriable(e)) journal.retainForRetry(recordId, feedback?.message)
             else journal.fail(recordId, feedback?.message)
         }
@@ -227,6 +264,7 @@ class OutboundViewModel : ViewModel() {
         }
         val nextOrder: OutboundOrder
         val nextLines: List<LocalPickLine>
+        var shortageNotice: String? = null
         if (mode == "pick") {
             assertPickerAssigned(detail)
             if (detail.statusKey != "picking") throw ErpException("当前状态「${outboundStatusLabel(detail.statusKey)}」不可拣货")
@@ -234,14 +272,18 @@ class OutboundViewModel : ViewModel() {
             val suggestions = api.pickSuggestions(id).itemList
             val shortages = suggestions.filter { it.uncovered > 0 }
             if (shortages.isNotEmpty()) {
-                throw ErpException("库位库存不足：${shortages.joinToString("、") { "${it.sku} 缺 ${it.uncovered}" }}；请标记库存短缺异常")
+                shortageNotice = "库位库存不足：${shortages.joinToString("、") { "${it.sku} 缺 ${it.uncovered}" }}；可先拣有库存数量，再登记短拣"
             }
             locationSuggestions = suggestions.associate { row -> row.id to row.suggestions.orEmpty().mapNotNull { it.locationCode?.trim()?.uppercase() } }
             nextLines = suggestions.flatMap { row ->
-                row.suggestions.orEmpty().filter { it.pickQty > 0 }.map { allocation ->
+                val allocated = row.suggestions.orEmpty().filter { it.pickQty > 0 }.map { allocation ->
                     val location = allocation.locationCode.orEmpty().trim().uppercase()
                     LocalPickLine(row.id, row.sku.orEmpty(), row.productName.orEmpty(), allocation.pickQty, location, 0, "${row.id}@$location", row.barcode.orEmpty(), row.platformBarcode.orEmpty())
                 }
+                val shortage = if (row.uncovered > 0) {
+                    listOf(LocalPickLine(row.id, row.sku.orEmpty(), "${row.productName.orEmpty()}（库存不足）", row.uncovered, "库存不足", 0, "${row.id}@SHORT", row.barcode.orEmpty(), row.platformBarcode.orEmpty()))
+                } else emptyList()
+                allocated + shortage
             }
             if (nextLines.isEmpty()) throw ErpException("暂无可执行的库位拣货任务，请先完成上架")
         } else if (mode == "review") {
@@ -268,6 +310,7 @@ class OutboundViewModel : ViewModel() {
         // 每次打开/恢复任务都必须重新扫描实物库位，不能通过点选或历史选择绕过库位校验。
         selectedSku = null
         PdaApp.instance.workJournal.activate(PdaResumeWork("outbound", mode, nextOrder.id, nextOrder.no))
+        shortageNotice?.let { feedback = Feedback(false, it) }
     }
 
     private fun assertPickerAssigned(order: OutboundOrder) {
@@ -322,6 +365,8 @@ class OutboundViewModel : ViewModel() {
         if (lines.any { !it.done }) { feedback = Feedback(false, "仍有未完成的库位任务；短拣请标记库存短缺异常"); return }
         viewModelScope.launch {
             busy = true
+            val journal = PdaApp.instance.workJournal
+            val recordId = journal.beginScan("outbound", "pick_submit", o.no, o.id, o.no)
             try {
                 val items = lines.groupBy { it.id }.map { (itemId, tasks) ->
                     mapOf<String, Any?>(
@@ -329,9 +374,14 @@ class OutboundViewModel : ViewModel() {
                         "allocations" to tasks.map { mapOf("locationCode" to it.locationCode, "qty" to it.qty) },
                     )
                 }
-                api.pick(o.id, items)
+                journal.preparePostRetry(recordId, "/outbound/${o.id}/pick", mapOf("pickSource" to "pda", "items" to items))
+                api.pick(o.id, items, recordId)
+                journal.acknowledge(recordId, "拣货提交成功")
                 feedback = Feedback(true, "${o.no} 拣货完成；下一步：进入复核"); order = null; lines = emptyList(); PdaApp.instance.workJournal.clearPickProgress(o.id, mode); PdaApp.instance.workJournal.clearActive("outbound"); loadList()
-            } catch (e: Exception) { feedback = Feedback(false, e.message ?: "拣货失败") }
+            } catch (e: Exception) {
+                feedback = Feedback(false, e.message ?: "拣货失败")
+                if (journal.isRetriable(e)) journal.retainForRetry(recordId, feedback?.message) else journal.fail(recordId, feedback?.message)
+            }
             finally { busy = false }
         }
     }
@@ -345,14 +395,67 @@ class OutboundViewModel : ViewModel() {
         }
         viewModelScope.launch {
             busy = true
+            val journal = PdaApp.instance.workJournal
+            val recordId = journal.beginScan("outbound", "pack_submit", o.no, o.id, o.no)
             try {
-                api.pack(o.id, if (o.omsPreDeduct != null) cartons.map { it.payload() } else emptyList())
+                val cartonPayload = if (o.omsPreDeduct != null) cartons.map { it.payload() } else emptyList()
+                journal.preparePostRetry(recordId, "/outbound/${o.id}/pack", mapOf("reviewSource" to "pda", "cartons" to cartonPayload))
+                api.pack(o.id, cartonPayload, recordId)
+                journal.acknowledge(recordId, "复核提交成功")
                 feedback = Feedback(true, "${o.no} 复核完成；外箱实测与实际费用已回写")
                 order = null; lines = emptyList(); cartons = listOf(OutboundCartonDraft())
                 PdaApp.instance.workJournal.clearPickProgress(o.id, mode); PdaApp.instance.workJournal.clearActive("outbound"); loadList()
             }
-            catch (e: Exception) { feedback = Feedback(false, e.message ?: "复核失败") }
+            catch (e: Exception) {
+                feedback = Feedback(false, e.message ?: "复核失败")
+                if (journal.isRetriable(e)) journal.retainForRetry(recordId, feedback?.message) else journal.fail(recordId, feedback?.message)
+            }
             finally { busy = false }
+        }
+    }
+
+    fun submitShortPick() {
+        val o = order ?: return
+        val incomplete = lines.filter { !it.done }
+        if (incomplete.isEmpty()) { feedback = Feedback(false, "当前没有短拣数量"); return }
+        if (shortPickReason.trim().length < 2) { feedback = Feedback(false, "请填写短拣原因"); return }
+        val summary = incomplete.joinToString("；") { "${it.sku}@${it.locationCode} 应拣${it.qty} 实拣${it.scannedQty} 缺${it.qty - it.scannedQty}" }
+        reportProblem("stock_short", "$summary；原因：${shortPickReason.trim()}") {
+            showShortPickDialog = false
+            shortPickReason = ""
+            list = list.filterNot { it.id == o.id }
+            clearOrder()
+        }
+    }
+
+    fun reportUnknownBarcode() {
+        val code = unknownScanCode ?: return
+        reportProblem("barcode_issue", "未知条码：$code${unknownScanRemark.trim().takeIf { it.isNotBlank() }?.let { "；$it" }.orEmpty()}") {
+            unknownScanCode = null
+            unknownScanRemark = ""
+        }
+    }
+
+    private fun reportProblem(problemType: String, remark: String, onSuccess: () -> Unit) {
+        val o = order ?: return
+        viewModelScope.launch {
+            busy = true
+            val journal = PdaApp.instance.workJournal
+            val recordId = journal.beginScan("outbound", "problem_$problemType", o.no, o.id, o.no)
+            try {
+                journal.preparePostRetry(recordId, "/outbound/${o.id}/problem", mapOf(
+                    "markType" to "problem",
+                    "problemType" to problemType,
+                    "problemRemark" to remark,
+                ))
+                api.setOutboundProblem(o.id, problemType, remark, recordId)
+                journal.acknowledge(recordId, "问题已登记")
+                onSuccess()
+                feedback = Feedback(true, "问题已登记并转交主管处理")
+            } catch (e: Exception) {
+                feedback = Feedback(false, e.message ?: "问题登记失败")
+                if (journal.isRetriable(e)) journal.retainForRetry(recordId, feedback?.message) else journal.fail(recordId, feedback?.message)
+            } finally { busy = false }
         }
     }
 
@@ -371,17 +474,26 @@ class OutboundViewModel : ViewModel() {
         if (mode != "ship" || o.statusKey != "packed") return
         viewModelScope.launch {
             busy = true; feedback = null
+            val journal = PdaApp.instance.workJournal
+            val recordId = journal.beginScan("outbound", "ship_submit", o.no, o.id, o.no)
             try {
-                api.ship(o.id, trackingNo, carrier, logisticsProduct)
+                journal.preparePostRetry(recordId, "/outbound/${o.id}/ship", mapOf(
+                    "trackingNo" to trackingNo.trim(),
+                    "carrier" to carrier.trim(),
+                    "logisticsProduct" to logisticsProduct.trim(),
+                ))
+                api.ship(o.id, trackingNo, carrier, logisticsProduct, recordId)
+                journal.acknowledge(recordId, "发运提交成功")
                 feedback = Feedback(true, "${o.no} 已发运；库存、OMS 状态和实际费用已同步")
                 order = null; trackingNo = ""; carrier = ""; logisticsProduct = ""; loadList()
             } catch (e: Exception) {
                 feedback = Feedback(false, e.message ?: "发运失败")
+                if (journal.isRetriable(e)) journal.retainForRetry(recordId, feedback?.message) else journal.fail(recordId, feedback?.message)
             } finally { busy = false }
         }
     }
 
-    fun clearOrder() { order?.let { PdaApp.instance.workJournal.clearPickProgress(it.id, mode) }; order = null; lines = emptyList(); selectedSku = null; scan = ""; PdaApp.instance.workJournal.clearActive("outbound") }
+    fun clearOrder() { order?.let { PdaApp.instance.workJournal.clearPickProgress(it.id, mode) }; order = null; lines = emptyList(); selectedSku = null; scan = ""; unknownScanCode = null; PdaApp.instance.workJournal.clearActive("outbound") }
 }
 
 @Composable
@@ -412,6 +524,7 @@ fun OutboundScreen(modeKey: String, onBack: () -> Unit, vm: OutboundViewModel = 
             scanLabel,
             enabled = !vm.busy && !reviewAwaitingStart && (vm.mode != "ship" || vm.order == null),
         )
+        ScanQueueStatus(vm.pendingScanCount, vm.busy)
         FeedbackBar(vm.feedback)
         val order = vm.order
         if (order == null) {
@@ -499,7 +612,12 @@ fun OutboundScreen(modeKey: String, onBack: () -> Unit, vm: OutboundViewModel = 
                 OutboundCartonMeasureEditor(vm)
             }
             when (vm.mode) {
-                "pick" -> BigButton("提交拣货", onClick = { vm.submitPick() }, enabled = !vm.busy && vm.lines.isNotEmpty(), color = PdaOk)
+                "pick" -> {
+                    BigButton("提交拣货", onClick = { vm.submitPick() }, enabled = !vm.busy && vm.lines.isNotEmpty() && vm.lines.all { it.done }, color = PdaOk)
+                    if (vm.lines.any { !it.done }) {
+                        BigButton("登记短拣", onClick = { vm.showShortPickDialog = true }, enabled = !vm.busy, color = PdaWarn)
+                    }
+                }
                 "review" -> BigButton("提交复核并计算费用", onClick = { vm.submitReview() }, enabled = !vm.busy && !reviewAwaitingStart && vm.lines.isNotEmpty(), color = PdaOk)
                 else -> {
                     Panel {
@@ -535,6 +653,57 @@ fun OutboundScreen(modeKey: String, onBack: () -> Unit, vm: OutboundViewModel = 
             }
         }
     }
+    if (vm.showShortPickDialog) ShortPickDialog(vm)
+    if (vm.unknownScanCode != null) OutboundUnknownBarcodeDialog(vm)
+}
+
+@Composable
+private fun ShortPickDialog(vm: OutboundViewModel) {
+    val incomplete = vm.lines.filter { !it.done }
+    AlertDialog(
+        onDismissRequest = { if (!vm.busy) vm.showShortPickDialog = false },
+        title = { Text("登记短拣") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                incomplete.forEach { line ->
+                    Text("${line.sku} · ${line.locationCode} · 应拣 ${line.qty} / 实拣 ${line.scannedQty} / 缺 ${line.qty - line.scannedQty}", color = PdaWarn, fontSize = 13.sp)
+                }
+                OutlinedTextField(
+                    value = vm.shortPickReason,
+                    onValueChange = { vm.shortPickReason = it },
+                    label = { Text("原因：库位空、实物不足、破损等") },
+                    minLines = 2,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = fieldColors(),
+                )
+                Text("登记后不会扣库存或完成拣货，该单将从当前任务列表隐藏，等待主管处理。", color = PdaMuted, fontSize = 12.sp)
+            }
+        },
+        confirmButton = { TextButton(enabled = !vm.busy && vm.shortPickReason.trim().length >= 2, onClick = { vm.submitShortPick() }) { Text("确认短拣", color = PdaWarn) } },
+        dismissButton = { TextButton(onClick = { vm.showShortPickDialog = false }) { Text("继续查找") } },
+    )
+}
+
+@Composable
+private fun OutboundUnknownBarcodeDialog(vm: OutboundViewModel) {
+    AlertDialog(
+        onDismissRequest = { if (!vm.busy) vm.unknownScanCode = null },
+        title = { Text("未知条码") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("${vm.unknownScanCode.orEmpty()} 不属于当前出库任务。请把实物放到异常区，或登记条码问题。", color = PdaWarn, fontSize = 14.sp)
+                OutlinedTextField(
+                    value = vm.unknownScanRemark,
+                    onValueChange = { vm.unknownScanRemark = it },
+                    label = { Text("备注（可选）") },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = fieldColors(),
+                )
+            }
+        },
+        confirmButton = { TextButton(enabled = !vm.busy, onClick = { vm.reportUnknownBarcode() }) { Text("登记条码异常", color = PdaWarn) } },
+        dismissButton = { TextButton(onClick = { vm.unknownScanCode = null }) { Text("返回继续作业") } },
+    )
 }
 
 @Composable

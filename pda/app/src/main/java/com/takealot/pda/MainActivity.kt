@@ -29,6 +29,7 @@ import com.takealot.pda.ui.login.LoginScreen
 import com.takealot.pda.ui.outbound.OutboundScreen
 import com.takealot.pda.ui.settings.SettingsScreen
 import com.takealot.pda.ui.stocktake.StocktakeScreen
+import com.takealot.pda.ui.sync.SyncScreen
 import com.takealot.pda.ui.theme.PdaBg
 import com.takealot.pda.ui.theme.PdaTheme
 
@@ -76,6 +77,7 @@ private fun PdaNav(onLogout: () -> Unit) {
                 onOutbound = { nav.navigate("outbound/$it") },
                 onStocktake = { nav.navigate("stocktake") },
                 onSettings = { nav.navigate("settings") },
+                onSync = { nav.navigate("sync") },
             )
         }
         composable("inbound/{mode}", arguments = listOf(navArgument("mode") { type = NavType.StringType })) {
@@ -89,6 +91,9 @@ private fun PdaNav(onLogout: () -> Unit) {
         }
         composable("settings") {
             SettingsScreen(onBack = { nav.popBackStack() }, onLogout = { nav.popBackStack(); onLogout() })
+        }
+        composable("sync") {
+            SyncScreen(onBack = { nav.popBackStack() })
         }
     }
 }

@@ -53,6 +53,7 @@ import com.takealot.pda.ui.components.KeyValue
 import com.takealot.pda.ui.components.Panel
 import com.takealot.pda.ui.components.QtyButton
 import com.takealot.pda.ui.components.ScanField
+import com.takealot.pda.ui.components.ScanQueueStatus
 import com.takealot.pda.ui.components.SkuCard
 import com.takealot.pda.ui.components.StatusChip
 import com.takealot.pda.ui.components.fieldColors
@@ -65,6 +66,8 @@ import com.takealot.pda.ui.theme.PdaText
 import com.takealot.pda.ui.theme.PdaWarn
 import com.takealot.pda.ui.i18n.tr
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 
 enum class InboundMode(val key: String, val title: String, val scanLabel: String) {
     Arrival("arrival", "到仓扫描", "扫入库单号"),
@@ -84,6 +87,7 @@ class InboundViewModel : ViewModel() {
     var order by mutableStateOf<InboundOrder?>(null)
     var feedback by mutableStateOf<Feedback?>(null)
     var busy by mutableStateOf(false)
+    var pendingScanCount by mutableIntStateOf(0)
     var selectedItemId by mutableStateOf<Int?>(null)
     var locationCode by mutableStateOf("")
     var putawayQty by mutableIntStateOf(1)
@@ -94,9 +98,41 @@ class InboundViewModel : ViewModel() {
     var acceptDiff by mutableStateOf(false)
     var exceptionReason by mutableStateOf("")
     var showExceptionRelease by mutableStateOf(false)
+    var showCartonDifference by mutableStateOf(false)
+    var cartonDifferenceReason by mutableStateOf("")
+    var unknownScanCode by mutableStateOf<String?>(null)
+    var unknownScanRemark by mutableStateOf("")
+    var qcIssueItemId by mutableStateOf<Int?>(null)
+    var qcIssueType by mutableStateOf("short")
+    var qcIssueQty by mutableStateOf("")
+    var qcIssueRemark by mutableStateOf("")
     var pendingOrders by mutableStateOf<List<InboundOrder>>(emptyList())
     var putawayDoneNo by mutableStateOf<String?>(null)
     val selectedItem: InboundItem? get() = order?.itemList?.find { it.id == selectedItemId }
+    val scannedCartonCount: Int
+        get() = order?.cartonList?.count { it.status == "received" } ?: 0
+    private val scanQueue = Channel<String>(64)
+
+    init {
+        viewModelScope.launch {
+            for (code in scanQueue) {
+                pendingScanCount = (pendingScanCount - 1).coerceAtLeast(0)
+                while (busy) delay(40)
+                runScan(code)
+            }
+        }
+    }
+
+    private fun applyOrder(detail: InboundOrder?) {
+        order = detail
+        if (detail != null) {
+            cartonCount = maxOf(
+                1,
+                detail.receivedCartonCount ?: 0,
+                detail.cartonList.count { it.status == "received" },
+            )
+        }
+    }
 
     fun bindMode(key: String) {
         mode = InboundMode.from(key); feedback = null; scan = ""
@@ -104,7 +140,7 @@ class InboundViewModel : ViewModel() {
         val resume = PdaApp.instance.workJournal.active("inbound", mode.key) ?: return
         viewModelScope.launch {
             try {
-                order = api.inboundDetail(resume.orderId)
+                applyOrder(api.inboundDetail(resume.orderId))
                 feedback = Feedback(true, "已恢复 ${resume.orderNo} 的未完成作业")
             } catch (_: Exception) {
                 PdaApp.instance.workJournal.clearActive("inbound")
@@ -134,36 +170,54 @@ class InboundViewModel : ViewModel() {
             finally { busy = false }
         }
     }
-    fun onHardwareScan(code: String) { scan = code; submitScan() }
+    fun onHardwareScan(code: String) { enqueueScan(code) }
     fun submitScan() {
-        val code = scan.trim(); if (code.isEmpty() || busy) return
-        viewModelScope.launch { runScan(code) }
+        enqueueScan(scan)
+    }
+
+    private fun enqueueScan(raw: String) {
+        val code = raw.trim()
+        if (code.isEmpty()) return
+        scan = ""
+        pendingScanCount += 1
+        if (!scanQueue.trySend(code).isSuccess) {
+            pendingScanCount = (pendingScanCount - 1).coerceAtLeast(0)
+            feedback = Feedback(false, "扫码队列已满，请稍后重试")
+        }
     }
 
     private suspend fun runScan(code: String) {
-        busy = true; feedback = null
+        busy = true; feedback = Feedback(false, "正在处理 $code…", processing = true)
         val journal = PdaApp.instance.workJournal
         val recordId = journal.beginScan("inbound", mode.key, code, order?.id, order?.no)
         try {
             when (mode) {
-                InboundMode.Arrival -> doArrival(code)
+                InboundMode.Arrival -> doArrival(code, recordId)
                 InboundMode.Receive -> doReceiveScan(code, recordId)
                 InboundMode.Qc -> doQcScan(code, recordId)
-                InboundMode.Putaway -> handlePutawayScan(code)
+                InboundMode.Putaway -> handlePutawayScan(code, recordId)
             }
             journal.acknowledge(recordId, feedback?.message)
         } catch (e: Exception) {
             feedback = Feedback(false, e.message ?: "操作失败")
+            if (order != null && mode != InboundMode.Arrival && (
+                    e.message.orEmpty().contains("不属于入库单") ||
+                    e.message.orEmpty().contains("未匹配")
+                )) {
+                unknownScanCode = code
+                unknownScanRemark = ""
+            }
             if (journal.isRetriable(e)) journal.retainForRetry(recordId, feedback?.message)
             else journal.fail(recordId, feedback?.message)
         } finally { busy = false }
     }
 
-    private suspend fun doArrival(code: String) {
+    private suspend fun doArrival(code: String, recordId: String) {
         val wh = session.warehouseCode
         if (wh.isBlank()) throw ErpException("请先在首页选择作业仓库")
+        PdaApp.instance.workJournal.prepareRetry(recordId, "arrival", extra = wh)
         val res = api.arrivalScan(code, wh)
-        order = res.order
+        applyOrder(res.order)
         scan = ""
         if (order?.id != null) refreshOrder()
         enterReceiveAfterArrival(
@@ -201,7 +255,8 @@ class InboundViewModel : ViewModel() {
             return
         }
         try {
-            val res = api.receiveBox(order!!.id, code)
+            PdaApp.instance.workJournal.prepareRetry(recordId, "receive_box")
+            val res = api.receiveBox(order!!.id, code, recordId)
             feedback = Feedback(true, res.message.orEmpty().ifBlank { "箱唛已确认，可继续扫箱唛或 SKU" })
             refreshOrder(); scan = ""
         } catch (e: Exception) {
@@ -240,6 +295,7 @@ class InboundViewModel : ViewModel() {
         if (!session.hasPerm("inbound.qc")) {
             throw ErpException("扫 SKU 需要清点权限，请用仓库账号或在电脑端开通「入库 · 清点」")
         }
+        PdaApp.instance.workJournal.prepareRetry(recordId, "scan_qc", quantity = qcIncrement)
         val res = api.scanQc(order!!.id, code, qcIncrement, recordId)
         if (res.itemId > 0) selectedItemId = res.itemId
         val sku = res.sku.orEmpty().ifBlank { code }
@@ -273,7 +329,7 @@ class InboundViewModel : ViewModel() {
         if (allowedStatuses != null && detail.statusKey !in allowedStatuses) {
             throw ErpException("当前状态「${detail.statusText}」不可上架，请选择待上架单据")
         }
-        order = detail
+        applyOrder(detail)
         PdaApp.instance.workJournal.activate(PdaResumeWork("inbound", mode.key, detail.id, detail.no))
         return order
     }
@@ -286,8 +342,10 @@ class InboundViewModel : ViewModel() {
         if (detail.statusKey != "pending_putaway" && detail.statusKey != "exception") {
             throw ErpException("当前状态「${detail.statusText}」不可上架，仅待上架单据可进入")
         }
-        order = detail
-        val first = detail.itemList.firstOrNull { it.remainingPutaway > 0 }
+        applyOrder(detail)
+        val first = detail.itemList.firstOrNull {
+            (it.actualQty ?: 0) > 0 && it.remainingPutaway > 0
+        }
         selectedItemId = first?.id
         putawayQty = first?.remainingPutaway?.coerceAtLeast(1) ?: 1
         locationCode = ""
@@ -295,7 +353,7 @@ class InboundViewModel : ViewModel() {
         feedback = Feedback(true, "已进入 ${detail.no}，请扫 SKU，再扫库位")
     }
 
-    private suspend fun handlePutawayScan(code: String) {
+    private suspend fun handlePutawayScan(code: String, recordId: String) {
         val guess = ScanCodeClassifier.classify(code).typeKey
         if (order == null || guess == "inbound_no") {
             if (order == null && (guess == "sku" || guess == "barcode" || guess == "location")) {
@@ -309,6 +367,10 @@ class InboundViewModel : ViewModel() {
         val current = order ?: return
         val skuHit = current.itemList.find { it.matchesScan(code) }
         if (skuHit != null) {
+            if ((skuHit.actualQty ?: 0) <= 0) {
+                feedback = Feedback(false, "${skuHit.skuCode} 清点实收为 0，不可上架")
+                scan = ""; return
+            }
             if (skuHit.remainingPutaway <= 0) {
                 feedback = Feedback(false, "${skuHit.skuCode} 已上架完成，请扫下一件 SKU")
                 scan = ""; return
@@ -324,26 +386,46 @@ class InboundViewModel : ViewModel() {
             scan = ""; return
         }
         if (selectedItemId == null) { feedback = Feedback(false, "请先扫描待上架 SKU"); return }
-        locationCode = code.trim().uppercase(); scan = ""; doPutaway()
+        locationCode = code.trim().uppercase(); scan = ""; doPutaway(recordId)
     }
 
     fun submitPutaway() {
         viewModelScope.launch {
             busy = true
-            try { doPutaway() }
-            catch (e: Exception) { feedback = Feedback(false, e.message ?: "上架失败") }
+            val o = order
+            val recordId = PdaApp.instance.workJournal.beginScan("inbound", "putaway", locationCode, o?.id, o?.no)
+            try {
+                doPutaway(recordId)
+                PdaApp.instance.workJournal.acknowledge(recordId, feedback?.message)
+            }
+            catch (e: Exception) {
+                feedback = Feedback(false, e.message ?: "上架失败")
+                if (PdaApp.instance.workJournal.isRetriable(e)) PdaApp.instance.workJournal.retainForRetry(recordId, feedback?.message)
+                else PdaApp.instance.workJournal.fail(recordId, feedback?.message)
+            }
             finally { busy = false }
         }
     }
 
-    private suspend fun doPutaway() {
+    private suspend fun doPutaway(recordId: String? = null) {
         val o = order ?: return
         val item = selectedItem ?: run { feedback = Feedback(false, "请先扫描 SKU"); return }
         if (locationCode.isBlank()) { feedback = Feedback(false, "请扫描库位"); return }
         if (!item.hasMeasuredDims()) { feedback = Feedback(false, "${item.skuCode} 请先填写并保存体积"); return }
         val qty = putawayQty.coerceIn(1, item.remainingPutaway.coerceAtLeast(1))
         val loc = locationCode
-        api.putaway(o.id, item.id, loc, qty)
+        val requestId = recordId ?: java.util.UUID.randomUUID().toString()
+        PdaApp.instance.workJournal.preparePostRetry(
+            requestId,
+            "/inbound/${o.id}/putaway",
+            mapOf(
+                "items" to listOf(mapOf(
+                    "inboundItemId" to item.id,
+                    "lines" to listOf(mapOf("locationCode" to loc, "qty" to qty)),
+                )),
+            ),
+        )
+        api.putaway(o.id, item.id, loc, qty, requestId)
         locationCode = ""; refreshOrder()
         val remaining = order?.itemList?.sumOf { it.remainingPutaway } ?: 0
         if (remaining <= 0) {
@@ -351,7 +433,9 @@ class InboundViewModel : ViewModel() {
             feedback = Feedback(true, "${o.no} 上架完成")
         } else {
             feedback = Feedback(true, "${item.skuCode} → $loc ×$qty；请扫描下一件 SKU")
-            val next = order?.itemList?.firstOrNull { it.remainingPutaway > 0 }
+            val next = order?.itemList?.firstOrNull {
+                (it.actualQty ?: 0) > 0 && it.remainingPutaway > 0
+            }
             selectedItemId = next?.id
             putawayQty = next?.remainingPutaway?.coerceAtLeast(1) ?: 1
         }
@@ -363,10 +447,29 @@ class InboundViewModel : ViewModel() {
         if (hasDiff && !acceptDiff) { feedback = Feedback(false, "存在收货差异，请确认差异处理后再提交"); return }
         viewModelScope.launch {
             busy = true
+            val journal = PdaApp.instance.workJournal
+            val recordId = journal.beginScan("inbound", "qc_submit", o.no, o.id, o.no)
             try {
-                api.submitQc(o.id, o.itemList.map { mapOf("id" to it.id, "sku" to it.skuCode, "actualQty" to (it.actualQty ?: 0), "qcStatus" to (it.qcStatus ?: "pass")) }, acceptDiff)
-                refreshOrder(); feedback = Feedback(true, "${o.no} 清点已提交；下一步：进入上架扫描")
-            } catch (e: Exception) { feedback = Feedback(false, e.message ?: "提交清点失败") }
+                val items = o.itemList.map { mapOf(
+                    "id" to it.id,
+                    "sku" to it.skuCode,
+                    "actualQty" to (it.actualQty ?: 0),
+                    "qcStatus" to (it.qcStatus ?: "pass"),
+                    "qcRemark" to it.qcRemark,
+                ) }
+                journal.preparePostRetry(recordId, "/inbound/${o.id}/qc", mapOf("items" to items, "acceptDiff" to acceptDiff))
+                api.submitQc(o.id, items, acceptDiff, recordId)
+                journal.acknowledge(recordId, "清点提交成功")
+                refreshOrder()
+                feedback = if (order?.statusKey == "exception") {
+                    Feedback(false, "${o.no} 差异已登记，订单进入异常，等待主管核对放行")
+                } else {
+                    Feedback(true, "${o.no} 清点已提交；下一步：进入上架扫描")
+                }
+            } catch (e: Exception) {
+                feedback = Feedback(false, e.message ?: "提交清点失败")
+                if (journal.isRetriable(e)) journal.retainForRetry(recordId, feedback?.message) else journal.fail(recordId, feedback?.message)
+            }
             finally { busy = false }
         }
     }
@@ -416,16 +519,79 @@ class InboundViewModel : ViewModel() {
         }
     }
 
-    fun confirmCartonCount() {
+    fun confirmCartonCount(reason: String = "") {
         val id = order?.id ?: run { feedback = Feedback(false, "请先扫描单号绑定入库单"); return }
+        if (cartonCount < scannedCartonCount) {
+            feedback = Feedback(false, "已扫码确认 $scannedCartonCount 箱，实收箱数不能改小")
+            cartonCount = scannedCartonCount
+            return
+        }
+        val expected = order?.cartonList?.size ?: 0
+        if (expected > 0 && cartonCount != expected && reason.trim().length < 2) {
+            showCartonDifference = true
+            return
+        }
         viewModelScope.launch {
             busy = true; feedback = null
+            val journal = PdaApp.instance.workJournal
+            val recordId = journal.beginScan("inbound", "carton_count_submit", cartonCount.toString(), id, order?.no)
             try {
-                val res = api.recordReceivedCartonCount(id, cartonCount)
+                journal.preparePostRetry(recordId, "/inbound/$id/received-carton-count", mapOf("receivedCartonCount" to cartonCount, "differenceReason" to reason.trim()))
+                val res = api.recordReceivedCartonCount(id, cartonCount, reason, recordId)
+                journal.acknowledge(recordId, "箱数登记成功")
                 refreshOrder()
+                showCartonDifference = false
+                cartonDifferenceReason = ""
                 enterQcAfterReceive(res.message.orEmpty().ifBlank { "实收箱数已登记" })
             } catch (e: Exception) {
                 feedback = Feedback(false, e.message ?: "登记箱数失败")
+                if (journal.isRetriable(e)) journal.retainForRetry(recordId, feedback?.message) else journal.fail(recordId, feedback?.message)
+            } finally { busy = false }
+        }
+    }
+
+    fun openQcIssue(item: InboundItem) {
+        qcIssueItemId = item.id
+        qcIssueQty = (item.actualQty ?: 0).toString()
+        qcIssueType = when {
+            (item.actualQty ?: 0) < item.expectedQty -> "short"
+            (item.actualQty ?: 0) > item.expectedQty -> "over"
+            else -> "damaged"
+        }
+        qcIssueRemark = item.qcRemark.orEmpty()
+    }
+
+    fun saveQcIssue() {
+        val itemId = qcIssueItemId ?: return
+        val actual = qcIssueQty.toIntOrNull()
+        if (actual == null || actual < 0) { feedback = Feedback(false, "实收数量必须是非负整数"); return }
+        if (qcIssueRemark.trim().length < 2) { feedback = Feedback(false, "请填写至少 2 个字的差异说明"); return }
+        val labels = mapOf("short" to "少收", "over" to "超收", "damaged" to "破损", "rejected" to "拒收")
+        val label = labels[qcIssueType] ?: "差异"
+        order = order?.copy(items = order?.itemList?.map {
+            if (it.id == itemId) it.copy(
+                actualQty = actual,
+                qcStatus = if (qcIssueType == "damaged" || qcIssueType == "rejected") "fail" else "pass",
+                qcRemark = "[$label] ${qcIssueRemark.trim()}",
+                diffQty = actual - it.expectedQty,
+            ) else it
+        })
+        qcIssueItemId = null
+        feedback = Feedback(true, "$label 已记录，提交清点后写入 ERP")
+    }
+
+    fun reportUnknownBarcode() {
+        val o = order ?: return
+        val code = unknownScanCode ?: return
+        viewModelScope.launch {
+            busy = true
+            try {
+                val res = api.reportInboundException(o.id, "unknown_barcode", code, unknownScanRemark)
+                feedback = Feedback(true, res.message.orEmpty().ifBlank { "未知条码已登记" })
+                unknownScanCode = null
+                unknownScanRemark = ""
+            } catch (e: Exception) {
+                feedback = Feedback(false, e.message ?: "异常登记失败")
             } finally { busy = false }
         }
     }
@@ -439,16 +605,21 @@ class InboundViewModel : ViewModel() {
 
     fun clearOrder() {
         order = null; selectedItemId = null; locationCode = ""; feedback = null; scan = ""
+        unknownScanCode = null; qcIssueItemId = null; showCartonDifference = false
         PdaApp.instance.workJournal.clearActive("inbound")
         if (mode == InboundMode.Putaway) loadPendingPutaway()
     }
 
     private suspend fun refreshOrder() {
         val id = order?.id ?: return
-        order = api.inboundDetail(id)
+        applyOrder(api.inboundDetail(id))
         order?.let { PdaApp.instance.workJournal.activate(PdaResumeWork("inbound", mode.key, it.id, it.no)) }
         val still = order?.itemList?.find { it.id == selectedItemId }
-        if (still == null) selectedItemId = order?.itemList?.firstOrNull { it.remainingPutaway > 0 }?.id
+        if (still == null) {
+            selectedItemId = order?.itemList?.firstOrNull {
+                (it.actualQty ?: 0) > 0 && it.remainingPutaway > 0
+            }?.id
+        }
     }
 }
 
@@ -482,6 +653,7 @@ fun InboundScreen(modeKey: String, onBack: () -> Unit, vm: InboundViewModel = vi
             )
         }
         ScanField(vm.scan, { vm.scan = it }, { vm.submitScan() }, scanLabel, enabled = true, focusNonce = "${vm.mode.key}-${vm.busy}")
+        ScanQueueStatus(vm.pendingScanCount, vm.busy)
         if (vm.mode == InboundMode.Receive) {
             Text("可扫箱唛记箱数，也可扫 SKU / 条码 / 990 累加实收", color = PdaMuted, fontSize = 12.sp)
         }
@@ -498,11 +670,12 @@ fun InboundScreen(modeKey: String, onBack: () -> Unit, vm: InboundViewModel = vi
         var qtyDialog by remember { mutableStateOf<String?>(null) }
         var qtyDraft by remember { mutableStateOf("") }
         val putawayMax = (vm.selectedItem?.remainingPutaway ?: 0).coerceAtLeast(1)
+        val cartonMin = vm.scannedCartonCount.coerceAtLeast(1)
         when (vm.mode) {
             InboundMode.Receive -> QtyRow(
                 label = "实收箱数",
                 value = vm.cartonCount,
-                onChange = { vm.cartonCount = it.coerceAtLeast(1) },
+                onChange = { vm.cartonCount = it.coerceAtLeast(cartonMin) },
                 onNumberClick = {
                     qtyDraft = vm.cartonCount.toString()
                     qtyDialog = "carton"
@@ -536,12 +709,20 @@ fun InboundScreen(modeKey: String, onBack: () -> Unit, vm: InboundViewModel = vi
             }
             val fieldLabel = if (qtyDialog == "carton") "箱数" else "件数"
             val maxQty = if (qtyDialog == "putaway") putawayMax else 9999
+            val minQty = if (qtyDialog == "carton") cartonMin else 1
             AlertDialog(
                 onDismissRequest = { qtyDialog = null },
                 title = { Text(dialogTitle) },
                 text = {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("点数字手填，或用 − / + 调整。", color = PdaMuted, fontSize = 13.sp)
+                        if (qtyDialog == "carton" && vm.scannedCartonCount > 0) {
+                            Text(
+                                "已扫码确认 ${vm.scannedCartonCount} 箱，不能填写更小数量。",
+                                color = PdaWarn,
+                                fontSize = 12.sp,
+                            )
+                        }
                         OutlinedTextField(
                             value = qtyDraft,
                             onValueChange = { raw -> qtyDraft = raw.filter { ch -> ch.isDigit() }.take(4) },
@@ -555,7 +736,7 @@ fun InboundScreen(modeKey: String, onBack: () -> Unit, vm: InboundViewModel = vi
                 },
                 confirmButton = {
                     TextButton(onClick = {
-                        val n = qtyDraft.toIntOrNull()?.coerceIn(1, maxQty) ?: 1
+                        val n = qtyDraft.toIntOrNull()?.coerceIn(minQty, maxQty) ?: minQty
                         when (qtyDialog) {
                             "carton" -> vm.cartonCount = n
                             "putaway" -> vm.putawayQty = n
@@ -607,6 +788,15 @@ fun InboundScreen(modeKey: String, onBack: () -> Unit, vm: InboundViewModel = vi
                 TextButton(onClick = { vm.clearOrder() }) { Text("换单", color = PdaAccent) }
             }
             if (vm.mode == InboundMode.Receive) {
+                if (order.cartonList.isNotEmpty()) {
+                    val received = order.cartonList.count { it.status == "received" }
+                    Text(
+                        "收箱进度 $received / ${order.cartonList.size} · ${order.cartonList.size - received} 箱未确认",
+                        color = if (received == order.cartonList.size) PdaOk else PdaWarn,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
                 BigButton("确认箱数", onClick = { vm.confirmCartonCount() }, enabled = !vm.busy, color = PdaOk)
             }
             if (order.statusKey == "exception") {
@@ -627,7 +817,12 @@ fun InboundScreen(modeKey: String, onBack: () -> Unit, vm: InboundViewModel = vi
             if (vm.mode == InboundMode.Putaway) PutawayEditor(vm)
             Text("SKU 明细", color = PdaInbound, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
             val showInlineMeasure = vm.mode == InboundMode.Qc || vm.mode == InboundMode.Receive
-            order.itemList.forEach { item ->
+            val visibleItems = if (vm.mode == InboundMode.Putaway) {
+                order.itemList.filter { (it.actualQty ?: 0) > 0 }
+            } else {
+                order.itemList
+            }
+            visibleItems.forEach { item ->
                 val selected = item.id == vm.selectedItemId
                 Column(
                     Modifier.fillMaxWidth().padding(bottom = 8.dp),
@@ -656,6 +851,9 @@ fun InboundScreen(modeKey: String, onBack: () -> Unit, vm: InboundViewModel = vi
                         if ((item.actualQty ?: 0) != item.expectedQty) {
                             Text("差异 ${(item.actualQty ?: 0) - item.expectedQty}", color = PdaWarn, fontSize = 12.sp)
                         }
+                        item.qcRemark?.takeIf { it.isNotBlank() }?.let {
+                            Text(it, color = PdaWarn, fontSize = 12.sp)
+                        }
                         if (vm.mode == InboundMode.Putaway && !item.hasMeasuredDims()) {
                             Text("缺少商品尺寸：请转「清点」扫描并测量", color = PdaWarn, fontSize = 12.sp)
                         }
@@ -667,11 +865,19 @@ fun InboundScreen(modeKey: String, onBack: () -> Unit, vm: InboundViewModel = vi
                     ) {
                         QcMeasureEditor(vm)
                     }
+                    if (showInlineMeasure) {
+                        TextButton(onClick = { vm.openQcIssue(item) }, enabled = !vm.busy) {
+                            Text("登记少收 / 超收 / 破损 / 拒收", color = PdaWarn)
+                        }
+                    }
                 }
             }
         }
     }
     if (vm.showExceptionRelease) ExceptionReleaseDialog(vm)
+    if (vm.showCartonDifference) CartonDifferenceDialog(vm)
+    if (vm.unknownScanCode != null) UnknownBarcodeDialog(vm)
+    if (vm.qcIssueItemId != null) QcIssueDialog(vm)
     if (vm.putawayDoneNo != null) {
         AlertDialog(
             onDismissRequest = { vm.finishPutawayDone() },
@@ -737,6 +943,13 @@ private fun PutawayEditor(vm: InboundViewModel) {
     val item = vm.selectedItem
     Panel {
         Text(item?.skuCode ?: "先扫 SKU", color = PdaText, fontWeight = FontWeight.Medium)
+        if (item != null) {
+            Text("本次上架 ${vm.putawayQty} 件 · 剩余 ${item.remainingPutaway} 件", color = PdaMuted, fontSize = 12.sp)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = { vm.putawayQty = 1 }, modifier = Modifier.weight(1f)) { Text("上架 1 件", color = PdaAccent) }
+                TextButton(onClick = { vm.putawayQty = item.remainingPutaway.coerceAtLeast(1) }, modifier = Modifier.weight(1f)) { Text("上架全部剩余", color = PdaAccent) }
+            }
+        }
         OutlinedTextField(value = vm.locationCode, onValueChange = { vm.locationCode = it.uppercase() }, label = { Text("库位") }, singleLine = true, colors = fieldColors())
         if (item != null && !item.hasMeasuredDims()) {
             Text("需先测体积（cm）", color = PdaWarn, fontSize = 13.sp)
@@ -758,6 +971,103 @@ private fun PutawayEditor(vm: InboundViewModel) {
         }
         BigButton("确认上架", onClick = { vm.submitPutaway() }, enabled = !vm.busy && item != null, color = PdaOk)
     }
+}
+
+@Composable
+private fun CartonDifferenceDialog(vm: InboundViewModel) {
+    val expected = vm.order?.cartonList?.size ?: 0
+    AlertDialog(
+        onDismissRequest = { if (!vm.busy) vm.showCartonDifference = false },
+        title = { Text("确认收箱差异") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("预计 $expected 箱，实际登记 ${vm.cartonCount} 箱。差异必须说明原因后才能继续。", color = PdaWarn, fontSize = 14.sp)
+                OutlinedTextField(
+                    value = vm.cartonDifferenceReason,
+                    onValueChange = { vm.cartonDifferenceReason = it },
+                    label = { Text("原因，如少箱、破损、无箱唛") },
+                    minLines = 2,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = fieldColors(),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = !vm.busy && vm.cartonDifferenceReason.trim().length >= 2,
+                onClick = { vm.confirmCartonCount(vm.cartonDifferenceReason) },
+            ) { Text("登记差异并继续", color = PdaWarn) }
+        },
+        dismissButton = { TextButton(onClick = { vm.showCartonDifference = false }) { Text("返回核对") } },
+    )
+}
+
+@Composable
+private fun UnknownBarcodeDialog(vm: InboundViewModel) {
+    AlertDialog(
+        onDismissRequest = { if (!vm.busy) vm.unknownScanCode = null },
+        title = { Text("未知条码") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("条码 ${vm.unknownScanCode.orEmpty()} 不属于当前入库单。可登记给主管核对，货物先放异常区。", color = PdaWarn, fontSize = 14.sp)
+                OutlinedTextField(
+                    value = vm.unknownScanRemark,
+                    onValueChange = { vm.unknownScanRemark = it },
+                    label = { Text("备注（可选）") },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = fieldColors(),
+                )
+            }
+        },
+        confirmButton = { TextButton(enabled = !vm.busy, onClick = { vm.reportUnknownBarcode() }) { Text("登记异常", color = PdaWarn) } },
+        dismissButton = { TextButton(enabled = !vm.busy, onClick = { vm.unknownScanCode = null }) { Text("返回继续清点") } },
+    )
+}
+
+@Composable
+private fun QcIssueDialog(vm: InboundViewModel) {
+    val item = vm.order?.itemList?.find { it.id == vm.qcIssueItemId }
+    val options = listOf("short" to "少收", "over" to "超收", "damaged" to "破损", "rejected" to "拒收")
+    AlertDialog(
+        onDismissRequest = { if (!vm.busy) vm.qcIssueItemId = null },
+        title = { Text("登记 ${item?.skuCode.orEmpty()} 收货差异") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    options.forEach { (key, label) ->
+                        TextButton(
+                            onClick = { vm.qcIssueType = key },
+                            modifier = Modifier.weight(1f).background(
+                                if (vm.qcIssueType == key) PdaWarn.copy(alpha = 0.2f) else PdaSurface2,
+                                RoundedCornerShape(8.dp),
+                            ),
+                        ) { Text(label, color = if (vm.qcIssueType == key) PdaWarn else PdaMuted, fontSize = 12.sp) }
+                    }
+                }
+                OutlinedTextField(
+                    value = vm.qcIssueQty,
+                    onValueChange = { vm.qcIssueQty = it.filter(Char::isDigit).take(6) },
+                    label = { Text("最终实收数量（应收 ${item?.expectedQty ?: 0}）") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = fieldColors(),
+                )
+                OutlinedTextField(
+                    value = vm.qcIssueRemark,
+                    onValueChange = { vm.qcIssueRemark = it },
+                    label = { Text("差异原因（必填）") },
+                    minLines = 2,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = fieldColors(),
+                )
+                if (vm.qcIssueType == "over") Text("超收提交仍需具备差异确认权限。", color = PdaWarn, fontSize = 12.sp)
+                if (vm.qcIssueType == "damaged" || vm.qcIssueType == "rejected") Text("破损或拒收会将入库单转为异常，需主管放行。", color = PdaWarn, fontSize = 12.sp)
+            }
+        },
+        confirmButton = { TextButton(onClick = { vm.saveQcIssue() }) { Text("保存差异", color = PdaWarn) } },
+        dismissButton = { TextButton(onClick = { vm.qcIssueItemId = null }) { Text("取消") } },
+    )
 }
 
 @Composable

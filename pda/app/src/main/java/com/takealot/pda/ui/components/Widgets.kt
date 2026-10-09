@@ -55,7 +55,7 @@ import com.takealot.pda.ui.theme.PdaText
 import com.takealot.pda.ui.theme.PdaWarn
 import kotlinx.coroutines.delay
 
-data class Feedback(val ok: Boolean, val message: String)
+data class Feedback(val ok: Boolean, val message: String, val processing: Boolean = false)
 
 @Composable
 fun ScanField(
@@ -144,9 +144,16 @@ fun FeedbackBar(feedback: Feedback?) {
     LaunchedEffect(feedback.ok, feedback.message) {
         val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) (context.getSystemService(VibratorManager::class.java))?.defaultVibrator
         else context.getSystemService(Vibrator::class.java)
-        val effect = if (feedback.ok) VibrationEffect.createOneShot(45, VibrationEffect.DEFAULT_AMPLITUDE)
-        else VibrationEffect.createWaveform(longArrayOf(0, 80, 55, 130), -1)
-        vibrator?.vibrate(effect)
+        if (feedback.processing) return@LaunchedEffect
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val effect = if (feedback.ok) VibrationEffect.createOneShot(45, VibrationEffect.DEFAULT_AMPLITUDE)
+            else VibrationEffect.createWaveform(longArrayOf(0, 80, 55, 130), -1)
+            vibrator?.vibrate(effect)
+        } else {
+            @Suppress("DEPRECATION")
+            if (feedback.ok) vibrator?.vibrate(45L)
+            else vibrator?.vibrate(longArrayOf(0, 80, 55, 130), -1)
+        }
         val tone = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 80)
         try {
             tone.startTone(if (feedback.ok) ToneGenerator.TONE_PROP_ACK else ToneGenerator.TONE_PROP_NACK, if (feedback.ok) 90 else 180)
@@ -157,9 +164,38 @@ fun FeedbackBar(feedback: Feedback?) {
     }
     Box(
         Modifier.fillMaxWidth()
-            .background(if (feedback.ok) PdaOk.copy(alpha = 0.18f) else PdaErr.copy(alpha = 0.18f), RoundedCornerShape(8.dp))
+            .background(
+                when {
+                    feedback.processing -> PdaWarn.copy(alpha = 0.18f)
+                    feedback.ok -> PdaOk.copy(alpha = 0.18f)
+                    else -> PdaErr.copy(alpha = 0.18f)
+                },
+                RoundedCornerShape(8.dp),
+            )
             .padding(12.dp),
-    ) { Text(feedback.message, color = if (feedback.ok) PdaOk else PdaErr, fontSize = 15.sp) }
+    ) {
+        Text(
+            feedback.message,
+            color = when {
+                feedback.processing -> PdaWarn
+                feedback.ok -> PdaOk
+                else -> PdaErr
+            },
+            fontSize = 15.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+    }
+}
+
+@Composable
+fun ScanQueueStatus(pendingCount: Int, busy: Boolean) {
+    if (!busy && pendingCount <= 0) return
+    val text = if (busy) {
+        if (pendingCount > 0) "正在处理 · 后面排队 $pendingCount 条" else "正在处理，结果确认前请勿重复扫描"
+    } else {
+        "待处理 $pendingCount 条"
+    }
+    Text(text, color = PdaWarn, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
 }
 
 @Composable

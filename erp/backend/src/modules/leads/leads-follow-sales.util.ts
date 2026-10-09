@@ -26,6 +26,12 @@ export function resolveFollowSales(followSales?: string | null, remark?: string 
   return String(followSales || '').trim() || parseFollowSalesFromRemark(remark)
 }
 
+/** 已指定跟进销售的新线索自动进入跟进中；保留后续业务状态。 */
+export function resolveLeadStatus(status?: string | null, followSales?: string | null): string {
+  const current = String(status || '').trim() || 'new'
+  return current === 'new' && String(followSales || '').trim() ? 'following' : current
+}
+
 const MIN_ASCII_TOKEN_LEN = 3
 const MIN_TOKEN_LEN = 2
 

@@ -457,6 +457,10 @@ export class ManagementLoopService {
   }
 
   async submitCount(planId: number, body: any, userId?: number) {
+    const clientRequestId = String(body?.clientRequestId || '').trim().slice(0, 100)
+    if (clientRequestId && await this.opLog.hasClientRequest('stocktake', 'count', clientRequestId)) {
+      return this.stocktakeDetail(planId)
+    }
     const plan = await this.prisma.stocktakePlan.findUnique({ where: { id: BigInt(planId) } })
     if (!plan) throw new NotFoundException('盘点单不存在')
     if (plan.status !== 'counting') throw new BadRequestException('盘点单已结束，不能继续录入')
@@ -468,16 +472,39 @@ export class ManagementLoopService {
     const qty = Number(body.qty)
     if (!Number.isInteger(qty) || qty < 0) throw new BadRequestException('实盘数量必须为非负整数')
     const isRecount = line.firstQty != null
+    if (isRecount && userId && line.firstCountedBy === BigInt(userId)) {
+      throw new BadRequestException('复盘必须由另一名作业员完成，请交接给其他账号')
+    }
     const finalQty = isRecount ? qty : (qty === line.bookQty ? qty : null)
-    await this.prisma.stocktakeLine.update({ where: { id: line.id }, data: isRecount ? {
-      secondQty: qty, finalQty: qty, varianceQty: qty - line.bookQty, status: qty === line.bookQty ? 'matched' : 'variance',
-      secondCountedBy: userId ? BigInt(userId) : null, recountedAt: new Date(),
-    } : {
-      firstQty: qty, finalQty, varianceQty: finalQty == null ? null : finalQty - line.bookQty,
-      status: finalQty == null ? 'recount' : 'matched', firstCountedBy: userId ? BigInt(userId) : null, countedAt: new Date(),
-    }})
-    const pending = await this.prisma.stocktakeLine.count({ where: { planId: BigInt(planId), status: { in: ['pending', 'recount'] } } })
-    if (!pending) await this.prisma.stocktakePlan.update({ where: { id: BigInt(planId) }, data: { status: 'pending_approval' } })
+    await this.prisma.$transaction(async (tx) => {
+      await tx.stocktakeLine.update({ where: { id: line.id }, data: isRecount ? {
+        secondQty: qty, finalQty: qty, varianceQty: qty - line.bookQty, status: qty === line.bookQty ? 'matched' : 'variance',
+        secondCountedBy: userId ? BigInt(userId) : null, recountedAt: new Date(),
+      } : {
+        firstQty: qty, finalQty, varianceQty: finalQty == null ? null : finalQty - line.bookQty,
+        status: finalQty == null ? 'recount' : 'matched', firstCountedBy: userId ? BigInt(userId) : null, countedAt: new Date(),
+      }})
+      const pending = await tx.stocktakeLine.count({ where: { planId: BigInt(planId), status: { in: ['pending', 'recount'] } } })
+      if (!pending) await tx.stocktakePlan.update({ where: { id: BigInt(planId) }, data: { status: 'pending_approval' } })
+      if (clientRequestId) await tx.operationLog.create({
+        data: {
+          operatorId: userId ? BigInt(userId) : undefined,
+          module: 'stocktake',
+          action: 'count',
+          targetType: 'stocktake_plan',
+          targetId: plan.stocktakeNo,
+          detail: { lineId: Number(line.id), qty, clientRequestId: clientRequestId || null },
+        },
+      })
+    })
+    if (!clientRequestId) await this.opLog.log({
+      operatorId: userId,
+      module: 'stocktake',
+      action: 'count',
+      targetType: 'stocktake_plan',
+      targetId: plan.stocktakeNo,
+      detail: { lineId: Number(line.id), qty, clientRequestId: null },
+    })
     return this.stocktakeDetail(planId)
   }
 

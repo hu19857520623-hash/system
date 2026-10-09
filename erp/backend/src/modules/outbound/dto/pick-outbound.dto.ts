@@ -44,6 +44,10 @@ export class PickOutboundDto {
   @IsOptional()
   @IsIn(['pda', 'pick_list'])
   pickSource?: 'pda' | 'pick_list'
+
+  @IsOptional()
+  @IsString()
+  clientRequestId?: string
 }
 
 export class AssignPickerDto {

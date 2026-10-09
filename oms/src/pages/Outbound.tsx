@@ -5,6 +5,7 @@ import { Button, Card, MonoCode, Table } from '../components/ui'
 import { FormSection, FormGrid, FormField, formInput, formSelect, formTextarea } from '../components/ui/form'
 import {
   warehouseLabel,
+  statusLabels,
   PLATFORM_OPTIONS, formatCurrency,
   TAKEALOT_ATTACHMENT_KINDS,
   type FileAttachment, type OutboundOrder, type OutboundType, type PlatformSkuMapping,
@@ -20,7 +21,8 @@ import {
   useInventoryItems,
   useProducts,
 } from '../data/inventoryStore'
-import { addOutboundOrderOrThrow, nextOutboundNo, removeOutboundOrder, submitOutboundToErp, useOutboundOrders } from '../data/outboundStore'
+import { addOutboundOrderOrThrow, applyErpOutboundToLocal, nextOutboundNo, removeOutboundOrder, submitOutboundToErp, useOutboundOrders } from '../data/outboundStore'
+import { cancelErpOutbound, fetchErpOutboundByNo } from '../api/erp'
 import { getCustomerCode, getCustomerIdForRole } from '../data/dataScope'
 import {
   TAKEALOT_DOWNLOAD_ITEMS,
@@ -124,8 +126,15 @@ export default function Outbound() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const editId = searchParams.get('edit')
+  const detailId = searchParams.get('detail')
+  const isDetail = Boolean(detailId)
   const outboundOrders = useOutboundOrders()
-  const editOrder = editId ? outboundOrders.find(order => order.id === editId && order.status === 'draft') : undefined
+  const editOrder = detailId
+    ? outboundOrders.find(order => order.id === detailId)
+    : editId ? outboundOrders.find(order => order.id === editId && order.status === 'draft') : undefined
+  const [withdrawing, setWithdrawing] = useState(false)
+  const [detailLoading, setDetailLoading] = useState(isDetail)
+  const [detailError, setDetailError] = useState('')
   const { role, can } = useRole()
   const [takealotDestWarehouse, setTakealotDestWarehouse] = useState<string>(DEFAULT_TAKEALOT_DEST_WAREHOUSE)
   const [fulfillmentWarehouses] = useState(() => getFulfillmentWarehouses())
@@ -192,6 +201,7 @@ export default function Outbound() {
     : destRegion
 
   const resolvedShippingMethod = useMemo(() => {
+    if (isDetail && editOrder?.shippingMethod) return editOrder.shippingMethod
     if (isTfs) return '快递'
     if (isTakealot) {
       const rule = findDispatchRuleForRegion(regionDispatchRules, effectiveDestRegion)
@@ -199,9 +209,9 @@ export default function Outbound() {
     }
     const rule = activeDispatchRules.find(r => r.id === dispatchRuleId)
     return rule?.shippingMethod ?? '卡派'
-  }, [isTfs, isTakealot, effectiveDestRegion, regionDispatchRules, dispatchRuleId, activeDispatchRules])
+  }, [isDetail, editOrder?.shippingMethod, isTfs, isTakealot, effectiveDestRegion, regionDispatchRules, dispatchRuleId, activeDispatchRules])
 
-  const customerId = getCustomerIdForRole(role)
+  const customerId = isDetail ? editOrder?.customerId : getCustomerIdForRole(role)
   const effectiveTakealotSellerId = (takealotParsedDoc?.sellerId || takealotSellerId.trim()) || undefined
   const quickBindStore = useMemo(
     () => pickTakealotStoreForBinding(effectiveTakealotSellerId, customerId ?? undefined),
@@ -231,6 +241,24 @@ export default function Outbound() {
   }
 
   useEffect(() => {
+    if (!isDetail || !editOrder?.outboundNo || editOrder.status === 'draft') {
+      setDetailLoading(false)
+      return
+    }
+    let active = true
+    setDetailLoading(true)
+    setDetailError('')
+    void fetchErpOutboundByNo(editOrder.outboundNo).then(order => {
+      if (!active) return
+      hydratedEditId.current = null
+      applyErpOutboundToLocal(order)
+    }).catch(error => {
+      if (active) setDetailError(error instanceof Error ? error.message : String(error))
+    }).finally(() => { if (active) setDetailLoading(false) })
+    return () => { active = false }
+  }, [isDetail, editOrder?.outboundNo])
+
+  useEffect(() => {
     if (!editOrder || hydratedEditId.current === editOrder.id) return
     hydratedEditId.current = editOrder.id
     setOutboundType(outboundTypeLabel(editOrder.type))
@@ -245,6 +273,8 @@ export default function Outbound() {
     setTakealotDestWarehouse(editOrder.takealotDestWarehouse || DEFAULT_TAKEALOT_DEST_WAREHOUSE)
     destinationExplicitlySelected.current = Boolean(editOrder.takealotDestWarehouse)
     setDestRegion(editOrder.destRegion || 'jhb')
+    const savedDispatchRule = activeDispatchRules.find(rule => rule.code === editOrder.destRegion)
+    if (savedDispatchRule) setDispatchRuleId(savedDispatchRule.id)
     setRecipientName(editOrder.recipient?.name || '')
     setRecipientProvince(editOrder.recipient?.province || '')
     setRecipientCity(editOrder.recipient?.city || '')
@@ -268,7 +298,7 @@ export default function Outbound() {
   }, [editOrder])
 
   useEffect(() => {
-    if (isTakealot) return
+    if (isDetail || isTakealot) return
     setTakealotParseHint('')
     setTakealotParsedDoc(null)
     setTakealotLabelResults({})
@@ -284,14 +314,14 @@ export default function Outbound() {
   }, [isTakealot, takealotAttachmentKinds])
 
   useEffect(() => {
-    if (activeDispatchRules.length === 0) return
+    if (isDetail || activeDispatchRules.length === 0) return
     if (!dispatchRuleId || !activeDispatchRules.some(r => r.id === dispatchRuleId)) {
       setDispatchRuleId(activeDispatchRules[0].id)
     }
   }, [activeDispatchRules, dispatchRuleId])
 
   useEffect(() => {
-    if (isTakealot) return
+    if (isDetail || isTakealot) return
     const rule = activeDispatchRules.find(r => r.id === dispatchRuleId)
     if (rule) setDestRegion(rule.code)
   }, [dispatchRuleId, isTakealot, activeDispatchRules])
@@ -315,6 +345,14 @@ export default function Outbound() {
   }
 
   const feeEstimate = useMemo(() => {
+    if (isDetail && editOrder) return {
+      lines: (editOrder.preDeductFees || []).map(line => ({ ...line, label: line.label || line.type, detail: line.detail || '' })),
+      total: editOrder.preDeductTotal ?? 0,
+      totalVolumeM3: editOrder.preDeductVolumeM3 ?? 0,
+      totalWeightKg: editOrder.preDeductWeightKg ?? 0,
+      destRegion: editOrder.destRegion || effectiveDestRegion,
+      pickupOnly: editOrder.shippingMethod === '自提',
+    }
     if (lines.length === 0) return null
     const stockLines = lines.map(l => ({ sku: l.sku, qty: l.qty }))
     return calculateOutboundPreDeduct(
@@ -325,9 +363,23 @@ export default function Outbound() {
       priceTemplate,
       regionDispatchRules,
     )
-  }, [lines, resolvedShippingMethod, effectiveDestRegion, regionDispatchRules, priceTemplate])
+  }, [isDetail, editOrder, lines, resolvedShippingMethod, effectiveDestRegion, regionDispatchRules, priceTemplate])
 
   const goRecords = () => navigate('/outbound/records')
+
+  const withdraw = async () => {
+    if (!can('outbound:write') || !editOrder || editOrder.status !== 'locked' || detailLoading || detailError || withdrawing) return
+    if (!window.confirm('确认撤回这张待拣货出库单？撤回后将释放库存并退回预扣费用。')) return
+    setWithdrawing(true)
+    try {
+      const result = await cancelErpOutbound(editOrder.outboundNo, getCustomerCode(editOrder.customerId))
+      applyErpOutboundToLocal(result)
+      setDetailError('')
+    } catch (error) {
+      setDetailError(error instanceof Error ? error.message : String(error))
+      try { applyErpOutboundToLocal(await fetchErpOutboundByNo(editOrder.outboundNo)) } catch { /* Keep the withdrawal error visible. */ }
+    } finally { setWithdrawing(false) }
+  }
 
   const resetForm = () => {
     setTakealotDestWarehouse(DEFAULT_TAKEALOT_DEST_WAREHOUSE)
@@ -393,7 +445,7 @@ export default function Outbound() {
   )
 
   useEffect(() => {
-    if (!editOrder || !isTakealot) {
+    if (isDetail || !editOrder || !isTakealot) {
       setParseBusy(false)
       return
     }
@@ -478,6 +530,7 @@ export default function Outbound() {
   }, [takealotParsedDoc, labelCrops, platformMappings, customerId, effectiveTakealotSellerId])
 
   useEffect(() => {
+    if (isDetail) return
     if (!takealotParsedDoc) {
       setLines(previous => {
         if (!previous.some(line => line.source === 'takealot')) return previous
@@ -533,6 +586,7 @@ export default function Outbound() {
   }, [takealotParsedDoc, takealotValidationRows])
 
   useEffect(() => {
+    if (isDetail) return
     const skuByBarcode = new Map<string, string>()
     for (const row of takealotValidationRows) {
       if (row.resolution.status === 'resolved') {
@@ -940,6 +994,7 @@ export default function Outbound() {
   }
 
   const handleSubmit = async (asDraft = false) => {
+    if (isDetail) return
     if (parseBusy) {
       window.alert('正在校验已上传文件，请稍候')
       return
@@ -1176,19 +1231,23 @@ export default function Outbound() {
   const parseMissing = takealotParsedDoc ? takealotMissingFields(takealotParsedDoc) : []
   const parsedFieldCount = takealotParsedDoc ? 7 - parseMissing.length : 0
 
+  if (isDetail && !editOrder) return <div className="page-shell"><p>出库单不存在或无权查看。</p><Link to="/outbound/records">返回出库记录</Link></div>
+
   return (
     <div className="page-shell pb-24">
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
         <div>
           <p className="text-[11px] font-medium uppercase tracking-wide text-primary-600">OutWhBill · 预约发货</p>
-          <h1 className="text-2xl font-semibold tracking-tight text-text-primary">预约发货</h1>
-          <p className="mt-1 text-sm text-text-secondary">参考易仓出库单模板填写，提交后锁定库存并由海外仓执行出库</p>
+          <h1 className="text-2xl font-semibold tracking-tight text-text-primary">{isDetail ? '出库单详情' : '预约发货'}</h1>
+          <p className="mt-1 text-sm text-text-secondary">{isDetail ? `${editOrder?.outboundNo} · ${editOrder?.status === 'locked' ? '待拣货' : statusLabels[editOrder?.status || ''] || editOrder?.status}` : '参考易仓出库单模板填写，提交后锁定库存并由海外仓执行出库'}</p>
         </div>
         <Link to="/outbound/records" className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-white px-3 py-2 text-xs font-medium text-text-secondary hover:bg-surface-muted">
           <ListOrdered className="h-3.5 w-3.5" /> 查看出库记录
         </Link>
       </div>
 
+      {isDetail && detailError && <p role="alert" className="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{detailError}</p>}
+      <fieldset disabled={isDetail} className="min-w-0 border-0 p-0 m-0">
       {!isTakealot && (
       <Card className="mb-4 overflow-hidden border-primary-200">
         <div className="border-b border-border-light px-5 py-4">
@@ -1540,7 +1599,7 @@ export default function Outbound() {
               </select>
             </FormField>
             <FormField label="出库单号" hint="提交后由系统自动生成">
-              <input className={formInput()} value="提交后自动生成" readOnly disabled />
+              <input className={formInput()} value={editOrder?.outboundNo || '提交后自动生成'} readOnly disabled />
             </FormField>
             <FormField label="参考号" hint="客户自行填写，用于对账（PO 号、内部单号等）">
               <input
@@ -1776,10 +1835,10 @@ export default function Outbound() {
         </FormSection>
 
         {feeEstimate && (
-          <FormSection num={needsRecipient ? 4 : 3} title="费用试算 · 预扣款">
+          <FormSection num={needsRecipient ? 4 : 3} title={isDetail ? '预约费用 · 预扣款' : '费用试算 · 预扣款'}>
             <div className="rounded-xl bg-amber-50 p-4 ring-1 ring-amber-100">
               <p className="text-xs font-semibold text-amber-900">
-                按 {effectiveDestRegion.toUpperCase()} 价格模板「{priceTemplate.name}」试算 · 提交时从余额预扣
+                {isDetail ? `预约时预扣费用 · 价格模板「${editOrder?.priceTemplateName || '预约时模板'}」` : `按 ${effectiveDestRegion.toUpperCase()} 价格模板「${priceTemplate.name}」试算 · 提交时从余额预扣`}
               </p>
               <p className="mt-1 text-[11px] text-amber-800">
                 {feeEstimate.pickupOnly
@@ -1801,16 +1860,31 @@ export default function Outbound() {
                 <span className="text-xs font-semibold text-amber-900">预扣合计</span>
                 <span className="text-sm font-bold text-amber-900">{formatCurrency(feeEstimate.total)}</span>
               </div>
-              <p className="mt-2 text-[10px] text-amber-700">
+              {!isDetail && <p className="mt-2 text-[10px] text-amber-700">
                 当前余额 {formatCurrency(creditBalance)}
                 {creditBalance < feeEstimate.total && ' · 余额不足，请先充值'}
-              </p>
+              </p>}
             </div>
           </FormSection>
         )}
       </div>
 
-      <div className="fixed bottom-0 left-0 right-0 z-30 border-t border-border-light bg-white/95 px-6 py-4 backdrop-blur-sm lg:pl-[220px]">
+      </fieldset>
+      {isDetail && editOrder?.status === 'exception' && (
+        <section className="mt-4 rounded-xl border border-red-200 bg-red-50 p-5" aria-label="出库异常情况">
+          <h2 className="text-sm font-semibold text-red-800">出库异常情况</h2>
+          <dl className="mt-3 space-y-3 text-sm">
+            <div><dt className="font-medium text-red-800">异常类型</dt><dd className="mt-1 text-red-700">{({ delivery_failure: '配送失败', missed_booking: '错过预约', customer_cancelled: '客户取消', platform_cancelled: '平台取消', document_missing: '文件缺失', system_sync: '系统同步异常', other: '其他异常' } as Record<string, string>)[editOrder.exceptionCode || ''] || editOrder.exceptionCode || '未填写异常类型'}</dd></div>
+            <div><dt className="font-medium text-red-800">异常说明</dt><dd className="mt-1 whitespace-pre-wrap break-words text-red-700">{editOrder.exceptionReason || '仓库暂未填写异常说明'}</dd></div>
+          </dl>
+        </section>
+      )}
+      {isDetail ? <div className="fixed bottom-0 left-0 right-0 z-30 border-t border-border-light bg-white/95 px-6 py-4 lg:pl-[220px]">
+        <div className="mx-auto flex max-w-[1280px] items-center justify-between gap-3">
+          <p className="text-xs text-text-muted">{detailLoading ? '正在核对仓库状态…' : editOrder?.status === 'locked' ? '待拣货，可以撤回预约。' : editOrder?.status === 'cancelled' ? '出库单已撤回。' : editOrder?.status === 'draft' ? '草稿尚未预约发货。' : '仓库已开始处理，不能撤回。'}</p>
+          <div className="flex gap-2"><Button variant="secondary" onClick={goRecords}>返回出库记录</Button>{editOrder?.status === 'locked' && can('outbound:write') && <Button disabled={detailLoading || Boolean(detailError) || withdrawing} onClick={() => void withdraw()}>{withdrawing ? '撤回中…' : '撤回出库单'}</Button>}</div>
+        </div>
+      </div> : <div className="fixed bottom-0 left-0 right-0 z-30 border-t border-border-light bg-white/95 px-6 py-4 backdrop-blur-sm lg:pl-[220px]">
         <div className="mx-auto flex max-w-[1280px] flex-wrap items-center justify-between gap-3">
           <p className="hidden text-xs text-text-muted sm:block">
             {feeEstimate
@@ -1836,6 +1910,7 @@ export default function Outbound() {
         </div>
       </div>
 
+      }
       <OutboundSkuPickerModal
         open={skuPickerOpen}
         onClose={() => setSkuPickerOpen(false)}

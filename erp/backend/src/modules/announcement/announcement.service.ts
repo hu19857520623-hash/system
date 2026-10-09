@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
 import { notifyOms } from '../../common/oms-notify.util'
+import { CacheService } from '../../common/cache/cache.service'
 
 type AnnouncementRow = {
   id: bigint
@@ -21,7 +22,7 @@ type AnnouncementRow = {
 
 @Injectable()
 export class AnnouncementService {
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService, private cache: CacheService) {}
 
   private normalizeTarget(raw?: string): 'erp' | 'oms' {
     return raw === 'oms' ? 'oms' : 'erp'
@@ -106,6 +107,7 @@ export class AnnouncementService {
           publishedAt,
         },
       })
+      await this.cache.invalidate('announcements')
       if (updated.targetChannel === 'oms') {
         await this.pushToOms(updated).catch(() => undefined)
       }
@@ -164,32 +166,28 @@ export class AnnouncementService {
 
   /** OMS P2：拉取已发布 OMS 渠道公告 */
   async listForOms() {
-    await this.activateDueAnnouncements()
-    const now = new Date()
-    const rows = await this.prisma.announcement.findMany({
-      where: {
-        targetChannel: 'oms',
-        ...this.visibleWhere(now),
-      },
-      orderBy: [{ isPinned: 'desc' }, { publishedAt: 'desc' }, { id: 'desc' }],
-      take: 100,
-    })
-    return { items: rows.map((r) => this.toPublic(r)), total: rows.length }
+    const items = await this.cachedVisible('oms', 100)
+    return { items, total: items.length }
   }
 
   /** ERP 工作台展示：已发布且未过期的 ERP 渠道公告 */
   async listVisibleForErp(take = 10) {
+    return this.cachedVisible('erp', take)
+  }
+
+  private async cachedVisible(targetChannel: 'erp' | 'oms', take: number) {
+    // Scheduled publication must still run when the visible list is cached.
     await this.activateDueAnnouncements()
-    const now = new Date()
-    const rows = await this.prisma.announcement.findMany({
-      where: {
-        targetChannel: 'erp',
-        ...this.visibleWhere(now),
-      },
-      orderBy: [{ isPinned: 'desc' }, { publishedAt: 'desc' }, { id: 'desc' }],
-      take,
+    const items = await this.cache.remember('announcements', `erp:announcements:${targetChannel}:${take}`, 30, async () => {
+      const rows = await this.prisma.announcement.findMany({
+        where: { targetChannel, ...this.visibleWhere() },
+        orderBy: [{ isPinned: 'desc' }, { publishedAt: 'desc' }, { id: 'desc' }],
+        take,
+      })
+      return JSON.parse(JSON.stringify(rows.map(row => this.toPublic(row)))) as ReturnType<AnnouncementService['toPublic']>[]
     })
-    return rows.map((row) => this.toPublic(row))
+    const now = Date.now()
+    return items.filter(row => !row.expiresAt || new Date(row.expiresAt).getTime() > now)
   }
 
   async create(data: any, publishedBy?: number) {
@@ -209,6 +207,7 @@ export class AnnouncementService {
         expiresAt: plan.expiresAt,
       },
     })
+    await this.cache.invalidate('announcements')
 
     if (plan.status === 'published' && targetChannel === 'oms') {
       await this.pushToOms(row)
@@ -283,6 +282,7 @@ export class AnnouncementService {
         expiresAt: nextExpiresAt,
       },
     })
+    await this.cache.invalidate('announcements')
 
     const channel = payload.targetChannel || existing.targetChannel
     const shouldPushOms =
@@ -298,6 +298,7 @@ export class AnnouncementService {
   async remove(id: number) {
     await this.detail(id)
     await this.prisma.announcement.delete({ where: { id: BigInt(id) } })
+    await this.cache.invalidate('announcements')
     return { id }
   }
 

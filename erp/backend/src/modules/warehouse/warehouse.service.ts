@@ -1,9 +1,10 @@
 import { Injectable, NotFoundException } from '@nestjs/common'
 import { PrismaService } from '../../common/prisma/prisma.service'
+import { CacheService } from '../../common/cache/cache.service'
 
 @Injectable()
 export class WarehouseService {
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService, private cache: CacheService) {}
 
   private parseVolumeCbm(value: unknown): number | null {
     if (value == null || value === '') return null
@@ -35,13 +36,18 @@ export class WarehouseService {
   }
 
   async list(type?: string) {
+    return this.cache.remember('warehouses', `erp:warehouses:${encodeURIComponent(JSON.stringify([type ?? null]))}`, 120,
+      () => this.loadList(type))
+  }
+
+  private async loadList(type?: string) {
     const where: any = {}
     if (type) {
       // API 别名：overseas = 海外仓（DB 仍存 wms）
       where.warehouseType = type === 'overseas' ? 'wms' : type
     }
     const rows = await this.prisma.warehouse.findMany({ where, orderBy: { id: 'asc' } })
-    return rows.map(row => this.present(row))
+    return JSON.parse(JSON.stringify(rows.map(row => this.present(row))))
   }
 
   async detail(id: number) {
@@ -65,6 +71,7 @@ export class WarehouseService {
         totalVolumeCbm: this.parseVolumeCbm(data.totalVolumeCbm),
       },
     })
+    await this.cache.invalidate('warehouses')
     return this.present(row)
   }
 
@@ -86,6 +93,7 @@ export class WarehouseService {
         ...(data.totalVolumeCbm !== undefined ? { totalVolumeCbm: this.parseVolumeCbm(data.totalVolumeCbm) } : {}),
       },
     })
+    await this.cache.invalidate('warehouses')
     return this.present(row)
   }
 

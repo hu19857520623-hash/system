@@ -43,6 +43,21 @@ export class OperationLogService {
     })
   }
 
+  async hasClientRequest(module: string, action: string, clientRequestId?: string) {
+    const key = String(clientRequestId || '').trim()
+    if (!key) return false
+    const row = await this.prisma.operationLog.findFirst({
+      where: {
+        module,
+        action,
+        detail: { path: '$.clientRequestId', equals: key },
+      },
+      select: { id: true },
+      orderBy: { id: 'desc' },
+    })
+    return Boolean(row)
+  }
+
   async list(q: PaginationDto & {
     module?: string
     action?: string

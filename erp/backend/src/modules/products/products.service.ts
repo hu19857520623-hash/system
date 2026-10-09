@@ -17,6 +17,8 @@ import { buildProductRemark } from '../../common/oms-sync-meta.util'
 import { buildInternalSku } from '../../common/sku-code.util'
 import { buildSkuLabelsHtml } from '../../common/labels/sku-label.util'
 import { CosObjectUrlService } from '../../common/cos-object-url.service'
+import { createHash } from 'crypto'
+import { CacheService } from '../../common/cache/cache.service'
 
 function num(v: unknown, fallback = 0): number {
   if (v == null || v === '') return fallback
@@ -46,6 +48,7 @@ export class ProductsService {
     private files: FileStoreService,
     private opLog: OperationLogService,
     private cosUrls: CosObjectUrlService,
+    private cache: CacheService,
   ) {}
 
   private buildImageList(
@@ -142,13 +145,38 @@ export class ProductsService {
     return { purchaseCostRmb, seaFreightPerUnit, domesticFeePerUnit, totalCostRmb }
   }
 
+  private async loadProductBasics(rows: any[]) {
+    const basics = rows.map(row => ({
+      id: Number(row.id), sku: row.sku, spu: row.spu, productName: row.productName,
+      spec: row.spec, category: row.category, brand: row.brand, barcode: row.barcode,
+      lengthCm: row.lengthCm, widthCm: row.widthCm, heightCm: row.heightCm, weightKg: row.weightKg,
+      imageUrl: row.imageUrl, takealotUrl: row.takealotUrl,
+    }))
+    // Versioned keys also cover writes performed by other ERP services.
+    const version = createHash('sha256').update(JSON.stringify(rows.map((row, index) => ({
+      ...basics[index], updatedAt: row.updatedAt,
+    })))).digest('hex')
+    return this.cache.remember('product-basics', `erp:product-basics:${version}`, 120, async () => {
+      const images = await this.prisma.productImage.findMany({
+        where: { productId: { in: rows.map(row => row.id) } },
+        orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+        select: { id: true, productId: true, imageUrl: true },
+      })
+      return JSON.parse(JSON.stringify({ basics, images: images.map(image => ({
+        ...image, id: String(image.id), productId: String(image.productId),
+      })) })) as {
+        basics: Record<string, any>[]
+        images: { id: string; productId: string; imageUrl: string }[]
+      }
+    })
+  }
+
   private async enrichProducts(rows: any[]) {
     if (!rows.length) return []
     const skus = rows.map((r) => r.sku).filter(Boolean) as string[]
     const supplierIds = [...new Set(rows.map((r) => r.supplierId).filter(Boolean))] as bigint[]
-    const productIds = rows.map((r) => r.id) as bigint[]
 
-    const [suppliers, devBySku, poItems, productImages, pricingRows, devMarketRows] = await Promise.all([
+    const [suppliers, devBySku, poItems, productBasics, pricingRows, devMarketRows] = await Promise.all([
       supplierIds.length
         ? this.prisma.supplier.findMany({ where: { id: { in: supplierIds } }, select: { id: true, supplierName: true } })
         : [],
@@ -165,13 +193,7 @@ export class ProductsService {
             orderBy: { createdAt: 'desc' },
           })
         : [],
-      productIds.length
-        ? this.prisma.productImage.findMany({
-            where: { productId: { in: productIds } },
-            orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
-            select: { id: true, productId: true, imageUrl: true },
-          })
-        : [],
+      this.loadProductBasics(rows),
       skus.length
         ? this.prisma.productPricing.findMany({
             where: { sku: { in: skus } },
@@ -194,10 +216,11 @@ export class ProductsService {
     }
 
     const imagesByProduct = new Map<number, { id: bigint; imageUrl: string }[]>()
-    for (const img of productImages) {
+    const basicsById = new Map(productBasics.basics.map(basic => [basic.id, basic]))
+    for (const img of productBasics.images) {
       const pid = Number(img.productId)
       if (!imagesByProduct.has(pid)) imagesByProduct.set(pid, [])
-      imagesByProduct.get(pid)!.push({ id: img.id, imageUrl: img.imageUrl })
+      imagesByProduct.get(pid)!.push({ id: BigInt(img.id), imageUrl: img.imageUrl })
     }
 
     const devSkuMap = new Map<string, bigint>(devBySku.map((d) => [d.sku!, d.applicantId!] as [string, bigint]))
@@ -271,6 +294,7 @@ export class ProductsService {
         purchaseCostRmb: costFields.purchaseCostRmb,
         totalCostRmb: costFields.totalCostRmb,
         barcode: row.barcode,
+        ...basicsById.get(Number(row.id)),
         imageUrl: imageMeta.imageUrl,
         imageUrls: imageMeta.imageUrls,
         images: imageMeta.images,

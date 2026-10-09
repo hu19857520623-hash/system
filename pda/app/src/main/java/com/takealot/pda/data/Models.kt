@@ -74,6 +74,8 @@ data class InboundItem(
     val actualQty: Int? = null,
     val putawayQty: Int? = null,
     val qcStatus: String? = null,
+    val qcRemark: String? = null,
+    val diffQty: Int? = null,
     val lengthCm: Double? = null,
     val widthCm: Double? = null,
     val heightCm: Double? = null,
@@ -102,6 +104,7 @@ data class ScanActionResult(
     val message: String? = "",
     val sku: String? = "",
     val increment: Int = 0,
+    val receivedCartonCount: Int? = null,
     val expectedQty: Int = 0,
     val actualQty: Int = 0,
     val remaining: Int = 0,
@@ -121,6 +124,9 @@ data class OutboundOrder(
     val skuSummary: String? = "",
     val totalQty: Int = 0,
     val omsPreDeduct: Any? = null,
+    val isProblem: Boolean = false,
+    val problemType: String? = null,
+    val problemRemark: String? = null,
     val items: List<OutboundItem>? = emptyList(),
 ) {
     val itemList get() = items.orEmpty()
@@ -201,7 +207,7 @@ fun scanMatchesProduct(code: String, sku: String, vararg aliases: String?): Bool
         .any { it.equals(token, ignoreCase = true) }
 }
 
-class ErpException(message: String, val code: Int = -1) : RuntimeException(message)
+class ErpException(message: String, val code: Int = -1, val retriable: Boolean = false) : RuntimeException(message)
 
 data class StocktakePlan(
     val id: Int = 0,
@@ -229,6 +235,8 @@ data class StocktakeLine(
     val firstQty: Int? = null,
     val secondQty: Int? = null,
     val status: String? = "",
+    val firstCountedBy: Int? = null,
+    val secondCountedBy: Int? = null,
 ) {
     val skuCode get() = sku.orEmpty()
     val loc get() = locationCode.orEmpty()

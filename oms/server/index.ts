@@ -1,4 +1,5 @@
 import 'dotenv/config'
+import { applicationCache, cachedFulfillmentWarehouses } from './cache.js'
 import express from 'express'
 import cors from 'cors'
 import { PrismaClient } from '@prisma/client'
@@ -48,6 +49,7 @@ import {
   cancelErpInboundAsn,
   reactivateErpInboundAsn,
   createErpOutbound,
+  cancelErpOutbound,
   createErpProduct,
   uploadErpOmsProductImage,
   updateErpProduct,
@@ -86,7 +88,6 @@ import {
   type ErpInboundOrder,
   type ErpOutboundOrder,
   type ErpReturnOrder,
-  fetchErpTakealotFulfillmentWarehouses,
 } from './erpClient.js'
 
 const prisma = new PrismaClient()
@@ -303,7 +304,7 @@ async function buildUnscopedBootstrap(
   ]
   let fulfillmentWarehouses = defaultFulfillmentWarehouses
   try {
-    const erpRows = await fetchErpTakealotFulfillmentWarehouses()
+    const erpRows = await cachedFulfillmentWarehouses()
     if (erpRows.items?.length) fulfillmentWarehouses = erpRows.items
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
@@ -1004,7 +1005,7 @@ app.get('/api/erp/catalog', async (_req, res) => {
 
 app.get('/api/erp/takealot-dest-warehouses/fulfillment', async (_req, res) => {
   try {
-    res.json(await fetchErpTakealotFulfillmentWarehouses())
+    res.json(await cachedFulfillmentWarehouses())
   } catch (e) {
     sendErpError(res, e)
   }
@@ -1743,6 +1744,8 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
         scheduledDeliveryDate: outbound.appointmentDate || existing?.scheduledDeliveryDate,
         recipient: outbound.recipient ? JSON.stringify(outbound.recipient) : existing?.recipient,
         remark: outbound.remark ?? existing?.remark,
+        exceptionCode: outbound.exceptionCode !== undefined ? outbound.exceptionCode : existing?.exceptionCode,
+        exceptionReason: outbound.exceptionReason !== undefined ? outbound.exceptionReason : existing?.exceptionReason,
         destRegion: outbound.preDeduct?.destRegion ?? outbound.destRegion ?? existing?.destRegion,
         priceTemplateId: outbound.preDeduct?.priceTemplateId ?? existing?.priceTemplateId,
         priceTemplateName: outbound.preDeduct?.priceTemplateName ?? existing?.priceTemplateName,
@@ -1790,6 +1793,8 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
             scheduledDeliveryDate: outbound.appointmentDate,
             recipient: outbound.recipient ? JSON.stringify(outbound.recipient) : null,
             remark: outbound.remark,
+            exceptionCode: outbound.exceptionCode ?? null,
+            exceptionReason: outbound.exceptionReason ?? null,
             destRegion: outbound.preDeduct?.destRegion ?? outbound.destRegion ?? null,
             priceTemplateId: outbound.preDeduct?.priceTemplateId ?? null,
             priceTemplateName: outbound.preDeduct?.priceTemplateName ?? null,
@@ -2561,6 +2566,16 @@ app.get('/api/erp/outbound/by-customer/:customerCode/sku/:sku/outbounds', async 
   }
 })
 
+app.post('/api/erp/outbound/:outboundNo/cancel', async (req, res) => {
+  try {
+    const customerCode = authenticatedCustomerCode(req, req.body?.customerCode)
+    if (!customerCode) return res.status(400).json({ error: '缺少客户编码' })
+    res.json(await cancelErpOutbound(req.params.outboundNo, customerCode))
+  } catch (e) {
+    sendErpError(res, e)
+  }
+})
+
 app.get('/api/erp/outbound/:outboundNo', async (req, res) => {
   try {
     res.json(await fetchErpOutboundByNo(req.params.outboundNo))
@@ -3327,72 +3342,6 @@ app.delete('/api/outbound-orders/:outboundNo', async (req, res) => {
   }
 })
 
-app.get('/api/reports/summary', async (req: AuthenticatedRequest, res) => {
-  try {
-    const scope = customerScope(req)
-    const [outbounds, inventory, fees] = await Promise.all([
-      prisma.outboundOrder.findMany({
-        where: scope ? { customerId: scope } : undefined,
-        select: { createdAt: true, totalQty: true, status: true, actualFeesTotal: true, preDeductTotal: true },
-      }),
-      prisma.inventoryItem.findMany({
-        where: scope ? { customerId: scope } : undefined,
-        select: { available: true, locked: true, shipped: true },
-      }),
-      prisma.feeRecord.findMany({
-        where: scope ? { customerCode: req.auth?.customerCode || '' } : undefined,
-        select: { type: true, amount: true },
-      }),
-    ])
-    const now = new Date()
-    const months = Array.from({ length: 6 }, (_, index) => {
-      const date = new Date(now.getFullYear(), now.getMonth() - 5 + index, 1)
-      return { key: `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`, label: `${date.getMonth() + 1}月` }
-    })
-    const trendMap = new Map(months.map(month => [month.key, { ...month, orders: 0, units: 0, amount: 0 }]))
-    for (const order of outbounds) {
-      const row = trendMap.get(String(order.createdAt || '').slice(0, 7))
-      if (!row) continue
-      row.orders += 1
-      row.units += Number(order.totalQty) || 0
-      row.amount += Number(order.actualFeesTotal ?? order.preDeductTotal) || 0
-    }
-    const feeLabels: Record<string, string> = {
-      outbound: '出库费', storage: '仓储费', logistics: '物流费', operation: '操作费',
-      recharge: '充值', refund: '退款', adjustment: '调整', other: '其他',
-    }
-    const feeMap = new Map<string, number>()
-    for (const fee of fees) {
-      const amount = Math.abs(Number(fee.amount) || 0)
-      if (amount) feeMap.set(fee.type, (feeMap.get(fee.type) || 0) + amount)
-    }
-    const feeTotal = [...feeMap.values()].reduce((sum, amount) => sum + amount, 0)
-    const activeOrders = outbounds.filter(order => order.status !== 'cancelled')
-    const completedOrders = activeOrders.filter(order => ['shipped', 'delivered'].includes(order.status))
-    const inventoryUnits = inventory.reduce((sum, item) => sum + item.available + item.locked, 0)
-    const shippedUnits = inventory.reduce((sum, item) => sum + item.shipped, 0)
-    res.json({
-      inventoryTurnoverDays: shippedUnits > 0 ? Math.round(inventoryUnits / shippedUnits * 300) / 10 : null,
-      fulfillmentRate: activeOrders.length ? Math.round(completedOrders.length / activeOrders.length * 1000) / 10 : 0,
-      totals: {
-        outboundOrders: outbounds.length,
-        completedOrders: completedOrders.length,
-        exceptionOrders: outbounds.filter(order => order.status === 'exception').length,
-        inventoryUnits,
-        fees: Math.round(feeTotal * 100) / 100,
-      },
-      orderTrend: months.map(month => trendMap.get(month.key)),
-      feeBreakdown: [...feeMap.entries()].map(([type, amount]) => ({
-        type, label: feeLabels[type] || type, amount: Math.round(amount * 100) / 100,
-        pct: feeTotal ? Math.round(amount / feeTotal * 1000) / 10 : 0,
-      })).sort((left, right) => right.amount - left.amount),
-    })
-  } catch (e) {
-    console.error(e)
-    res.status(500).json({ error: '真实报表数据加载失败' })
-  }
-})
-
 app.get('/api/billing', async (req: AuthenticatedRequest, res) => {
   try {
     const scope = customerScope(req)
@@ -3992,12 +3941,26 @@ async function start() {
   }
   await ensureConfiguredPortalAdmin(prisma)
   const listenHost = String(process.env.LISTEN_HOST || '127.0.0.1').trim() || '127.0.0.1'
-  app.listen(PORT, listenHost, () => {
+  const server = app.listen(PORT, listenHost, () => {
     console.log(`OMS API listening on http://${listenHost}:${PORT}`)
   })
+  const shutdown = () => {
+    applicationCache.close()
+    const forceExit = setTimeout(() => process.exit(1), 10_000)
+    forceExit.unref()
+    server.close(() => {
+      void prisma.$disconnect().finally(() => {
+        clearTimeout(forceExit)
+        process.exit(0)
+      })
+    })
+  }
+  process.once('SIGTERM', shutdown)
+  process.once('SIGINT', shutdown)
 }
 
 void start().catch(async error => {
+  applicationCache.close()
   console.error('OMS API failed to start', error)
   await prisma.$disconnect()
   process.exit(1)

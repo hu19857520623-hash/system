@@ -3,6 +3,7 @@ import { ConfigModule } from '@nestjs/config'
 import { APP_GUARD } from '@nestjs/core'
 
 import { PrismaModule } from './common/prisma/prisma.module'
+import { CacheModule } from './common/cache/cache.module'
 import { InventoryMutationModule } from './common/inventory/inventory-mutation.module'
 import { PermissionsModule } from './common/permissions/permissions.module'
 import { OmsInternalAuthModule } from './common/oms-internal-auth.module'
@@ -45,6 +46,7 @@ import { validateEnvironment } from './config/environment'
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true, validate: validateEnvironment }),
+    CacheModule,
     OmsInternalAuthModule,
     PrismaModule,
     InventoryMutationModule,

@@ -885,9 +885,13 @@ export class InboundService {
   /** 扫箱收货：人工清点实收箱数 */
   async recordReceivedCartonCount(
     id: number,
-    body: { receivedCartonCount?: number },
+    body: { receivedCartonCount?: number; differenceReason?: string; clientRequestId?: string },
     operatorId?: number,
   ) {
+    const clientRequestId = String(body.clientRequestId || '').trim().slice(0, 100)
+    if (clientRequestId && await this.opLog.hasClientRequest('inbound', 'receive_carton_count', clientRequestId)) {
+      return { ...(await this.detail(id)), duplicate: true }
+    }
     const count = Math.floor(Number(body.receivedCartonCount))
     if (!Number.isFinite(count) || count <= 0) throw new BadRequestException('实收箱数须大于 0')
 
@@ -911,6 +915,11 @@ export class InboundService {
         `已扫码确认 ${scannedCartonCount} 箱，实收箱数不能改小`,
       )
     }
+    const expectedCartonCount = order.cartons?.length || 0
+    const differenceReason = String(body.differenceReason || '').trim()
+    if (expectedCartonCount > 0 && count !== expectedCartonCount && differenceReason.length < 2) {
+      throw new BadRequestException(`实收 ${count} 箱与应收 ${expectedCartonCount} 箱不一致，请填写差异原因`)
+    }
 
     await this.prisma.inboundOrder.update({
       where: { id: BigInt(id) },
@@ -923,7 +932,12 @@ export class InboundService {
       action: 'receive_carton_count',
       targetType: 'inbound_order',
       targetId: order.inboundNo,
-      detail: { receivedCartonCount: count },
+      detail: {
+        receivedCartonCount: count,
+        expectedCartonCount,
+        differenceReason: differenceReason || null,
+        clientRequestId: clientRequestId || null,
+      },
     })
 
     const refreshed = await this.detail(id)
@@ -943,9 +957,13 @@ export class InboundService {
   /** 扫外箱标：仅登记箱数，不写入 SKU 实收件数（件数在清点与测量确认） */
   async receiveBox(
     id: number,
-    data: { scanCode?: string; qty?: number; cartonCount?: number },
+    data: { scanCode?: string; qty?: number; cartonCount?: number; clientRequestId?: string },
     operatorId?: number,
   ) {
+    const clientRequestId = String(data.clientRequestId || '').trim().slice(0, 100)
+    if (clientRequestId && await this.opLog.hasClientRequest('inbound', 'receive_carton', clientRequestId)) {
+      return { ...(await this.detail(id)), duplicate: true }
+    }
     const code = String(data.scanCode || '').trim()
     if (!code) throw new BadRequestException('请扫描外箱标')
 
@@ -968,7 +986,7 @@ export class InboundService {
         `扫描码 ${code} 未匹配到外箱标。本环节仅确认箱数；SKU 数量（含 1 SKU 一箱 / 一箱多件）请在「清点与测量」扫描确认`,
       )
     }
-    return this.receiveOuterCarton(id, carton, operatorId, order.inboundNo)
+    return this.receiveOuterCarton(id, carton, operatorId, order.inboundNo, clientRequestId)
   }
 
   private async receiveOuterCarton(
@@ -976,6 +994,7 @@ export class InboundService {
     carton: { id: bigint; boxCode: string; items: { sku: string; qty: number; inboundItemId: bigint | null }[] },
     operatorId: number | undefined,
     inboundNo: string,
+    clientRequestId = '',
   ) {
     const received = await this.prisma.inboundCarton.findUnique({ where: { id: carton.id } })
     if (!received || received.status === 'received') {
@@ -1022,7 +1041,7 @@ export class InboundService {
       action: 'receive_carton',
       targetType: 'inbound_order',
       targetId: inboundNo,
-      detail: { boxCode: carton.boxCode, items: carton.items, receivedCartonCount },
+      detail: { boxCode: carton.boxCode, items: carton.items, receivedCartonCount, clientRequestId: clientRequestId || null },
     })
 
     return {
@@ -1213,6 +1232,27 @@ export class InboundService {
           },
         })
       }
+      if (clientRequestId) {
+        await tx.operationLog.create({
+          data: {
+            operatorId: operatorId ? BigInt(operatorId) : undefined,
+            module: 'inbound',
+            action: 'scan_qc',
+            targetType: 'inbound_order',
+            targetId: order.inboundNo,
+            detail: {
+              sku: item.sku,
+              increment,
+              actualQty: newActual,
+              lengthCm: parsed.lengthCm,
+              widthCm: parsed.widthCm,
+              heightCm: parsed.heightCm,
+              weightKg: hasWeight ? weightRaw : null,
+              clientRequestId,
+            },
+          },
+        })
+      }
     })
 
     const refreshed = await this.detail(id)
@@ -1223,7 +1263,7 @@ export class InboundService {
       ? ` · 体积 ${parsed.lengthCm}×${parsed.widthCm}×${parsed.heightCm} cm`
       : ''
 
-    await this.opLog.log({
+    if (!clientRequestId) await this.opLog.log({
       operatorId,
       module: 'inbound',
       action: 'scan_qc',
@@ -1237,7 +1277,7 @@ export class InboundService {
         widthCm: parsed.widthCm,
         heightCm: parsed.heightCm,
         weightKg: hasWeight ? weightRaw : null,
-        clientRequestId: clientRequestId || null,
+        clientRequestId: null,
       },
     })
 
@@ -1280,6 +1320,41 @@ export class InboundService {
         ...summary,
       },
     }
+  }
+
+  async reportException(id: number, payload: any, operatorId?: number) {
+    const order = await this.detail(id)
+    if (TERMINAL_STATUSES.has(order.status)) throw new BadRequestException('该入库单已完结，不能登记现场异常')
+    const exceptionTypes: Record<string, string> = {
+      unknown_barcode: '未知条码',
+      missing_carton: '少箱',
+      extra_carton: '多箱',
+      damaged_carton: '外箱破损',
+      mixed_carton: '混装',
+      sku_mismatch: 'SKU 不符',
+      damaged_goods: '货品破损',
+      other: '其他异常',
+    }
+    const exceptionType = String(payload?.exceptionType || '').trim()
+    if (!exceptionTypes[exceptionType]) throw new BadRequestException('请选择有效的收货异常类型')
+    const scanCode = String(payload?.scanCode || '').trim().slice(0, 100)
+    const remark = String(payload?.remark || '').trim().slice(0, 500)
+    if (!scanCode && remark.length < 2) throw new BadRequestException('请填写异常条码或异常说明')
+    await this.opLog.log({
+      operatorId,
+      module: 'inbound',
+      action: 'report_exception',
+      targetType: 'inbound_order',
+      targetId: order.inboundNo,
+      detail: {
+        exceptionType,
+        exceptionTypeLabel: exceptionTypes[exceptionType],
+        scanCode: scanCode || null,
+        remark: remark || null,
+        workStatus: order.status,
+      },
+    })
+    return { message: `${exceptionTypes[exceptionType]}已登记，主管可在操作日志中核对` }
   }
 
   /** 海外仓到仓扫描：pending_receipt → arrived */
@@ -1408,6 +1483,10 @@ export class InboundService {
   }
 
   async qc(id: number, payload: any, operatorId?: number) {
+    const clientRequestId = String(payload?.clientRequestId || '').trim().slice(0, 100)
+    if (clientRequestId && await this.opLog.hasClientRequest('inbound', 'qc', clientRequestId)) {
+      return { ...(await this.detail(id)), duplicate: true }
+    }
     let order = await this.detail(id)
     if (TERMINAL_STATUSES.has(order.status)) throw new BadRequestException('该入库单已完结')
     if (order.status === 'pending_putaway') return order
@@ -1472,7 +1551,7 @@ export class InboundService {
       action: 'qc',
       targetType: 'inbound_order',
       targetId: order.inboundNo,
-      detail: { statusAfter: nextStatus, acceptDiff },
+      detail: { statusAfter: nextStatus, acceptDiff, clientRequestId: clientRequestId || null },
     })
     await this.inboundFee.recordOperation(updated, 'qc', pieceQty(updated.items))
     return { ...updated, id: Number(updated.id) }
@@ -1572,6 +1651,10 @@ export class InboundService {
   }
 
   async putaway(id: number, payload: any, operatorId?: number) {
+    const clientRequestId = String(payload?.clientRequestId || '').trim().slice(0, 100)
+    if (clientRequestId && await this.opLog.hasClientRequest('inbound', 'putaway', clientRequestId)) {
+      return { ...(await this.detail(id)), duplicate: true }
+    }
     const order = await this.detail(id)
     if (TERMINAL_STATUSES.has(order.status)) throw new BadRequestException('该入库单已完结')
     if (!PUTAWAY_STATUSES.has(order.status)) {
@@ -1706,8 +1789,30 @@ export class InboundService {
           : {},
         include: { items: true, cartons: { include: { items: true }, orderBy: { boxSeq: 'asc' } } },
       })
+      if (clientRequestId) await tx.operationLog.create({
+        data: {
+          operatorId: operatorId ? BigInt(operatorId) : undefined,
+          module: 'inbound',
+          action: 'putaway',
+          targetType: 'inbound_order',
+          targetId: order.inboundNo,
+          detail: {
+            allDone,
+            lineCount: groups.length,
+            clientRequestId: clientRequestId || null,
+          },
+        },
+      })
       return { ...updated, id: Number(updated.id), allDone }
     }).then(async (result) => {
+      if (!clientRequestId) await this.opLog.log({
+        operatorId,
+        module: 'inbound',
+        action: 'putaway',
+        targetType: 'inbound_order',
+        targetId: order.inboundNo,
+        detail: { allDone: result.allDone, lineCount: groups.length, clientRequestId: null },
+      })
       if (result.allDone) {
         const skus = result.items.map((i: { sku: string }) => i.sku).filter(Boolean)
         try {
@@ -1750,14 +1855,6 @@ export class InboundService {
           },
         })
       }
-      await this.opLog.log({
-        operatorId,
-        module: 'inbound',
-        action: 'putaway',
-        targetType: 'inbound_order',
-        targetId: order.inboundNo,
-        detail: { allDone: result.allDone, lineCount: groups.length },
-      })
       if (result.allDone) {
         await this.inboundFee.recordOperation(result, 'putaway', pieceQty(result.items, 'putawayQty'))
       }

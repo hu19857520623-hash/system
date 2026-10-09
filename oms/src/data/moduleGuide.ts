@@ -171,12 +171,6 @@ export const MODULE_GUIDES: Record<string, ModuleGuide> = {
     features: ['扣款 / 入款筛选', '账户余额变动', '关联订单号与费用类型', '导出'],
     status: 'planned',
   },
-  reports: {
-    title: '报表中心',
-    desc: '费用管理 · 订单趋势、库存周转与费用分析。',
-    features: ['订单量 / GMV 趋势', '库存周转天数', '渠道妥投率', '费用占比'],
-    status: 'planned',
-  },
   members: {
     title: '账号管理',
     desc: '系统管理员维护电商/货盘/混合客户账号，分配模块权限，支持货盘→混合升级。',

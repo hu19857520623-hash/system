@@ -14,6 +14,7 @@ import {
   followSalesMatchTokens,
   formatFollowSalesLabel,
   resolveFollowSales,
+  resolveLeadStatus,
 } from './leads-follow-sales.util'
 import { stripLeadRemarkImportPrefix } from './leads-remark.util'
 import {
@@ -412,7 +413,7 @@ export class LeadsService {
       where: { status: 1 },
       select: { username: true, realName: true },
     })
-    const followSales = canonicalizeFollowSales(String(data.followSales || '').trim(), followSalesUsers) || undefined
+    const followSales = canonicalizeFollowSales(resolveFollowSales(data.followSales, data.remark), followSalesUsers) || undefined
     const created = await this.prisma.lead.create({
       data: {
         leadNo,
@@ -421,7 +422,7 @@ export class LeadsService {
         contactPhone: contactPhone || undefined,
         email: data.email,
         source: data.source,
-        status: data.status || 'new',
+        status: resolveLeadStatus(data.status, followSales),
         remark: data.remark,
         assigneeId: assignee.id,
         followSales,
@@ -450,6 +451,11 @@ export class LeadsService {
       if (rest.contactName !== undefined) rest.contactName = contactName || null
       if (rest.contactPhone !== undefined) rest.contactPhone = contactPhone || null
     }
+    const followSales = resolveFollowSales(
+      rest.followSales !== undefined ? rest.followSales : existing.followSales,
+      rest.remark !== undefined ? rest.remark : existing.remark,
+    )
+    rest.status = resolveLeadStatus(rest.status ?? existing.status, followSales)
     return this.prisma.lead.update({ where: { id: BigInt(id) }, data: rest })
   }
 

@@ -20,7 +20,6 @@ export const SYS_ADMIN_PERMISSIONS = [
   'returns:read', 'returns:write',
   'billing:read', 'billing:recharge',
   'store:manage',
-  'report:read',
   'account:manage', 'account:disable', 'account:assign',
 ] as const
 

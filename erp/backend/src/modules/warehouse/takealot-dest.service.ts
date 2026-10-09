@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException, OnModuleInit } from
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { DEFAULT_TAKEALOT_DEST_ROWS, type TakealotDestRow } from './takealot-dest.defaults'
 import { setTakealotDestCache } from './takealot-dest.cache'
+import { CacheService } from '../../common/cache/cache.service'
 
 function parseAliases(raw: string | null | undefined): string[] {
   if (!raw?.trim()) return []
@@ -23,7 +24,10 @@ function serializeAliases(values: string[] | undefined): string {
 
 @Injectable()
 export class TakealotDestService implements OnModuleInit {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly cache: CacheService,
+  ) {}
 
   async onModuleInit() {
     await this.refreshCache(true)
@@ -86,6 +90,11 @@ export class TakealotDestService implements OnModuleInit {
 
   /** OMS 出库目的仓下拉：按 omsWarehouseId 去重 */
   async listForOmsFulfillment() {
+    return this.cache.remember('takealot-dest', 'erp:takealot-dest:fulfillment', 30,
+      () => this.loadOmsFulfillment())
+  }
+
+  private async loadOmsFulfillment() {
     const seen = new Set<string>()
     const items: { id: string; city: string }[] = []
     for (const row of (await this.list()).items) {
@@ -120,6 +129,7 @@ export class TakealotDestService implements OnModuleInit {
         sortOrder: data.sortOrder ?? 0,
       },
     })
+    await this.cache.invalidate('takealot-dest')
     await this.refreshCache(false)
     return this.present(row)
   }
@@ -148,6 +158,7 @@ export class TakealotDestService implements OnModuleInit {
         ...(data.sortOrder !== undefined ? { sortOrder: data.sortOrder } : {}),
       },
     })
+    await this.cache.invalidate('takealot-dest')
     await this.refreshCache(false)
     return this.present(row)
   }

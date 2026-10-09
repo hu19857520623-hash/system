@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { Upload, Plus, Trash2, ListOrdered } from 'lucide-react'
-import { Button, Card, MonoCode, Table } from '../components/ui'
+import { Button, Card, Table } from '../components/ui'
 import { FormSection, FormGrid, FormField, formInput, formSelect, formTextarea } from '../components/ui/form'
 import { findProductByCode } from '../data/platformBindingUtils'
 import { useRole } from '../auth/RoleContext'
@@ -22,18 +22,9 @@ import SkuFuzzyPicker from '../components/ui/SkuFuzzyPicker'
 import type { DeliveryMethod, FileAttachment, InboundStatus, InboundType } from '../data/mockData'
 import { CUSTOMER_INBOUND_TYPES, sanitizeCustomerInboundType } from '../data/mockData'
 import { useInboundOrders } from '../data/entityStore'
+import { buildInboundBoxLines, validateInboundBoxLines, type InboundBoxLine } from '../data/inboundBoxLines'
 
 const INBOUND_WAREHOUSE_ID = 'jhb1'
-
-interface LineItem {
-  id: string
-  sku: string
-  name: string
-  qty: number
-  boxNo: number
-  packType: string
-  stockType: string
-}
 
 export default function Inbound() {
   const navigate = useNavigate()
@@ -49,7 +40,6 @@ export default function Inbound() {
   const editingInTransit = editOrder?.status === 'on_the_way'
   const { role } = useRole()
   const [delivery, setDelivery] = useState<'self' | 'pickup'>('self')
-  const [entryMode, setEntryMode] = useState<'sequential' | 'simple'>('sequential')
   const [inboundType, setInboundType] = useState<InboundType>('自发头程')
   const [eta, setEta] = useState('')
   const [trackingNo, setTrackingNo] = useState('')
@@ -57,11 +47,11 @@ export default function Inbound() {
   const [platformRef, setPlatformRef] = useState('')
   const [remark, setRemark] = useState('')
   const [skuInput, setSkuInput] = useState('')
-  const [qtyInput, setQtyInput] = useState('')
-  const [boxInput, setBoxInput] = useState('')
+  const [boxCountInput, setBoxCountInput] = useState('')
+  const [qtyPerBoxInput, setQtyPerBoxInput] = useState('')
   const [packTypeInput, setPackTypeInput] = useState('自带包装')
   const [stockTypeInput, setStockTypeInput] = useState('以仓库为准')
-  const [lines, setLines] = useState<LineItem[]>([])
+  const [lines, setLines] = useState<InboundBoxLine[]>([])
   const [attachments, setAttachments] = useState<FileAttachment[]>([])
   const [confirmWarehouseData, setConfirmWarehouseData] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -115,18 +105,25 @@ export default function Inbound() {
   }, [editId, reorderId, inboundOrders, navigate, targetOrder])
 
   const addLine = () => {
-    if (!skuInput || !qtyInput) return
     const prod = findProductByCode(skuInput)
-    setLines(prev => [...prev, {
-      id: String(Date.now()),
-      sku: skuInput,
-      name: prod?.name ?? skuInput,
-      qty: Number(qtyInput),
-      boxNo: Number(boxInput) || prev.length + 1,
-      packType: packTypeInput,
-      stockType: stockTypeInput,
-    }])
-    setSkuInput(''); setQtyInput(''); setBoxInput('')
+    try {
+      const added = buildInboundBoxLines(lines, {
+        sku: skuInput,
+        name: prod?.name ?? skuInput.trim(),
+        boxCount: Number(boxCountInput),
+        qtyPerBox: Number(qtyPerBoxInput),
+        packType: packTypeInput,
+        stockType: stockTypeInput,
+      })
+      setLines(prev => [...prev, ...added])
+      setSkuInput(''); setBoxCountInput(''); setQtyPerBoxInput('')
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : '添加货品失败')
+    }
+  }
+
+  const updateLine = (id: string, patch: Partial<InboundBoxLine>) => {
+    setLines(prev => prev.map(line => line.id === id ? { ...line, ...patch } : line))
   }
 
   const handleBatchUploadLines = async () => {
@@ -170,6 +167,11 @@ export default function Inbound() {
       window.alert('请先添加入库货品')
       return
     }
+    const lineError = validateInboundBoxLines(lines)
+    if (lineError) {
+      window.alert(lineError)
+      return
+    }
 
     const totalQty = lines.reduce((s, l) => s + l.qty, 0)
     const boxCount = new Set(lines.map(l => l.boxNo)).size
@@ -198,7 +200,7 @@ export default function Inbound() {
       skuHint: lines.map(l => l.sku).slice(0, 3).join(', '),
       remark: remark.trim() || undefined,
       lineItems: lines.map(l => ({
-        sku: l.sku,
+        sku: l.sku.trim(),
         name: l.name,
         qty: l.qty,
         boxNo: l.boxNo,
@@ -354,15 +356,6 @@ export default function Inbound() {
           }
         >
           <ImportTemplateLegend columns={INBOUND_LINE_COLUMNS} />
-          <div className="mb-4 flex flex-wrap items-center gap-4 text-sm">
-            {([['sequential', '按顺序录入'], ['simple', '精简录入']] as const).map(([v, l]) => (
-              <label key={v} className="flex items-center gap-2">
-                <input type="radio" checked={entryMode === v} onChange={() => setEntryMode(v)} className="text-primary-600" />
-                {l}
-              </label>
-            ))}
-          </div>
-
           <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
             <FormField label="SKU" required>
               <SkuFuzzyPicker
@@ -371,11 +364,11 @@ export default function Inbound() {
                 customerId={getCustomerIdForRole(role) ?? undefined}
               />
             </FormField>
-            <FormField label="数量" required hint="> 0">
-              <input value={qtyInput} onChange={e => setQtyInput(e.target.value)} type="number" className={formInput()} />
+            <FormField label="箱数" required hint="正整数">
+              <input value={boxCountInput} onChange={e => setBoxCountInput(e.target.value)} type="number" min={1} step={1} className={formInput()} />
             </FormField>
-            <FormField label="箱号" hint="> 0">
-              <input value={boxInput} onChange={e => setBoxInput(e.target.value)} type="number" className={formInput()} />
+            <FormField label="每箱数量" required hint="正整数">
+              <input value={qtyPerBoxInput} onChange={e => setQtyPerBoxInput(e.target.value)} type="number" min={1} step={1} className={formInput()} />
             </FormField>
             <FormField label="包装类型">
               <select className={formSelect()} value={packTypeInput} onChange={e => setPackTypeInput(e.target.value)}>
@@ -390,16 +383,17 @@ export default function Inbound() {
               </select>
             </FormField>
             <div className="flex items-end gap-2">
-              <Button size="sm" onClick={addLine}><Plus className="h-3.5 w-3.5" /> 增加</Button>
+              <Button size="sm" onClick={addLine}><Plus className="h-3.5 w-3.5" /> 添加</Button>
               <Button variant="secondary" size="sm" onClick={() => setLines([])}>清除</Button>
             </div>
           </div>
+          <p className="mb-3 text-xs text-text-muted">每箱生成一行，箱号从当前最大箱号继续编号；添加后可在下方直接修改明细。</p>
 
           <Card className="overflow-hidden">
             <Table>
               <thead className="table-head">
                 <tr>
-                  <th>箱序号</th>
+                  <th>箱号</th>
                   <th>SKU</th>
                   <th>产品标题</th>
                   <th>数量</th>
@@ -410,15 +404,34 @@ export default function Inbound() {
               </thead>
               <tbody className="table-body">
                 {lines.length === 0 ? (
-                  <tr><td colSpan={7} className="table-cell py-8 text-center text-xs text-text-muted">暂无货品，请录入 SKU 后点击「增加」，或使用批量上传</td></tr>
+                  <tr><td colSpan={7} className="table-cell py-8 text-center text-xs text-text-muted">暂无货品，请填写 SKU、箱数和每箱数量后点击「添加」，或使用批量上传</td></tr>
                 ) : lines.map(row => (
                   <tr key={row.id} className="table-row">
-                    <td className="table-cell text-xs">{row.boxNo}</td>
-                    <td className="table-cell"><MonoCode>{row.sku}</MonoCode></td>
-                    <td className="table-cell text-xs">{row.name}</td>
-                    <td className="table-cell text-xs font-semibold">{row.qty}</td>
-                    <td className="table-cell text-xs">{row.packType}</td>
-                    <td className="table-cell text-xs">{row.stockType}</td>
+                    <td className="table-cell">
+                      <input aria-label={`箱号 ${row.boxNo} 的箱号`} type="number" min={1} step={1} value={row.boxNo || ''} onChange={e => updateLine(row.id, { boxNo: Number(e.target.value) })} className={formInput('min-w-[72px] w-20')} />
+                    </td>
+                    <td className="table-cell">
+                      <input aria-label={`箱号 ${row.boxNo} 的 SKU`} value={row.sku} onChange={e => {
+                        const sku = e.target.value
+                        updateLine(row.id, { sku, name: findProductByCode(sku)?.name ?? sku })
+                      }} className={formInput('min-w-[120px]')} />
+                    </td>
+                    <td className="table-cell">
+                      <input aria-label={`箱号 ${row.boxNo} 的产品标题`} value={row.name} onChange={e => updateLine(row.id, { name: e.target.value })} className={formInput('min-w-[120px]')} />
+                    </td>
+                    <td className="table-cell">
+                      <input aria-label={`箱号 ${row.boxNo} 的数量`} type="number" min={1} step={1} value={row.qty || ''} onChange={e => updateLine(row.id, { qty: Number(e.target.value) })} className={formInput('min-w-[80px] w-24')} />
+                    </td>
+                    <td className="table-cell">
+                      <select aria-label={`箱号 ${row.boxNo} 的包装类型`} value={row.packType} onChange={e => updateLine(row.id, { packType: e.target.value })} className={formSelect('min-w-[110px]')}>
+                        <option>自带包装</option><option>仓库包装</option>
+                      </select>
+                    </td>
+                    <td className="table-cell">
+                      <select aria-label={`箱号 ${row.boxNo} 的库存类型`} value={row.stockType} onChange={e => updateLine(row.id, { stockType: e.target.value })} className={formSelect('min-w-[130px]')}>
+                        <option>以仓库为准</option><option>以箱为准</option>
+                      </select>
+                    </td>
                     <td className="table-cell">
                       <button type="button" onClick={() => setLines(prev => prev.filter(l => l.id !== row.id))} className="text-red-500 hover:text-red-700">
                         <Trash2 className="h-3.5 w-3.5" />

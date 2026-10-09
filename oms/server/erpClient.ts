@@ -360,6 +360,8 @@ export type ErpOutboundOrder = {
   warehouseCode: string
   status: string
   omsStatus: string
+  exceptionCode?: string | null
+  exceptionReason?: string | null
   fbaNo: string | null
   fbaWarehouse: string | null
   destination?: string | null
@@ -862,6 +864,12 @@ export function createErpProduct(body: {
   }>('/products/oms', {
     method: 'POST',
     body: JSON.stringify(body),
+  })
+}
+
+export function cancelErpOutbound(outboundNo: string, customerCode: string) {
+  return erpRequest<ErpOutboundOrder>(`/outbound/oms/by-no/${encodeURIComponent(outboundNo)}/cancel`, {
+    method: 'POST', body: JSON.stringify({ customerCode }),
   })
 }
 

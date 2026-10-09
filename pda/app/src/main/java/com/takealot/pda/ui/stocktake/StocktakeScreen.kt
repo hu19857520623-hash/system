@@ -38,6 +38,7 @@ import com.takealot.pda.ui.components.FeedbackBar
 import com.takealot.pda.ui.components.KeyValue
 import com.takealot.pda.ui.components.QtyButton
 import com.takealot.pda.ui.components.ScanField
+import com.takealot.pda.ui.components.ScanQueueStatus
 import com.takealot.pda.ui.components.SkuCard
 import com.takealot.pda.ui.components.StatusChip
 import com.takealot.pda.ui.i18n.tr
@@ -48,6 +49,8 @@ import com.takealot.pda.ui.theme.PdaStocktake
 import com.takealot.pda.ui.theme.PdaText
 import com.takealot.pda.ui.theme.PdaWarn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 
 class StocktakeViewModel : ViewModel() {
     private val api get() = PdaApp.instance.api
@@ -60,7 +63,19 @@ class StocktakeViewModel : ViewModel() {
     var qty by mutableIntStateOf(1)
     var feedback by mutableStateOf<Feedback?>(null)
     var busy by mutableStateOf(false)
+    var pendingScanCount by mutableIntStateOf(0)
     val selectedLine: StocktakeLine? get() = plan?.lineList?.find { it.id == selectedLineId }
+    private val scanQueue = Channel<String>(64)
+
+    init {
+        viewModelScope.launch {
+            for (code in scanQueue) {
+                pendingScanCount = (pendingScanCount - 1).coerceAtLeast(0)
+                while (busy) delay(40)
+                runScan(code)
+            }
+        }
+    }
 
     fun bind() {
         feedback = null
@@ -87,17 +102,26 @@ class StocktakeViewModel : ViewModel() {
         }
     }
 
-    fun onHardwareScan(code: String) { scan = code; submitScan() }
+    fun onHardwareScan(code: String) { enqueueScan(code) }
 
     fun submitScan() {
-        val code = scan.trim()
-        if (code.isEmpty() || busy) return
-        viewModelScope.launch { runScan(code) }
+        enqueueScan(scan)
+    }
+
+    private fun enqueueScan(raw: String) {
+        val code = raw.trim()
+        if (code.isEmpty()) return
+        scan = ""
+        pendingScanCount += 1
+        if (!scanQueue.trySend(code).isSuccess) {
+            pendingScanCount = (pendingScanCount - 1).coerceAtLeast(0)
+            feedback = Feedback(false, "扫码队列已满，请稍后重试")
+        }
     }
 
     private suspend fun runScan(code: String) {
         busy = true
-        feedback = null
+        feedback = Feedback(false, "正在处理 $code…", processing = true)
         val journal = PdaApp.instance.workJournal
         val recordId = journal.beginScan("stocktake", "count", code, plan?.id, plan?.no)
         try {
@@ -111,9 +135,17 @@ class StocktakeViewModel : ViewModel() {
             val normalized = code.trim()
             val locationHit = current.lineList.firstOrNull { it.loc.equals(normalized, ignoreCase = true) }
             if (locationHit != null) {
-                locationCode = locationHit.loc
-                selectedLineId = current.lineList.firstOrNull { it.loc.equals(locationCode, ignoreCase = true) && it.isOpen }?.id
-                    ?: locationHit.id
+                val openLine = current.lineList.firstOrNull { it.loc.equals(locationHit.loc, ignoreCase = true) && it.isOpen }
+                if (openLine == null) {
+                    locationCode = ""
+                    selectedLineId = null
+                    feedback = Feedback(false, "库位 ${locationHit.loc} 已盘完，请扫描下一库位")
+                    scan = ""
+                    journal.acknowledge(recordId, feedback?.message)
+                    return
+                }
+                locationCode = openLine.loc
+                selectedLineId = openLine.id
                 qty = 1
                 feedback = Feedback(true, "库位 ${locationHit.loc}")
                 scan = ""
@@ -121,11 +153,14 @@ class StocktakeViewModel : ViewModel() {
                 return
             }
             val skuHits = current.lineList.filter { it.matchesScan(normalized) }
+            if (locationCode.isBlank()) {
+                val suggested = skuHits.firstOrNull()?.loc
+                throw ErpException(if (suggested != null) "请先扫描库位 $suggested，再扫描 SKU" else "请先扫描盘点库位")
+            }
             val skuHit = when {
                 locationCode.isNotBlank() -> skuHits.firstOrNull { it.loc.equals(locationCode, ignoreCase = true) }
-                else -> skuHits.firstOrNull { it.isOpen } ?: skuHits.firstOrNull()
+                else -> null
             } ?: throw ErpException("盘点单中没有 $normalized")
-            locationCode = skuHit.loc
             selectedLineId = skuHit.id
             qty = 1
             feedback = Feedback(true, "${skuHit.skuCode} · ${skuHit.loc}")
@@ -147,7 +182,7 @@ class StocktakeViewModel : ViewModel() {
                 val detail = api.stocktake(id)
                 plan = detail
                 locationCode = ""
-                selectedLineId = detail.lineList.firstOrNull { it.isOpen }?.id
+                selectedLineId = null
                 qty = 1
                 PdaApp.instance.workJournal.activate(PdaResumeWork("stocktake", "count", detail.id, detail.no))
             } catch (e: Exception) {
@@ -170,7 +205,7 @@ class StocktakeViewModel : ViewModel() {
         val detail = api.stocktake(hit.id)
         plan = detail
         locationCode = ""
-        selectedLineId = detail.lineList.firstOrNull { it.isOpen }?.id
+        selectedLineId = null
         qty = 1
         PdaApp.instance.workJournal.activate(PdaResumeWork("stocktake", "count", detail.id, detail.no))
         feedback = Feedback(true, "${detail.no} 已打开")
@@ -188,25 +223,32 @@ class StocktakeViewModel : ViewModel() {
         }
         viewModelScope.launch {
             busy = true
+            val journal = PdaApp.instance.workJournal
+            val recordId = journal.beginScan("stocktake", "count_submit", line.skuCode, current.id, current.no)
             try {
-                plan = api.stocktakeCount(current.id, line.id, qty)
+                journal.preparePostRetry(recordId, "/management-loop/stocktakes/${current.id}/count", mapOf("lineId" to line.id, "qty" to qty))
+                plan = api.stocktakeCount(current.id, line.id, qty, recordId)
+                journal.acknowledge(recordId, "盘点提交成功")
                 val refreshed = plan!!
                 PdaApp.instance.workJournal.activate(PdaResumeWork("stocktake", "count", refreshed.id, refreshed.no))
                 val next = refreshed.lineList.firstOrNull { it.loc.equals(locationCode, ignoreCase = true) && it.isOpen }
-                    ?: refreshed.lineList.firstOrNull { it.isOpen }
                 selectedLineId = next?.id
-                if (next == null) {
+                if (refreshed.lineList.none { it.isOpen }) {
                     locationCode = ""
                     PdaApp.instance.workJournal.clearActive("stocktake")
                     feedback = Feedback(true, if (refreshed.statusKey == "pending_approval") "盘点完成，等待审批" else "本单已盘完")
                     loadList()
-                } else {
-                    locationCode = next.loc
+                } else if (next == null) {
+                    locationCode = ""
                     qty = 1
-                    feedback = Feedback(true, "${line.skuCode} 已提交")
+                    feedback = Feedback(true, "${line.skuCode} 已提交；当前库位完成，请扫描下一个库位")
+                } else {
+                    qty = 1
+                    feedback = Feedback(true, "${line.skuCode} 已提交；请扫描当前库位下一 SKU")
                 }
             } catch (e: Exception) {
                 feedback = Feedback(false, e.message ?: "提交失败")
+                if (journal.isRetriable(e)) journal.retainForRetry(recordId, feedback?.message) else journal.fail(recordId, feedback?.message)
             } finally {
                 busy = false
             }
@@ -232,7 +274,8 @@ fun StocktakeScreen(onBack: () -> Unit, vm: StocktakeViewModel = viewModel()) {
             Text(tr("stocktake"), color = PdaText, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
             TextButton(onClick = onBack) { Text(tr("back"), color = PdaAccent) }
         }
-        ScanField(vm.scan, { vm.scan = it }, { vm.submitScan() }, tr("scan_stocktake"), enabled = !vm.busy)
+        ScanField(vm.scan, { vm.scan = it }, { vm.submitScan() }, if (vm.locationCode.isBlank()) "先扫盘点库位" else "扫当前库位 SKU", enabled = !vm.busy)
+        ScanQueueStatus(vm.pendingScanCount, vm.busy)
         FeedbackBar(vm.feedback)
         val plan = vm.plan
         if (plan == null) {
@@ -276,15 +319,12 @@ fun StocktakeScreen(onBack: () -> Unit, vm: StocktakeViewModel = viewModel()) {
                     progress = progress,
                     done = !line.isOpen,
                     selected = line.id == vm.selectedLineId,
-                    onClick = {
-                        vm.selectedLineId = line.id
-                        vm.locationCode = line.loc
-                        vm.qty = 1
-                    },
+                    onClick = {},
                 ) {
                     Text("库位 ${line.loc}", color = PdaText, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                     if (!plan.blindCount) Text("账面 ${line.bookQty ?: 0}", color = PdaMuted, fontSize = 12.sp)
                     Text(stocktakeStatusLabel(line.statusKey), color = PdaMuted, fontSize = 12.sp)
+                    if (line.statusKey == "recount") Text("复盘必须由不同于初盘的账号完成", color = PdaWarn, fontSize = 12.sp)
                 }
             }
             if (vm.selectedLine?.isOpen == true && plan.statusKey == "counting") {

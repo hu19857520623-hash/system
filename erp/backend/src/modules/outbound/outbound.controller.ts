@@ -53,6 +53,14 @@ export class OutboundController {
     return this.service.getByOutboundNoForOms(outboundNo)
   }
 
+  /** OMS 客户仅可撤回待拣货出库单。 */
+  @OmsBridge()
+  @Post('oms/by-no/:outboundNo/cancel')
+  omsCancel(@Param('outboundNo') outboundNo: string, @Body() body: { customerCode?: string }) {
+    if (!String(body.customerCode || '').trim()) throw new BadRequestException('缺少客户编码')
+    return this.service.cancelFromOms(outboundNo, body.customerCode!)
+  }
+
   /** OMS 客户回传 POD 签收单文件 */
   @OmsBridge()
   @Post('oms/by-no/:outboundNo/pod')
@@ -194,10 +202,10 @@ export class OutboundController {
     return this.service.uploadAttachment(id, body)
   }
 
-  @RequirePerms('outbound.create')
+  @RequireAnyPerm('outbound.create', 'outbound.pick', 'outbound.pack')
   @Post(':id/problem')
-  setProblem(@Param('id', ParseIntPipe) id: number, @Body() body: any) {
-    return this.service.setProblem(id, body)
+  setProblem(@Param('id', ParseIntPipe) id: number, @Body() body: any, @CurrentUser('userId') userId: number) {
+    return this.service.setProblem(id, body, userId)
   }
 
   @RequirePerms('outbound.relabel')

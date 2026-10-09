@@ -141,7 +141,7 @@ const statusOptions = [
 ]
 
 const sourceOptions = [
-  'Takealot', '官网', '展会', '推荐', '小红书', '抖音', '其他',
+  'Takealot', '官网', '展会', '推荐', '小红书', '抖音', '视频号', '公众号', '其他',
 ]
 
 const dialogVisible = ref(false)
@@ -753,13 +753,7 @@ onMounted(async () => {
       </el-form-item>
       <el-form-item label="来源">
         <el-select v-model="newLead.source" style="width:100%">
-          <el-option label="Takealot" value="Takealot" />
-          <el-option label="官网" value="官网" />
-          <el-option label="展会" value="展会" />
-          <el-option label="推荐" value="推荐" />
-          <el-option label="小红书" value="小红书" />
-          <el-option label="抖音" value="抖音" />
-          <el-option label="其他" value="其他" />
+          <el-option v-for="source in sourceOptions" :key="source" :label="source" :value="source" />
         </el-select>
       </el-form-item>
       <el-form-item label="归属运营" required>

@@ -82,6 +82,7 @@ export const MANUAL_SQL_SCRIPTS = [
   'add_product_measured_dims.sql',
   'add_supplier_freight_bill_po_link.sql',
   'fix_lead_assignee_chenqizhen.sql',
+  'fix_lead_assigned_new_status.sql',
   'fix_lead_empty_follow_sales.sql',
   'fix_lead_missing_assignee.sql',
   'unify_lead_follow_sales_aliases.sql',
