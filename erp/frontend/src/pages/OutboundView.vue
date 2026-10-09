@@ -336,11 +336,13 @@ function rowActionAttachments(row: any) {
       ? [{ id: 0, fileName: row.attachmentName, fileType: 'other', downloadable: true }]
       : []
   return atts.filter(
-    (att: any) => !['skuLabel', 'outerLabel'].includes(att.fileType) && att.downloadable === true,
+    (att: any) => att.fileType !== 'skuLabel' && att.downloadable === true,
   )
 }
 
 function attachmentActionLabel(att: any) {
+  if (att.fileType === 'outerLabel') return '外箱标'
+  if (att.fileType === 'skuLabel') return 'SKU标签'
   if (att.fileType === 'pod') return 'POD签收单'
   if (att.fileType === 'deliveryList') return '发货清单'
   if (att.fileType === 'appointment') return '预约单'
@@ -361,6 +363,10 @@ const detailCustomerRemark = computed(() => {
   const remark = detailOrder.value?.customerRemark ?? detailOrder.value?.remark
   return String(remark || '').trim() || '—'
 })
+
+const detailAttachments = computed(() =>
+  (detailOrder.value?.attachments || []).filter((att: any) => att.labelRole !== 'unitCrop'),
+)
 
 function appendDetailCommand(cmds: RowAction[]) {
   cmds.unshift({ key: 'detail', command: 'detail', label: '查看详情' })
@@ -1511,6 +1517,26 @@ function statusTag(status: string) {
               </template>
             </el-table-column>
           </el-table>
+          <template v-if="detailAttachments.length">
+            <div class="detail-section-title" style="margin-top: 16px">客户上传附件</div>
+            <el-table :data="detailAttachments" border size="small">
+              <el-table-column label="类型" width="110">
+                <template #default="{ row }">{{ attachmentActionLabel(row) }}</template>
+              </el-table-column>
+              <el-table-column prop="fileName" label="文件名" min-width="220" show-overflow-tooltip />
+              <el-table-column label="操作" width="140">
+                <template #default="{ row }">
+                  <el-button
+                    v-if="row.downloadable === true"
+                    link
+                    type="primary"
+                    @click="downloadAttachmentById(detailOrder, row.id)"
+                  >下载{{ attachmentActionLabel(row) }}</el-button>
+                  <span v-else>文件不可下载</span>
+                </template>
+              </el-table-column>
+            </el-table>
+          </template>
         </template>
       </div>
       <template #footer>
