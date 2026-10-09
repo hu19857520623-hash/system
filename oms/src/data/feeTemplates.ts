@@ -296,7 +296,8 @@ export function calcBillingWeightKg(
 }
 
 export function normalizeChannelShippingRule(rule: ChannelShippingRule): ChannelShippingRule {
-  const ratio = rule.volumetricRatio ?? DEFAULT_VOLUMETRIC_RATIO
+  const ratio = Number.isFinite(rule.volumetricRatio) && (rule.volumetricRatio ?? 0) > 0
+    ? rule.volumetricRatio! : DEFAULT_VOLUMETRIC_RATIO
   if (rule.mode === 'volume' && rule.ratePerCbm != null) {
     return {
       mode: 'weight',
@@ -395,24 +396,18 @@ export function calculateOutboundPreDeduct(
   } else {
     const channel = (shippingMethod === '卡派' ? '卡派' : '快递') as '卡派' | '快递'
     const rates = priceTemplate.shippingByRegion[destRegion] ?? defaultRegionShippingRates()
-    const channelRule = rates[channel] ?? rates['快递']
-
-    let shipping = 0
-    let shippingDetail = ''
+    const channelRule = normalizeChannelShippingRule(rates[channel] ?? rates['快递'])
 
     const ratio = channelRule.volumetricRatio
       ?? rates['卡派']?.volumetricRatio
       ?? DEFAULT_VOLUMETRIC_RATIO
 
-    if (channelRule.mode === 'volume' && channelRule.ratePerCbm != null) {
-      shipping = Math.max(channelRule.minCharge, totalVolumeM3 * channelRule.ratePerCbm)
-      shippingDetail = `${destRegionLabel} · ${channel} · 体积 ${totalVolumeM3.toFixed(4)} m³ × ¥${channelRule.ratePerCbm}/m³`
-    } else {
-      const billKg = calcBillingWeightKg(totalVolumeM3, totalWeightKg, ratio)
-      const ratePerKg = channelRule.ratePerKg ?? 0
-      shipping = Math.max(channelRule.minCharge, billKg * ratePerKg)
-      shippingDetail = `${destRegionLabel} · ${channel} · 计费重 ${billKg.toFixed(2)} kg（抛重比 ${ratio}）× ¥${ratePerKg}/kg`
-    }
+    const billKg = calcBillingWeightKg(totalVolumeM3, totalWeightKg, ratio)
+    const volumetricKg = totalVolumeM3 * 1_000_000 / ratio
+    const ratePerKg = channelRule.ratePerKg ?? 0
+    const weightCharge = billKg * ratePerKg
+    const shipping = Math.max(channelRule.minCharge, weightCharge)
+    const shippingDetail = `${destRegionLabel} · ${channel} · 实重 ${totalWeightKg.toFixed(2)} kg / 抛重 ${volumetricKg.toFixed(2)} kg（抛重比 ${ratio}），取大计费 ${billKg.toFixed(2)} kg × ¥${ratePerKg}/kg = ¥${round2(weightCharge).toFixed(2)}；最低收费 ¥${channelRule.minCharge.toFixed(2)}，应收 ¥${round2(shipping).toFixed(2)}`
 
     feeLines.push({
       type: 'shipping',
@@ -439,7 +434,7 @@ export function buildOutboundTemplateSnapshot(
   const pickupOnly = shippingMethod === '自提'
   const channel = (shippingMethod === '卡派' ? '卡派' : '快递') as '卡派' | '快递'
   const rates = priceTemplate.shippingByRegion[destRegion] ?? defaultRegionShippingRates()
-  const channelRule = rates[channel] ?? rates['快递']
+  const channelRule = normalizeChannelShippingRule(rates[channel] ?? rates['快递'])
   const pickup = priceTemplate.pickupByRegion?.[destRegion] ?? defaultPickupRegionRule()
   return {
     handling: { ...priceTemplate.handling },

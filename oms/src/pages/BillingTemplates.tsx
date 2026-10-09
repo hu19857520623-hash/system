@@ -59,6 +59,14 @@ export default function BillingTemplates() {
   }
 
   const saveAll = () => {
+    const rates = priceDraft.shippingByRegion[activeRegion] ?? defaultRegionShippingRates()
+    const ratio = rates['卡派'].volumetricRatio ?? DEFAULT_VOLUMETRIC_RATIO
+    if (!Number.isFinite(ratio) || ratio <= 0 || Object.values(rates).some(rule =>
+      !Number.isFinite(rule.ratePerKg) || (rule.ratePerKg ?? -1) < 0 ||
+      !Number.isFinite(rule.minCharge) || rule.minCharge < 0)) {
+      window.alert('请填写大于 0 的抛重比，以及不小于 0 的物流单价和最低收费。')
+      return
+    }
     const nextTemplates = priceTemplates.map(t => t.id === priceDraft.id ? priceDraft : t)
     updatePriceTemplates(nextTemplates)
     updateStorageTemplate(storageDraft)
@@ -248,7 +256,7 @@ export default function BillingTemplates() {
             <div>
               <p className="mb-1 text-xs font-semibold text-text-secondary">物流费</p>
               <p className="mb-3 text-[11px] text-text-muted">
-                抛重比默认 {DEFAULT_VOLUMETRIC_RATIO}；卡派与快递共用同一抛重比计算体积重
+                实重与抛重取较大值计费：抛重(kg) = 长×宽×高(cm) ÷ 抛重比；物流费 = max(计费重 × 单价, 最低收费)。抛重比默认 {DEFAULT_VOLUMETRIC_RATIO}，卡派与快递共用。
               </p>
               <div className="grid gap-3 sm:grid-cols-2">
                 {(['卡派', '快递'] as const).map(channel => {
@@ -257,36 +265,25 @@ export default function BillingTemplates() {
                   return (
                     <div key={channel} className="rounded-md bg-surface-muted/60 p-2.5 ring-1 ring-border-light">
                       <p className="mb-2 text-[11px] font-medium text-text-secondary">{channel}</p>
+                      <p className="mb-2 text-[11px] text-text-muted">计费规则：实重 / 抛重取大</p>
                       <div className="grid grid-cols-2 gap-2">
-                        <FormField label={channel === '卡派' ? '抛重比' : '单价 (¥/kg)'}>
+                        <FormField label="单价 (¥/kg)">
                           <input
                             type="number"
-                            step={channel === '卡派' ? 1 : 0.01}
-                            min={channel === '卡派' ? 1 : 0}
+                            step="0.01"
+                            min="0"
                             className={formInput()}
-                            value={channel === '卡派' ? sharedRatio : (rule.ratePerKg ?? 0)}
+                            value={rule.ratePerKg ?? 0}
                             onChange={e => {
                               const val = Number(e.target.value)
                               setPriceDraft(p => {
                                 const current = p.shippingByRegion[activeRegion] ?? defaultRegionShippingRates()
-                                if (channel === '卡派') {
-                                  return {
-                                    ...p,
-                                    shippingByRegion: {
-                                      [activeRegion]: {
-                                        ...current,
-                                        卡派: { ...current['卡派'], volumetricRatio: val },
-                                        快递: { ...current['快递'], volumetricRatio: val },
-                                      },
-                                    },
-                                  }
-                                }
                                 return {
                                   ...p,
                                   shippingByRegion: {
                                     [activeRegion]: {
                                       ...current,
-                                      快递: { ...current['快递'], ratePerKg: val },
+                                      [channel]: { ...current[channel], mode: 'weight', ratePerKg: val },
                                     },
                                   },
                                 }
@@ -294,9 +291,11 @@ export default function BillingTemplates() {
                             }}
                           />
                         </FormField>
-                        <FormField label="最低 (¥)">
+                        <FormField label="最低收费 (¥)">
                           <input
                             type="number"
+                            min="0"
+                            step="0.01"
                             className={formInput()}
                             value={rule.minCharge}
                             onChange={e => setPriceDraft(p => ({
@@ -310,6 +309,20 @@ export default function BillingTemplates() {
                             }))}
                           />
                         </FormField>
+                        {channel === '卡派' && <FormField label="抛重比（卡派 / 快递共用）">
+                          <input type="number" min="1" step="1" className={formInput()} value={sharedRatio}
+                            onChange={e => {
+                              const val = Number(e.target.value)
+                              setPriceDraft(p => {
+                                const current = p.shippingByRegion[activeRegion] ?? defaultRegionShippingRates()
+                                return { ...p, shippingByRegion: { [activeRegion]: {
+                                  ...current,
+                                  卡派: { ...current['卡派'], volumetricRatio: val },
+                                  快递: { ...current['快递'], volumetricRatio: val },
+                                } } }
+                              })
+                            }} />
+                        </FormField>}
                       </div>
                     </div>
                   )

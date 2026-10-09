@@ -81,17 +81,15 @@ export function calculateOutboundActualFees(params: {
   } else {
     const channel = shippingMethod === '卡派' ? '卡派' : '快递'
     const rule = snapshot.shipping
-    let amount = 0
-    let detail = ''
-    if (rule.mode === 'volume' && rule.ratePerCbm != null) {
-      amount = round2(Math.max(rule.minCharge, totalVolumeM3 * rule.ratePerCbm))
-      detail = `实测 · ${destRegion} · ${channel} · 体积 ${totalVolumeM3.toFixed(4)} m³ × ¥${rule.ratePerCbm}/m³`
-    } else {
-      const ratio = rule.volumetricRatio ?? DEFAULT_VOLUMETRIC_RATIO
-      const billKg = billingWeightKg(totalVolumeM3, totalWeightKg, ratio)
-      amount = round2(Math.max(rule.minCharge, billKg * (rule.ratePerKg ?? 0)))
-      detail = `实测 · ${destRegion} · ${channel} · 计费重 ${billKg.toFixed(2)} kg（抛重比 ${ratio}）× ¥${rule.ratePerKg}/kg`
-    }
+    const ratio = Number.isFinite(rule.volumetricRatio) && (rule.volumetricRatio ?? 0) > 0
+      ? rule.volumetricRatio! : DEFAULT_VOLUMETRIC_RATIO
+    const billKg = billingWeightKg(totalVolumeM3, totalWeightKg, ratio)
+    // Legacy volume templates use an equivalent kg rate, then the same weight comparison.
+    const ratePerKg = rule.ratePerKg ?? (rule.mode === 'volume' && rule.ratePerCbm != null
+      ? round2(rule.ratePerCbm * ratio / 1_000_000) : 0)
+    const weightCharge = billKg * ratePerKg
+    const amount = round2(Math.max(rule.minCharge, weightCharge))
+    const detail = `实测 · ${destRegion} · ${channel} · 实重 ${totalWeightKg.toFixed(2)} kg / 抛重 ${(totalVolumeM3 * 1_000_000 / ratio).toFixed(2)} kg（抛重比 ${ratio}），取大计费 ${billKg.toFixed(2)} kg × ¥${ratePerKg}/kg = ¥${round2(weightCharge).toFixed(2)}；最低收费 ¥${rule.minCharge.toFixed(2)}，应收 ¥${amount.toFixed(2)}`
     lines.push({
       type: 'shipping',
       label: '物流费',
