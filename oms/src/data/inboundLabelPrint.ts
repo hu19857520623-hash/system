@@ -23,7 +23,9 @@ function escapeHtml(value: string) {
 }
 
 function lineSku(sku: string, customerCode?: string) {
-  return resolveBarcodeLabelCode({ sku, customerCode })
+  const value = sku.trim()
+  const code = customerCode?.trim().toUpperCase()
+  return code && value && !value.toUpperCase().startsWith(`${code}-`) ? `${code}-${value}` : value
 }
 
 function orderLines(order: InboundOrder) {
@@ -76,7 +78,7 @@ export function buildInboundLabelInputs(order: InboundOrder, _kind: InboundLabel
   const inputs: BarcodeLabelInput[] = []
 
   for (const line of lines) {
-    const code = lineSku(line.sku, customerCode)
+    const code = resolveBarcodeLabelCode({ sku: line.sku, customerCode })
     if (!code) continue
     const count = Math.max(1, Math.min(line.qty, 500))
     inputs.push({ code, copies: count })

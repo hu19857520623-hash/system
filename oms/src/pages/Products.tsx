@@ -216,7 +216,7 @@ export default function Products() {
       return
     }
     const inputs = items.map(product => ({
-      code: product.internalSku.trim() || displaySku(product, barcodeCustomerId),
+      code: getCustomerSkuDisplay(product, dataScope.getCustomerCode(product.customerId)),
       copies: 1,
     })).filter(item => item.code)
     await printBarcodeLabels(inputs, 'SKU 标签')

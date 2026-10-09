@@ -1,4 +1,6 @@
-/** 50×30mm 条码标签：客户代码-SKU，无页眉页脚，紧凑布局（与 ERP 一致） */
+import { getCustomerSkuDisplay } from './skuCode'
+
+/** 50×50mm 客户 SKU 标签：文字和二维码均使用客户 SKU。 */
 
 export interface BarcodeLabelInput {
   code: string
@@ -14,19 +16,9 @@ function escapeHtml(value: string) {
 export function resolveBarcodeLabelCode(input: {
   sku: string
   customerCode?: string
-  barcode?: string
+  customerSku?: string
 }): string {
-  const explicit = String(input.barcode || '').trim()
-  if (explicit) return explicit
-
-  const sku = String(input.sku || '').trim()
-  if (!sku) return ''
-
-  const code = String(input.customerCode || '').trim().toUpperCase()
-  if (code && !sku.toUpperCase().startsWith(`${code}-`)) {
-    return `${code}-${sku}`
-  }
-  return sku
+  return getCustomerSkuDisplay({ internalSku: input.sku, customerSku: input.customerSku }, input.customerCode)
 }
 
 export const BARCODE_LABEL_STYLE = `@page{size:50mm 50mm;margin:0}
