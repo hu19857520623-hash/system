@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Plus, Printer, Copy, Pencil, Ban, RotateCcw, Trash2 } from 'lucide-react'
+import { Plus, Printer, Copy, Pencil, Ban, RotateCcw, Trash2, CheckCircle } from 'lucide-react'
 import {
   Badge, Button, Card, PageHeader, MonoCode, Table, TableFooter,
 } from '../components/ui'
@@ -16,6 +16,7 @@ import {
   permanentlyDeleteLocalProduct,
   restoreLocalProduct,
   useProducts,
+  approveProducts,
 } from '../data/inventoryStore'
 import { useInboundOrders } from '../data/entityStore'
 import { getPrimaryPlatformBarcode } from '../data/platformBindingUtils'
@@ -26,7 +27,9 @@ import { AdminCustomerFilter, AdminCustomerCell } from '../components/admin/Admi
 import { downloadProductTemplate, exportProducts, parseProducts, PRODUCT_COLUMNS } from '../data/importTemplates'
 import { importCsvFile } from '../data/csvImportExport'
 import { reportLineImportResult } from '../utils/lineImportResult'
-import { notifyIfUserError } from '../utils/userNotify'
+import { notifyIfUserError, notifySuccess, notifyError } from '../utils/userNotify'
+import { approveProductDrafts } from '../data/productDraftApproval'
+import { useRole } from '../auth/RoleContext'
 import { deleteErpProduct, disableErpProduct, enableErpProduct } from '../api/erp'
 
 const statusTabs = [
@@ -92,6 +95,7 @@ function applyProductFilters(list: Product[], f: ProductFilters, tab: string, cu
 }
 
 export default function Products() {
+  const { can } = useRole()
   const dataScope = useDataScope()
   const barcodeCustomerId = dataScope.bindingCustomerId
   const products = useProducts()
@@ -99,6 +103,7 @@ export default function Products() {
   const [tab, setTab] = useState('all')
   const [filtersOpen, setFiltersOpen] = useState(true)
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [approving, setApproving] = useState(false)
   const [draft, setDraft] = useState<ProductFilters>(defaultFilters)
   const [applied, setApplied] = useState<ProductFilters>(defaultFilters)
   const [page, setPage] = useState(1)
@@ -116,6 +121,28 @@ export default function Products() {
     () => myProducts.filter(product => selected.has(product.id)),
     [myProducts, selected],
   )
+
+  const reviewableSelected = selectedProducts.filter(p => p.productStatus === 'draft' && !p.inCatalog)
+
+  const handleApprove = async (items: Product[]) => {
+    if (approving || !can('product:write')) return
+    if (!items.length) { notifyError('请先勾选需要审核的草稿商品'); return }
+    setApproving(true)
+    try {
+      const result = await approveProductDrafts(items, {
+        customerCodeFor: dataScope.getCustomerCode,
+        markAvailable: approveProducts,
+      })
+      if (result.approvedIds.length) {
+        setSelected(previous => new Set([...previous].filter(id => !result.approvedIds.includes(id))))
+        setPage(1)
+        notifySuccess(`已审核 ${result.approvedIds.length} 个商品，状态已变为可用`)
+      }
+      if (result.failures.length) notifyError(`审核失败 ${result.failures.length} 个：${result.failures.slice(0, 5).map(item => `${item.sku}：${item.error}`).join('；')}`)
+    } catch (error) {
+      notifyIfUserError(error, '商品审核失败，草稿已保留，请重试')
+    } finally { setApproving(false) }
+  }
 
   const paged = useMemo(() => {
     const start = (page - 1) * pageSize
@@ -158,7 +185,7 @@ export default function Products() {
         )
         if (!saved.ok) throw new Error(saved.error)
       }, {
-        successMessage: count => `已将 ${count} 个商品保存为草稿，请核对后逐个提交至 ERP`,
+        successMessage: count => `已将 ${count} 个商品保存为草稿，请在草稿列表点击「审核」或勾选后「批量审核」`,
         csvFilename: 'OMS-商品导入失败明细',
       })
     } catch (error) {
@@ -330,6 +357,7 @@ export default function Products() {
           })}
         </div>
         <div className="flex flex-wrap gap-2">
+          {can('product:write') && (tab === 'draft' || reviewableSelected.length > 0) && <Button variant="toolbar" size="sm" disabled={approving || reviewableSelected.length === 0} onClick={() => void handleApprove(reviewableSelected)}><CheckCircle className="h-3.5 w-3.5" /> {approving ? '审核中…' : '批量审核'}</Button>}
           <Link to="/products/new"><Button variant="toolbar" size="sm"><Plus className="h-3.5 w-3.5" /> 创建产品</Button></Link>
           {!dataScope.isAdmin && <DropdownBtn variant="toolbar" label="导入商品" items={[
             { label: '批量导入草稿', onClick: () => void handleImportDrafts() },
@@ -408,6 +436,7 @@ export default function Products() {
                   <div className="flex flex-wrap items-center gap-1 text-xs">
                     {!p.inCatalog && p.productStatus !== 'discarded' && (
                       <>
+                        {p.productStatus === 'draft' && can('product:write') && <button type="button" disabled={approving} onClick={() => void handleApprove([p])} className="inline-flex items-center gap-0.5 font-medium text-emerald-700 hover:underline disabled:opacity-40"><CheckCircle className="h-3 w-3" /> {approving ? '审核中…' : '审核'}</button>}
                         <Link to={`/products/${p.id}/edit`} className="inline-flex items-center gap-0.5 font-medium text-primary-600 hover:underline"><Pencil className="h-3 w-3" /> {p.productStatus === 'draft' ? '编辑草稿' : '编辑商品'}</Link>
                         <button type="button" onClick={() => void handleDiscard(p)} className="inline-flex items-center gap-0.5 font-medium text-amber-700 hover:underline"><Ban className="h-3 w-3" /> 废弃商品</button>
                       </>
