@@ -7,6 +7,8 @@ import {
   customerInboundTypeLabel, customerInboundStockLabel,
 } from '../../data/mockData'
 import { useRole } from '../../auth/RoleContext'
+import { PrintCodeTypeDialog } from '../PrintCodeTypeDialog'
+import type { LabelCodeType } from '../../data/barcodeLabelTemplate'
 import { useDataScope } from '../../auth/useDataScope'
 import { getCustomerSkuDisplay } from '../../data/skuCode'
 import { isSysAdmin } from '../../data/dataScope'
@@ -37,6 +39,7 @@ const TIMELINE: Record<string, string[]> = {
 
 export default function InboundDetailDrawer({ order, onClose, onOrderChanged }: InboundDetailDrawerProps) {
   const { role } = useRole()
+  const [printKind, setPrintKind] = useState<InboundLabelKind | null>(null)
   const dataScope = useDataScope()
   const customerView = !isSysAdmin(role)
   const [feedback, setFeedback] = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
@@ -48,6 +51,7 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged }: 
   useEffect(() => {
     setConfirmReorder(false)
     setFeedback(null)
+    setPrintKind(null)
   }, [order?.id])
 
   if (!order) return null
@@ -68,11 +72,12 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged }: 
     window.setTimeout(() => setFeedback(null), 4000)
   }
 
-  const handlePrint = async (kind: InboundLabelKind) => {
-    const ok = await printInboundLabels(kind === 'SKU 标签' ? skuLabelOrder : order, kind)
+  const handlePrint = async (kind: InboundLabelKind, codeType: LabelCodeType) => {
+    const ok = await printInboundLabels(kind === 'SKU 标签' ? skuLabelOrder : order, kind, undefined, codeType)
     if (ok) {
       showFeedback('ok', `已打开${kind}打印预览`)
     }
+    return ok
   }
 
   const handleDownloadReceivingList = () => {
@@ -294,7 +299,7 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged }: 
                   </Button>
                 )}
                 {INBOUND_DOWNLOAD_ITEMS.map(l => (
-                  <Button key={l} variant="secondary" size="sm" onClick={() => handlePrint(l as InboundLabelKind)}>
+                  <Button key={l} variant="secondary" size="sm" onClick={() => setPrintKind(l as InboundLabelKind)}>
                     <Printer className="h-3 w-3" /> 打印{l}
                   </Button>
                 ))}
@@ -303,6 +308,7 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged }: 
           )}
         </div>
 
+        {printKind && <PrintCodeTypeDialog title={printKind} initialType={printKind === '箱唛' ? 'barcode' : 'qr'} onClose={() => setPrintKind(null)} onConfirm={type => handlePrint(printKind, type)} />}
         <div className="border-t border-border-light p-4 flex flex-wrap gap-2">
           {canEditInboundOrder(order.status) && (
             <Link to={`/inbound?edit=${encodeURIComponent(order.id)}`}>

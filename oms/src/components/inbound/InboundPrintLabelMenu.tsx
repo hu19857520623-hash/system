@@ -7,6 +7,9 @@ import { printInboundLabels, type InboundLabelKind } from '../../data/inboundLab
 import { printInboundReceivingList } from '../../data/inboundReceivingListPrint'
 import { useProducts } from '../../data/inventoryStore'
 import type { InboundOrder, InboundStatus } from '../../data/mockData'
+import { PrintCodeTypeDialog } from '../PrintCodeTypeDialog'
+import { useDataScope } from '../../auth/useDataScope'
+import { getCustomerSkuDisplay } from '../../data/skuCode'
 
 export function canPrintInboundLabels(status: InboundStatus) {
   return !['draft', 'voided'].includes(status)
@@ -14,6 +17,8 @@ export function canPrintInboundLabels(status: InboundStatus) {
 
 export function InboundPrintLabelMenu({ order }: { order: InboundOrder }) {
   const products = useProducts()
+  const dataScope = useDataScope()
+  const [printKind, setPrintKind] = useState<InboundLabelKind | null>(null)
   const [open, setOpen] = useState(false)
   const buttonRef = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -55,12 +60,20 @@ export function InboundPrintLabelMenu({ order }: { order: InboundOrder }) {
     },
     ...INBOUND_DOWNLOAD_ITEMS.map(label => ({
       label,
-      run: () => { void printInboundLabels(order, label as InboundLabelKind) },
+      run: () => { setPrintKind(label as InboundLabelKind) },
     })),
   ]
 
   return (
     <>
+      {printKind && <PrintCodeTypeDialog title={printKind} initialType={printKind === '箱唛' ? 'barcode' : 'qr'} onClose={() => setPrintKind(null)} onConfirm={type => {
+        const code = dataScope.getCustomerCode(order.customerId)
+        const skuOrder = { ...order,
+          skuHint: getCustomerSkuDisplay({ internalSku: order.skuHint ?? '' }, code),
+          lineItems: order.lineItems?.map(line => ({ ...line, sku: getCustomerSkuDisplay(products.find(p => p.internalSku === line.sku && p.customerId === order.customerId) ?? { internalSku: line.sku }, code) })),
+        }
+        return printInboundLabels(printKind === 'SKU 标签' ? skuOrder : order, printKind, undefined, type)
+      }} />}
       <button
         ref={buttonRef}
         type="button"

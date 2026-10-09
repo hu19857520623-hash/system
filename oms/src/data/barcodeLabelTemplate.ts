@@ -1,4 +1,7 @@
 import { getCustomerSkuDisplay } from './skuCode'
+import { code128Svg } from './code128'
+
+export type LabelCodeType = 'qr' | 'barcode'
 
 /** 50×50mm 客户 SKU 标签：文字和二维码均使用客户 SKU。 */
 
@@ -28,6 +31,7 @@ body{display:block}
 .label{width:50mm;height:50mm;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:2mm 2mm 1.5mm;overflow:hidden;page-break-after:always}
 .barcode-wrap{flex:1 1 auto;display:flex;align-items:center;justify-content:center;width:100%;min-height:0;max-height:40mm}
 .barcode-wrap svg{width:38mm;height:38mm;display:block}
+.barcode-wrap svg:not(.qr){width:44mm;height:20mm}
 .code{margin:1mm 0 0;padding:0;font:700 9px/1.15 Arial,Helvetica,sans-serif;text-align:center;letter-spacing:.02em;white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis}
 @media print{html,body{width:50mm;height:50mm}.label{page-break-inside:avoid}}`
 
@@ -39,11 +43,15 @@ export function buildBarcodeLabelHtml(articles: string, title = '条码标签') 
   return `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title><style>${BARCODE_LABEL_STYLE}</style></head><body>${articles}</body></html>`
 }
 
-export async function renderBarcodeSvg(code: string) {
+export async function renderBarcodeSvg(code: string, codeType: LabelCodeType = 'qr') {
+  if (codeType === 'barcode') {
+    if (!/^[\x20-\x7e]+$/.test(code.trim())) throw new Error('条形码仅支持英文、数字及英文符号，请选择二维码')
+    return code128Svg(code)
+  }
   const { create } = await import('qrcode')
   const payload = String(code || '').trim() || '0'
   const modules = create(payload, { errorCorrectionLevel: 'M' }).modules
-  const quiet = 1
+  const quiet = 4
   const n = modules.size
   const dim = n + quiet * 2
   const rects: string[] = []
@@ -58,12 +66,12 @@ export async function renderBarcodeSvg(code: string) {
   return `<svg class="qr" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${dim} ${dim}" shape-rendering="crispEdges" role="img" aria-label="${label}">${rects.join('')}</svg>`
 }
 
-export async function buildBarcodeLabelsHtml(inputs: BarcodeLabelInput[], title = '条码标签') {
+export async function buildBarcodeLabelsHtml(inputs: BarcodeLabelInput[], title = '条码标签', codeType: LabelCodeType = 'qr') {
   const articles: string[] = []
   for (const item of inputs) {
     const code = String(item.code || '').trim()
     if (!code) continue
-    const svg = await renderBarcodeSvg(code)
+    const svg = await renderBarcodeSvg(code, codeType)
     const article = buildBarcodeLabelArticle(code, svg)
     const copies = Math.max(1, Math.min(Number(item.copies) || 1, 500))
     for (let i = 0; i < copies; i += 1) articles.push(article)
@@ -71,7 +79,7 @@ export async function buildBarcodeLabelsHtml(inputs: BarcodeLabelInput[], title 
   return buildBarcodeLabelHtml(articles.join(''), title)
 }
 
-export async function printBarcodeLabels(inputs: BarcodeLabelInput[], title = '条码标签') {
+export async function printBarcodeLabels(inputs: BarcodeLabelInput[], title = '条码标签', codeType: LabelCodeType = 'qr') {
   if (!inputs.length) {
     window.alert('没有可打印的标签')
     return false
@@ -81,7 +89,9 @@ export async function printBarcodeLabels(inputs: BarcodeLabelInput[], title = '�
     window.alert('浏览器拦截了打印窗口，请允许弹出窗口后重试')
     return false
   }
-  const html = await buildBarcodeLabelsHtml(inputs, title)
+  let html: string
+  try { html = await buildBarcodeLabelsHtml(inputs, title, codeType) }
+  catch (error) { win.close(); throw error }
   win.document.write(html)
   win.document.close()
   win.focus()

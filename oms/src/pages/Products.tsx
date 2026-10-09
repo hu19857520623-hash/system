@@ -20,7 +20,8 @@ import {
 } from '../data/inventoryStore'
 import { useInboundOrders } from '../data/entityStore'
 import { getPlatformBarcodeAliases } from '../data/platformBindingUtils'
-import { printBarcodeLabels } from '../data/barcodeLabelTemplate'
+import { printBarcodeLabels, type BarcodeLabelInput } from '../data/barcodeLabelTemplate'
+import { PrintCodeTypeDialog } from '../components/PrintCodeTypeDialog'
 import { getCustomerSkuDisplay } from '../data/skuCode'
 import { useDataScope } from '../auth/useDataScope'
 import { AdminCustomerFilter, AdminCustomerCell } from '../components/admin/AdminCustomerFilter'
@@ -95,6 +96,7 @@ function applyProductFilters(list: Product[], f: ProductFilters, tab: string, cu
 }
 
 export default function Products() {
+  const [printInputs, setPrintInputs] = useState<BarcodeLabelInput[] | null>(null)
   const { can } = useRole()
   const dataScope = useDataScope()
   const barcodeCustomerId = dataScope.bindingCustomerId
@@ -219,7 +221,7 @@ export default function Products() {
       code: getCustomerSkuDisplay(product, dataScope.getCustomerCode(product.customerId)),
       copies: 1,
     })).filter(item => item.code)
-    await printBarcodeLabels(inputs, 'SKU 标签')
+    setPrintInputs(inputs)
   }
 
   const isSubmittedProduct = (product: Product) => (
@@ -457,6 +459,7 @@ export default function Products() {
             ))}
           </tbody>
         </Table>
+        {printInputs && <PrintCodeTypeDialog title="SKU 标签" onClose={() => setPrintInputs(null)} onConfirm={type => printBarcodeLabels(printInputs, 'SKU 标签', type)} />}
         <TableFooter
           total={filtered.length}
           page={page}
