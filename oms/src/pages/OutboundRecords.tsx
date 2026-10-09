@@ -28,11 +28,8 @@ import { useRole } from '../auth/RoleContext'
 import { useDataScope } from '../auth/useDataScope'
 import { getCustomerCode, getCustomerIdForRole } from '../data/dataScope'
 
-const LOGISTICS_TABS = [
-  { id: 'in_transit', label: '运输中' },
-  { id: 'delivered', label: '已签收' },
+const POD_TABS = [
   { id: 'pod_pending', label: '待回传签收单' },
-  { id: 'logistics_exception', label: '物流异常' },
 ] as const
 
 const SOURCE_TABS: { id: string; label: string; source?: ShipmentSource }[] = [
@@ -64,9 +61,10 @@ export default function OutboundRecords() {
   const scopedOutbound = useMemo(() => dataScope.scopeOutbound(allOutbound), [dataScope, allOutbound])
   const scopedOrders = useMemo(() => dataScope.scope(orders), [dataScope, orders])
   const [searchParams] = useSearchParams()
-  const initialTab = searchParams.get('tab') === 'platform_order'
-    ? 'all'
-    : (searchParams.get('tab') ?? 'all')
+  const requestedTab = searchParams.get('tab') ?? 'all'
+  const initialTab = [...SOURCE_TABS, ...POD_TABS].some(item => item.id === requestedTab)
+    ? requestedTab
+    : 'all'
   const urlOrderNo = searchParams.get('orderNo') ?? ''
   const urlOrderNoMode = (searchParams.get('orderNoMode') === 'exact' ? 'exact' : 'fuzzy') as SearchMode
   const [tab, setTab] = useState(initialTab)
@@ -126,10 +124,10 @@ export default function OutboundRecords() {
   )
 
   const visibleSources = dataScope.isAdmin
-    ? [...SOURCE_TABS, ...LOGISTICS_TABS]
+    ? [...SOURCE_TABS, ...POD_TABS]
     : role === 'catalog'
-      ? [...SOURCE_TABS.filter(t => ['all', 'catalog_dist', 'active'].includes(t.id)), ...LOGISTICS_TABS]
-      : [...SOURCE_TABS, ...LOGISTICS_TABS]
+      ? [...SOURCE_TABS.filter(t => ['all', 'catalog_dist', 'active'].includes(t.id)), ...POD_TABS]
+      : [...SOURCE_TABS, ...POD_TABS]
 
   const tabCount = (tabId: string) => filterFulfillmentRows(allRows, tabId, applied).length
 
@@ -240,7 +238,6 @@ export default function OutboundRecords() {
               <th className="whitespace-nowrap">平台</th>
               <th className="whitespace-nowrap">仓库</th>
               <th className="whitespace-nowrap">履约状态</th>
-              <th className="whitespace-nowrap">物流状态</th>
               <th className="whitespace-nowrap">签收单</th>
               <th className="whitespace-nowrap">费用对账</th>
               <th className="whitespace-nowrap text-right">金额</th>
@@ -250,7 +247,7 @@ export default function OutboundRecords() {
           </thead>
           <tbody className="table-body">
             {filtered.length === 0 ? (
-              <tr><td colSpan={14} className="table-cell py-10 text-center text-xs text-text-muted">暂无数据</td></tr>
+              <tr><td colSpan={13} className="table-cell py-10 text-center text-xs text-text-muted">暂无数据</td></tr>
             ) : filtered.map(r => {
               const feeSummary = r.outbound ? buildOutboundFeeSummary(r.outbound, feeRecords) : null
               return (
@@ -276,13 +273,6 @@ export default function OutboundRecords() {
                 <td className="table-cell text-xs font-medium">{warehouseLabel(r.warehouse)}</td>
                 <td className="table-cell">
                   <Badge status={r.statusKey} label={r.statusLabel} />
-                </td>
-                <td className="table-cell">
-                  {r.logistics ? (
-                    <Badge status={r.logistics.status} label={statusLabels[r.logistics.status] ?? r.logistics.status} />
-                  ) : (
-                    <span className="text-xs text-text-muted">—</span>
-                  )}
                 </td>
                 <td className="table-cell">
                   {r.logistics ? <PodStatusBadge status={r.logistics.podStatus} /> : <span className="text-xs text-text-muted">—</span>}

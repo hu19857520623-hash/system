@@ -129,9 +129,7 @@ export default function FulfillmentDetailDrawer({ row, open, onClose, onUploadPo
               {row.logistics && (
                 <>
                   <InfoRow label="承运商" value={row.logistics.carrier || '—'} />
-                  <InfoRow label="物流状态" value={statusLabels[row.logistics.status] ?? row.logistics.status} />
                   <InfoRow label="目的地" value={row.logistics.destination} />
-                  <InfoRow label="物流更新" value={row.logistics.updatedAt} />
                   {row.logistics.podCode && (
                     <InfoRow label="仓库 POD 码" value={<MonoCode>{row.logistics.podCode}</MonoCode>} />
                   )}
