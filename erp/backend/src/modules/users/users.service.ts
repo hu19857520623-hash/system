@@ -1,4 +1,5 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common'
+import { Prisma } from '@prisma/client'
 import * as bcrypt from 'bcryptjs'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { PermissionsService } from '../../common/permissions/permissions.service'
@@ -76,15 +77,22 @@ export class UsersService {
   async create(dto: CreateUserDto) {
     this.assertKnownRole(dto.roleCode)
     const passwordHash = await bcrypt.hash(dto.password, 10)
-    return this.prisma.sysUser.create({
-      data: {
-        username: dto.username, passwordHash, realName: dto.realName,
-        roleCode: dto.roleCode, phone: dto.phone, email: dto.email,
-        workstation: isWarehouseStaffRole(dto.roleCode) ? normalizeWorkstation(dto.workstation) : null,
-        status: dto.status ?? 1,
-      },
-      select: SELECT,
-    })
+    try {
+      return await this.prisma.sysUser.create({
+        data: {
+          username: dto.username, passwordHash, realName: dto.realName,
+          roleCode: dto.roleCode, phone: dto.phone, email: dto.email,
+          workstation: isWarehouseStaffRole(dto.roleCode) ? normalizeWorkstation(dto.workstation) : null,
+          status: dto.status ?? 1,
+        },
+        select: SELECT,
+      })
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new ConflictException('登录名已存在，请在用户列表中查找已有账号或更换登录名')
+      }
+      throw error
+    }
   }
 
   async update(id: number, dto: UpdateUserDto) {
