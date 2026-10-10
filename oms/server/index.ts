@@ -54,12 +54,7 @@ import {
   reactivateErpInboundAsn,
   createErpOutbound,
   cancelErpOutbound,
-  createErpProduct,
   uploadErpOmsProductImage,
-  updateErpProduct,
-  disableErpProduct,
-  enableErpProduct,
-  deleteErpProduct,
   createErpRecharge,
   createErpReturn,
   cancelErpReturn as cancelErpReturnApi,
@@ -1347,125 +1342,9 @@ app.post('/api/erp/product-image', async (req, res) => {
   }
 })
 
-app.post('/api/erp/products', async (req, res) => {
-  try {
-    const body = req.body as {
-      sku?: string
-      customerSku?: string
-      productName?: string
-      name?: string
-      customerCode?: string
-      customerId?: string
-      spec?: string
-      category?: string
-      brand?: string
-      barcode?: string
-      lengthCm?: number
-      widthCm?: number
-      heightCm?: number
-      weightKg?: number
-      costRmb?: number
-      declaredValue?: number
-      declaredNameEn?: string
-      declaredNameCn?: string
-      unit?: string
-      hasBattery?: boolean
-      imageUrl?: string
-      remark?: string
-    }
-    let customerCode = authenticatedCustomerCode(req, body.customerCode)
-    if (!customerCode && body.customerId) {
-      const account = await prisma.customerAccount.findUnique({ where: { id: String(body.customerId) } })
-      customerCode = account?.code || ''
-    }
-    const customerSku = String(body.customerSku || '').trim()
-    if (!customerSku) return res.status(400).json({ error: '请填写客户 SKU' })
-    if (customerSku.length >= 12) return res.status(400).json({ error: '客户 SKU 须少于 12 位' })
-    if (body.imageUrl && !/^\/api\/product-dev\/images\/[A-Za-z0-9._-]+$/.test(body.imageUrl)) {
-      return res.status(400).json({ error: '商品图片地址无效' })
-    }
-
-    const result = await createErpProduct({
-      sku: String(body.sku || ''),
-      customerSku,
-      productName: String(body.productName || body.name || ''),
-      customerCode: customerCode || undefined,
-      spec: body.spec,
-      category: body.category,
-      brand: body.brand,
-      barcode: body.barcode,
-      lengthCm: body.lengthCm,
-      widthCm: body.widthCm,
-      heightCm: body.heightCm,
-      weightKg: body.weightKg,
-      costRmb: body.costRmb,
-      declaredValue: body.declaredValue,
-      declaredNameEn: body.declaredNameEn,
-      declaredNameCn: body.declaredNameCn,
-      unit: body.unit,
-      hasBattery: body.hasBattery,
-      imageUrl: body.imageUrl,
-      remark: body.remark,
-    })
-    res.json(result)
-  } catch (e) {
-    sendErpError(res, e)
-  }
-})
-
-function scopedOmsProductSku(req: express.Request, sku: string, customerCode?: string) {
-  const value = String(sku || '').trim()
-  const scopeCode = authenticatedCustomerCode(req, customerCode).toUpperCase()
-  if (!value) return { error: '缺少商品 SKU' }
-  if (scopeCode && !value.toUpperCase().startsWith(`${scopeCode}-`)) {
-    return { error: '无权操作其他客户的商品' }
-  }
-  return { sku: value }
-}
-
-/** OMS 商品资料编辑、废弃、恢复与删除。 */
-app.put('/api/erp/products/:sku', async (req, res) => {
-  try {
-    const body = req.body as Parameters<typeof updateErpProduct>[1]
-    const scope = scopedOmsProductSku(req, req.params.sku, body.customerCode)
-    if ('error' in scope) return res.status(403).json({ error: scope.error })
-    const customerSku = String(body.customerSku || '').trim()
-    if (!customerSku) return res.status(400).json({ error: '请填写客户 SKU' })
-    if (customerSku.length >= 12) return res.status(400).json({ error: '客户 SKU 须少于 12 位' })
-    res.json(await updateErpProduct(scope.sku, { ...body, customerSku }))
-  } catch (e) {
-    sendErpError(res, e)
-  }
-})
-
-app.post('/api/erp/products/:sku/disable', async (req, res) => {
-  try {
-    const scope = scopedOmsProductSku(req, req.params.sku)
-    if ('error' in scope) return res.status(403).json({ error: scope.error })
-    res.json(await disableErpProduct(scope.sku))
-  } catch (e) {
-    sendErpError(res, e)
-  }
-})
-
-app.post('/api/erp/products/:sku/enable', async (req, res) => {
-  try {
-    const scope = scopedOmsProductSku(req, req.params.sku)
-    if ('error' in scope) return res.status(403).json({ error: scope.error })
-    res.json(await enableErpProduct(scope.sku))
-  } catch (e) {
-    sendErpError(res, e)
-  }
-})
-
-app.delete('/api/erp/products/:sku', async (req, res) => {
-  try {
-    const scope = scopedOmsProductSku(req, req.params.sku)
-    if ('error' in scope) return res.status(403).json({ error: scope.error })
-    res.json(await deleteErpProduct(scope.sku))
-  } catch (e) {
-    sendErpError(res, e)
-  }
+// 历史接口：旧版浏览器若仍尝试把 OMS 商品写入 ERP，明确要求刷新。
+app.use('/api/erp/products', (_req, res) => {
+  res.status(410).json({ error: 'OMS 商品仅保存在 OMS，请刷新页面后重试' })
 })
 
 /**

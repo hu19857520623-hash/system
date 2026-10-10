@@ -13,13 +13,12 @@ import {
   type ImportRowResult,
   MAX_IMPORT_FAILURE_DETAILS,
 } from '../../common/import-row-result.util'
-import { buildProductRemark } from '../../common/oms-sync-meta.util'
-import { buildInternalSku } from '../../common/sku-code.util'
 import { assertGlobalSkuAvailable } from '../../common/global-sku.util'
 import { buildSkuLabelsHtml } from '../../common/labels/sku-label.util'
 import { CosObjectUrlService } from '../../common/cos-object-url.service'
 import { createHash } from 'crypto'
 import { CacheService } from '../../common/cache/cache.service'
+import { ERP_MASTER_PRODUCT_WHERE } from '../../common/product-source.util'
 
 function num(v: unknown, fallback = 0): number {
   if (v == null || v === '') return fallback
@@ -317,7 +316,7 @@ export class ProductsService {
 
   async list(q: PaginationDto & { status?: string }) {
     const { page, pageSize } = getPagination(q)
-    const where: any = {}
+    const where: any = { AND: [ERP_MASTER_PRODUCT_WHERE] }
     if (q.keyword) {
       where.OR = [{ sku: { contains: q.keyword } }, { productName: { contains: q.keyword } }]
     }
@@ -663,31 +662,6 @@ export class ProductsService {
     return { id }
   }
 
-  async updateFromOms(sku: string, data: any) {
-    const row = await this.findBySku(sku)
-    const customerSku = String(data.customerSku || '').trim()
-    if (!customerSku) throw new BadRequestException('请填写客户 SKU')
-    if (customerSku.length >= 12) throw new BadRequestException('客户 SKU 须少于 12 位')
-
-    if (customerSku !== String(row.customerSku || '').trim()) await assertGlobalSkuAvailable(this.prisma, { sku, customerSku, excludeErpSku: sku, mirrorOmsSku: sku })
-    return this.update(Number(row.id), data)
-  }
-
-  async disableFromOms(sku: string) {
-    const row = await this.findBySku(sku)
-    return this.disable(Number(row.id))
-  }
-
-  async enableFromOms(sku: string) {
-    const row = await this.findBySku(sku)
-    return this.enable(Number(row.id))
-  }
-
-  async removeFromOms(sku: string) {
-    const row = await this.findBySku(sku)
-    return this.remove(Number(row.id))
-  }
-
   async findBySku(sku: string) {
     const row = await this.prisma.product.findUnique({ where: { sku } })
     if (!row) throw new NotFoundException('商品不存在')
@@ -800,81 +774,4 @@ export class ProductsService {
     res.send(buf)
   }
 
-  /** OMS P2：客户建品 → ERP 商品主数据 */
-  async createFromOms(data: any) {
-    const customerCode = String(data.customerCode || '').trim()
-    const customerSku = String(data.customerSku || data.sku || data.internalSku || '').trim()
-    const productName = String(data.productName || data.name || '').trim()
-    if (!customerSku) throw new BadRequestException('请填写 SKU')
-    if (customerSku.length >= 12) throw new BadRequestException('客户 SKU 须少于 12 位')
-    if (!productName) throw new BadRequestException('请填写商品名称')
-
-    let sku = String(data.internalSku || data.sku || '').trim()
-    if (customerCode && (!sku || sku === customerSku || !sku.toUpperCase().startsWith(`${customerCode.toUpperCase()}-`))) {
-      const existing = await this.prisma.product.findMany({
-        where: customerCode ? { remark: { contains: `OMS客户:${customerCode}` } } : undefined,
-        select: { sku: true },
-      })
-      sku = buildInternalSku(customerCode, customerSku, existing.map(r => r.sku))
-    }
-    if (!sku) throw new BadRequestException('无法生成系统 SKU')
-
-    const existing = await this.prisma.product.findUnique({ where: { sku } })
-    if (existing) {
-      throw new BadRequestException(`重复 SKU：${sku}`)
-    }
-
-    const remark = buildProductRemark({
-      customerCode: customerCode || undefined,
-      userRemark: data.remark,
-      meta: {
-        declaredNameEn: data.declaredNameEn || data.spec || undefined,
-        declaredNameCn: data.declaredNameCn || undefined,
-        unit: data.unit || undefined,
-        customerSku,
-      },
-    })
-
-    const item = await this.create(
-      {
-        sku,
-        productName,
-        spec: data.spec || data.declaredNameEn || null,
-        category: data.category || null,
-        brand: data.brand || null,
-        barcode: data.barcode || data.customCode || null,
-        customerSku,
-        declaredNameEn: data.declaredNameEn || data.spec || null,
-        declaredNameCn: data.declaredNameCn || null,
-        unit: data.unit || null,
-        hasBattery: Boolean(data.hasBattery),
-        imageUrl: typeof data.image === 'string' && data.image.length <= 500
-          ? data.image
-          : (typeof data.imageUrl === 'string' && data.imageUrl.length <= 500 ? data.imageUrl : null),
-        lengthCm: data.lengthCm,
-        widthCm: data.widthCm,
-        heightCm: data.heightCm,
-        weightKg: data.weightKg,
-        costRmb: data.costRmb ?? data.declaredValue ?? 0,
-        status: 'active',
-        remark: remark || null,
-      },
-      undefined,
-    )
-
-    return {
-      id: item.id,
-      sku: item.sku,
-      customerSku,
-      productName: item.productName,
-      spec: item.spec,
-      barcode: item.barcode,
-      status: item.status,
-      customerCode: customerCode || null,
-      declaredNameEn: data.declaredNameEn || null,
-      declaredNameCn: data.declaredNameCn || null,
-      unit: data.unit || null,
-      createdAt: item.createdAt,
-    }
-  }
 }

@@ -249,8 +249,8 @@ function mapOmsProductRow(r: Record<string, unknown>) {
   const wt = r.weightKg != null ? Number(r.weightKg) : null
   const statusRaw = String(r.productStatus || 'pending')
   const status =
-    statusRaw === 'active' || statusRaw === '正式' ? 'active'
-    : statusRaw === 'inactive' || statusRaw === '停用' ? 'inactive'
+    statusRaw === 'active' || statusRaw === 'available' || statusRaw === '正式' ? 'active'
+    : statusRaw === 'inactive' || statusRaw === 'discarded' || statusRaw === '停用' ? 'inactive'
     : 'pending'
   const statusLabel =
     status === 'active' ? '正式产品'
@@ -531,9 +531,9 @@ export async function fetchOmsProductRows(prisma: PrismaService, filters: Merged
 
   const statusFilter = (filters.statusFilter || 'all').trim()
   if (statusFilter === 'active') {
-    conditions.push("(p.productStatus IN ('active', '正式', '正式产品'))")
+    conditions.push("(p.productStatus IN ('active', 'available', '正式', '正式产品'))")
   } else if (statusFilter === 'inactive') {
-    conditions.push("(p.productStatus IN ('inactive', '停用', '停用产品'))")
+    conditions.push("(p.productStatus IN ('inactive', 'discarded', '停用', '停用产品'))")
   } else if (statusFilter === 'pending') {
     conditions.push("(p.productStatus IN ('pending', '待完善', 'draft'))")
   } else if (statusFilter === 'missing_dims') {

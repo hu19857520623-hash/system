@@ -31,7 +31,6 @@ import { reportLineImportResult } from '../utils/lineImportResult'
 import { notifyIfUserError, notifySuccess, notifyError } from '../utils/userNotify'
 import { approveProductDrafts } from '../data/productDraftApproval'
 import { useRole } from '../auth/RoleContext'
-import { deleteErpProduct, disableErpProduct, enableErpProduct } from '../api/erp'
 
 const statusTabs = [
   { id: 'all', label: '全部' },
@@ -224,19 +223,6 @@ export default function Products() {
     setPrintInputs(inputs)
   }
 
-  const isSubmittedProduct = (product: Product) => (
-    product.productStatus === 'available'
-    || product.productStatus === 'reviewing'
-    || (product.productStatus === 'discarded' && product.discardedFrom !== 'draft')
-  )
-
-  const isErpProductMissing = (error: unknown) => (
-    typeof error === 'object'
-    && error !== null
-    && 'status' in error
-    && (error as { status?: unknown }).status === 404
-  )
-
   const permanentDeleteBlockReason = (product: Product): string | undefined => {
     if (hasLocalProductStock(product.id)) return '该 SKU 仍有库存，不能永久删除；请先清空库存。'
     const inbound = inboundOrders.find(order => inboundOrderUsesSku(order, product))
@@ -246,15 +232,6 @@ export default function Products() {
   const handleDiscard = async (product: Product) => {
     if (!window.confirm(`确认废弃商品「${displaySku(product)}」？可在“废弃”页恢复。`)) return
     try {
-      if (isSubmittedProduct(product)) {
-        try {
-          await disableErpProduct(product.internalSku)
-        } catch (error) {
-          // Historical OMS cards may not have a corresponding ERP product.
-          // They can still be safely moved to the OMS recycle bin.
-          if (!isErpProductMissing(error)) throw error
-        }
-      }
       await discardLocalProduct(product.id)
       setSelected(previous => {
         const next = new Set(previous)
@@ -268,7 +245,6 @@ export default function Products() {
 
   const handleRestore = async (product: Product) => {
     try {
-      if (isSubmittedProduct(product)) await enableErpProduct(product.internalSku)
       await restoreLocalProduct(product.id)
     } catch (error) {
       window.alert(`恢复商品失败：${error instanceof Error ? error.message : String(error)}`)
@@ -283,7 +259,6 @@ export default function Products() {
     }
     if (!window.confirm(`确认永久删除商品「${displaySku(product)}」？关联的本地库存展示记录将一并删除，且无法恢复。`)) return
     try {
-      if (isSubmittedProduct(product)) await deleteErpProduct(product.internalSku)
       await permanentlyDeleteLocalProduct(product.id)
       setSelected(previous => {
         const next = new Set(previous)
@@ -300,8 +275,8 @@ export default function Products() {
       <PageHeader
         title="我的商品"
         desc={dataScope.isAdmin
-          ? '来自 ERP 的 SKU 主数据（含货盘池）；新建产品会写入 ERP，其余字段请在 ERP 维护'
-          : '来自 ERP 的 SKU 与申报信息；新建产品会同步 ERP，资料变更请在 ERP 完成'}
+          ? '客户商品在 OMS 维护，并显示在 ERP 的 SKU 查询；货盘商品仍由 ERP 维护'
+          : '客户商品在 OMS 维护，并显示在 ERP 的 SKU 查询'}
       />
 
       <Card className="mb-4 p-4">

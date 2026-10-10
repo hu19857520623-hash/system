@@ -91,7 +91,7 @@ export default function ProductDetail() {
       {product.image ? (
         <Card className="overflow-hidden">
           <div className="border-b border-border-light px-5 py-3">
-            <h2 className="text-sm font-semibold text-text-primary">主图（来自 ERP 同步）</h2>
+            <h2 className="text-sm font-semibold text-text-primary">商品主图</h2>
           </div>
           <div className="p-6">
             <img src={product.image} alt={product.name} className="h-32 w-32 rounded-lg object-cover ring-1 ring-border-light" />

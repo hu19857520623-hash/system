@@ -1,4 +1,4 @@
-import { apiDelete, apiGet, apiPost, apiPut } from './client'
+import { apiGet, apiPost, apiPut } from './client'
 import type { OutboundRecipient } from '../data/mockData'
 
 export type ErpCatalogItem = {
@@ -581,33 +581,6 @@ export function getErpFulfillmentWarehouses() {
   return apiGet<{ items: ErpFulfillmentWarehouse[] }>('/erp/takealot-dest-warehouses/fulfillment')
 }
 
-export function createErpProduct(body: {
-  sku: string
-  customerSku?: string
-  productName: string
-  customerCode?: string
-  customerId?: string
-  spec?: string
-  category?: string
-  brand?: string
-  barcode?: string
-  lengthCm?: number
-  widthCm?: number
-  heightCm?: number
-  weightKg?: number
-  costRmb?: number
-  declaredValue?: number
-  declaredNameEn?: string
-  declaredNameCn?: string
-  unit?: string
-  hasBattery?: boolean
-  image?: string
-  imageUrl?: string
-  remark?: string
-}) {
-  return apiPost<{ id: number; sku: string; productName: string; status: string }>('/erp/products', body)
-}
-
 export function fetchErpOutboundByNo(outboundNo: string) {
   return apiGet<ErpOutboundOrder>(`/erp/outbound/${encodeURIComponent(outboundNo)}`)
 }
@@ -621,20 +594,4 @@ export function uploadErpProductDraftImage(fileName: string, contentBase64: stri
     fileName,
     contentBase64,
   })
-}
-
-export function updateErpProduct(sku: string, body: Omit<Parameters<typeof createErpProduct>[0], 'sku'>) {
-  return apiPut<{ id: number; sku: string; productName: string; status: string }>(`/erp/products/${encodeURIComponent(sku)}`, body)
-}
-
-export function disableErpProduct(sku: string) {
-  return apiPost<{ id: number; sku: string; status: string }>(`/erp/products/${encodeURIComponent(sku)}/disable`, {})
-}
-
-export function enableErpProduct(sku: string) {
-  return apiPost<{ id: number; sku: string; status: string }>(`/erp/products/${encodeURIComponent(sku)}/enable`, {})
-}
-
-export function deleteErpProduct(sku: string) {
-  return apiDelete<{ id: number }>(`/erp/products/${encodeURIComponent(sku)}`)
 }

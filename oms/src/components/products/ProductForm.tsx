@@ -3,8 +3,8 @@ import { Link, useNavigate } from 'react-router-dom'
 import { Button } from '../ui'
 import { FormSection, FormGrid, FormField, formInput, formSelect } from '../ui/form'
 import { Product } from '../../data/mockData'
-import { upsertLocalProduct, prepareNewProductSkus, updateLocalProducts, useProducts } from '../../data/inventoryStore'
-import { createErpProduct, updateErpProduct, uploadErpProductDraftImage } from '../../api/erp'
+import { upsertLocalProduct, prepareNewProductSkus, useProducts } from '../../data/inventoryStore'
+import { uploadErpProductDraftImage } from '../../api/erp'
 import { useRole } from '../../auth/RoleContext'
 import { getCustomerCode, getCustomerIdForRole } from '../../data/dataScope'
 import { getCustomerSkuDisplay } from '../../data/skuCode'
@@ -21,7 +21,7 @@ function ProductEditBlocked({ product }: { product: Product }) {
     <div className="rounded-xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-900">
       <p className="font-medium">废弃商品请先恢复后再编辑</p>
       <p className="mt-1 text-xs text-amber-800/90">
-        可在“废弃”页恢复该商品；恢复后即可在 OMS 编辑并同步 ERP。
+        可在“废弃”页恢复该商品；恢复后即可在 OMS 编辑。
       </p>
       <Link to={`/products/${product.id}`} className="mt-3 inline-block text-xs font-medium text-primary-600 hover:underline">
         返回产品详情
@@ -134,7 +134,7 @@ function ProductEditorForm({ product, mode = 'create' }: ProductFormProps) {
         widthCm: widthCm || 0,
         heightCm: heightCm || 0,
         inCatalog: product?.inCatalog ?? false,
-        productStatus: action === 'update' ? product!.productStatus : 'draft',
+        productStatus: action === 'update' ? product!.productStatus : action === 'submit' ? 'available' : 'draft',
         productSource: product?.productSource ?? 'manual',
         hasBattery: hasBattery === 'yes',
         certUploaded: product?.certUploaded ?? false,
@@ -144,47 +144,12 @@ function ProductEditorForm({ product, mode = 'create' }: ProductFormProps) {
         declaredValue: declaredValue || 0,
         unit,
       }
-      const erpBody = {
-        customerSku,
-        productName: name.trim(),
-        customerCode: customerCode !== '—' ? customerCode : undefined,
-        customerId: customerId || undefined,
-        barcode: customCode || undefined,
-        lengthCm: lengthCm || undefined,
-        widthCm: widthCm || undefined,
-        heightCm: heightCm || undefined,
-        weightKg: weightKg || undefined,
-        declaredValue: declaredValue || undefined,
-        declaredNameEn: nameEn || undefined,
-        declaredNameCn: declaredCn || undefined,
-        unit: unit || undefined,
-        costRmb: declaredValue || undefined,
-        spec: nameEn || undefined,
-        hasBattery: hasBattery === 'yes',
-        imageUrl: action === 'submit' && image.startsWith('/api/erp/product-image/')
-          ? image.replace('/api/erp/product-image/', '/api/product-dev/images/')
-          : undefined,
-      }
-      if (action === 'update') {
-        await updateErpProduct(internalSku, erpBody)
-      }
       const saved = await upsertLocalProduct(local)
       if (!saved.ok) {
         window.alert(saved.error)
         return
       }
       if (action === 'submit') {
-        try {
-          await createErpProduct({
-            sku: internalSku,
-            ...erpBody,
-          })
-          await updateLocalProducts([productId], { productStatus: 'available' })
-        } catch (error) {
-          await updateLocalProducts([productId], { productStatus: 'draft' })
-          setError(`ERP 提交失败，商品资料已保留在“草稿”中：${error instanceof Error ? error.message : String(error)}`)
-          return
-        }
         navigate('/products')
         return
       }
@@ -205,8 +170,8 @@ function ProductEditorForm({ product, mode = 'create' }: ProductFormProps) {
     <div className="space-y-4 pb-24">
       <p className="text-xs text-text-muted">
         {submittedProduct
-          ? '保存修改会同步 ERP 商品主数据。'
-          : '“保存”仅保存为草稿，可继续编辑；“保存并提交”会创建 ERP 主数据，商品随即变为可用。'}
+          ? '保存修改会更新 OMS 商品资料，并显示在 ERP 的 SKU 查询中。'
+          : '“保存”仅保存为草稿；“保存并提交”会使 OMS 商品变为可用，并显示在 ERP 的 SKU 查询中。'}
       </p>
 
       <FormSection num={1} title="产品信息">
@@ -274,7 +239,7 @@ function ProductEditorForm({ product, mode = 'create' }: ProductFormProps) {
             <input type="file" accept="image/jpeg,image/png,image/gif,image/webp" className="hidden" disabled={imageUploading || saving} onChange={event => void handleImageUpload(event.target.files?.[0])} />
           </label>}
         </div>
-        <p className="mt-2 text-xs text-text-muted">图片上传后会随草稿保存，提交商品时同步到 ERP；支持 JPG、PNG、GIF、WebP，最大 5MB。</p>
+        <p className="mt-2 text-xs text-text-muted">图片上传后会随 OMS 商品保存；支持 JPG、PNG、GIF、WebP，最大 5MB。</p>
       </FormSection>
 
       {error && (

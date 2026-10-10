@@ -44,12 +44,12 @@ export const MODULE_GUIDES: Record<string, ModuleGuide> = {
   },
   products: {
     title: '我的商品',
-    desc: 'ERP 同步的 SKU 主数据：申报信息、规格尺寸与绑码状态；新建产品走 ERP 接口。',
+    desc: 'OMS 客户商品：申报信息、规格尺寸与绑码状态；提交后显示在 ERP 的 SKU 查询中。',
     features: [
       '筛选：含电池 / 箱规 / SKU / 申报价值 / 重量',
       '状态 Tab：全部 / 可用 / 草稿 / 废弃（历史本地状态仍可在「全部」查看）',
       '列表：申报品名、申报价值、长宽高、重量',
-      '操作：创建产品（同步 ERP）、打印条码、导出、复制新建',
+      '操作：创建产品、打印条码、导出、复制新建',
     ],
     status: 'partial',
   },

@@ -832,41 +832,6 @@ export function fetchErpAnnouncements() {
   return erpRequest<{ items: ErpAnnouncementItem[]; total: number }>('/announcements/oms')
 }
 
-export function createErpProduct(body: {
-  sku: string
-  customerSku: string
-  productName: string
-  customerCode?: string
-  spec?: string
-  category?: string
-  brand?: string
-  barcode?: string
-  lengthCm?: number
-  widthCm?: number
-  heightCm?: number
-  weightKg?: number
-  costRmb?: number
-  declaredValue?: number
-  declaredNameEn?: string
-  declaredNameCn?: string
-  unit?: string
-  hasBattery?: boolean
-  imageUrl?: string
-  remark?: string
-}) {
-  return erpRequest<{
-    id: number
-    sku: string
-    productName: string
-    status: string
-    customerCode: string | null
-    createdAt?: string
-  }>('/products/oms', {
-    method: 'POST',
-    body: JSON.stringify(body),
-  })
-}
-
 export function cancelErpOutbound(outboundNo: string, customerCode: string) {
   return erpRequest<ErpOutboundOrder>(`/outbound/oms/by-no/${encodeURIComponent(outboundNo)}/cancel`, {
     method: 'POST', body: JSON.stringify({ customerCode }),
@@ -878,29 +843,4 @@ export function uploadErpOmsProductImage(body: { fileName: string; contentBase64
     method: 'POST',
     body: JSON.stringify(body),
   })
-}
-
-type OmsProductUpdate = Omit<Parameters<typeof createErpProduct>[0], 'sku'>
-
-export function updateErpProduct(sku: string, body: OmsProductUpdate) {
-  return erpRequest<{ id: number; sku: string; productName: string; status: string }>(`/products/oms/${encodeURIComponent(sku)}`, {
-    method: 'PUT',
-    body: JSON.stringify(body),
-  })
-}
-
-export function disableErpProduct(sku: string) {
-  return erpRequest<{ id: number; sku: string; status: string }>(`/products/oms/${encodeURIComponent(sku)}/disable`, {
-    method: 'POST',
-  })
-}
-
-export function enableErpProduct(sku: string) {
-  return erpRequest<{ id: number; sku: string; status: string }>(`/products/oms/${encodeURIComponent(sku)}/enable`, {
-    method: 'POST',
-  })
-}
-
-export function deleteErpProduct(sku: string) {
-  return erpRequest<{ id: number }>(`/products/oms/${encodeURIComponent(sku)}`, { method: 'DELETE' })
 }

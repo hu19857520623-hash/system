@@ -28,9 +28,9 @@ export default function ProductCreate() {
         <p className="mt-1 text-sm text-text-muted">
           {isEdit
             ? product?.productStatus === 'draft'
-              ? '草稿可继续编辑；保存并提交后将创建 ERP 主数据并变为可用'
-            : '编辑后将同步 ERP 商品主数据'
-            : '可先保存为草稿，确认资料后再保存并提交至 ERP'}
+              ? '草稿可继续编辑；保存并提交后将在 OMS 变为可用，并显示在 ERP 的 SKU 查询中'
+            : '编辑后将更新 OMS 商品资料，并显示在 ERP 的 SKU 查询中'
+            : '可先保存为草稿，确认资料后再提交为 OMS 可用商品'}
         </p>
       </div>
       <ProductForm product={product} mode={isEdit ? 'edit' : 'create'} />

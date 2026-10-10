@@ -1,11 +1,10 @@
-import { Body, Controller, Delete, Get, Header, Param, ParseIntPipe, Post, Put, Query, Res } from '@nestjs/common'
+import { Body, Controller, Delete, Get, GoneException, Header, Param, ParseIntPipe, Post, Put, Query, Res } from '@nestjs/common'
 import type { Response } from 'express'
 import { ProductsService } from './products.service'
 import { PaginationDto } from '../../common/dto/pagination.dto'
 import { RequireAnyPerm, RequirePerms } from '../../common/decorators/require-perms.decorator'
 import { Public } from '../../common/decorators/public.decorator'
 import { OmsBridge } from '../../common/decorators/oms-bridge.decorator'
-import { CreateOmsProductDto } from './dto/oms-product.dto'
 import { CurrentUser } from '../../common/decorators/current-user.decorator'
 
 @Controller('products')
@@ -33,36 +32,36 @@ export class ProductsController {
     return this.service.serveImage(fileName, res)
   }
 
-  /** OMS P2：客户建品 */
+  /** 历史 OMS 写入入口已停用；客户商品只保存在 OMS 并经 SKU 查询读取。 */
   @OmsBridge()
   @Post('oms')
-  createFromOms(@Body() body: CreateOmsProductDto) {
-    return this.service.createFromOms(body)
+  createFromOms() {
+    throw new GoneException('OMS 商品仅保存在 OMS，请刷新 OMS 页面后重试')
   }
 
   /** OMS 商品资料及生命周期操作。 */
   @OmsBridge()
   @Put('oms/:sku')
-  updateFromOms(@Param('sku') sku: string, @Body() body: CreateOmsProductDto) {
-    return this.service.updateFromOms(sku, body)
+  updateFromOms() {
+    throw new GoneException('OMS 商品仅保存在 OMS，请刷新 OMS 页面后重试')
   }
 
   @OmsBridge()
   @Post('oms/:sku/disable')
-  disableFromOms(@Param('sku') sku: string) {
-    return this.service.disableFromOms(sku)
+  disableFromOms() {
+    throw new GoneException('OMS 商品仅保存在 OMS，请刷新 OMS 页面后重试')
   }
 
   @OmsBridge()
   @Post('oms/:sku/enable')
-  enableFromOms(@Param('sku') sku: string) {
-    return this.service.enableFromOms(sku)
+  enableFromOms() {
+    throw new GoneException('OMS 商品仅保存在 OMS，请刷新 OMS 页面后重试')
   }
 
   @OmsBridge()
   @Delete('oms/:sku')
-  removeFromOms(@Param('sku') sku: string) {
-    return this.service.removeFromOms(sku)
+  removeFromOms() {
+    throw new GoneException('OMS 商品仅保存在 OMS，请刷新 OMS 页面后重试')
   }
 
   @RequirePerms('products.view')

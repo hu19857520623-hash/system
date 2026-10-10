@@ -25,6 +25,7 @@ import {
   resolveBillingDimensions,
 } from '../../common/product-dimension.util'
 import { InventoryMutationService } from '../../common/inventory/inventory-mutation.service'
+import { ERP_MASTER_PRODUCT_WHERE, OMS_MANAGED_PRODUCT_WHERE } from '../../common/product-source.util'
 import type { InventoryTx } from '../../common/inventory/inventory-mutation.types'
 import {
   assertLogisticsWarehouse,
@@ -484,7 +485,19 @@ export class InventoryService {
       else and.push({ id: { in: [] as bigint[] } })
     }
 
-    const where = and.length ? { AND: and } : {}
+    // 旧仓内档案若没有对应的 OMS 商品，仍需留在 SKU 查询供仓库追溯。
+    // 有 OMS 商品的档案则由 oms_product 展示，避免同一 SKU 出现两行。
+    const orphanRows = await this.prisma.$queryRaw<{ id: bigint }[]>`
+      SELECT p.id FROM product p
+      WHERE (p.remark LIKE '%OMS客户:%' OR p.remark LIKE '%OMS 预约入库自动建档%')
+        AND NOT EXISTS (SELECT 1 FROM oms_product o WHERE o.internalSku = p.sku)
+    `
+    const where = {
+      AND: [
+        { OR: [ERP_MASTER_PRODUCT_WHERE, { id: { in: orphanRows.map((row) => row.id) } }] },
+        ...and,
+      ],
+    }
     const omsFilters: MergedSkuFilters = {
       customerCode: q.supplierKeyword?.trim(),
       title: (q.title || q.keyword || '').trim() || undefined,
@@ -549,8 +562,6 @@ export class InventoryService {
       if (s === 'pending') return '待完善'
       return s
     }
-
-    const erpProductBySku = new Map(products.map((p) => [p.sku, p] as const))
 
     const erpItems = products.map((p) => {
       const supplier = p.supplierId ? supMap.get(Number(p.supplierId)) : undefined
@@ -617,8 +628,10 @@ export class InventoryService {
         billingDimSource: billing.source,
         dimLabel: formatDimLabel(billing.lengthCm, billing.widthCm, billing.heightCm),
         weightLabel: wt != null ? wt.toFixed(3) : '',
-        dataSource: 'erp',
-        dataSourceLabel: 'ERP·货盘/主数据',
+        dataSource: /OMS客户:|OMS 预约入库自动建档/.test(p.remark || '') ? 'oms' : 'erp',
+        dataSourceLabel: /OMS客户:|OMS 预约入库自动建档/.test(p.remark || '')
+          ? 'OMS·仓内档案'
+          : 'ERP·货盘/主数据',
         editable: true,
         sortKey: p.updatedAt.getTime(),
       })
@@ -629,6 +642,16 @@ export class InventoryService {
     const omsItems = omsTake ? allOmsItems.slice(omsStart, omsStart + omsTake) : []
     const items = [...erpItems, ...omsItems]
     const total = erpTotal + allOmsItems.length
+
+    // OMS 商品仍可能有仓内作业档案（实测尺寸/库存关联）；只用于补充
+    // SKU 查询，不作为第二条 ERP 商品主数据展示。
+    const omsSkus = omsItems.map((row) => String(row.sku || '')).filter(Boolean)
+    const omsWarehouseProducts = omsSkus.length
+      ? await this.prisma.product.findMany({
+          where: { AND: [OMS_MANAGED_PRODUCT_WHERE, { sku: { in: omsSkus } }] },
+        })
+      : []
+    const erpProductBySku = new Map([...products, ...omsWarehouseProducts].map((p) => [p.sku, p] as const))
 
     const allSkus = [...new Set(items.map((r) => String(r.sku || '')).filter(Boolean))]
     const invFlags = await this.loadSkuInventoryFlags(allSkus)
