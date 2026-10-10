@@ -30,7 +30,8 @@ export function AdminCustomerCell({
   if (!scope.isAdmin) return null
   return (
     <td
-      className="table-cell align-top text-xs font-medium text-violet-700"
+      className="table-cell whitespace-nowrap text-xs font-medium text-violet-700"
+      style={{ verticalAlign: rowSpan ? 'top' : 'middle' }}
       rowSpan={rowSpan}
     >
       <MonoCode>{scope.getCustomerCode(customerId)}</MonoCode>

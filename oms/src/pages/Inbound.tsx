@@ -100,7 +100,7 @@ export default function Inbound() {
     }
     if (!canEditInboundOrder(targetOrder.status)) {
       redirectedEdit.current = true
-      window.alert('仅草稿或在途入库单可修改')
+      window.alert('请先将在途入库单撤回为草稿，再修改并提交')
       navigate('/inbound/records')
     }
   }, [editId, reorderId, inboundOrders, navigate, targetOrder])

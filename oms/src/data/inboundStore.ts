@@ -17,7 +17,7 @@ import { buildInboundNo, inboundNoPrefix, nextSeqFromNos } from './wmsDocNo'
 export { pushInbound as addInboundOrder, updateInboundOrder, upsertInboundOrder }
 
 export function canEditInboundOrder(status: InboundStatus) {
-  return status === 'draft' || status === 'on_the_way'
+  return status === 'draft'
 }
 
 export function canVoidInboundOrder(status: InboundStatus) {
@@ -91,7 +91,9 @@ export function buildInboundOrderFromErp(erp: ErpInboundOrder, customerId?: stri
     skuCount: erp.items.length || new Set(lineItems.map(line => line.sku)).size,
     totalQty: erp.totalExpectedQty,
     receivedQty: erp.totalReceivedQty,
-    status: mapErpInboundStatus(erp.omsStatus),
+    status: erp.omsStatus === 'cancelled' && existing?.status === 'draft'
+      ? 'draft'
+      : mapErpInboundStatus(erp.omsStatus),
     createdAt: existing?.createdAt || new Date().toISOString().slice(0, 10),
     eta: erp.eta || existing?.eta,
     warehouse: erp.warehouseCode || existing?.warehouse || 'jhb1',
@@ -158,7 +160,14 @@ export async function submitInboundToErp(order: InboundOrder): Promise<{ ok: tru
     return { ok: false, error: '当前角色未绑定客户编码，无法同步 ERP' }
   }
   try {
-    const erp = await createErpInbound(erpAsnPayload(order, customerCode))
+    const payload = erpAsnPayload(order, customerCode)
+    let erp: ErpInboundOrder
+    try {
+      erp = await reactivateErpInbound(order.inboundNo, payload)
+    } catch (err) {
+      if (!isNotFoundError(err)) throw err
+      erp = await createErpInbound(payload)
+    }
     const merged = mergeLocalInboundAfterErp(erp, order)
     await upsertInboundOrderOrThrow(merged)
     return { ok: true, order: merged }
@@ -178,6 +187,21 @@ export async function updateInboundOnErp(order: InboundOrder): Promise<{ ok: tru
     const merged = mergeLocalInboundAfterErp(erp, order)
     await upsertInboundOrderOrThrow(merged)
     return { ok: true, order: merged }
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+/** 在途单撤回成草稿；ERP 停止收货，修改后重新提交时激活同一单号。 */
+export async function withdrawInboundOrder(order: InboundOrder): Promise<{ ok: true; order: InboundOrder } | { ok: false; error: string }> {
+  if (order.status !== 'on_the_way') return { ok: false, error: '仅在途入库单可撤回' }
+  const customerCode = getCustomerCode(order.customerId)
+  if (!customerCode || customerCode === '—') return { ok: false, error: '当前角色未绑定客户编码，无法同步 ERP' }
+  try {
+    const erp = await cancelErpInbound(order.inboundNo, { customerCode, customerId: order.customerId })
+    const draft = { ...mergeLocalInboundAfterErp(erp, order), status: 'draft' as InboundStatus }
+    await upsertInboundOrderOrThrow(draft)
+    return { ok: true, order: draft }
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) }
   }

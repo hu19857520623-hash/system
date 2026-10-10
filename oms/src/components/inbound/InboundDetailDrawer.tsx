@@ -18,12 +18,13 @@ import { downloadInboundReceivingList, printInboundReceivingList } from '../../d
 import { useProducts } from '../../data/inventoryStore'
 import { getInboundOrdersSnapshot, setInboundOrders } from '../../data/entityStore'
 import { apiDelete } from '../../api/client'
-import { canEditInboundOrder, canVoidInboundOrder, canReorderInboundOrder, voidInboundOrder, reorderInboundOnErp } from '../../data/inboundStore'
+import { canEditInboundOrder, canVoidInboundOrder, canReorderInboundOrder, voidInboundOrder, reorderInboundOnErp, withdrawInboundOrder } from '../../data/inboundStore'
 
 interface InboundDetailDrawerProps {
   order: InboundOrder | null
   onClose: () => void
   onOrderChanged?: (order?: InboundOrder | null) => void
+  mode?: 'drawer' | 'page'
 }
 
 const TIMELINE: Record<string, string[]> = {
@@ -37,13 +38,14 @@ const TIMELINE: Record<string, string[]> = {
   voided: ['已作废', '可重新下单'],
 }
 
-export default function InboundDetailDrawer({ order, onClose, onOrderChanged }: InboundDetailDrawerProps) {
+export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mode = 'drawer' }: InboundDetailDrawerProps) {
   const { role } = useRole()
   const [printKind, setPrintKind] = useState<InboundLabelKind | null>(null)
   const dataScope = useDataScope()
   const customerView = !isSysAdmin(role)
   const [feedback, setFeedback] = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
   const [voiding, setVoiding] = useState(false)
+  const [withdrawing, setWithdrawing] = useState(false)
   const [reordering, setReordering] = useState(false)
   const [confirmReorder, setConfirmReorder] = useState(false)
   const products = useProducts()
@@ -131,6 +133,23 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged }: 
     }
   }
 
+  const handleWithdraw = async () => {
+    if (order.status !== 'on_the_way') return
+    if (!window.confirm(`确认撤回入库单 ${order.inboundNo}？仓库将停止收货，入库单转为草稿后可修改并重新提交。`)) return
+    setWithdrawing(true)
+    try {
+      const result = await withdrawInboundOrder(order)
+      if (!result.ok) {
+        showFeedback('err', `撤回失败：${result.error}`)
+        return
+      }
+      showFeedback('ok', '已撤回为草稿，可修改后重新提交')
+      onOrderChanged?.(result.order)
+    } finally {
+      setWithdrawing(false)
+    }
+  }
+
   const handleReorderSubmit = async () => {
     if (!canReorderInboundOrder(order.status)) return
     if (!confirmReorder) {
@@ -153,9 +172,12 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged }: 
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end bg-slate-900/20 backdrop-blur-sm" onClick={onClose}>
+    <div
+      className={mode === 'page' ? 'mx-auto w-full max-w-5xl rounded-xl border border-border-light bg-white shadow-sm' : 'fixed inset-0 z-50 flex justify-end bg-slate-900/20 backdrop-blur-sm'}
+      onClick={mode === 'drawer' ? onClose : undefined}
+    >
       <div
-        className="flex h-full w-full max-w-2xl flex-col bg-white shadow-2xl"
+        className={mode === 'page' ? 'flex min-h-[70vh] w-full flex-col' : 'flex h-full w-full max-w-2xl flex-col bg-white shadow-2xl'}
         onClick={e => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-border-light px-5 py-4">
@@ -310,6 +332,11 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged }: 
 
         {printKind && <PrintCodeTypeDialog title={printKind} initialType={printKind === '箱唛' ? 'barcode' : 'qr'} onClose={() => setPrintKind(null)} onConfirm={type => handlePrint(printKind, type)} />}
         <div className="border-t border-border-light p-4 flex flex-wrap gap-2">
+          {order.status === 'on_the_way' && (
+            <Button variant="secondary" size="sm" disabled={withdrawing} onClick={() => void handleWithdraw()}>
+              {withdrawing ? '撤回中…' : '撤回为草稿'}
+            </Button>
+          )}
           {canEditInboundOrder(order.status) && (
             <Link to={`/inbound?edit=${encodeURIComponent(order.id)}`}>
               <Button size="sm">{order.status === 'draft' ? '编辑' : '修改'}</Button>

@@ -20,6 +20,7 @@ const ProductDetail = lazy(() => import('./pages/ProductDetail'))
 const Codes = lazy(() => import('./pages/Codes'))
 const Inbound = lazy(() => import('./pages/Inbound'))
 const InboundRecords = lazy(() => import('./pages/InboundRecords'))
+const InboundDetail = lazy(() => import('./pages/InboundDetail'))
 const Outbound = lazy(() => import('./pages/Outbound'))
 const OutboundRecords = lazy(() => import('./pages/OutboundRecords'))
 const Messages = lazy(() => import('./pages/Messages'))
@@ -74,6 +75,7 @@ export default function App() {
         <Route path="inbound" element={<Inbound />} />
         <Route path="inbound/new" element={<Navigate to="/inbound" replace />} />
         <Route path="inbound/records" element={<InboundRecords />} />
+        <Route path="inbound/records/:id" element={<InboundDetail />} />
         <Route path="inbound/qc" element={<Navigate to="/inbound/records" replace />} />
         <Route path="outbound/orders" element={<Navigate to="/outbound/records" replace />} />
         <Route path="outbound" element={<Outbound />} />

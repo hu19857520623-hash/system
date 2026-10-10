@@ -19,7 +19,7 @@ import { useDataScope } from '../auth/useDataScope'
 import { AdminCustomerFilter, AdminCustomerCell } from '../components/admin/AdminCustomerFilter'
 import { useRole } from '../auth/RoleContext'
 import { getCustomerCode, getCustomerIdForRole } from '../data/dataScope'
-import { addInboundOrder, canEditInboundOrder, canVoidInboundOrder, canReorderInboundOrder, nextInboundNo, refreshInboundsFromErp, voidInboundOrder } from '../data/inboundStore'
+import { addInboundOrder, canEditInboundOrder, canVoidInboundOrder, canReorderInboundOrder, nextInboundNo, refreshInboundsFromErp, voidInboundOrder, withdrawInboundOrder } from '../data/inboundStore'
 import { importCsvFile } from '../data/csvImportExport'
 import {
   INBOUND_ORDER_COLUMNS,
@@ -102,6 +102,19 @@ export default function InboundRecords() {
   const [syncing, setSyncing] = useState(false)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [voiding, setVoiding] = useState(false)
+  const [withdrawingId, setWithdrawingId] = useState<string | null>(null)
+
+  const handleWithdraw = async (order: InboundOrder) => {
+    if (!window.confirm(`确认撤回入库单 ${order.inboundNo}？仓库将停止收货，之后可在草稿中修改并重新提交。`)) return
+    setWithdrawingId(order.id)
+    try {
+      const result = await withdrawInboundOrder(order)
+      if (!result.ok) window.alert(`撤回失败：${result.error}`)
+      else if (detail?.id === order.id) setDetail(result.order)
+    } finally {
+      setWithdrawingId(null)
+    }
+  }
 
   const syncFromErp = async () => {
     const customerId = getCustomerIdForRole(role)
@@ -388,7 +401,11 @@ export default function InboundRecords() {
                     aria-label={`选择 ${o.inboundNo}`}
                   />
                 </td>
-                <td className="table-cell"><MonoCode>{o.inboundNo}</MonoCode></td>
+                <td className="table-cell">
+                  <Link to={`/inbound/records/${encodeURIComponent(o.id)}`} className="hover:underline" aria-label={`查看 ${o.inboundNo} 详情`}>
+                    <MonoCode>{o.inboundNo}</MonoCode>
+                  </Link>
+                </td>
                 <AdminCustomerCell customerId={o.customerId} scope={dataScope} />
                 <td className="table-cell text-xs">{warehouseLabel(o.warehouse)}</td>
                 <td className="table-cell text-xs">{dataScope.isAdmin ? o.inboundType : customerInboundTypeLabel(o.inboundType)}</td>
@@ -407,12 +424,17 @@ export default function InboundRecords() {
                 <td className="table-cell text-xs text-text-muted">{o.createdAt}</td>
                 <td className="table-cell align-top">
                   <div className="flex min-w-[72px] flex-col gap-0.5">
-                    <TableActionLink onClick={() => setDetail(o)}>详情</TableActionLink>
+                    <Link to={`/inbound/records/${encodeURIComponent(o.id)}`} className={actionLinkClass()}>详情</Link>
                     <InboundPrintLabelMenu order={o} />
                     {canEditInboundOrder(o.status) && (
                       <Link to={`/inbound?edit=${encodeURIComponent(o.id)}`} className={actionLinkClass()}>
-                        {o.status === 'draft' ? '编辑' : '修改'}
+                        编辑
                       </Link>
+                    )}
+                    {o.status === 'on_the_way' && (
+                      <TableActionLink onClick={() => void handleWithdraw(o)}>
+                        {withdrawingId === o.id ? '撤回中…' : '撤回为草稿'}
+                      </TableActionLink>
                     )}
                     {canVoidInboundOrder(o.status) && (
                       <TableActionLink onClick={() => void handleVoidOrders([o])}>

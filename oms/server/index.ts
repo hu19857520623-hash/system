@@ -1533,7 +1533,9 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
       if (palletInbound && !existing) {
         return res.json({ ok: true, type, skipped: 'pallet inbound is ERP-only' })
       }
-      const status = inbound.omsStatus || 'on_the_way'
+      const status = inbound.omsStatus === 'cancelled' && existing?.status === 'draft'
+        ? 'draft'
+        : inbound.omsStatus || 'on_the_way'
       const totalQty = inbound.totalExpectedQty ?? 0
       const receivedQty = inbound.totalReceivedQty ?? 0
       const lineItemsArr = inboundLinesFromErp(inbound, existing || undefined)
@@ -2807,6 +2809,23 @@ function validateInventoryProductState(
   return undefined
 }
 
+async function filterDeletedSnapshotRows<T extends Record<string, unknown>>(
+  entityType: string,
+  rows: T[],
+): Promise<T[]> {
+  // Older open tabs keep sending full snapshots; a tombstone prevents deleted
+  // records from being recreated while preserving other rows in each update.
+  if (!Array.isArray(rows) || rows.length === 0) return rows
+  const deleted = await prisma.$queryRaw<Array<{ entity_id: string }>>(Prisma.sql`
+    SELECT entity_id FROM oms_snapshot_tombstone
+    WHERE entity_type = ${entityType}
+      AND entity_id IN (${Prisma.join(rows.map(row => String(row.id)))})
+  `)
+  if (deleted.length === 0) return rows
+  const ids = new Set(deleted.map(row => row.entity_id))
+  return rows.filter(row => !ids.has(String(row.id)))
+}
+
 app.put('/api/inventory-state', async (req, res) => {
   try {
     const body = req.body as {
@@ -2843,6 +2862,12 @@ app.put('/api/inventory-state', async (req, res) => {
           .some(item => item.customerId !== scope)
       ) return res.status(403).json({ error: 'Cross-customer mutation denied' })
     }
+
+    ;[inventory, products, purchases] = await Promise.all([
+      filterDeletedSnapshotRows('inventory', inventory),
+      filterDeletedSnapshotRows('product', products),
+      filterDeletedSnapshotRows('purchase', purchases),
+    ])
 
     // This endpoint persists a complete OMS client snapshot.  Older data can
     // legitimately contain duplicate SKU cards, and rejecting that snapshot
@@ -3075,7 +3100,8 @@ app.delete('/api/inventory-state/inventory/:id', async (req, res) => {
 
 app.put('/api/outbound-orders', async (req, res) => {
   try {
-    const orders = req.body as Record<string, unknown>[]
+    let orders = req.body as Record<string, unknown>[]
+    orders = await filterDeletedSnapshotRows('outbound', orders)
     const scope = customerScope(req as AuthenticatedRequest)
     if (scope) {
       const existing = await prisma.outboundOrder.findMany({
@@ -3254,7 +3280,8 @@ app.get('/api/billing', async (req: AuthenticatedRequest, res) => {
 
 app.put('/api/logistics', async (req, res) => {
   try {
-    const records = req.body as Record<string, unknown>[]
+    let records = req.body as Record<string, unknown>[]
+    records = await filterDeletedSnapshotRows('logistics', records)
     const scope = customerScope(req as AuthenticatedRequest)
     if (scope) {
       const requestedOutboundNos = new Set(records.map(item => String(item.outboundNo)))
@@ -3307,10 +3334,11 @@ app.put('/api/logistics', async (req, res) => {
 
 app.put('/api/billing', async (req: AuthenticatedRequest, res) => {
   try {
-  const { creditBalance, feeRecords } = req.body as {
+  const { creditBalance, feeRecords: submittedFeeRecords } = req.body as {
       creditBalance: number
       feeRecords: Record<string, unknown>[]
     }
+    const feeRecords = await filterDeletedSnapshotRows('fee', submittedFeeRecords || [])
     const requestedBalance = Math.round(Number(creditBalance) * 100) / 100
     if (!Number.isFinite(requestedBalance)) {
       return res.status(400).json({ error: 'Invalid creditBalance' })
@@ -3583,7 +3611,8 @@ app.delete('/api/platform-sku-mappings/:id', async (req, res) => {
 
 app.put('/api/inbound-orders', async (req, res) => {
   try {
-    const list = req.body as Record<string, unknown>[]
+    let list = req.body as Record<string, unknown>[]
+    list = await filterDeletedSnapshotRows('inbound', list)
     const scope = customerScope(req as AuthenticatedRequest)
     if (!Array.isArray(list) || list.some(o => !o || !String(o.id || '').trim() || !String(o.inboundNo || '').trim())) {
       return res.status(400).json({ error: '入库单缺少标识或单号' })
