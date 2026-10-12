@@ -27,6 +27,7 @@ import {
 import { InventoryMutationService } from '../../common/inventory/inventory-mutation.service'
 import { ERP_MASTER_PRODUCT_WHERE, OMS_MANAGED_PRODUCT_WHERE } from '../../common/product-source.util'
 import type { InventoryTx } from '../../common/inventory/inventory-mutation.types'
+import { omsInventoryWithoutErpDuplicates } from './inventory-source.util'
 import {
   assertLogisticsWarehouse,
   parseLogisticsTransferBody,
@@ -108,7 +109,32 @@ export class InventoryService {
       }
     }
 
-    if (q.supplierKeyword?.trim()) {
+    if (q.customerKeyword?.trim()) {
+      const keyword = q.customerKeyword.trim()
+      const customers = await this.prisma.customer.findMany({
+        where: { OR: [{ customerCode: { contains: keyword } }, { customerName: { contains: keyword } }] },
+        select: { customerCode: true },
+      })
+      const customerCodes = new Set(customers.map((row) => row.customerCode.toUpperCase()))
+      try {
+        const omsCustomers = await this.prisma.$queryRawUnsafe<{ code: string }[]>(
+          'SELECT code FROM oms_customeraccount WHERE code LIKE ? OR name LIKE ?',
+          `%${keyword}%`, `%${keyword}%`,
+        )
+        for (const row of omsCustomers) customerCodes.add(String(row.code).toUpperCase())
+      } catch {
+        // ERP customer records remain usable if OMS tables are unavailable.
+      }
+      const ownedProducts = productIdFilter.length && customerCodes.size
+        ? await this.prisma.product.findMany({
+            where: { id: { in: productIdFilter } },
+            select: { id: true, sku: true, remark: true },
+          })
+        : []
+      productIdFilter = ownedProducts.filter((row) => customerCodes.has((
+        parseOmsCustomerCodeFromRemark(row.remark) || deriveCustomerCodeFromInternalSku(row.sku) || ''
+      ).toUpperCase())).map((row) => row.id)
+    } else if (q.supplierKeyword?.trim()) {
       const suppliers = await this.prisma.supplier.findMany({
         where: {
           OR: [
@@ -344,10 +370,32 @@ export class InventoryService {
       }
     }
 
-    const omsItems =
+    const omsCandidates =
       mergedFilters.dataSource === 'all' || mergedFilters.dataSource === 'oms'
         ? await fetchOmsInventoryRows(this.prisma, mergedFilters)
         : []
+
+    // Resolve existence independently of quantity filters and the selected source tab.
+    // A filtered-out ERP row must not be replaced with its stale OMS mirror.
+    const authoritativeStock = omsCandidates.length
+      ? await this.prisma.inventory.findMany({
+          where: { sku: { in: [...new Set(omsCandidates.map((row) => row.sku))] } },
+          select: { sku: true, warehouseCode: true, productId: true },
+        })
+      : []
+    const stockProducts = authoritativeStock.length
+      ? await this.prisma.product.findMany({
+          where: { id: { in: [...new Set(authoritativeStock.map((row) => row.productId))] } },
+          select: { id: true, remark: true },
+        })
+      : []
+    const stockProductById = new Map(stockProducts.map((row) => [String(row.id), row]))
+    const omsItems = omsInventoryWithoutErpDuplicates(omsCandidates, authoritativeStock.map((row) => ({
+      sku: row.sku,
+      warehouseCode: row.warehouseCode,
+      customerCode: parseOmsCustomerCodeFromRemark(stockProductById.get(String(row.productId))?.remark)
+        || deriveCustomerCodeFromInternalSku(row.sku),
+    })))
 
     const erpFiltered =
       mergedFilters.dataSource === 'all' || mergedFilters.dataSource === 'erp' ? erpItems : []

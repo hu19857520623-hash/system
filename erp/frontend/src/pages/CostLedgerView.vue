@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { formatSku } from '@erp/shared/sku-display'
 import { computed, onMounted, ref } from 'vue'
 import { costApi } from '@/api/client.js'
 import { mapCostLedger } from '@/api/mappers.ts'
@@ -118,7 +119,7 @@ onMounted(load)
       <el-table-column prop="referenceNo" label="关联单号" min-width="140" show-overflow-tooltip>
         <template #default="{ row }"><span class="mono linkish">{{ row.referenceNo || '—' }}</span></template>
       </el-table-column>
-      <el-table-column prop="sku" label="SKU" min-width="128" show-overflow-tooltip />
+      <el-table-column prop="sku" label="SKU" min-width="128" show-overflow-tooltip :formatter="formatSku" />
       <el-table-column prop="costType" label="费用类型" min-width="96" show-overflow-tooltip />
       <el-table-column prop="costDate" label="发生日期" width="108" />
       <el-table-column prop="amountRmb" label="金额 (RMB)" width="118" align="right">

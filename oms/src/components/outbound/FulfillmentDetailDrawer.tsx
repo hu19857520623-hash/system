@@ -1,3 +1,4 @@
+import { displaySku } from '../../data/skuDisplay'
 import { useEffect, useState, useMemo } from 'react'
 import {
   Badge, Button, Drawer, DrawerTabs, ExceptionBadge, InfoRow, MonoCode, SectionTitle,
@@ -188,7 +189,7 @@ export default function FulfillmentDetailDrawer({ row, open, onClose, onUploadPo
                 {outbound.lineItems && outbound.lineItems.length > 0 && (
                   <InfoRow
                     label="明细行"
-                    value={outbound.lineItems.map(l => `${l.sku}×${l.qty}`).join('、')}
+                    value={outbound.lineItems.map(l => `${displaySku(l.sku, outbound.customerId)}×${l.qty}`).join('、')}
                   />
                 )}
                 {outbound.attachments && outbound.attachments.length > 0 && (
@@ -244,7 +245,7 @@ export default function FulfillmentDetailDrawer({ row, open, onClose, onUploadPo
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium text-text-primary">{item.name}</p>
-                  <p className="text-xs text-text-muted"><MonoCode>{item.sku}</MonoCode></p>
+                  <p className="text-xs text-text-muted"><MonoCode>{displaySku(item.sku, order.customerId)}</MonoCode></p>
                   <p className="mt-1 text-xs text-text-muted">
                     × {item.qty} · {formatCurrency(item.price)}
                     {!item.stockOk && <span className="ml-2 text-red-600">库存不足</span>}

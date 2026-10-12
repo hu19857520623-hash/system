@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { displaySku, displaySkuText } from '@erp/shared/sku-display'
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -238,11 +239,11 @@ async function saveCreate() {
       status: f.status,
     })
     createVisible.value = false
-    ElMessage.success(`商品 ${created.sku} 已创建，可在编辑中上传图片`)
+    ElMessage.success(displaySkuText(`商品 ${displaySku(created)} 已创建，可在编辑中上传图片`))
     await load()
     if (created.id) openEdit(created.id)
   } catch (err: any) {
-    ElMessage.error(err.message || '创建失败')
+    ElMessage.error(displaySkuText(err.message || '创建失败'))
   } finally {
     createSaving.value = false
   }
@@ -275,7 +276,7 @@ async function loadProductDialog(id: number, mode: 'detail' | 'edit') {
       dialogVisible.value = true
     }
   } catch (err: any) {
-    ElMessage.error(err.message || '加载商品失败')
+    ElMessage.error(displaySkuText(err.message || '加载商品失败'))
   }
 }
 
@@ -346,7 +347,7 @@ async function uploadProductImage(productId: number, file: File) {
     ElMessage.success('图片已上传')
     load()
   } catch (err: any) {
-    ElMessage.error(err.message || '图片上传失败')
+    ElMessage.error(displaySkuText(err.message || '图片上传失败'))
   } finally {
     imageUploading.value = false
   }
@@ -366,7 +367,7 @@ async function removeProductImage(productId: number, imageId: number | null) {
     ElMessage.success('图片已删除')
     load()
   } catch (err: any) {
-    if (err !== 'cancel') ElMessage.error(err.message || '删除失败')
+    if (err !== 'cancel') ElMessage.error(displaySkuText(err.message || '删除失败'))
   }
 }
 
@@ -382,7 +383,7 @@ async function handleEditImageUpload(options: { file: File }) {
 
 async function disableProduct(row: any) {
   try {
-    await erpConfirm(`确认禁用商品「${row.name}」（${row.sku}）？禁用后不可用于新采购下单。`, '禁用商品', { type: 'warning' })
+    await erpConfirm(`确认禁用商品「${row.name}」（${displaySku(row)}）？禁用后不可用于新采购下单。`, '禁用商品', { type: 'warning' })
     const ok = await withAction(async () => {
       await productApi.disable(row.id)
     }, '商品已禁用')
@@ -457,7 +458,7 @@ async function printSkuLabels(items: Array<{ sku?: string; name?: string; barcod
         <el-table-column type="selection" width="46" fixed="left" reserve-selection />
         <el-table-column prop="sku" label="SKU" width="110">
           <template #default="{ row }">
-            <span style="font-family: var(--font-mono); font-size: 12px">{{ row.sku }}</span>
+            <span style="font-family: var(--font-mono); font-size: 12px">{{ displaySku(row) }}</span>
           </template>
         </el-table-column>
         <el-table-column prop="spu" label="SPU" width="120" />
@@ -631,7 +632,7 @@ async function printSkuLabels(items: Array<{ sku?: string; name?: string; barcod
         </p>
       </div>
       <div class="product-info-panel">
-        <DetailSheet :kicker="detailProduct.sku" :title="detailProduct.name" :subtitle="[detailProduct.spec, detailProduct.supplier].filter(Boolean).join(' · ')">
+        <DetailSheet :kicker="displaySku(detailProduct)" :title="detailProduct.name" :subtitle="[detailProduct.spec, detailProduct.supplier].filter(Boolean).join(' · ')">
           <template #status>
             <el-tag size="small">{{ detailProduct.status }}</el-tag>
           </template>

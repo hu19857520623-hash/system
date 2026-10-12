@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { displaySku, displaySkuText } from '@erp/shared/sku-display'
 import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { erpConfirm, erpPrompt } from '@/utils/messageBox'
@@ -915,7 +916,7 @@ async function markPoUnpaid(po?: { id: number }) {
         <el-table v-loading="assignLoading" :data="assignPagedItems" stripe border size="small">
           <el-table-column prop="prePoNo" label="预采购单号" width="130"><template #default="{ row }"><span class="mono">{{ row.prePoNo }}</span></template></el-table-column>
           <el-table-column prop="applyNo" label="选品单号" width="120" />
-          <el-table-column prop="sku" label="SKU" width="110"><template #default="{ row }"><span class="mono">{{ row.sku }}</span></template></el-table-column>
+          <el-table-column prop="sku" label="SKU" width="110"><template #default="{ row }"><span class="mono">{{ displaySku(row) }}</span></template></el-table-column>
           <el-table-column prop="productName" label="商品名称" min-width="140" show-overflow-tooltip />
           <el-table-column label="计划数量" width="90" align="right"><template #default="{ row }">{{ row.plannedQty }}</template></el-table-column>
           <el-table-column label="参考单价" width="90" align="right"><template #default="{ row }">{{ row.unitPrice != null ? `¥ ${row.unitPrice}` : '—' }}</template></el-table-column>
@@ -936,7 +937,7 @@ async function markPoUnpaid(po?: { id: number }) {
         </div>
         <el-table v-loading="prePoLoading" :data="prePoPagedItems" stripe border size="small">
           <el-table-column prop="prePoNo" label="预采购单号" width="130"><template #default="{ row }"><span class="mono">{{ row.prePoNo }}</span></template></el-table-column>
-          <el-table-column prop="sku" label="SKU" width="110"><template #default="{ row }"><span class="mono">{{ row.sku }}</span></template></el-table-column>
+          <el-table-column prop="sku" label="SKU" width="110"><template #default="{ row }"><span class="mono">{{ displaySku(row) }}</span></template></el-table-column>
           <el-table-column prop="productName" label="商品名称" min-width="130" show-overflow-tooltip />
           <el-table-column prop="supplier" label="供应商" width="110" show-overflow-tooltip />
           <el-table-column label="单价" width="80" align="right"><template #default="{ row }">{{ row.unitPrice != null ? `¥ ${row.unitPrice}` : '—' }}</template></el-table-column>
@@ -970,7 +971,7 @@ async function markPoUnpaid(po?: { id: number }) {
           </template>
         </el-table-column>
         <el-table-column prop="skuLabel" label="SKU" width="110">
-          <template #default="{ row }"><span class="mono">{{ row.skuLabel }}</span></template>
+          <template #default="{ row }"><span class="mono">{{ displaySkuText(row.skuLabel) }}</span></template>
         </el-table-column>
         <el-table-column prop="productNameLabel" label="商品名称" min-width="130" show-overflow-tooltip />
         <el-table-column prop="supplier" label="供应商" min-width="130" />
@@ -1089,7 +1090,7 @@ async function markPoUnpaid(po?: { id: number }) {
               >
                 <template #default="{ item }: { item: CreatePoSkuOption }">
                   <div class="sku-suggest-item">
-                    <span class="mono">{{ item.sku }}</span>
+                    <span class="mono">{{ displaySku(item) }}</span>
                     <span class="sku-suggest-name">{{ item.productName }}</span>
                   </div>
                 </template>
@@ -1224,7 +1225,7 @@ async function markPoUnpaid(po?: { id: number }) {
 
           <div class="detail-section-title">SKU 费用明细</div>
           <el-table :data="selectedPo.items || []" border size="small" style="margin-bottom:16px">
-            <el-table-column prop="sku" label="SKU" width="130"><template #default="{ row }"><span class="mono">{{ row.sku }}</span></template></el-table-column>
+            <el-table-column prop="sku" label="SKU" width="130"><template #default="{ row }"><span class="mono">{{ displaySku(row) }}</span></template></el-table-column>
             <el-table-column prop="productName" label="商品" min-width="150" />
             <el-table-column label="实际数量" width="88" align="right"><template #default="{ row }">{{ financeLineBreakdown(row, selectedPo.purchaseConfirmation).qty.toLocaleString() }}</template></el-table-column>
             <el-table-column label="采购单价" width="100" align="right"><template #default="{ row }">{{ confirmationMoney(row.unitPrice) }}</template></el-table-column>
@@ -1298,7 +1299,7 @@ async function markPoUnpaid(po?: { id: number }) {
         <div class="detail-section-title">SKU 明细</div>
         <el-table :data="selectedPo.items || []" border size="small" style="margin-bottom:20px">
           <el-table-column prop="sku" label="SKU" width="110">
-            <template #default="{ row }"><span style="font-family:var(--font-mono);font-size:12px">{{ row.sku }}</span></template>
+            <template #default="{ row }"><span style="font-family:var(--font-mono);font-size:12px">{{ displaySku(row) }}</span></template>
           </el-table-column>
           <el-table-column prop="productName" label="商品名" min-width="120" />
           <el-table-column label="核定数量" width="88" align="right">

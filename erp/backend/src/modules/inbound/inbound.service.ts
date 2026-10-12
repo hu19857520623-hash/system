@@ -1,4 +1,5 @@
 import { assertGlobalSkuAvailable } from '../../common/global-sku.util'
+import { isCatalogPurchaseInbound } from './catalog-inbound.util'
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { FileStoreService } from '../../common/file-store.service'
@@ -18,6 +19,7 @@ import { InventoryMutationService } from '../../common/inventory/inventory-mutat
 import { buildInternalSku, deriveCustomerCodeFromInternalSku } from '../../common/sku-code.util'
 import { buildBoxLabelsPdfBuffer, buildInboundBoxLabelData } from '../../common/labels/box-label-pdf.util'
 import { buildSkuLabelsHtml, buildSkuLabelsPdfBuffer } from '../../common/labels/sku-label.util'
+import { inboundCustomerSku } from '@erp/shared/inbound-customer-sku'
 import { InboundFeeService } from './inbound-fee.service'
 import { normalizeOmsAsnCustomerDimensions } from './oms-asn-dimensions.util'
 import {
@@ -40,6 +42,7 @@ import {
   patchInboundRemarkSeaFreight,
 } from './inbound-sea-freight.util'
 import { inboundReceivingStarted } from './inbound-delete.util'
+import { reduceInboundQuantity, InboundReduction } from './inbound-reduce.util'
 
 type OmsAsnLineInput = {
   sku: string
@@ -146,7 +149,18 @@ export class InboundService {
       keyword: q.keyword,
       status: q.status,
     })
-    const erpNoSet = new Set(erpItems.map((r) => r.inboundNo))
+    // Check ERP existence without the status filter: an OMS snapshot can lag behind
+    // its ERP order and must not reappear under an earlier workflow status.
+    const linkedErpOrders = omsItems.length
+      ? await this.prisma.inboundOrder.findMany({
+          where: { inboundNo: { in: omsItems.map((r) => r.inboundNo) } },
+          select: { inboundNo: true },
+        })
+      : []
+    const erpNoSet = new Set([
+      ...erpItems.map((r) => r.inboundNo),
+      ...linkedErpOrders.map((r) => r.inboundNo),
+    ])
     const omsOnly = omsItems.filter((r) => !erpNoSet.has(r.inboundNo))
 
     const { items, total } = mergeInboundPaginate([erpItems, omsOnly], page, pageSize)
@@ -291,6 +305,7 @@ export class InboundService {
       inboundId: item.inboundId != null ? Number(item.inboundId) : undefined,
       productId: Number(item.productId),
       productName: prod?.productName || item.sku,
+      customerSku: prod?.customerSku || undefined,
       spec: prod?.spec || '',
       lengthCm: billing.lengthCm,
       widthCm: billing.widthCm,
@@ -955,6 +970,10 @@ export class InboundService {
     }
   }
 
+  reduceQuantity(id: number, mode: 'qc' | 'carton' | 'putaway', body: InboundReduction, operatorId?: number) {
+    return reduceInboundQuantity(this.prisma, this.inventoryMutation, id, mode, body, operatorId)
+  }
+
   /** 扫外箱标：仅登记箱数，不写入 SKU 实收件数（件数在清点与测量确认） */
   async receiveBox(
     id: number,
@@ -1359,6 +1378,24 @@ export class InboundService {
   }
 
   /** 海外仓到仓扫描：pending_receipt → arrived */
+  async bindCatalogInbound(data: { scanCode: string; warehouseCode: string }, operatorId?: number) {
+    const scanCode = String(data.scanCode || '').trim()
+    const warehouseCode = String(data.warehouseCode || '').trim()
+    if (!scanCode || !warehouseCode) throw new BadRequestException('请先选择作业仓库并扫描入库单号')
+    const order = await this.prisma.inboundOrder.findFirst({
+      where: { inboundNo: scanCode, warehouseCode }, include: { items: true },
+    })
+    if (!order) throw new NotFoundException('未找到当前仓库的入库单，请扫描完整入库单号')
+    if (!isCatalogPurchaseInbound(order)) throw new BadRequestException('货盘入库只接受 ERP 货盘采购发运的入库单，不支持客户预约或客户自有货物入库单')
+    if (!PENDING_RECEIPT_STATUSES.has(order.status) && !QC_STATUSES.has(order.status) && !PUTAWAY_STATUSES.has(order.status)) {
+      throw new BadRequestException(`当前状态「${order.status}」不可绑定货盘入库作业`)
+    }
+    if (PENDING_RECEIPT_STATUSES.has(order.status)) {
+      await this.arrivalScan({ scanCode, warehouseCode }, operatorId)
+    }
+    return this.detail(Number(order.id))
+  }
+
   async arrivalScan(data: { scanCode: string; warehouseCode: string }, operatorId?: number) {
     const scanCode = String(data.scanCode || '').trim()
     const warehouseCode = String(data.warehouseCode || '').trim()
@@ -1987,11 +2024,10 @@ export class InboundService {
     const items = sku ? order.items.filter((i: any) => i.sku === sku) : order.items
     return buildSkuLabelsHtml(
       (items || []).map((item: any) => ({
-        sku: item.sku,
-        barcode: item.barcode,
+        sku: inboundCustomerSku(item, order.omsCustomerCode),
         qty: item.expectedQty,
       })),
-      { customerCode: order.omsCustomerCode, title: `SKU标签_${order.inboundNo}` },
+      { title: `SKU标签_${order.inboundNo}` },
     )
   }
 
@@ -2024,11 +2060,10 @@ export class InboundService {
     const items = sku ? order.items.filter((i: any) => i.sku === sku) : order.items
     const pdf = await buildSkuLabelsPdfBuffer(
       (items || []).map((item: any) => ({
-        sku: item.sku,
-        barcode: item.barcode,
+        sku: inboundCustomerSku(item, order.omsCustomerCode),
         qty: item.expectedQty,
       })),
-      { customerCode: order.omsCustomerCode },
+      {},
     )
     const fileName = `SKU标签_${order.inboundNo}.pdf`
     this.files.write('labels', fileName, pdf)

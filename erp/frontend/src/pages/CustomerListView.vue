@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { displaySku, displaySkuText } from '@erp/shared/sku-display'
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -257,7 +258,7 @@ async function load() {
     rows.value = (res.items || []).map(mapCustomer)
     listTotal.value = res.total ?? rows.value.length
   } catch (e: any) {
-    ElMessage.error(e?.message || '加载失败')
+    ElMessage.error(displaySkuText(e?.message || '加载失败'))
   } finally {
     loading.value = false
   }
@@ -351,7 +352,7 @@ async function submitPortalPassword() {
     ElMessage.success(`${actionLabel}成功：${result.customerCode} · ${result.portalUsername || result.portalLoginEmail}`)
     await reloadAll()
   } catch (e: any) {
-    ElMessage.error(`${e?.message || `${actionLabel}失败`}；临时密码未保留，请重新输入`)
+    ElMessage.error(displaySkuText(`${e?.message || `${actionLabel}失败`}；临时密码未保留，请重新输入`))
   } finally {
     saving.value = false
   }
@@ -407,7 +408,7 @@ async function submitCreate() {
     createSuccessVisible.value = true
     await reloadAll()
   } catch (e: any) {
-    ElMessage.error(e?.message || '开户失败')
+    ElMessage.error(displaySkuText(e?.message || '开户失败'))
   } finally {
     saving.value = false
   }
@@ -445,7 +446,7 @@ async function submitEdit() {
     editVisible.value = false
     await reloadAll()
   } catch (e: any) {
-    ElMessage.error(e?.message || '保存失败')
+    ElMessage.error(displaySkuText(e?.message || '保存失败'))
   } finally {
     saving.value = false
   }
@@ -869,7 +870,7 @@ onMounted(() => {
           empty-text="暂无持有 SKU"
         >
           <el-table-column prop="sku" label="SKU" width="110">
-            <template #default="{ row }"><span class="mono">{{ row.sku }}</span></template>
+            <template #default="{ row }"><span class="mono">{{ displaySku(row) }}</span></template>
           </el-table-column>
           <el-table-column prop="productName" label="商品名" min-width="140" show-overflow-tooltip />
           <el-table-column label="持有数量" width="90" align="right">

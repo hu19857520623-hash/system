@@ -87,6 +87,7 @@ export function mapProduct(row: any) {
   return {
     id: row.id,
     sku: row.sku,
+    customerSku: row.customerSku,
     spu: row.spu || '',
     name: row.productName,
     spec: row.spec || '',
@@ -190,6 +191,7 @@ export function mapPrePurchaseOrder(row: any) {
     devId: row.devId,
     applyNo: row.applyNo,
     sku: row.sku,
+    customerSku: row.customerSku,
     productName: row.productName,
     spec: row.spec || '',
     plannedQty: row.plannedQty ?? 0,
@@ -237,6 +239,7 @@ export function mapPendingMasterData(row: any) {
     devId: row.devId,
     applyNo: row.applyNo || '',
     sku: row.sku,
+    customerSku: row.customerSku,
     productName: row.productName,
     spec: row.spec || '',
     costRmb: row.costRmb,
@@ -259,6 +262,7 @@ export function mapPendingPurchaseSku(row: any) {
     devId: row.devId,
     applyNo: row.applyNo,
     sku: row.sku,
+    customerSku: row.customerSku,
     productId: row.productId,
     productName: row.productName,
     spec: row.spec || '',
@@ -377,6 +381,7 @@ export function mapLead(row: any) {
 export function mapInventory(row: any) {
   return {
     sku: row.sku,
+    customerSku: row.customerSku,
     name: row.productName || row.name || '',
     spec: row.spec || '',
     warehouse: row.warehouseCode,

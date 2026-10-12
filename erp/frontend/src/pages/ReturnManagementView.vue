@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { displaySku, displaySkuText, formatSku } from '@erp/shared/sku-display'
 import { ref, computed, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { erpConfirm } from '@/utils/messageBox'
@@ -360,7 +361,7 @@ async function submitReceive() {
       openMeasure({ ...receiveTarget.value, ...updated })
     }
   } catch (e: any) {
-    ElMessage.error(e?.message || (receiveMode.value === 'reReceive' ? '重新收货失败' : '收货失败'))
+    ElMessage.error(displaySkuText(e?.message || (receiveMode.value === 'reReceive' ? '重新收货失败' : '收货失败')))
   } finally {
     receiveSubmitting.value = false
   }
@@ -441,7 +442,7 @@ async function openFeeTemplates() {
   try {
     feeTemplates.value = await returnsApi.listFeeTemplates()
   } catch (e: any) {
-    ElMessage.error(e?.message || '加载收费模板失败')
+    ElMessage.error(displaySkuText(e?.message || '加载收费模板失败'))
   }
 }
 
@@ -512,7 +513,7 @@ async function deleteTemplate(tpl: any) {
     feeTemplates.value = feeTemplates.value.filter((t: any) => t.id !== tpl.id)
     if (editingTemplateId.value === tpl.id) cancelEditTemplate()
   } catch (e: any) {
-    ElMessage.error(e?.message || '删除失败')
+    ElMessage.error(displaySkuText(e?.message || '删除失败'))
   }
 }
 
@@ -579,7 +580,7 @@ async function saveTemplate() {
     cancelEditTemplate()
     if (measureDialog.value) scheduleFeePreview()
   } catch (e: any) {
-    ElMessage.error(e?.message || '保存失败')
+    ElMessage.error(displaySkuText(e?.message || '保存失败'))
   } finally {
     templateSaving.value = false
   }
@@ -628,7 +629,7 @@ async function submitMeasure() {
     measureDialog.value = false
     await loadList()
   } catch (e: any) {
-    ElMessage.error(e?.message || '测量或算费失败')
+    ElMessage.error(displaySkuText(e?.message || '测量或算费失败'))
   } finally {
     measureSubmitting.value = false
   }
@@ -678,7 +679,7 @@ async function submitInspect() {
     inspectDialog.value = false
     await loadList()
   } catch (e: any) {
-    ElMessage.error(e?.message || '提交失败')
+    ElMessage.error(displaySkuText(e?.message || '提交失败'))
   } finally {
     inspectSubmitting.value = false
   }
@@ -692,7 +693,7 @@ async function handleDispose(row: any) {
     ElMessage.success('已确认销毁')
     await loadList()
   } catch (e: any) {
-    if (e !== 'cancel') ElMessage.error(e?.message || '操作失败')
+    if (e !== 'cancel') ElMessage.error(displaySkuText(e?.message || '操作失败'))
   }
 }
 
@@ -714,7 +715,7 @@ async function submitProcess() {
     processDialog.value = false
     await loadList()
   } catch (e: any) {
-    ElMessage.error(e?.message || '处理失败')
+    ElMessage.error(displaySkuText(e?.message || '处理失败'))
   }
 }
 
@@ -722,7 +723,7 @@ async function downloadAttachment(row: any, att: { id: number; fileName: string 
   try {
     await returnsApi.downloadAttachment(row.id, att.id)
   } catch (e: any) {
-    ElMessage.error(e?.message || '下载失败')
+    ElMessage.error(displaySkuText(e?.message || '下载失败'))
   }
 }
 
@@ -752,7 +753,7 @@ async function openLog(row: any) {
     })
     logRows.value = res.items || []
   } catch (e: any) {
-    ElMessage.error(e?.message || '加载日志失败')
+    ElMessage.error(displaySkuText(e?.message || '加载日志失败'))
   } finally {
     logLoading.value = false
   }
@@ -963,7 +964,7 @@ void _removeExtraFeeLine
       <el-table-column label="退件明细" min-width="300">
         <template #default="{ row }">
           <div v-for="item in row.items || []" :key="item.id || item.sku" class="item-block">
-            <div class="item-sku mono">{{ item.sku }}</div>
+            <div class="item-sku mono">{{ displaySku(item) }}</div>
             <div class="item-line"><span class="lbl">退件数量</span>{{ item.quantity }}</div>
             <div class="item-line"><span class="lbl">处理方式</span>{{ row.requestedProcessLabel || row.requestedProcess }}</div>
             <div class="item-stats">
@@ -1178,7 +1179,7 @@ void _removeExtraFeeLine
           <el-empty v-else description="暂无附件" :image-size="48" />
           <el-divider content-position="left">SKU 明细</el-divider>
           <el-table :data="detailRow.items || []" size="small" border>
-            <el-table-column prop="sku" label="SKU" width="140" />
+            <el-table-column prop="sku" label="SKU" width="140" :formatter="formatSku" />
             <el-table-column prop="productName" label="商品名" min-width="160" />
             <el-table-column prop="quantity" label="数量" width="80" align="right" />
           </el-table>

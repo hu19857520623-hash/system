@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { displaySku } from '@erp/shared/sku-display'
 import { computed } from 'vue'
 import {
   buildOutboundLabelSummary,
@@ -92,9 +93,9 @@ function emitPrintUnit(line: unknown, unitIndex: number) {
     />
 
     <el-table v-else :data="summary.lines" size="small" border class="label-table">
-      <el-table-column label="内部 SKU" min-width="130">
+      <el-table-column label="SKU" min-width="130">
         <template #default="{ row }">
-          <span class="mono">{{ row.internalSku }}</span>
+          <span class="mono">{{ displaySku(row) }}</span>
         </template>
       </el-table-column>
       <el-table-column label="应贴" width="64" align="center">
@@ -129,7 +130,7 @@ function emitPrintUnit(line: unknown, unitIndex: number) {
               plain
               :loading="isActionLoading('unit', row.internalSku, unitIndex)"
               :disabled="!row.printable"
-              :aria-label="`打印 ${row.internalSku} 第 ${unitIndex} 件标签`"
+              :aria-label="`打印 ${displaySku(row)} 第 ${unitIndex} 件标签`"
               @click="emitPrintUnit(row, unitIndex)"
             >
               #{{ unitIndex }}

@@ -1,3 +1,4 @@
+import { displaySku, displaySkuText } from '../data/skuDisplay'
 import { useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { RefreshCw, Plus } from 'lucide-react'
@@ -86,7 +87,7 @@ export default function ReturnProcessing() {
       const n = await refreshReturnsFromErp(customerId)
       window.alert(`已从 ERP 同步 ${n} 条退件状态`)
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : String(err))
+      window.alert(displaySkuText(err instanceof Error ? err.message : String(err)))
     } finally {
       setSyncing(false)
     }
@@ -101,7 +102,7 @@ export default function ReturnProcessing() {
         customerCode: erpCustomer?.customerCode || getCustomerCode(r.customerId),
       })
       if (!result.ok) {
-        window.alert(result.error)
+        window.alert(displaySkuText(result.error))
         return
       }
       window.alert('已撤回；可在「已撤回」标签页查看该退件单')
@@ -115,7 +116,7 @@ export default function ReturnProcessing() {
     if (!window.confirm(`确认删除退件单 ${r.returnNo}？此操作不可恢复。`)) return
     const result = removeReturnOrder(r)
     if (!result.ok) {
-      window.alert(result.error)
+      window.alert(displaySkuText(result.error))
       return
     }
     if (detailId === r.id) setDetailId(null)
@@ -185,7 +186,7 @@ export default function ReturnProcessing() {
         processChoice: decision === 'keep' ? decideProcess : undefined,
       })
       if (!result.ok) {
-        window.alert(result.error)
+        window.alert(displaySkuText(result.error))
         return
       }
       window.alert(decision === 'discard' ? '已确认不留，仓库将销毁' : '已确认留货，仓库将安排作业')
@@ -267,8 +268,8 @@ export default function ReturnProcessing() {
           <tbody className="table-body">
             {returns.map(r => {
               const skuLabel = r.lineItems.length === 1
-                ? r.lineItems[0].sku
-                : r.lineItems.length ? `${r.lineItems[0]?.sku} 等 ${r.lineItems.length} SKU` : '—'
+                ? displaySku(r.lineItems[0].sku, r.customerId)
+                : r.lineItems.length ? `${displaySku(r.lineItems[0]?.sku, r.customerId)} 等 ${r.lineItems.length} SKU` : '—'
               return (
                 <tr
                   key={r.id}
@@ -280,7 +281,7 @@ export default function ReturnProcessing() {
                   <td className="table-cell text-xs">{r.returnWarehouse || '—'}</td>
                   <td className="table-cell text-xs">{r.referenceNo || '—'}</td>
                   <td className="table-cell text-xs">{r.trackingNo || '—'}</td>
-                  <td className="table-cell text-xs"><MonoCode>{skuLabel}</MonoCode></td>
+                  <td className="table-cell text-xs"><MonoCode>{displaySkuText(skuLabel)}</MonoCode></td>
                   <td className="table-cell text-xs">{r.totalQty ?? r.lineItems.reduce((s, i) => s + i.qty, 0)}</td>
                   <td className="table-cell text-xs text-text-secondary">{r.returnReason}</td>
                   <td className="table-cell text-xs">{r.requestedProcessLabel || r.requestedProcess}</td>
@@ -439,7 +440,7 @@ export default function ReturnProcessing() {
               <ul className="space-y-1 text-xs">
                 {detail.lineItems.map(l => (
                   <li key={l.sku} className="flex justify-between rounded bg-surface-muted px-2 py-1">
-                    <span><MonoCode>{l.sku}</MonoCode> · {l.name}</span>
+                    <span><MonoCode>{displaySku(l.sku, detail.customerId)}</MonoCode> · {l.name}</span>
                     <span>×{l.qty}</span>
                   </li>
                 ))}

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { displaySku, displaySkuText, formatSku } from '@erp/shared/sku-display'
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -175,7 +176,7 @@ async function loadProductDimMap(force = false) {
 
 function skuOptionLabel(s: WhSku) {
   const name = s.productName ? ` · ${s.productName}` : ''
-  return `${s.sku}${name} · 可发 ${s.available}`
+  return `${displaySku(s)}${name} · 可发 ${s.available}`
 }
 
 async function hydrateWarehouseSkuDims(rows: WhSku[]) {
@@ -452,7 +453,7 @@ function clampLinePack(line: InboundLine) {
   }
   syncLinePackQty(line)
   total = lineTotalQty(line)
-  ElMessage.warning(`SKU「${line.sku}」合计 ${total} 件，不能超过本仓可发 ${max} 件`)
+  ElMessage.warning(displaySkuText(`SKU「${displaySku(line)}」合计 ${total} 件，不能超过本仓可发 ${max} 件`))
 }
 
 async function loadLogisticsStock(code: string) {
@@ -752,7 +753,7 @@ async function removeInbound(row?: any) {
     const copy = await confirmAction('是否用原单内容复制一份新的入库单？提交后会生成新单号。', '复制新建')
     if (copy) await copyDeletedInbound(snapshot)
   } catch (e: any) {
-    ElMessage.error(e?.message || '删除失败')
+    ElMessage.error(displaySkuText(e?.message || '删除失败'))
   }
 }
 
@@ -938,7 +939,7 @@ async function saveDraft() {
     toast('草稿已保存')
     tab.value = 'drafts'
   } catch (e: any) {
-    ElMessage.error(e.message || '保存草稿失败')
+    ElMessage.error(displaySkuText(e.message || '保存草稿失败'))
   }
 }
 
@@ -1021,7 +1022,7 @@ function validateCartons(validLines: InboundLine[]) {
   }
   for (const [sku, qty] of expected) {
     if ((packed.get(sku) || 0) !== qty) {
-      ElMessage.warning(`外箱装箱数量与明细不一致：${sku} 装箱 ${packed.get(sku) || 0} ≠ 应收 ${qty}`)
+      ElMessage.warning(displaySkuText(`外箱装箱数量与明细不一致：${sku} 装箱 ${packed.get(sku) || 0} ≠ 应收 ${qty}`))
       return false
     }
   }
@@ -1048,17 +1049,17 @@ async function submitCreate() {
   }
   const badPack = validLines.find((l) => !l.cartonCount || !l.qtyPerCarton)
   if (badPack) {
-    ElMessage.warning(`SKU「${badPack.sku}」请填写入库箱数与每箱数量`)
+    ElMessage.warning(displaySkuText(`SKU「${displaySku(badPack)}」请填写入库箱数与每箱数量`))
     return
   }
   const missingDim = validLines.find((l) => !l.lengthCm || !l.widthCm || !l.heightCm)
   if (missingDim) {
-    ElMessage.warning(`请填写 SKU「${missingDim.sku}」的单件长、宽、高（cm）`)
+    ElMessage.warning(displaySkuText(`请填写 SKU「${displaySku(missingDim)}」的单件长、宽、高（cm）`))
     return
   }
   const missingWeight = validLines.find((l) => !l.weightKg)
   if (missingWeight) {
-    ElMessage.warning(`请填写 SKU「${missingWeight.sku}」的单件重量（kg）`)
+    ElMessage.warning(displaySkuText(`请填写 SKU「${displaySku(missingWeight)}」的单件重量（kg）`))
     return
   }
   const skuTotals = new Map<string, number>()
@@ -1068,7 +1069,7 @@ async function submitCreate() {
   for (const [sku, total] of skuTotals) {
     const available = getSkuAvailable(sku)
     if (available && total > available) {
-      ElMessage.warning(`SKU「${sku}」入库数量合计 ${total} 件，超过本仓可发 ${available} 件`)
+      ElMessage.warning(displaySkuText(`SKU「${sku}」入库数量合计 ${total} 件，超过本仓可发 ${available} 件`))
       return
     }
   }
@@ -1149,7 +1150,7 @@ async function openDetail(row: any) {
       detailOrder.value = await inboundApi.detail(id)
     }
   } catch (e: any) {
-    ElMessage.error(e?.message || '加载详情失败')
+    ElMessage.error(displaySkuText(e?.message || '加载详情失败'))
     detailVisible.value = false
   } finally {
     detailLoading.value = false
@@ -1173,7 +1174,7 @@ async function submitFreight() {
     return
   }
   if (detailMissingDimSkus.value.length) {
-    ElMessage.warning(`请先补齐尺寸：${detailMissingDimSkus.value.join('、')}`)
+    ElMessage.warning(displaySkuText(`请先补齐尺寸：${detailMissingDimSkus.value.join('、')}`))
     return
   }
   freightSubmitting.value = true
@@ -1187,7 +1188,7 @@ async function submitFreight() {
     toast('海运费已补录并同步货盘')
     await load()
   } catch (e: any) {
-    ElMessage.error(e?.message || '补录海运费失败')
+    ElMessage.error(displaySkuText(e?.message || '补录海运费失败'))
   } finally {
     freightSubmitting.value = false
   }
@@ -1204,7 +1205,7 @@ async function clearFreight() {
     toast('海运费已清除，入库单仍保留')
     await load()
   } catch (e: any) {
-    ElMessage.error(e?.message || '清除海运费失败')
+    ElMessage.error(displaySkuText(e?.message || '清除海运费失败'))
   }
 }
 
@@ -1222,7 +1223,7 @@ async function downloadLabel(row: any) {
     triggerBlobDownload(blob, fileName)
     toast(`已下载 ${row.id} SKU 标签`)
   } catch (e: any) {
-    ElMessage.error(e.message || '标签下载失败')
+    ElMessage.error(displaySkuText(e.message || '标签下载失败'))
   }
 }
 
@@ -1234,7 +1235,7 @@ async function downloadOuterLabel(row: any) {
     triggerBlobDownload(blob, fileName)
     toast(`已下载 ${row.id} 外箱标`)
   } catch (e: any) {
-    ElMessage.error(e.message || '外箱标下载失败')
+    ElMessage.error(displaySkuText(e.message || '外箱标下载失败'))
   }
 }
 
@@ -1244,7 +1245,7 @@ async function downloadReceivingList(row: any) {
   try {
     await inboundApi.downloadReceivingList(id)
   } catch (e: any) {
-    ElMessage.error(e.message || '入库清单下载失败')
+    ElMessage.error(displaySkuText(e.message || '入库清单下载失败'))
   }
 }
 
@@ -1268,7 +1269,7 @@ async function deleteDraft(row: any) {
       await loadDrafts()
       toast('草稿已删除')
     } catch (e: any) {
-      ElMessage.error(e.message || '删除失败')
+      ElMessage.error(displaySkuText(e.message || '删除失败'))
     }
   }
 }
@@ -1295,7 +1296,7 @@ async function handleAttachmentFile(e: Event) {
     })
     toast(`附件「${file.name}」已上传`)
   } catch (err: any) {
-    ElMessage.error(err.message || '附件上传失败')
+    ElMessage.error(displaySkuText(err.message || '附件上传失败'))
   }
 }
 </script>
@@ -1475,7 +1476,7 @@ async function handleAttachmentFile(e: Event) {
                 <span class="align-right">单件海运费</span>
               </div>
               <div v-for="row in freightAllocLines" :key="row.sku" class="alloc-grid-row">
-                <span class="sku-code">{{ row.sku }}</span>
+                <span class="sku-code">{{ displaySku(row) }}</span>
                 <span class="num align-right">{{ row.lineCbm ? row.lineCbm.toFixed(3) : '—' }}</span>
                 <span class="align-right">
                   <span v-if="row.lineCbm" class="pct-badge">{{ row.volumePct.toFixed(1) }}%</span>
@@ -1531,7 +1532,7 @@ async function handleAttachmentFile(e: Event) {
                     :value="s.sku"
                   >
                     <div class="sku-option-row">
-                      <span class="mono sku-option-code">{{ s.sku }}</span>
+                      <span class="mono sku-option-code">{{ displaySku(s) }}</span>
                       <span class="sku-option-name">{{ s.productName || '—' }}</span>
                       <span class="sku-option-qty">可发 {{ s.available }}</span>
                     </div>
@@ -1670,7 +1671,7 @@ async function handleAttachmentFile(e: Event) {
                     <el-option
                       v-for="l in createForm.lines.filter(x => x.sku)"
                       :key="l.sku"
-                      :label="l.sku"
+                      :label="displaySku(l)"
                       :value="l.sku"
                     />
                   </el-select>
@@ -1735,7 +1736,7 @@ async function handleAttachmentFile(e: Event) {
         <el-table-column label="入仓号" width="110">
           <template #default="{ row }">{{ row._form.warehouseNo || '—' }}</template>
         </el-table-column>
-        <el-table-column prop="sku" label="SKU" min-width="130" />
+        <el-table-column prop="sku" label="SKU" min-width="130" :formatter="formatSku" />
         <el-table-column prop="qty" label="数量" width="80" align="right" />
         <el-table-column label="预计到货" width="110">
           <template #default="{ row }">{{ row._form.plannedDate || '—' }}</template>
@@ -1771,7 +1772,7 @@ async function handleAttachmentFile(e: Event) {
         <el-table-column label="入仓号" width="110">
           <template #default="{ row }">{{ row.warehouseNo || '—' }}</template>
         </el-table-column>
-        <el-table-column prop="sku" label="SKU" min-width="130" />
+        <el-table-column prop="sku" label="SKU" min-width="130" :formatter="formatSku" />
         <el-table-column prop="qty" label="数量" width="80" align="right">
           <template #default="{ row }">{{ row.qty.toLocaleString() }}</template>
         </el-table-column>
@@ -1856,7 +1857,7 @@ async function handleAttachmentFile(e: Event) {
         <div class="detail-section-title">SKU 明细（{{ detailItems.length }}）</div>
         <el-table :data="detailItems" border size="small" class="detail-sku-table">
           <el-table-column prop="sku" label="SKU" min-width="130" show-overflow-tooltip>
-            <template #default="{ row }"><span class="mono">{{ row.sku }}</span></template>
+            <template #default="{ row }"><span class="mono">{{ displaySku(row) }}</span></template>
           </el-table-column>
           <el-table-column prop="productName" label="品名" min-width="140" show-overflow-tooltip>
             <template #default="{ row }">{{ row.productName || '—' }}</template>
@@ -1955,7 +1956,7 @@ async function handleAttachmentFile(e: Event) {
           <span class="align-right">单件海运费</span>
         </div>
         <div v-for="row in detailFreightLines" :key="row.sku" class="alloc-grid-row">
-          <span class="sku-code">{{ row.sku }}</span>
+          <span class="sku-code">{{ displaySku(row) }}</span>
           <span class="align-right">
             <span v-if="row.lineCbm" class="pct-badge">{{ row.volumePct.toFixed(1) }}%</span>
             <span v-else class="num muted">—</span>

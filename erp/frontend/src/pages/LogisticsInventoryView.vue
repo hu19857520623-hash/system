@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { displaySku, displaySkuText } from '@erp/shared/sku-display'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -210,11 +211,11 @@ async function submitTransfer() {
       remark: form.remark.trim() || undefined,
     })
     const destName = transferDestOptions.value.find((wh) => wh.code === form.toWarehouse)?.name || form.toWarehouse
-    ElMessage.success(`已调拨 ${form.qty} 件 ${form.sku} 至 ${res.toWarehouseName || destName}`)
+    ElMessage.success(displaySkuText(`已调拨 ${form.qty} 件 ${displaySku(form)} 至 ${res.toWarehouseName || destName}`))
     transferVisible.value = false
     await load()
   } catch (e: any) {
-    ElMessage.error(e?.message || '调拨失败')
+    ElMessage.error(displaySkuText(e?.message || '调拨失败'))
   } finally {
     transferring.value = false
   }
@@ -311,7 +312,7 @@ onMounted(async () => {
       >
         <el-table-column label="SKU / 商品" min-width="220">
           <template #default="{ row }">
-            <button type="button" class="sku-link" @click="detail(row)">{{ row.sku }}</button>
+            <button type="button" class="sku-link" @click="detail(row)">{{ displaySku(row) }}</button>
             <div class="title-cn">{{ row.name || '—' }}</div>
             <div v-if="row.spec" class="title-en">{{ row.spec }}</div>
           </template>
@@ -368,14 +369,14 @@ onMounted(async () => {
 
     <el-dialog
       v-model="detailVisible"
-      :title="`库存详情 · ${detailRow?.sku || ''}`"
+      :title="`库存详情 · ${displaySku(detailRow) || ''}`"
       width="680px"
       class="inventory-detail-dialog erp-detail"
       destroy-on-close
     >
       <div v-if="detailRow" class="inventory-detail">
         <DetailSheet
-          :kicker="detailRow.sku"
+          :kicker="displaySku(detailRow)"
           :title="detailRow.name || '未命名商品'"
           :subtitle="detailRow.spec || '无规格信息'"
         >
@@ -449,7 +450,7 @@ onMounted(async () => {
       <el-form label-width="88px">
         <el-form-item label="SKU">
           <div>
-            <div class="mono">{{ transferForm.sku }}</div>
+            <div class="mono">{{ displaySku(transferForm) }}</div>
             <div v-if="transferForm.name" class="sub">{{ transferForm.name }}</div>
           </div>
         </el-form-item>
@@ -491,7 +492,7 @@ onMounted(async () => {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="logVisible" :title="`库存流水 · ${logSku} @ ${logWarehouse}`" width="640px">
+    <el-dialog v-model="logVisible" :title="`库存流水 · ${displaySku(logSku)} @ ${logWarehouse}`" width="640px">
       <el-table v-loading="logLoading" :data="logRows" border size="small" max-height="360">
         <el-table-column prop="time" label="时间" width="130" />
         <el-table-column prop="changeLabel" label="类型" width="100" />

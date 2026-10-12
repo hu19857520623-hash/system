@@ -47,6 +47,7 @@ data class PageResult<T>(
 
 data class InboundOrder(
     val id: Int = 0,
+    val omsCustomerCode: String? = "",
     val inboundNo: String? = "",
     val warehouseCode: String? = "",
     val warehouseNo: String? = "",
@@ -85,7 +86,7 @@ data class InboundItem(
     val skuCode get() = sku.orEmpty()
     val remainingPutaway get() = ((actualQty ?: expectedQty) - (putawayQty ?: 0)).coerceAtLeast(0)
     val bound990 get() = boundTakealotBarcode(platformBarcode, barcode)
-    fun matchesScan(code: String) = scanMatchesProduct(code, skuCode, barcode, platformBarcode)
+    fun matchesScan(code: String, customerCode: String? = null) = scanMatchesProduct(code, skuCode, barcode, platformBarcode, customerCode = customerCode)
     fun hasMeasuredDims(): Boolean {
         val treatAsMeasured = dimensionsSource == "measured" || dimensionsSource == null
         return treatAsMeasured && (lengthCm ?: 0.0) > 0 && (widthCm ?: 0.0) > 0 && (heightCm ?: 0.0) > 0
@@ -110,6 +111,9 @@ data class ScanActionResult(
     val remaining: Int = 0,
     val itemId: Int = 0,
     val order: InboundOrder? = null,
+    val item: InboundItem? = null,
+    val carton: InboundCarton? = null,
+    val duplicate: Boolean = false,
 )
 
 data class OutboundOrder(
@@ -120,6 +124,7 @@ data class OutboundOrder(
     val pickerId: Int? = null,
     val pickerName: String? = "",
     val pickerWorkstation: String? = "",
+    val customerCode: String? = "",
     val customerName: String? = "",
     val skuSummary: String? = "",
     val totalQty: Int = 0,
@@ -182,10 +187,11 @@ data class LocalPickLine(
     val taskKey: String = "$id@$locationCode",
     val barcode: String = "",
     val platformBarcode: String = "",
+    val customerCode: String? = null,
 ) {
     val done get() = scannedQty >= qty
     val bound990 get() = boundTakealotBarcode(platformBarcode, barcode)
-    fun matchesScan(code: String) = scanMatchesProduct(code, sku, barcode, platformBarcode)
+    fun matchesScan(code: String) = scanMatchesProduct(code, sku, barcode, platformBarcode, customerCode = customerCode)
 }
 
 fun boundTakealotBarcode(vararg aliases: String?): String {
@@ -194,17 +200,6 @@ fun boundTakealotBarcode(vararg aliases: String?): String {
         .map { it.trim() }
         .filter { it.isNotEmpty() }
     return codes.firstOrNull { it.startsWith("990") }.orEmpty()
-}
-
-fun scanMatchesProduct(code: String, sku: String, vararg aliases: String?): Boolean {
-    val token = code.trim()
-    if (token.isEmpty()) return false
-    if (sku.equals(token, ignoreCase = true)) return true
-    return aliases.asSequence()
-        .flatMap { it.orEmpty().split(',', '|', ';', ' ') }
-        .map { it.trim() }
-        .filter { it.isNotEmpty() }
-        .any { it.equals(token, ignoreCase = true) }
 }
 
 class ErpException(message: String, val code: Int = -1, val retriable: Boolean = false) : RuntimeException(message)

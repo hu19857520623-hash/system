@@ -38,15 +38,20 @@ import com.takealot.pda.data.PdaPickProgressLine
 import com.takealot.pda.data.PdaResumeWork
 import com.takealot.pda.data.outboundStatusLabel
 import com.takealot.pda.data.pickTaskAtLocation
+import com.takealot.pda.data.requireUniqueScanSku
 import com.takealot.pda.scan.ScanBus
+import com.takealot.pda.scan.QueuedScan
+import com.takealot.pda.scan.ScanDiagnostics
 import com.takealot.pda.ui.components.BigButton
 import com.takealot.pda.ui.components.DocumentCard
 import com.takealot.pda.ui.components.Feedback
 import com.takealot.pda.ui.components.FeedbackBar
 import com.takealot.pda.ui.components.KeyValue
 import com.takealot.pda.ui.components.Panel
+import com.takealot.pda.ui.components.QuantityReductionDialog
 import com.takealot.pda.ui.components.ScanField
 import com.takealot.pda.ui.components.ScanQueueStatus
+import com.takealot.pda.ui.components.ScanReceiptStatus
 import com.takealot.pda.ui.components.SkuCard
 import com.takealot.pda.ui.components.StatusChip
 import com.takealot.pda.ui.components.fieldColors
@@ -102,23 +107,29 @@ class OutboundViewModel : ViewModel() {
     var lastRejectedScan by mutableStateOf<String?>(null)
     var busy by mutableStateOf(false)
     var pendingScanCount by androidx.compose.runtime.mutableIntStateOf(0)
+    var lastReadCode by mutableStateOf("")
     var showShortPickDialog by mutableStateOf(false)
     var shortPickReason by mutableStateOf("")
     var unknownScanCode by mutableStateOf<String?>(null)
     var unknownScanRemark by mutableStateOf("")
-    private val scanQueue = Channel<String>(64)
+    var reductionTaskKey by mutableStateOf<String?>(null)
+    private val scanQueue = Channel<QueuedScan>(64)
 
     init {
         viewModelScope.launch {
-            for (code in scanQueue) {
-                pendingScanCount = (pendingScanCount - 1).coerceAtLeast(0)
+            for (queued in scanQueue) {
                 while (busy) delay(40)
-                runScan(code)
+                pendingScanCount = (pendingScanCount - 1).coerceAtLeast(0)
+                val started = System.nanoTime()
+                val scanMode = mode
+                try { runScan(queued.code) } finally { ScanDiagnostics.recordScan(queued, started, "outbound", scanMode) }
             }
         }
     }
 
     fun bindMode(key: String) {
+        lastReadCode = ""
+        reductionTaskKey = null
         mode = when (key) {
             "review" -> "review"
             "ship" -> "ship"
@@ -168,20 +179,26 @@ class OutboundViewModel : ViewModel() {
         enqueueScan(scan)
     }
 
+    fun displaySku(value: String, customerCode: String? = order?.customerCode): String {
+        val prefix = customerCode.orEmpty().trim().takeIf { it.isNotEmpty() }?.plus("-") ?: return value
+        return if (value.startsWith(prefix, ignoreCase = true) && value.length > prefix.length) value.substring(prefix.length) else value
+    }
+
     private fun enqueueScan(raw: String) {
+        if (reductionTaskKey != null) { feedback = Feedback(false, "请先完成减少数量或取消后再扫码"); return }
         val code = raw.trim()
         if (code.isEmpty()) return
         scan = ""
         pendingScanCount += 1
-        if (!scanQueue.trySend(code).isSuccess) {
+        if (!scanQueue.trySend(QueuedScan(code)).isSuccess) {
             pendingScanCount = (pendingScanCount - 1).coerceAtLeast(0)
-            lastRejectedScan = "未计数 · $code：扫码队列已满，请重新扫描"
+            lastRejectedScan = "未计数 · ${displaySku(code)}：扫码队列已满，请重新扫描"
             feedback = Feedback(false, lastRejectedScan!!)
-        }
+        } else lastReadCode = code
     }
 
     private suspend fun runScan(code: String) {
-        busy = true; feedback = Feedback(false, "正在处理 $code…", processing = true)
+        busy = true; feedback = Feedback(false, "正在处理 ${displaySku(code)}…", processing = true)
         val journal = PdaApp.instance.workJournal
         val recordId = journal.beginScan("outbound", mode, code, order?.id, order?.no)
         var pickCountApplied = false
@@ -202,6 +219,7 @@ class OutboundViewModel : ViewModel() {
                     feedback = Feedback(true, "库位 ${locationTask.locationCode}，请扫描本库位待拣 SKU")
                     saveProgress(); journal.acknowledge(recordId, feedback?.message); return
                 }
+                requireUniqueScanSku(lines.filter { it.matchesScan(code) }.map { it.sku })
                 val selected = lines.pickTaskAtLocation(scannedPickLocation, code)
                 if (selected != null) {
                     val nextQty = nextPickQty(selected.scannedQty, selected.qty)
@@ -211,12 +229,12 @@ class OutboundViewModel : ViewModel() {
                     selectedSku = selected.taskKey
                     pickCountApplied = true
                     val modeHint = if (pickScanMode == "carton") "按箱" else "逐件"
-                    feedback = Feedback(true, "已计数 · $code\n$modeHint ${selected.locationCode} · ${selected.sku} $nextQty/${selected.qty}", pickCounted = true)
+                    feedback = Feedback(true, "已计数 · ${displaySku(code)}\n$modeHint ${selected.locationCode} · ${displaySku(selected.sku)} $nextQty/${selected.qty}", pickCounted = true)
                     journal.acknowledge(recordId, feedback?.message); return
                 }
                 val skuTask = lines.firstOrNull { !it.done && !it.taskKey.endsWith("@SHORT") && it.matchesScan(code) }
                 if (skuTask != null) {
-                    throw ErpException("请先扫描库位 ${skuTask.locationCode}，再扫描 ${skuTask.sku}")
+                    throw ErpException("请先扫描库位 ${skuTask.locationCode}，再扫描 ${displaySku(skuTask.sku)}")
                 }
                 if (lines.any { !it.done && it.taskKey.endsWith("@SHORT") && it.matchesScan(code) }) {
                     throw ErpException("该 SKU 存在库存缺口，请点击「登记短拣」")
@@ -225,12 +243,13 @@ class OutboundViewModel : ViewModel() {
                     throw ErpException("该 SKU 本单已拣完，请扫描下一件或提交拣货")
                 }
             } else {
+                requireUniqueScanSku(lines.filter { it.matchesScan(code) }.map { it.sku })
                 val line = lines.firstOrNull { !it.done && it.matchesScan(code) }
                 if (line != null) {
                     val nextQty = (line.scannedQty + 1).coerceAtMost(line.qty)
                     selectedSku = line.taskKey
                     lines = lines.map { if (it.taskKey == line.taskKey) it.copy(scannedQty = nextQty) else it }
-                    feedback = Feedback(true, "${line.sku} $nextQty/${line.qty}")
+                    feedback = Feedback(true, "${displaySku(line.sku)} $nextQty/${line.qty}")
                     saveProgress(); journal.acknowledge(recordId, feedback?.message); return
                 }
                 if (lines.any { it.matchesScan(code) }) {
@@ -242,8 +261,8 @@ class OutboundViewModel : ViewModel() {
         } catch (e: Exception) {
             val message = e.message ?: "扫描失败"
             if (order != null && mode == "pick") {
-                lastRejectedScan = if (pickCountApplied) "已计数 · $code：作业日志保存失败，请勿重复扫描；$message"
-                    else "未计数 · $code：$message"
+                lastRejectedScan = if (pickCountApplied) "已计数 · ${displaySku(code)}：作业日志保存失败，请勿重复扫描；$message"
+                    else "未计数 · ${displaySku(code)}：$message"
                 feedback = Feedback(false, lastRejectedScan!!)
             } else feedback = Feedback(false, message)
             if (order != null && mode != "ship" && e.message.orEmpty().contains("未找到出库单")) {
@@ -289,7 +308,7 @@ class OutboundViewModel : ViewModel() {
             val suggestions = api.pickSuggestions(id).itemList
             val shortages = suggestions.filter { it.uncovered > 0 }
             if (shortages.isNotEmpty()) {
-                shortageNotice = "库位库存不足：${shortages.joinToString("、") { "${it.sku} 缺 ${it.uncovered}" }}；可先拣有库存数量，再登记短拣"
+                shortageNotice = "库位库存不足：${shortages.joinToString("、") { "${displaySku(it.sku.orEmpty(), detail.customerCode)} 缺 ${it.uncovered}" }}；可先拣有库存数量，再登记短拣"
             }
             locationSuggestions = suggestions.associate { row -> row.id to row.suggestions.orEmpty().mapNotNull { it.locationCode?.trim()?.uppercase() } }
             nextLines = suggestions.flatMap { row ->
@@ -319,7 +338,7 @@ class OutboundViewModel : ViewModel() {
         }
         val saved = PdaApp.instance.workJournal.pickProgress(nextOrder.id, mode)
         order = nextOrder
-        lines = nextLines.map { line ->
+        lines = nextLines.map { it.copy(customerCode = nextOrder.customerCode) }.map { line ->
             saved?.lines?.firstOrNull { it.taskKey == line.taskKey || (it.taskKey.isNullOrBlank() && it.id == line.id) }?.let { progress ->
                 line.copy(scannedQty = progress.scannedQty.coerceAtMost(line.qty), locationCode = progress.locationCode)
             } ?: line
@@ -374,6 +393,30 @@ class OutboundViewModel : ViewModel() {
                 order?.let { PdaApp.instance.workJournal.activate(PdaResumeWork("outbound", mode, it.id, it.no)) }
             } catch (e: Exception) { feedback = Feedback(false, e.message ?: "开始复核失败") }
             finally { busy = false }
+        }
+    }
+
+    fun reduceTask(quantity: Int, reason: String) {
+        val current = order ?: return
+        val key = reductionTaskKey ?: return
+        val line = lines.find { it.taskKey == key } ?: return
+        if (busy || pendingScanCount > 0 || quantity !in 1..line.scannedQty || reason.trim().length < 2) return
+        if ((mode == "pick" && current.statusKey != "picking") || (mode == "review" && current.statusKey != "reviewing")) {
+            feedback = Feedback(false, "已提交的作业请交主管处理"); return
+        }
+        val journal = PdaApp.instance.workJournal
+        val recordId = journal.beginScan("outbound", "reduce_$mode", line.sku, current.id, current.no)
+        try {
+            val next = lines.map { if (it.taskKey == key) it.copy(scannedQty = it.scannedQty - quantity) else it }
+            saveProgress(next, key)
+            lines = next
+            selectedSku = key
+            reductionTaskKey = null
+            feedback = Feedback(true, "${displaySku(line.sku)} · ${line.locationCode} 已减少 $quantity 件，当前 ${line.scannedQty - quantity}/${line.qty}")
+            journal.acknowledge(recordId, "${feedback?.message}；原因：${reason.trim()}")
+        } catch (e: Exception) {
+            journal.fail(recordId, e.message)
+            feedback = Feedback(false, "减少数量记录保存失败，请核对当前数量：${e.message.orEmpty()}")
         }
     }
 
@@ -511,7 +554,7 @@ class OutboundViewModel : ViewModel() {
         }
     }
 
-    fun clearOrder() { order?.let { PdaApp.instance.workJournal.clearPickProgress(it.id, mode) }; order = null; lines = emptyList(); selectedSku = null; scannedPickLocation = null; scan = ""; unknownScanCode = null; PdaApp.instance.workJournal.clearActive("outbound") }
+    fun clearOrder() { order?.let { PdaApp.instance.workJournal.clearPickProgress(it.id, mode) }; order = null; lines = emptyList(); selectedSku = null; scannedPickLocation = null; scan = ""; lastReadCode = ""; unknownScanCode = null; PdaApp.instance.workJournal.clearActive("outbound") }
 }
 
 @Composable
@@ -544,6 +587,7 @@ fun OutboundScreen(modeKey: String, onBack: () -> Unit, vm: OutboundViewModel = 
             autoFocus = vm.unknownScanCode == null && !vm.showShortPickDialog,
             focusNonce = listOf(vm.order?.id, vm.unknownScanCode, vm.showShortPickDialog, reviewAwaitingStart),
         )
+        ScanReceiptStatus(vm.displaySku(vm.lastReadCode), vm.busy, vm.pendingScanCount)
         ScanQueueStatus(vm.pendingScanCount, vm.busy)
         FeedbackBar(vm.feedback)
         vm.lastRejectedScan?.let { rejected ->
@@ -570,7 +614,7 @@ fun OutboundScreen(modeKey: String, onBack: () -> Unit, vm: OutboundViewModel = 
                         status = { StatusChip(outboundStatusLabel(row.statusKey), "warn") },
                         onClick = { vm.openOrder(row.id) },
                     ) {
-                        Text("${row.customerName.orEmpty()} · ${row.skuSummary.orEmpty().ifBlank { "${row.totalQty} 件" }}", color = PdaMuted, fontSize = 12.sp)
+                        Text("${row.customerName.orEmpty()} · ${vm.displaySku(row.skuSummary.orEmpty(), row.customerCode).ifBlank { "${row.totalQty} 件" }}", color = PdaMuted, fontSize = 12.sp)
                     }
                 }
             } else {
@@ -615,7 +659,7 @@ fun OutboundScreen(modeKey: String, onBack: () -> Unit, vm: OutboundViewModel = 
                     Text("SKU 明细", color = PdaOutbound, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                     vm.lines.forEach { line ->
                         SkuCard(
-                            sku = line.sku,
+                            sku = vm.displaySku(line.sku),
                             bound990 = line.bound990,
                             progress = "${line.scannedQty}/${line.qty}",
                             done = line.done,
@@ -633,6 +677,7 @@ fun OutboundScreen(modeKey: String, onBack: () -> Unit, vm: OutboundViewModel = 
                                 fontSize = 12.sp,
                             )
                             else Text("逐件扫描 SKU 或已绑 990，扫满 ${line.qty} 件", color = PdaAccent, fontSize = 12.sp)
+                            TextButton(onClick = { vm.reductionTaskKey = line.taskKey }, enabled = !vm.busy && vm.pendingScanCount == 0 && line.scannedQty > 0 && !reviewAwaitingStart, modifier = Modifier.fillMaxWidth()) { Text("减少已扫码数量", color = PdaWarn) }
                         }
                     }
                 }
@@ -682,6 +727,11 @@ fun OutboundScreen(modeKey: String, onBack: () -> Unit, vm: OutboundViewModel = 
             }
         }
     }
+    vm.reductionTaskKey?.let { key ->
+        vm.lines.find { it.taskKey == key }?.let { line ->
+            QuantityReductionDialog(label = "${vm.displaySku(line.sku)} · ${line.locationCode}", current = line.scannedQty, busy = vm.busy, note = "仅减少本次尚未提交的扫码数量；不会改变应拣或应复核数量。", onDismiss = { vm.reductionTaskKey = null }, onConfirm = { quantity, reason -> vm.reduceTask(quantity, reason) })
+        }
+    }
     if (vm.showShortPickDialog) ShortPickDialog(vm)
     if (vm.unknownScanCode != null) OutboundUnknownBarcodeDialog(vm)
 }
@@ -695,7 +745,7 @@ private fun ShortPickDialog(vm: OutboundViewModel) {
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 incomplete.forEach { line ->
-                    Text("${line.sku} · ${line.locationCode} · 应拣 ${line.qty} / 实拣 ${line.scannedQty} / 缺 ${line.qty - line.scannedQty}", color = PdaWarn, fontSize = 13.sp)
+                    Text("${vm.displaySku(line.sku)} · ${line.locationCode} · 应拣 ${line.qty} / 实拣 ${line.scannedQty} / 缺 ${line.qty - line.scannedQty}", color = PdaWarn, fontSize = 13.sp)
                 }
                 OutlinedTextField(
                     value = vm.shortPickReason,

@@ -14,8 +14,9 @@ import java.io.IOException
 import java.net.SocketTimeoutException
 import java.util.concurrent.TimeUnit
 import java.util.UUID
+import com.takealot.pda.scan.ScanDiagnostics
 
-class ErpClient(private val session: SessionStore) {
+class ErpClient(private val session: SessionStore, private val journal: PdaWorkJournal? = null) {
     private val gson = Gson()
     private val jsonType = "application/json; charset=utf-8".toMediaType()
     private val http = OkHttpClient.Builder()
@@ -54,7 +55,7 @@ class ErpClient(private val session: SessionStore) {
                 if (!keyword.isNullOrBlank()) append("&keyword=${keyword.encodeUrl()}")
                 if (!status.isNullOrBlank()) append("&status=$status")
             }
-            gson.fromJson(get(q), object : TypeToken<PageResult<InboundOrder>>() {}.type)
+            parseOperationalInboundPage(get(q), gson)
         }
 
     suspend fun inboundDetail(id: Int): InboundOrder = withContext(Dispatchers.IO) {
@@ -63,6 +64,10 @@ class ErpClient(private val session: SessionStore) {
 
     suspend fun arrivalScan(scanCode: String, warehouseCode: String): ArrivalScanResult = withContext(Dispatchers.IO) {
         gson.fromJson(postJson("/inbound/arrival-scan", mapOf("scanCode" to scanCode, "warehouseCode" to warehouseCode)), ArrivalScanResult::class.java)
+    }
+
+    suspend fun bindCatalogInbound(scanCode: String, warehouseCode: String): InboundOrder = withContext(Dispatchers.IO) {
+        gson.fromJson(postJson("/inbound/catalog-bind", mapOf("scanCode" to scanCode, "warehouseCode" to warehouseCode)), InboundOrder::class.java)
     }
 
     suspend fun receiveBox(id: Int, scanCode: String, clientRequestId: String = UUID.randomUUID().toString()): ScanActionResult = withContext(Dispatchers.IO) {
@@ -110,6 +115,11 @@ class ErpClient(private val session: SessionStore) {
         Unit
     }
 
+    suspend fun reduceInbound(id: Int, mode: String, body: Map<String, Any?>): ScanActionResult = withContext(Dispatchers.IO) {
+        require(mode in setOf("qc", "carton", "putaway"))
+        gson.fromJson(postJson("/inbound/$id/reduce-$mode", body), ScanActionResult::class.java)
+    }
+
     suspend fun measureDimensions(
         id: Int,
         inboundItemId: Int,
@@ -128,11 +138,11 @@ class ErpClient(private val session: SessionStore) {
         postJson("/inbound/$id/measure-dimensions", mapOf("items" to listOf(row)))
     }
 
-    suspend fun putaway(id: Int, inboundItemId: Int, locationCode: String, qty: Int, clientRequestId: String = UUID.randomUUID().toString()) = withContext(Dispatchers.IO) {
-        postJson("/inbound/$id/putaway", mapOf("items" to listOf(mapOf(
+    suspend fun putaway(id: Int, inboundItemId: Int, locationCode: String, qty: Int, clientRequestId: String = UUID.randomUUID().toString()): InboundOrder = withContext(Dispatchers.IO) {
+        gson.fromJson(postJson("/inbound/$id/putaway", mapOf("items" to listOf(mapOf(
             "inboundItemId" to inboundItemId,
             "lines" to listOf(mapOf("locationCode" to locationCode, "qty" to qty)),
-        )), "clientRequestId" to clientRequestId))
+        )), "clientRequestId" to clientRequestId)), InboundOrder::class.java)
     }
 
     suspend fun resolveException(id: Int, reason: String) = withContext(Dispatchers.IO) {
@@ -261,6 +271,18 @@ class ErpClient(private val session: SessionStore) {
     }
 
     private fun execute(request: Request, requireAuth: Boolean): JsonElement {
+        val journalStarted = System.nanoTime()
+        if (request.method != "GET" && requireAuth) journal?.flushBeforeRequest()
+        val journalMs = ScanDiagnostics.millis(System.nanoTime() - journalStarted)
+        val requestStarted = System.nanoTime()
+        try {
+            return executeResponse(request, requireAuth)
+        } finally {
+            ScanDiagnostics.recordRequest(request.url.encodedPath, journalMs, ScanDiagnostics.millis(System.nanoTime() - requestStarted))
+        }
+    }
+
+    private fun executeResponse(request: Request, requireAuth: Boolean): JsonElement {
         val resp = try {
             http.newCall(request).execute()
         } catch (e: SocketTimeoutException) {

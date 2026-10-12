@@ -24,6 +24,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.takealot.pda.PdaApp
 import com.takealot.pda.data.PdaScanRecord
+import com.takealot.pda.data.resolveSkuScan
 import com.takealot.pda.ui.components.Feedback
 import com.takealot.pda.ui.components.FeedbackBar
 import com.takealot.pda.ui.components.Panel
@@ -60,12 +61,12 @@ class SyncViewModel : ViewModel() {
                             if (!e.message.orEmpty().contains("已确认")) throw e
                         }
                     }
-                    "scan_qc" -> api.scanQc(
-                        record.orderId ?: error("记录缺少入库单"),
-                        record.scanCode,
-                        record.retryQuantity ?: 1,
-                        record.id,
-                    )
+                    "scan_qc" -> {
+                        val orderId = record.orderId ?: error("记录缺少入库单")
+                        val requestCode = record.retryExtra?.takeIf { it.isNotBlank() }
+                            ?: api.inboundDetail(orderId).resolveSkuScan(record.scanCode)
+                        api.scanQc(orderId, requestCode, record.retryQuantity ?: 1, record.id)
+                    }
                     "post" -> api.retryPending(record)
                     else -> error("该记录不能自动重试，请返回原任务核对后重新扫描")
                 }

@@ -20,8 +20,8 @@ class PdaApp : Application() {
         super.onCreate()
         instance = this
         session = SessionStore(this)
-        api = ErpClient(session)
         workJournal = PdaWorkJournal(this)
+        api = ErpClient(session, workJournal)
         language = LanguageStore(this)
     }
 

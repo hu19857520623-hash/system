@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { displaySku, displaySkuText, formatSku } from '@erp/shared/sku-display'
 import { ref, computed, onMounted, reactive } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -463,7 +464,7 @@ async function openDetail(row: any) {
   try {
     detailOrder.value = await outboundApi.detail(row.id)
   } catch (err: any) {
-    ElMessage.error(err?.message || '加载出库详情失败')
+    ElMessage.error(displaySkuText(err?.message || '加载出库详情失败'))
     detailVisible.value = false
   } finally {
     detailLoading.value = false
@@ -475,7 +476,7 @@ async function downloadAttachment(row: any) {
     const { blob, fileName } = await outboundApi.downloadAttachment(row.id)
     triggerBrowserDownload(blob, fileName || row.attachmentName || 'cpt-attachment')
   } catch (err: any) {
-    ElMessage.error(err.message || '下载失败')
+    ElMessage.error(displaySkuText(err.message || '下载失败'))
   }
 }
 
@@ -488,7 +489,7 @@ async function downloadAttachmentById(row: any, attachmentId: number) {
     const { blob, fileName } = await outboundApi.downloadAttachmentById(row.id, attachmentId)
     triggerBrowserDownload(blob, fileName || 'attachment')
   } catch (err: any) {
-    ElMessage.error(err.message || '下载失败')
+    ElMessage.error(displaySkuText(err.message || '下载失败'))
   }
 }
 
@@ -504,7 +505,7 @@ async function downloadPodAttachment(row: any) {
     const mode = triggerBrowserDownload(blob, name, { preferNewTab: true })
     ElMessage.success(mode === 'tab' ? 'POD 签收单已在新窗口打开' : 'POD 签收单下载已开始')
   } catch (err: any) {
-    ElMessage.error(err.message || '下载 POD 签收单失败')
+    ElMessage.error(displaySkuText(err.message || '下载 POD 签收单失败'))
   }
 }
 
@@ -513,7 +514,7 @@ async function downloadRowLabels(row: any) {
     const { blob, fileName } = await outboundApi.downloadSkuLabels(row.id)
     triggerBrowserDownload(blob, fileName || `${row.outboundNo || 'outbound'}-labels.pdf`)
   } catch (err: any) {
-    ElMessage.error(err.message || '下载标签失败')
+    ElMessage.error(displaySkuText(err.message || '下载标签失败'))
   }
 }
 
@@ -542,7 +543,7 @@ async function printOutboundLabels(
     return
   }
   if (action !== 'order' && !line?.printable) {
-    ElMessage.warning(`${sku || '此 SKU'} 的标签尚未准备完整`)
+    ElMessage.warning(displaySkuText(`${sku || '此 SKU'} 的标签尚未准备完整`))
     return
   }
   if (action === 'unit' && (unitIndex === undefined || !line?.unitIndices.includes(unitIndex))) {
@@ -586,7 +587,7 @@ async function printOutboundLabels(
     ElMessage.success('标签 PDF 已打开；若未自动弹出打印框，请使用浏览器打印')
   } catch (err: any) {
     if (!printWindow.closed) printWindow.close()
-    ElMessage.error(err?.message || '打开标签 PDF 失败')
+    ElMessage.error(displaySkuText(err?.message || '打开标签 PDF 失败'))
   } finally {
     delete labelActionLoading[actionKey]
   }
@@ -620,7 +621,7 @@ async function openRelabel(row: any) {
       }))
     relabelVisible.value = true
   } catch (e: any) {
-    ElMessage.error(e?.message || '加载换标明细失败')
+    ElMessage.error(displaySkuText(e?.message || '加载换标明细失败'))
   }
 }
 
@@ -635,7 +636,7 @@ async function submitRelabel(allowSkipScan = false) {
   if (!skipScan) {
     for (const line of relabelLines.value) {
       if (!line.scannedBarcode?.trim()) {
-        ElMessage.warning(`请扫描 ${line.sku} 的旧条码`)
+        ElMessage.warning(displaySkuText(`请扫描 ${displaySku(line)} 的旧条码`))
         return
       }
     }
@@ -672,7 +673,7 @@ async function downloadPickList(row: any) {
   try {
     await outboundApi.downloadPickList(row.id)
   } catch (err: any) {
-    ElMessage.error(err.message || '下载拣货清单失败')
+    ElMessage.error(displaySkuText(err.message || '下载拣货清单失败'))
   }
 }
 
@@ -691,7 +692,7 @@ async function openPack(row: any) {
       await outboundApi.startReview(row.id)
       row.status = 'reviewing'
     } catch (err: any) {
-      ElMessage.error(err?.message || '无法开始复核')
+      ElMessage.error(displaySkuText(err?.message || '无法开始复核'))
       return
     }
   }
@@ -705,7 +706,7 @@ async function openPack(row: any) {
   try {
     packOrder.value = await outboundApi.detail(row.id)
   } catch (err: any) {
-    ElMessage.error(err?.message || '加载复核明细失败')
+    ElMessage.error(displaySkuText(err?.message || '加载复核明细失败'))
   } finally {
     packDetailLoading.value = false
   }
@@ -964,7 +965,7 @@ async function doExport() {
     URL.revokeObjectURL(url)
     ElMessage.success('导出成功')
   } catch (err: any) {
-    ElMessage.error(err.message || '导出失败')
+    ElMessage.error(displaySkuText(err.message || '导出失败'))
   }
 }
 
@@ -1280,7 +1281,7 @@ function statusTag(status: string) {
       <div v-if="!relabelUsesPlatformUnitLabels" class="legacy-relabel">
         <div class="pick-hint">仅列出需换标的 SKU；不换标行已跳过。请扫描旧条码确认换标；新条码/FNSKU 可选填。确认后进入待发运。</div>
         <el-table :data="relabelLines" size="small" border>
-          <el-table-column prop="sku" label="SKU" width="120" />
+          <el-table-column prop="sku" label="SKU" width="120" :formatter="formatSku" />
           <el-table-column prop="productName" label="品名" min-width="120" show-overflow-tooltip />
           <el-table-column label="扫描旧条码" min-width="160">
             <template #default="{ row }">
@@ -1484,7 +1485,7 @@ function statusTag(status: string) {
           <div class="detail-section-title">SKU 明细</div>
           <el-table :data="detailOrder.items || []" border size="small" empty-text="暂无 SKU 明细">
             <el-table-column prop="sku" label="SKU" width="140">
-              <template #default="{ row }"><span class="mono">{{ row.sku || '—' }}</span></template>
+              <template #default="{ row }"><span class="mono">{{ displaySku(row) || '—' }}</span></template>
             </el-table-column>
             <el-table-column prop="productName" label="品名" min-width="160" show-overflow-tooltip />
             <el-table-column prop="qty" label="数量" width="80" align="right" />

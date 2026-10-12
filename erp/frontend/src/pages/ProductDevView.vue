@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { displaySku, displaySkuText } from '@erp/shared/sku-display'
 import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { erpConfirm } from '@/utils/messageBox'
@@ -155,7 +156,7 @@ async function uploadDevImage(
     form.value[field] = res.imageUrl
     ElMessage.success(successText)
   } catch (err: any) {
-    ElMessage.error(err?.message || '图片上传失败')
+    ElMessage.error(displaySkuText(err?.message || '图片上传失败'))
   } finally {
     uploading.value = false
   }
@@ -403,7 +404,7 @@ async function submitForm() {
       </el-table-column>
       <el-table-column prop="sku" label="SKU" width="110">
         <template #default="{ row }">
-          <span style="font-family:var(--font-mono);font-size:12px">{{ row.sku || '待分配' }}</span>
+          <span style="font-family:var(--font-mono);font-size:12px">{{ displaySku(row) || '待分配' }}</span>
         </template>
       </el-table-column>
       <el-table-column prop="name" label="商品名" min-width="140" />

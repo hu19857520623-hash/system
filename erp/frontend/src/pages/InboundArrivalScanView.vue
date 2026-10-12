@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { displaySku, displaySkuText } from '@erp/shared/sku-display'
 import { ref, computed, onMounted, nextTick, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -58,6 +59,7 @@ const activeOrders = ref<any[]>([])
 
 /** 扫箱收货 */
 const manualCartonCount = ref<number | null>(null)
+const manualCartonDifferenceReason = ref('')
 const manualCartonSaving = ref(false)
 const boxScanCode = ref('')
 const boxScanning = ref(false)
@@ -113,7 +115,7 @@ const receiveCartonProgress = computed(() => {
   const order = activeOrder.value
   const expected = order?.cartons?.length ?? 0
   const scanned = receivedCartons.value.length
-  const confirmed = order?.receivedCartonCount ?? manualCartonCount.value ?? null
+  const confirmed = order?.receivedCartonCount ?? null
   return { expected, scanned, confirmed }
 })
 
@@ -349,7 +351,7 @@ async function loadActiveOrder(id: number, preferredStep?: WorkStep) {
       await loadLocations(data.warehouseCode)
     }
   } catch (e: any) {
-    ElMessage.error(e?.message || '加载入库单失败')
+    ElMessage.error(displaySkuText(e?.message || '加载入库单失败'))
   } finally {
     loadingOrder.value = false
   }
@@ -398,11 +400,11 @@ async function submitQcScan() {
     })
     await loadActiveOrder(activeOrder.value.id, 'qc')
     qcSelectedItemId.value = res.itemId ?? qcSelectedItemId.value
-    ElMessage.success(res.message || '扫描成功')
+    ElMessage.success(displaySkuText(res.message || '扫描成功'))
     qcSkuScan.value = ''
     focusQcScan()
   } catch (e: any) {
-    ElMessage.error(e?.message || '扫描清点失败')
+    ElMessage.error(displaySkuText(e?.message || '扫描清点失败'))
     focusQcScan()
   } finally {
     qcScanning.value = false
@@ -429,9 +431,9 @@ async function submitArrivalScan() {
       order: res.order,
     }
     if (res.alreadyScanned) {
-      ElMessage.info(res.message || '该单已到仓')
+      ElMessage.info(displaySkuText(res.message || '该单已到仓'))
     } else {
-      ElMessage.success(res.message || '到仓扫描成功')
+      ElMessage.success(displaySkuText(res.message || '到仓扫描成功'))
     }
     scanCode.value = ''
     await loadRecent()
@@ -445,7 +447,7 @@ async function submitArrivalScan() {
     }
   } catch (e: any) {
     lastResult.value = { ok: false, message: e?.message || '扫描失败' }
-    ElMessage.error(e?.message || '扫描失败')
+    ElMessage.error(displaySkuText(e?.message || '扫描失败'))
     focusScan()
   } finally {
     scanning.value = false
@@ -462,12 +464,12 @@ async function submitReceiveCartonScan() {
   boxScanning.value = true
   try {
     const res = await inboundApi.receiveBox(activeOrder.value.id, { scanCode: code })
-    ElMessage.success(res.message || '外箱已确认')
+    ElMessage.success(displaySkuText(res.message || '外箱已确认'))
     boxScanCode.value = ''
     await loadActiveOrder(activeOrder.value.id, 'receive')
     focusBoxScan()
   } catch (e: any) {
-    ElMessage.error(e?.message || '扫描外箱失败')
+    ElMessage.error(displaySkuText(e?.message || '扫描外箱失败'))
     focusBoxScan()
   } finally {
     boxScanning.value = false
@@ -483,11 +485,17 @@ async function submitManualCartonCount() {
   }
   manualCartonSaving.value = true
   try {
-    const res = await inboundApi.recordReceivedCartonCount(activeOrder.value.id, { receivedCartonCount: count })
-    ElMessage.success(res.message || '实收箱数已保存')
+    const res = await inboundApi.recordReceivedCartonCount(activeOrder.value.id, {
+      receivedCartonCount: count,
+      differenceReason: manualCartonDifferenceReason.value.trim() || undefined,
+    })
+    ElMessage.success(displaySkuText(res.message || '实收箱数已保存'))
     await loadActiveOrder(activeOrder.value.id, 'receive')
+    await loadActiveOrderList()
+    manualCartonDifferenceReason.value = ''
+    if (canQc.value) goToQcStep()
   } catch (e: any) {
-    ElMessage.error(e?.message || '保存实收箱数失败')
+    ElMessage.error(displaySkuText(e?.message || '保存实收箱数失败'))
   } finally {
     manualCartonSaving.value = false
   }
@@ -499,7 +507,7 @@ function goToQcStep() {
     ElMessage.warning('当前状态不可清点与测量')
     return
   }
-  const confirmed = activeOrder.value.receivedCartonCount ?? manualCartonCount.value
+  const confirmed = activeOrder.value.receivedCartonCount
   if (!confirmed || confirmed <= 0) {
     ElMessage.warning('请先在「确认箱数」环节登记实收箱数')
     return
@@ -601,7 +609,7 @@ function resolveLocationCode(raw: string) {
 
 function validateMeasureLine(item: any) {
   if (!hasDimensions(item)) {
-    ElMessage.warning(`请为 SKU ${item.sku} 填写有效的长宽高（cm）`)
+    ElMessage.warning(displaySkuText(`请为 SKU ${displaySku(item)} 填写有效的长宽高（cm）`))
     return false
   }
   return true
@@ -612,7 +620,7 @@ function onPutawaySkuScan() {
   if (!code) return
   const line = putawayReadyLines.value.find((i: any) => lineMatchesScan(i, code))
   if (!line) {
-    ElMessage.warning(`SKU ${putawaySkuScan.value} 不在待上架明细中`)
+    ElMessage.warning(displaySkuText(`SKU ${putawaySkuScan.value} 不在待上架明细中`))
     return
   }
   putawaySelectedItemId.value = line.id
@@ -638,15 +646,15 @@ function onPutawayLocationScan() {
 function validatePutawayLine(item: any, qty?: number) {
   const targetQty = qty ?? item.remaining
   if (!hasDimensions(item)) {
-    ElMessage.warning(`${item.sku} 请先完成体积测量`)
+    ElMessage.warning(displaySkuText(`${displaySku(item)} 请先完成体积测量`))
     return false
   }
   if (!item.locationCode) {
-    ElMessage.warning(`请为 SKU ${item.sku} 选择库位`)
+    ElMessage.warning(displaySkuText(`请为 SKU ${displaySku(item)} 选择库位`))
     return false
   }
   if (targetQty <= 0 || targetQty > item.remaining) {
-    ElMessage.warning(`${item.sku} 上架数量无效（待上架 ${item.remaining}）`)
+    ElMessage.warning(displaySkuText(`${displaySku(item)} 上架数量无效（待上架 ${item.remaining}）`))
     return false
   }
   return true
@@ -904,7 +912,7 @@ onMounted(async () => {
         </el-form-item>
       </el-form>
       <div v-if="lastResult" class="result-box" :class="lastResult.ok ? 'ok' : 'err'">
-        <div class="result-msg">{{ lastResult.message }}</div>
+        <div class="result-msg">{{ displaySkuText(lastResult.message) }}</div>
       </div>
     </div>
 
@@ -935,6 +943,7 @@ onMounted(async () => {
 
         <div v-if="canReceive && ['arrived','receiving'].includes(activeOrder.status)" class="scan-block manual-carton-block">
           <div class="scan-block-title">确认实收箱数</div>
+          <el-alert v-if="receiveCartonProgress.confirmed > 0" type="success" :closable="false" show-icon style="margin-bottom:12px" :title="`箱数已确认：${receiveCartonProgress.confirmed} 箱。可继续清点与测量；逐箱扫码用于核对外箱标。`" />
           <el-form inline @submit.prevent="submitManualCartonCount">
             <el-form-item label="实收箱数" required>
               <el-input-number
@@ -945,6 +954,9 @@ onMounted(async () => {
                 controls-position="right"
                 style="width:120px"
               />
+            </el-form-item>
+            <el-form-item label="差异原因">
+              <el-input v-model="manualCartonDifferenceReason" placeholder="箱数有差异时必填" maxlength="500" :disabled="manualCartonSaving" />
             </el-form-item>
             <el-form-item>
               <el-button type="primary" :loading="manualCartonSaving" @click="submitManualCartonCount">
@@ -998,15 +1010,18 @@ onMounted(async () => {
           <el-table-column label="箱内明细" min-width="200">
             <template #default="{ row }">
               <span v-for="(it, idx) in row.items" :key="idx" class="carton-item-tag">
-                {{ it.sku }}×{{ it.qty }}<span v-if="Number(idx) < row.items.length - 1">；</span>
+                {{ displaySku(it) }}×{{ it.qty }}<span v-if="Number(idx) < row.items.length - 1">；</span>
               </span>
             </template>
           </el-table-column>
-          <el-table-column label="状态" width="88" align="center">
+          <el-table-column label="收货 / 扫码核对" width="190" align="center">
             <template #default="{ row }">
-              <el-tag :type="row.status === 'received' ? 'success' : 'info'" size="small">
-                {{ row.status === 'received' ? '已收' : '待收' }}
-              </el-tag>
+              <el-tag v-if="row.status === 'received'" type="success" size="small">已扫码核对</el-tag>
+              <template v-else-if="receiveCartonProgress.confirmed > 0">
+                <el-tag type="success" size="small">整单箱数已确认</el-tag>
+                <div class="hint">此外箱未扫码核对</div>
+              </template>
+              <el-tag v-else type="info" size="small">待收</el-tag>
             </template>
           </el-table-column>
         </el-table>
@@ -1015,7 +1030,7 @@ onMounted(async () => {
           <el-table-column prop="sku" label="SKU" min-width="150">
             <template #default="{ row }">
               <div class="sku-cell">
-                <span class="mono">{{ row.sku }}</span>
+                <span class="mono">{{ displaySku(row) }}</span>
                 <span v-if="bound990Text(row)" class="bound-990">已绑 {{ bound990Text(row) }}</span>
               </div>
             </template>
@@ -1095,7 +1110,7 @@ onMounted(async () => {
             </el-form-item>
           </el-form>
           <p v-if="qcSelectedLine" class="hint">
-            当前：{{ qcSelectedLine.sku }}<template v-if="bound990Text(qcSelectedLine)"> · 已绑 {{ bound990Text(qcSelectedLine) }}</template> · 实收 {{ qcSelectedLine.actualQty }} / {{ qcSelectedLine.expectedQty }}
+            当前：{{ displaySku(qcSelectedLine) }}<template v-if="bound990Text(qcSelectedLine)"> · 已绑 {{ bound990Text(qcSelectedLine) }}</template> · 实收 {{ qcSelectedLine.actualQty }} / {{ qcSelectedLine.expectedQty }}
             <template v-if="hasDimensions(qcSelectedLine)">
               · {{ qcSelectedLine.lengthCm }}×{{ qcSelectedLine.widthCm }}×{{ qcSelectedLine.heightCm }} cm
             </template>
@@ -1114,7 +1129,7 @@ onMounted(async () => {
           <el-table-column prop="sku" label="SKU" min-width="150" fixed="left">
             <template #default="{ row }">
               <div class="sku-cell">
-                <span class="mono">{{ row.sku }}</span>
+                <span class="mono">{{ displaySku(row) }}</span>
                 <span v-if="bound990Text(row)" class="bound-990">已绑 {{ bound990Text(row) }}</span>
               </div>
             </template>
@@ -1254,7 +1269,7 @@ onMounted(async () => {
                   <el-option
                     v-for="line in putawayReadyLines"
                     :key="line.id"
-                    :label="bound990Text(line) ? `${line.sku} / ${bound990Text(line)}（待上架 ${line.remaining}）` : `${line.sku}（待上架 ${line.remaining}）`"
+                    :label="bound990Text(line) ? `${displaySku(line)} / ${bound990Text(line)}（待上架 ${line.remaining}）` : `${displaySku(line)}（待上架 ${line.remaining}）`"
                     :value="line.id"
                   />
                 </el-select>
@@ -1312,7 +1327,7 @@ onMounted(async () => {
               <div class="sku-card-head">
                 <div class="sku-card-title">
                   <span class="sku-index">{{ idx + 1 }}</span>
-                  <span class="mono sku-code">{{ line.sku }}</span>
+                  <span class="mono sku-code">{{ displaySku(line) }}</span>
                   <span v-if="bound990Text(line)" class="bound-990">已绑 {{ bound990Text(line) }}</span>
                   <span v-if="line.productName" class="sku-name">{{ line.productName }}</span>
                 </div>

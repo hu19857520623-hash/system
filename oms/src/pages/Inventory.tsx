@@ -1,3 +1,4 @@
+import { displaySku } from '../data/skuDisplay'
 import { useState, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { Download, RefreshCw, ListOrdered } from 'lucide-react'
@@ -319,7 +320,7 @@ export default function InventoryPage() {
                       </>
                     ) : '—'}
                   </td>
-                  <td className="table-cell"><MonoCode>{item.sku}</MonoCode></td>
+                  <td className="table-cell"><MonoCode>{displaySku(item.sku, item.customerId)}</MonoCode></td>
                   <td className="table-cell text-xs">{item.customCode ? <MonoCode>{item.customCode}</MonoCode> : '—'}</td>
                   <td className="table-cell text-xs">{warehouseLabel(item.warehouse)}</td>
                   <td className="table-cell">
@@ -363,7 +364,7 @@ export default function InventoryPage() {
       <Drawer
         open={outboundDrawerOpen}
         onClose={() => setOutboundDrawerOpen(false)}
-        title={`出库记录 · ${outboundDrawerSku}`}
+        title={`出库记录 · ${displaySku(outboundDrawerSku)}`}
         subtitle="查看包含该 SKU 的出库单及出库数量"
       >
         {outboundDrawerLoading ? (

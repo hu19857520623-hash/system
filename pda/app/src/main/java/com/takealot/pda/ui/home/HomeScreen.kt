@@ -59,9 +59,6 @@ fun HomeScreen(onInbound: (String) -> Unit, onOutbound: (String) -> Unit, onStoc
     var warehouses by remember { mutableStateOf<List<Warehouse>>(emptyList()) }
     var menuOpen by remember { mutableStateOf(false) }
     var warehouseCode by remember { mutableStateOf(session.warehouseCode) }
-    var inboundTodo by remember { mutableStateOf(0) }
-    var outboundTodo by remember { mutableStateOf(0) }
-    var stocktakeTodo by remember { mutableStateOf(0) }
     val networkOnline = rememberNetworkOnline()
     val scannerReady by ScanBus.receiverActive.collectAsState()
     val scannerHealth by ScanBus.health.collectAsState()
@@ -79,23 +76,6 @@ fun HomeScreen(onInbound: (String) -> Unit, onOutbound: (String) -> Unit, onStoc
         }
     }
 
-    LaunchedEffect(warehouseCode) {
-        if (warehouseCode.isBlank()) return@LaunchedEffect
-        runCatching {
-            val inbound = listOf("arrived", "receiving", "pending_putaway", "exception").sumOf { status ->
-                api.inboundList(status = status, pageSize = 100).items.orEmpty().count { it.warehouseCode == warehouseCode }
-            }
-            val outbound = listOf("picking", "picked", "reviewing").sumOf { status ->
-                api.outboundList(status = status, warehouseCode = warehouseCode, pageSize = 100).items.orEmpty().size
-            }
-            val stocktake = api.stocktakes(warehouseCode = warehouseCode, status = "counting").size
-            inboundTodo = inbound
-            outboundTodo = outbound
-            stocktakeTodo = stocktake
-        }
-    }
-
-    val currentLang = PdaApp.instance.language.language
     val currentWh = warehouses.find { it.code == warehouseCode }
     val whLabel = currentWh?.let { "${it.title} (${it.code})" } ?: warehouseCode.ifBlank { tr("no_warehouse") }
 
@@ -157,15 +137,8 @@ fun HomeScreen(onInbound: (String) -> Unit, onOutbound: (String) -> Unit, onStoc
                 }
             }
         }
-        Text(tr("my_todo"), color = PdaMuted, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TodoTile(tr("inbound_todo"), inboundTodo, PdaInbound, Modifier.weight(1f)) { onInbound("receive") }
-            TodoTile(tr("outbound_todo"), outboundTodo, PdaOutbound, Modifier.weight(1f)) { onOutbound("pick") }
-        }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TodoTile(tr("stocktake_todo"), stocktakeTodo, PdaStocktake, Modifier.weight(1f)) { onStocktake() }
-        }
         Text("${tr("inbound")} · INBOUND", color = PdaInbound, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 8.dp))
+        WorkTile(tr("catalog_inbound"), tr("catalog_inbound_hint"), PdaInbound, session.hasPerm("inbound.arrival_scan") && session.hasPerm("inbound.qc") && warehouseCode.isNotBlank(), warehouseCode.isBlank()) { onInbound("catalog") }
         WorkTile(tr("arrival"), tr("arrival_hint"), PdaInbound, session.hasPerm("inbound.arrival_scan") && warehouseCode.isNotBlank(), warehouseCode.isBlank()) { onInbound("arrival") }
         WorkTile(tr("receive"), tr("receive_hint"), PdaInbound, session.hasPerm("inbound.receive") && warehouseCode.isNotBlank(), warehouseCode.isBlank()) { onInbound("receive") }
         WorkTile(tr("qc"), tr("qc_hint"), PdaInbound, session.hasPerm("inbound.qc") && warehouseCode.isNotBlank(), warehouseCode.isBlank()) { onInbound("qc") }
@@ -211,18 +184,6 @@ private fun StatusItem(label: String, value: String, healthy: Boolean, modifier:
     Column(modifier.background(PdaSurface2, RoundedCornerShape(8.dp)).padding(horizontal = 10.dp, vertical = 8.dp)) {
         Text(label, color = PdaMuted, fontSize = 11.sp)
         Text(value, color = if (healthy) PdaOk else PdaErr, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
-    }
-}
-
-@Composable
-private fun TodoTile(title: String, count: Int, accent: androidx.compose.ui.graphics.Color, modifier: Modifier, onClick: () -> Unit) {
-    Column(
-        modifier.background(PdaSurface, RoundedCornerShape(12.dp)).border(1.dp, accent.copy(alpha = 0.35f), RoundedCornerShape(12.dp)).clickable(onClick = onClick).padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(2.dp),
-    ) {
-        Text(title, color = accent, fontSize = 12.sp, fontWeight = FontWeight.Medium)
-        Text("$count", color = if (count > 0) accent else PdaText, fontSize = 24.sp, fontWeight = FontWeight.SemiBold)
-        Text(if (count > 0) tr("tap_to_handle") else tr("no_todo"), color = PdaMuted, fontSize = 12.sp)
     }
 }
 

@@ -1,3 +1,5 @@
+import { displaySkuText } from '../data/skuDisplayText'
+
 export type UserToastKind = 'ok' | 'err' | 'info'
 
 export type UserToast = {
@@ -19,7 +21,7 @@ export function subscribeUserToast(listener: Listener) {
 }
 
 function publish(kind: UserToastKind, text: string) {
-  const trimmed = text.trim()
+  const trimmed = displaySkuText(text).trim()
   if (!trimmed) return
   const toast: UserToast = { id: ++nextId, kind, text: trimmed }
   listeners.forEach(fn => fn(toast))

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { displaySku, displaySkuText } from '@erp/shared/sku-display'
 import { ref, onMounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -95,7 +96,7 @@ async function load() {
   } catch (e: any) {
     rows.value = []
     listTotal.value = 0
-    ElMessage.error(e?.message || '加载失败')
+    ElMessage.error(displaySkuText(e?.message || '加载失败'))
   } finally {
     loading.value = false
   }
@@ -197,7 +198,7 @@ async function saveEdit() {
     ElMessage.success('保存成功')
     editVisible.value = false
   } catch (e: any) {
-    ElMessage.error(e?.message || '保存失败')
+    ElMessage.error(displaySkuText(e?.message || '保存失败'))
   } finally {
     editSaving.value = false
   }
@@ -385,7 +386,7 @@ onMounted(() => {
           <template #default="{ row }">
             <div class="prod-info">
               <div>
-                <el-button link type="primary" class="prod-sku" @click="openDetail(row)">{{ row.sku }}</el-button>
+                <el-button link type="primary" class="prod-sku" @click="openDetail(row)">{{ displaySku(row) }}</el-button>
               </div>
               <div v-if="row.spu" class="prod-sub"><span class="lbl">自定义编码:</span> {{ row.spu }}</div>
               <div class="prod-name">{{ row.productName }}</div>
@@ -485,10 +486,10 @@ onMounted(() => {
       <ListPagination v-model:page="page" v-model:page-size="pageSize" :total="listTotal" />
     </div>
 
-    <el-dialog v-model="detailVisible" :title="`产品详情 · ${detailRow?.sku || ''}`" width="560px" class="erp-detail">
+    <el-dialog v-model="detailVisible" :title="`产品详情 · ${displaySku(detailRow) || ''}`" width="560px" class="erp-detail">
       <template v-if="detailRow">
         <DetailSheet
-          :kicker="detailRow.sku"
+          :kicker="displaySku(detailRow)"
           :title="detailRow.productName"
           :subtitle="[detailRow.spec, detailRow.category, detailRow.brand].filter(Boolean).join(' · ')"
         >
@@ -513,7 +514,7 @@ onMounted(() => {
 
     <el-dialog
       v-model="editVisible"
-      :title="`编辑 · ${editRow?.sku || ''}`"
+      :title="`编辑 · ${displaySku(editRow) || ''}`"
       width="560px"
       destroy-on-close
     >

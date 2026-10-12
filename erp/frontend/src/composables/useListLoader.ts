@@ -1,5 +1,6 @@
 import { ref, shallowRef } from 'vue'
 import { ElMessage } from 'element-plus'
+import { displaySkuText } from '@erp/shared/sku-display'
 
 export function useListLoader<T = any>(
   fetcher: () => Promise<any>,
@@ -21,7 +22,7 @@ export function useListLoader<T = any>(
         total.value = res.total ?? items.value.length
       }
     } catch (e: any) {
-      ElMessage.error(e?.message || opts?.errorMsg || '加载失败')
+      ElMessage.error(displaySkuText(e?.message || opts?.errorMsg || '加载失败'))
     } finally {
       loading.value = false
     }
@@ -33,10 +34,10 @@ export function useListLoader<T = any>(
 export async function withAction(fn: () => Promise<void>, okMsg?: string) {
   try {
     await fn()
-    if (okMsg) ElMessage.success(okMsg)
+    if (okMsg) ElMessage.success(displaySkuText(okMsg))
     return true
   } catch (e: any) {
-    ElMessage.error(e?.message || '操作失败')
+    ElMessage.error(displaySkuText(e?.message || '操作失败'))
     return false
   }
 }

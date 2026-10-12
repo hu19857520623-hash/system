@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { displaySkuText, formatSku } from '@erp/shared/sku-display'
 import { ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { outboundApi } from '@/api/client.js'
@@ -68,7 +69,7 @@ async function loadPickLines(row: NonNullable<typeof props.order>) {
       throw new Error('部分 SKU 暂无可用库位，请确认已上架')
     }
   } catch (err: any) {
-    ElMessage.error(err?.message || '加载拣货库位失败')
+    ElMessage.error(displaySkuText(err?.message || '加载拣货库位失败'))
     emit('update:modelValue', false)
   } finally {
     pickLoading.value = false
@@ -114,7 +115,7 @@ async function submitPick() {
       在 ERP 网页按库位确认拣货（无独立 PDA 扫描端）。系统已拆分库位任务，须全部拣完；短拣请标记库存短缺异常。
     </div>
     <el-table v-loading="pickLoading" :data="pickLines" row-key="key" size="small" border>
-      <el-table-column prop="sku" label="SKU" width="120" />
+      <el-table-column prop="sku" label="SKU" width="120" :formatter="formatSku" />
       <el-table-column label="总应拣" width="75" align="right">
         <template #default="{ row }">{{ row.totalQty }}</template>
       </el-table-column>

@@ -12,6 +12,19 @@ import type {
 
 @Injectable()
 export class InventoryMutationService {
+  /** Undo only an unallocated lot belonging to this receipt, never FIFO from other receipts. */
+  async undoPutawayStock(tx: InventoryTx, params: { productId: bigint; sku: string; warehouseCode: string; locationId: bigint; inboundNo: string; qty: number; operatorId?: number; reason: string }) {
+    await tx.$queryRaw`SELECT id FROM inventory WHERE product_id = ${params.productId} AND warehouse_code = ${params.warehouseCode} FOR UPDATE`
+    const warehouse = await tx.inventory.findUnique({ where: { productId_warehouseCode: { productId: params.productId, warehouseCode: params.warehouseCode } } })
+    if (!warehouse || warehouse.lockedQty > 0 || warehouse.availableQty < params.qty) throw new BadRequestException('库存已锁定或可用数量不足，请交主管处理')
+    const lot = await tx.inventoryLocation.findFirst({ where: { productId: params.productId, warehouseCode: params.warehouseCode, locationId: params.locationId, inboundNo: params.inboundNo, batchNo: params.inboundNo } })
+    if (!lot || lot.qty < params.qty) throw new BadRequestException('该入库批次库位库存不足，可能已拣货或移库，请交主管处理')
+    const changed = await tx.inventoryLocation.updateMany({ where: { id: lot.id, qty: { gte: params.qty } }, data: { qty: { decrement: params.qty } } })
+    if (changed.count !== 1) throw new BadRequestException('库位库存已变化，请刷新重试')
+    await this.applyWarehouseQtyDelta(tx, { productId: params.productId, sku: params.sku, warehouseCode: params.warehouseCode, diff: -params.qty, operatorId: params.operatorId, changeType: 'putaway_undo', referenceNo: params.inboundNo, remark: params.reason })
+    await this.refreshAvgCost(tx, params.productId, params.warehouseCode)
+  }
+
   /** 仓级库存增减并写 InventoryLog */
   async applyWarehouseQtyDelta(tx: InventoryTx, params: WarehouseDeltaParams) {
     const { productId, sku, warehouseCode, diff, operatorId, changeType, remark, referenceNo } = params

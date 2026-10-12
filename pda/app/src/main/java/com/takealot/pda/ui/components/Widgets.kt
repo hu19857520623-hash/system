@@ -196,7 +196,7 @@ fun FeedbackBar(feedback: Feedback?) {
             .padding(12.dp),
     ) {
         Text(
-            feedback.message,
+            feedback.message.replace(Regex("(?<![a-zA-Z0-9_-])TKL\\d+-(?=[a-zA-Z0-9_-])", RegexOption.IGNORE_CASE), ""),
             color = when {
                 feedback.processing -> PdaWarn
                 feedback.ok -> PdaOk
@@ -217,6 +217,14 @@ fun ScanQueueStatus(pendingCount: Int, busy: Boolean) {
         "待处理 $pendingCount 条"
     }
     Text(text, color = PdaWarn, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+}
+
+@Composable
+fun ScanReceiptStatus(code: String, busy: Boolean, pendingCount: Int) {
+    if (code.isNotBlank()) Text(
+        "已读取：$code · ${if (busy || pendingCount > 0) "等待作业确认" else "处理结果见下方"}",
+        color = PdaMuted, fontSize = 12.sp,
+    )
 }
 
 @Composable

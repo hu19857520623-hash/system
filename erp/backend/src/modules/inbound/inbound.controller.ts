@@ -130,6 +130,12 @@ export class InboundController {
     return this.service.arrivalScan(body, userId)
   }
 
+  @RequirePerms('inbound.arrival_scan', 'inbound.qc')
+  @Post('catalog-bind')
+  bindCatalogInbound(@Body() body: { scanCode: string; warehouseCode: string }, @CurrentUser('userId') userId: number) {
+    return this.service.bindCatalogInbound(body, userId)
+  }
+
   @RequirePerms('create_inbound.label')
   @Get(':id/labels/sku')
   @Header('Content-Type', 'application/pdf')
@@ -250,6 +256,24 @@ export class InboundController {
   @Post(':id/scan-qc')
   scanQc(@Param('id', ParseIntPipe) id: number, @Body() body: any, @CurrentUser('userId') userId: number) {
     return this.service.scanQc(id, body, userId)
+  }
+
+  @RequirePerms('inbound.qc')
+  @Post(':id/reduce-qc')
+  reduceQc(@Param('id', ParseIntPipe) id: number, @Body() body: any, @CurrentUser('userId') userId: number) {
+    return this.service.reduceQuantity(id, 'qc', body, userId)
+  }
+
+  @RequirePerms('inbound.receive')
+  @Post(':id/reduce-carton')
+  reduceCarton(@Param('id', ParseIntPipe) id: number, @Body() body: any, @CurrentUser('userId') userId: number) {
+    return this.service.reduceQuantity(id, 'carton', body, userId)
+  }
+
+  @RequirePerms('inbound.putaway')
+  @Post(':id/reduce-putaway')
+  reducePutaway(@Param('id', ParseIntPipe) id: number, @Body() body: any, @CurrentUser('userId') userId: number) {
+    return this.service.reduceQuantity(id, 'putaway', body, userId)
   }
 
   @RequireAnyPerm('inbound.receive', 'inbound.qc', 'inbound.putaway')

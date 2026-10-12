@@ -62,6 +62,14 @@ class PdaWorkJournal(context: Context) {
     private val pickProgressType = object : TypeToken<List<PdaPickProgress>>() {}.type
     private val _scanRecords = MutableStateFlow(loadRecords())
     val scanRecords = _scanRecords.asStateFlow()
+    private var resumeCache: List<PdaResumeWork> = gson.fromJson<List<PdaResumeWork>>(prefs.getString(KEY_RESUMES, null), resumeType).orEmpty()
+    private var pickCache: List<PdaPickProgress> = gson.fromJson<List<PdaPickProgress>>(prefs.getString(KEY_PICK_PROGRESS, null), pickProgressType).orEmpty()
+    private val writer = JournalPreferenceWriter(
+        serialize = { gson.toJson(it) },
+        persist = { key, value -> prefs.edit().putString(key, value).commit() },
+    )
+
+    fun flushBeforeRequest() = writer.flushBlocking()
 
     @Synchronized
     fun beginScan(module: String, mode: String, scanCode: String, orderId: Int? = null, orderNo: String? = null): String {
@@ -104,7 +112,8 @@ class PdaWorkJournal(context: Context) {
     @Synchronized
     fun activate(work: PdaResumeWork) {
         val next = resumes().filterNot { it.module == work.module } + work
-        prefs.edit().putString(KEY_RESUMES, gson.toJson(next)).apply()
+        resumeCache = next
+        writer.enqueue(KEY_RESUMES, next)
     }
 
     @Synchronized
@@ -115,13 +124,15 @@ class PdaWorkJournal(context: Context) {
 
     @Synchronized
     fun clearActive(module: String) {
-        prefs.edit().putString(KEY_RESUMES, gson.toJson(resumes().filterNot { it.module == module })).apply()
+        resumeCache = resumes().filterNot { it.module == module }
+        writer.enqueue(KEY_RESUMES, resumeCache)
     }
 
     @Synchronized
     fun savePickProgress(progress: PdaPickProgress) {
         val next = pickProgress().filterNot { it.orderId == progress.orderId && it.mode == progress.mode } + progress
-        prefs.edit().putString(KEY_PICK_PROGRESS, gson.toJson(next)).apply()
+        pickCache = next
+        writer.enqueue(KEY_PICK_PROGRESS, next)
     }
 
     @Synchronized
@@ -132,7 +143,8 @@ class PdaWorkJournal(context: Context) {
         val next = pickProgress().filterNot { progress ->
             (orderId == null || progress.orderId == orderId) && (mode == null || progress.mode == mode)
         }
-        prefs.edit().putString(KEY_PICK_PROGRESS, gson.toJson(next)).apply()
+        pickCache = next
+        writer.enqueue(KEY_PICK_PROGRESS, next)
     }
 
     private fun update(id: String, state: String, message: String?) {
@@ -148,14 +160,14 @@ class PdaWorkJournal(context: Context) {
     fun dismiss(id: String) = update(id, "dismissed", "已人工确认")
 
     private fun loadRecords(): List<PdaScanRecord> = gson.fromJson<List<PdaScanRecord>>(prefs.getString(KEY_RECORDS, null), recordsType).orEmpty()
-    private fun resumes(): List<PdaResumeWork> = gson.fromJson<List<PdaResumeWork>>(prefs.getString(KEY_RESUMES, null), resumeType).orEmpty()
-    private fun pickProgress(): List<PdaPickProgress> = gson.fromJson<List<PdaPickProgress>>(prefs.getString(KEY_PICK_PROGRESS, null), pickProgressType).orEmpty()
+    private fun resumes(): List<PdaResumeWork> = resumeCache
+    private fun pickProgress(): List<PdaPickProgress> = pickCache
     private fun saveRecords(value: List<PdaScanRecord>) {
         val pending = value.filter { it.state == "pending" }.takeLast(MAX_PENDING_RECORDS)
         val completed = value.filter { it.state != "pending" }.takeLast(MAX_RECORDS)
         val next = (pending + completed).sortedBy { it.createdAt }
-        prefs.edit().putString(KEY_RECORDS, gson.toJson(next)).apply()
         _scanRecords.value = next
+        writer.enqueue(KEY_RECORDS, next)
     }
 
     companion object {

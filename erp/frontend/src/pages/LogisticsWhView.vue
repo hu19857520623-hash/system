@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { displaySku, displaySkuText } from '@erp/shared/sku-display'
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -234,7 +235,7 @@ async function submitReceive() {
   if (!items.length) { ElMessage.warning('请填写良品实收或破损数量'); return }
   for (const l of items) {
     if (l.actualQty + l.damagedQty > l.pendingQty) {
-      ElMessage.warning(`${l.sku} 良品 + 破损超过待收 ${l.pendingQty}`)
+      ElMessage.warning(displaySkuText(`${displaySku(l)} 良品 + 破损超过待收 ${l.pendingQty}`))
       return
     }
   }
@@ -390,7 +391,7 @@ function goCreateInbound(row?: any) {
         <el-table-column label="SKU / 待收" min-width="220">
           <template #default="{ row }">
             <div v-for="item in row.lines" :key="item.id" class="line-preview">
-              <span class="mono">{{ item.sku }}</span>
+              <span class="mono">{{ displaySku(item) }}</span>
               <span v-if="item.name" class="line-name" :title="item.name">{{ item.name }}</span>
               <span class="line-pending">× {{ item.pendingQty.toLocaleString() }}</span>
             </div>
@@ -415,7 +416,7 @@ function goCreateInbound(row?: any) {
       <el-table v-loading="stockLoading" :data="pagedStock" border stripe size="small" class="stock-table" empty-text="该仓库暂无到货库存" header-cell-class-name="stock-table-header">
         <el-table-column label="SKU / 商品" min-width="200">
           <template #default="{ row }">
-            <div class="mono sku">{{ row.sku }}</div>
+            <div class="mono sku">{{ displaySku(row) }}</div>
             <div class="title-cn">{{ row.name || '—' }}</div>
             <div v-if="row.spec" class="title-en">{{ row.spec }}</div>
           </template>
@@ -552,7 +553,7 @@ function goCreateInbound(row?: any) {
         <el-table :data="receiveLines" size="small" border stripe style="width:100%">
           <el-table-column prop="sku" label="SKU" width="118" fixed="left" show-overflow-tooltip>
             <template #default="{ row }">
-              <span class="mono">{{ row.sku }}</span>
+              <span class="mono">{{ displaySku(row) }}</span>
             </template>
           </el-table-column>
           <el-table-column prop="name" label="商品名" min-width="160" show-overflow-tooltip />

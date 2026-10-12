@@ -10,6 +10,7 @@ import {
 } from '../../data/inventoryStore'
 import { findProductByCode, getPlatformBarcodeAliases } from '../../data/platformBindingUtils'
 import { getCustomerSkuDisplay, productVisibleToCustomer } from '../../data/skuCode'
+import { displaySku as customerSkuDisplay } from '../../data/skuDisplay'
 
 const PAGE_SIZE = 10
 const MAX_SKU_TOKENS = 200
@@ -416,7 +417,7 @@ export default function OutboundSkuPickerModal({
                 const shippable = getOutboundShippableQty(key, stockSource, customerId)
                 const displaySku = item.kind === 'product'
                   ? getCustomerSkuDisplay(item.product)
-                  : item.line.sku
+                  : customerSkuDisplay(item.line.sku, customerId)
                 const title = item.kind === 'product' ? item.product.name : item.line.name
                 return (
                   <tr key={key} className={`table-row ${isChecked ? 'bg-primary-50/40' : ''}`}>

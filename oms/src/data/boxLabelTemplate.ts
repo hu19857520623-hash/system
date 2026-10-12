@@ -18,6 +18,12 @@ export interface BoxLabelData {
   boxTotal?: number
 }
 
+/** 每页最多两行，给 SKU 条码保留高度；混装箱超过两行时续页。 */
+export function splitBoxLabelPages(data: BoxLabelData): BoxLabelData[] {
+  const lines = data.lines.length ? data.lines : [{ sku: '—', qty: 0 }]
+  return Array.from({ length: Math.ceil(lines.length / 2) }, (_, i) => ({ ...data, lines: lines.slice(i * 2, i * 2 + 2) }))
+}
+
 function escapeHtml(value: string) {
   return value.replace(/[<>&"]/g, (char) => (
     { '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[char] || char
@@ -39,15 +45,17 @@ body{display:block}
 table{width:100%;border-collapse:collapse;margin:0}
 th,td{border:0.35mm solid #000;padding:1.2mm 1.5mm;font:400 12.8pt/1.2 Arial,Helvetica,sans-serif;text-align:left;vertical-align:middle}
 th:last-child,td:last-child{text-align:center;width:14mm}
-.sku-cell{word-break:break-all}
-.footer{margin-top:10mm;display:flex;justify-content:flex-end;align-items:flex-end;font:400 12pt/1.2 Arial,Helvetica,sans-serif}
+.sku-cell{word-break:break-all;height:14mm}
+.sku-barcode{margin:1mm 2mm 0;height:7mm}
+.sku-barcode svg{display:block;width:100%;height:7mm}
+.footer{margin-top:auto;padding-top:1mm;display:flex;justify-content:flex-end;align-items:flex-end;font:400 10pt/1.2 Arial,Helvetica,sans-serif}
 @media print{html,body{width:100mm;height:100mm}.box-label{page-break-inside:avoid}}`
 
 export function buildBoxLabelArticle(data: BoxLabelData) {
   const boxIndex = data.boxIndex ?? data.boxNo
   const boxTotal = data.boxTotal ?? boxIndex
   const rows = (data.lines.length ? data.lines : [{ sku: '—', qty: 0 }])
-    .map(line => `<tr><td class="sku-cell">${escapeHtml(line.sku)}</td><td>${line.qty}</td></tr>`)
+    .map(line => `<tr><td class="sku-cell">${escapeHtml(line.sku)}${line.sku.trim() && line.sku !== '—' ? `<div class="sku-barcode">${code128Svg(line.sku)}</div>` : ''}</td><td>${line.qty}</td></tr>`)
     .join('')
 
   const cartonCode = buildCartonCode(data.referenceNo, data.boxNo)
@@ -68,7 +76,7 @@ export function buildBoxLabelArticle(data: BoxLabelData) {
 }
 
 export function buildBoxLabelsHtml(labels: BoxLabelData[], title = '箱唛') {
-  return `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title><style>${BOX_LABEL_STYLE}</style></head><body>${labels.map(buildBoxLabelArticle).join('')}</body></html>`
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title><style>${BOX_LABEL_STYLE}</style></head><body>${labels.flatMap(splitBoxLabelPages).map(buildBoxLabelArticle).join('')}</body></html>`
 }
 
 export function printBoxLabels(labels: BoxLabelData[], title = '箱唛') {

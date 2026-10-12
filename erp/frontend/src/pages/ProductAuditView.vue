@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { displaySku, displaySkuText } from '@erp/shared/sku-display'
 import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { erpPrompt } from '@/utils/messageBox'
@@ -131,9 +132,9 @@ async function downloadLabel(row: any) {
   try {
     const { blob, fileName } = await productApi.downloadSkuLabel(row.sku)
     triggerBlobDownload(blob, fileName)
-    ElMessage.success(`已下载 ${row.sku} SKU 标签`)
+    ElMessage.success(displaySkuText(`已下载 ${displaySku(row)} SKU 标签`))
   } catch (e: any) {
-    ElMessage.error(e.message || '标签下载失败')
+    ElMessage.error(displaySkuText(e.message || '标签下载失败'))
   }
 }
 
@@ -177,7 +178,7 @@ function tagType(status: string) {
       <el-table-column prop="name" label="选品名称" min-width="130" />
       <el-table-column prop="sku" label="SKU" width="100">
         <template #default="{ row }">
-          <span class="mono">{{ row.sku && row.sku !== '—' ? row.sku : '待分配' }}</span>
+          <span class="mono">{{ displaySku(row) && displaySku(row) !== '—' ? displaySku(row) : '待分配' }}</span>
         </template>
       </el-table-column>
       <el-table-column label="采购价" width="88" align="right">

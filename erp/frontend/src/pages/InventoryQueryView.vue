@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { displaySku, displaySkuText, formatSku } from '@erp/shared/sku-display'
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -146,7 +147,7 @@ async function load() {
   } catch (e: any) {
     rows.value = []
     listTotal.value = 0
-    ElMessage.error(e?.message || '加载失败')
+    ElMessage.error(displaySkuText(e?.message || '加载失败'))
   } finally {
     loading.value = false
   }
@@ -183,7 +184,7 @@ async function reprintLabel(row: any) {
     barcode: row.barcode || row.ean || row.customerSku,
     customerCode: row.customerCode,
   }])
-  if (printed) ElMessage.success(`${row.sku} 标签已打开打印窗口`)
+  if (printed) ElMessage.success(displaySkuText(`${displaySku(row)} 标签已打开打印窗口`))
 }
 
 function onSourceChange() {
@@ -251,7 +252,7 @@ async function openOutboundLogs(row: any) {
   try {
     outboundLogRows.value = await inventoryApi.outboundLogs(row.sku, { warehouseCode: row.warehouseCode })
   } catch (e: any) {
-    ElMessage.error(e?.message || '加载失败')
+    ElMessage.error(displaySkuText(e?.message || '加载失败'))
   } finally {
     outboundLogLoading.value = false
   }
@@ -303,7 +304,7 @@ async function openAdjustFromRow(row: any) {
     }
     await showSkuLocations(row)
   } catch (e: any) {
-    ElMessage.error(e?.message || '加载库位失败')
+    ElMessage.error(displaySkuText(e?.message || '加载库位失败'))
   }
 }
 
@@ -371,7 +372,7 @@ async function handleBatchImportFile(e: Event) {
     ElMessage.success(`已解析 ${batchPreviewRows.value.length} 行，请确认后提交`)
   } catch (err: any) {
     batchPreviewRows.value = []
-    ElMessage.error(err?.message || '解析失败')
+    ElMessage.error(displaySkuText(err?.message || '解析失败'))
   }
 }
 
@@ -415,7 +416,7 @@ async function submitBatchChange() {
       load()
     }
   } catch (e: any) {
-    ElMessage.error(e?.message || '批量变更失败')
+    ElMessage.error(displaySkuText(e?.message || '批量变更失败'))
   } finally {
     batchSubmitting.value = false
   }
@@ -555,7 +556,7 @@ watch([page, pageSize], () => load())
               :class="`sku-link--${row.dataSource || 'erp'}`"
               @click="row.dataSource === 'erp' ? showSkuLocations(row) : goSkuQuery(row)"
             >
-              {{ row.sku }}
+              {{ displaySku(row) }}
             </button>
           </template>
         </el-table-column>
@@ -631,7 +632,7 @@ watch([page, pageSize], () => load())
     </el-card>
 
     <!-- 库位分布 -->
-    <el-dialog v-model="locDialogVisible" :title="`库位分布 · ${locDialogSku}`" width="720px">
+    <el-dialog v-model="locDialogVisible" :title="`库位分布 · ${displaySku(locDialogSku)}`" width="720px">
       <el-table :data="skuLocations" border size="small">
         <el-table-column prop="locationCode" label="库位" width="110">
           <template #default="{ row }"><span class="mono">{{ row.locationCode }}</span></template>
@@ -659,7 +660,7 @@ watch([page, pageSize], () => load())
     </el-dialog>
 
     <!-- 出库记录 -->
-    <el-dialog v-model="outboundLogVisible" :title="`出库记录 · ${outboundLogSku}`" width="920px" destroy-on-close>
+    <el-dialog v-model="outboundLogVisible" :title="`出库记录 · ${displaySku(outboundLogSku)}`" width="920px" destroy-on-close>
       <el-table v-loading="outboundLogLoading" :data="outboundLogRows" border size="small" max-height="400">
         <el-table-column prop="outboundNo" label="出库单" width="130" />
         <el-table-column prop="qty" label="数量" width="72" align="right" />
@@ -680,7 +681,7 @@ watch([page, pageSize], () => load())
         <el-form-item label="客户代码" required>
           <el-input v-model="adjustForm.customerCode" placeholder="货盘填 TKL，客户填 TKL0001" />
         </el-form-item>
-        <el-form-item label="SKU"><span class="mono">{{ adjustForm.sku }}</span></el-form-item>
+        <el-form-item label="SKU"><span class="mono">{{ displaySku(adjustForm) }}</span></el-form-item>
         <el-form-item label="当前库位"><span class="mono">{{ adjustForm.locationCode }}</span></el-form-item>
         <el-form-item label="目标库位" required>
           <el-select v-model="adjustForm.newLocationCode" filterable style="width:100%" :loading="locationOptionsLoading">
@@ -716,7 +717,7 @@ watch([page, pageSize], () => load())
                 :loading="skuSearchLoading"
                 style="width:100%"
               >
-                <el-option v-for="opt in skuOptions" :key="opt.sku" :label="opt.sku" :value="opt.sku" />
+                <el-option v-for="opt in skuOptions" :key="opt.sku" :label="displaySku(opt)" :value="opt.sku" />
               </el-select>
             </el-form-item>
             <el-form-item label="仓库">
@@ -751,7 +752,7 @@ watch([page, pageSize], () => load())
           </div>
           <el-table v-if="batchPreviewRows.length" :data="batchPreviewRows" border size="small" max-height="280" class="batch-preview">
             <el-table-column prop="customerCode" label="客户代码" width="96" />
-            <el-table-column prop="sku" label="SKU" min-width="110" />
+            <el-table-column prop="sku" label="SKU" min-width="110" :formatter="formatSku" />
             <el-table-column prop="warehouseCode" label="仓库" width="110" />
             <el-table-column prop="fromLocationCode" label="原库位" width="90" />
             <el-table-column prop="toLocationCode" label="目标库位" width="96" />

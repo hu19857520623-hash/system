@@ -2,6 +2,7 @@ package com.takealot.pda.data
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PickScanMatcherTest {
@@ -32,5 +33,23 @@ class PickScanMatcherTest {
     @Test fun `shortage rows cannot be picked by scanning a SKU`() {
         val lines = listOf(task(1, "A", "SHORT"))
         assertNull(lines.pickTaskAtLocation("SHORT", "A"))
+    }
+
+    @Test fun `customer SKU picks only at the verified location and keeps real task identity`() {
+        val lines = listOf(task(1, "TKL005-710515-2", "R01"), task(1, "TKL005-710515-2", "R02"))
+        assertEquals("1@R02", lines.pickTaskAtLocation("R02", "710515-2")?.taskKey)
+        assertNull(lines.pickTaskAtLocation(null, "710515-2"))
+        assertNull(lines.pickTaskAtLocation("R03", "710515-2"))
+        assertEquals("TKL005-710515-2", lines.pickTaskAtLocation("R02", "710515-2")?.sku)
+    }
+
+    @Test(expected = ErpException::class) fun `ambiguous customer SKU never counts the first matching product`() {
+        listOf(task(1, "TKL005-ABC", "R01"), task(2, "TKL001-ABC", "R01"))
+            .pickTaskAtLocation("R01", "ABC")
+    }
+
+    @Test fun `review task matches short SKU for a known customer`() {
+        val line = task(1, "AFU0430-710515-2", "R01").copy(customerCode = "AFU0430")
+        assertTrue(line.matchesScan("710515-2"))
     }
 }

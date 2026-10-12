@@ -1,3 +1,4 @@
+import { displaySku, displaySkuText } from '../data/skuDisplay'
 import { useMemo, useState, useEffect, useRef } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { AlertTriangle, CheckCircle2, Link2, ListOrdered, Plus, Trash2, Upload, XCircle } from 'lucide-react'
@@ -989,7 +990,7 @@ export default function Outbound() {
       setQuickBindTarget(null)
     } catch (error) {
       setPlatformSkuMappings(before)
-      window.alert(`绑定保存失败：${error instanceof Error ? error.message : String(error)}`)
+      window.alert(displaySkuText(`绑定保存失败：${error instanceof Error ? error.message : String(error)}`))
     }
   }
 
@@ -1131,7 +1132,7 @@ export default function Outbound() {
         resetForm()
         goRecords()
       } catch (error) {
-        window.alert(`草稿保存失败：${error instanceof Error ? error.message : String(error)}`)
+        window.alert(displaySkuText(`草稿保存失败：${error instanceof Error ? error.message : String(error)}`))
       }
       return
     }
@@ -1142,7 +1143,7 @@ export default function Outbound() {
 
     const lockResult = await lockStockForOutbound(stockLines, stockSource, submitCustomerId)
     if (!lockResult.ok) {
-      window.alert(lockResult.error)
+      window.alert(displaySkuText(lockResult.error))
       return
     }
 
@@ -1155,10 +1156,10 @@ export default function Outbound() {
       try {
         await rollbackStockForOutbound(stockLines, stockSource, submitCustomerId)
       } catch (rollbackError) {
-        window.alert(`${deductResult.error}\n库存回滚失败：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`)
+        window.alert(displaySkuText(`${deductResult.error}\n库存回滚失败：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`))
         return
       }
-      window.alert(deductResult.error)
+      window.alert(displaySkuText(deductResult.error))
       return
     }
 
@@ -1169,7 +1170,7 @@ export default function Outbound() {
         rollbackPreDeductOutboundFees(outboundNo),
         rollbackStockForOutbound(stockLines, stockSource, submitCustomerId),
       ])
-      window.alert(`出库单保存失败，已回滚库存和预扣：${error instanceof Error ? error.message : String(error)}`)
+      window.alert(displaySkuText(`出库单保存失败，已回滚库存和预扣：${error instanceof Error ? error.message : String(error)}`))
       return
     }
 
@@ -1768,7 +1769,7 @@ export default function Outbound() {
                       暂无货品，请点击「增加」选择 SKU，或使用批量上传
                       {availableProducts.length > 0 && (
                         <span className="mt-2 block text-[10px]">
-                          可匹配库存：{availableProducts.slice(0, 3).map(p => p.sku).join('、')} 等
+                          可匹配库存：{availableProducts.slice(0, 3).map(p => displaySku(p.sku, customerId)).join('、')} 等
                         </span>
                       )}
                     </td>
@@ -1778,7 +1779,7 @@ export default function Outbound() {
                   const overMax = row.qty > maxQty
                   return (
                   <tr key={row.id} className="table-row">
-                    <td className="table-cell"><MonoCode>{row.sku}</MonoCode></td>
+                    <td className="table-cell"><MonoCode>{displaySku(row.sku, customerId)}</MonoCode></td>
                     <td className="table-cell text-xs">{row.name}</td>
                     <td className="table-cell align-top">
                       <input

@@ -19,7 +19,7 @@ object ScanCodeClassifier {
         ScanChecklistItem("outbound_no", "scan_type_outbound", "DOAFU0167-260910-0005"),
         ScanChecklistItem("carton", "scan_type_carton", "RVAFU0430-260910-0002-1"),
         ScanChecklistItem("location", "scan_type_location", "H-12-2-1"),
-        ScanChecklistItem("sku", "scan_type_sku", "AFU0430-719110"),
+        ScanChecklistItem("sku", "scan_type_sku", "719110"),
         ScanChecklistItem("barcode", "scan_type_barcode", "9902316738435"),
         ScanChecklistItem("stocktake", "scan_type_stocktake", "PD-20260903-0012"),
         ScanChecklistItem("measure", "scan_type_measure", "SKU-A|10|20|30"),
@@ -36,6 +36,9 @@ object ScanCodeClassifier {
             return ScanGuess("measure_pipe", "scan_type_measure", "scan_use_qc", "measure")
         }
         val upper = code.uppercase()
+        if (Regex("""^TKL\d+-[A-Z0-9][A-Z0-9_-]*$""").matches(upper)) {
+            return ScanGuess("sku", "scan_type_sku", "scan_use_sku")
+        }
         if (isLocation(upper)) {
             return ScanGuess("location", "scan_type_location", "scan_use_location")
         }
@@ -62,7 +65,7 @@ object ScanCodeClassifier {
         if (Regex("""^\d{8,14}$""").matches(code)) {
             return ScanGuess("barcode", "scan_type_barcode", "scan_use_sku")
         }
-        if (Regex("""^[A-Z][A-Z0-9]{1,12}-[A-Z0-9][A-Z0-9_-]{0,24}$""", RegexOption.IGNORE_CASE).matches(code)) {
+        if (Regex("""^[A-Z0-9][A-Z0-9_-]{0,39}$""", RegexOption.IGNORE_CASE).matches(code)) {
             return ScanGuess("sku", "scan_type_sku", "scan_use_sku")
         }
         return ScanGuess("unknown", "scan_type_unknown", "scan_use_unknown")

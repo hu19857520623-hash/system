@@ -1,6 +1,6 @@
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from 'pdf-lib'
 import { code128Widths } from './code128'
-import type { BoxLabelData } from './boxLabelTemplate'
+import { splitBoxLabelPages, type BoxLabelData } from './boxLabelTemplate'
 import { buildCartonCode } from './wmsDocNo'
 
 const PT_PER_MM = 72 / 25.4
@@ -56,8 +56,9 @@ function drawBoxLabelPage(page: PDFPage, data: BoxLabelData, font: PDFFont, font
   page.drawText(data.warehouseCode, { x: PAD_X + mm(3), y: PAGE_H - mm(42), size: 20, font: fontBold, color: rgb(0, 0, 0) })
 
   const headerTop = PAGE_H - mm(46)
-  const rowHeight = mm(6)
-  const tableBottom = headerTop - rowHeight * (1 + lines.length)
+  const headerHeight = mm(6)
+  const rowHeight = mm(14)
+  const tableBottom = headerTop - headerHeight - rowHeight * lines.length
   page.drawRectangle({
     x: PAD_X,
     y: tableBottom,
@@ -67,27 +68,34 @@ function drawBoxLabelPage(page: PDFPage, data: BoxLabelData, font: PDFFont, font
     borderWidth: 0.8,
   })
   page.drawLine({ start: { x: pcsLeft, y: tableBottom }, end: { x: pcsLeft, y: headerTop }, thickness: 0.8, color: rgb(0, 0, 0) })
-  page.drawLine({ start: { x: PAD_X, y: headerTop - rowHeight }, end: { x: tableRight, y: headerTop - rowHeight }, thickness: 0.8, color: rgb(0, 0, 0) })
+  page.drawLine({ start: { x: PAD_X, y: headerTop - headerHeight }, end: { x: tableRight, y: headerTop - headerHeight }, thickness: 0.8, color: rgb(0, 0, 0) })
 
   page.drawText('SKU', { x: PAD_X + mm(1.5), y: headerTop - mm(4.2), size: 13, font, color: rgb(0, 0, 0) })
   const pcs = 'PCS'
   page.drawText(pcs, { x: pcsLeft + (pcsWidth - font.widthOfTextAtSize(pcs, 13)) / 2, y: headerTop - mm(4.2), size: 13, font, color: rgb(0, 0, 0) })
 
   lines.forEach((line, index) => {
-    const baseline = headerTop - rowHeight * (index + 2) + mm(1.8)
-    page.drawText(line.sku, { x: PAD_X + mm(1.5), y: baseline, size: 13, font, color: rgb(0, 0, 0), maxWidth: pcsLeft - PAD_X - mm(3) })
+    const rowTop = headerTop - headerHeight - rowHeight * index
+    const rowBottom = rowTop - rowHeight
+    const baseline = rowTop - mm(4.2)
+    const textWidth = pcsLeft - PAD_X - mm(3)
+    const textSize = Math.min(13, 13 * textWidth / Math.max(1, font.widthOfTextAtSize(line.sku, 13)))
+    page.drawText(line.sku, { x: PAD_X + mm(1.5), y: baseline, size: textSize, font, color: rgb(0, 0, 0) })
+    if (line.sku.trim() && line.sku !== '—') {
+      drawCode128(page, line.sku, PAD_X + mm(3.5), rowBottom + mm(1.5), textWidth - mm(4), mm(7))
+    }
     const qty = String(line.qty)
     page.drawText(qty, { x: pcsLeft + (pcsWidth - font.widthOfTextAtSize(qty, 13)) / 2, y: baseline, size: 13, font, color: rgb(0, 0, 0) })
     if (index < lines.length - 1) {
-      page.drawLine({ start: { x: PAD_X, y: headerTop - rowHeight * (index + 2) }, end: { x: tableRight, y: headerTop - rowHeight * (index + 2) }, thickness: 0.6, color: rgb(0, 0, 0) })
+      page.drawLine({ start: { x: PAD_X, y: rowBottom }, end: { x: tableRight, y: rowBottom }, thickness: 0.6, color: rgb(0, 0, 0) })
     }
   })
 
   const pageCount = `${boxIndex}/${boxTotal}`
   page.drawText(pageCount, {
     x: tableRight - font.widthOfTextAtSize(pageCount, 12),
-    y: Math.min(tableBottom - mm(12), mm(36)),
-    size: 12,
+    y: Math.max(mm(2), Math.min(tableBottom - mm(4), mm(36))),
+    size: 10,
     font,
     color: rgb(0, 0, 0),
   })
@@ -98,7 +106,7 @@ export async function buildBoxLabelsPdf(labels: BoxLabelData[]): Promise<Uint8Ar
   const doc = await PDFDocument.create()
   const font = await doc.embedFont(StandardFonts.Helvetica)
   const fontBold = await doc.embedFont(StandardFonts.HelveticaBold)
-  for (const label of labels) {
+  for (const label of labels.flatMap(splitBoxLabelPages)) {
     const page = doc.addPage([PAGE_W, PAGE_H])
     drawBoxLabelPage(page, label, font, fontBold)
   }

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { displaySku, displaySkuText } from '@erp/shared/sku-display'
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -173,7 +174,7 @@ async function loadHoldings() {
   } catch (e: any) {
     holdingRows.value = []
     holdingsTotal.value = 0
-    ElMessage.error(e?.message || '加载货盘持有失败')
+    ElMessage.error(displaySkuText(e?.message || '加载货盘持有失败'))
   } finally {
     holdingsLoading.value = false
   }
@@ -210,7 +211,7 @@ async function openCatalogPurchases(row: HoldingRow) {
     })
     catalogPurchaseRows.value = res.items || []
   } catch (e: any) {
-    ElMessage.error(e?.message || '加载失败')
+    ElMessage.error(displaySkuText(e?.message || '加载失败'))
   } finally {
     catalogPurchaseLoading.value = false
   }
@@ -245,12 +246,12 @@ async function submitReclaim() {
       quantity: f.quantity,
       remark: f.remark.trim() || undefined,
     })
-    ElMessage.success(res.message || '货盘持有已收回')
+    ElMessage.success(displaySkuText(res.message || '货盘持有已收回'))
     reclaimDialogVisible.value = false
     loadHoldings()
     load()
   } catch (e: any) {
-    ElMessage.error(e?.message || '收回失败')
+    ElMessage.error(displaySkuText(e?.message || '收回失败'))
   } finally {
     reclaimSubmitting.value = false
   }
@@ -593,8 +594,8 @@ async function submitReprice() {
       <el-table-column label="客户 SKU" width="100" show-overflow-tooltip>
         <template #default="{ row }"><span class="mono">{{ row.customerSku || '—' }}</span></template>
       </el-table-column>
-      <el-table-column prop="sku" label="内部 SKU" width="118" show-overflow-tooltip>
-        <template #default="{ row }"><span class="mono">{{ row.sku }}</span></template>
+      <el-table-column prop="sku" label="SKU" width="118" show-overflow-tooltip>
+        <template #default="{ row }"><span class="mono">{{ displaySku(row) }}</span></template>
       </el-table-column>
       <el-table-column prop="name" label="商品名" min-width="130" />
       <el-table-column prop="purchaseQty" label="采购数量" width="96" align="right">
@@ -678,7 +679,7 @@ async function submitReprice() {
       </el-alert>
       <el-table v-loading="holdingsLoading" :data="holdingRows" stripe border size="small">
         <el-table-column prop="sku" label="SKU" width="120">
-          <template #default="{ row }"><span class="mono">{{ row.sku }}</span></template>
+          <template #default="{ row }"><span class="mono">{{ displaySku(row) }}</span></template>
         </el-table-column>
         <el-table-column label="客户 SKU" width="100" show-overflow-tooltip>
           <template #default="{ row }"><span class="mono">{{ row.customerSku || '—' }}</span></template>
@@ -722,7 +723,7 @@ async function submitReprice() {
 
   <el-dialog v-model="pricingVisible" :title="'货盘库存 · ' + (editing?.name || '')" width="760px" top="6vh" class="erp-detail">
     <template v-if="editing">
-      <DetailSheet :kicker="editing.customerCode || CATALOG_CUSTOMER_CODE" :title="editing.name" :subtitle="`${CATALOG_CUSTOMER_NAME} · 客户 SKU ${editing.customerSku || '—'} · 内部 ${editing.sku}`">
+      <DetailSheet :kicker="editing.customerCode || CATALOG_CUSTOMER_CODE" :title="editing.name" :subtitle="`${CATALOG_CUSTOMER_NAME} · 客户 SKU ${editing.customerSku || '—'} · SKU ${displaySku(editing)}`">
         <template #metrics>
           <div class="erp-detail__metric">
             <label>采购成本</label>
@@ -756,7 +757,7 @@ async function submitReprice() {
       <el-descriptions :column="3" border size="small">
         <el-descriptions-item label="客户代码">{{ editing.customerCode || CATALOG_CUSTOMER_CODE }}</el-descriptions-item>
         <el-descriptions-item label="客户 SKU">{{ editing.customerSku || '—' }}</el-descriptions-item>
-        <el-descriptions-item label="内部 SKU">{{ editing.sku }}</el-descriptions-item>
+        <el-descriptions-item label="SKU">{{ displaySku(editing) }}</el-descriptions-item>
         <el-descriptions-item label="采购单">{{ editing.poNo || '—' }}</el-descriptions-item>
         <el-descriptions-item label="入库单">{{ editing.inboundNo || '—' }}</el-descriptions-item>
         <el-descriptions-item label="采购数量">{{ editing.purchaseQty.toLocaleString() }} <span class="form-tip">（全部已审采购单合计）</span></el-descriptions-item>
@@ -994,7 +995,7 @@ async function submitReprice() {
         <el-input v-model="reclaimForm.customerCode" disabled />
       </el-form-item>
       <el-form-item label="SKU">
-        <span class="mono">{{ reclaimForm.sku }}</span>
+        <span class="mono">{{ displaySku(reclaimForm) }}</span>
       </el-form-item>
       <el-form-item label="品名">
         <span>{{ reclaimForm.productName || '—' }}</span>

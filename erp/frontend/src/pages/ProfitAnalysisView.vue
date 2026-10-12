@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { displaySku, displaySkuText } from '@erp/shared/sku-display'
 import { computed, onMounted, ref, watch } from 'vue'
 import { customerApi, dashboardApi, profitApi, supplierApi } from '@/api/client.js'
 import { num } from '@/api/mappers.ts'
@@ -250,7 +251,9 @@ watch(dim, loadAll)
         <el-radio-button value="channel">按渠道</el-radio-button>
       </el-radio-group>
       <el-table :data="profitPagedItems" stripe border size="small">
-        <el-table-column prop="dim" :label="dim === 'customer' ? '客户' : dim === 'sku' ? 'SKU' : '渠道'" min-width="160" />
+        <el-table-column prop="dim" :label="dim === 'customer' ? '客户' : dim === 'sku' ? 'SKU' : '渠道'" min-width="160">
+          <template #default="{ row }">{{ dim === 'sku' ? displaySkuText(row.dim) : row.dim }}</template>
+        </el-table-column>
         <el-table-column prop="revenue" label="营收" width="120" align="right" />
         <el-table-column prop="cost" label="采购成本" width="120" align="right" />
         <el-table-column prop="freight" label="物流费" width="100" align="right" />
@@ -270,7 +273,7 @@ watch(dim, loadAll)
         <el-table-column type="index" label="#" width="50" />
         <el-table-column prop="name" label="商品名" min-width="150" />
         <el-table-column prop="sku" label="SKU" width="110">
-          <template #default="{ row }"><span class="mono">{{ row.sku }}</span></template>
+          <template #default="{ row }"><span class="mono">{{ displaySku(row) }}</span></template>
         </el-table-column>
         <el-table-column prop="revenue" label="营收" width="120" align="right" />
         <el-table-column prop="qty" label="销量" width="90" align="right">

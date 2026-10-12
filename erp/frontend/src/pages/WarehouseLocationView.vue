@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { displaySku, displaySkuText } from '@erp/shared/sku-display'
 import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { warehouseApi, warehouseZoneApi, locationApi } from '@/api/client.js'
@@ -381,7 +382,7 @@ async function showInventory(row: any) {
     invDetail.value = await locationApi.inventory(row.id)
     invDialogVisible.value = true
   } catch (e: any) {
-    ElMessage.error(e.message || '加载库位库存失败')
+    ElMessage.error(displaySkuText(e.message || '加载库位库存失败'))
   }
 }
 
@@ -391,7 +392,7 @@ async function printOne(row: any) {
   try {
     await locationApi.printLabel(row.id)
   } catch (e: any) {
-    ElMessage.error(e.message || '打印失败')
+    ElMessage.error(displaySkuText(e.message || '打印失败'))
   }
 }
 
@@ -403,7 +404,7 @@ async function printSelected() {
   try {
     await locationApi.printLabels({ ids: selectedRows.value.map((r) => r.id).join(',') })
   } catch (e: any) {
-    ElMessage.error(e.message || '打印失败')
+    ElMessage.error(displaySkuText(e.message || '打印失败'))
   }
 }
 
@@ -417,7 +418,7 @@ async function printCurrentZone() {
     if (selectedZoneId.value !== 'all') params.zoneId = selectedZoneId.value
     await locationApi.printLabels(params)
   } catch (e: any) {
-    ElMessage.error(e.message || '打印失败')
+    ElMessage.error(displaySkuText(e.message || '打印失败'))
   }
 }
 </script>
@@ -656,7 +657,7 @@ async function printCurrentZone() {
       </div>
       <el-table v-if="invDetail?.items?.length" :data="invDetail.items" size="small" border>
         <el-table-column prop="sku" label="SKU" width="120">
-          <template #default="{ row }"><span class="mono">{{ row.sku }}</span></template>
+          <template #default="{ row }"><span class="mono">{{ displaySku(row) }}</span></template>
         </el-table-column>
         <el-table-column prop="qty" label="数量" width="80" align="right" />
         <el-table-column prop="batchNo" label="批次" width="100" />

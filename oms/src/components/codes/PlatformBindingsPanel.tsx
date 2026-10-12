@@ -1,3 +1,4 @@
+import { displaySku } from '../../data/skuDisplay'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Plus, Upload, Trash2, Settings } from 'lucide-react'
@@ -410,7 +411,7 @@ export default function PlatformBindingsPanel() {
                       <td className="table-cell align-top max-w-[200px] truncate text-xs text-primary-700" rowSpan={row.lines.length} title={row.platformTitle}>{row.platformTitle}</td>
                     </>
                   )}
-                  <td className="table-cell"><MonoCode>{line.internalSku}</MonoCode>{row.lines.length > 1 && <span className="ml-1 text-[10px] text-violet-600">×{line.qty}</span>}</td>
+                  <td className="table-cell"><MonoCode>{displaySku(line.internalSku, row.customerId)}</MonoCode>{row.lines.length > 1 && <span className="ml-1 text-[10px] text-violet-600">×{line.qty}</span>}</td>
                   <td className="table-cell text-xs">{line.warehouseName}</td>
                   <td className="table-cell text-xs text-text-muted">{line.shortName ?? '—'}</td>
                   {lineIdx === 0 && (

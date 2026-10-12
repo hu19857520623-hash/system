@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { displaySku, displaySkuText } from '../data/skuDisplay'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { Upload, Plus, Trash2, ListOrdered } from 'lucide-react'
 import { Button, Card, Table } from '../components/ui'
@@ -117,7 +118,7 @@ export default function Inbound() {
       setBoxCountInput(''); setQtyPerBoxInput('')
       return true
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : '添加货品失败')
+      window.alert(displaySkuText(err instanceof Error ? err.message : '添加货品失败'))
       return false
     }
   }
@@ -169,7 +170,7 @@ export default function Inbound() {
     }
     const lineError = validateInboundBoxLines(lines)
     if (lineError) {
-      window.alert(lineError)
+      window.alert(displaySkuText(lineError))
       return
     }
 
@@ -215,7 +216,7 @@ export default function Inbound() {
       if (reordering) {
         const erpResult = await reorderInboundOnErp({ ...localOrder, status: 'voided' })
         if (!erpResult.ok) {
-          window.alert(`重新下单失败：${erpResult.error}`)
+          window.alert(displaySkuText(`重新下单失败：${erpResult.error}`))
           return
         }
         window.alert(`入库单 ${localOrder.inboundNo} 已重新下单，进入在途`)
@@ -226,7 +227,7 @@ export default function Inbound() {
       if (editingInTransit) {
         const erpResult = await updateInboundOnErp(localOrder)
         if (!erpResult.ok) {
-          window.alert(`保存失败：${erpResult.error}`)
+          window.alert(displaySkuText(`保存失败：${erpResult.error}`))
           return
         }
         window.alert(`入库单 ${localOrder.inboundNo} 已保存`)
@@ -241,7 +242,7 @@ export default function Inbound() {
         const erpResult = await submitInboundToErp(localOrder)
         if (!erpResult.ok) {
           await updateInboundOrderOrThrow(localOrder.id, { status: 'draft' })
-          window.alert(`同步 ERP 失败，已保留为草稿，请修改后重试：${erpResult.error}`)
+          window.alert(displaySkuText(`同步 ERP 失败，已保留为草稿，请修改后重试：${erpResult.error}`))
           return
         }
       }
@@ -382,9 +383,10 @@ export default function Inbound() {
                       <input aria-label={`箱号 ${row.boxNo} 的箱号`} type="number" min={1} step={1} value={row.boxNo || ''} onChange={e => updateLine(row.id, { boxNo: Number(e.target.value) })} className={formInput('min-w-[72px] w-20')} />
                     </td>
                     <td className="table-cell">
-                      <input aria-label={`箱号 ${row.boxNo} 的 SKU`} value={row.sku} onChange={e => {
+                      <input aria-label={`箱号 ${row.boxNo} 的 SKU`} value={displaySku(row.sku, targetOrder?.customerId ?? getCustomerIdForRole(role))} onChange={e => {
                         const sku = e.target.value
-                        updateLine(row.id, { sku, name: findProductByCode(sku)?.name ?? sku })
+                        const product = findProductByCode(sku, targetOrder?.customerId ?? getCustomerIdForRole(role) ?? undefined)
+                        updateLine(row.id, { sku: product?.internalSku ?? sku, name: product?.name ?? sku })
                       }} className={formInput('min-w-[120px]')} />
                     </td>
                     <td className="table-cell">

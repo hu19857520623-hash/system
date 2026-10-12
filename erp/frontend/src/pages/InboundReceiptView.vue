@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { inboundApi } from '@/api/client.js'
 import { mapInbound, fmtTime } from '@/api/mappers.ts'
@@ -9,6 +9,8 @@ import { useAppStore } from '@/stores/app'
 import { INBOUND_STATUS } from '@/constants/index.js'
 import ListPagination from '@/components/ListPagination.vue'
 import DetailSheet from '@/components/ui/DetailSheet.vue'
+import { inboundCustomerSku } from '@erp/shared/inbound-customer-sku'
+import { MANUAL_ARRIVAL_STATUSES, receiveInboundManually } from '@/utils/manual-inbound-receive'
 
 function bound990Text(row: any): string {
   const codes = [
@@ -25,6 +27,7 @@ function bound990Text(row: any): string {
 
 const app = useAppStore()
 const route = useRoute()
+const router = useRouter()
 
 type StatusFilter = 'all' | 'in_transit' | 'arrived' | 'receiving' | 'putaway' | 'completed' | 'exception' | 'cancelled'
 
@@ -104,8 +107,8 @@ const orderRows = computed(() =>
     const raw = o._raw
     const qty = (raw.items || []).reduce((s: number, i: any) => s + (i.expectedQty || 0), 0)
     const skuLabel = raw.items?.length === 1
-      ? raw.items[0].sku
-      : raw.items?.length ? `${raw.items[0]?.sku} 等 ${raw.items.length} SKU` : '—'
+      ? inboundCustomerSku(raw.items[0], raw.omsCustomerCode)
+      : raw.items?.length ? `${inboundCustomerSku(raw.items[0], raw.omsCustomerCode)} 等 ${raw.items.length} SKU` : '—'
     const displayStatus = raw.displayStatus || raw.status
     const customerRemark = parseCustomerRemark(raw.remark)
     return {
@@ -187,6 +190,106 @@ watch(filter, () => {
 })
 
 const canReceive = computed(() => app.hasPerm('inbound.receive'))
+const canConfirmArrival = computed(() => app.hasPerm('inbound.arrival_scan'))
+const manualReceiveVisible = ref(false)
+const manualReceiveLoading = ref(false)
+const manualReceiveSubmitting = ref(false)
+const manualReceiveOrder = ref<any>(null)
+const manualReceiveCount = ref<number | null>(null)
+const manualReceiveReason = ref('')
+const manualReceiveRequestId = ref('')
+
+function canManualReceiveOrder(row: any) {
+  if (!row || row.readOnly || String(row.id).startsWith('oms-') || !canReceive.value) return false
+  return ['arrived', 'receiving'].includes(row.status)
+    || (canConfirmArrival.value && MANUAL_ARRIVAL_STATUSES.includes(row.status))
+}
+
+async function openManualReceive(row: any) {
+  if (!canManualReceiveOrder(row)) return
+  detailVisible.value = false
+  manualReceiveOrder.value = null
+  manualReceiveCount.value = null
+  manualReceiveReason.value = ''
+  manualReceiveRequestId.value = crypto.randomUUID()
+  manualReceiveVisible.value = true
+  manualReceiveLoading.value = true
+  try {
+    const order = await inboundApi.detail(row.id)
+    if (!canManualReceiveOrder(order)) throw new Error('当前单据不可手动收货，请刷新列表查看状态')
+    manualReceiveOrder.value = order
+    manualReceiveCount.value = order.receivedCartonCount ?? null
+  } catch (e: any) {
+    ElMessage.error(e?.message || '加载收货单据失败')
+    manualReceiveVisible.value = false
+  } finally {
+    manualReceiveLoading.value = false
+  }
+}
+
+async function submitManualReceive() {
+  const order = manualReceiveOrder.value
+  if (!canManualReceiveOrder(order) || manualReceiveSubmitting.value) return
+  manualReceiveSubmitting.value = true
+  try {
+    await receiveInboundManually({
+      detail: (id) => inboundApi.detail(id),
+      arrivalScan: (data) => inboundApi.arrivalScan(data),
+      recordReceivedCartonCount: (id, data) => inboundApi.recordReceivedCartonCount(id, data),
+    }, order.id, {
+      count: manualReceiveCount.value, differenceReason: manualReceiveReason.value,
+      clientRequestId: manualReceiveRequestId.value,
+    })
+    manualReceiveVisible.value = false
+    ElMessage.success('手动收货已登记，请继续清点与测量')
+    await reloadAll()
+    if (canQc.value) {
+      await router.push({ name: 'InboundArrivalScan', query: { inboundId: String(order.id), step: 'qc' } })
+    }
+  } catch (e: any) {
+    ElMessage.error(e?.message || '手动收货失败')
+    await reloadAll()
+  } finally {
+    manualReceiveSubmitting.value = false
+  }
+}
+const canPutaway = computed(() => app.hasPerm('inbound.putaway'))
+
+function canPutawayOrder(row: any) {
+  return canPutaway.value && row?.status === 'pending_putaway'
+    && !row.readOnly && !String(row.id).startsWith('oms-')
+    && row.displayStatus !== 'exception'
+}
+
+function openPutaway(row: any) {
+  if (!canPutawayOrder(row)) return
+  detailVisible.value = false
+  void router.push({ name: 'InboundArrivalScan', query: { inboundId: String(row.id), step: 'putaway' } })
+}
+
+const canPrintSku = computed(() => app.hasPerm('create_inbound.label'))
+const printingSkuId = ref<number | string | null>(null)
+
+async function printSkuLabels(row: any) {
+  const id = row?._raw?.id ?? row?.id
+  if (!id || row.readOnly || String(id).startsWith('oms-') || printingSkuId.value != null) return
+  const printWindow = window.open('', '_blank')
+  if (!printWindow) return ElMessage.warning('请允许弹窗后再打印 SKU 标签')
+  printWindow.document.body.textContent = '正在生成 SKU 标签…'
+  printingSkuId.value = id
+  try {
+    const { blob } = await inboundApi.downloadSkuLabel(id)
+    const url = URL.createObjectURL(blob)
+    printWindow.location.href = url
+    window.setTimeout(() => URL.revokeObjectURL(url), 5 * 60 * 1000)
+    ElMessage.success('已打开 SKU 标签 PDF，请在预览窗口打印')
+  } catch (e: any) {
+    printWindow.close()
+    ElMessage.error(e?.message || '生成 SKU 标签失败')
+  } finally {
+    printingSkuId.value = null
+  }
+}
 const canQc = computed(() => app.hasPerm('inbound.qc'))
 const canResolve = computed(() => app.hasPerm('inbound.handle_exception') || app.hasPerm('inbound.confirm_diff'))
 
@@ -195,6 +298,7 @@ const qcOrder = ref<any>(null)
 const qcLines = ref<{
   id: number
   sku: string
+  customerSku: string
   productName: string
   spec: string
   expectedQty: number
@@ -283,6 +387,7 @@ async function openQc(row: any) {
     qcLines.value = (data.items || []).map((item: any) => ({
       id: item.id,
       sku: item.sku,
+      customerSku: inboundCustomerSku(item, data.omsCustomerCode),
       barcode: item.barcode || '',
       platformBarcode: item.platformBarcode || '',
       platformBarcodes: item.platformBarcodes || [],
@@ -405,7 +510,7 @@ onMounted(async () => {
           <el-tag :type="statusTagType(row.status, row.displayStatus)" size="small">{{ row.statusLabel }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="300" fixed="right">
+      <el-table-column label="操作" width="440" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" size="small" @click="openDetail(row)">详情</el-button>
           <template v-if="!row.readOnly">
@@ -414,6 +519,9 @@ onMounted(async () => {
             link type="primary" size="small"
             @click="downloadReceivingList(row)"
           >入库清单</el-button>
+          <el-button v-if="canPrintSku" link type="primary" size="small" :loading="printingSkuId === row.id" :disabled="printingSkuId != null" @click="printSkuLabels(row)">打印 SKU 标签</el-button>
+          <el-button v-if="canPutawayOrder(row)" link type="primary" size="small" @click="openPutaway(row)">上架</el-button>
+          <el-button v-if="canManualReceiveOrder(row)" link type="primary" size="small" @click="openManualReceive(row)">手动收货</el-button>
           <el-button
             v-if="row.status === 'arrived' && canReceive"
             link type="primary" size="small"
@@ -481,7 +589,7 @@ onMounted(async () => {
             <el-table-column prop="sku" label="SKU" min-width="150">
               <template #default="{ row }">
                 <div class="sku-cell">
-                  <span class="mono">{{ row.sku }}</span>
+                  <span class="mono">{{ inboundCustomerSku(row, detailOrder.omsCustomerCode) }}</span>
                   <span v-if="bound990Text(row)" class="bound-990">已绑 {{ bound990Text(row) }}</span>
                 </div>
               </template>
@@ -524,11 +632,44 @@ onMounted(async () => {
         </template>
       </div>
       <template #footer>
+        <el-button v-if="canManualReceiveOrder(detailOrder)" type="primary" @click="openManualReceive(detailOrder)">手动收货</el-button>
+        <el-button v-if="canPutawayOrder(detailOrder)" type="primary" @click="openPutaway(detailOrder)">上架</el-button>
+        <el-button v-if="detailOrder && !detailOrder.readOnly && !String(detailOrder.id).startsWith('oms-') && canPrintSku" :loading="printingSkuId === detailOrder.id" :disabled="printingSkuId != null" @click="printSkuLabels(detailOrder)">打印 SKU 标签</el-button>
         <el-button
           v-if="detailOrder && !detailOrder.readOnly && !String(detailOrder.id).startsWith('oms-')"
           @click="downloadReceivingList(detailOrder)"
         >下载入库清单</el-button>
         <el-button type="primary" @click="detailVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="manualReceiveVisible" title="手动收货" width="680px" :close-on-click-modal="false" :close-on-press-escape="!manualReceiveSubmitting" :show-close="!manualReceiveSubmitting">
+      <div v-loading="manualReceiveLoading">
+        <template v-if="manualReceiveOrder">
+          <el-alert type="info" :closable="false" show-icon style="margin-bottom:16px" title="请确认货物已到仓。提交将登记到仓及实收箱数；SKU 件数、尺寸和库存由后续清点与上架确认。" />
+          <el-descriptions :column="2" border size="small">
+            <el-descriptions-item label="入库单" :span="2">{{ manualReceiveOrder.inboundNo }}</el-descriptions-item>
+            <el-descriptions-item label="目的仓">{{ manualReceiveOrder.warehouseCode }}</el-descriptions-item>
+            <el-descriptions-item label="应收箱数">{{ manualReceiveOrder.cartons?.length || '未提供' }}</el-descriptions-item>
+          </el-descriptions>
+          <el-table :data="manualReceiveOrder.items || []" size="small" max-height="240" style="margin:16px 0">
+            <el-table-column label="SKU" min-width="140"><template #default="{ row }">{{ inboundCustomerSku(row, manualReceiveOrder.omsCustomerCode) }}</template></el-table-column>
+            <el-table-column prop="productName" label="品名" min-width="160" />
+            <el-table-column prop="expectedQty" label="预期件数" width="100" />
+          </el-table>
+          <el-form label-width="100px" @submit.prevent="submitManualReceive">
+            <el-form-item label="实收箱数" required>
+              <el-input-number v-model="manualReceiveCount" :min="1" :max="9999" :precision="0" :disabled="manualReceiveSubmitting" />
+            </el-form-item>
+            <el-form-item label="差异原因">
+              <el-input v-model="manualReceiveReason" type="textarea" :rows="2" maxlength="500" show-word-limit placeholder="实收与应收箱数不一致时必填" :disabled="manualReceiveSubmitting" />
+            </el-form-item>
+          </el-form>
+        </template>
+      </div>
+      <template #footer>
+        <el-button :disabled="manualReceiveSubmitting" @click="manualReceiveVisible = false">取消</el-button>
+        <el-button type="primary" :loading="manualReceiveSubmitting" :disabled="manualReceiveLoading || !manualReceiveOrder" @click="submitManualReceive">确认手动收货</el-button>
       </template>
     </el-dialog>
 
@@ -563,7 +704,7 @@ onMounted(async () => {
             <el-table-column prop="sku" label="SKU" min-width="150" fixed="left" show-overflow-tooltip>
               <template #default="{ row }">
                 <div class="sku-cell">
-                  <span class="mono">{{ row.sku }}</span>
+                  <span class="mono">{{ row.customerSku || row.sku }}</span>
                   <span v-if="bound990Text(row)" class="bound-990">已绑 {{ bound990Text(row) }}</span>
                 </div>
               </template>

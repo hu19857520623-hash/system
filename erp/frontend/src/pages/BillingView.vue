@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { displaySku } from '@erp/shared/sku-display'
 
 import { ref, computed, onMounted, watch } from 'vue'
 
@@ -1008,7 +1009,7 @@ onMounted(async () => {
         <div class="sku-detail-head">SKU 明细</div>
         <el-table :data="chargeDetailRow.skuItems || []" border size="small" max-height="280">
           <el-table-column prop="sku" label="SKU" min-width="140">
-            <template #default="{ row }"><span class="mono">{{ row.sku }}</span></template>
+            <template #default="{ row }"><span class="mono">{{ displaySku(row) }}</span></template>
           </el-table-column>
           <el-table-column prop="productName" label="商品" min-width="180">
             <template #default="{ row }">{{ row.productName || '—' }}</template>

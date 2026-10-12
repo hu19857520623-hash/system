@@ -4,6 +4,7 @@ import { formInput } from './form'
 import { searchProductsFuzzy } from '../../data/platformBindingUtils'
 import { getCustomerSkuDisplay } from '../../data/skuCode'
 import type { Product } from '../../data/mockData'
+import { displaySku } from '../../data/skuDisplay'
 
 type SkuFuzzyPickerProps = {
   id?: string
@@ -82,7 +83,7 @@ export default function SkuFuzzyPicker({
         <input
           id={id}
           aria-describedby={ariaDescribedBy}
-          value={value}
+          value={displaySku(value, customerId)}
           onChange={e => {
             onChange(e.target.value)
             setOpen(true)
@@ -109,7 +110,7 @@ export default function SkuFuzzyPicker({
                   idx === activeIdx ? 'bg-primary-50 text-primary-900' : 'hover:bg-surface-muted'
                 }`}
               >
-                <span className="font-mono font-semibold text-text-primary">{getCustomerSkuDisplay(p)}</span>
+                <span className="font-mono font-semibold text-text-primary">{displaySku(p.internalSku, customerId)}</span>
                 <span className="line-clamp-1 text-text-secondary">{p.name}</span>
                 {p.customCode && (
                   <span className="text-[10px] text-text-muted">自定义编号：{p.customCode}</span>
