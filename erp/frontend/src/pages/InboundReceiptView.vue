@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { inboundApi } from '@/api/client.js'
 import { mapInbound, fmtTime } from '@/api/mappers.ts'
 import { withAction } from '@/composables/useListLoader.ts'
@@ -291,6 +291,40 @@ async function printSkuLabels(row: any) {
   }
 }
 const canQc = computed(() => app.hasPerm('inbound.qc'))
+const countManaging = ref(false)
+function countManageable(row: any) {
+  const raw = row?._raw || row
+  return raw && !raw.readOnly && !String(raw.id).startsWith('oms-') && raw.items?.length
+    && !raw.items.some((i: any) => Number(i.putawayQty || 0) > 0)
+}
+function allCountedZero(row: any) {
+  const raw = row?._raw || row
+  return countManageable(row) && raw.items.every((i: any) => i.actualQty != null && Number(i.actualQty) === 0)
+}
+function canReopenCount(row: any) {
+  return canQc.value && countManageable(row) && (['pending_putaway', 'exception'].includes(row.status) || (row.status === 'completed' && allCountedZero(row)))
+}
+function canCloseZero(row: any) {
+  return canResolve.value && allCountedZero(row) && ['pending_putaway', 'exception'].includes(row.status)
+}
+async function manageCount(row: any, mode: 'reopen' | 'close-zero') {
+  if (countManaging.value || !(mode === 'reopen' ? canReopenCount(row) : canCloseZero(row))) return
+  const title = mode === 'reopen' ? '更正清点' : '零收货结束'
+  try {
+    const { value } = await ElMessageBox.prompt(mode === 'reopen' ? '将退回收货中，可重新录入清点数量。请填写更正原因。' : '确认全部 SKU 实收为 0，将结束单据且不增加库存。请填写未收货原因。', title, {
+      confirmButtonText: '确认', cancelButtonText: '取消', inputValidator: (v) => String(v || '').trim().length >= 2 || '请填写不少于 2 个字的原因',
+    })
+    countManaging.value = true
+    if (mode === 'reopen') await inboundApi.reopenCount(row.id, { reason: value })
+    else await inboundApi.closeZero(row.id, { reason: value })
+    detailVisible.value = false
+    await reloadAll()
+    ElMessage.success(`${title}已完成`)
+    if (mode === 'reopen') await openQc({ id: row.id })
+  } catch (e: any) {
+    if (e !== 'cancel' && e !== 'close') ElMessage.error(e?.message || `${title}失败`)
+  } finally { countManaging.value = false }
+}
 const canResolve = computed(() => app.hasPerm('inbound.handle_exception') || app.hasPerm('inbound.confirm_diff'))
 
 const qcDialogVisible = ref(false)
@@ -522,6 +556,8 @@ onMounted(async () => {
           <el-button v-if="canPrintSku" link type="primary" size="small" :loading="printingSkuId === row.id" :disabled="printingSkuId != null" @click="printSkuLabels(row)">打印 SKU 标签</el-button>
           <el-button v-if="canPutawayOrder(row)" link type="primary" size="small" @click="openPutaway(row)">上架</el-button>
           <el-button v-if="canManualReceiveOrder(row)" link type="primary" size="small" @click="openManualReceive(row)">手动收货</el-button>
+          <el-button v-if="canReopenCount(row)" link type="warning" size="small" :disabled="countManaging" @click="manageCount(row, 'reopen')">更正清点</el-button>
+          <el-button v-if="canCloseZero(row)" link type="danger" size="small" :disabled="countManaging" @click="manageCount(row, 'close-zero')">零收货结束</el-button>
           <el-button
             v-if="row.status === 'arrived' && canReceive"
             link type="primary" size="small"
@@ -632,6 +668,8 @@ onMounted(async () => {
         </template>
       </div>
       <template #footer>
+        <el-button v-if="canReopenCount(detailOrder)" :disabled="countManaging" @click="manageCount(detailOrder, 'reopen')">更正清点</el-button>
+        <el-button v-if="canCloseZero(detailOrder)" type="danger" :disabled="countManaging" @click="manageCount(detailOrder, 'close-zero')">零收货结束</el-button>
         <el-button v-if="canManualReceiveOrder(detailOrder)" type="primary" @click="openManualReceive(detailOrder)">手动收货</el-button>
         <el-button v-if="canPutawayOrder(detailOrder)" type="primary" @click="openPutaway(detailOrder)">上架</el-button>
         <el-button v-if="detailOrder && !detailOrder.readOnly && !String(detailOrder.id).startsWith('oms-') && canPrintSku" :loading="printingSkuId === detailOrder.id" :disabled="printingSkuId != null" @click="printSkuLabels(detailOrder)">打印 SKU 标签</el-button>

@@ -536,11 +536,11 @@ async function submitQcAndMeasure() {
     return
   }
 
-  for (const line of qcLines.value) {
+  for (const line of qcLines.value.filter((line) => Number(line.actualQty) > 0)) {
     if (!validateMeasureLine(line)) return
   }
 
-  const measureItems = qcLines.value.map(measurePayloadFromQcLine)
+  const measureItems = qcLines.value.filter((line) => Number(line.actualQty) > 0).map(measurePayloadFromQcLine)
   const needsQc = ['arrived', 'receiving'].includes(order.status)
 
   if (needsQc) {
@@ -573,6 +573,13 @@ async function submitQcAndMeasure() {
     }
   } else if (order.status !== 'pending_putaway') {
     ElMessage.warning('当前状态不可提交清点与测量')
+    return
+  }
+
+  if (!measureItems.length) {
+    await loadActiveOrder(order.id, 'putaway')
+    await loadActiveOrderList()
+    ElMessage.info('清点数量全部为 0，请在入库单管理中选择「零收货结束」；填错数量可选择「更正清点」')
     return
   }
 

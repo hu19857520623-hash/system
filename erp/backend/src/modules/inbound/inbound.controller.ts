@@ -247,6 +247,18 @@ export class InboundController {
   }
 
   @RequirePerms('inbound.qc')
+  @Post(':id/reopen-count')
+  reopenCount(@Param('id', ParseIntPipe) id: number, @Body() body: { reason?: string }, @CurrentUser('userId') userId: number) {
+    return this.service.manageCount(id, 'reopen', body.reason || '', userId)
+  }
+
+  @RequireAnyPerm('inbound.confirm_diff', 'inbound.handle_exception')
+  @Post(':id/close-zero')
+  closeZero(@Param('id', ParseIntPipe) id: number, @Body() body: { reason?: string }, @CurrentUser('userId') userId: number) {
+    return this.service.manageCount(id, 'close-zero', body.reason || '', userId)
+  }
+
+  @RequirePerms('inbound.qc')
   @Post(':id/qc')
   qc(@Param('id', ParseIntPipe) id: number, @Body() body: any, @CurrentUser('userId') userId: number) {
     return this.service.qc(id, body, userId)

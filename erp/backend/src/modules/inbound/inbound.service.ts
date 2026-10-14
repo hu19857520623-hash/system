@@ -42,6 +42,7 @@ import {
   patchInboundRemarkSeaFreight,
 } from './inbound-sea-freight.util'
 import { inboundReceivingStarted } from './inbound-delete.util'
+import { manageInboundCount } from './inbound-count-management.util'
 import { reduceInboundQuantity, InboundReduction } from './inbound-reduce.util'
 
 type OmsAsnLineInput = {
@@ -1518,6 +1519,12 @@ export class InboundService {
       id: Number(row.id),
       items: (row.items || []).map((i: any) => ({ ...i, id: Number(i.id) })),
     }
+  }
+
+  async manageCount(id: number, mode: 'reopen' | 'close-zero', reason: string, operatorId?: number) {
+    const result = await manageInboundCount(this.prisma, id, mode, reason, operatorId)
+    await this.pushInboundStatusToOms(result.inboundNo)
+    return result
   }
 
   async qc(id: number, payload: any, operatorId?: number) {
