@@ -501,8 +501,8 @@ async function downloadPodAttachment(row: any) {
     const { blob, fileName } = await outboundApi.downloadPod(row.id)
     if (!blob?.size) throw new Error('POD 签收单文件为空')
     const name = fileName || `${row.outboundNo || 'outbound'}-pod.pdf`
-    const mode = triggerBrowserDownload(blob, name, { preferNewTab: true })
-    ElMessage.success(mode === 'tab' ? 'POD 签收单已在新窗口打开' : 'POD 签收单下载已开始')
+    triggerBrowserDownload(blob, name)
+    ElMessage.success('POD 签收单下载已开始')
   } catch (err: any) {
     ElMessage.error(displaySkuText(err.message || '下载 POD 签收单失败'))
   }

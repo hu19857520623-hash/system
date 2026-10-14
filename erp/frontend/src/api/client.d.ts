@@ -111,8 +111,7 @@ export interface FileDownload {
 export function triggerBrowserDownload(
   blob: Blob,
   fileName?: string,
-  options?: { preferNewTab?: boolean },
-): 'tab' | 'download'
+): 'download'
 
 export interface OutboundApi extends ApiGroup {
   detail(id: number | string): Promise<any>

@@ -55,20 +55,11 @@ async function downloadRequest(url) {
   return { blob, fileName }
 }
 
-export function triggerBrowserDownload(blob, fileName = 'download', options = {}) {
-  const { preferNewTab = false } = options
+export function triggerBrowserDownload(blob, fileName = 'download') {
   if (!blob || blob.size <= 0) throw new Error('文件内容为空')
   const url = URL.createObjectURL(blob)
   const safeName = fileName || 'download'
   const cleanup = () => window.setTimeout(() => URL.revokeObjectURL(url), 5 * 60 * 1000)
-
-  if (preferNewTab || /\.pdf$/i.test(safeName) || blob.type === 'application/pdf') {
-    const tab = window.open(url, '_blank', 'noopener,noreferrer')
-    if (tab) {
-      cleanup()
-      return 'tab'
-    }
-  }
 
   const anchor = document.createElement('a')
   anchor.href = url
