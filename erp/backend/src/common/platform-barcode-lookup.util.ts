@@ -5,6 +5,7 @@ export type PlatformMappingRow = {
   platformBarcode?: string | null
   lines?: string | null
   status?: string | null
+  stockSource?: string | null
 }
 
 export type ProductScanFields = {
@@ -50,6 +51,7 @@ export function primaryBoundBarcode(codes: string[]): string {
 export function indexPlatformBarcodes(rows: PlatformMappingRow[]): Map<string, string[]> {
   const indexed = new Map<string, string[]>()
   for (const row of rows) {
+    if (row.stockSource === 'catalog') continue
     if (String(row.status || 'active').trim().toLowerCase() !== 'active') continue
     const barcode = String(row.platformBarcode || '').trim()
     if (!barcode) continue
@@ -102,7 +104,7 @@ export async function loadPlatformBarcodesByInternalSku(
   if (!uniqueCodes(skus).length) return new Map()
   try {
     const rows = await prisma.$queryRawUnsafe<PlatformMappingRow[]>(
-      `SELECT platformBarcode, \`lines\`, status FROM ${OMS_TABLE.platformSkuMapping} WHERE status = 'active'`,
+      `SELECT platformBarcode, \`lines\`, status, stockSource FROM ${OMS_TABLE.platformSkuMapping} WHERE status = 'active' AND stockSource = 'owned' AND customerId IS NOT NULL`,
     )
     return indexPlatformBarcodes(rows || [])
   } catch {

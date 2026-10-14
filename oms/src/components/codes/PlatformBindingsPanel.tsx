@@ -1,4 +1,7 @@
 import { displaySku } from '../../data/skuDisplay'
+import { bindingStockSource } from '../../data/bindingStockSource'
+import { useProducts, useInventoryItems, mergeErpCatalogIntoState } from '../../data/inventoryStore'
+import { getErpCatalog } from '../../api/erp'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Plus, Upload, Trash2, Settings } from 'lucide-react'
@@ -68,6 +71,13 @@ export default function PlatformBindingsPanel() {
   const canApprove = can('code:approve')
   const mappings = usePlatformSkuMappings()
   const stores = useStores()
+  const products = useProducts()
+  const inventory = useInventoryItems()
+  const isLocked = (m: PlatformSkuMapping) => m.stockSource !== 'catalog' && (m.hasInventory || m.lines.some(line => inventory.some(i => i.sku === line.internalSku && i.customerId === m.customerId && i.stockSource !== 'catalog' && [i.available, i.locked, i.inTransit, i.pendingShelving, i.pendingOutbound, i.defective].some(qty => qty > 0))))
+  useEffect(() => {
+    void getErpCatalog().then(catalog => mergeErpCatalogIntoState(catalog.items || []))
+      .catch(error => notifyIfUserError(error, '读取货盘 SKU 失败'))
+  }, [])
   const [searchParams] = useSearchParams()
   const bindingCustomerId = dataScope.bindingCustomerId ?? undefined
 
@@ -127,8 +137,9 @@ export default function PlatformBindingsPanel() {
   }
 
   const takealotList = useMemo(
-    () => dataScope.scope(list).filter(m => m.platform === 'Takealot'),
-    [list, dataScope],
+    () => dataScope.scope(list).filter(m => m.platform === 'Takealot')
+      .map(m => ({ ...m, hasInventory: isLocked(m), stockSource: m.stockSource === 'catalog' ? 'catalog' as const : bindingStockSource(m.lines, products, m.stockSource) })),
+    [list, dataScope, products, inventory],
   )
 
   const filtered = useMemo(() => {
@@ -150,6 +161,7 @@ export default function PlatformBindingsPanel() {
   }
 
   const openEdit = (row: PlatformSkuMapping) => {
+    if (isLocked(row)) { window.alert('自有库存有库存，不能修改原绑定，请在发货时填写其他 990 标签。'); return }
     setEditing(row)
     setQueryPrefill(undefined)
     setModalOpen(true)
@@ -164,9 +176,9 @@ export default function PlatformBindingsPanel() {
     const takealotStore = firstTakealotStore(stores)
     const store = takealotStore ?? stores.find(s => s.id === form.storeId)
     const validLines = form.lines.filter(l => l.internalSku)
-    const nextStatus = prev?.hasInventory && prev.status === 'active'
-      ? 'pending_review' as const
-      : validLines.length === 0
+    const source = bindingStockSource(validLines, products, form.stockSource)
+    if (prev && isLocked(prev)) { window.alert('自有库存有库存，不能修改原绑定。'); return }
+    const nextStatus = validLines.length === 0
         ? 'unmapped' as const
         : 'active' as const
 
@@ -182,16 +194,16 @@ export default function PlatformBindingsPanel() {
         platformSkuId: prev.platformSkuId || undefined,
         platformBarcode: form.platformBarcode,
         platformTitle: form.platformTitle,
-        stockSource: form.stockSource,
+        stockSource: source,
         lines: validLines,
         status: nextStatus,
         syncSource: 'manual' as const,
-        version: m.version + (nextStatus === 'pending_review' ? 1 : 0),
+        version: m.version + 1,
         updatedAt: '2026-07-08',
       } : m)
     } else {
       next = [...list, {
-        id: `pb-${Date.now()}`,
+          id: `pb-${crypto.randomUUID()}`,
         customerId,
         sellerId: store?.sellerId,
         platform: 'Takealot',
@@ -202,7 +214,7 @@ export default function PlatformBindingsPanel() {
         platformTitle: form.platformTitle,
         lines: validLines,
         status: validLines.length ? 'active' : 'unmapped',
-        stockSource: form.stockSource,
+        stockSource: source,
         syncSource: 'manual',
         version: 1,
         hasInventory: false,
@@ -217,6 +229,7 @@ export default function PlatformBindingsPanel() {
 
   const handleDelete = async () => {
     if (selected.size === 0) return
+    if (list.some(m => selected.has(m.id) && isLocked(m))) { window.alert('选中的自有库存绑定有库存，不能删除。'); return }
     if (!window.confirm(`确认删除已选 ${selected.size} 条 990 绑定？此操作不可恢复。`)) return
     const before = list
     const next = list.filter(m => !selected.has(m.id))
@@ -260,7 +273,7 @@ export default function PlatformBindingsPanel() {
             platformTitle: row.platformTitle,
             lines: row.lines,
             status: row.lines.length ? 'active' : 'unmapped',
-            stockSource: row.stockSource,
+              stockSource: bindingStockSource(row.lines, products, row.stockSource),
             syncSource: 'import',
             version: 1,
             hasInventory: false,
@@ -422,7 +435,7 @@ export default function PlatformBindingsPanel() {
                       </td>
                       <td className="table-cell align-top" rowSpan={row.lines.length}>
                         {canWrite && (
-                          <Button variant="ghost" size="sm" onClick={() => openEdit(row)} title="编辑">
+                          <Button variant="ghost" size="sm" disabled={isLocked(row)} onClick={() => openEdit(row)} title={isLocked(row) ? '有库存，原绑定不可修改；其他标签请在发货时填写' : '编辑'}>
                             <Settings className="h-3.5 w-3.5" />
                           </Button>
                         )}

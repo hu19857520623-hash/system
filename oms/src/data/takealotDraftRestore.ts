@@ -1,13 +1,16 @@
 import type { FileAttachment } from './mockData'
 import { TAKEALOT_ATTACHMENT_KINDS } from './mockData'
 import {
-  mergeTakealotParsed, parseTakealotDocumentText, parseTakealotFilename,
+  detectTakealotDocKind, mergeTakealotParsed, parseTakealotDocumentText, parseTakealotFilename,
   type TakealotParsedDoc,
 } from './takealotDocParser'
 import type { TakealotLabelPdfResult } from './takealotLabelPdf'
+import type { TakealotPdfTextModel } from './takealotPdfText'
+import { parseTakealotDocumentModel } from './takealotShipmentPdf'
 
 type Readers = {
   extractText: (file: File) => Promise<string>
+  extractModel?: (file: File) => Promise<TakealotPdfTextModel>
   parseLabels: (file: File) => Promise<TakealotLabelPdfResult>
 }
 
@@ -32,14 +35,19 @@ export async function restoreTakealotDraftAttachments(attachments: FileAttachmen
       const file = new File([blob], attachment.fileName, { type: blob.type })
       const isPdf = /\.pdf$/i.test(file.name)
       let text = ''
+      let model: TakealotPdfTextModel | undefined
       try {
-        text = isPdf ? await readers.extractText(file) : await file.text()
+        if (isPdf && readers.extractModel) {
+          model = await readers.extractModel(file)
+          text = model.text
+        } else text = isPdf ? await readers.extractText(file) : await file.text()
       } catch (error) {
         // Unit labels can be scanned images: the label parser remains authoritative.
         if (fileType !== TAKEALOT_ATTACHMENT_KINDS.skuLabel) throw error
       }
+      const kind = docKind === '预约单' ? detectTakealotDocKind(file.name, text) : docKind
       const fileParts: Partial<TakealotParsedDoc>[] = [
-        parseTakealotFilename(file.name), parseTakealotDocumentText(text, docKind),
+        parseTakealotFilename(file.name), model ? parseTakealotDocumentModel(model, kind) : parseTakealotDocumentText(text, kind),
       ]
       if (isPdf && fileType !== TAKEALOT_ATTACHMENT_KINDS.skuLabel && !text.trim()) {
         errors.push(`${file.name}：未提取到文字，请重新上传可识别的 PDF`)

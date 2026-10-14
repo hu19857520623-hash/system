@@ -9,7 +9,6 @@ import { basename } from 'node:path'
 import {
   detectTakealotDocKind,
   mergeTakealotParsed,
-  parseTakealotDocumentText,
   parseTakealotFilename,
   takealotMissingFields,
   takealotParseConflicts,
@@ -17,6 +16,7 @@ import {
 } from '../src/data/takealotDocParser'
 import { parseTakealotProductLabelPdf } from '../src/data/takealotLabelPdf'
 import { extractPdfTextModelFromData } from '../src/data/takealotPdfText'
+import { parseTakealotDocumentModel } from '../src/data/takealotShipmentPdf'
 
 const paths = process.argv.slice(2)
 assert.equal(paths.length, 4, '请依次提供外箱标、预约单、发货清单、商品标签四份真实 PDF 路径')
@@ -33,7 +33,7 @@ for (const [index, path] of paths.entries()) {
   assert.ok(model.pageCount > 0 && model.text.trim(), `${name} 没有可识别的 PDF 文字`)
   const kind = detectTakealotDocKind(name, model.text)
   assert.equal(kind, expectedKinds[index], `${name} 文件类型识别错误`)
-  parts.push(parseTakealotFilename(name), parseTakealotDocumentText(model.text, kind))
+  parts.push(parseTakealotFilename(name), parseTakealotDocumentModel(model, kind))
 
   if (kind === 'SKU 标签') {
     const result = await parseTakealotProductLabelPdf(
@@ -69,8 +69,8 @@ for (const item of merged.lineItems) {
   assert.ok(item.barcode, `SKU ${item.sku} 没有 990 条码`)
   assert.equal(item.sku, shippingItems.find(source => source.barcode === item.barcode)?.sku,
     `条码 ${item.barcode} 覆盖了发货清单中的客户 SKU`)
-  assert.equal(observedLabels.get(item.barcode), item.qty,
-    `SKU ${item.sku} 的标签张数与发货清单数量不一致`)
+  assert.ok((observedLabels.get(item.barcode) || 0) >= 1,
+    `SKU ${item.sku} 缺少可用标签模板`)
 }
 
 console.log(JSON.stringify({

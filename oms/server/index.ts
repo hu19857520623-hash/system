@@ -1,4 +1,7 @@
+import { assertOwnedBindingMutation, OwnedBindingLockedError } from './owned-binding-lock.util.js'
 import 'dotenv/config'
+import { catalogBindingSkus, catalogMappingSource } from './catalog-binding.util.js'
+import { OutboundAttachmentContentError, requireOutboundAttachmentContent } from './outbound-attachment-content.util.js'
 import { assertGlobalSkuAvailable, GlobalSkuConflict } from './global-sku.util.js'
 import { Prisma } from '@prisma/client'
 import { InboundIdentityError, saveInboundOrder } from './inbound-order-persistence.util.js'
@@ -294,6 +297,9 @@ async function buildUnscopedBootstrap(
     prisma.paymentMethod.findMany({ orderBy: { sortOrder: 'asc' } }),
   ])
 
+  const stockedErpSkus = new Set((await prisma.$queryRawUnsafe<Array<{ sku: string }>>(
+    'SELECT DISTINCT sku FROM inventory WHERE total_qty>0 OR available_qty>0 OR locked_qty>0',
+  )).map(row => row.sku))
   const defaultFulfillmentWarehouses = [
     { id: 'jhb1', city: '约翰内斯堡' },
     { id: 'jhb3', city: '约翰内斯堡' },
@@ -376,6 +382,9 @@ async function buildUnscopedBootstrap(
     })),
     platformSkuMappings: platformSkuMappings.map(m => ({
       ...m,
+      hasInventory: m.stockSource !== 'catalog' && parseJson<Array<{ internalSku: string }>>(m.lines, []).some(line =>
+        stockedErpSkus.has(line.internalSku) || inventory.some(i => i.sku === line.internalSku && i.customerId === m.customerId && i.stockSource !== 'catalog' &&
+          [i.available, i.locked, i.inTransit, i.pendingShelving, i.pendingOutbound, i.defective].some(qty => qty > 0))),
       lines: parseJson(m.lines, []),
     })),
     logistics,
@@ -976,6 +985,7 @@ app.patch('/api/system-messages/read', async (req, res) => {
 })
 
 function sendErpError(res: express.Response, e: unknown) {
+  if (e instanceof OutboundAttachmentContentError) return res.status(400).json({ error: e.message })
   if (e instanceof ErpApiError) {
     return res.status(e.status >= 400 && e.status < 600 ? e.status : 502).json({
       error: e.message,
@@ -2384,11 +2394,8 @@ app.post('/api/erp/outbound', async (req, res) => {
     }
     if (!customerCode) return res.status(400).json({ error: '缺少 customerCode' })
 
-    const attachments = (body.attachments || []).map(a => {
-      let contentBase64 = a.contentBase64
-      if (!contentBase64 && a.url?.startsWith('data:')) {
-        contentBase64 = a.url.split(',')[1] || ''
-      }
+    const attachments = (body.attachments || []).map((a, index) => {
+      const contentBase64 = requireOutboundAttachmentContent(a, index)
       return {
         fileType: a.fileType || 'other',
         fileName: a.fileName,
@@ -2402,7 +2409,7 @@ app.post('/api/erp/outbound', async (req, res) => {
         labelRole: a.labelRole,
         contentHash: a.contentHash,
       }
-    }).filter(a => a.fileName && a.contentBase64)
+    })
 
     const result = await createErpOutbound({
       outboundNo: body.outboundNo,
@@ -3549,6 +3556,7 @@ app.put('/api/platform-sku-mappings', async (req, res) => {
   try {
     const list = req.body as Record<string, unknown>[]
     const scope = customerScope(req as AuthenticatedRequest)
+    const catalogSkus = await catalogBindingSkus(prisma)
     if (scope) {
       const existing = await prisma.platformSkuMapping.findMany({
         where: { id: { in: list.map(item => String(item.id)) } },
@@ -3559,8 +3567,10 @@ app.put('/api/platform-sku-mappings', async (req, res) => {
       }
     }
     await prisma.$transaction(async tx => {
+      const all = await tx.platformSkuMapping.findMany()
       for (const m of list) {
         const id = String(m.id)
+        const source = catalogMappingSource(m.lines, catalogSkus, m.stockSource)
         const data = {
             customerId: scope ?? (m.customerId as string | null | undefined) ?? null,
             sellerId: (m.sellerId as string | null | undefined) ?? null,
@@ -3572,23 +3582,28 @@ app.put('/api/platform-sku-mappings', async (req, res) => {
             platformTitle: String(m.platformTitle),
             platformListingId: (m.platformListingId as string | null | undefined) ?? null,
             lines: JSON.stringify(m.lines ?? []),
-            status: String(m.status),
-            stockSource: String(m.stockSource),
+            status: source === 'catalog' && m.status === 'pending_review' ? 'active' : String(m.status),
+            stockSource: source,
             syncSource: String(m.syncSource),
             version: Number(m.version),
             hasInventory: Boolean(m.hasInventory),
             lastSyncAt: (m.lastSyncAt as string | null | undefined) ?? null,
             updatedAt: String(m.updatedAt),
         }
-        await tx.platformSkuMapping.upsert({
+        await assertOwnedBindingMutation(tx, all.find(row => row.id === id), { id, ...data }, all)
+        const saved = await tx.platformSkuMapping.upsert({
           where: { id },
           create: { id, ...data },
           update: data,
         })
+        const existingIndex = all.findIndex(row => row.id === id)
+        if (existingIndex >= 0) all[existingIndex] = saved
+        else all.push(saved)
       }
     })
     res.json({ ok: true })
   } catch (e) {
+    if (e instanceof OwnedBindingLockedError) return res.status(409).json({ error: e.message })
     console.error(e)
     res.status(500).json({ error: String(e) })
   }
@@ -3597,12 +3612,15 @@ app.put('/api/platform-sku-mappings', async (req, res) => {
 app.delete('/api/platform-sku-mappings/:id', async (req, res) => {
   try {
     const scope = customerScope(req as AuthenticatedRequest)
-    const result = await prisma.platformSkuMapping.deleteMany({
-      where: { id: String(req.params.id), ...(scope ? { customerId: scope } : {}) },
+    const result = await prisma.$transaction(async tx => {
+      const previous = await tx.platformSkuMapping.findFirst({ where: { id: String(req.params.id), ...(scope ? { customerId: scope } : {}) } })
+      if (previous) await assertOwnedBindingMutation(tx, previous, undefined, [])
+      return tx.platformSkuMapping.deleteMany({ where: { id: String(req.params.id), ...(scope ? { customerId: scope } : {}) } })
     })
     if (scope && result.count === 0) return res.status(404).json({ error: '绑定不存在' })
     res.json({ ok: true })
   } catch (e) {
+    if (e instanceof OwnedBindingLockedError) return res.status(409).json({ error: e.message })
     console.error(e)
     res.status(500).json({ error: String(e) })
   }

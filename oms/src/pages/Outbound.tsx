@@ -1,4 +1,6 @@
 import { displaySku, displaySkuText } from '../data/skuDisplay'
+import { bindingStockSource } from '../data/bindingStockSource'
+import { getErpCatalog } from '../api/erp'
 import { useMemo, useState, useEffect, useRef } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { AlertTriangle, CheckCircle2, Link2, ListOrdered, Plus, Trash2, Upload, XCircle } from 'lucide-react'
@@ -21,6 +23,7 @@ import {
   rollbackStockForOutbound,
   useInventoryItems,
   useProducts,
+  mergeErpCatalogIntoState,
 } from '../data/inventoryStore'
 import { addOutboundOrderOrThrow, applyErpOutboundToLocal, nextOutboundNo, removeOutboundOrder, submitOutboundToErp, useOutboundOrders } from '../data/outboundStore'
 import { cancelErpOutbound, fetchErpOutboundByNo } from '../api/erp'
@@ -52,13 +55,15 @@ import {
   parseTakealotDocumentText,
   parseTakealotFilename,
   takealotIdentityConflicts,
+  takealotLabelPresenceIssues,
   takealotMissingFields,
   takealotParseConflicts,
   takealotParseWarnings,
   type TakealotDocKind,
   type TakealotParsedDoc,
 } from '../data/takealotDocParser'
-import { extractPdfTextFromFile } from '../data/takealotPdfText'
+import { extractPdfTextFromFile, extractPdfTextModelFromFile, type TakealotPdfTextModel } from '../data/takealotPdfText'
+import { parseTakealotDocumentModel } from '../data/takealotShipmentPdf'
 import {
   isValidEan13,
   parseTakealotProductLabelPdf,
@@ -92,6 +97,7 @@ const DOC_KIND_TO_FILE_TYPE: Record<string, TakealotAttachmentKind> = {
   'SKU 标签': TAKEALOT_ATTACHMENT_KINDS.skuLabel,
   '发货清单': TAKEALOT_ATTACHMENT_KINDS.deliveryList,
   '预约单': TAKEALOT_ATTACHMENT_KINDS.appointment,
+  'TFS 面单': TAKEALOT_ATTACHMENT_KINDS.appointment,
 }
 
 const FILE_TYPE_TO_DOC_KIND: Record<TakealotAttachmentKind, TakealotDocKind> = {
@@ -162,6 +168,7 @@ export default function Outbound() {
   const [recipientAddress1, setRecipientAddress1] = useState('')
   const [recipientAddress2, setRecipientAddress2] = useState('')
   const [recipientEmail, setRecipientEmail] = useState('')
+  const [shipmentBindings, setShipmentBindings] = useState<PlatformSkuMapping[]>([])
   const [attachments, setAttachments] = useState<FileAttachment[]>([])
   const [lines, setLines] = useState<LineItem[]>([])
   const [destRegion, setDestRegion] = useState('jhb')
@@ -186,6 +193,9 @@ export default function Outbound() {
   const isDropship = outboundType === '一件代发'
   const isTakealot = outboundType === 'Takealot入仓'
   const isTfs = outboundType === 'TFS快递'
+  const hasTakealotDocuments = isTakealot || isTfs
+  const documentItems = TAKEALOT_DOWNLOAD_ITEMS.map(item => isTfs && item.fileType === TAKEALOT_ATTACHMENT_KINDS.appointment
+    ? { ...item, label: 'TFS 面单' } : item)
   const needsRecipient = isDropship || isTfs
   const takealotAttachmentKinds = useMemo(
     () => new Set(Object.values(TAKEALOT_ATTACHMENT_KINDS)),
@@ -213,6 +223,11 @@ export default function Outbound() {
   }, [isDetail, editOrder?.shippingMethod, isTfs, isTakealot, effectiveDestRegion, regionDispatchRules, dispatchRuleId, activeDispatchRules])
 
   const customerId = isDetail ? editOrder?.customerId : getCustomerIdForRole(role)
+  useEffect(() => {
+    if (isDetail || !hasTakealotDocuments) return
+    void getErpCatalog().then(catalog => mergeErpCatalogIntoState(catalog.items || []))
+      .catch(error => notifyIfUserError(error, '读取货盘 SKU 失败'))
+  }, [hasTakealotDocuments, isDetail, customerId])
   const effectiveTakealotSellerId = (takealotParsedDoc?.sellerId || takealotSellerId.trim()) || undefined
   const quickBindStore = useMemo(
     () => pickTakealotStoreForBinding(effectiveTakealotSellerId, customerId ?? undefined),
@@ -284,6 +299,7 @@ export default function Outbound() {
     setRecipientAddress1(editOrder.recipient?.address1 || '')
     setRecipientAddress2(editOrder.recipient?.address2 || '')
     setRecipientEmail(editOrder.recipient?.email || '')
+    setShipmentBindings((editOrder.lineItems || []).flatMap(line => line.shipmentBarcodeBindings || []))
     setAttachments(editOrder.attachments || [])
     setLines((editOrder.lineItems || []).map((line, index) => ({
       id: `${editOrder.id}-${index}`,
@@ -299,7 +315,7 @@ export default function Outbound() {
   }, [editOrder])
 
   useEffect(() => {
-    if (isDetail || isTakealot) return
+    if (isDetail || hasTakealotDocuments) return
     setTakealotParseHint('')
     setTakealotParsedDoc(null)
     setTakealotLabelResults({})
@@ -312,7 +328,7 @@ export default function Outbound() {
       }
       return true
     }))
-  }, [isTakealot, takealotAttachmentKinds])
+  }, [hasTakealotDocuments, takealotAttachmentKinds])
 
   useEffect(() => {
     if (isDetail || activeDispatchRules.length === 0) return
@@ -408,6 +424,7 @@ export default function Outbound() {
     setRecipientAddress1('')
     setRecipientAddress2('')
     setRecipientEmail('')
+    setShipmentBindings([])
     setAttachments([])
     setLines([])
     setDestRegion('jhb')
@@ -436,6 +453,25 @@ export default function Outbound() {
     else if (mode === 'replace') setTakealotBookingRef('')
     if (doc.shipmentDate) setShipmentDueDate(doc.shipmentDate)
     else if (mode === 'replace') setShipmentDueDate('')
+    if (isTfs || doc.courierReference) {
+      setPlatform('Takealot')
+      if (doc.earliestDeliveryDate) setScheduledDeliveryDate(doc.earliestDeliveryDate)
+      if (doc.warehouseCode) {
+        const region = warehouseIdToRegion(doc.warehouseCode)
+        setDestRegion(region)
+        const rule = activeDispatchRules.find(rule => rule.code === region)
+        if (rule) setDispatchRuleId(rule.id)
+      }
+      if (doc.recipient) {
+        setRecipientName(doc.recipient.name || '')
+        setRecipientCity(doc.recipient.city || '')
+        setRecipientProvince(doc.recipient.province || '')
+        setRecipientPostalCode(doc.recipient.postalCode || '')
+        setRecipientAddress1(doc.recipient.address1 || '')
+        setRecipientEmail(doc.recipient.email || '')
+        setRecipientPhone(doc.recipient.phone || '')
+      }
+    }
     setTakealotParseHint(describeTakealotParsed(doc))
     setTakealotParsedDoc(doc)
   }
@@ -446,7 +482,7 @@ export default function Outbound() {
   )
 
   useEffect(() => {
-    if (isDetail || !editOrder || !isTakealot) {
+    if (isDetail || !editOrder || !hasTakealotDocuments) {
       setParseBusy(false)
       return
     }
@@ -455,6 +491,7 @@ export default function Outbound() {
     setParseErrors([])
     void restoreTakealotDraftAttachments(editOrder.attachments || [], {
       extractText: extractPdfTextFromFile,
+      extractModel: extractPdfTextModelFromFile,
       parseLabels: parseTakealotProductLabelPdf,
     }).then(result => {
       if (cancelled) return
@@ -464,6 +501,7 @@ export default function Outbound() {
       setTakealotLabelResults(result.labelResults)
       setParseErrors(result.errors)
       setAttachments(result.attachments)
+      if (isTfs && result.parsed) applyTakealotParsed(result.parsed)
     }).catch(error => {
       if (!cancelled) setParseErrors([`草稿文件校验失败：${error instanceof Error ? error.message : String(error)}`])
     }).finally(() => {
@@ -472,7 +510,7 @@ export default function Outbound() {
     return () => { cancelled = true }
     // Restoring once per draft avoids overwriting subsequent edits or reuploads.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editOrder?.id, isTakealot])
+  }, [editOrder?.id, hasTakealotDocuments])
 
   const takealotValidationRows = useMemo<TakealotValidationRow[]>(() => {
     if (!takealotParsedDoc) return []
@@ -496,6 +534,7 @@ export default function Outbound() {
     const barcodes = [...new Set([...expected.keys(), ...observed.keys()])]
     const resolutions = new Map(
       resolvePlatformBarcodes(barcodes, {
+        mappings: [...platformMappings.filter(m => !shipmentBindings.some(local => local.platformBarcode === m.platformBarcode)), ...shipmentBindings],
         customerId: customerId ?? undefined,
         sellerId: effectiveTakealotSellerId,
         platform: 'Takealot',
@@ -514,8 +553,7 @@ export default function Outbound() {
         }
       const issues: string[] = []
       if (!isValidEan13(barcode)) issues.push('EAN-13 无效')
-      if (observedQty < expectedQty) issues.push(`缺少 ${expectedQty - observedQty} 张标签`)
-      if (observedQty > expectedQty) issues.push(`多出 ${observedQty - expectedQty} 张标签`)
+      issues.push(...takealotLabelPresenceIssues(expectedQty, observedQty))
       if (resolution.status === 'unmatched') issues.push('未绑定')
       if (resolution.status === 'ambiguous') issues.push('映射不唯一')
       return {
@@ -528,7 +566,7 @@ export default function Outbound() {
         issues,
       }
     })
-  }, [takealotParsedDoc, labelCrops, platformMappings, customerId, effectiveTakealotSellerId])
+  }, [takealotParsedDoc, labelCrops, platformMappings, shipmentBindings, allProducts, customerId, effectiveTakealotSellerId])
 
   useEffect(() => {
     if (isDetail) return
@@ -616,7 +654,7 @@ export default function Outbound() {
     [attachments],
   )
   const anyNeedsRelabel = lines.some(line => line.needsRelabel)
-  const skuLabelRequired = isTakealot && anyNeedsRelabel
+  const skuLabelRequired = hasTakealotDocuments && anyNeedsRelabel
   const skipSkuLabelQtyIssue = (row: TakealotValidationRow) => {
     const sku = row.resolution.status === 'resolved' ? row.resolution.product.internalSku : ''
     if (sku) return lines.find(line => line.sku === sku)?.needsRelabel === false
@@ -626,7 +664,7 @@ export default function Outbound() {
     if (!skipSkuLabelQtyIssue(row)) return row.issues
     return row.issues.filter(issue => !issue.startsWith('缺少') && !issue.startsWith('多出'))
   }
-  const missingTakealotDocs = TAKEALOT_DOWNLOAD_ITEMS
+  const missingTakealotDocs = documentItems
     .filter(item => {
       if (item.fileType === TAKEALOT_ATTACHMENT_KINDS.skuLabel && !skuLabelRequired) return false
       return !sourceAttachmentTypes.has(item.fileType)
@@ -644,7 +682,7 @@ export default function Outbound() {
     ...parseErrors,
     ...identityConflicts,
     ...(skuLabelRequired ? labelBlockingStates.map(state => state.message) : []),
-    ...(takealotParsedDoc ? takealotMissingFields(takealotParsedDoc).map(field => `缺少${field}`) : ['尚未解析 Takealot 文件']),
+    ...(takealotParsedDoc ? takealotMissingFields(takealotParsedDoc, isTfs ? 'tfs' : 'takealot').map(field => `缺少${field}`) : ['尚未解析 Takealot 文件']),
     ...takealotValidationRows.flatMap(row => rowDisplayIssues(row).map(issue => `${row.barcode}：${issue}`)),
     ...(takealotParsedDoc?.totalUnits != null && takealotParsedDoc.totalUnits !== expectedTotal
       ? [`预约单总件数 ${takealotParsedDoc.totalUnits} 与清单 ${expectedTotal} 不一致`]
@@ -701,10 +739,10 @@ export default function Outbound() {
     files: FileList | null,
     kind: TakealotAttachmentKind | 'auto',
   ) => {
-    if (!files?.length) return
+    if (!files?.length || parseBusy) return
     const selected = Array.from(files)
-    if (selected.length > 1) {
-      setParseErrors(['请一次只上传一个文件。后传文件的 PO 号、Seller ID、目的仓等必须与已上传文件一致，否则将拒绝上传。'])
+    if (kind !== 'auto' && selected.length > 1) {
+      setParseErrors(['分类上传时请选择一个文件；批量上传请使用上方自动识别入口。'])
       return
     }
     setParseBusy(true)
@@ -719,9 +757,11 @@ export default function Outbound() {
       for (const file of selected) {
         const fromName = parseTakealotFilename(file.name)
         let text = ''
+        let pdfModel: TakealotPdfTextModel | undefined
         if (file.name.toLowerCase().endsWith('.pdf')) {
           try {
-            text = await extractPdfTextFromFile(file)
+            pdfModel = await extractPdfTextModelFromFile(file)
+            text = pdfModel.text
           } catch (error) {
             if (kind !== TAKEALOT_ATTACHMENT_KINDS.skuLabel) {
               errors.push(`${file.name}：PDF 文本读取失败，已尝试按文件名识别`)
@@ -732,7 +772,7 @@ export default function Outbound() {
         }
         const inferredKind = detectTakealotDocKind(file.name, text)
         const detectedKind = (
-          kind === 'auto'
+          kind === 'auto' || inferredKind === 'TFS 面单'
             ? inferredKind
             : kind === TAKEALOT_ATTACHMENT_KINDS.deliveryList && inferredKind === 'SKU 标签'
               ? inferredKind
@@ -742,6 +782,10 @@ export default function Outbound() {
         if (!fileType) {
           errors.push(`${file.name}：无法确定 Takealot 文件类型`)
           continue
+        }
+        if (uploadedTypes.has(fileType)) {
+          setParseErrors(['同一批文件中每种类型只需一份，请移除重复文件后再上传。'])
+          return
         }
         uploadedTypes.add(fileType)
         const sourceAttachment = await fileToAttachment(file, fileType)
@@ -753,7 +797,7 @@ export default function Outbound() {
         })
         let fromText: Partial<TakealotParsedDoc> = { sources: [], lineItems: [] }
         if (text.trim()) {
-          fromText = parseTakealotDocumentText(text, detectedKind)
+          fromText = pdfModel ? parseTakealotDocumentModel(pdfModel, detectedKind) : parseTakealotDocumentText(text, detectedKind)
         } else if (
           file.name.toLowerCase().endsWith('.pdf')
           && fileType !== TAKEALOT_ATTACHMENT_KINDS.skuLabel
@@ -831,7 +875,9 @@ export default function Outbound() {
         return
       }
 
-      if (kind === 'auto' || TAKEALOT_DOWNLOAD_ITEMS.some(item => item.fileType === kind)) {
+      if (incomingParts.some(part => part.courierReference)) {
+        setOutboundType('TFS快递')
+      } else if (!isTfs && (kind === 'auto' || TAKEALOT_DOWNLOAD_ITEMS.some(item => item.fileType === kind))) {
         setOutboundType('Takealot入仓')
       }
 
@@ -868,10 +914,15 @@ export default function Outbound() {
           stockSource: catalogOnly ? 'catalog' : 'owned',
           now: todayDateInput(),
         })
-        if (bindResult.bound.length) {
-          setPlatformSkuMappings(bindResult.mappings)
+        const changed = bindResult.mappings.filter(m => !platformMappings.some(old => old === m))
+        const local = changed.filter(m => m.stockSource === 'owned')
+        if (local.length) setShipmentBindings(prev => [...prev.filter(m => !local.some(n => n.platformBarcode === m.platformBarcode)), ...local])
+        const permanent = bindResult.mappings.filter(m => !local.includes(m))
+        for (const old of platformMappings) if (local.some(m => m.id === old.id)) permanent.push(old)
+        if (changed.some(m => m.stockSource === 'catalog')) {
+          setPlatformSkuMappings(permanent)
           try {
-            await apiPut('/platform-sku-mappings', bindResult.mappings)
+            await apiPut('/platform-sku-mappings', permanent)
             bindHint = `已自动绑定 ${bindResult.bound.length} 个 990→SKU`
           } catch (error) {
             setPlatformSkuMappings(platformMappings)
@@ -909,6 +960,8 @@ export default function Outbound() {
       findTakealotStoresForSeller(effectiveTakealotSellerId, customerId ?? undefined)
         .map(store => store.id),
     )
+    const local = shipmentBindings.find(m => m.platformBarcode === quickBindTarget.barcode)
+    if (local) return local
     const matches = platformMappings.filter(mapping =>
       mapping.platform === 'Takealot'
       && mapping.platformBarcode === quickBindTarget.barcode
@@ -919,7 +972,7 @@ export default function Outbound() {
         || (!mapping.sellerId && sellerStoreIds.has(mapping.storeId))
       ))
     return matches.length === 1 ? matches[0] : null
-  }, [quickBindTarget, platformMappings, customerId, effectiveTakealotSellerId])
+  }, [quickBindTarget, platformMappings, shipmentBindings, customerId, effectiveTakealotSellerId])
 
   const openQuickBind = (row: TakealotValidationRow) => {
     if (!can('platform:write')) {
@@ -938,6 +991,7 @@ export default function Outbound() {
     previous: PlatformSkuMapping | null,
   ) => {
     const validLines = form.lines.filter(line => line.internalSku)
+    const source = bindingStockSource(validLines, allProducts, form.stockSource)
     if (!form.platformBarcode.trim() || validLines.length !== 1) {
       window.alert('快速绑定需要填写 990 条码并且只选择一个仓库 SKU')
       return
@@ -946,8 +1000,9 @@ export default function Outbound() {
     const bindingSellerId = effectiveTakealotSellerId || store?.sellerId
     const before = platformMappings
     const now = todayDateInput()
+    const mappingBase = previous && !platformMappings.some(m => m.id === previous.id) ? [...platformMappings, previous] : platformMappings
     const next = previous
-      ? platformMappings.map(mapping => mapping.id === previous.id ? {
+      ? mappingBase.map(mapping => mapping.id === previous.id ? {
           ...mapping,
           customerId: customerId ?? mapping.customerId,
           sellerId: bindingSellerId || mapping.sellerId,
@@ -958,8 +1013,8 @@ export default function Outbound() {
           platformBarcode: form.platformBarcode.trim(),
           platformTitle: form.platformTitle.trim(),
           lines: validLines,
-          stockSource: form.stockSource,
-          status: previous.hasInventory && previous.status === 'active'
+          stockSource: source,
+          status: source !== 'catalog' && previous.hasInventory && previous.status === 'active'
             ? 'pending_review' as const
             : 'active' as const,
           syncSource: 'manual' as const,
@@ -967,7 +1022,7 @@ export default function Outbound() {
           updatedAt: now,
         } : mapping)
       : [...platformMappings, {
-          id: `pb-${Date.now()}`,
+          id: `pb-${crypto.randomUUID()}`,
           customerId: customerId ?? undefined,
           sellerId: bindingSellerId,
           platform: form.platform,
@@ -978,12 +1033,18 @@ export default function Outbound() {
           platformTitle: form.platformTitle.trim(),
           lines: validLines,
           status: 'active' as const,
-          stockSource: form.stockSource,
+          stockSource: source,
           syncSource: 'manual' as const,
           version: 1,
           hasInventory: false,
           updatedAt: now,
         }]
+    if (source === 'owned') {
+      const mapping = next.find(m => m.platformBarcode === form.platformBarcode.trim() && m.lines === validLines)
+      if (mapping) setShipmentBindings(prev => [...prev.filter(m => m.platformBarcode !== mapping.platformBarcode), { ...mapping, status: 'active' }])
+      setQuickBindTarget(null)
+      return
+    }
     setPlatformSkuMappings(next)
     try {
       await apiPut('/platform-sku-mappings', next)
@@ -1027,7 +1088,7 @@ export default function Outbound() {
           .filter(Boolean)
           .join(', ')
 
-    if (!asDraft && isTakealot && takealotValidationBlockers.length > 0) {
+    if (!asDraft && hasTakealotDocuments && takealotValidationBlockers.length > 0) {
       window.alert(
         `Takealot 文件校验未通过：\n${takealotValidationBlockers.slice(0, 10).join('\n')}${takealotValidationBlockers.length > 10 ? `\n…另有 ${takealotValidationBlockers.length - 10} 项` : ''}`,
       )
@@ -1106,7 +1167,7 @@ export default function Outbound() {
       takealotSellerId: takealotSellerId.trim() || undefined,
       takealotBookingRef: takealotBookingRef.trim() || undefined,
       shipmentDueDate: shipmentDueDate || undefined,
-      takealotLabelValidation: isTakealot ? {
+      takealotLabelValidation: hasTakealotDocuments ? {
         expectedQty: expectedTotal,
         observedQty: observedTotal,
         cropCount: labelCrops.length,
@@ -1114,13 +1175,14 @@ export default function Outbound() {
       } : undefined,
       remark: remark.trim() || undefined,
       lineItems: lines.map(l => ({
+        shipmentBarcodeBindings: shipmentBindings.filter(m => m.lines.some(line => line.internalSku === l.sku)),
         sku: l.sku,
         name: l.name,
         qty: l.qty,
         declaredName: l.declaredName || undefined,
         declaredValue: l.declaredValue || undefined,
         note: l.note || undefined,
-        needsRelabel: isTakealot ? l.needsRelabel : false,
+        needsRelabel: hasTakealotDocuments ? l.needsRelabel : false,
       })),
       attachments: attachments.length ? attachments : undefined,
     }
@@ -1205,7 +1267,7 @@ export default function Outbound() {
       declaredValue: row.declaredValue,
       note: row.note,
       source: row.source ?? 'manual',
-      needsRelabel: row.needsRelabel ?? isTakealot,
+      needsRelabel: row.needsRelabel ?? hasTakealotDocuments,
     })))
   }
 
@@ -1220,7 +1282,7 @@ export default function Outbound() {
           declaredValue: row.declaredValue ?? 0,
           note: row.note ?? '',
           source: 'manual' as const,
-          needsRelabel: isTakealot,
+          needsRelabel: hasTakealotDocuments,
         }))])
       })
     } catch (err) {
@@ -1229,7 +1291,7 @@ export default function Outbound() {
   }
 
   const availableProducts = listShippableOutboundItems(customerId ?? undefined, { catalogOnly })
-  const parseMissing = takealotParsedDoc ? takealotMissingFields(takealotParsedDoc) : []
+  const parseMissing = takealotParsedDoc ? takealotMissingFields(takealotParsedDoc, isTfs ? 'tfs' : 'takealot') : []
   const parsedFieldCount = takealotParsedDoc ? 7 - parseMissing.length : 0
 
   if (isDetail && !editOrder) return <div className="page-shell"><p>出库单不存在或无权查看。</p><Link to="/outbound/records">返回出库记录</Link></div>
@@ -1249,7 +1311,7 @@ export default function Outbound() {
 
       {isDetail && detailError && <p role="alert" className="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{detailError}</p>}
       <fieldset disabled={isDetail} className="min-w-0 border-0 p-0 m-0">
-      {!isTakealot && (
+      {!hasTakealotDocuments && (
       <Card className="mb-4 overflow-hidden border-primary-200">
         <div className="border-b border-border-light px-5 py-4">
           <p className="text-[11px] font-semibold uppercase tracking-wide text-primary-600">先上传，再填单</p>
@@ -1313,16 +1375,16 @@ export default function Outbound() {
       </Card>
       )}
 
-      {isTakealot && (
+      {hasTakealotDocuments && (
       <Card className="mb-4 overflow-hidden border-primary-200">
         <div className="border-b border-border-light px-5 py-4">
           <p className="text-[11px] font-semibold uppercase tracking-wide text-primary-600">先上传，再填单</p>
           <div className="mt-1 flex flex-wrap items-end justify-between gap-2">
             <div>
-              <h2 className="text-base font-semibold text-text-primary">Takealot 文件智能识别</h2>
+              <h2 className="text-base font-semibold text-text-primary">{isTfs ? 'TFS 文件智能识别' : 'Takealot 文件智能识别'}</h2>
               <p className="mt-1 text-xs text-text-muted">
-                {skuLabelRequired
-                  ? '请上传预约单、发货清单、外箱标，以及需换标 SKU 的标签。不换标 SKU 可出现在同一份标签 PDF 中，系统只核对需换标行。'
+                {isTfs ? '可一次上传 TFS 面单、发货清单、外箱标和 SKU 标签。自动识别 PO、目的地区、收件地址和最早送达日期；每个 990 条码只需一张可用标签。' : skuLabelRequired
+                  ? '请上传预约单、发货清单、外箱标，以及需换标 SKU 的标签。每个 990 条码只需一张可用标签，发货件数以清单为准。不换标 SKU 可出现在同一份标签 PDF 中。'
                   : '本单全部不换标，只需上传预约单、发货清单和外箱标，不必上传 SKU 标签。若部分 SKU 要换标，请在货品明细中打开「换标」。'}
               </p>
             </div>
@@ -1339,6 +1401,7 @@ export default function Outbound() {
             ref={fileInputRef}
             type="file"
             accept=".pdf,.txt,.csv,application/pdf,text/plain,text/csv"
+            multiple
             className="hidden"
             onChange={e => {
               void onPickAttachment(e.target.files, 'auto')
@@ -1366,13 +1429,13 @@ export default function Outbound() {
           >
             <Upload className="mx-auto h-6 w-6 text-primary-500" />
             <p className="mt-2 text-sm font-semibold text-text-primary">
-              {parseBusy ? '正在读取并识别文件…' : '点击选择或拖入 Takealot 文件'}
+              {parseBusy ? '正在读取并识别文件…' : `点击选择或拖入 ${isTfs ? 'TFS' : 'Takealot'} 文件`}
             </p>
-            <p className="mt-1 text-[11px] text-text-muted">一次只能上传一个 PDF；请按文件逐个添加</p>
+            <p className="mt-1 text-[11px] text-text-muted">支持多选或逐个添加；自动分类并核对文件是否属于同一单</p>
           </button>
 
           <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-            {TAKEALOT_DOWNLOAD_ITEMS.map(item => {
+            {documentItems.map(item => {
               const uploaded = attachments.filter(attachment =>
                 attachment.fileType === item.fileType
                 && attachment.labelRole === 'sourceDocument')
@@ -1430,6 +1493,9 @@ export default function Outbound() {
           {takealotParseHint && (
             <div className="mt-4 rounded-lg bg-emerald-50 px-3 py-3 ring-1 ring-emerald-100">
               <p className="text-xs font-medium text-emerald-800">已自动填写：{takealotParseHint}</p>
+              {isTfs && takealotParsedDoc?.recipient && !recipientPhone.trim() && (
+                <p className="mt-1 text-[11px] text-amber-700">面单未提供联系电话，请在收件人信息中补填。</p>
+              )}
               {parseMissing.length > 0 && (
                 <p className="mt-1 text-[11px] text-amber-700">仍需补充：{parseMissing.join('、')}</p>
               )}
@@ -1453,7 +1519,7 @@ export default function Outbound() {
                       ? <XCircle className="h-4 w-4 text-red-600" />
                       : <CheckCircle2 className="h-4 w-4 text-emerald-600" />}
                     <div>
-                      <p className="text-xs font-semibold text-text-primary">Takealot 提交校验</p>
+                      <p className="text-xs font-semibold text-text-primary">{isTfs ? 'TFS' : 'Takealot'} 提交校验</p>
                       <p className="text-[10px] text-text-muted">
                         {takealotValidationBlockers.length
                           ? `${takealotValidationBlockers.length} 项阻塞，修复后才能提交`
@@ -1470,7 +1536,7 @@ export default function Outbound() {
               </div>
 
               <div className="grid grid-cols-2 border-b border-border-light sm:grid-cols-4">
-                {TAKEALOT_DOWNLOAD_ITEMS.map(item => {
+                {documentItems.map(item => {
                   const uploaded = sourceAttachmentTypes.has(item.fileType)
                   const optional = item.fileType === TAKEALOT_ATTACHMENT_KINDS.skuLabel && !skuLabelRequired
                   const missing = !uploaded && !optional
@@ -1505,8 +1571,8 @@ export default function Outbound() {
                     <tr>
                       <th className="px-3 py-2 font-medium">990 条码</th>
                       <th className="px-3 py-2 font-medium">产品</th>
-                      <th className="px-3 py-2 text-center font-medium">清单</th>
-                      <th className="px-3 py-2 text-center font-medium">标签</th>
+                      <th className="px-3 py-2 text-center font-medium">清单件数</th>
+                      <th className="px-3 py-2 text-center font-medium">标签张数</th>
                       <th className="px-3 py-2 text-center font-medium">裁切</th>
                       <th className="px-3 py-2 font-medium">仓库 SKU</th>
                       <th className="px-3 py-2 font-medium">状态</th>
@@ -1521,7 +1587,7 @@ export default function Outbound() {
                         <td className="px-3 py-2 font-mono text-text-primary">{row.barcode}</td>
                         <td className="max-w-[220px] truncate px-3 py-2 text-text-secondary" title={row.title}>{row.title || '—'}</td>
                         <td className="px-3 py-2 text-center font-semibold">{row.expectedQty}</td>
-                        <td className={`px-3 py-2 text-center font-semibold ${skipQty || row.expectedQty === row.observedQty ? 'text-emerald-700' : 'text-red-700'}`}>{row.observedQty}</td>
+                        <td className={`px-3 py-2 text-center font-semibold ${skipQty || takealotLabelPresenceIssues(row.expectedQty, row.observedQty).length === 0 ? 'text-emerald-700' : 'text-red-700'}`}>{row.observedQty}</td>
                         <td className="px-3 py-2 text-center">{row.cropCount}</td>
                         <td className="px-3 py-2">
                           {row.resolution.status === 'resolved'
@@ -1612,10 +1678,10 @@ export default function Outbound() {
             </FormField>
             <FormField label="平台">
               <select
-                value={isTakealot ? 'Takealot' : platform}
+                value={hasTakealotDocuments ? 'Takealot' : platform}
                 onChange={e => setPlatform(e.target.value)}
                 className={formSelect()}
-                disabled={isTakealot}
+                disabled={hasTakealotDocuments}
               >
                 {PLATFORM_OPTIONS.map(p => <option key={p} value={p}>{p}</option>)}
               </select>
@@ -1671,9 +1737,19 @@ export default function Outbound() {
                 </FormField>
               </>
             )}
-            <FormField label="预约送仓时间" required hint="上传预约单后可自动识别日期与时间">
+            {isTfs && (
+              <>
+                <FormField label="TFS 快递参考号" hint="从快递面单 Reference 自动识别">
+                  <input className={formInput()} value={takealotParsedDoc?.courierReference || ''} readOnly />
+                </FormField>
+                <FormField label="包裹数" hint="从面单 Parcels 识别，与货品件数分别统计">
+                  <input className={formInput()} value={takealotParsedDoc?.parcelCount || ''} readOnly />
+                </FormField>
+              </>
+            )}
+            <FormField label={isTfs ? '最早送达日期' : '预约送仓时间'} required hint={isTfs ? '从 TFS 面单 Earliest delivery 识别，不代表已预约送仓时间' : '上传预约单后可自动识别日期与时间'}>
               <input
-                type="datetime-local"
+                type={isTfs ? 'date' : 'datetime-local'}
                 className={formInput()}
                 value={scheduledDeliveryDate}
                 onChange={e => setScheduledDeliveryDate(e.target.value)}
@@ -1733,7 +1809,7 @@ export default function Outbound() {
             <div className="flex flex-wrap gap-2">
               <Button size="sm" onClick={() => setSkuPickerOpen(true)}><Plus className="h-3.5 w-3.5" /> 增加</Button>
               <Button variant="secondary" size="sm" onClick={() => setLines([])}>清除</Button>
-              {isTakealot && lines.length > 0 && (
+              {hasTakealotDocuments && lines.length > 0 && (
                 <>
                   <Button variant="secondary" size="sm" onClick={() => setLines(prev => prev.map(l => ({ ...l, needsRelabel: true })))}>全部换标</Button>
                   <Button variant="secondary" size="sm" onClick={() => setLines(prev => prev.map(l => ({ ...l, needsRelabel: false })))}>全部不换标</Button>
@@ -1755,7 +1831,7 @@ export default function Outbound() {
                   <th>SKU</th>
                   <th>产品标题</th>
                   <th>数量</th>
-                  {isTakealot && <th>换标</th>}
+                  {hasTakealotDocuments && <th>换标</th>}
                   <th>申报品名</th>
                   <th>申报价值</th>
                   <th>备注</th>
@@ -1765,7 +1841,7 @@ export default function Outbound() {
               <tbody className="table-body">
                 {lines.length === 0 ? (
                   <tr>
-                    <td colSpan={isTakealot ? 8 : 7} className="table-cell py-8 text-center text-xs text-text-muted">
+                    <td colSpan={hasTakealotDocuments ? 8 : 7} className="table-cell py-8 text-center text-xs text-text-muted">
                       暂无货品，请点击「增加」选择 SKU，或使用批量上传
                       {availableProducts.length > 0 && (
                         <span className="mt-2 block text-[10px]">
@@ -1794,7 +1870,7 @@ export default function Outbound() {
                         {overMax ? ' · 已超出' : ''}
                       </p>
                     </td>
-                    {isTakealot && (
+                    {hasTakealotDocuments && (
                       <td className="table-cell">
                         <label className="inline-flex items-center gap-1.5 text-xs text-text-secondary">
                           <input
@@ -1827,7 +1903,7 @@ export default function Outbound() {
           {lines.length > 0 && (
             <p className="mt-2 text-xs text-text-muted">
               合计 {lines.length} 行 · {lines.reduce((s, l) => s + l.qty, 0)} 件
-              {isTakealot && (
+              {hasTakealotDocuments && (
                 <> · 需换标 {lines.filter(l => l.needsRelabel).length} 行{!anyNeedsRelabel ? ' · 全部不换标，无需上传 SKU 标签' : ''}</>
               )}
             </p>
@@ -1896,14 +1972,14 @@ export default function Outbound() {
             <Button variant="secondary" onClick={goRecords}>取消</Button>
             <Button variant="secondary" disabled={parseBusy} onClick={() => void handleSubmit(true)}>保存草稿</Button>
             <Button
-              disabled={parseBusy || (isTakealot && takealotValidationBlockers.length > 0)}
-              title={isTakealot && takealotValidationBlockers.length ? '请先修复 Takealot 文件校验阻塞项' : undefined}
+              disabled={parseBusy || (hasTakealotDocuments && takealotValidationBlockers.length > 0)}
+              title={hasTakealotDocuments && takealotValidationBlockers.length ? '请先修复文件校验阻塞项' : undefined}
               onClick={() => void handleSubmit(false)}
             >
               {parseBusy ? '正在校验文件…' : '提交并锁定库存'}
             </Button>
           </div>
-          {isTakealot && !parseBusy && takealotValidationBlockers.length > 0 && (
+          {hasTakealotDocuments && !parseBusy && takealotValidationBlockers.length > 0 && (
             <p className="w-full text-xs text-red-600" role="status">
               暂不能提交：{takealotValidationBlockers[0]}{takealotValidationBlockers.length > 1 ? `（共 ${takealotValidationBlockers.length} 项，请查看上方文件校验）` : ''}
             </p>
@@ -1923,6 +1999,7 @@ export default function Outbound() {
       />
 
       <PlatformBindingModal
+        shipmentOnly
         open={Boolean(quickBindTarget)}
         editing={quickBindEditing}
         customerId={customerId ?? undefined}

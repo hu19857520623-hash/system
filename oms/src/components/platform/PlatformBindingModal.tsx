@@ -8,6 +8,8 @@ import {
 } from '../../data/mockData'
 import { findProductByCode, firstTakealotStore } from '../../data/platformBindingUtils'
 import { useStores } from '../../data/entityStore'
+import { useProducts } from '../../data/inventoryStore'
+import { bindingStockSource } from '../../data/bindingStockSource'
 import SkuFuzzyPicker from '../ui/SkuFuzzyPicker'
 
 export interface BindingFormState {
@@ -57,6 +59,7 @@ function toFormState(
 }
 
 interface Props {
+  shipmentOnly?: boolean
   open: boolean
   editing: PlatformSkuMapping | null
   initialValues?: Partial<BindingFormState>
@@ -65,8 +68,9 @@ interface Props {
   onSave: (data: BindingFormState, editing: PlatformSkuMapping | null) => void
 }
 
-export default function PlatformBindingModal({ open, editing, initialValues, customerId, onClose, onSave }: Props) {
+export default function PlatformBindingModal({ shipmentOnly = false, open, editing, initialValues, customerId, onClose, onSave }: Props) {
   const stores = useStores()
+  const products = useProducts()
   const [form, setForm] = useState<BindingFormState>(() => toFormState(editing, stores, initialValues))
 
   useEffect(() => {
@@ -89,7 +93,7 @@ export default function PlatformBindingModal({ open, editing, initialValues, cus
     setForm(prev => {
       const lines = [...prev.lines]
       lines[idx] = { ...lines[idx], ...patch }
-      return { ...prev, lines }
+      return { ...prev, lines, stockSource: bindingStockSource(lines, products, prev.stockSource) }
     })
   }
 
@@ -107,12 +111,12 @@ export default function PlatformBindingModal({ open, editing, initialValues, cus
         internalSku: prod?.internalSku ?? trimmed,
         warehouseName: prod?.name ?? lines[idx].warehouseName,
       }
-      return { ...prev, lines }
+      return { ...prev, lines, stockSource: bindingStockSource(lines, products, prev.stockSource) }
     })
   }
 
   const handleSubmit = () => {
-    onSave(form, editing)
+    onSave({ ...form, stockSource: bindingStockSource(form.lines, products, form.stockSource) }, editing)
   }
 
   return (
@@ -120,9 +124,9 @@ export default function PlatformBindingModal({ open, editing, initialValues, cus
       <div className="my-6 w-full max-w-3xl rounded-2xl bg-white shadow-2xl ring-1 ring-border-light" onClick={e => e.stopPropagation()}>
         <div className="border-b border-border-light px-6 py-5">
           <h3 className="font-semibold text-text-primary">
-            {editing ? '编辑 990 码绑定' : '绑定 990 码'}
+            {shipmentOnly ? '本次发货 990 标签' : editing ? '编辑 990 码绑定' : '绑定 990 码'}
           </h3>
-          <p className="mt-1 text-xs text-text-muted">把 Takealot 990 条码对应到仓库 SKU，用于出库识别标签。不会从平台拉单扣库存。</p>
+          <p className="mt-1 text-xs text-text-muted">{shipmentOnly ? '自有库存的其他 990 标签仅用于本次发货，不修改原绑定。货盘绑定按客户保存。' : '货盘 990 绑定按客户独立保存，仅用于 OMS 上传文件识别 SKU，不同步 ERP 商品条码。自有库存有库存时原绑定不可修改。'}</p>
         </div>
 
         <div className="max-h-[70vh] overflow-y-auto px-6 py-5 space-y-6">
@@ -136,7 +140,7 @@ export default function PlatformBindingModal({ open, editing, initialValues, cus
                 <input className={formInput()} value={form.platformTitle} onChange={e => setForm(prev => ({ ...prev, platformTitle: e.target.value }))} />
               </FormField>
               <FormField label="库存来源">
-                <select className={formSelect()} value={form.stockSource} onChange={e => setForm(prev => ({ ...prev, stockSource: e.target.value as PlatformSkuMapping['stockSource'] }))}>
+                <select className={formSelect()} value={bindingStockSource(form.lines, products, form.stockSource)} disabled>
                   <option value="owned">自有库存</option>
                   <option value="catalog">货盘库存</option>
                 </select>
@@ -199,14 +203,14 @@ export default function PlatformBindingModal({ open, editing, initialValues, cus
           {editing && (
             <p className="text-xs text-text-muted">
               当前状态：<span className="font-semibold text-text-primary">{PLATFORM_BINDING_STATUS_LABELS[editing.status]}</span>
-              {editing.hasInventory && ' · 有库存时变更需审核'}
+              {editing.hasInventory && bindingStockSource(form.lines, products, form.stockSource) !== 'catalog' && !shipmentOnly && ' · 有库存，原绑定不可修改'}
             </p>
           )}
         </div>
 
         <div className="flex justify-end gap-2 border-t border-border-light px-6 py-4">
           <Button variant="secondary" onClick={onClose}>取消</Button>
-          <Button onClick={handleSubmit}>{editing?.hasInventory ? '提交变更申请' : '确认绑定'}</Button>
+          <Button disabled={!shipmentOnly && editing?.stockSource !== 'catalog' && editing?.hasInventory} onClick={handleSubmit}>{shipmentOnly ? '确认本次发货标签' : '确认绑定'}</Button>
         </div>
       </div>
     </div>

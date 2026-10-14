@@ -93,7 +93,7 @@ describe('outbound label utilities', () => {
     )).not.toThrow()
   })
 
-  it('reports each SKU whose cropped-label count does not match quantity', () => {
+  it('accepts a single template for many units and rejects a SKU with no template', () => {
     const attachments = normalizeOmsOutboundAttachments([
       {
         fileType: 'skuLabel',
@@ -104,12 +104,13 @@ describe('outbound label utilities', () => {
       },
     ])
 
+    expect(() => assertSkuLabelCounts([{ sku: 'SKU-A', qty: 14 }], attachments)).not.toThrow()
     expect(() => assertSkuLabelCounts([
       { sku: 'SKU-A', qty: 2 },
       { sku: 'SKU-B', qty: 1 },
     ], attachments)).toThrow(
       new OutboundLabelValidationError(
-        'SKU 标签数量不匹配：SKU-A 需要 2 张，收到 1 张；SKU-B 需要 1 张，收到 0 张',
+        'SKU 标签数量不匹配：SKU-B 需要至少 1 张可用标签，收到 0 张',
       ),
     )
   })

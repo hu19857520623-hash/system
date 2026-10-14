@@ -289,14 +289,15 @@ export async function purchaseCatalogProductViaErp(
   }
 }
 
-/** 用 ERP 货盘目录覆盖本地展示用商品/库存池（归属平台货盘客户 TKL） */
+/** ERP is authoritative: refresh the in-memory catalog pool without saving a customer inventory snapshot. */
 export async function mergeErpCatalogIntoState(items: ErpCatalogItem[]) {
   const existingSkus = listInternalSkusForCustomer(state.products, CATALOG_CUSTOMER_ID)
   for (const item of items) {
     const internalSku = item.sku.trim()
     const customerSku = getCustomerSkuDisplay({ internalSku, customerSku: undefined }, CATALOG_CUSTOMER_CODE)
     const existing = state.products.find(
-      p => p.internalSku === internalSku || (p.inCatalog && p.customerId === CATALOG_CUSTOMER_ID && p.customerSku === customerSku),
+      p => (isCatalogPoolCustomerId(p.customerId) || (!p.customerId && p.inCatalog))
+        && (p.internalSku === internalSku || p.customerSku === customerSku),
     )
     if (existing) {
       existing.customerId = CATALOG_CUSTOMER_ID
@@ -409,14 +410,6 @@ export async function mergeErpCatalogIntoState(items: ErpCatalogItem[]) {
   })
 
   emit()
-  try {
-    await persistLocalOrThrow()
-  } catch (error) {
-    // ERP is the catalog source of truth. A cache write problem must not erase
-    // catalog rows that were just fetched successfully; the page refreshes the
-    // catalog from ERP again on every visit.
-    notifyPersistFailed('货盘目录缓存', error)
-  }
 }
 
 function skuLookupKeys(sku: string): string[] {

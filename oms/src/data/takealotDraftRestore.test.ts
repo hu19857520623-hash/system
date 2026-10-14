@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { restoreTakealotDraftAttachments } from './takealotDraftRestore.ts'
 import type { FileAttachment } from './mockData.ts'
 import type { TakealotLabelPdfResult } from './takealotLabelPdf.ts'
@@ -15,6 +16,18 @@ const labels: TakealotLabelPdfResult = {
     page: 1, row: 0, column: 0, dataUrl: 'data:image/png;base64,YQ==',
     bounds: { left: 0, bottom: 0, width: 1, height: 1 } }],
 }
+
+test('TFS draft restoration recognizes courier labels saved in the fourth document slot', async () => {
+  const text = readFileSync(new URL('./fixtures/tfs-courier-label.txt', import.meta.url), 'utf8')
+  const result = await restoreTakealotDraftAttachments([source('appointment', 'Stickers_25_GLJJTT(2).pdf')], {
+    extractText: async () => text, parseLabels: async () => labels,
+  })
+  assert.deepEqual(result.errors, [])
+  assert.equal(result.parsed?.courierReference, 'GLJJTT')
+  assert.equal(result.parsed?.earliestDeliveryDate, '2026-10-09')
+  assert.equal(result.parsed?.recipient?.postalCode, '4019')
+  assert.deepEqual(result.parsed?.lineItems, [])
+})
 
 test('reopening a draft reconstructs parsed documents and source attachment roles', async () => {
   const result = await restoreTakealotDraftAttachments([source('appointment', 'booking.pdf')], {

@@ -4,9 +4,23 @@ import {
   parseMappingInternalSkus,
   primaryBoundBarcode,
   productScanFields,
+  loadPlatformBarcodesByInternalSku,
 } from './platform-barcode-lookup.util'
 
 describe('platform-barcode-lookup', () => {
+  it('never exposes catalog customer 990 bindings to ERP scan fields', async () => {
+    const rows = [
+      { stockSource: 'catalog', platformBarcode: '9902380084674', lines: JSON.stringify([{ internalSku: 'SHARED' }]), status: 'active' },
+      { stockSource: 'owned', platformBarcode: '9902233754839', lines: JSON.stringify([{ internalSku: 'OWNED' }]), status: 'active' },
+    ]
+    expect(indexPlatformBarcodes(rows).has('SHARED')).toBe(false)
+    const query = jest.fn().mockResolvedValue(rows)
+    const indexed = await loadPlatformBarcodesByInternalSku({ $queryRawUnsafe: query }, ['SHARED'])
+    expect(query.mock.calls[0][0]).toContain("stockSource = 'owned' AND customerId IS NOT NULL")
+    expect(productScanFields('SHARED', { barcode: 'original-erp-barcode' }, indexed)).toEqual({
+      barcode: 'original-erp-barcode', platformBarcode: '', platformBarcodes: [],
+    })
+  })
   it('parses mapping lines JSON', () => {
     expect(
       parseMappingInternalSkus(

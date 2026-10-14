@@ -1,0 +1,75 @@
+Johannes … Parcels
+to
+1/3
+TAL KZN
+GLJJTT/1
+From Example sender … Col. agent example-agent
+Date 2026-10-07 Del. agent
+Account Routing code Service level
+TCS Main Collection (J
+29889711 -
+HB - KZN)
+Reference GLJJTT Earliest delivery
+Customer ref.
+190035967 2026-10-09
+To KZN DC1
+Business address 181 Old North Coast Rd
+Glen Anil
+Durban, 4019
+Contact name Example Contact
+Contact detail shipments@example.test
+Instructions
+Collection
+Delivery
+1 Custom parcel 60.0 x 20.0 x 20.0 5.5
+(Signed) Date
+Johannes … Parcels
+to
+2/3
+TAL KZN
+GLJJTT/2
+From Example sender … Col. agent example-agent
+Date 2026-10-07 Del. agent
+Account Routing code Service level
+TCS Main Collection (J
+29889711 -
+HB - KZN)
+Reference GLJJTT Earliest delivery
+Customer ref.
+190035967 2026-10-09
+To KZN DC1
+Business address 181 Old North Coast Rd
+Glen Anil
+Durban, 4019
+Contact name Example Contact
+Contact detail shipments@example.test
+Instructions
+Collection
+Delivery
+2 Custom parcel 52.0 x 10.0 x 18.0 4.0
+(Signed) Date
+Johannes … Parcels
+to
+3/3
+TAL KZN
+GLJJTT/3
+From Example sender … Col. agent example-agent
+Date 2026-10-07 Del. agent
+Account Routing code Service level
+TCS Main Collection (J
+29889711 -
+HB - KZN)
+Reference GLJJTT Earliest delivery
+Customer ref.
+190035967 2026-10-09
+To KZN DC1
+Business address 181 Old North Coast Rd
+Glen Anil
+Durban, 4019
+Contact name Example Contact
+Contact detail shipments@example.test
+Instructions
+Collection
+Delivery
+3 Custom parcel 32.0 x 27.0 x 90.0 7.0
+(Signed) Date

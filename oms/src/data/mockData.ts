@@ -77,6 +77,8 @@ export interface FileAttachment {
 }
 
 export interface OutboundLineItem {
+  /** 本单使用的 990 标签映射，不写入永久编码绑定。 */
+  shipmentBarcodeBindings?: PlatformSkuMapping[]
   sku: string
   name: string
   qty: number

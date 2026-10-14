@@ -5,11 +5,12 @@ import type {
   StoreAccount,
 } from './mockData'
 import { mappingBelongsToCustomer } from './platformBarcodeScope'
+import { bindingStockSource } from './bindingStockSource'
 import { productMatchesSellerSku, productVisibleToCustomer } from './skuCode'
 import type { TakealotLineItem } from './takealotDocParser'
 
 export type BindableProduct = Pick<Product, 'internalSku' | 'name'> &
-  Partial<Pick<Product, 'customerId' | 'customerSku'>>
+  Partial<Pick<Product, 'customerId' | 'customerSku' | 'inCatalog'>>
 
 export interface TakealotAutoBindHit {
   barcode: string
@@ -86,6 +87,7 @@ export function applyTakealotShippingNoteBindings(options: {
       continue
     }
     const product = matches[0]
+    const source = bindingStockSource([{ internalSku: product.internalSku }], [product], options.stockSource)
     const existing = mappingsForBarcode(
       next,
       barcode,
@@ -119,8 +121,8 @@ export function applyTakealotShippingNoteBindings(options: {
           platformSkuId: item.tsin || target.platformSkuId,
           platformTitle: item.productTitle || target.platformTitle,
           lines: [line],
-          status: target.hasInventory ? 'pending_review' : 'active',
-          stockSource: options.stockSource,
+          status: source !== 'catalog' && target.hasInventory ? 'pending_review' : 'active',
+          stockSource: source,
           syncSource: 'import',
           version: target.version + 1,
           updatedAt: options.now,
@@ -143,7 +145,7 @@ export function applyTakealotShippingNoteBindings(options: {
       platformTitle: item.productTitle || '',
       lines: [line],
       status: 'active',
-      stockSource: options.stockSource,
+      stockSource: source,
       syncSource: 'import',
       version: 1,
       hasInventory: false,

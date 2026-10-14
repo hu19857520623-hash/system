@@ -84,6 +84,8 @@ const CATALOG_PERMISSIONS = [
     'catalog:write',
     'product:read',
     'code:read',
+    'platform:read',
+    'platform:write',
     'inbound:read',
     'inbound:write',
     'outbound:read',

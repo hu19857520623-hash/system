@@ -113,12 +113,12 @@ describe('OutboundService cropped label storage', () => {
     expect(mapped.downloadable).toBe(false)
   })
 
-  it('rejects OMS requests before persistence when SKU label counts mismatch', async () => {
+  it('rejects OMS requests before persistence when a required SKU has no label', async () => {
     const { service, prisma } = buildService()
 
     await expect(service.createFromOms({
       customerCode: 'CUST-1',
-      items: [{ sku: 'SKU-A', qty: 2 }],
+      items: [{ sku: 'SKU-A', qty: 2 }, { sku: 'SKU-B', qty: 1 }],
       attachments: [{
         fileType: 'skuLabel',
         fileName: 'label.pdf',
@@ -129,7 +129,7 @@ describe('OutboundService cropped label storage', () => {
     })).rejects.toThrow(BadRequestException)
     await expect(service.createFromOms({
       customerCode: 'CUST-1',
-      items: [{ sku: 'SKU-A', qty: 2 }],
+      items: [{ sku: 'SKU-A', qty: 2 }, { sku: 'SKU-B', qty: 1 }],
       attachments: [{
         fileType: 'skuLabel',
         fileName: 'label.pdf',
@@ -137,7 +137,7 @@ describe('OutboundService cropped label storage', () => {
         sku: 'SKU-A',
         unitIndex: 1,
       }],
-    })).rejects.toThrow('SKU-A 需要 2 张，收到 1 张')
+    })).rejects.toThrow('SKU-B 需要至少 1 张可用标签，收到 0 张')
     expect(prisma.customer.findUnique).not.toHaveBeenCalled()
   })
 

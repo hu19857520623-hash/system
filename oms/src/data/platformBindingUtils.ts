@@ -82,6 +82,7 @@ export function findProductByCode(code: string, customerId?: string) {
 }
 
 export interface PlatformBarcodeResolveScope {
+  mappings?: PlatformSkuMapping[]
   customerId?: string
   sellerId?: string
   platform?: StorePlatform
@@ -155,7 +156,7 @@ export function resolvePlatformBarcode(
 ): PlatformBarcodeResolution {
   const normalized = barcode.trim()
   const platform = scope.platform ?? 'Takealot'
-  let mappings = getPlatformSkuMappingsSnapshot().filter(mapping =>
+  let mappings = (scope.mappings ?? getPlatformSkuMappingsSnapshot()).filter(mapping =>
     mapping.platform === platform
     && mapping.platformBarcode === normalized
     && mappingBelongsToCustomer(mapping, scope.customerId))
@@ -164,7 +165,7 @@ export function resolvePlatformBarcode(
     const scopedStores = findTakealotStoresForSeller(scope.sellerId, scope.customerId)
     const storeIds = new Set(scopedStores.map(store => store.id))
     mappings = mappings.filter(mapping =>
-      mapping.sellerId === scope.sellerId
+      mapping.stockSource === 'catalog' || mapping.sellerId === scope.sellerId
       || (!mapping.sellerId && storeIds.has(mapping.storeId)))
   }
 
@@ -182,10 +183,11 @@ export function resolvePlatformBarcode(
 
   const productsBySku = new Map<string, Product>()
   const catalog = getProductsSnapshot().filter(product =>
-    !scope.customerId || !product.customerId || product.customerId === scope.customerId)
+    productVisibleToCustomer(product, scope.customerId))
   for (const mapping of activeMappings) {
     for (const line of mapping.lines) {
-      const product = catalog.find(item => item.internalSku === line.internalSku)
+      const product = catalog.find(item => item.internalSku === line.internalSku && item.customerId === scope.customerId)
+        ?? catalog.find(item => item.internalSku === line.internalSku)
       if (product) productsBySku.set(product.internalSku, product)
     }
   }

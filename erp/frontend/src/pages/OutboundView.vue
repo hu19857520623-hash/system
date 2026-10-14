@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { displaySku, displaySkuText, formatSku } from '@erp/shared/sku-display'
+import { downloadableOutboundSourceAttachments, isOutboundSourceAttachment } from '@/features/outbound/attachments'
 import { ref, computed, onMounted, reactive } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -336,9 +337,7 @@ function rowActionAttachments(row: any) {
     : row.attachmentName && row.attachmentDownloadable
       ? [{ id: 0, fileName: row.attachmentName, fileType: 'other', downloadable: true }]
       : []
-  return atts.filter(
-    (att: any) => att.fileType !== 'skuLabel' && att.downloadable === true,
-  )
+  return downloadableOutboundSourceAttachments(atts)
 }
 
 function attachmentActionLabel(att: any) {
@@ -346,7 +345,7 @@ function attachmentActionLabel(att: any) {
   if (att.fileType === 'skuLabel') return 'SKU标签'
   if (att.fileType === 'pod') return 'POD签收单'
   if (att.fileType === 'deliveryList') return '发货清单'
-  if (att.fileType === 'appointment') return '预约单'
+  if (att.fileType === 'appointment') return /^Stickers_/i.test(att.fileName || '') ? 'TFS面单' : '预约单'
   return '附件'
 }
 
@@ -366,7 +365,7 @@ const detailCustomerRemark = computed(() => {
 })
 
 const detailAttachments = computed(() =>
-  (detailOrder.value?.attachments || []).filter((att: any) => att.labelRole !== 'unitCrop'),
+  (detailOrder.value?.attachments || []).filter(isOutboundSourceAttachment),
 )
 
 function appendDetailCommand(cmds: RowAction[]) {
@@ -380,7 +379,7 @@ function appendAttachmentCommands(cmds: RowAction[], row: any) {
     cmds.push({
       key: isPod ? `downloadPod-${index}` : (hasAttachmentId ? `att-${att.id}-${index}` : `att-${att.fileName || att.fileType || 'file'}-${index}`),
       command: isPod ? 'downloadPod' : (hasAttachmentId ? `downloadAtt:${att.id}` : 'downloadCpt'),
-      label: `下载${attachmentActionLabel(att)}`,
+      label: `下载${attachmentActionLabel(att)} · ${att.fileName || '附件'}`,
     })
   })
 }

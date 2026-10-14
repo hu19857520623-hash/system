@@ -31,8 +31,13 @@ export interface TakealotParsedDoc {
   bookingRef?: string
   asnNumber?: string
   totalUnits?: number
+  courierReference?: string
+  earliestDeliveryDate?: string
+  parcelCount?: number
+  recipient?: { name?: string; province?: string; city?: string; postalCode?: string; address1?: string; email?: string; phone?: string }
   lineItems: TakealotLineItem[]
   sources: string[]
+  parsingIssues?: string[]
 }
 
 function looksLikeTakealotShippingNote(fileName: string, text: string): boolean {
@@ -55,6 +60,7 @@ function looksLikeTakealotSkuLabelSheet(text: string): boolean {
 
 export function detectTakealotDocKind(fileName: string, text = ''): TakealotDocKind {
   const name = fileName.toLowerCase()
+  if (/earliest delivery/i.test(text) && /customer ref\.?|TCS Main Collection/i.test(text)) return 'TFS 面单'
   if (/^tal[a-z0-9]+\.pdf$/i.test(fileName) || /booking confirmation|booking reference number|date of booking/i.test(text)) {
     return '预约单'
   }
@@ -77,14 +83,14 @@ export function detectTakealotDocKind(fileName: string, text = ''): TakealotDocK
   return '发货清单'
 }
 
-export function takealotMissingFields(doc: TakealotParsedDoc): string[] {
+export function takealotMissingFields(doc: TakealotParsedDoc, mode: 'takealot' | 'tfs' = 'takealot'): string[] {
   const missing: string[] = []
   if (!doc.poNumber) missing.push('PO 单号')
   if (!doc.warehouseCode) missing.push('目的仓')
-  if (!doc.appointmentDate) missing.push('预约时间')
+  if (mode === 'tfs' ? !doc.earliestDeliveryDate : !doc.appointmentDate) missing.push(mode === 'tfs' ? '最早送达日期' : '预约时间')
   if (!doc.sellerId) missing.push('Seller ID')
   if (!doc.sellerName) missing.push('店铺名称')
-  if (!doc.bookingRef) missing.push('Booking Reference')
+  if (mode === 'tfs' ? !doc.courierReference : !doc.bookingRef) missing.push(mode === 'tfs' ? 'TFS 参考号' : 'Booking Reference')
   if (!doc.lineItems.some(item => item.sku && item.qty > 0)) missing.push('SKU 明细')
   return missing
 }
@@ -95,6 +101,9 @@ const TAKEALOT_IDENTITY_FIELDS: Array<[keyof TakealotParsedDoc, string]> = [
   ['appointmentDate', '预约时间'],
   ['bookingRef', 'Booking Reference'],
   ['asnNumber', 'ASN'],
+  ['courierReference', 'TFS 参考号'],
+  ['earliestDeliveryDate', '最早送达日期'],
+  ['parcelCount', '包裹数'],
 ]
 
 function conflictingFieldValues(
@@ -135,6 +144,7 @@ export function takealotIdentityConflicts(parts: Partial<TakealotParsedDoc>[]): 
 
 export function takealotParseConflicts(parts: Partial<TakealotParsedDoc>[]): string[] {
   const conflicts = [
+    ...parts.flatMap(part => part.parsingIssues || []),
     ...takealotIdentityConflicts(parts),
     ...conflictingFieldValues(parts, [
       ['sellerName', '店铺名称'],
@@ -167,6 +177,13 @@ export function takealotParseWarnings(doc: TakealotParsedDoc): string[] {
     warnings.push(`预约日期 ${bookingDay} 晚于 Due Date ${doc.shipmentDate}`)
   }
   return warnings
+}
+
+/** A readable label is a print template for a barcode, regardless of shipment units. */
+export function takealotLabelPresenceIssues(expectedQty: number, observedLabelCount: number): string[] {
+  if (expectedQty <= 0 && observedLabelCount > 0) return ['清单中没有此条码']
+  if (expectedQty > 0 && observedLabelCount <= 0) return ['缺少 1 张可用标签']
+  return []
 }
 
 const WH_ALIAS: Record<string, string> = {
@@ -256,7 +273,7 @@ export function parseTakealotFilename(fileName: string): Partial<TakealotParsedD
 const TAKEALOT_MP_BARCODE = /^(990\d{10}|\d{13})$/
 const TAKEALOT_TSIN = /^\d{8,11}$/
 const TAKEALOT_QTY = /^\d{1,5}$/
-const TAKEALOT_SELLER_SKU = /^[A-Z][A-Z0-9][A-Z0-9_-]{0,28}$/i
+const TAKEALOT_SELLER_SKU = /^[A-Z0-9][A-Z0-9_-]{1,29}$/i
 
 function tokenizeTakealotPdfText(text: string): string[] {
   return text
@@ -370,10 +387,10 @@ export function parseTakealotDocumentText(text: string, kind?: TakealotDocKind):
     || t.match(/TAL\s*MP\s+(\d{6,15})\s+ASN[A-Z0-9]+/i)
   if (po) out.poNumber = po[1]
 
-  const shipmentName = t.match(/Shipment Name:\s*(PO-[^\n]+)/i)
+  const shipmentName = t.match(/Shipment Name:\s*([^\n]+)/i)
   if (shipmentName) {
     out.shipmentName = shipmentName[1].trim()
-    const wh = shipmentName[1].match(/-(JHB3|JHB1|JHB|CPT2|CPT1|CPT|DBN1|DBN)-\d+/i)
+    const wh = shipmentName[1].match(/-(JHB3|JHB1|JHB|CPT2|CPT1|CPT|DBN1|DBN)(?:-\d+)?\b/i)
     if (wh) {
       out.warehouseCode = normalizeTakealotWarehouse(wh[1])
       out.warehouseConfidence = /\d$/.test(wh[1]) ? 'explicit' : 'generic'
@@ -426,6 +443,34 @@ export function parseTakealotDocumentText(text: string, kind?: TakealotDocKind):
     || t.match(/Total units to collect:\s*(\d+)/i)
     || t.match(/\bTAL\s*MP\s+\d{6,15}\s+ASN[A-Z0-9]+\s+(\d+)\s+Stock\b/i)
   if (totalUnits) out.totalUnits = Number(totalUnits[1])
+
+  if (kind === 'TFS 面单') {
+    out.poNumber = t.match(/Customer ref\.?\s*[:#]?\s*(\d{6,15})/i)?.[1]
+    out.sellerId = t.match(/\bAccount\b[\s\S]{0,120}?\b(\d{6,12})\b/i)?.[1]
+    out.courierReference = t.match(/(?:^|\n)Reference\s*[:#]?\s*([A-Z0-9-]+)/i)?.[1]
+    out.earliestDeliveryDate = t.match(/Earliest delivery[\s\S]{0,100}?(\d{4}-\d{2}-\d{2})/i)?.[1]
+    const parcels = t.match(/Parcels[\s\S]{0,30}?\b\d+\s*\/\s*(\d+)\b/i)
+    if (parcels) out.parcelCount = Number(parcels[1])
+    const address = t.match(/Business address\s*([\s\S]*?)(?=Contact name|Contact detail|Instructions)/i)?.[1]?.trim()
+    const cityPostal = address?.match(/([^\n,]+),\s*(\d{4})\s*$/)
+    out.recipient = {
+      name: t.match(/Contact name\s*([^\n]+)/i)?.[1]?.trim(),
+      address1: address?.replace(/\n/g, ', '),
+      city: cityPostal?.[1]?.trim(),
+      postalCode: cityPostal?.[2],
+      email: t.match(/Contact detail\s*([^\s]+@[^\s]+)/i)?.[1],
+    }
+    if (/Durban|KZN DC/i.test(t)) {
+      out.warehouseCode = 'dbn'
+      out.warehouseConfidence = 'explicit'
+      out.recipient.province = 'KwaZulu-Natal'
+    }
+    return out
+  }
+
+  // Only shipping notes supply demand. Label titles / booking text can contain
+  // numbers that resemble compact SKU-and-quantity rows.
+  if (kind && kind !== '发货清单') return out
 
   const addLine = (item: TakealotLineItem) => {
     if (!item.sku || !item.qty || item.qty <= 0) return
@@ -543,6 +588,10 @@ export function mergeTakealotParsed(...parts: Partial<TakealotParsedDoc>[]): Tak
     if (p.bookingRef) result.bookingRef = p.bookingRef
     if (p.asnNumber) result.asnNumber = p.asnNumber
     if (p.totalUnits) result.totalUnits = p.totalUnits
+    if (p.courierReference) result.courierReference = p.courierReference
+    if (p.earliestDeliveryDate) result.earliestDeliveryDate = p.earliestDeliveryDate
+    if (p.parcelCount) result.parcelCount = p.parcelCount
+    if (p.recipient) result.recipient = { ...result.recipient, ...p.recipient }
     if (p.lineItems?.length) {
       for (const item of p.lineItems) {
         if (!item.sku && !item.barcode) continue
@@ -589,8 +638,11 @@ export function describeTakealotParsed(doc: TakealotParsedDoc): string {
   if (doc.poNumber) bits.push(`PO ${doc.poNumber}`)
   if (doc.warehouseCode) bits.push(`仓库 ${doc.warehouseCode.toUpperCase()}`)
   if (doc.appointmentDate || doc.shipmentDate) {
-    bits.push(`预约 ${formatAppointmentLabel(doc.appointmentDate || doc.shipmentDate!)}`)
+    if (!doc.courierReference) bits.push(`${doc.appointmentDate ? '预约' : 'Due Date'} ${formatAppointmentLabel(doc.appointmentDate || doc.shipmentDate!)}`)
   }
+  if (doc.courierReference) bits.push(`TFS ${doc.courierReference}`)
+  if (doc.earliestDeliveryDate) bits.push(`最早送达 ${doc.earliestDeliveryDate}`)
+  if (doc.parcelCount) bits.push(`包裹 ${doc.parcelCount}`)
   if (doc.sellerName) bits.push(`店铺 ${doc.sellerName}`)
   if (doc.lineItems.length) {
     bits.push(doc.lineItems.map(i => `${i.sku || '?'}×${i.qty}`).join(', '))

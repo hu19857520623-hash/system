@@ -193,9 +193,9 @@ export function assertSkuLabelCounts(
   }
 
   const mismatches = new Set<string>()
-  for (const [sku, qty] of expected) {
+  for (const [sku] of expected) {
     const labelCount = actual.get(sku) || 0
-    if (labelCount !== qty) mismatches.add(`${sku} 需要 ${qty} 张，收到 ${labelCount} 张`)
+    if (labelCount < 1) mismatches.add(`${sku} 需要至少 1 张可用标签，收到 ${labelCount} 张`)
   }
   for (const [sku, labelCount] of actual) {
     if (skipSkus.has(sku)) continue
