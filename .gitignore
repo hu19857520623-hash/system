@@ -54,3 +54,11 @@ pda/.kotlin/
 .codex-tmp/
 outputs/
 tmp/
+
+# Local deployment, audit, and customer-data exports
+/tmp_*
+/output/
+/audit-results/
+/oms/output/
+/pda/output/
+**/__pycache__/

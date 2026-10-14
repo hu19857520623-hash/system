@@ -153,6 +153,7 @@ export const productDevApi: ApiGroup
 export const supplierApi: ApiGroup
 export const purchaseApi: ApiGroup
 export const inboundApi: ApiGroup
+export const flowDebugApi: ApiGroup
 export const returnsApi: ApiGroup
 export const inventoryApi: ApiGroup
 export const outboundApi: OutboundApi

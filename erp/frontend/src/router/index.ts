@@ -48,6 +48,7 @@ const routes: RouteRecordRaw[] = [
       { path: 'cost', redirect: '/finance-books/purchase' },
       { path: 'operating-ledger', redirect: '/finance-books/operating' },
       { path: 'sync', name: 'SyncLog', component: () => import('@/pages/SyncLogView.vue'), meta: { title: '同步日志', section: '同步' } },
+      { path: 'flow-debug', name: 'FlowDebug', component: () => import('@/pages/FlowDebugView.vue'), meta: { title: '流程字段与接口调试', section: '同步' } },
       { path: 'operation-logs', name: 'OperationLog', component: () => import('@/pages/OperationLogView.vue'), meta: { title: '操作日志', section: '同步' } },
       // 财务
       { path: 'billing', name: 'Billing', component: () => import('@/pages/BillingView.vue'), meta: { title: '客户结算', section: '财务' } },

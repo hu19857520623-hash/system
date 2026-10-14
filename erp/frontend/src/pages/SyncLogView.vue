@@ -70,6 +70,7 @@ onMounted(load)
       <div class="page-header">
         <span class="page-title">同步日志</span>
         <div class="header-actions">
+          <el-button v-if="app.authenticatedUser?.roleCode === 'admin'" type="primary" plain @click="$router.push('/flow-debug')">流程字段与接口调试</el-button>
           <el-tag v-if="failCount" type="danger" size="small">{{ failCount }} 条失败待重试</el-tag>
           <el-button size="small" @click="exportTask('同步日志')">导出</el-button>
         </div>

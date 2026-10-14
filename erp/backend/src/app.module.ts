@@ -42,6 +42,7 @@ import { OperatingLedgerModule } from './modules/operating-ledger/operating-ledg
 import { ManagementLoopModule } from './modules/management-loop/management-loop.module'
 import { AnhengModule } from './modules/anheng/anheng.module'
 import { validateEnvironment } from './config/environment'
+import { FlowDebugModule } from './modules/flow-debug/flow-debug.module'
 
 @Module({
   imports: [
@@ -64,6 +65,7 @@ import { validateEnvironment } from './config/environment'
     BillingModule,
     CostModule,
     SyncLogModule,
+    FlowDebugModule,
     AsyncIoModule,
     AnnouncementModule,
     ProfitModule,

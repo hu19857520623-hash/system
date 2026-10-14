@@ -6,6 +6,11 @@ import { clearAccessToken, getAccessToken } from '@/auth/tokenStore'
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
 
+export const flowDebugApi = {
+  catalog: () => api.get('/flow-debug/catalog'),
+  trace: (params) => api.get('/flow-debug/trace', params),
+}
+
 function describeNetworkError(err) {
   const msg = err instanceof Error ? err.message : String(err)
   if (
