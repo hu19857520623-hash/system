@@ -9,7 +9,7 @@ function setup(status = 'pending_actual_qty') {
       findUnique: jest.fn(async () => ({ ...row, items: row.items.map(line => ({ ...line })) })),
       update: jest.fn(async ({ data }) => {
         if (data.items?.update) Object.assign(row.items[0], data.items.update.data)
-        const { items, ...patch } = data
+        const { items: _items, ...patch } = data
         Object.assign(row, patch)
         return { ...row, items: row.items.map(line => ({ ...line })) }
       }),
