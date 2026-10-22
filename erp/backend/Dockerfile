@@ -6,12 +6,15 @@
 ARG DOCKER_REGISTRY=docker.io/library/
 ARG NODE_VERSION=22-alpine
 ARG NPM_REGISTRY=https://registry.npmmirror.com
+ARG APK_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/alpine
 
 # ── 1) 依赖（与源码分离，最大化缓存命中）──
 FROM ${DOCKER_REGISTRY}node:${NODE_VERSION} AS deps
 ARG NPM_REGISTRY
+ARG APK_MIRROR
 WORKDIR /app
-RUN apk add --no-cache openssl libc6-compat \
+RUN sed -i "s#https://dl-cdn.alpinelinux.org/alpine#${APK_MIRROR}#g" /etc/apk/repositories \
+    && apk add --no-cache openssl libc6-compat \
     && npm config set registry ${NPM_REGISTRY}
 COPY backend/package.json backend/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm \
@@ -33,7 +36,9 @@ RUN npm run build \
 
 # ── 3) 运行（仅生产产物 + 非 root + dumb-init）──
 FROM ${DOCKER_REGISTRY}node:${NODE_VERSION} AS runner
-RUN apk add --no-cache openssl dumb-init \
+ARG APK_MIRROR
+RUN sed -i "s#https://dl-cdn.alpinelinux.org/alpine#${APK_MIRROR}#g" /etc/apk/repositories \
+    && apk add --no-cache openssl dumb-init \
     && addgroup -g 1001 -S erp \
     && adduser -S erp -u 1001 -G erp
 WORKDIR /app

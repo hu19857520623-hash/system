@@ -6,12 +6,15 @@
 ARG DOCKER_REGISTRY=docker.io/library/
 ARG NODE_VERSION=22-alpine
 ARG NPM_REGISTRY=https://registry.npmmirror.com
+ARG APK_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/alpine
 
 # ── 1) 全量依赖（仅用于 prisma generate）──
 FROM ${DOCKER_REGISTRY}node:${NODE_VERSION} AS deps
 ARG NPM_REGISTRY
+ARG APK_MIRROR
 WORKDIR /app
-RUN apk add --no-cache openssl libc6-compat \
+RUN sed -i "s#https://dl-cdn.alpinelinux.org/alpine#${APK_MIRROR}#g" /etc/apk/repositories \
+    && apk add --no-cache openssl libc6-compat \
     && npm config set registry ${NPM_REGISTRY}
 COPY package.json package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm \
@@ -25,8 +28,10 @@ RUN --mount=type=cache,target=/root/.npm \
 # ── 2) 生产依赖（不含前端/构建工具）──
 FROM ${DOCKER_REGISTRY}node:${NODE_VERSION} AS prod-deps
 ARG NPM_REGISTRY
+ARG APK_MIRROR
 WORKDIR /app
-RUN apk add --no-cache openssl libc6-compat \
+RUN sed -i "s#https://dl-cdn.alpinelinux.org/alpine#${APK_MIRROR}#g" /etc/apk/repositories \
+    && apk add --no-cache openssl libc6-compat \
     && npm config set registry ${NPM_REGISTRY}
 COPY package.json package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm \
@@ -38,7 +43,9 @@ COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
 
 # ── 3) 运行：server + prisma + 服务端复用的数据模块 ──
 FROM ${DOCKER_REGISTRY}node:${NODE_VERSION} AS runner
-RUN apk add --no-cache openssl dumb-init \
+ARG APK_MIRROR
+RUN sed -i "s#https://dl-cdn.alpinelinux.org/alpine#${APK_MIRROR}#g" /etc/apk/repositories \
+    && apk add --no-cache openssl dumb-init \
     && addgroup -g 1001 -S oms \
     && adduser -S oms -u 1001 -G oms \
     && mkdir -p /app && chown oms:oms /app

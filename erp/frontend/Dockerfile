@@ -9,6 +9,7 @@
 ARG DOCKER_REGISTRY=docker.io/library/
 ARG NODE_VERSION=22-alpine
 ARG NPM_REGISTRY=https://registry.npmmirror.com
+ARG APK_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/alpine
 
 FROM ${DOCKER_REGISTRY}node:${NODE_VERSION} AS builder
 ARG NPM_REGISTRY
@@ -23,7 +24,9 @@ ENV NODE_ENV=production
 RUN npm run build
 
 FROM ${DOCKER_REGISTRY}nginx:alpine AS runner
-RUN apk add --no-cache wget \
+ARG APK_MIRROR
+RUN sed -i "s#https://dl-cdn.alpinelinux.org/alpine#${APK_MIRROR}#g" /etc/apk/repositories \
+    && apk add --no-cache wget \
     && rm -f /etc/nginx/conf.d/default.conf
 COPY frontend/nginx.docker.conf /etc/nginx/conf.d/default.conf
 COPY --from=builder /app/dist /usr/share/nginx/html
