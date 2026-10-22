@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { userFacingError } from '../utils/userFacingError'
 import { ClipboardList, ImageOff, RefreshCw, ShoppingCart, Trash2 } from 'lucide-react'
 import { Badge, Button, Card, Drawer, MonoCode, PageHeader, SearchInput, Table, Tabs } from '../components/ui'
 import { formatCurrency } from '../data/mockData'
@@ -138,7 +139,7 @@ export default function Catalog() {
           (customerCode && customerCode !== '—' ? ` · 客户 ${customerCode}` : ''),
       })
     } catch (err) {
-      setMsg({ type: 'err', text: err instanceof Error ? err.message : String(err) })
+      setMsg({ type: 'err', text: userFacingError(err) })
     } finally {
       setLoadingCatalog(false)
       setTimeout(() => setMsg(null), 5000)

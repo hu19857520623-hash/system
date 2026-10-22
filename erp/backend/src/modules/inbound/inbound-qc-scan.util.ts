@@ -4,88 +4,52 @@ export type InboundQcScanPayload = {
   lengthCm?: number
   widthCm?: number
   heightCm?: number
+  weightKg?: number
 }
 
-function positiveNum(v: unknown): number | undefined {
-  const n = Number(v)
-  return Number.isFinite(n) && n > 0 ? n : undefined
+function numeric(raw: unknown, label: string): number {
+  if (typeof raw !== 'number' && !(typeof raw === 'string' && raw.trim())) throw new Error(`${label}须为有效数值`)
+  const value = Number(raw)
+  if (!Number.isFinite(value)) throw new Error(`${label}须为有效数值`)
+  return value
+}
+function count(raw: unknown): number {
+  const value = numeric(raw, '每次件数')
+  if (!Number.isSafeInteger(value) || value < 0 || value > 2147483647) throw new Error('每次件数须为不小于零且未超出范围的整数')
+  return value
+}
+function dimension(raw: unknown, label: string, weight = false): number | undefined {
+  if (raw === undefined) return undefined
+  const value = numeric(raw, label), precision = weight ? 1000 : 100
+  if (value <= 0 || value > (weight ? 99999.999 : 999999.99) || Math.abs(value * precision - Math.round(value * precision)) > 0.0001) throw new Error(`${label}须大于零且不超过${weight ? '99999.999' : '999999.99'}，最多保留${weight ? '三' : '两'}位小数`)
+  return value
 }
 
-function pickSku(obj: Record<string, unknown>): string {
-  return String(obj.sku || obj.SKU || obj.scanCode || obj.barcode || '').trim()
-}
-
-function pickIncrement(obj: Record<string, unknown>, fallback: number): number {
-  const raw = obj.increment ?? obj.qty ?? obj.count ?? obj.actualQty
-  const n = Math.floor(Number(raw))
-  return Number.isFinite(n) && n > 0 ? n : fallback
-}
-
-/** 解析清点扫描码：纯 SKU、JSON、或 SKU|长|宽|高（测量机常见格式） */
-export function parseInboundQcScanInput(
-  raw: string,
-  incrementOverride?: number,
-  dims?: { lengthCm?: unknown; widthCm?: unknown; heightCm?: unknown },
-): InboundQcScanPayload {
+/** Quantity is never rounded or silently replaced; device JSON and separated dimensions share validation. */
+export function parseInboundQcScanInput(raw: string, incrementOverride?: number, dims?: { lengthCm?: unknown; widthCm?: unknown; heightCm?: unknown; weightKg?: unknown }): InboundQcScanPayload {
   const text = String(raw || '').trim()
   if (!text) throw new Error('请扫描或输入 SKU')
-
-  const overrideIncrement =
-    incrementOverride != null && Number.isFinite(Number(incrementOverride))
-      ? Math.max(0, Math.floor(Number(incrementOverride)))
-      : undefined
-
-  const bodyLength = positiveNum(dims?.lengthCm)
-  const bodyWidth = positiveNum(dims?.widthCm)
-  const bodyHeight = positiveNum(dims?.heightCm)
-
+  let token = text, embedded: Record<string, unknown> = {}
   if (text.startsWith('{')) {
-    try {
-      const obj = JSON.parse(text) as Record<string, unknown>
-      const skuToken = pickSku(obj)
-      if (!skuToken) throw new Error('JSON 扫描内容缺少 sku')
-      const lengthCm = bodyLength ?? positiveNum(obj.lengthCm ?? obj.length ?? obj.l)
-      const widthCm = bodyWidth ?? positiveNum(obj.widthCm ?? obj.width ?? obj.w)
-      const heightCm = bodyHeight ?? positiveNum(obj.heightCm ?? obj.height ?? obj.h)
-      return {
-        skuToken,
-        increment: overrideIncrement != null ? overrideIncrement : pickIncrement(obj, 1),
-        lengthCm,
-        widthCm,
-        heightCm,
-      }
-    } catch (error) {
-      if (error instanceof SyntaxError) {
-        // fall through to plain-text parsers
-      } else {
-        throw error
-      }
+    try { embedded = JSON.parse(text) }
+    catch { throw new Error('扫描内容不是有效的 JSON，请重新扫描') }
+    if (!embedded || Array.isArray(embedded) || typeof embedded !== 'object') throw new Error('扫描内容须为有效商品资料')
+    const code = embedded.sku ?? embedded.SKU ?? embedded.scanCode ?? embedded.barcode
+    if (typeof code !== 'string' || !code.trim()) throw new Error('JSON 扫描内容缺少有效 SKU 编码')
+    token = code.trim()
+  } else if (/[|;,]/.test(text)) {
+    const parts = text.split(/[|;,]/).map(part => part.trim())
+    if (parts.length >= 4) {
+      if (!parts[0]) throw new Error('测量机扫描内容须包含 SKU 和完整长宽高')
+      token = parts[0]
+      embedded = { lengthCm: parts[1], widthCm: parts[2], heightCm: parts[3], ...(parts.length > 4 ? { increment: parts[4] } : {}) }
     }
   }
-
-  const delimited = text.split(/[|;,]/).map((part) => part.trim()).filter(Boolean)
-  if (delimited.length >= 4) {
-    const lengthCm = bodyLength ?? positiveNum(delimited[1])
-    const widthCm = bodyWidth ?? positiveNum(delimited[2])
-    const heightCm = bodyHeight ?? positiveNum(delimited[3])
-    if (lengthCm && widthCm && heightCm) {
-      const incrementRaw = delimited.length >= 5 ? positiveNum(delimited[4]) : undefined
-      return {
-        skuToken: delimited[0],
-        increment:
-          overrideIncrement != null ? overrideIncrement : incrementRaw ? Math.floor(incrementRaw) : 1,
-        lengthCm,
-        widthCm,
-        heightCm,
-      }
-    }
-  }
-
-  return {
-    skuToken: text,
-    increment: overrideIncrement != null ? overrideIncrement : 1,
-    lengthCm: bodyLength,
-    widthCm: bodyWidth,
-    heightCm: bodyHeight,
-  }
+  const lengthCm = dimension(dims?.lengthCm ?? embedded.lengthCm ?? embedded.length ?? embedded.l, '长度')
+  const widthCm = dimension(dims?.widthCm ?? embedded.widthCm ?? embedded.width ?? embedded.w, '宽度')
+  const heightCm = dimension(dims?.heightCm ?? embedded.heightCm ?? embedded.height ?? embedded.h, '高度')
+  const weightKg = dimension(dims?.weightKg ?? embedded.weightKg ?? embedded.weight, '重量', true)
+  if ([lengthCm, widthCm, heightCm].some(value => value !== undefined) && ![lengthCm, widthCm, heightCm].every(value => value !== undefined)) throw new Error('请提供完整且有效的长、宽、高')
+  const increment = incrementOverride !== undefined ? count(incrementOverride) : count(embedded.increment ?? embedded.qty ?? embedded.count ?? embedded.actualQty ?? 1)
+  return { skuToken: token, increment, lengthCm, widthCm, heightCm, weightKg }
 }

@@ -1,7 +1,9 @@
 <script setup lang="ts">
+import { userFacingError } from '@erp/shared/user-facing-error'
+
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { inboundApi } from '@/api/client.js'
 import { mapInbound, fmtTime } from '@/api/mappers.ts'
 import { withAction } from '@/composables/useListLoader.ts'
@@ -10,7 +12,10 @@ import { INBOUND_STATUS } from '@/constants/index.js'
 import ListPagination from '@/components/ListPagination.vue'
 import DetailSheet from '@/components/ui/DetailSheet.vue'
 import { inboundCustomerSku } from '@erp/shared/inbound-customer-sku'
-import { MANUAL_ARRIVAL_STATUSES, receiveInboundManually } from '@/utils/manual-inbound-receive'
+import WarehouseControlDialog from '@/components/inbound/WarehouseControlDialog.vue'
+import { warehouseControlOptions, type WarehouseControlKind } from '@/utils/warehouseControl'
+import { MANUAL_ARRIVAL_STATUSES, recordedReceivedCartonCount } from '@/utils/manual-inbound-receive'
+import { readWarehouseAttempts, saveWarehouseAttempt, clearWarehouseAttempt, runWarehouseAttempt, recoverWarehouseAttemptFailure, type WarehouseAttempt } from '@/utils/warehouseOperation'
 
 function bound990Text(row: any): string {
   const codes = [
@@ -28,6 +33,54 @@ function bound990Text(row: any): string {
 const app = useAppStore()
 const route = useRoute()
 const router = useRouter()
+const warehouseAttempts = ref<WarehouseAttempt[]>([])
+const warehouseStorageError = ref('')
+const warehouseBusy = ref(false)
+const warehouseNotice = ref('')
+function readPendingOperations() {
+  try { warehouseAttempts.value = readWarehouseAttempts(localStorage, Number(app.authenticatedUser?.id)); warehouseStorageError.value = '' }
+  catch (error) { warehouseStorageError.value = userFacingError(error) }
+}
+function hasPendingOperation(id: number) { return warehouseAttempts.value.some(row => row.inboundId === Number(id)) }
+async function retryWarehouseOperation(attempt: WarehouseAttempt) {
+  if (warehouseBusy.value) return false
+  warehouseBusy.value = true
+  const operatorId = Number(app.authenticatedUser?.id)
+  let result: any
+  try {
+    result = await runWarehouseAttempt(inboundApi, attempt)
+    if (result.feePending || result.syncPending) {
+      warehouseNotice.value = result.warning || '作业已保存，费用待核对，请使用原操作重试'
+      ElMessage.warning(warehouseNotice.value)
+      return false
+    }
+    clearWarehouseAttempt(localStorage, operatorId, attempt)
+    readPendingOperations()
+    warehouseNotice.value = result.message || '原仓库操作已完成，请继续查看单据进度'
+    manualReceiveVisible.value = false; qcDialogVisible.value = false
+    ElMessage.success(warehouseNotice.value)
+  } catch (error: any) {
+    const recovery = recoverWarehouseAttemptFailure(localStorage, operatorId, attempt, error)
+    readPendingOperations()
+    if (!recovery.retained) { manualReceiveVisible.value = false; qcDialogVisible.value = false }
+    warehouseNotice.value = recovery.message
+    ElMessage.error(warehouseNotice.value)
+    return false
+  } finally { warehouseBusy.value = false }
+  await reloadAll()
+  return true
+}
+async function submitWarehouseOperation(kind: WarehouseAttempt['kind'], order: any, payload: Record<string, any>) {
+  if (warehouseBusy.value || warehouseStorageError.value || hasPendingOperation(order.id)) return false
+  const attempt: WarehouseAttempt = JSON.parse(JSON.stringify({ kind, inboundId: Number(order.id), inboundNo: order.inboundNo,
+    warehouseCode: order.warehouseCode, payload: { ...payload, clientRequestId: crypto.randomUUID() }, snapshot: { order } }))
+  try { saveWarehouseAttempt(localStorage, Number(app.authenticatedUser?.id), attempt); readPendingOperations() }
+  catch (error) { warehouseStorageError.value = userFacingError(error); ElMessage.error(warehouseStorageError.value); return false }
+  return retryWarehouseOperation(attempt)
+}
+function continueWarehouseOperation(attempt: WarehouseAttempt) {
+  void router.push({ name: 'InboundArrivalScan', query: { inboundId: String(attempt.inboundId) } })
+}
 
 type StatusFilter = 'all' | 'in_transit' | 'arrived' | 'receiving' | 'putaway' | 'completed' | 'exception' | 'cancelled'
 
@@ -38,6 +91,9 @@ const pageSize = ref(50)
 const listTotal = ref(0)
 const loading = ref(false)
 const inboundOrders = ref<any[]>([])
+const listReadError = ref('')
+const countsReadError = ref('')
+let listReadVersion = 0, countsReadVersion = 0
 
 const statusCounts = ref({
   all: 0,
@@ -78,7 +134,7 @@ function qcStatusLabel(status?: string | null) {
   if (status === 'pass') return '通过'
   if (status === 'fail') return '异常'
   if (status === 'pending') return '待检'
-  return status || '—'
+  return status ? '待核对' : '—'
 }
 
 const filterTabs = computed(() => [
@@ -126,7 +182,7 @@ const orderRows = computed(() =>
       poRemark: raw.poRemark || '',
       status: raw.status,
       displayStatus,
-      statusLabel: INBOUND_STATUS[displayStatus]?.label || raw.status,
+      statusLabel: INBOUND_STATUS[displayStatus]?.label || '待核对',
       itemCount: raw.items?.length || 0,
       createdAt: fmtTime(raw.createdAt),
       _raw: raw,
@@ -135,6 +191,8 @@ const orderRows = computed(() =>
 )
 
 async function refreshCounts() {
+  const version = ++countsReadVersion, keyword = searchQ.value.trim()
+  countsReadError.value = ''
   const entries: [keyof typeof statusCounts.value, string | undefined][] = [
     ['all', undefined],
     ['in_transit', 'pending_receipt'],
@@ -147,17 +205,20 @@ async function refreshCounts() {
   ]
   try {
     const results = await Promise.all(
-      entries.map(([, status]) => inboundApi.list({ pageSize: 1, ...(status ? { status } : {}) })),
+      entries.map(([, status]) => inboundApi.list({ pageSize: 1, ...(keyword ? { keyword } : {}), ...(status ? { status } : {}) })),
     )
+    if (version !== countsReadVersion) return
     entries.forEach(([key], i) => {
       statusCounts.value[key] = results[i]?.total ?? 0
     })
-  } catch {
-    // 计数失败不影响列表
+  } catch (error) {
+    if (version === countsReadVersion) countsReadError.value = `状态数量未能刷新，请重试后核对。${userFacingError(error)}`
   }
 }
 
 async function load() {
+  const version = ++listReadVersion
+  listReadError.value = ''
   loading.value = true
   try {
     const params: Record<string, unknown> = { page: page.value, pageSize: pageSize.value }
@@ -167,12 +228,13 @@ async function load() {
     const q = searchQ.value.trim()
     if (q) params.keyword = q
     const res = await inboundApi.list(params)
+    if (version !== listReadVersion) return
     inboundOrders.value = (res.items || []).map((r: any) => ({ ...mapInbound(r), _raw: r }))
     listTotal.value = res.total ?? inboundOrders.value.length
   } catch (e: any) {
-    ElMessage.error(e?.message || '加载失败')
+    if (version === listReadVersion) listReadError.value = `列表未能刷新，请重新读取。${userFacingError(e)}`
   } finally {
-    loading.value = false
+    if (version === listReadVersion) loading.value = false
   }
 }
 
@@ -183,7 +245,7 @@ async function reloadAll() {
 watch([filter, page, pageSize], () => load())
 watch(searchQ, () => {
   page.value = 1
-  load()
+  void reloadAll()
 })
 watch(filter, () => {
   page.value = 1
@@ -197,10 +259,9 @@ const manualReceiveSubmitting = ref(false)
 const manualReceiveOrder = ref<any>(null)
 const manualReceiveCount = ref<number | null>(null)
 const manualReceiveReason = ref('')
-const manualReceiveRequestId = ref('')
 
 function canManualReceiveOrder(row: any) {
-  if (!row || row.readOnly || String(row.id).startsWith('oms-') || !canReceive.value) return false
+  if (!row || row.readOnly || String(row.id).startsWith('oms-') || !canReceive.value || warehouseBusy.value || warehouseStorageError.value || hasPendingOperation(row.id)) return false
   return ['arrived', 'receiving'].includes(row.status)
     || (canConfirmArrival.value && MANUAL_ARRIVAL_STATUSES.includes(row.status))
 }
@@ -211,16 +272,15 @@ async function openManualReceive(row: any) {
   manualReceiveOrder.value = null
   manualReceiveCount.value = null
   manualReceiveReason.value = ''
-  manualReceiveRequestId.value = crypto.randomUUID()
   manualReceiveVisible.value = true
   manualReceiveLoading.value = true
   try {
     const order = await inboundApi.detail(row.id)
     if (!canManualReceiveOrder(order)) throw new Error('当前单据不可手动收货，请刷新列表查看状态')
     manualReceiveOrder.value = order
-    manualReceiveCount.value = order.receivedCartonCount ?? null
+    manualReceiveCount.value = recordedReceivedCartonCount(order)
   } catch (e: any) {
-    ElMessage.error(e?.message || '加载收货单据失败')
+    ElMessage.error(userFacingError(e?.message || '加载收货单据失败'))
     manualReceiveVisible.value = false
   } finally {
     manualReceiveLoading.value = false
@@ -230,25 +290,17 @@ async function openManualReceive(row: any) {
 async function submitManualReceive() {
   const order = manualReceiveOrder.value
   if (!canManualReceiveOrder(order) || manualReceiveSubmitting.value) return
+  const count = Number(manualReceiveCount.value)
+  if (!Number.isSafeInteger(count) || count <= 0 || count > 9999) { ElMessage.warning('请填写有效的实收箱数整数'); return }
+  if (order.cartons?.length && count !== order.cartons.length && manualReceiveReason.value.trim().length < 2) { ElMessage.warning('箱数与应收不一致，请填写不少于两个字的差异原因'); return }
   manualReceiveSubmitting.value = true
   try {
-    await receiveInboundManually({
-      detail: (id) => inboundApi.detail(id),
-      arrivalScan: (data) => inboundApi.arrivalScan(data),
-      recordReceivedCartonCount: (id, data) => inboundApi.recordReceivedCartonCount(id, data),
-    }, order.id, {
-      count: manualReceiveCount.value, differenceReason: manualReceiveReason.value,
-      clientRequestId: manualReceiveRequestId.value,
-    })
-    manualReceiveVisible.value = false
-    ElMessage.success('手动收货已登记，请继续清点与测量')
-    await reloadAll()
-    if (canQc.value) {
+    const ok = await submitWarehouseOperation('carton-count', order, { receivedCartonCount: count, differenceReason: manualReceiveReason.value.trim() })
+    if (ok && canQc.value) {
       await router.push({ name: 'InboundArrivalScan', query: { inboundId: String(order.id), step: 'qc' } })
     }
   } catch (e: any) {
-    ElMessage.error(e?.message || '手动收货失败')
-    await reloadAll()
+    ElMessage.error(userFacingError(e?.message || '手动收货失败'))
   } finally {
     manualReceiveSubmitting.value = false
   }
@@ -285,13 +337,13 @@ async function printSkuLabels(row: any) {
     ElMessage.success('已打开 SKU 标签 PDF，请在预览窗口打印')
   } catch (e: any) {
     printWindow.close()
-    ElMessage.error(e?.message || '生成 SKU 标签失败')
+    ElMessage.error(userFacingError(e?.message || '生成 SKU 标签失败'))
   } finally {
     printingSkuId.value = null
   }
 }
 const canQc = computed(() => app.hasPerm('inbound.qc'))
-const countManaging = ref(false)
+const countManaging = computed(() => warehouseBusy.value)
 function countManageable(row: any) {
   const raw = row?._raw || row
   return raw && !raw.readOnly && !String(raw.id).startsWith('oms-') && raw.items?.length
@@ -305,27 +357,31 @@ function canReopenCount(row: any) {
   return canQc.value && countManageable(row) && (['pending_putaway', 'exception'].includes(row.status) || (row.status === 'completed' && allCountedZero(row)))
 }
 function canCloseZero(row: any) {
-  return canResolve.value && allCountedZero(row) && ['pending_putaway', 'exception'].includes(row.status)
+  return (app.hasPerm('inbound.handle_exception') || app.hasPerm('inbound.confirm_diff')) && allCountedZero(row) && ['pending_putaway', 'exception'].includes(row.status)
 }
-async function manageCount(row: any, mode: 'reopen' | 'close-zero') {
-  if (countManaging.value || !(mode === 'reopen' ? canReopenCount(row) : canCloseZero(row))) return
-  const title = mode === 'reopen' ? '更正清点' : '零收货结束'
-  try {
-    const { value } = await ElMessageBox.prompt(mode === 'reopen' ? '将退回收货中，可重新录入清点数量。请填写更正原因。' : '确认全部 SKU 实收为 0，将结束单据且不增加库存。请填写未收货原因。', title, {
-      confirmButtonText: '确认', cancelButtonText: '取消', inputValidator: (v) => String(v || '').trim().length >= 2 || '请填写不少于 2 个字的原因',
-    })
-    countManaging.value = true
-    if (mode === 'reopen') await inboundApi.reopenCount(row.id, { reason: value })
-    else await inboundApi.closeZero(row.id, { reason: value })
-    detailVisible.value = false
-    await reloadAll()
-    ElMessage.success(`${title}已完成`)
-    if (mode === 'reopen') await openQc({ id: row.id })
-  } catch (e: any) {
-    if (e !== 'cancel' && e !== 'close') ElMessage.error(e?.message || `${title}失败`)
-  } finally { countManaging.value = false }
+const controlVisible = ref(false)
+const controlInboundId = ref<number | null>(null)
+const controlKind = ref<WarehouseControlKind>('reopen-count')
+const controlAttempt = computed(() => warehouseAttempts.value.find(attempt => attempt.inboundId === controlInboundId.value) || null)
+function openControl(row: any, kind?: WarehouseControlKind) {
+  if (warehouseBusy.value || warehouseStorageError.value || hasPendingOperation(row.id)) return
+  warehouseNotice.value = ''; controlInboundId.value = Number(row.id)
+  controlKind.value = kind || warehouseControlOptions(row._raw || row, permission => app.hasPerm(permission)).find(kind => kind.startsWith('reduce-')) || 'reopen-count'
+  controlVisible.value = true
 }
-const canResolve = computed(() => app.hasPerm('inbound.handle_exception') || app.hasPerm('inbound.confirm_diff'))
+function manageCount(row: any, mode: 'reopen' | 'close-zero') {
+  if (mode === 'reopen' ? canReopenCount(row) : canCloseZero(row)) openControl(row, mode === 'reopen' ? 'reopen-count' : 'close-zero')
+}
+function hasQuantityControl(row: any) { return warehouseControlOptions(row._raw || row, permission => app.hasPerm(permission)).some(kind => kind.startsWith('reduce-')) }
+async function submitControl(data: { kind: WarehouseControlKind; order: any; payload: any }) {
+  return submitWarehouseOperation(data.kind, data.order, data.payload)
+}
+async function retryControl(id: number) {
+  const attempt = warehouseAttempts.value.find(row => row.inboundId === id)
+  return attempt ? retryWarehouseOperation(attempt) : false
+}
+
+const canResolve = computed(() => ['inbound.qc', 'inbound.putaway', 'inbound.handle_exception', 'inbound.confirm_diff'].some(permission => app.hasPerm(permission)))
 
 const qcDialogVisible = ref(false)
 const qcOrder = ref<any>(null)
@@ -376,7 +432,7 @@ async function openDetail(row: any) {
       detailOrder.value = data
     }
   } catch (e: any) {
-    ElMessage.error(e?.message || '加载详情失败')
+    ElMessage.error(userFacingError(e?.message || '加载详情失败'))
     detailVisible.value = false
   } finally {
     detailLoading.value = false
@@ -392,7 +448,7 @@ async function downloadOmsAttachment(inboundId: number, attachmentId: number, fi
     a.click()
     URL.revokeObjectURL(a.href)
   } catch (e: any) {
-    ElMessage.error(e?.message || '下载失败')
+    ElMessage.error(userFacingError(e?.message || '下载失败'))
   }
 }
 
@@ -405,11 +461,12 @@ async function downloadReceivingList(row: any) {
   try {
     await inboundApi.downloadReceivingList(id)
   } catch (e: any) {
-    ElMessage.error(e?.message || '下载入库清单失败')
+    ElMessage.error(userFacingError(e?.message || '下载入库清单失败'))
   }
 }
 
 async function openQc(row: any) {
+  if (warehouseBusy.value || warehouseStorageError.value || hasPendingOperation(row.id)) { ElMessage.warning('请先在页面上方核对原仓库操作'); return }
   qcDialogVisible.value = true
   qcAcceptDiff.value = false
   qcOrder.value = row._raw
@@ -417,6 +474,12 @@ async function openQc(row: any) {
   qcLoading.value = true
   try {
     const data = await inboundApi.detail(row.id)
+    if (!data.cartonConfirmation?.ready) {
+      qcDialogVisible.value = false
+      ElMessage.info(data.cartonConfirmation?.message || '请先完成收箱，再继续清点')
+      await router.push({ name: 'InboundArrivalScan', query: { inboundId: String(row.id), step: 'receive' } })
+      return
+    }
     qcOrder.value = data
     qcLines.value = (data.items || []).map((item: any) => ({
       id: item.id,
@@ -428,13 +491,13 @@ async function openQc(row: any) {
       productName: item.productName || item.sku,
       spec: item.spec || '',
       expectedQty: item.expectedQty,
-      actualQty: item.actualQty ?? item.expectedQty,
+      actualQty: item.actualQty ?? 0,
       qcStatus: item.qcStatus === 'fail' ? 'fail' : 'pass',
       qcRemark: item.qcRemark || '',
       lineRemark: item.remark || '',
     }))
   } catch (e: any) {
-    ElMessage.error(e?.message || '加载清点明细失败')
+    ElMessage.error(userFacingError(e?.message || '加载清点明细失败'))
     qcDialogVisible.value = false
   } finally {
     qcLoading.value = false
@@ -442,7 +505,7 @@ async function openQc(row: any) {
 }
 
 async function startReceive(row: any) {
-  if (!canReceive.value) return
+  if (!canReceive.value || warehouseBusy.value || hasPendingOperation(row.id)) return
   const ok = await withAction(async () => {
     await inboundApi.startReceive(row.id)
     await reloadAll()
@@ -454,33 +517,27 @@ async function startReceive(row: any) {
 }
 
 async function submitQc() {
-  if (!qcOrder.value || !canQc.value) return
-  const ok = await withAction(async () => {
-    await inboundApi.qc(qcOrder.value.id, {
+  if (!qcOrder.value || !canQc.value || qcLoading.value || warehouseBusy.value) return
+  if (qcLines.value.some(line => !Number.isSafeInteger(Number(line.actualQty)) || Number(line.actualQty) < 0)) { ElMessage.warning('各SKU实收数量须为不小于零的整数'); return }
+  await submitWarehouseOperation('qc-submit', qcOrder.value, {
+      expectedVersion: qcOrder.value.receivingVersion,
       acceptDiff: qcAcceptDiff.value,
       items: qcLines.value.map((l) => ({
-        id: l.id,
+        id: Number(l.id),
         sku: l.sku,
-        actualQty: l.actualQty,
+        actualQty: Number(l.actualQty),
         qcStatus: l.qcStatus,
         qcRemark: l.qcRemark || undefined,
       })),
     })
-    await reloadAll()
-  }, `${qcOrder.value.inboundNo} 清点已提交`)
-  if (ok) qcDialogVisible.value = false
 }
 
-async function resolveException(row: any) {
-  if (!canResolve.value) return
-  const ok = await withAction(async () => {
-    await inboundApi.resolveException(row.id)
-    await reloadAll()
-  }, `${row.inboundNo} 已放行，等待上架`)
-  if (ok) reloadAll()
+function resolveException(row: any) {
+  if (canResolve.value) openControl(row, 'resolve-exception')
 }
 
 onMounted(async () => {
+  readPendingOperations()
   await reloadAll()
   const inboundId = Number(route.query.inboundId)
   if (inboundId > 0) {
@@ -500,8 +557,18 @@ onMounted(async () => {
 
     <div class="callout info">
       <div class="callout-title">已到仓收货 · 清点 → 待上架</div>
-      <div class="callout-body">含 ERP 发运入库与 OMS 客户预约入库。OMS 草稿/未同步单仅可查看；已同步至 ERP 的单据可正常收货上架。</div>
+      <div class="callout-body">含 ERP 发运入库与已提交的 OMS 客户预约入库。未提交草稿不进入仓库作业列表；已提交但尚未同步至 ERP 的单据仅可查看，同步后可正常收货上架。</div>
     </div>
+
+    <el-alert v-if="warehouseStorageError" :title="warehouseStorageError" type="error" :closable="false"><el-button @click="readPendingOperations">重新读取核对信息</el-button></el-alert>
+    <el-alert v-if="listReadError" :title="listReadError" type="error" :closable="false"><el-button @click="load">重新读取列表</el-button></el-alert>
+    <el-alert v-if="countsReadError" :title="countsReadError" type="warning" :closable="false"><el-button @click="refreshCounts">刷新状态数量</el-button></el-alert>
+    <el-alert v-for="attempt in warehouseAttempts" :key="attempt.payload.clientRequestId" :title="`${attempt.inboundNo} 有原仓库操作待核对`" type="warning" :closable="false">
+      作业结果尚未核实，原请求已保存。请核对后继续。
+      <el-button :loading="warehouseBusy" @click="retryWarehouseOperation(attempt)">核对并重试原操作</el-button>
+      <el-button :disabled="warehouseBusy" @click="continueWarehouseOperation(attempt)">查看并继续作业</el-button>
+    </el-alert>
+    <el-alert v-if="warehouseNotice" :title="warehouseNotice" type="info" :closable="false" />
 
     <div class="filter-row">
       <el-radio-group v-model="filter" size="small">
@@ -539,13 +606,14 @@ onMounted(async () => {
       </el-table-column>
       <el-table-column prop="customerRemark" label="客户备注" min-width="140" show-overflow-tooltip />
       <el-table-column prop="createdAt" label="创建时间" width="130" />
-      <el-table-column label="状态" width="100">
+      <el-table-column label="状态" width="100" fixed="right">
         <template #default="{ row }">
           <el-tag :type="statusTagType(row.status, row.displayStatus)" size="small">{{ row.statusLabel }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="440" fixed="right">
+      <el-table-column label="操作" width="300" fixed="right">
         <template #default="{ row }">
+          <div class="inbound-row-actions">
           <el-button link type="primary" size="small" @click="openDetail(row)">详情</el-button>
           <template v-if="!row.readOnly">
           <el-button
@@ -554,6 +622,7 @@ onMounted(async () => {
             @click="downloadReceivingList(row)"
           >入库清单</el-button>
           <el-button v-if="canPrintSku" link type="primary" size="small" :loading="printingSkuId === row.id" :disabled="printingSkuId != null" @click="printSkuLabels(row)">打印 SKU 标签</el-button>
+          <el-button v-if="hasQuantityControl(row)" link type="warning" size="small" :disabled="warehouseBusy || hasPendingOperation(row.id)" @click="openControl(row)">数量更正</el-button>
           <el-button v-if="canPutawayOrder(row)" link type="primary" size="small" @click="openPutaway(row)">上架</el-button>
           <el-button v-if="canManualReceiveOrder(row)" link type="primary" size="small" @click="openManualReceive(row)">手动收货</el-button>
           <el-button v-if="canReopenCount(row)" link type="warning" size="small" :disabled="countManaging" @click="manageCount(row, 'reopen')">更正清点</el-button>
@@ -576,11 +645,14 @@ onMounted(async () => {
           >放行上架</el-button>
           </template>
           <span v-else class="muted-op">OMS 待同步</span>
+          </div>
         </template>
       </el-table-column>
     </el-table>
     <el-empty v-if="!loading && !orderRows.length" description="暂无入库单" />
     <ListPagination v-model:page="page" v-model:page-size="pageSize" :total="listTotal" />
+
+    <WarehouseControlDialog v-model="controlVisible" :inbound-id="controlInboundId" :initial-kind="controlKind" :busy="warehouseBusy" :attempt="controlAttempt" :error-text="warehouseNotice || warehouseStorageError" :submit-action="submitControl" :retry-action="retryControl" />
 
     <el-dialog v-model="detailVisible" :title="`入库详情 · ${detailOrder?.inboundNo || ''}`" width="760px" class="inbound-detail-dialog erp-detail" destroy-on-close>
       <div v-loading="detailLoading">
@@ -697,17 +769,17 @@ onMounted(async () => {
           </el-table>
           <el-form label-width="100px" @submit.prevent="submitManualReceive">
             <el-form-item label="实收箱数" required>
-              <el-input-number v-model="manualReceiveCount" :min="1" :max="9999" :precision="0" :disabled="manualReceiveSubmitting" />
+              <el-input-number v-model="manualReceiveCount" :min="1" :max="9999" :precision="0" placeholder="填写实际箱数" :disabled="manualReceiveSubmitting || !!warehouseStorageError || hasPendingOperation(manualReceiveOrder.id)" />
             </el-form-item>
             <el-form-item label="差异原因">
-              <el-input v-model="manualReceiveReason" type="textarea" :rows="2" maxlength="500" show-word-limit placeholder="实收与应收箱数不一致时必填" :disabled="manualReceiveSubmitting" />
+              <el-input v-model="manualReceiveReason" type="textarea" :rows="2" maxlength="500" show-word-limit placeholder="实收与应收箱数不一致时必填" :disabled="manualReceiveSubmitting || !!warehouseStorageError || hasPendingOperation(manualReceiveOrder.id)" />
             </el-form-item>
           </el-form>
         </template>
       </div>
       <template #footer>
         <el-button :disabled="manualReceiveSubmitting" @click="manualReceiveVisible = false">取消</el-button>
-        <el-button type="primary" :loading="manualReceiveSubmitting" :disabled="manualReceiveLoading || !manualReceiveOrder" @click="submitManualReceive">确认手动收货</el-button>
+        <el-button type="primary" :loading="manualReceiveSubmitting" :disabled="manualReceiveLoading || !canManualReceiveOrder(manualReceiveOrder)" @click="submitManualReceive">确认手动收货</el-button>
       </template>
     </el-dialog>
 
@@ -717,6 +789,9 @@ onMounted(async () => {
       width="960px"
       class="qc-dialog"
       destroy-on-close
+      :close-on-click-modal="false"
+      :close-on-press-escape="!warehouseBusy"
+      :show-close="!warehouseBusy"
     >
       <template v-if="qcOrder">
         <el-descriptions v-loading="qcLoading" :column="3" border size="small" class="qc-summary">
@@ -765,6 +840,7 @@ onMounted(async () => {
                   size="small"
                   controls-position="right"
                   class="qc-qty-input"
+                  :disabled="warehouseBusy || !!warehouseStorageError || hasPendingOperation(qcOrder.id)"
                 />
               </template>
             </el-table-column>
@@ -777,7 +853,7 @@ onMounted(async () => {
             </el-table-column>
             <el-table-column label="QC" width="96" align="center">
               <template #default="{ row }">
-                <el-select v-model="row.qcStatus" size="small" class="qc-status-select">
+                <el-select v-model="row.qcStatus" size="small" class="qc-status-select" :disabled="warehouseBusy || !!warehouseStorageError || hasPendingOperation(qcOrder.id)">
                   <el-option label="通过" value="pass" />
                   <el-option label="异常" value="fail" />
                 </el-select>
@@ -785,24 +861,27 @@ onMounted(async () => {
             </el-table-column>
             <el-table-column label="QC 备注" min-width="140">
               <template #default="{ row }">
-                <el-input v-model="row.qcRemark" size="small" placeholder="破损说明等" clearable />
+                <el-input v-model="row.qcRemark" size="small" placeholder="破损说明等" clearable :disabled="warehouseBusy || !!warehouseStorageError || hasPendingOperation(qcOrder.id)" />
               </template>
             </el-table-column>
           </el-table>
         </div>
       </template>
-      <div v-if="canResolve" class="qc-footer">
-        <el-checkbox v-model="qcAcceptDiff">确认接受数量差异（需主管权限）</el-checkbox>
+      <div v-if="canQc" class="qc-footer">
+        <el-checkbox v-model="qcAcceptDiff" :disabled="warehouseBusy || !!warehouseStorageError || hasPendingOperation(qcOrder?.id)">确认接受数量差异</el-checkbox>
       </div>
       <template #footer>
-        <el-button @click="qcDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="submitQc">提交清点</el-button>
+        <el-button :disabled="warehouseBusy" @click="qcDialogVisible = false">返回列表</el-button>
+        <el-button v-if="!hasPendingOperation(qcOrder?.id)" type="primary" :loading="warehouseBusy" :disabled="qcLoading || !!warehouseStorageError" @click="submitQc">提交清点</el-button>
+        <el-button v-else type="primary" :loading="warehouseBusy" @click="retryWarehouseOperation(warehouseAttempts.find(row => row.inboundId === Number(qcOrder?.id))!)">核对并重试原操作</el-button>
       </template>
     </el-dialog>
   </el-card>
 </template>
 
 <style scoped>
+.inbound-row-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.inbound-row-actions :deep(.el-button + .el-button) { margin-left: 0; }
 .page-header { display:flex; align-items:center; justify-content:space-between; gap:12px; }
 .page-title { font-weight:600; font-size:15px; }
 .page-meta { font-size:13px; color:var(--el-text-color-secondary); }

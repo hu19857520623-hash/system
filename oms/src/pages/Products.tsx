@@ -1,3 +1,5 @@
+
+import { userFacingError } from '../utils/userFacingError'
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Plus, Printer, Copy, Pencil, Ban, RotateCcw, Trash2, CheckCircle } from 'lucide-react'
@@ -239,7 +241,7 @@ export default function Products() {
         return next
       })
     } catch (error) {
-      window.alert(`废弃商品失败：${error instanceof Error ? error.message : String(error)}`)
+      window.alert(userFacingError(`废弃商品失败：${error instanceof Error ? error.message : String(error)}`))
     }
   }
 
@@ -247,7 +249,7 @@ export default function Products() {
     try {
       await restoreLocalProduct(product.id)
     } catch (error) {
-      window.alert(`恢复商品失败：${error instanceof Error ? error.message : String(error)}`)
+      window.alert(userFacingError(`恢复商品失败：${error instanceof Error ? error.message : String(error)}`))
     }
   }
 
@@ -266,7 +268,7 @@ export default function Products() {
         return next
       })
     } catch (error) {
-      window.alert(`永久删除商品失败：${error instanceof Error ? error.message : String(error)}`)
+      window.alert(userFacingError(`永久删除商品失败：${error instanceof Error ? error.message : String(error)}`))
     }
   }
 

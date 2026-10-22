@@ -1,3 +1,5 @@
+
+import { userFacingError } from '../../utils/userFacingError'
 import { displaySku } from '../../data/skuDisplay'
 import { bindingStockSource } from '../../data/bindingStockSource'
 import { useProducts, useInventoryItems, mergeErpCatalogIntoState } from '../../data/inventoryStore'
@@ -131,7 +133,7 @@ export default function PlatformBindingsPanel() {
     } catch (error) {
       setList(before)
       setPlatformSkuMappings(before)
-      window.alert(`保存失败，数据已恢复：${error instanceof Error ? error.message : String(error)}`)
+      window.alert(userFacingError(`保存失败，数据已恢复：${error instanceof Error ? error.message : String(error)}`))
       return false
     }
   }
@@ -244,7 +246,7 @@ export default function PlatformBindingsPanel() {
     } catch (error) {
       setList(before)
       setPlatformSkuMappings(before)
-      window.alert(`删除失败，数据已恢复：${error instanceof Error ? error.message : String(error)}`)
+      window.alert(userFacingError(`删除失败，数据已恢复：${error instanceof Error ? error.message : String(error)}`))
     }
   }
 

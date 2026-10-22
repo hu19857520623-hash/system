@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { userFacingError } from '@erp/shared/user-facing-error'
+
 import { displaySku, displaySkuText, formatSku } from '@erp/shared/sku-display'
 import { ref, computed, watch } from 'vue'
 import { ElMessage } from 'element-plus'
@@ -40,6 +42,13 @@ const processDialog = ref(false)
 const processTarget = ref<any>(null)
 const processResultForm = ref('restock')
 const processRemark = ref('')
+const processSubmitting = ref(false)
+const processLoading = ref(false)
+const processFeedback = ref('')
+const processUncertain = ref(false)
+const processRequestId = ref('')
+const processStockRows = ref<{ sku: string; name: string; remaining: number; qty: string; locationCode: string }[]>([])
+const processNeedsStock = computed(() => ['restock', 'relabel'].includes(processResultForm.value))
 
 const detailVisible = ref(false)
 const detailRow = ref<any>(null)
@@ -269,16 +278,6 @@ function warehouseLabel(code?: string | null) {
   return code
 }
 
-function itemStats(row: any, item: { quantity: number }) {
-  const qty = item.quantity || 0
-  const received = ['received', 'measured', 'fee_calculated', 'arrived', 'processing', 'completed'].includes(row.status)
-    ? (row.receivedQty ?? qty)
-    : 0
-  const pendingRestock = row.status === 'completed' && row.processResult === 'restock' ? qty : 0
-  const good = row.status === 'completed' && row.processResult === 'restock' ? qty : 0
-  return { received, pendingRestock, good, defective: 0, spare: 0, destroy: 0 }
-}
-
 const tableRows = computed(() =>
   rows.value.map((r, index) => ({
     ...r,
@@ -361,7 +360,7 @@ async function submitReceive() {
       openMeasure({ ...receiveTarget.value, ...updated })
     }
   } catch (e: any) {
-    ElMessage.error(displaySkuText(e?.message || (receiveMode.value === 'reReceive' ? '重新收货失败' : '收货失败')))
+    ElMessage.error(userFacingError(displaySkuText(e?.message || (receiveMode.value === 'reReceive' ? '重新收货失败' : '收货失败'))))
   } finally {
     receiveSubmitting.value = false
   }
@@ -393,7 +392,7 @@ function buildMeasureCartonPayload() {
     lengthCm: Number(c.lengthCm),
     widthCm: Number(c.widthCm),
     heightCm: Number(c.heightCm),
-    grossWeightKg: Number(c.grossWeightKg) || 0,
+    grossWeightKg: Number(c.grossWeightKg),
   }))
 }
 
@@ -406,7 +405,8 @@ function _buildExtraFeePayload() {
 async function refreshFeePreview() {
   if (!measureTarget.value) return
   const cartons = buildMeasureCartonPayload()
-  if (!cartons.length || cartons.some(c => c.lengthCm <= 0 || c.widthCm <= 0 || c.heightCm <= 0)) {
+  if (!cartons.length || cartons.some(c => ![c.lengthCm, c.widthCm, c.heightCm].every(value => Number.isFinite(value) && value > 0)
+    || !Number.isFinite(c.grossWeightKg) || c.grossWeightKg < 0)) {
     feePreview.value = null
     return
   }
@@ -442,7 +442,7 @@ async function openFeeTemplates() {
   try {
     feeTemplates.value = await returnsApi.listFeeTemplates()
   } catch (e: any) {
-    ElMessage.error(displaySkuText(e?.message || '加载收费模板失败'))
+    ElMessage.error(userFacingError(displaySkuText(e?.message || '加载收费模板失败')))
   }
 }
 
@@ -513,7 +513,7 @@ async function deleteTemplate(tpl: any) {
     feeTemplates.value = feeTemplates.value.filter((t: any) => t.id !== tpl.id)
     if (editingTemplateId.value === tpl.id) cancelEditTemplate()
   } catch (e: any) {
-    ElMessage.error(displaySkuText(e?.message || '删除失败'))
+    ElMessage.error(userFacingError(displaySkuText(e?.message || '删除失败')))
   }
 }
 
@@ -580,7 +580,7 @@ async function saveTemplate() {
     cancelEditTemplate()
     if (measureDialog.value) scheduleFeePreview()
   } catch (e: any) {
-    ElMessage.error(displaySkuText(e?.message || '保存失败'))
+    ElMessage.error(userFacingError(displaySkuText(e?.message || '保存失败')))
   } finally {
     templateSaving.value = false
   }
@@ -613,15 +613,23 @@ function removeMeasureCarton(index: number) {
 }
 
 async function submitMeasure() {
-  if (!measureTarget.value) return
-  if (previewVolume.value <= 0) {
-    ElMessage.warning('请填写每箱有效的外箱尺寸')
-    return
+  if (!measureTarget.value || measureSubmitting.value) return
+  const cartons = buildMeasureCartonPayload()
+  if (!cartons.length) { ElMessage.warning('请至少填写一箱外箱尺寸'); return }
+  for (const [index, carton] of cartons.entries()) {
+    if (![carton.lengthCm, carton.widthCm, carton.heightCm].every(value => Number.isFinite(value) && value > 0)) {
+      ElMessage.warning(`请填写第 ${index + 1} 箱大于零的长、宽、高`)
+      return
+    }
+    if (!Number.isFinite(carton.grossWeightKg) || carton.grossWeightKg < 0) {
+      ElMessage.warning(`第 ${index + 1} 箱毛重无效，请填写不小于零的重量`)
+      return
+    }
   }
   measureSubmitting.value = true
   try {
     await returnsApi.measure(measureTarget.value.id, {
-      cartons: buildMeasureCartonPayload(),
+      cartons,
     })
     const feeResult = await returnsApi.calculateFees(measureTarget.value.id, {})
     const feeTotal = feeResult?.estimatedFeeTotal ?? previewFeeTotal.value
@@ -629,7 +637,7 @@ async function submitMeasure() {
     measureDialog.value = false
     await loadList()
   } catch (e: any) {
-    ElMessage.error(displaySkuText(e?.message || '测量或算费失败'))
+    ElMessage.error(userFacingError(displaySkuText(e?.message || '测量或算费失败')))
   } finally {
     measureSubmitting.value = false
   }
@@ -679,7 +687,7 @@ async function submitInspect() {
     inspectDialog.value = false
     await loadList()
   } catch (e: any) {
-    ElMessage.error(displaySkuText(e?.message || '提交失败'))
+    ElMessage.error(userFacingError(displaySkuText(e?.message || '提交失败')))
   } finally {
     inspectSubmitting.value = false
   }
@@ -693,37 +701,104 @@ async function handleDispose(row: any) {
     ElMessage.success('已确认销毁')
     await loadList()
   } catch (e: any) {
-    if (e !== 'cancel') ElMessage.error(displaySkuText(e?.message || '操作失败'))
+    if (e !== 'cancel') ElMessage.error(userFacingError(displaySkuText(e?.message || '操作失败')))
   }
 }
 
-function openProcess(row: any) {
+function prepareProcessStockRows(row: any) {
+  const previousLocations = new Map(processStockRows.value.map(line => [line.sku, line.locationCode]))
+  const items = new Map<string, { sku: string; name: string; quantity: number }>()
+  for (const item of row.items || []) {
+    const previous = items.get(item.sku)
+    items.set(item.sku, { sku: item.sku, name: item.productName || item.sku, quantity: (previous?.quantity || 0) + item.quantity })
+  }
+  const pending = [...items.values()].map(item => ({ ...item, remaining: Math.max(0, item.quantity - (row.restockedBySku?.[item.sku] || 0)) })).filter(item => item.remaining > 0)
+  processStockRows.value = pending.map(item => ({ sku: item.sku, name: item.name, remaining: item.remaining,
+    qty: pending.length === 1 ? String(Math.min(item.remaining, row.remainingRestockQty ?? item.remaining)) : '', locationCode: previousLocations.get(item.sku) || '' }))
+}
+
+async function refreshProcessTarget() {
+  if (!processTarget.value || processSubmitting.value) return
+  processLoading.value = true
+  try {
+    processTarget.value = await returnsApi.detail(processTarget.value.id)
+    processResultForm.value = processTarget.value.customerProcessChoice || processTarget.value.processResult || processTarget.value.requestedProcess || 'restock'
+    prepareProcessStockRows(processTarget.value)
+    processRequestId.value = crypto.randomUUID()
+    processUncertain.value = false
+    processFeedback.value = processTarget.value.status === 'completed' ? '该退件已处理完成，可关闭并返回列表查看结果。' : ''
+  } catch (error: any) {
+    processUncertain.value = true
+    processFeedback.value = `读取退件最新状态失败，请刷新核对后再继续。${userFacingError(error)}`
+  } finally { processLoading.value = false }
+}
+
+async function openProcess(row: any) {
+  if (processSubmitting.value) return
   processTarget.value = row
   processResultForm.value = row.customerProcessChoice || row.requestedProcess || 'restock'
   processRemark.value = ''
   processDialog.value = true
+  processStockRows.value = []
+  processFeedback.value = ''
+  processUncertain.value = false
+  await refreshProcessTarget()
 }
 
 async function submitProcess() {
-  if (!processTarget.value) return
+  if (!processTarget.value || processSubmitting.value || processLoading.value || processUncertain.value || processTarget.value.status === 'completed') return
+  processFeedback.value = ''
+  const stockLines = []
+  if (processNeedsStock.value) {
+    for (const row of processStockRows.value) {
+      const qty = Number(row.qty)
+      if (row.qty.trim() === '' || qty === 0) continue
+      if (!Number.isSafeInteger(qty) || qty <= 0 || qty > row.remaining) {
+        processFeedback.value = `${row.sku} 的本次上架数量须为大于零且不超过 ${row.remaining} 的整数`
+        return
+      }
+      if (!row.locationCode.trim()) { processFeedback.value = `请填写 ${row.sku} 的实际上架库位`; return }
+      stockLines.push({ sku: row.sku, qty, locationCode: row.locationCode.trim() })
+    }
+    if (!stockLines.length) { processFeedback.value = '请至少填写一个 SKU 的实际库位和本次上架数量'; return }
+    if (stockLines.reduce((sum, line) => sum + line.qty, 0) > processTarget.value.remainingRestockQty) {
+      processFeedback.value = `本次上架数量超过实收剩余数量 ${processTarget.value.remainingRestockQty}，请核对`
+      return
+    }
+  }
+  processSubmitting.value = true
   try {
-    await returnsApi.process(processTarget.value.id, {
+    const result = await returnsApi.process(processTarget.value.id, {
       processResult: processResultForm.value,
       processRemark: processRemark.value.trim() || undefined,
+      clientRequestId: processRequestId.value,
+      ...(processNeedsStock.value ? { warehouseCode: 'WMS-JHB-01', stockLines } : {}),
     })
-    ElMessage.success('处理完成')
-    processDialog.value = false
-    await loadList()
+    processTarget.value = result
+    if (result.warning) ElMessage.warning(result.warning)
+    if (result.status === 'completed') {
+      ElMessage.success(processNeedsStock.value ? `退件返库完成，累计入库 ${result.restockedQty} 件` : '处理完成')
+      processDialog.value = false
+    } else {
+      processFeedback.value = `本次上架已保存，累计入库 ${result.restockedQty} 件，剩余 ${result.remainingRestockQty} 件；请继续填写实际库位和数量。`
+      prepareProcessStockRows(result)
+      processRequestId.value = crypto.randomUUID()
+    }
+    await loadList().catch(() => ElMessage.warning('处理结果已保存，但列表刷新失败，请重新查询核对'))
   } catch (e: any) {
-    ElMessage.error(displaySkuText(e?.message || '处理失败'))
-  }
+    const status = Number(e?.status)
+    processUncertain.value = !Number.isFinite(status) || status < 100 || status >= 500 || status === 408 || status === 409
+    processFeedback.value = processUncertain.value
+      ? `操作结果暂无法确认，请先刷新核对已入库数量，请勿重复提交。${userFacingError(e)}`
+      : userFacingError(displaySkuText(e?.message || '处理失败'))
+  } finally { processSubmitting.value = false }
 }
 
 async function downloadAttachment(row: any, att: { id: number; fileName: string }) {
   try {
     await returnsApi.downloadAttachment(row.id, att.id)
   } catch (e: any) {
-    ElMessage.error(displaySkuText(e?.message || '下载失败'))
+    ElMessage.error(userFacingError(displaySkuText(e?.message || '下载失败')))
   }
 }
 
@@ -753,7 +828,7 @@ async function openLog(row: any) {
     })
     logRows.value = res.items || []
   } catch (e: any) {
-    ElMessage.error(displaySkuText(e?.message || '加载日志失败'))
+    ElMessage.error(userFacingError(displaySkuText(e?.message || '加载日志失败')))
   } finally {
     logLoading.value = false
   }
@@ -967,14 +1042,13 @@ void _removeExtraFeeLine
             <div class="item-sku mono">{{ displaySku(item) }}</div>
             <div class="item-line"><span class="lbl">退件数量</span>{{ item.quantity }}</div>
             <div class="item-line"><span class="lbl">处理方式</span>{{ row.requestedProcessLabel || row.requestedProcess }}</div>
-            <div class="item-stats">
-              <span>实收: {{ itemStats(row, item).received }}</span>
-              <span>待上架: {{ itemStats(row, item).pendingRestock }}</span>
-              <span>良品: {{ itemStats(row, item).good }}</span>
-              <span>不良品: {{ itemStats(row, item).defective }}</span>
-              <span>备用: {{ itemStats(row, item).spare }}</span>
-              <span>直接销毁: {{ itemStats(row, item).destroy }}</span>
-            </div>
+          </div>
+          <div v-if="row.receivedAt" class="item-stats">
+            <span>整单实收: {{ row.receivedQty }}</span>
+            <template v-if="['restock', 'relabel'].includes(row.customerProcessChoice || row.processResult || row.requestedProcess)">
+              <span>已返库: {{ row.status === 'completed' && !row.restockedQty ? '历史数据待核对' : row.restockedQty }}</span>
+              <span>待返库: {{ row.status === 'completed' && !row.restockedQty ? '待核对' : row.remainingRestockQty }}</span>
+            </template>
           </div>
           <span v-if="!row.items?.length" class="muted">—</span>
         </template>
@@ -1049,7 +1123,7 @@ void _removeExtraFeeLine
               type="button"
               class="op-link success"
               @click="openProcess(row)"
-            >完成处理</button>
+            >继续仓库作业</button>
             <button
               v-if="['arrived', 'processing'].includes(row.status) && app.hasPerm('return.process')"
               type="button"
@@ -1524,23 +1598,39 @@ void _removeExtraFeeLine
       </template>
     </el-dialog>
 
-    <el-dialog v-model="processDialog" title="退件处理" width="480px">
-      <el-form label-width="90px">
+    <el-dialog v-model="processDialog" title="退件处理" width="760px" :close-on-click-modal="!processSubmitting" :close-on-press-escape="!processSubmitting" :show-close="!processSubmitting">
+      <p v-if="processFeedback" role="alert" class="mb-3 text-sm text-amber-700">{{ processFeedback }}</p>
+      <el-form label-width="90px" :disabled="processSubmitting || processLoading || processUncertain">
         <el-form-item label="退件单号">
           <span>{{ processTarget?.returnNo }}</span>
         </el-form-item>
         <el-form-item label="处理结果" required>
-          <el-select v-model="processResultForm" style="width: 100%">
+          <el-select v-model="processResultForm" :disabled="processTarget?.status === 'accepted_pending' && !!processTarget?.customerProcessChoice" style="width: 100%">
             <el-option v-for="o in PROCESS_OPTIONS" :key="o.value" :label="o.label" :value="o.value" />
           </el-select>
         </el-form-item>
+        <template v-if="processNeedsStock">
+          <el-form-item label="实际返库仓">JHB 海外仓</el-form-item>
+          <p class="mb-3 text-sm">实收 {{ processTarget?.receivedQty ?? '—' }} 件，已返库 {{ processTarget?.restockedQty ?? 0 }} 件，剩余 {{ processTarget?.remainingRestockQty ?? '—' }} 件。仅填写本次实际上架的数量；未上架部分可稍后继续。</p>
+          <el-table :data="processStockRows" border>
+            <el-table-column prop="sku" label="仓库 SKU" min-width="150" />
+            <el-table-column prop="remaining" label="明细剩余" width="90" />
+            <el-table-column label="本次上架数量" width="145">
+              <template #default="{ row }"><el-input v-model="row.qty" type="number" min="0" :max="row.remaining" :aria-label="`${row.sku} 本次上架数量`" /></template>
+            </el-table-column>
+            <el-table-column label="实际库位" min-width="150">
+              <template #default="{ row }"><el-input v-model="row.locationCode" placeholder="填写实际库位" :aria-label="`${row.sku} 实际库位`" /></template>
+            </el-table-column>
+          </el-table>
+        </template>
         <el-form-item label="处理备注">
           <el-input v-model="processRemark" type="textarea" :rows="3" />
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="processDialog = false">取消</el-button>
-        <el-button type="primary" @click="submitProcess">确认</el-button>
+        <el-button :disabled="processSubmitting" @click="processDialog = false">返回列表</el-button>
+        <el-button :disabled="processSubmitting || processLoading" @click="refreshProcessTarget">刷新核对结果</el-button>
+        <el-button type="primary" :loading="processSubmitting || processLoading" :disabled="processUncertain || processTarget?.status === 'completed'" @click="submitProcess">{{ processNeedsStock ? '确认本次上架' : '确认处理' }}</el-button>
       </template>
     </el-dialog>
   </div>

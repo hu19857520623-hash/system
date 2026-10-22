@@ -6,7 +6,7 @@ import { useListLoader } from '@/composables/useListLoader.ts'
 import { useTablePagination } from '@/composables/useTablePagination.ts'
 import { useRowActions } from '@/composables/useRowActions'
 import { useAsyncIo } from '@/composables/useAsyncIo'
-import { downloadLeadsImportTemplate, downloadProductImportTemplate } from '@/constants/importTemplates.ts'
+import { downloadLeadsImportTemplate, downloadProductImportTemplate, downloadPurchaseOrderImportTemplate } from '@/constants/importTemplates.ts'
 import {
   formatImportDetailFields,
   importCounts,
@@ -68,6 +68,11 @@ async function importProducts() {
   if (job) await load()
 }
 
+async function importPurchaseOrders() {
+  const job = await importCsv('采购订单')
+  if (job) await load()
+}
+
 async function newExport() {
   const job = await exportModule('库存')
   if (job) await load()
@@ -122,6 +127,8 @@ onMounted(load)
         <el-button size="small" link type="primary" @click="downloadLeadsImportTemplate">下载线索导入模板</el-button>
         <el-button type="primary" size="small" @click="importProducts">上传模板导入商品</el-button>
         <el-button size="small" link type="primary" @click="downloadProductImportTemplate">下载商品导入模板</el-button>
+        <el-button type="primary" size="small" @click="importPurchaseOrders">上传模板导入采购单</el-button>
+        <el-button size="small" link type="primary" @click="downloadPurchaseOrderImportTemplate">下载采购单导入模板</el-button>
       </div>
       <el-table :data="importPagedItems" stripe border size="small">
         <el-table-column prop="id" label="任务编号" width="140">

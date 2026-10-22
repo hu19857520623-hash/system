@@ -65,6 +65,7 @@ const routes: RouteRecordRaw[] = [
       { path: 'permissions', name: 'Permissions', component: () => import('@/pages/UserManagementView.vue'), meta: { title: '用户管理', section: '系统' } },
       { path: 'user-management', redirect: '/permissions' },
       { path: 'settings/profile', name: 'ProfileSettings', component: () => import('@/pages/ProfileSettingsView.vue'), meta: { title: '个人设置', section: '系统' } },
+      { path: ':pathMatch(.*)*', name: 'NotFound', component: () => import('@/pages/NotFoundView.vue'), meta: { title: '页面不存在' } },
     ],
   },
 ]

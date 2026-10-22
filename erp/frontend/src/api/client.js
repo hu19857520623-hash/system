@@ -3,6 +3,7 @@
  * 文档：backend/docs/API.md
  */
 import { clearAccessToken, getAccessToken } from '@/auth/tokenStore'
+import { userFacingError } from '@erp/shared/user-facing-error'
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
 
@@ -17,9 +18,9 @@ function describeNetworkError(err) {
     err instanceof TypeError
     || /failed to fetch|fetch failed|networkerror|econnrefused|econnreset/i.test(msg)
   ) {
-    return new Error('无法连接 ERP 后端（127.0.0.1:3000）。请先运行仓库根目录 dev-local.ps1，或单独启动 erp/backend。')
+    return new Error('暂时无法连接服务，请检查网络后重试；如持续失败，请联系管理员。')
   }
-  return err instanceof Error ? err : new Error(msg)
+  return new Error(userFacingError(msg))
 }
 
 function shouldClearErpSession(url, status) {
@@ -46,7 +47,9 @@ async function downloadRequest(url) {
         window.location.href = `/login?redirect=${encodeURIComponent(window.location.pathname)}`
       }
     }
-    throw new Error(error.message || `HTTP ${response.status}`)
+    const failure = new Error(userFacingError(error, response.status))
+    failure.status = response.status
+    throw failure
   }
   const blob = await response.blob()
   const disposition = response.headers.get('Content-Disposition') || ''
@@ -85,7 +88,7 @@ async function openHtmlPrint(url) {
   }
   if (!response.ok) {
     const error = await response.json().catch(() => ({ message: response.statusText }))
-    throw new Error(error.message || `HTTP ${response.status}`)
+    throw new Error(userFacingError(error, response.status))
   }
   const html = await response.text()
   const win = window.open('', '_blank')
@@ -123,23 +126,17 @@ async function request(url, options = {}) {
         window.location.href = `/login?redirect=${encodeURIComponent(window.location.pathname)}`
       }
     }
-    if (response.status === 403) {
-      throw new Error(error.message || '无权限执行此操作')
-    }
-    if (response.status === 429) {
-      throw new Error(error.message || '请求过于频繁，请稍后再试')
-    }
-    if (response.status === 502 || response.status === 503) {
-      throw new Error(error.message || '上游服务暂时不可用。店铺监控请确认 Takealot 代理（127.0.0.1:3456）已启动。')
-    }
-    throw new Error(error.message || `HTTP ${response.status}`)
+    const failure = new Error(userFacingError(error, response.status))
+    failure.status = response.status
+    throw failure
   }
 
-  const json = await response.json()
+  let json
+  try { json = await response.json() } catch (err) { throw new Error(userFacingError(err)) }
 
   if (json && typeof json === 'object' && 'code' in json) {
     if (json.code !== 0) {
-      throw new Error(json.message || '请求失败')
+      throw new Error(userFacingError(json.message, Number(json.code)))
     }
     return json.data
   }
@@ -159,7 +156,7 @@ export const api = {
   post: (url, data) => request(url, { method: 'POST', body: JSON.stringify(data) }),
   put: (url, data) => request(url, { method: 'PUT', body: JSON.stringify(data) }),
   patch: (url, data) => request(url, { method: 'PATCH', body: JSON.stringify(data) }),
-  delete: (url) => request(url, { method: 'DELETE' }),
+  delete: (url, data) => request(url, { method: 'DELETE', ...(data === undefined ? {} : { body: JSON.stringify(data) }) }),
 }
 
 // ── 鉴权 ──
@@ -293,11 +290,14 @@ export const purchaseApi = {
   listPurchasers: () => api.get('/purchase-orders/purchasers'),
   detail: (id) => api.get(`/purchase-orders/${id}`),
   create: (data) => api.post('/purchase-orders', data),
+  importCsv: (content) => api.post('/purchase-orders/import', { content }),
+  resubmit: (id, data) => api.post(`/purchase-orders/${id}/resubmit`, data),
   approve: (id, data) => api.post(`/purchase-orders/${id}/approve`, data || {}),
   rejectPoAudit: (id, data) => api.post(`/purchase-orders/${id}/reject-po-audit`, data),
   markPaid: (id, data) => api.post(`/purchase-orders/${id}/mark-paid`, data || {}),
   markUnpaid: (id, data) => api.post(`/purchase-orders/${id}/mark-unpaid`, data || {}),
   remove: (id) => api.delete(`/purchase-orders/${id}`),
+  removePrePo: (id) => api.delete(`/purchase-orders/pre-purchase/${id}`),
 }
 
 // ── 入库 ──
@@ -315,9 +315,13 @@ export const inboundApi = {
   scanQc: (id, data) => api.post(`/inbound/${id}/scan-qc`, data),
   scanReceiptLabel: (id, data) => api.post(`/inbound/${id}/scan-receipt-label`, data),
   qc: (id, data) => api.post(`/inbound/${id}/qc`, data),
+  qcAndMeasure: (id, data) => api.post(`/inbound/${id}/qc-and-measure`, data),
   reopenCount: (id, data) => api.post(`/inbound/${id}/reopen-count`, data),
   closeZero: (id, data) => api.post(`/inbound/${id}/close-zero`, data),
-  resolveException: (id) => api.post(`/inbound/${id}/resolve-exception`),
+  resolveException: (id, data) => api.post(`/inbound/${id}/resolve-exception`, data),
+  reduceQc: (id, data) => api.post(`/inbound/${id}/reduce-qc`, data),
+  reduceCarton: (id, data) => api.post(`/inbound/${id}/reduce-carton`, data),
+  reducePutaway: (id, data) => api.post(`/inbound/${id}/reduce-putaway`, data),
   measureDimensions: (id, data) => api.post(`/inbound/${id}/measure-dimensions`, data),
   putaway: (id, data) => api.post(`/inbound/${id}/putaway`, data),
   listDrafts: () => api.get('/inbound/drafts'),
@@ -330,7 +334,7 @@ export const inboundApi = {
   downloadOmsAttachment: (inboundId, attachmentId) =>
     downloadRequest(`/inbound/${inboundId}/attachments/${attachmentId}`),
   applySeaFreight: (id, data) => api.post(`/inbound/${id}/sea-freight`, data),
-  clearSeaFreight: (id) => api.delete(`/inbound/${id}/sea-freight`),
+  clearSeaFreight: (id, data) => api.delete(`/inbound/${id}/sea-freight`, data),
   remove: (id) => api.delete(`/inbound/${id}`),
 }
 

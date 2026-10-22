@@ -3,6 +3,7 @@ import { ChevronLeft } from 'lucide-react'
 import ProductForm, { useProductById } from '../components/products/ProductForm'
 import { getCustomerSkuDisplay } from '../data/skuCode'
 import { useDataScope } from '../auth/useDataScope'
+import { productCopyTemplate } from '../data/productCopy'
 
 export default function ProductCreate() {
   const { id } = useParams()
@@ -12,6 +13,12 @@ export default function ProductCreate() {
   const product = useProductById(id || copyId)
   const isEdit = Boolean(id)
   const isCopy = !isEdit && Boolean(copyId && product)
+  if ((isEdit || copyId) && !product) {
+    return <div className="page-shell" role="alert">
+      <p>未找到该商品，或当前账号无权查看。请返回商品列表重新选择。</p>
+      <Link to="/products" className="mt-4 inline-block text-primary-600">返回我的商品</Link>
+    </div>
+  }
   const skuLabel = product
     ? getCustomerSkuDisplay(product, dataScope.getCustomerCode(product.customerId))
     : ''
@@ -33,7 +40,8 @@ export default function ProductCreate() {
             : '可先保存为草稿，确认资料后再提交为 OMS 可用商品'}
         </p>
       </div>
-      <ProductForm product={product} mode={isEdit ? 'edit' : 'create'} />
+      <ProductForm key={`${isEdit ? 'edit' : isCopy ? 'copy' : 'create'}:${id || copyId || 'new'}`}
+        product={isCopy && product ? productCopyTemplate(product) : product} mode={isEdit ? 'edit' : 'create'} />
     </div>
   )
 }

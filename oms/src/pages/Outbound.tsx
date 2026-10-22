@@ -1,3 +1,5 @@
+
+import { userFacingError } from '../utils/userFacingError'
 import { displaySku, displaySkuText } from '../data/skuDisplay'
 import { bindingStockSource } from '../data/bindingStockSource'
 import { getErpCatalog } from '../api/erp'
@@ -18,14 +20,14 @@ import {
 import {
   getOutboundShippableQty,
   listShippableOutboundItems,
-  lockStockForOutbound,
+  refreshInventoryFromErp,
   resolveOutboundStockSource,
-  rollbackStockForOutbound,
   useInventoryItems,
   useProducts,
   mergeErpCatalogIntoState,
 } from '../data/inventoryStore'
-import { addOutboundOrderOrThrow, applyErpOutboundToLocal, nextOutboundNo, removeOutboundOrder, submitOutboundToErp, useOutboundOrders } from '../data/outboundStore'
+import { addOutboundOrderOrThrow, applyErpOutboundToLocal, nextOutboundNo, submitOutboundWorkflow, useOutboundOrders } from '../data/outboundStore'
+import { OutboundSubmitDialog } from '../components/outbound/OutboundSubmitDialog'
 import { cancelErpOutbound, fetchErpOutboundByNo } from '../api/erp'
 import { getCustomerCode, getCustomerIdForRole } from '../data/dataScope'
 import {
@@ -45,7 +47,7 @@ import {
   enabledDispatchRules, findDispatchRuleForRegion, regionLabel,
 } from '../data/feeTemplates'
 import { useFeeTemplates, getPriceTemplateForCustomer } from '../data/feeTemplateStore'
-import { preDeductOutboundFees, rollbackPreDeductOutboundFees, useBilling } from '../data/billingStore'
+import { refreshBillingFromErp, useBilling } from '../data/billingStore'
 import { useRole } from '../auth/RoleContext'
 import { fileToAttachment, todayDateInput } from '../data/fileUtils'
 import {
@@ -85,7 +87,7 @@ import {
   useStores,
 } from '../data/entityStore'
 import { apiPut } from '../api/client'
-import { notifyIfUserError } from '../utils/userNotify'
+import { notifyIfUserError, notifySuccess, notifyInfo } from '../utils/userNotify'
 import { getFulfillmentWarehouses } from '../data/fulfillmentWarehouseConfig'
 import { restoreTakealotDraftAttachments } from '../data/takealotDraftRestore'
 
@@ -142,6 +144,13 @@ export default function Outbound() {
   const [withdrawing, setWithdrawing] = useState(false)
   const [detailLoading, setDetailLoading] = useState(isDetail)
   const [detailError, setDetailError] = useState('')
+  const [savingAction, setSavingAction] = useState<'draft' | 'submit' | null>(null)
+  const saving = savingAction !== null
+  const submissionInFlight = useRef(false)
+  const [submissionUncertain, setSubmissionUncertain] = useState(false)
+  const [submissionFeedback, setSubmissionFeedback] = useState('')
+  const [pendingSubmission, setPendingSubmission] = useState<OutboundOrder | null>(null)
+  const submissionIdentity = useRef<{ id: string; outboundNo: string } | null>(null)
   const { role, can } = useRole()
   const [takealotDestWarehouse, setTakealotDestWarehouse] = useState<string>(DEFAULT_TAKEALOT_DEST_WAREHOUSE)
   const [fulfillmentWarehouses] = useState(() => getFulfillmentWarehouses())
@@ -197,6 +206,7 @@ export default function Outbound() {
   const documentItems = TAKEALOT_DOWNLOAD_ITEMS.map(item => isTfs && item.fileType === TAKEALOT_ATTACHMENT_KINDS.appointment
     ? { ...item, label: 'TFS 面单' } : item)
   const needsRecipient = isDropship || isTfs
+  const scheduleFieldLabel = isTfs ? '最早送达日期' : isTakealot ? '预约送仓时间' : '预约发货时间'
   const takealotAttachmentKinds = useMemo(
     () => new Set(Object.values(TAKEALOT_ATTACHMENT_KINDS)),
     [],
@@ -269,7 +279,7 @@ export default function Outbound() {
       hydratedEditId.current = null
       applyErpOutboundToLocal(order)
     }).catch(error => {
-      if (active) setDetailError(error instanceof Error ? error.message : String(error))
+      if (active) setDetailError(userFacingError(error instanceof Error ? error.message : String(error)))
     }).finally(() => { if (active) setDetailLoading(false) })
     return () => { active = false }
   }, [isDetail, editOrder?.outboundNo])
@@ -393,12 +403,13 @@ export default function Outbound() {
       applyErpOutboundToLocal(result)
       setDetailError('')
     } catch (error) {
-      setDetailError(error instanceof Error ? error.message : String(error))
+      setDetailError(userFacingError(error instanceof Error ? error.message : String(error)))
       try { applyErpOutboundToLocal(await fetchErpOutboundByNo(editOrder.outboundNo)) } catch { /* Keep the withdrawal error visible. */ }
     } finally { setWithdrawing(false) }
   }
 
   const resetForm = () => {
+    submissionIdentity.current = null
     setTakealotDestWarehouse(DEFAULT_TAKEALOT_DEST_WAREHOUSE)
     setPlatform(PLATFORM_OPTIONS[0])
     setOutboundType('Takealot入仓')
@@ -503,7 +514,7 @@ export default function Outbound() {
       setAttachments(result.attachments)
       if (isTfs && result.parsed) applyTakealotParsed(result.parsed)
     }).catch(error => {
-      if (!cancelled) setParseErrors([`草稿文件校验失败：${error instanceof Error ? error.message : String(error)}`])
+      if (!cancelled) setParseErrors([userFacingError(`草稿文件校验失败：${error instanceof Error ? error.message : String(error)}`)])
     }).finally(() => {
       if (!cancelled) setParseBusy(false)
     })
@@ -846,7 +857,7 @@ export default function Outbound() {
               })),
             })
           } catch (error) {
-            errors.push(`${file.name}：SKU 标签裁切失败：${error instanceof Error ? error.message : String(error)}`)
+            errors.push(userFacingError(`${file.name}：SKU 标签裁切失败：${error instanceof Error ? error.message : String(error)}`))
           }
         }
         partsByFile.set(`${fileType}:${file.name}`, fileParts)
@@ -926,7 +937,7 @@ export default function Outbound() {
             bindHint = `已自动绑定 ${bindResult.bound.length} 个 990→SKU`
           } catch (error) {
             setPlatformSkuMappings(platformMappings)
-            errors.push(`自动绑定 990 条码失败：${error instanceof Error ? error.message : String(error)}`)
+            errors.push(userFacingError(`自动绑定 990 条码失败：${error instanceof Error ? error.message : String(error)}`))
           }
         }
         if (bindResult.unmatchedSkus.length) {
@@ -1051,17 +1062,60 @@ export default function Outbound() {
       setQuickBindTarget(null)
     } catch (error) {
       setPlatformSkuMappings(before)
-      window.alert(displaySkuText(`绑定保存失败：${error instanceof Error ? error.message : String(error)}`))
+      window.alert(userFacingError(displaySkuText(`绑定保存失败：${error instanceof Error ? error.message : String(error)}`)))
+    }
+  }
+
+  const executeSubmission = async (order: OutboundOrder, asDraft: boolean) => {
+    if (submissionInFlight.current || submissionUncertain) return
+    submissionInFlight.current = true
+    setSavingAction(asDraft ? 'draft' : 'submit')
+    setSubmissionFeedback('')
+    try {
+      if (asDraft) {
+        await addOutboundOrderOrThrow(order)
+        notifySuccess(`草稿已保存：${order.outboundNo}`)
+      } else {
+        const result = await submitOutboundWorkflow(order)
+        if (!result.ok) {
+          setSubmissionUncertain(Boolean(result.uncertain))
+          setSubmissionFeedback(displaySkuText(result.error))
+          setPendingSubmission(null)
+          return
+        }
+        const refreshed = await Promise.allSettled([
+          refreshInventoryFromErp(order.customerId!, getCustomerCode(order.customerId)),
+          refreshBillingFromErp(getCustomerCode(order.customerId)),
+        ])
+        const warning = result.warning || (refreshed.some(item => item.status === 'rejected')
+          ? `出库单 ${order.outboundNo} 已提交 ERP，但库存或账单刷新未完成。请返回记录核对，请勿重复提交。` : '')
+        if (warning) notifyInfo(warning)
+        else notifySuccess(`出库单 ${order.outboundNo} 已提交，库存已锁定`)
+      }
+      setPendingSubmission(null)
+      resetForm()
+      goRecords()
+    } catch (error) {
+      setSubmissionFeedback(userFacingError(displaySkuText(`保存失败，请刷新出库记录核对：${error instanceof Error ? error.message : String(error)}`)))
+      setPendingSubmission(null)
+    } finally {
+      submissionInFlight.current = false
+      setSavingAction(null)
     }
   }
 
   const handleSubmit = async (asDraft = false) => {
-    if (isDetail) return
+    if (isDetail || submissionInFlight.current || submissionUncertain || pendingSubmission) return
+    setSubmissionFeedback('')
     if (parseBusy) {
-      window.alert('正在校验已上传文件，请稍候')
+      setSubmissionFeedback('正在校验已上传文件，请稍候')
       return
     }
-    const submitCustomerId = getCustomerIdForRole(role) ?? undefined
+    const submitCustomerId = getCustomerIdForRole(role) || editOrder?.customerId
+    if (!submitCustomerId || getCustomerCode(submitCustomerId) === '—') {
+      setSubmissionFeedback('当前发货预约未绑定客户，请进入对应客户账号后再填写')
+      return
+    }
     const type: OutboundType = outboundTypeFromLabel(outboundType)
     const stockLines = lines.length > 0
       ? lines.map(l => ({ sku: resolveLineSku(l.sku) || l.sku, qty: l.qty }))
@@ -1074,7 +1128,7 @@ export default function Outbound() {
       )),
     )
     if (!asDraft && lineSources.size > 1) {
-      window.alert('同一出库单不能混发自有库存与货盘库存，请分开下单')
+      setSubmissionFeedback('同一出库单不能混发自有库存与货盘库存，请分开下单')
       return
     }
     const stockSource: StockSource = lineSources.size === 1
@@ -1089,17 +1143,21 @@ export default function Outbound() {
           .join(', ')
 
     if (!asDraft && hasTakealotDocuments && takealotValidationBlockers.length > 0) {
-      window.alert(
+      setSubmissionFeedback(
         `Takealot 文件校验未通过：\n${takealotValidationBlockers.slice(0, 10).join('\n')}${takealotValidationBlockers.length > 10 ? `\n…另有 ${takealotValidationBlockers.length - 10} 项` : ''}`,
       )
       return
     }
     if (!asDraft && stockLines.length === 0) {
-      window.alert('请先添加出库货品')
+      setSubmissionFeedback('请先添加出库货品')
+      return
+    }
+    if (!asDraft && stockLines.some(line => !line.sku.trim() || !Number.isSafeInteger(line.qty) || line.qty <= 0)) {
+      setSubmissionFeedback('请检查货品 SKU，出库数量必须为正整数')
       return
     }
     if (!asDraft && !scheduledDeliveryDate) {
-      window.alert('请填写预约送仓时间')
+      setSubmissionFeedback(`请填写${scheduleFieldLabel}`)
       return
     }
     if (
@@ -1111,11 +1169,14 @@ export default function Outbound() {
         !recipientPhone.trim() ||
         !recipientAddress1.trim())
     ) {
-      window.alert('请完整填写收件人姓名、城市、邮编、电话和地址1')
+      setSubmissionFeedback('请完整填写收件人姓名、城市、邮编、电话和地址1')
       return
     }
 
-    const outboundNo = editOrder?.outboundNo || nextOutboundNo(getCustomerCode(submitCustomerId))
+    const identity = editOrder ? { id: editOrder.id, outboundNo: editOrder.outboundNo }
+      : submissionIdentity.current || { id: `ob-${crypto.randomUUID()}`, outboundNo: nextOutboundNo(getCustomerCode(submitCustomerId)) }
+    submissionIdentity.current = identity
+    const outboundNo = identity.outboundNo
     const submitPriceTemplate = getPriceTemplateForCustomer(submitCustomerId, effectiveDestRegion)
     const feeResult = asDraft
       ? { lines: [], total: 0, totalVolumeM3: 0, totalWeightKg: 0 }
@@ -1129,7 +1190,7 @@ export default function Outbound() {
         )
 
     const localOrder: OutboundOrder = {
-      id: editOrder?.id || String(Date.now()),
+      id: identity.id,
       customerId: submitCustomerId,
       outboundNo,
       source,
@@ -1139,7 +1200,7 @@ export default function Outbound() {
       warehouse: SHIP_WAREHOUSE_ID,
       items: lines.length,
       totalQty,
-      status: asDraft ? 'draft' : 'locked',
+      status: asDraft ? 'draft' : 'pending',
       destination: destination || '待完善',
       recipient: needsRecipient ? {
         name: recipientName.trim(),
@@ -1187,74 +1248,8 @@ export default function Outbound() {
       attachments: attachments.length ? attachments : undefined,
     }
 
-    if (asDraft) {
-      try {
-        await addOutboundOrderOrThrow(localOrder)
-        window.alert(`草稿已保存：${outboundNo}`)
-        resetForm()
-        goRecords()
-      } catch (error) {
-        window.alert(displaySkuText(`草稿保存失败：${error instanceof Error ? error.message : String(error)}`))
-      }
-      return
-    }
-
-    if (!window.confirm(`确认提交出库单？将锁定 ${totalQty} 件库存并预扣 ${formatCurrency(feeResult.total)}。`)) {
-      return
-    }
-
-    const lockResult = await lockStockForOutbound(stockLines, stockSource, submitCustomerId)
-    if (!lockResult.ok) {
-      window.alert(displaySkuText(lockResult.error))
-      return
-    }
-
-    const deductResult = await preDeductOutboundFees(
-      outboundNo,
-      feeResult.lines,
-      submitCustomerId ? getCustomerCode(submitCustomerId) : undefined,
-    )
-    if (!deductResult.ok) {
-      try {
-        await rollbackStockForOutbound(stockLines, stockSource, submitCustomerId)
-      } catch (rollbackError) {
-        window.alert(displaySkuText(`${deductResult.error}\n库存回滚失败：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`))
-        return
-      }
-      window.alert(displaySkuText(deductResult.error))
-      return
-    }
-
-    try {
-      await addOutboundOrderOrThrow(localOrder)
-    } catch (error) {
-      await Promise.allSettled([
-        rollbackPreDeductOutboundFees(outboundNo),
-        rollbackStockForOutbound(stockLines, stockSource, submitCustomerId),
-      ])
-      window.alert(displaySkuText(`出库单保存失败，已回滚库存和预扣：${error instanceof Error ? error.message : String(error)}`))
-      return
-    }
-
-    const erpResult = await submitOutboundToErp(localOrder)
-    if (!erpResult.ok) {
-      const rollbackResults = await Promise.allSettled([
-        rollbackPreDeductOutboundFees(outboundNo),
-        rollbackStockForOutbound(stockLines, stockSource, submitCustomerId),
-      ])
-      const removeResult = await Promise.allSettled([removeOutboundOrder(localOrder.id)])
-      const rollbackFailed = rollbackResults.some(result => result.status === 'rejected')
-        || removeResult.some(result => result.status === 'rejected')
-      window.alert(
-        rollbackFailed
-          ? `同步 ERP 失败；本地回滚未完全保存，请联系管理员：${erpResult.error}`
-          : `同步 ERP 失败，已回滚本地预扣与库存：${erpResult.error}`,
-      )
-      return
-    }
-
-    resetForm()
-    goRecords()
+    if (asDraft) await executeSubmission(localOrder, true)
+    else setPendingSubmission(localOrder)
   }
 
   const applySkuPickerLines = (rows: OutboundSkuPickerConfirmRow[]) => {
@@ -1295,12 +1290,13 @@ export default function Outbound() {
   const parsedFieldCount = takealotParsedDoc ? 7 - parseMissing.length : 0
 
   if (isDetail && !editOrder) return <div className="page-shell"><p>出库单不存在或无权查看。</p><Link to="/outbound/records">返回出库记录</Link></div>
+  if (editId && !editOrder && !saving && !submissionUncertain) return <div className="page-shell"><p role="alert">未找到可编辑的出库草稿，单据可能已提交或无权查看。</p><Link to="/outbound/records">返回出库记录</Link></div>
 
   return (
     <div className="page-shell pb-24">
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
         <div>
-          <p className="text-[11px] font-medium uppercase tracking-wide text-primary-600">OutWhBill · 预约发货</p>
+          <p className="text-[11px] font-medium tracking-wide text-primary-600">出库单 · 预约发货</p>
           <h1 className="text-2xl font-semibold tracking-tight text-text-primary">{isDetail ? '出库单详情' : '预约发货'}</h1>
           <p className="mt-1 text-sm text-text-secondary">{isDetail ? `${editOrder?.outboundNo} · ${editOrder?.status === 'locked' ? '待拣货' : statusLabels[editOrder?.status || ''] || editOrder?.status}` : '参考易仓出库单模板填写，提交后锁定库存并由海外仓执行出库'}</p>
         </div>
@@ -1310,7 +1306,7 @@ export default function Outbound() {
       </div>
 
       {isDetail && detailError && <p role="alert" className="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{detailError}</p>}
-      <fieldset disabled={isDetail} className="min-w-0 border-0 p-0 m-0">
+      <fieldset disabled={isDetail || saving || Boolean(pendingSubmission) || submissionUncertain} className="min-w-0 border-0 p-0 m-0">
       {!hasTakealotDocuments && (
       <Card className="mb-4 overflow-hidden border-primary-200">
         <div className="border-b border-border-light px-5 py-4">
@@ -1732,9 +1728,6 @@ export default function Outbound() {
                     ))}
                   </select>
                 </FormField>
-                <FormField label="参考号">
-                  <input className={formInput()} placeholder="客户参考号" value={refNo} onChange={e => setRefNo(e.target.value)} />
-                </FormField>
               </>
             )}
             {isTfs && (
@@ -1747,7 +1740,7 @@ export default function Outbound() {
                 </FormField>
               </>
             )}
-            <FormField label={isTfs ? '最早送达日期' : '预约送仓时间'} required hint={isTfs ? '从 TFS 面单 Earliest delivery 识别，不代表已预约送仓时间' : '上传预约单后可自动识别日期与时间'}>
+            <FormField label={scheduleFieldLabel} required hint={isTfs ? '从 TFS 面单 Earliest delivery 识别，不代表已预约送仓时间' : isTakealot ? '上传预约单后可自动识别日期与时间' : '请选择预约发货日期与时间'}>
               <input
                 type={isTfs ? 'date' : 'datetime-local'}
                 className={formInput()}
@@ -1947,6 +1940,11 @@ export default function Outbound() {
       </div>
 
       </fieldset>
+      {submissionFeedback && <div role="alert" className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm whitespace-pre-wrap text-red-800">
+        {submissionFeedback}
+        {submissionUncertain && <Link to="/outbound/records" className="mt-2 block font-medium underline">返回出库记录核对结果</Link>}
+      </div>}
+      {isDetail && editOrder?.status === 'pending' && <div role="status" className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">正在核对仓库接单结果，请刷新出库记录确认，请勿重复提交。</div>}
       {isDetail && editOrder?.status === 'exception' && (
         <section className="mt-4 rounded-xl border border-red-200 bg-red-50 p-5" aria-label="出库异常情况">
           <h2 className="text-sm font-semibold text-red-800">出库异常情况</h2>
@@ -1958,7 +1956,7 @@ export default function Outbound() {
       )}
       {isDetail ? <div className="fixed bottom-0 left-0 right-0 z-30 border-t border-border-light bg-white/95 px-6 py-4 lg:pl-[220px]">
         <div className="mx-auto flex max-w-[1280px] items-center justify-between gap-3">
-          <p className="text-xs text-text-muted">{detailLoading ? '正在核对仓库状态…' : editOrder?.status === 'locked' ? '待拣货，可以撤回预约。' : editOrder?.status === 'cancelled' ? '出库单已撤回。' : editOrder?.status === 'draft' ? '草稿尚未预约发货。' : '仓库已开始处理，不能撤回。'}</p>
+          <p className="text-xs text-text-muted">{detailLoading ? '正在核对仓库状态…' : editOrder?.status === 'locked' ? '待拣货，可以撤回预约。' : editOrder?.status === 'pending' ? '接单结果待核对，请刷新出库记录。' : editOrder?.status === 'cancelled' ? '出库单已撤回。' : editOrder?.status === 'draft' ? '草稿尚未预约发货。' : '仓库已开始处理，不能撤回。'}</p>
           <div className="flex gap-2"><Button variant="secondary" onClick={goRecords}>返回出库记录</Button>{editOrder?.status === 'locked' && can('outbound:write') && <Button disabled={detailLoading || Boolean(detailError) || withdrawing} onClick={() => void withdraw()}>{withdrawing ? '撤回中…' : '撤回出库单'}</Button>}</div>
         </div>
       </div> : <div className="fixed bottom-0 left-0 right-0 z-30 border-t border-border-light bg-white/95 px-6 py-4 backdrop-blur-sm lg:pl-[220px]">
@@ -1969,14 +1967,14 @@ export default function Outbound() {
               : '提交后锁定库存并进入拣货，可在出库记录跟踪进度'}
           </p>
           <div className="flex gap-2">
-            <Button variant="secondary" onClick={goRecords}>取消</Button>
-            <Button variant="secondary" disabled={parseBusy} onClick={() => void handleSubmit(true)}>保存草稿</Button>
+            <Button variant="secondary" disabled={saving} onClick={goRecords}>{submissionUncertain ? '返回出库记录' : '取消'}</Button>
+            <Button variant="secondary" disabled={parseBusy || saving || Boolean(pendingSubmission) || submissionUncertain} onClick={() => void handleSubmit(true)}>{savingAction === 'draft' ? '保存中…' : '保存草稿'}</Button>
             <Button
-              disabled={parseBusy || (hasTakealotDocuments && takealotValidationBlockers.length > 0)}
+              disabled={parseBusy || saving || Boolean(pendingSubmission) || submissionUncertain || (hasTakealotDocuments && takealotValidationBlockers.length > 0)}
               title={hasTakealotDocuments && takealotValidationBlockers.length ? '请先修复文件校验阻塞项' : undefined}
               onClick={() => void handleSubmit(false)}
             >
-              {parseBusy ? '正在校验文件…' : '提交并锁定库存'}
+              {savingAction === 'submit' ? '提交中…' : parseBusy ? '正在校验文件…' : '提交并锁定库存'}
             </Button>
           </div>
           {hasTakealotDocuments && !parseBusy && takealotValidationBlockers.length > 0 && (
@@ -1988,6 +1986,7 @@ export default function Outbound() {
       </div>
 
       }
+      {pendingSubmission && <OutboundSubmitDialog order={pendingSubmission} busy={saving} onCancel={() => setPendingSubmission(null)} onConfirm={() => void executeSubmission(pendingSubmission, false)} />}
       <OutboundSkuPickerModal
         open={skuPickerOpen}
         onClose={() => setSkuPickerOpen(false)}

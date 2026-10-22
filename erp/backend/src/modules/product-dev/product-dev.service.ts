@@ -1,5 +1,6 @@
 import { assertGlobalSkuAvailable } from '../../common/global-sku.util'
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common'
+import { randomUUID } from 'crypto'
 import type { Response } from 'express'
 import * as path from 'path'
 import { PrismaService } from '../../common/prisma/prisma.service'
@@ -187,11 +188,12 @@ export class ProductDevService {
 
   async create(data: any, applicantId?: number) {
     if (!this.str(data.productName)) throw new BadRequestException('请填写商品名称')
+    if (data.status != null && data.status !== 'draft') throw new BadRequestException('新建选品只能保存为草稿，请通过提交审核继续处理')
     const sku = data.sku ? await this.validateSku(data.sku) : undefined
     const fields = this.mapDevFields(data)
     const row = await this.prisma.productDev.create({
       data: {
-        applyNo: 'PD-' + Date.now().toString().slice(-8),
+        applyNo: `PD-${Date.now().toString(36).toUpperCase()}-${randomUUID().slice(0, 8).toUpperCase()}`,
         sku,
         ...fields,
         productName: this.str(data.productName)!,
@@ -219,7 +221,13 @@ export class ProductDevService {
   async update(id: number, data: any, operatorId?: number) {
     const before = await this.detail(id)
     const updateData: any = {}
-    const hasDevFields = this.devFieldKeys.some((k) => k in data)
+    const hasDevFields = this.devFieldKeys.some((k) => k in data) || 'sku' in data
+    const editable = before.status === 'draft' || before.status === 'rejected'
+    if (!editable && hasDevFields) throw new BadRequestException('仅草稿或已驳回的选品可修改，请先撤回待审核申请')
+    if ('productName' in data && !this.str(data.productName)) throw new BadRequestException('请填写商品名称')
+    if ('status' in data && (data.status !== 'draft' || !['draft', 'rejected', 'submitted'].includes(before.status))) {
+      throw new BadRequestException('不能通过编辑修改审核结果，请使用提交、审核或驳回操作')
+    }
 
     if (hasDevFields) {
       Object.assign(updateData, this.mapDevFields(data))
@@ -231,7 +239,9 @@ export class ProductDevService {
       updateData.sku = data.sku ? await this.validateSku(data.sku, id) : null
     }
 
-    const row = await this.prisma.productDev.update({ where: { id: BigInt(id) }, data: updateData })
+    const changed = await this.prisma.productDev.updateMany({ where: { id: BigInt(id), status: before.status }, data: updateData })
+    if (changed.count !== 1) throw new ConflictException('选品状态已变化，请刷新核对后再操作')
+    const row = await this.detail(id)
     await this.opLog.log({
       operatorId,
       module: 'product_audit',
@@ -249,7 +259,9 @@ export class ProductDevService {
       throw new BadRequestException('仅草稿或已驳回状态可提交审核')
     }
     this.assertReadyForSubmit(row)
-    const updated = await this.prisma.productDev.update({ where: { id: BigInt(id) }, data: { status: 'submitted' } })
+    const changed = await this.prisma.productDev.updateMany({ where: { id: BigInt(id), status: row.status }, data: { status: 'submitted' } })
+    if (changed.count !== 1) throw new ConflictException('选品状态已变化，请刷新核对后再操作')
+    const updated = await this.detail(id)
     await this.opLog.log({
       operatorId,
       module: 'product_audit',
@@ -264,15 +276,15 @@ export class ProductDevService {
   async approve(id: number, auditorId?: number, remark?: string, purchaseQty?: number) {
     const row = await this.detail(id)
     if (row.status !== 'submitted') throw new BadRequestException('仅待审核状态可通过')
-    if (!purchaseQty || purchaseQty <= 0) throw new BadRequestException('请核定采购数量')
+    if (!Number.isSafeInteger(purchaseQty) || purchaseQty! <= 0 || purchaseQty! > 2147483647) throw new BadRequestException('计划采购数量须为大于零且不超过 2147483647 的整数')
 
     const finalSku = this.str(row.sku)
     if (!finalSku) throw new BadRequestException('审核通过前必须填写 SKU')
     await this.validateSku(finalSku, id)
 
     const updated = await this.prisma.$transaction(async (tx) => {
-      const saved = await tx.productDev.update({
-        where: { id: BigInt(id) },
+      const changed = await tx.productDev.updateMany({
+        where: { id: BigInt(id), status: 'submitted' },
         data: {
           status: 'approved',
           sku: finalSku,
@@ -282,13 +294,15 @@ export class ProductDevService {
           auditedAt: new Date(),
         },
       })
+      if (changed.count !== 1) throw new ConflictException('选品状态已变化，请刷新核对后再操作')
+      const saved = await tx.productDev.findUniqueOrThrow({ where: { id: BigInt(id) } })
       await this.prePurchase.createFromDev({
         id: BigInt(id),
         applyNo: row.applyNo,
         productName: row.productName,
         spec: row.spec,
         sku: finalSku,
-        purchaseQty,
+        purchaseQty: purchaseQty!,
         estimatedCost: row.estimatedCost,
       }, tx)
       return saved
@@ -307,10 +321,13 @@ export class ProductDevService {
   async reject(id: number, auditorId?: number, remark?: string) {
     const row = await this.detail(id)
     if (row.status !== 'submitted') throw new BadRequestException('仅待审核状态可驳回')
-    const updated = await this.prisma.productDev.update({
-      where: { id: BigInt(id) },
-      data: { status: 'rejected', auditorId: auditorId ? BigInt(auditorId) : undefined, auditRemark: remark, auditedAt: new Date() },
+    if (typeof remark !== 'string' || !remark.trim()) throw new BadRequestException('请填写驳回原因，便于修改后重新提交')
+    const changed = await this.prisma.productDev.updateMany({
+      where: { id: BigInt(id), status: 'submitted' },
+      data: { status: 'rejected', auditorId: auditorId ? BigInt(auditorId) : undefined, auditRemark: remark.trim(), auditedAt: new Date() },
     })
+    if (changed.count !== 1) throw new ConflictException('选品状态已变化，请刷新核对后再操作')
+    const updated = await this.detail(id)
     await this.opLog.log({
       operatorId: auditorId,
       module: 'product_audit',
@@ -324,7 +341,9 @@ export class ProductDevService {
 
   async remove(id: number, operatorId?: number) {
     const row = await this.detail(id)
-    await this.prisma.productDev.delete({ where: { id: BigInt(id) } })
+    if (!['draft', 'rejected'].includes(row.status)) throw new BadRequestException('仅草稿或已驳回的选品可删除，审核和采购中的申请须保留')
+    const changed = await this.prisma.productDev.deleteMany({ where: { id: BigInt(id), status: row.status } })
+    if (changed.count !== 1) throw new ConflictException('选品状态已变化，请刷新核对后再操作')
     await this.opLog.log({
       operatorId,
       module: 'product_audit',

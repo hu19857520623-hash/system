@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { userFacingError } from '@erp/shared/user-facing-error'
+
 import { displaySku, displaySkuText } from '@erp/shared/sku-display'
 import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
@@ -382,7 +384,7 @@ async function showInventory(row: any) {
     invDetail.value = await locationApi.inventory(row.id)
     invDialogVisible.value = true
   } catch (e: any) {
-    ElMessage.error(displaySkuText(e.message || '加载库位库存失败'))
+    ElMessage.error(userFacingError(displaySkuText(e.message || '加载库位库存失败')))
   }
 }
 
@@ -392,7 +394,7 @@ async function printOne(row: any) {
   try {
     await locationApi.printLabel(row.id)
   } catch (e: any) {
-    ElMessage.error(displaySkuText(e.message || '打印失败'))
+    ElMessage.error(userFacingError(displaySkuText(e.message || '打印失败')))
   }
 }
 
@@ -404,7 +406,7 @@ async function printSelected() {
   try {
     await locationApi.printLabels({ ids: selectedRows.value.map((r) => r.id).join(',') })
   } catch (e: any) {
-    ElMessage.error(displaySkuText(e.message || '打印失败'))
+    ElMessage.error(userFacingError(displaySkuText(e.message || '打印失败')))
   }
 }
 
@@ -418,7 +420,7 @@ async function printCurrentZone() {
     if (selectedZoneId.value !== 'all') params.zoneId = selectedZoneId.value
     await locationApi.printLabels(params)
   } catch (e: any) {
-    ElMessage.error(displaySkuText(e.message || '打印失败'))
+    ElMessage.error(userFacingError(displaySkuText(e.message || '打印失败')))
   }
 }
 </script>

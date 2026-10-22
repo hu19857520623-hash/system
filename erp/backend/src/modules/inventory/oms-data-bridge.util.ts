@@ -1,5 +1,5 @@
 import { PrismaService } from '../../common/prisma/prisma.service'
-import { CATALOG_CUSTOMER_CODE, catalogBaseSkuFromInternal } from '../../common/catalog-customer.util'
+import { CATALOG_CUSTOMER_CODE, catalogBaseSkuFromInternal, catalogSkuLookupKeys } from '../../common/catalog-customer.util'
 import { remainingCatalogStock } from '../pricing/catalog-stock.util'
 import {
   buildCatalogHoldingInventoryRow,
@@ -10,6 +10,7 @@ import {
   resolveCustomerIdentity,
 } from '../../common/inventory-row-mapper.util'
 import { expandWarehouseSearchTerms } from '../../common/warehouse-display.util'
+import { skuOperationStatusLabel } from './sku-operation-status.util'
 
 export { expandWarehouseSearchTerms } from '../../common/warehouse-display.util'
 
@@ -130,12 +131,14 @@ function mapCatalogInventoryRow(
     updatedAt: Date
   },
   customer?: { customerCode: string; customerName: string },
+  lockedQty = 0,
 ) {
   return buildCatalogHoldingInventoryRow({
     id: r.id,
     sku: r.sku,
     productName: r.productName,
     quantity: r.quantity,
+    lockedQty,
     unitPrice: r.unitPrice,
     updatedAt: r.updatedAt,
     customerCode: customer?.customerCode,
@@ -281,16 +284,18 @@ function mapOmsProductRow(r: Record<string, unknown>) {
     costRmb: r.cost != null ? Number(r.cost) : null,
     status,
     statusLabel,
-    syncStatus: 'oms',
+    syncStatus: null,
     receiptFlag: hasDimensions ? '已测量' : '新产品',
     hasDimensions,
     customerCode: customer.customerCode,
     customerName: customer.customerName,
-    supplierName: customer.customerName,
+    supplierName: '',
     developerName: '',
-    salesStatus: r.inCatalog ? '货盘可见' : 'OMS客户',
-    orderableOnOms: Boolean(r.inCatalog),
-    visibleOnOms: Boolean(r.inCatalog),
+    operationStatus: statusRaw,
+    operationStatusLabel: skuOperationStatusLabel(statusRaw),
+    salesStatus: null,
+    orderableOnOms: null,
+    visibleOnOms: null,
     finalPrice: r.price != null ? Number(r.price) : null,
     remark: String(r.customCode || ''),
     createdAt: null,
@@ -469,7 +474,30 @@ export async function fetchCatalogInventoryRows(prisma: PrismaService, filters: 
     customerMap = new Map(customers.map((c) => [Number(c.id), c]))
   }
 
-  const mapped = rows.map((r) => mapCatalogInventoryRow(r, customerMap.get(Number(r.customerId))))
+  // 预约出库时已扣减持有可用量；锁定量从尚未发货的货盘出库单计算，不能再扣一次。
+  const outboundItems = rows.length ? await prisma.outboundOrderItem.findMany({
+    where: {
+      OR: rows.map(r => ({
+        sku: { in: catalogSkuLookupKeys(r.sku) },
+        order: {
+          customerId: r.customerId,
+          shippedAt: null,
+          status: { in: ['pending_pick', 'picking', 'picked', 'reviewing', 'pending_relabel', 'packed', 'exception'] },
+          remark: { contains: '[stock:catalog]' },
+        },
+      })),
+    },
+    select: { sku: true, qty: true, order: { select: { customerId: true } } },
+  }) : []
+  const lockedByCustomerSku = new Map<string, number>()
+  const holdingKey = (customerId: unknown, sku: string) => `${customerId}::${catalogBaseSkuFromInternal(sku)}`
+  for (const item of outboundItems) {
+    const key = holdingKey(item.order.customerId, item.sku)
+    lockedByCustomerSku.set(key, (lockedByCustomerSku.get(key) || 0) + item.qty)
+  }
+  const mapped = rows.map(r => mapCatalogInventoryRow(
+    r, customerMap.get(Number(r.customerId)), lockedByCustomerSku.get(holdingKey(r.customerId, r.sku)) || 0,
+  )).filter(r => r.availableQty > 0 || r.lockedQty > 0)
   return attachCatalogPurchaseStats(prisma, mapped)
 }
 

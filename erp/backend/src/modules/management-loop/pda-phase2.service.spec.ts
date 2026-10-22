@@ -7,8 +7,12 @@ describe('PDA phase 2 warehouse exception flows', () => {
   it('requires a reason when the received carton count differs from the expected count', async () => {
     const prisma: any = {
       inboundCarton: { count: jest.fn().mockResolvedValue(0) },
-      inboundOrder: { update: jest.fn() },
+      inboundOrder: { update: jest.fn(), findUnique: jest.fn().mockResolvedValue({ id: 6n, inboundNo: 'IN-6', warehouseCode: 'WMS-JHB-01', status: 'receiving', cartons: [{}, {}, {}], items: [{ id: 1n }] }) },
+      warehouse: { findUnique: jest.fn().mockResolvedValue({ status: 1, warehouseType: 'wms' }) },
+      operationLog: { findFirst: jest.fn().mockResolvedValue(null) },
+      $queryRaw: jest.fn(),
     }
+    prisma.$transaction = (callback: any) => callback(prisma)
     const opLog = { log: jest.fn(), hasClientRequest: jest.fn().mockResolvedValue(false) }
     const service = new InboundService(
       prisma,
@@ -26,7 +30,7 @@ describe('PDA phase 2 warehouse exception flows', () => {
       items: [],
     } as any)
 
-    await expect(service.recordReceivedCartonCount(6, { receivedCartonCount: 2 }, 11))
+    await expect(service.recordReceivedCartonCount(6, { receivedCartonCount: 2, clientRequestId: '8edaf540-168b-489c-b6a9-dce602503815' }, 11))
       .rejects.toThrow(new BadRequestException('实收 2 箱与应收 3 箱不一致，请填写差异原因'))
     expect(prisma.inboundOrder.update).not.toHaveBeenCalled()
     expect(opLog.log).not.toHaveBeenCalled()

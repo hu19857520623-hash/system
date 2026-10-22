@@ -103,13 +103,13 @@ export function normalizeOmsOutboundAttachments(
       throw new OutboundLabelValidationError(`附件 ${index + 1} 格式无效`)
     }
     const fileName = String(attachment.fileName || '').trim()
-    if (!fileName) throw new OutboundLabelValidationError(`附件 ${index + 1} 缺少 fileName`)
+    if (!fileName) throw new OutboundLabelValidationError(`附件 ${index + 1} 缺少文件名`)
     if (fileName.length > 200) {
       throw new OutboundLabelValidationError(`附件 ${index + 1} fileName 最长 200 字符`)
     }
     const contentBase64 = String(attachment.contentBase64 || '').trim()
     if (!contentBase64) {
-      throw new OutboundLabelValidationError(`附件 ${index + 1} 缺少 contentBase64`)
+      throw new OutboundLabelValidationError(`附件 ${index + 1} 缺少文件内容，请重新上传`)
     }
     const fileType = normalizeOutboundAttachmentFileType(attachment.fileType)
     if (fileType.length > 30) {
@@ -126,13 +126,13 @@ export function normalizeOmsOutboundAttachments(
       fileType === 'skuLabel'
       && (labelRole === 'unitCrop' || sku != null || unitIndex != null)
     if (isUnitCrop) {
-      if (!sku) throw new OutboundLabelValidationError(`skuLabel 附件 ${index + 1} 缺少 sku`)
+      if (!sku) throw new OutboundLabelValidationError(`SKU 标签附件 ${index + 1} 缺少 SKU 编码`)
       if (unitIndex == null) {
-        throw new OutboundLabelValidationError(`skuLabel 附件 ${index + 1} 缺少 unitIndex`)
+        throw new OutboundLabelValidationError(`SKU 标签附件 ${index + 1} 缺少商品标签序号`)
       }
       const pdf = decodeAttachmentBase64(contentBase64)
       if (pdf.length < 5 || pdf.subarray(0, 5).toString('ascii') !== '%PDF-') {
-        throw new OutboundLabelValidationError(`skuLabel 附件 ${index + 1} 必须是 PDF`)
+        throw new OutboundLabelValidationError(`SKU 标签附件 ${index + 1} 必须是 PDF`)
       }
     }
     return {

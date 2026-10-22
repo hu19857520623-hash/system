@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { userFacingError } from '@erp/shared/user-facing-error'
+
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { flowDebugApi } from '@/api/client.js'
@@ -29,7 +31,7 @@ async function lookup() {
   tracing.value = true
   trace.value = null
   try { trace.value = await flowDebugApi.trace(query.value) }
-  catch (e: any) { ElMessage.error(e.message || '查询失败') }
+  catch (e: any) { ElMessage.error(userFacingError(e.message || '查询失败')) }
   finally { tracing.value = false }
 }
 function download(name: string, value: string, type: string) {
@@ -45,7 +47,7 @@ function exportFields() {
 onMounted(async () => {
   if (app.authenticatedUser?.roleCode !== 'admin') return
   loading.value = true
-  try { catalog.value = await flowDebugApi.catalog() } catch (e: any) { ElMessage.error(e.message || '字段目录加载失败') } finally { loading.value = false }
+  try { catalog.value = await flowDebugApi.catalog() } catch (e: any) { ElMessage.error(userFacingError(e.message || '字段目录加载失败')) } finally { loading.value = false }
 })
 </script>
 

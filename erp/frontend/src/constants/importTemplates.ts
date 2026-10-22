@@ -171,6 +171,30 @@ export interface InventoryAdjustImportRow {
   remark?: string
 }
 
+/** 采购订单 — 与 PurchaseView 创建采购单字段一致。相同供应商、中转仓、预计到货、国内运费、备注的行合并为一张采购单。 */
+export const PURCHASE_ORDER_IMPORT_FIELDS: ImportFieldDef[] = [
+  { key: 'supplierName', label: '供应商', required: true, hint: '可填已有供应商，也可填新名称' },
+  { key: 'warehouse', label: '目标中转仓', required: true, hint: '仓库名称或仓库代码，须为已启用的物流中转仓' },
+  { key: 'expectedArrival', label: '预计到货', required: false, hint: 'YYYY-MM-DD；同一采购单请保持一致' },
+  { key: 'domesticFreight', label: '国内运费', required: false, hint: '订单运费；同一采购单请保持一致' },
+  { key: 'remark', label: '备注', required: false, hint: '订单备注；同一采购单请保持一致' },
+  { key: 'sku', label: 'SKU', required: true },
+  { key: 'productName', label: '商品名称', required: false, hint: '留空时按 SKU 从商品主数据带出' },
+  { key: 'quantity', label: '采购数量', required: true, hint: '正整数' },
+  { key: 'unitPrice', label: '单价', required: true, hint: '大于 0，最多两位小数' },
+  { key: 'lineRemark', label: '行备注', required: false },
+]
+
+export const PURCHASE_ORDER_IMPORT_SAMPLE_ROWS: unknown[][] = [
+  ['示例供应商', '深圳集运物流仓', '2026-11-01', '80', '补货', 'FIT-001', '扶手折叠椅', '10', '120.75', ''],
+  ['示例供应商', '深圳集运物流仓', '2026-11-01', '80', '补货', 'FUR-002', '可移动实木婴儿床', '5', '283.42', '加急'],
+  ['另一供应商', '义乌集运物流仓', '', '', '', 'TK-99001', '', '2', '15.00', ''],
+]
+
+export function downloadPurchaseOrderImportTemplate() {
+  downloadImportTemplate('采购订单导入模板.xls', PURCHASE_ORDER_IMPORT_FIELDS, PURCHASE_ORDER_IMPORT_SAMPLE_ROWS)
+}
+
 export function parseInventoryAdjustCsvClient(content: string, defaultWarehouse = 'WMS-JHB-01'): InventoryAdjustImportRow[] {
   const lines = content.replace(/^\uFEFF/, '').split(/\r?\n/).filter((l) => l.trim())
   if (lines.length < 2) throw new Error('文件为空或仅有表头')

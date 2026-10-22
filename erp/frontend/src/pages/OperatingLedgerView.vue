@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { userFacingError } from '@erp/shared/user-facing-error'
+
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { operatingLedgerApi } from '@/api/client.js'
@@ -211,7 +213,7 @@ async function importCsv() {
     })
     await search()
   } catch (error: any) {
-    ElMessage.error(error?.message || '导入失败')
+    ElMessage.error(userFacingError(error?.message || '导入失败'))
   } finally {
     loading.value = false
   }

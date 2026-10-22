@@ -3,6 +3,7 @@ import { catalogSkuLookupKeys, toCatalogInternalSku } from '../../common/catalog
 import { receivedCatalogQtyPatch } from './catalog-stock.util'
 import { pushCatalogStockToOms } from './oms-catalog-sync.util'
 import { assertGlobalSkuAvailable } from '../../common/global-sku.util'
+import { Prisma } from '@prisma/client'
 
 function num(v: unknown, fallback = 0): number {
   if (v == null || v === '') return fallback
@@ -28,7 +29,7 @@ export type SyncInboundCatalogInput = {
 }
 
 /** 入库发运时自动同步 SKU、海运费等到货盘库存 */
-export async function syncCatalogFromInbound(prisma: PrismaService, input: SyncInboundCatalogInput) {
+export async function syncCatalogFromInbound(prisma: Pick<PrismaService, 'product' | 'productPricing' | 'productDev' | 'productPricingHistory' | '$queryRaw'>, input: SyncInboundCatalogInput) {
   const results: { sku: string; pricingId: number; status: string }[] = []
   const now = new Date()
 
@@ -59,11 +60,11 @@ export async function syncCatalogFromInbound(prisma: PrismaService, input: SyncI
       inboundNo: input.inboundNo,
       inboundQty,
       seaFreight,
-      ...(domesticFee > 0 ? { domesticFee } : {}),
+      ...(line.domesticFeePerUnit != null ? { domesticFee } : {}),
       freightCallbackAt: now,
       pricingStatus: 'pending_pricing' as const,
       ...(input.poNo ? { poNo: input.poNo } : {}),
-      ...(line.costRmb != null && line.costRmb > 0 ? { costRmb: line.costRmb } : {}),
+      ...(line.costRmb != null && line.costRmb >= 0 ? { costRmb: line.costRmb } : {}),
       ...(resolvedMarket > 0 ? { marketPrice: resolvedMarket } : {}),
     }
 
@@ -84,12 +85,12 @@ export async function syncCatalogFromInbound(prisma: PrismaService, input: SyncI
       })
     }
 
-    if (product && (seaFreight > 0 || domesticFee > 0)) {
+    if (product && (line.seaFreightPerUnit != null || line.domesticFeePerUnit != null)) {
       await prisma.product.update({
         where: { sku: baseSku },
         data: {
-          ...(seaFreight > 0 ? { seaFreightPerUnit: seaFreight } : {}),
-          ...(domesticFee > 0 ? { domesticFeePerUnit: domesticFee } : {}),
+          ...(line.seaFreightPerUnit != null ? { seaFreightPerUnit: seaFreight } : {}),
+          ...(line.domesticFeePerUnit != null ? { domesticFeePerUnit: domesticFee } : {}),
         },
       })
     }
@@ -115,8 +116,8 @@ export type InboundActualCatalogLine = {
 }
 
 /** 入库完结后按实收回写货盘本批入库（只改本单对应的货盘行） */
-export async function applyInboundActualToCatalog(
-  prisma: PrismaService,
+export async function writeInboundActualToCatalog(
+  prisma: Pick<PrismaService, 'productPricing' | 'productPricingHistory' | '$queryRaw'>,
   input: { inboundNo: string; lines: InboundActualCatalogLine[] },
 ) {
   const results: { sku: string; pricingId: number; inboundQty: number; changed: boolean }[] = []
@@ -125,6 +126,7 @@ export async function applyInboundActualToCatalog(
     const baseSku = String(line.sku || '').trim()
     if (!baseSku) continue
     const keys = catalogSkuLookupKeys(baseSku)
+    await prisma.$queryRaw`SELECT id FROM product_pricing WHERE sku IN (${Prisma.join(keys)}) FOR UPDATE`
     const row = await prisma.productPricing.findFirst({ where: { sku: { in: keys } } })
     if (!row) continue
     if (row.inboundNo && row.inboundNo !== input.inboundNo) continue
@@ -153,17 +155,19 @@ export async function applyInboundActualToCatalog(
       },
     })
 
-    if (updated.visibleOnOms) {
-      try {
-        await pushCatalogStockToOms(prisma, updated.sku)
-      } catch (err) {
-        console.warn('[catalog] OMS stock push after inbound actual skipped:', err)
-      }
-    }
-
     results.push({ sku: updated.sku, pricingId: Number(updated.id), inboundQty: actualQty, changed: true })
   }
 
+  return results
+}
+
+/** Existing reconciliation callers retain notification after the database write. */
+export async function applyInboundActualToCatalog(prisma: PrismaService, input: { inboundNo: string; lines: InboundActualCatalogLine[] }) {
+  const results = await writeInboundActualToCatalog(prisma, input)
+  for (const row of results.filter(row => row.changed)) {
+    try { await pushCatalogStockToOms(prisma, row.sku) }
+    catch (error) { console.warn('[catalog] OMS stock push after inbound actual skipped:', error) }
+  }
   return results
 }
 
@@ -217,8 +221,23 @@ export async function applyInboundSeaFreightToCatalog(
   prisma: PrismaService,
   input: { inboundNo: string; lines: Array<{ sku: string; seaFreightPerUnit: number }>; action?: string },
 ) {
+  const results = await writeInboundSeaFreightToCatalog(prisma, input)
+  for (const row of results) {
+    if (row.visibleOnOms) {
+      try { await pushCatalogStockToOms(prisma, row.sku) }
+      catch (err) { console.warn('[catalog] OMS stock push after sea freight skipped:', err) }
+    }
+  }
+  return results.map(({ sku, seaFreight }) => ({ sku, seaFreight }))
+}
+
+/** Database-only part, suitable for the shipment transaction. Freight cost is not an OMS stock change. */
+export async function writeInboundSeaFreightToCatalog(
+  prisma: Pick<PrismaService, 'productPricing' | 'productPricingHistory'>,
+  input: { inboundNo: string; lines: Array<{ sku: string; seaFreightPerUnit: number }>; action?: string },
+) {
   const action = input.action || '入库海运费补录'
-  const results: { sku: string; seaFreight: number }[] = []
+  const results: { sku: string; seaFreight: number; visibleOnOms: boolean }[] = []
   for (const line of input.lines) {
     const baseSku = String(line.sku || '').trim()
     if (!baseSku) continue
@@ -244,14 +263,7 @@ export async function applyInboundSeaFreightToCatalog(
         detail: `入库单 ${input.inboundNo} 海运费 ¥${row.seaFreight ?? 0}/件 → ¥${seaFreight}/件`,
       },
     })
-    if (updated.visibleOnOms) {
-      try {
-        await pushCatalogStockToOms(prisma, updated.sku)
-      } catch (err) {
-        console.warn('[catalog] OMS stock push after sea freight skipped:', err)
-      }
-    }
-    results.push({ sku: updated.sku, seaFreight })
+    results.push({ sku: updated.sku, seaFreight, visibleOnOms: Boolean(updated.visibleOnOms) })
   }
   return results
 }

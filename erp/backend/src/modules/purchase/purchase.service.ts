@@ -7,6 +7,15 @@ import { allocatePoDomesticFreight } from '../../common/po-domestic-freight.util
 import { computePoFinanceApprovalCosts } from '../../common/po-finance-cost.util'
 import { catalogSkuLookupKeys, toCatalogInternalSku } from '../../common/catalog-customer.util'
 import { resolveProductPhysicalWeightKg } from '../../common/product-physical-weight.util'
+import { logisticsReceiptProgress } from '../logistics-receipt/logistics-receipt-progress.util'
+import { MAX_IMPORT_FAILURE_DETAILS, type ImportRowFailure, type ImportRowResult } from '../../common/import-row-result.util'
+import {
+  PURCHASE_IMPORT_MAX_ROWS,
+  buildPurchaseImportPoNo,
+  groupPurchaseImportLines,
+  parsePurchaseImportCsv,
+  resolveLogisticsWarehouseCode,
+} from './purchase-import.util'
 
 function fmtTime(d: Date | null | undefined): string {
   if (!d) return ''
@@ -26,6 +35,16 @@ export class PurchaseService {
   ) {}
 
   private async enrichOrders(rows: any[]) {
+    const receiving = rows.filter(row => ['finance_approved', 'at_logistics_wh', 'approved', 'received'].includes(row.status))
+    if (receiving.length) {
+      const receipts = await this.prisma.logisticsReceipt.findMany({ where: { poId: { in: receiving.map(row => row.id) } }, include: { items: { orderBy: { id: 'asc' } } } })
+      rows = rows.map(row => {
+        if (!receiving.includes(row)) return row
+        const progress = logisticsReceiptProgress(row.items, receipts.filter(receipt => receipt.poId === row.id))
+        return { ...row, items: progress.items, receiptIssue: progress.issues.join('；'),
+          status: progress.issues.length ? row.status : progress.allReceived ? 'received' : progress.items.some(item => item.receivedQty > 0) ? 'at_logistics_wh' : row.status }
+      })
+    }
     if (!rows.length) return []
     const supplierIds = [...new Set(rows.map((r) => r.supplierId))]
     const userIds = [
@@ -34,22 +53,28 @@ export class PurchaseService {
       ),
     ] as bigint[]
     const whCodes = [...new Set(rows.map((r) => r.warehouseCode).filter(Boolean))] as string[]
+    const prePoIds = [...new Set(rows.map((r) => r.prePoId).filter(Boolean))] as bigint[]
 
-    const [suppliers, users, warehouses] = await Promise.all([
+    const [suppliers, users, warehouses, prePos] = await Promise.all([
       this.prisma.supplier.findMany({ where: { id: { in: supplierIds } } }),
       userIds.length ? this.prisma.sysUser.findMany({ where: { id: { in: userIds } } }) : [],
       whCodes.length ? this.prisma.warehouse.findMany({ where: { warehouseCode: { in: whCodes } } }) : [],
+      prePoIds.length ? this.prisma.prePurchaseOrder.findMany({ where: { id: { in: prePoIds } }, select: { id: true, status: true } }) : [],
     ])
     const supMap = new Map<number, string>(suppliers.map((s) => [Number(s.id), s.supplierName] as [number, string]))
     const userMap = new Map<number, string>(users.map((u) => [Number(u.id), u.realName] as [number, string]))
     const whMap = new Map<string, string>(warehouses.map((w) => [w.warehouseCode, w.warehouseName] as [string, string]))
+    const prePoStatusMap = new Map<number, string>(prePos.map((item) => [Number(item.id), item.status] as [number, string]))
 
-    return rows.map((row) => this.serialize(row, supMap, userMap, whMap))
+    return rows.map((row) => this.serialize(row, supMap, userMap, whMap, prePoStatusMap.get(Number(row.prePoId)) || ''))
   }
 
-  private serialize(row: any, supMap: Map<number, string>, userMap: Map<number, string>, whMap: Map<string, string>) {
+  private serialize(row: any, supMap: Map<number, string>, userMap: Map<number, string>, whMap: Map<string, string>, prePoStatus = '') {
     return {
       id: Number(row.id),
+      prePoId: row.prePoId ? Number(row.prePoId) : null,
+      prePoStatus,
+      receiptIssue: row.receiptIssue || '',
       poNo: row.poNo,
       supplierId: Number(row.supplierId),
       supplierName: supMap.get(Number(row.supplierId)) || '—',
@@ -556,22 +581,96 @@ export class PurchaseService {
     return item
   }
 
-  async approve(id: number, auditorId?: number, remark?: string, warehouseCode?: string) {
-    const row = await this.detail(id)
-    if (row.status !== 'pending_po_audit') throw new BadRequestException('当前状态不可进行采购审核')
-    const auditWarehouseCode = String(warehouseCode || '').trim()
-    const targetWarehouseCode = row.warehouseCode || auditWarehouseCode
-    if (!targetWarehouseCode) throw new BadRequestException('请先补充目标中转仓后再审核通过')
-    if (!row.warehouseCode) {
-      const warehouse = await this.prisma.warehouse.findUnique({ where: { warehouseCode: targetWarehouseCode } })
-      if (!warehouse || warehouse.warehouseType !== 'logistics') {
-        throw new BadRequestException('请选择有效的物流中转仓')
+  /** 按创建采购单的字段批量导入。相同供应商、中转仓、到货、运费和备注的行合并为一张采购单。 */
+  async importFromCsv(content: string, purchaserId?: number): Promise<ImportRowResult> {
+    let parsed: ReturnType<typeof parsePurchaseImportCsv>
+    try {
+      parsed = parsePurchaseImportCsv(content)
+    } catch (error: any) {
+      throw new BadRequestException(error?.message || '导入文件格式错误')
+    }
+    const totalRows = parsed.lines.length + parsed.failureCount
+    if (!totalRows) throw new BadRequestException('文件为空或没有有效数据行')
+    if (totalRows > PURCHASE_IMPORT_MAX_ROWS) {
+      throw new BadRequestException(`单次最多导入 ${PURCHASE_IMPORT_MAX_ROWS} 行`)
+    }
+
+    const warehouses = await this.prisma.warehouse.findMany({
+      where: { warehouseType: 'logistics', status: 1 },
+      select: { warehouseCode: true, warehouseName: true },
+    })
+    const skus = [...new Set(parsed.lines.map((line) => line.sku))]
+    const products = skus.length
+      ? await this.prisma.product.findMany({
+        where: { sku: { in: skus } },
+        select: { id: true, sku: true, productName: true },
+      })
+      : []
+    const productBySku = new Map(products.map((product) => [product.sku.toLowerCase(), product]))
+
+    let ok = 0
+    let fail = parsed.failureCount
+    const failures: ImportRowFailure[] = [...parsed.failures]
+    const recordFail = (lineNo: number, reason: string, sku?: string) => {
+      fail++
+      if (failures.length < MAX_IMPORT_FAILURE_DETAILS) {
+        failures.push({ lineNo, reason, ...(sku ? { sku } : {}) })
       }
     }
-    const source = !row.warehouseCode
-      ? await this.prisma.purchaseOrder.findUnique({ where: { id: BigInt(id) }, select: { prePoId: true } })
-      : null
+
+    let orderSeq = 0
+    for (const group of groupPurchaseImportLines(parsed.lines)) {
+      const warehouse = resolveLogisticsWarehouseCode(group.warehouseKey, warehouses)
+      if (!warehouse.code) {
+        const reason = warehouse.ambiguous
+          ? `目标中转仓「${group.warehouseKey}」对应多个仓库，请改填仓库代码`
+          : `目标中转仓「${group.warehouseKey}」不是已启用的物流中转仓`
+        for (const line of group.lines) recordFail(line.lineNo, reason, line.sku)
+        continue
+      }
+      orderSeq++
+      try {
+        await this.create({
+          poNo: buildPurchaseImportPoNo(orderSeq),
+          supplierName: group.supplierName,
+          warehouseCode: warehouse.code,
+          expectedArrival: group.expectedArrival,
+          domesticFreight: group.domesticFreight,
+          remark: group.orderRemark,
+          items: group.lines.map((line) => {
+            const product = productBySku.get(line.sku.toLowerCase())
+            return {
+              productId: product ? Number(product.id) : 0,
+              sku: product?.sku || line.sku,
+              productName: line.productName || product?.productName || undefined,
+              quantity: line.quantity,
+              unitPrice: line.unitPrice,
+              remark: line.lineRemark,
+            }
+          }),
+        }, purchaserId)
+        ok += group.lines.length
+      } catch (error: any) {
+        const reason = error?.message || '写入失败'
+        for (const line of group.lines) recordFail(line.lineNo, reason, line.sku)
+      }
+    }
+
+    return { imported: ok, failed: fail, failures }
+  }
+
+  async approve(id: number, auditorId?: number, remark?: string, warehouseCode?: string) {
+    const auditWarehouseCode = String(warehouseCode || '').trim()
     const updated = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM purchase_order WHERE id = ${BigInt(id)} FOR UPDATE`
+      const row = await tx.purchaseOrder.findUnique({ where: { id: BigInt(id) }, include: { items: true } })
+      if (!row) throw new NotFoundException('采购单不存在')
+      if (row.status !== 'pending_po_audit') throw new BadRequestException('采购单状态已变化，请刷新核对后再审核')
+      const targetWarehouseCode = row.warehouseCode || auditWarehouseCode
+      if (!targetWarehouseCode) throw new BadRequestException('请先补充目标中转仓后再审核通过')
+      const warehouse = await tx.warehouse.findUnique({ where: { warehouseCode: targetWarehouseCode } })
+      if (!warehouse || warehouse.status !== 1 || warehouse.warehouseType !== 'logistics') throw new BadRequestException('请选择有效且启用的物流中转仓')
+      if (!row.items.length || row.items.some(line => !Number.isSafeInteger(line.quantity) || line.quantity <= 0 || !Number.isFinite(Number(line.unitPrice)) || Number(line.unitPrice) <= 0)) throw new BadRequestException('请先核对采购明细，每项数量须为正整数、采购单价须大于零')
       const order = await tx.purchaseOrder.update({
         where: { id: BigInt(id) },
         data: {
@@ -584,9 +683,9 @@ export class PurchaseService {
         } as any,
         include: { items: true },
       })
-      if (!row.warehouseCode && source?.prePoId) {
+      if (!row.warehouseCode && row.prePoId) {
         await tx.prePurchaseOrder.update({
-          where: { id: source.prePoId },
+          where: { id: row.prePoId },
           data: { warehouseCode: targetWarehouseCode },
         })
       }
@@ -600,24 +699,33 @@ export class PurchaseService {
       action: 'po_approve',
       targetType: 'purchase_order',
       targetId: item.poNo,
-      detail: { remark: remark || '审核通过', warehouseCode: targetWarehouseCode, statusAfter: item.status },
+      detail: { remark: remark || '审核通过', warehouseCode: updated.warehouseCode, statusAfter: item.status },
     })
     return item
   }
 
   async rejectPoAudit(id: number, auditorId?: number, remark?: string) {
-    const row = await this.detail(id)
-    if (row.status !== 'pending_po_audit') throw new BadRequestException('当前状态不可驳回')
     if (!remark?.trim()) throw new BadRequestException('请填写驳回原因')
-    const updated = await this.prisma.purchaseOrder.update({
-      where: { id: BigInt(id) },
-      data: {
-        status: 'rejected',
-        auditorId: auditorId ? BigInt(auditorId) : undefined,
-        auditedAt: new Date(),
-        poAuditRemark: remark.trim(),
-      } as any,
-      include: { items: true },
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM purchase_order WHERE id = ${BigInt(id)} FOR UPDATE`
+      const row = await tx.purchaseOrder.findUnique({ where: { id: BigInt(id) } })
+      if (!row) throw new NotFoundException('采购单不存在')
+      if (row.status !== 'pending_po_audit') throw new BadRequestException('采购单状态已变化，请刷新核对后再驳回')
+      if (row.prePoId) {
+        const prePo = await tx.prePurchaseOrder.findUnique({ where: { id: row.prePoId } })
+        if (!prePo || prePo.convertedPoId !== row.id || prePo.status !== 'confirmed') throw new BadRequestException('关联预采购单状态异常，请联系管理员核对')
+        await tx.prePurchaseOrder.update({ where: { id: prePo.id }, data: { status: 'returned' } })
+      }
+      return tx.purchaseOrder.update({
+        where: { id: BigInt(id) },
+        data: {
+          status: 'rejected',
+          auditorId: auditorId ? BigInt(auditorId) : undefined,
+          auditedAt: new Date(),
+          poAuditRemark: remark.trim(),
+        } as any,
+        include: { items: true },
+      })
     })
     const [item] = await this.enrichOrders([updated])
     await this.opLog.log({
@@ -633,45 +741,50 @@ export class PurchaseService {
 
   /** 产品主管核定实际采购数量 → 进入采购主管审核 */
   async setActualQty(id: number, body: { quantity?: number; remark?: string }, operatorId?: number) {
-    const row = await this.prisma.purchaseOrder.findUnique({
-      where: { id: BigInt(id) },
-      include: { items: true },
-    })
-    if (!row) throw new NotFoundException('采购单不存在')
-    if (row.status !== 'pending_actual_qty') throw new BadRequestException('当前状态不可核定实际采购数量')
-
     const qty = Number(body.quantity)
-    if (!qty || qty <= 0) throw new BadRequestException('请填写实际采购数量')
+    if (!Number.isSafeInteger(qty) || qty <= 0 || qty > 2147483647) throw new BadRequestException('实际采购数量须为 1 至 2147483647 的整数')
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM purchase_order WHERE id = ${BigInt(id)} FOR UPDATE`
+      const row = await tx.purchaseOrder.findUnique({
+        where: { id: BigInt(id) },
+        include: { items: true },
+      })
+      if (!row) throw new NotFoundException('采购单不存在')
+      if (row.status !== 'pending_actual_qty') throw new BadRequestException('当前状态不可核定实际采购数量')
 
-    const line = row.items[0]
-    if (!line) throw new BadRequestException('采购明细为空')
+      const line = row.items[0]
+      if (!line) throw new BadRequestException('采购明细为空')
+      if (row.items.length !== 1) throw new BadRequestException('该单包含多项采购明细，请联系管理员逐项核对数量')
 
-    const unitPrice = Number(line.unitPrice)
-    const amount = qty * unitPrice
-    const orderDomestic = row.domesticFreight != null ? Number(row.domesticFreight) : 0
-    let lineDomestic = line.domesticFreight != null ? Number(line.domesticFreight) : undefined
-    if (lineDomestic == null && orderDomestic > 0) {
-      lineDomestic = orderDomestic
-    }
+      const unitPrice = Number(line.unitPrice)
+      const amount = Math.round(qty * unitPrice * 100) / 100
+      if (!Number.isFinite(unitPrice) || unitPrice <= 0) throw new BadRequestException('请先补充有效的采购单价')
+      if (!Number.isFinite(amount) || amount > 999999999999.99) throw new BadRequestException('采购金额超出支持范围，请核对数量和单价')
+      const orderDomestic = row.domesticFreight != null ? Number(row.domesticFreight) : 0
+      let lineDomestic = line.domesticFreight != null ? Number(line.domesticFreight) : undefined
+      if (lineDomestic == null && orderDomestic > 0) {
+        lineDomestic = orderDomestic
+      }
 
-    const updated = await this.prisma.purchaseOrder.update({
-      where: { id: BigInt(id) },
-      data: {
-        status: 'pending_po_audit',
-        totalAmount: amount,
-        items: {
-          update: {
-            where: { id: line.id },
-            data: {
-              quantity: qty,
-              amount,
-              domesticFreight: lineDomestic,
-              remark: body.remark?.trim() || line.remark,
+      return tx.purchaseOrder.update({
+        where: { id: BigInt(id) },
+        data: {
+          status: 'pending_po_audit',
+          totalAmount: amount,
+          items: {
+            update: {
+              where: { id: line.id },
+              data: {
+                quantity: qty,
+                amount,
+                domesticFreight: lineDomestic,
+                remark: body.remark?.trim() || line.remark,
+              },
             },
           },
         },
-      },
-      include: { items: true },
+        include: { items: true },
+      })
     })
 
     const [item] = await this.enrichOrders([updated])
@@ -681,7 +794,7 @@ export class PurchaseService {
       action: 'set_actual_qty',
       targetType: 'purchase_order',
       targetId: item.poNo,
-      detail: { sku: line.sku, plannedQty: line.plannedQty, actualQty: qty },
+      detail: { sku: updated.items[0].sku, plannedQty: updated.items[0].plannedQty, actualQty: qty },
     })
     return item
   }
@@ -913,23 +1026,21 @@ export class PurchaseService {
   }
 
   async setPaymentStatus(id: number, paid: boolean, operatorId?: number, remark?: string) {
-    const row = await this.detail(id)
-    const markable = ['finance_approved', 'at_logistics_wh', 'received', 'completed', 'approved']
-    if (!markable.includes(row.status)) {
-      throw new BadRequestException('采购审核通过后才能标记打款状态')
-    }
     const next = paid ? 'paid' : 'unpaid'
-    if (row.paymentStatus === next) {
-      throw new BadRequestException(paid ? '该采购单已是已打款' : '该采购单已是未打款')
-    }
     const updated = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM purchase_order WHERE id = ${BigInt(id)} FOR UPDATE`
+      const row = await tx.purchaseOrder.findUnique({ where: { id: BigInt(id) }, include: { items: true } })
+      if (!row) throw new NotFoundException('采购单不存在')
+      const markable = ['finance_approved', 'at_logistics_wh', 'received', 'completed', 'approved']
+      if (!markable.includes(row.status)) throw new BadRequestException('采购审核通过后才能标记打款状态')
+      if ((row.paymentStatus || 'unpaid') === next) throw new BadRequestException(paid ? '该采购单已是已打款' : '该采购单已是未打款')
       const order = await tx.purchaseOrder.update({
         where: { id: BigInt(id) },
         data: {
           paymentStatus: next,
           paidAt: paid ? new Date() : null,
           paidBy: paid && operatorId ? BigInt(operatorId) : null,
-          financeRemark: remark?.trim() || row.financeRemark || undefined,
+          financeRemark: remark?.trim() || (paid ? '已标记已打款' : '已标记未打款'),
         } as any,
         include: { items: true },
       })
@@ -1003,15 +1114,39 @@ export class PurchaseService {
   }
 
   async remove(id: number, operatorId?: number) {
-    const row = await this.detail(id)
-    await this.prisma.purchaseOrderItem.deleteMany({ where: { poId: BigInt(id) } })
-    await this.prisma.purchaseOrder.delete({ where: { id: BigInt(id) } })
+    const removed = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM purchase_order WHERE id = ${BigInt(id)} FOR UPDATE`
+      const row = await tx.purchaseOrder.findUnique({ where: { id: BigInt(id) }, include: { items: true } })
+      if (!row) throw new NotFoundException('采购单不存在')
+      if (!['rejected', 'draft'].includes(row.status)) throw new BadRequestException('仅已驳回或草稿的废弃采购单可以删除')
+      if (row.items.some((line) => (line.receivedQty ?? 0) > 0)) throw new BadRequestException('该采购单已有收货记录，不能删除')
+      const [receipts, inbounds, bills, costs] = await Promise.all([
+        tx.logisticsReceipt.count({ where: { poId: row.id } }),
+        tx.inboundOrder.count({ where: { poId: row.id } }),
+        tx.supplierFreightBill.count({ where: { poId: row.id } }),
+        tx.costLedger.count({ where: { referenceNo: row.poNo } }),
+      ])
+      if (receipts || inbounds || bills || costs) throw new BadRequestException('该采购单已有收货、入库或费用记录，不能删除')
+      if (row.prePoId) {
+        const prePo = await tx.prePurchaseOrder.findUnique({ where: { id: row.prePoId } })
+        if (prePo?.convertedPoId === row.id) {
+          await tx.prePurchaseOrder.update({
+            where: { id: prePo.id },
+            data: { status: 'cancelled', cancelReason: prePo.cancelReason || '关联采购单已删除', convertedPoId: null },
+          })
+        }
+      }
+      await tx.purchaseOrderItem.deleteMany({ where: { poId: row.id } })
+      await tx.purchaseOrder.delete({ where: { id: row.id } })
+      return row
+    })
     await this.opLog.log({
       operatorId,
       module: 'purchase',
       action: 'delete',
       targetType: 'purchase_order',
-      targetId: row.poNo,
+      targetId: removed.poNo,
+      detail: { status: removed.status },
     })
     return { id }
   }

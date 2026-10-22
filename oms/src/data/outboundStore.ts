@@ -8,6 +8,7 @@ import { toErpTakealotDestWh, fromErpTakealotDestWh } from './takealotDocParser'
 import { getPriceTemplateForCustomer } from './feeTemplateStore'
 import { buildOutboundTemplateSnapshot } from './feeTemplates'
 import { notifyPersistFailed } from '../utils/userNotify'
+import { userFacingError } from '../utils/userFacingError'
 
 let orders: OutboundOrder[] = []
 const listeners = new Set<() => void>()
@@ -16,10 +17,10 @@ function emit() {
   listeners.forEach(fn => fn())
 }
 
-function persist(next: OutboundOrder[]) {
+function persist(next: OutboundOrder[], changed: OutboundOrder[] = next) {
   orders = next
   emit()
-  void apiPut('/outbound-orders', next).catch(err => notifyPersistFailed('出库单', err))
+  void apiPut('/outbound-orders', changed).catch(err => notifyPersistFailed('出库单', err))
 }
 
 function subscribe(listener: () => void) {
@@ -41,21 +42,23 @@ export function getOutboundOrders(): OutboundOrder[] {
 }
 
 export function addOutboundOrder(order: OutboundOrder) {
-  persist([order, ...orders])
+  persist([order, ...orders], [order])
 }
 
 export async function addOutboundOrderOrThrow(order: OutboundOrder) {
-  const before = orders
   const existingIndex = orders.findIndex(item => item.id === order.id || item.outboundNo === order.outboundNo)
+  const previous = existingIndex >= 0 ? orders[existingIndex] : undefined
+  const optimistic = { ...previous, ...order }
   const next = existingIndex >= 0
-    ? orders.map((item, index) => index === existingIndex ? { ...item, ...order } : item)
-    : [order, ...orders]
+    ? orders.map((item, index) => index === existingIndex ? optimistic : item)
+    : [optimistic, ...orders]
   orders = next
   emit()
   try {
-    await apiPut('/outbound-orders', next)
+    await apiPut('/outbound-orders', [optimistic])
   } catch (error) {
-    orders = before
+    // Waiting for persistence must not undo a newer ERP refresh of this or another order.
+    orders = orders.flatMap(item => item !== optimistic ? [item] : previous ? [previous] : [])
     emit()
     throw error
   }
@@ -78,7 +81,8 @@ export async function removeOutboundOrder(id: string) {
 }
 
 export function updateOutboundOrder(id: string, patch: Partial<OutboundOrder>) {
-  persist(orders.map(o => (o.id === id ? { ...o, ...patch } : o)))
+  const next = orders.map(o => (o.id === id ? { ...o, ...patch } : o))
+  persist(next, next.filter(o => o.id === id))
 }
 
 export function useOutboundOrders(): OutboundOrder[] {
@@ -100,7 +104,7 @@ function mapErpOutboundStatus(omsStatus: string): LegacyOrderStatus {
   return (allowed.includes(omsStatus as LegacyOrderStatus) ? omsStatus : 'locked') as LegacyOrderStatus
 }
 
-export function applyErpOutboundToLocal(erp: ErpOutboundOrder, base?: Partial<OutboundOrder>): OutboundOrder {
+export function applyErpOutboundToLocal(erp: ErpOutboundOrder, base?: Partial<OutboundOrder>, options: { persist?: boolean } = {}): OutboundOrder {
   const existing = orders.find(o => o.outboundNo === erp.outboundNo)
   const takealotDest = fromErpTakealotDestWh(erp.fbaWarehouse)
   const order: OutboundOrder = {
@@ -169,16 +173,22 @@ export function applyErpOutboundToLocal(erp: ErpOutboundOrder, base?: Partial<Ou
   if (idx >= 0) {
     const next = [...orders]
     next[idx] = { ...next[idx], ...order }
-    persist(next)
+    if (options.persist !== false) persist(next, [next[idx]])
+    else { orders = next; emit() }
   } else {
-    persist([order, ...orders])
+    if (options.persist !== false) persist([order, ...orders], [order])
+    else { orders = [order, ...orders]; emit() }
   }
   return order
 }
 
+export type OutboundSubmissionResult =
+  | { ok: true; order: OutboundOrder; warning?: string }
+  | { ok: false; error: string; uncertain?: boolean }
+
 export async function submitOutboundToErp(
   order: OutboundOrder,
-): Promise<{ ok: true; order: OutboundOrder } | { ok: false; error: string }> {
+): Promise<OutboundSubmissionResult> {
   const customerCode = getCustomerCode(order.customerId)
   if (!customerCode || customerCode === '—') {
     return { ok: false, error: '当前角色未绑定客户编码，无法同步 ERP' }
@@ -254,18 +264,51 @@ export async function submitOutboundToErp(
         templateSnapshot,
       } : undefined,
     })
-    return { ok: true, order: applyErpOutboundToLocal(erp, order) }
+    const confirmed = applyErpOutboundToLocal(erp, order, { persist: false })
+    try {
+      await addOutboundOrderOrThrow(confirmed)
+      return { ok: true, order: confirmed }
+    } catch (error) {
+      return { ok: true, order: confirmed,
+        warning: `出库单 ${order.outboundNo} 已提交 ERP，但 OMS 回写失败。请刷新出库记录核对，请勿重复提交。${userFacingError(error)}` }
+    }
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    const status = Number((err as { status?: unknown } | null)?.status)
+    const uncertain = !Number.isFinite(status) || status < 100 || status >= 500 || status === 408 || status === 409
+    return { ok: false, uncertain,
+      error: uncertain
+        ? `出库提交结果暂无法确认，请返回出库记录刷新核对，请勿重复提交。${userFacingError(err)}`
+        : userFacingError(err) }
   }
+}
+
+/** ERP is the sole authority for reservation and charging; OMS records the request and mirrors confirmed results. */
+export async function submitOutboundWorkflow(order: OutboundOrder): Promise<OutboundSubmissionResult> {
+  try {
+    await addOutboundOrderOrThrow({ ...order, status: 'pending' })
+  } catch (error) {
+    return { ok: false, error: `出库单保存未确认，尚未发送 ERP；请刷新记录核对后再试。${userFacingError(error)}` }
+  }
+  const result = await submitOutboundToErp(order)
+  if (!result.ok && !result.uncertain) {
+    try {
+      await addOutboundOrderOrThrow({ ...order, status: 'draft' })
+    } catch (error) {
+      return { ok: false, uncertain: true,
+        error: `${result.error}；ERP 未接单，但草稿恢复未确认，请返回出库记录核对。${userFacingError(error)}` }
+    }
+  }
+  return result
 }
 
 export async function refreshOutboundsFromErp(customerId: string): Promise<number> {
   const customerCode = getCustomerCode(customerId)
   if (!customerCode || customerCode === '—') return 0
   const data = await syncErpOutbounds(customerCode)
-  for (const item of data.items || []) {
-    applyErpOutboundToLocal(item, { customerId })
+  const refreshed = (data.items || []).map(item => applyErpOutboundToLocal(item, { customerId }, { persist: false }))
+  if (refreshed.length) {
+    try { await apiPut('/outbound-orders', refreshed) }
+    catch (error) { throw new Error(`ERP 出库记录已读取，但 OMS 保存失败，请刷新核对。${userFacingError(error)}`) }
   }
   return data.total
 }

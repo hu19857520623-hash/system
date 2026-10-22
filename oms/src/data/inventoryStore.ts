@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react'
 import { apiDelete, apiPut, getStoredAuthSession } from '../api/client'
 import { notifyPersistFailed } from '../utils/userNotify'
+import { userFacingError } from '../utils/userFacingError'
 import { purchaseErpCatalog, type ErpCatalogItem, type ErpPurchaseResult } from '../api/erp'
 import type { InventoryItem, Product } from './mockData'
 import { getCustomerCode } from './dataScope'
@@ -651,6 +652,10 @@ export async function refreshInventoryFromErp(customerId: string, customerCode: 
     const locked = stockSource === 'catalog'
       ? Math.max(0, Number(item.quantity) || 0)
       : Math.max(0, Number(item.warehouseLocked) || 0)
+    const inTransit = stockSource === 'owned' && item.inTransitQty != null
+      ? Math.max(0, Number(item.inTransitQty) || 0) : undefined
+    const pendingShelving = stockSource === 'owned' && item.pendingShelvingQty != null
+      ? Math.max(0, Number(item.pendingShelvingQty) || 0) : undefined
     const idx = state.inventory.findIndex(
       i => i.sku === item.sku && i.stockSource === stockSource && i.customerId === customerId,
     )
@@ -660,6 +665,8 @@ export async function refreshInventoryFromErp(customerId: string, customerCode: 
       state.inventory[idx].name = item.productName
       state.inventory[idx].price = item.unitPrice ?? state.inventory[idx].price
       state.inventory[idx].warehouse = item.warehouseCode
+      if (inTransit !== undefined) state.inventory[idx].inTransit = inTransit
+      if (pendingShelving !== undefined) state.inventory[idx].pendingShelving = pendingShelving
     } else {
       state.inventory.unshift({
         // ERP item ids are globally unique per stock source; never append the
@@ -671,11 +678,11 @@ export async function refreshInventoryFromErp(customerId: string, customerCode: 
         image: '',
         available,
         locked,
-        inTransit: 0,
+        inTransit: inTransit ?? 0,
         safetyStock: 0,
         spec: '',
         warehouse: item.warehouseCode,
-        pendingShelving: 0,
+        pendingShelving: pendingShelving ?? 0,
         pendingOutbound: 0,
         defective: 0,
         shipped: 0,
@@ -692,7 +699,11 @@ export async function refreshInventoryFromErp(customerId: string, customerCode: 
       }
     }
   }
-  persistLocal()
+  try {
+    await persistLocalOrThrow()
+  } catch (error) {
+    throw new Error(`ERP 库存已读取，但 OMS 保存失败，请刷新核对。${userFacingError(error)}`)
+  }
   return data.total
 }
 

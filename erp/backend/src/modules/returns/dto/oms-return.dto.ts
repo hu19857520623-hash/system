@@ -50,7 +50,7 @@ export class OmsReturnAttachmentDto {
 export class CreateOmsReturnDto {
   @IsOptional()
   @IsString()
-  @MaxLength(40)
+  @MaxLength(50)
   returnNo?: string
 
   @IsString()

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { userFacingError } from '@erp/shared/user-facing-error'
+
 import { displaySku, displaySkuText } from '@erp/shared/sku-display'
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
@@ -174,7 +176,7 @@ async function loadHoldings() {
   } catch (e: any) {
     holdingRows.value = []
     holdingsTotal.value = 0
-    ElMessage.error(displaySkuText(e?.message || '加载货盘持有失败'))
+    ElMessage.error(userFacingError(displaySkuText(e?.message || '加载货盘持有失败')))
   } finally {
     holdingsLoading.value = false
   }
@@ -193,7 +195,8 @@ function resetHoldingsFilters() {
 }
 
 function isReclaimableRow(row: HoldingRow) {
-  return Boolean(row.customerCode && !isCatalogPoolCustomerCode(row.customerCode))
+  return Boolean(row.customerCode && !isCatalogPoolCustomerCode(row.customerCode)
+    && Number(row.availableQty ?? row.sellableQty ?? 0) > 0)
 }
 
 async function openCatalogPurchases(row: HoldingRow) {
@@ -211,13 +214,14 @@ async function openCatalogPurchases(row: HoldingRow) {
     })
     catalogPurchaseRows.value = res.items || []
   } catch (e: any) {
-    ElMessage.error(displaySkuText(e?.message || '加载失败'))
+    ElMessage.error(userFacingError(displaySkuText(e?.message || '加载失败')))
   } finally {
     catalogPurchaseLoading.value = false
   }
 }
 
 function openReclaim(row: HoldingRow) {
+  if (!isReclaimableRow(row)) return ElMessage.warning('该客户没有可收回的持有数量')
   const maxQty = Number(row.availableQty ?? row.sellableQty ?? 0)
   reclaimForm.value = {
     customerCode: row.customerCode || '',
@@ -235,7 +239,8 @@ async function submitReclaim() {
   if (!f.customerCode.trim()) return ElMessage.warning('请填写客户代码')
   if (!f.sku.trim()) return ElMessage.warning('缺少 SKU')
   if (!f.quantity || f.quantity <= 0) return ElMessage.warning('收回数量须大于 0')
-  if (f.maxQty > 0 && f.quantity > f.maxQty) {
+  if (f.maxQty <= 0) return ElMessage.warning('没有可收回的持有数量')
+  if (f.quantity > f.maxQty) {
     return ElMessage.warning(`最多可收回 ${f.maxQty} 件`)
   }
   reclaimSubmitting.value = true
@@ -251,7 +256,7 @@ async function submitReclaim() {
     loadHoldings()
     load()
   } catch (e: any) {
-    ElMessage.error(displaySkuText(e?.message || '收回失败'))
+    ElMessage.error(userFacingError(displaySkuText(e?.message || '收回失败')))
   } finally {
     reclaimSubmitting.value = false
   }
@@ -675,7 +680,7 @@ async function submitReprice() {
 
     <template v-else>
       <el-alert type="info" :closable="false" show-icon style="margin-bottom:14px">
-        客户从 OMS 货盘申购后的持有库存；申购后可发货，ERP 可收回并回流货盘池。
+        持有量为可收回数量；锁定量为已预约、尚未发货的货盘数量。历史持有量与锁定量均为 0 的记录不显示。
       </el-alert>
       <el-table v-loading="holdingsLoading" :data="holdingRows" stripe border size="small">
         <el-table-column prop="sku" label="SKU" width="120">

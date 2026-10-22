@@ -1,4 +1,8 @@
 import { assertOwnedBindingMutation, OwnedBindingLockedError } from './owned-binding-lock.util.js'
+import { localizedErrorResponse } from './error-response.util.js'
+import { missingRequiredAccountMessage } from './account-validation.util.js'
+import { readReturnFormMetadata, writeReturnFormMetadata, ReturnFormValidationError } from './return-form-metadata.util.js'
+import { applyCatalogReturnSnapshot } from './catalog-return-snapshot.util.js'
 import 'dotenv/config'
 import { catalogBindingSkus, catalogMappingSource } from './catalog-binding.util.js'
 import { OutboundAttachmentContentError, requireOutboundAttachmentContent } from './outbound-attachment-content.util.js'
@@ -142,7 +146,7 @@ app.use((_req, res, next) => {
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')
   const json = res.json.bind(res)
   res.json = ((body: unknown) => json(
-    res.statusCode >= 400 ? sanitizeErrorPayload(body) : body,
+    res.statusCode >= 400 ? localizedErrorResponse(sanitizeErrorPayload(body), res.statusCode) : body,
   )) as typeof res.json
   next()
 })
@@ -375,6 +379,7 @@ async function buildUnscopedBootstrap(
     })),
     returnOrders: returnOrders.map(o => ({
       ...o,
+      ...readReturnFormMetadata(o.remark),
       lineItems: o.lineItems ? parseJson(o.lineItems, []) : [],
       attachments: o.attachments ? parseJson(o.attachments, []) : [],
       estimatedFeeTotal: o.estimatedFeeTotal == null ? undefined : Number(o.estimatedFeeTotal),
@@ -1047,11 +1052,11 @@ app.post('/api/erp/purchase', async (req, res) => {
       const account = await prisma.customerAccount.findUnique({ where: { id: String(body.customerId) } })
       customerCode = account?.code?.trim() || ''
     }
-    if (!customerCode) return res.status(400).json({ error: '缺少 customerCode 或可解析的 customerId' })
+    if (!customerCode) return res.status(400).json({ error: '缺少客户代码或有效的客户信息' })
 
     const sku = String(body.sku || '').trim()
     const quantity = Math.floor(Number(body.quantity))
-    if (!sku) return res.status(400).json({ error: '缺少 sku' })
+    if (!sku) return res.status(400).json({ error: '缺少 SKU 编码' })
     if (!Number.isFinite(quantity) || quantity <= 0) return res.status(400).json({ error: '购买数量须大于 0' })
 
     const orderNo =
@@ -1379,16 +1384,16 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
       })
     }
     const eventId = String(body.eventId || req.header('x-oms-event-id') || '').trim()
-    if (!eventId) return res.status(400).json({ error: '缺少 eventId' })
+    if (!eventId) return res.status(400).json({ error: '缺少同步事件编号' })
     const type = String(body.type || '')
     const customerCode = String(body.customerCode || '').trim()
     const data = body.data || {}
     if (!type) {
-      return res.status(400).json({ error: '缺少 type' })
+      return res.status(400).json({ error: '缺少同步事件类型' })
     }
     // 公告可广播 customerCode='*'；其余事件必须带客户编码
     if (!customerCode && type !== 'announcement.publish') {
-      return res.status(400).json({ error: '缺少 customerCode' })
+      return res.status(400).json({ error: '缺少客户代码' })
     }
 
     const payloadHash = createHash('sha256').update(rawBody).digest('hex')
@@ -1510,7 +1515,7 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
 
     if (type === 'outbound.fees') {
       const payload = data as unknown as OutboundFeesPayload
-      if (!payload.outboundNo) return res.status(400).json({ error: '缺少 outboundNo' })
+      if (!payload.outboundNo) return res.status(400).json({ error: '缺少出库单号' })
       const result = await settleOutboundFees(prisma, customerCode, account?.id ?? null, payload)
       if ('error' in result) return res.status(400).json({ error: result.error })
       return res.json({ ok: true, type, customerCode, settlementDelta: result.settlementDelta })
@@ -1518,7 +1523,7 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
 
     if (type === 'outbound.refund') {
       const outboundNo = String(data.outboundNo || '')
-      if (!outboundNo) return res.status(400).json({ error: '缺少 outboundNo' })
+      if (!outboundNo) return res.status(400).json({ error: '缺少出库单号' })
       const result = await refundOutboundPreDeduct(prisma, customerCode, account?.id ?? null, {
         outboundNo,
         preDeductTotal: Number(data.preDeductTotal) || 0,
@@ -1531,7 +1536,7 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
 
     if (type === 'inbound.status') {
       const inbound = data as unknown as ErpInboundOrder & { deleted?: boolean }
-      if (!inbound.inboundNo) return res.status(400).json({ error: '缺少 inboundNo' })
+      if (!inbound.inboundNo) return res.status(400).json({ error: '缺少入库单号' })
       const existing = await prisma.inboundOrder.findFirst({ where: { inboundNo: inbound.inboundNo } })
       if (inbound.deleted) {
         if (existing) {
@@ -1609,7 +1614,7 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
       }
     } else if (type === 'outbound.status') {
       const outbound = data as unknown as ErpOutboundOrder
-      if (!outbound.outboundNo) return res.status(400).json({ error: '缺少 outboundNo' })
+      if (!outbound.outboundNo) return res.status(400).json({ error: '缺少出库单号' })
       const existing = await prisma.outboundOrder.findFirst({ where: { outboundNo: outbound.outboundNo } })
       const status = outbound.omsStatus || 'locked'
       const totalQty = outbound.items?.reduce((s, i) => s + i.qty, 0) || 0
@@ -1718,6 +1723,7 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
           availableQty?: number
           lockedQty?: number
           pendingShelvingQty?: number
+          holdingQty?: number
         }>
       }
       if (payload.action === 'catalog_reclaim' && customerId && payload.sku && payload.quantity) {
@@ -1777,6 +1783,9 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
           })
         }
       }
+      if (customerId && payload.stockSource === 'catalog' && payload.reason === 'return_restock') {
+        for (const line of payload.items || []) await applyCatalogReturnSnapshot(prisma, customerId, line, toOmsWarehouseCode(payload.warehouseCode, 'jhb1'))
+      }
       if (customerId && payload.stockSource === 'owned') {
         const warehouse = toOmsWarehouseCode(payload.warehouseCode, 'jhb1')
         for (const line of payload.items || []) {
@@ -1797,7 +1806,7 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
             image: product.image,
             available,
             locked,
-            inTransit: payload.reason?.startsWith('outbound_') ? inventory?.inTransit ?? 0 : 0,
+            inTransit: payload.reason?.startsWith('outbound_') || payload.reason === 'return_restock' ? inventory?.inTransit ?? 0 : 0,
             safetyStock: inventory?.safetyStock ?? 0,
             spec: product.spec,
             customCode: product.customCode,
@@ -1848,7 +1857,7 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
       }
     } else if (type === 'return.status') {
       const ret = data as unknown as ErpReturnOrder
-      if (!ret.returnNo) return res.status(400).json({ error: '缺少 returnNo' })
+      if (!ret.returnNo) return res.status(400).json({ error: '缺少退件单号' })
       const existing = await prisma.returnOrder.findFirst({ where: { returnNo: ret.returnNo } })
       const lineItems = JSON.stringify(
         (ret.items || []).map(i => ({
@@ -1921,7 +1930,7 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
         exceptionReason?: string
       }
       const outboundNo = String(lg.outboundNo || '')
-      if (!outboundNo) return res.status(400).json({ error: '缺少 outboundNo' })
+      if (!outboundNo) return res.status(400).json({ error: '缺少出库单号' })
       const id = String(lg.id || `lg-erp-${outboundNo}`)
       const existing = await prisma.logisticsRecord.findFirst({
         where: { OR: [{ id }, { outboundNo }] },
@@ -2065,7 +2074,7 @@ app.post('/api/erp/inbound', async (req, res) => {
       const account = await prisma.customerAccount.findUnique({ where: { id: String(body.customerId) } })
       customerCode = account?.code?.trim() || ''
     }
-    if (!customerCode) return res.status(400).json({ error: '缺少 customerCode' })
+    if (!customerCode) return res.status(400).json({ error: '缺少客户代码' })
 
     const result = await createErpInboundAsn(mapOmsAsnRequest(body, customerCode))
     res.json(result)
@@ -2077,7 +2086,7 @@ app.post('/api/erp/inbound', async (req, res) => {
 app.put('/api/erp/inbound/:inboundNo', async (req, res) => {
   try {
     const inboundNo = String(req.params.inboundNo || '').trim()
-    if (!inboundNo) return res.status(400).json({ error: '缺少 inboundNo' })
+    if (!inboundNo) return res.status(400).json({ error: '缺少入库单号' })
     const body = req.body as {
       inboundNo?: string
       customerCode?: string
@@ -2101,7 +2110,7 @@ app.put('/api/erp/inbound/:inboundNo', async (req, res) => {
       const account = await prisma.customerAccount.findUnique({ where: { id: String(body.customerId) } })
       customerCode = account?.code?.trim() || ''
     }
-    if (!customerCode) return res.status(400).json({ error: '缺少 customerCode' })
+    if (!customerCode) return res.status(400).json({ error: '缺少客户代码' })
 
     const result = await updateErpInboundAsn(inboundNo, mapOmsAsnRequest({ ...body, inboundNo }, customerCode))
     res.json(result)
@@ -2113,14 +2122,14 @@ app.put('/api/erp/inbound/:inboundNo', async (req, res) => {
 app.post('/api/erp/inbound/:inboundNo/cancel', async (req, res) => {
   try {
     const inboundNo = String(req.params.inboundNo || '').trim()
-    if (!inboundNo) return res.status(400).json({ error: '缺少 inboundNo' })
+    if (!inboundNo) return res.status(400).json({ error: '缺少入库单号' })
     const body = req.body as { customerCode?: string; customerId?: string }
     let customerCode = authenticatedCustomerCode(req, body.customerCode)
     if (!customerCode && body.customerId) {
       const account = await prisma.customerAccount.findUnique({ where: { id: String(body.customerId) } })
       customerCode = account?.code?.trim() || ''
     }
-    if (!customerCode) return res.status(400).json({ error: '缺少 customerCode' })
+    if (!customerCode) return res.status(400).json({ error: '缺少客户代码' })
     res.json(await cancelErpInboundAsn(inboundNo, customerCode))
   } catch (e) {
     sendErpError(res, e)
@@ -2130,7 +2139,7 @@ app.post('/api/erp/inbound/:inboundNo/cancel', async (req, res) => {
 app.post('/api/erp/inbound/:inboundNo/reactivate', async (req, res) => {
   try {
     const inboundNo = String(req.params.inboundNo || '').trim()
-    if (!inboundNo) return res.status(400).json({ error: '缺少 inboundNo' })
+    if (!inboundNo) return res.status(400).json({ error: '缺少入库单号' })
     const body = req.body as {
       inboundNo?: string
       customerCode?: string
@@ -2154,7 +2163,7 @@ app.post('/api/erp/inbound/:inboundNo/reactivate', async (req, res) => {
       const account = await prisma.customerAccount.findUnique({ where: { id: String(body.customerId) } })
       customerCode = account?.code?.trim() || ''
     }
-    if (!customerCode) return res.status(400).json({ error: '缺少 customerCode' })
+    if (!customerCode) return res.status(400).json({ error: '缺少客户代码' })
     res.json(await reactivateErpInboundAsn(inboundNo, mapOmsAsnRequest({ ...body, inboundNo }, customerCode)))
   } catch (e) {
     sendErpError(res, e)
@@ -2203,7 +2212,7 @@ app.post('/api/erp/returns', async (req, res) => {
       const account = await prisma.customerAccount.findUnique({ where: { id: String(body.customerId) } })
       customerCode = account?.code?.trim() || ''
     }
-    if (!customerCode) return res.status(400).json({ error: '缺少 customerCode' })
+    if (!customerCode) return res.status(400).json({ error: '缺少客户代码' })
     const returnWarehouse = String(body.returnWarehouse || '').trim().toUpperCase()
     if (!['JHB3', 'CPT2', 'DBN'].includes(returnWarehouse)) {
       return res.status(400).json({ error: '请选择退件仓库（JHB3 / CPT2 / DBN）' })
@@ -2259,7 +2268,7 @@ app.post('/api/erp/returns/:returnNo/cancel', async (req, res) => {
       const account = await prisma.customerAccount.findUnique({ where: { id: String(body.customerId) } })
       customerCode = account?.code?.trim() || ''
     }
-    if (!customerCode) return res.status(400).json({ error: '缺少 customerCode' })
+    if (!customerCode) return res.status(400).json({ error: '缺少客户代码' })
     res.json(await cancelErpReturnApi(returnNo, customerCode))
   } catch (e) {
     sendErpError(res, e)
@@ -2280,9 +2289,9 @@ app.post('/api/erp/returns/:returnNo/decide', async (req, res) => {
       const account = await prisma.customerAccount.findUnique({ where: { id: String(body.customerId) } })
       customerCode = account?.code?.trim() || ''
     }
-    if (!customerCode) return res.status(400).json({ error: '缺少 customerCode' })
+    if (!customerCode) return res.status(400).json({ error: '缺少客户代码' })
     if (body.decision !== 'keep' && body.decision !== 'discard') {
-      return res.status(400).json({ error: 'decision 须为 keep 或 discard' })
+      return res.status(400).json({ error: '请选择留货或不留货的处理决定' })
     }
     res.json(await decideErpReturnApi(returnNo, {
       customerCode,
@@ -2300,7 +2309,7 @@ app.get('/api/erp/returns/:returnNo/attachment/:attachmentId', async (req, res) 
       req,
       typeof req.query.customerCode === 'string' ? req.query.customerCode : undefined,
     )
-    if (!customerCode) return res.status(400).json({ error: '缺少 customerCode' })
+    if (!customerCode) return res.status(400).json({ error: '缺少客户代码' })
     const file = await downloadErpReturnAttachment(
       String(req.params.returnNo),
       Number(req.params.attachmentId),
@@ -2392,7 +2401,7 @@ app.post('/api/erp/outbound', async (req, res) => {
       const account = await prisma.customerAccount.findUnique({ where: { id: String(body.customerId) } })
       customerCode = account?.code?.trim() || ''
     }
-    if (!customerCode) return res.status(400).json({ error: '缺少 customerCode' })
+    if (!customerCode) return res.status(400).json({ error: '缺少客户代码' })
 
     const attachments = (body.attachments || []).map((a, index) => {
       const contentBase64 = requireOutboundAttachmentContent(a, index)
@@ -2490,7 +2499,7 @@ app.post('/api/erp/outbound/:outboundNo/pod', async (req, res) => {
       const account = await prisma.customerAccount.findUnique({ where: { id: String(body.customerId) } })
       customerCode = account?.code?.trim() || ''
     }
-    if (!customerCode) return res.status(400).json({ error: '缺少 customerCode' })
+    if (!customerCode) return res.status(400).json({ error: '缺少客户代码' })
     let contentBase64 = body.contentBase64 || ''
     if (!contentBase64 && body.url?.startsWith('data:')) {
       contentBase64 = body.url.split(',')[1] || ''
@@ -2514,7 +2523,7 @@ app.get('/api/erp/outbound/:outboundNo/pod', async (req, res) => {
       req,
       typeof req.query.customerCode === 'string' ? req.query.customerCode : undefined,
     )
-    if (!customerCode) return res.status(400).json({ error: '缺少 customerCode' })
+    if (!customerCode) return res.status(400).json({ error: '缺少客户代码' })
     const file = await downloadErpOutboundPod(String(req.params.outboundNo), customerCode)
     const inline = req.query.inline === '1'
     const lower = file.fileName.toLowerCase()
@@ -2560,16 +2569,8 @@ app.post('/api/accounts', requireSysAdmin, async (req, res) => {
       loginEmail?: string
       temporaryPassword?: string
     }
-    const required: [string, unknown][] = [
-      ['customerName', body.customerName],
-      ['contactEmail', body.contactEmail],
-      ['contactPhone', body.contactPhone],
-      ['omsType', body.omsType],
-      ['warehouse', body.warehouse],
-      ['temporaryPassword', body.temporaryPassword],
-    ]
-    const missing = required.find(([, value]) => !String(value || '').trim())
-    if (missing) return res.status(400).json({ error: `缺少 ${missing[0]}` })
+    const requiredError = missingRequiredAccountMessage(body)
+    if (requiredError) return res.status(400).json({ error: requiredError })
     const contactPhone = String(body.contactPhone || '').trim()
     if (!isValidPortalLoginPhone(normalizePortalLoginPhone(contactPhone))) {
       return res.status(400).json({ error: '联系电话须为至少 6 位数字，作为 OMS 登录手机号' })
@@ -2609,7 +2610,7 @@ app.post('/api/accounts', requireSysAdmin, async (req, res) => {
     const hasPermissions = body.permissions !== undefined
     const permissionTemplate = String(body.permissionTemplate || '').trim()
     if (hasPermissions && !Array.isArray(body.permissions)) {
-      return res.status(400).json({ error: 'permissions 必须是数组' })
+      return res.status(400).json({ error: '权限列表格式无效，请重新选择权限模板' })
     }
     if (permissionTemplate && !['ecommerce', 'catalog', 'hybrid'].includes(permissionTemplate)) {
       return res.status(400).json({ error: '权限模板无效' })
@@ -2627,7 +2628,7 @@ app.post('/api/accounts', requireSysAdmin, async (req, res) => {
       ? [...new Set(body.permissions.map(String))]
       : undefined
     if (permissions?.some(permission => !allowedCustomerPermissions.has(permission))) {
-      return res.status(400).json({ error: 'permissions 包含无效或管理员专属权限' })
+      return res.status(400).json({ error: '权限列表包含无效或管理员专属权限' })
     }
 
     const provisioned = await provisionOmsCustomer({
@@ -3396,7 +3397,7 @@ app.put('/api/billing', async (req: AuthenticatedRequest, res) => {
 app.delete('/api/billing/pre-deduct/:outboundNo', async (req: AuthenticatedRequest, res) => {
   try {
     const outboundNo = String(req.params.outboundNo || '').trim()
-    if (!outboundNo) return res.status(400).json({ error: '缺少 outboundNo' })
+    if (!outboundNo) return res.status(400).json({ error: '缺少出库单号' })
     const scope = customerScope(req)
     if (scope) {
       try {
@@ -3710,6 +3711,7 @@ app.put('/api/return-orders', async (req, res) => {
     await prisma.$transaction(async tx => {
       for (const o of list) {
         const id = String(o.id)
+        const previousForm = await tx.returnOrder.findUnique({ where: { id }, select: { remark: true } })
         const data = {
           customerId: scope ?? (o.customerId as string | null | undefined) ?? null,
           returnNo: String(o.returnNo),
@@ -3730,7 +3732,7 @@ app.put('/api/return-orders', async (req, res) => {
           processedAt: (o.processedAt as string | null | undefined) ?? null,
           createdAt: String(o.createdAt),
           lineItems: o.lineItems ? JSON.stringify(o.lineItems) : null,
-          remark: (o.remark as string | null | undefined) ?? null,
+          remark: writeReturnFormMetadata(o, previousForm?.remark),
           attachments: o.attachments ? JSON.stringify(o.attachments) : null,
           estimatedFeeTotal: o.estimatedFeeTotal == null ? null : String(o.estimatedFeeTotal),
           totalVolumeCbm: o.totalVolumeCbm == null ? null : String(o.totalVolumeCbm),
@@ -3749,6 +3751,7 @@ app.put('/api/return-orders', async (req, res) => {
     })
     res.json({ ok: true })
   } catch (e) {
+    if (e instanceof ReturnFormValidationError) return res.status(400).json({ error: e.message })
     console.error(e)
     res.status(500).json({ error: String(e) })
   }
@@ -3757,10 +3760,18 @@ app.put('/api/return-orders', async (req, res) => {
 app.delete('/api/return-orders/:id', async (req, res) => {
   try {
     const scope = customerScope(req as AuthenticatedRequest)
-    const result = await prisma.returnOrder.deleteMany({
+    const target = await prisma.returnOrder.findFirst({
       where: { id: String(req.params.id), ...(scope ? { customerId: scope } : {}) },
+      select: { id: true, status: true },
     })
-    if (scope && result.count === 0) return res.status(404).json({ error: '退件单不存在' })
+    if (!target) return res.status(404).json({ error: '退件单不存在' })
+    if (!['draft', 'cancelled'].includes(target.status)) {
+      return res.status(400).json({ error: '仅草稿或已撤回的退件可以删除，请先核对退件状态' })
+    }
+    const result = await prisma.returnOrder.deleteMany({
+      where: { id: target.id, status: { in: ['draft', 'cancelled'] }, ...(scope ? { customerId: scope } : {}) },
+    })
+    if (result.count === 0) return res.status(409).json({ error: '退件单状态已变化，请刷新后核对' })
     res.json({ ok: true })
   } catch (e) {
     console.error(e)
@@ -3853,6 +3864,15 @@ app.put('/api/payment-methods', async (req, res) => {
     console.error(e)
     res.status(500).json({ error: String(e) })
   }
+})
+
+app.use('/api', (_req, res) => { res.status(404).json({ error: '未找到所需接口，请刷新后重试' }) })
+app.use((error: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (res.headersSent) return next(error)
+  console.error(error)
+  const candidate = Number((error as { status?: number })?.status)
+  const status = candidate >= 400 && candidate < 600 ? candidate : 500
+  res.status(status).json(localizedErrorResponse({ error: status === 400 ? '请求内容格式有误，请检查输入后重试' : undefined }, status))
 })
 
 async function start() {

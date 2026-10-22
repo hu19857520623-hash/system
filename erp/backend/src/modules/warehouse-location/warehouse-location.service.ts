@@ -70,7 +70,7 @@ export class WarehouseLocationService {
     const locationCode = String(data.locationCode || '').trim()
     const zoneId = Number(data.zoneId)
     if (!warehouseCode || !locationCode || !zoneId) {
-      throw new BadRequestException('warehouseCode、locationCode、zoneId 为必填')
+      throw new BadRequestException('仓库、库位编码和库区为必填项')
     }
 
     const zone = await this.prisma.warehouseZone.findUnique({ where: { id: BigInt(zoneId) } })
@@ -79,7 +79,7 @@ export class WarehouseLocationService {
     }
 
     const status = String(data.status || 'available')
-    if (!LOCATION_STATUSES.has(status)) throw new BadRequestException('无效的 status')
+    if (!LOCATION_STATUSES.has(status)) throw new BadRequestException('库位状态无效')
 
     const row = await this.prisma.warehouseLocation.create({
       data: {
@@ -118,10 +118,10 @@ export class WarehouseLocationService {
     const partitionCodeRaw = data.partitionCode ?? data.partitionLetter
 
     if (!warehouseCode || !zoneId) {
-      throw new BadRequestException('warehouseCode、zoneId 为必填')
+      throw new BadRequestException('请选择仓库和库区')
     }
     if (!Number.isFinite(startNum) || !Number.isFinite(endNum) || startNum > endNum) {
-      throw new BadRequestException('startNum/endNum 无效')
+      throw new BadRequestException('起始编号和结束编号无效，请检查编号范围')
     }
     if (endNum - startNum + 1 > 200) {
       throw new BadRequestException('单次最多生成 200 个库位')
@@ -204,7 +204,7 @@ export class WarehouseLocationService {
     }
 
     const status = data.status != null ? String(data.status) : row.status
-    if (!LOCATION_STATUSES.has(status)) throw new BadRequestException('无效的 status')
+    if (!LOCATION_STATUSES.has(status)) throw new BadRequestException('库位状态无效')
 
     const updated = await this.prisma.warehouseLocation.update({
       where: { id: BigInt(id) },
@@ -346,7 +346,7 @@ ${autoPrint ? 'window.onload = function() { setTimeout(function() { window.print
         orderBy: { locationCode: 'asc' },
       })
     } else {
-      throw new BadRequestException('请提供 ids 或 warehouseCode')
+      throw new BadRequestException('请选择要打印的库位或仓库')
     }
 
     if (!rows.length) throw new NotFoundException('没有可打印的库位')

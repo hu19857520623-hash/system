@@ -1,11 +1,13 @@
 <script setup lang="ts">
+import { userFacingError } from '@erp/shared/user-facing-error'
+
 import { displaySku, displaySkuText, formatSku } from '@erp/shared/sku-display'
-import { ref, computed, onMounted, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { ref, computed, onMounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { warehouseApi, inboundApi, inventoryApi, productApi } from '@/api/client.js'
 import { mapInbound, fmtTime } from '@/api/mappers.ts'
-import { useListLoader, withAction } from '@/composables/useListLoader.ts'
+import { useListLoader } from '@/composables/useListLoader.ts'
 import { useTablePagination } from '@/composables/useTablePagination.ts'
 import { useRowActions } from '@/composables/useRowActions'
 import { triggerBlobDownload } from '@/composables/useAsyncIo'
@@ -26,14 +28,18 @@ import {
 import { normalizeImportFileText, parseCsvLine } from '@/utils/csv.ts'
 import { reportPartialImportResult, type ImportRowFailure } from '@/utils/importResultFeedback.ts'
 
-const DRAFT_KEY = 'erp-inbound-drafts' // legacy localStorage key — migrated to API
+import { clearShipmentAttempt, readShipmentAttempt, saveShipmentAttempt, type ShipmentAttempt } from '@/utils/erpShipmentAttempt'
+import { inboundListStats } from '@/features/inbound/listStats'
+import { clearShipmentMaintenance, readShipmentMaintenance, saveShipmentMaintenance, type ShipmentMaintenanceAttempt } from '@/utils/shipmentMaintenanceAttempt'
 
 const app = useAppStore()
 const route = useRoute()
+const router = useRouter()
 const { confirmAction, toast } = useRowActions()
 
 const tab = ref<'form' | 'drafts' | 'list'>('list')
 const inboundSearchQ = ref('')
+const inboundSource = ref('erp_shipment')
 
 interface InboundLine {
   sku: string
@@ -85,10 +91,16 @@ interface WhSku {
 }
 
 const { loading, items: inbounds, load } = useListLoader(async () => {
-  const res = await inboundApi.list({ pageSize: 100 })
+  const res = await inboundApi.list({ page: 1, pageSize: 100, source: 'all' })
+  const rows = [...(res.items || [])]
+  for (let page = 2; rows.length < res.total; page++) {
+    const next = await inboundApi.list({ page, pageSize: 100, source: 'all' })
+    if (!next.items?.length) break
+    rows.push(...next.items)
+  }
   const productMap = await loadProductDimMap()
   return {
-    items: (res.items || []).map((r: any) => {
+    items: rows.map((r: any) => {
       const mapped = mapInbound(r)
       const qty = (r.items || []).reduce((s: number, i: any) => s + (i.expectedQty || 0), 0)
       const skuLabel = r.items?.length
@@ -104,7 +116,7 @@ const { loading, items: inbounds, load } = useListLoader(async () => {
         qty,
         statusLabel: st.label,
         tone: st.tone,
-        warehouseNo: meta.warehouseNo,
+        warehouseNo: r.warehouseNo || meta.warehouseNo,
         arrival: meta.arrival,
         displayRemark: meta.userRemark,
         seaFreight: meta.seaFreight,
@@ -122,6 +134,26 @@ const warehouseSkus = ref<WhSku[]>([])
 const productDimMap = ref<Map<string, { lengthCm: number; widthCm: number; heightCm: number; weightKg: number }>>(new Map())
 const productDimMapLoaded = ref(false)
 const createLoading = ref(false)
+const refsError = ref('')
+const stockError = ref('')
+const draftsError = ref('')
+const shipmentBusy = ref(false)
+const draftBusy = ref(false)
+const attachmentBusy = ref(false)
+const importBusy = ref(false)
+const maintenanceBusy = ref(false)
+const maintenanceAttempt = ref<ShipmentMaintenanceAttempt | null>(null)
+const maintenanceStorageError = ref('')
+const maintenanceError = ref('')
+const maintenanceResult = ref<any>(null)
+const shipmentAttempt = ref<ShipmentAttempt | null>(null)
+const shipmentAttemptError = ref('')
+const shipmentError = ref('')
+const shipmentResult = ref<any>(null)
+const formBusy = computed(() => shipmentBusy.value || draftBusy.value || attachmentBusy.value || importBusy.value || maintenanceBusy.value)
+const formLocked = computed(() => formBusy.value || !!shipmentAttempt.value || !!shipmentResult.value || !!shipmentAttemptError.value || !!maintenanceAttempt.value || !!maintenanceStorageError.value)
+let stockLoadVersion = 0
+let draftLoadVersion = 0
 const skuLoading = ref(false)
 const editingDraftId = ref<string | null>(null)
 const skuFileInputRef = ref<HTMLInputElement | null>(null)
@@ -168,8 +200,8 @@ async function loadProductDimMap(force = false) {
     }
     productDimMap.value = map
     productDimMapLoaded.value = true
-  } catch {
-    /* 保留已加载的部分 */
+  } catch (error) {
+    throw new Error(`商品资料未能读取，请稍后重试。${userFacingError(error)}`)
   }
   return productDimMap.value
 }
@@ -219,26 +251,29 @@ function parseInboundMeta(remark?: string) {
 
 async function loadRefs() {
   createLoading.value = true
+  refsError.value = ''
   try {
     const [logRes, ovsRes] = await Promise.all([
       warehouseApi.list({ type: 'logistics' }),
       warehouseApi.list({ type: 'overseas' }),
     ])
-    logisticsWarehouses.value = Array.isArray(logRes) ? logRes : (logRes.items || [])
-    overseasWarehouses.value = Array.isArray(ovsRes) ? ovsRes : (ovsRes.items || [])
+    logisticsWarehouses.value = (Array.isArray(logRes) ? logRes : (logRes.items || [])).filter((wh: any) => wh.status === 1)
+    overseasWarehouses.value = (Array.isArray(ovsRes) ? ovsRes : (ovsRes.items || [])).filter((wh: any) => wh.status === 1)
     await loadProductDimMap()
-  } catch {
-    logisticsWarehouses.value = []
-    overseasWarehouses.value = []
+  } catch (error) {
+    refsError.value = `仓库或商品资料未能读取，请重新读取后提交。${userFacingError(error)}`
   } finally {
     createLoading.value = false
   }
 }
 
 onMounted(async () => {
+  refreshShipmentAttempt()
+  refreshMaintenanceAttempt()
   load()
   await loadRefs()
   loadDrafts()
+  if (shipmentAttempt.value || shipmentAttemptError.value || maintenanceAttempt.value || maintenanceStorageError.value) return
   const wh = String(route.query.wh || '')
   const sku = String(route.query.sku || '')
   if (wh) {
@@ -254,38 +289,15 @@ onMounted(async () => {
 
 const filteredInbounds = computed(() => {
   const q = inboundSearchQ.value.trim().toLowerCase()
-  if (!q) return inbounds.value
-  return inbounds.value.filter((r: any) =>
+  const rows = inbounds.value.filter((r: any) => inboundSource.value === 'all' || r._raw?.sourceKind === inboundSource.value)
+  if (!q) return rows
+  return rows.filter((r: any) =>
     String(r.id).toLowerCase().includes(q)
     || String(r.sku).toLowerCase().includes(q),
   )
 })
 
-const listStats = computed(() => {
-  const rows = filteredInbounds.value
-  let pendingReceipt = 0
-  let pendingPutaway = 0
-  let completed = 0
-  let cbmTotal = 0
-  let hasCbm = false
-  rows.forEach((r: any) => {
-    const st = r._raw?.status
-    if (st === 'pending_putaway') pendingPutaway++
-    else if (r.tone === 'warn' || st === 'exception') pendingReceipt++
-    if (r.tone === 'ok') completed++
-    if (r.cbm !== '—') {
-      cbmTotal += parseFloat(r.cbm)
-      hasCbm = true
-    }
-  })
-  return {
-    total: rows.length,
-    pendingReceipt,
-    pendingPutaway,
-    completed,
-    cbm: hasCbm ? cbmTotal.toFixed(3) : '—',
-  }
-})
+const listStats = computed(() => inboundListStats(filteredInbounds.value))
 
 const { page: inboundPage, pageSize: inboundPageSize, total: inboundTotal, pagedItems: inboundPagedItems } = useTablePagination(filteredInbounds)
 const drafts = ref<DraftRow[]>([])
@@ -303,6 +315,7 @@ function emptyForm() {
     seaFreightAmounts: { lcl: '', fcl: '' },
     lines: [] as InboundLine[],
     cartons: [] as CartonForm[],
+    attachments: [] as { id?: number; fileName: string }[],
   }
 }
 
@@ -312,6 +325,7 @@ const canEditFreight = computed(() => app.hasPerm('create_inbound.create'))
 const detailVisible = ref(false)
 const detailLoading = ref(false)
 const detailOrder = ref<any>(null)
+const detailMutationWarning = ref('')
 const freightVisible = ref(false)
 const freightSubmitting = ref(false)
 const freightForm = ref({ mode: 'lcl' as 'lcl' | 'fcl', amount: '' })
@@ -385,17 +399,72 @@ function mapDraftRow(d: any): DraftRow {
 }
 
 async function loadDrafts() {
+  const version = ++draftLoadVersion
+  draftsError.value = ''
   try {
     const rows = await inboundApi.listDrafts()
-    drafts.value = (Array.isArray(rows) ? rows : []).map(mapDraftRow)
-  } catch {
-    try {
-      const raw = localStorage.getItem(DRAFT_KEY)
-      drafts.value = raw ? JSON.parse(raw) : []
-    } catch {
-      drafts.value = []
-    }
+    if (version === draftLoadVersion) drafts.value = (Array.isArray(rows) ? rows : []).map(mapDraftRow)
+  } catch (error) {
+    if (version === draftLoadVersion) draftsError.value = `草稿箱未能读取，请重试。${userFacingError(error)}`
   }
+}
+
+function refreshShipmentAttempt() {
+  try {
+    shipmentAttempt.value = readShipmentAttempt(localStorage, app.authenticatedUser!.id)
+    shipmentAttemptError.value = ''
+  } catch (error) { shipmentAttemptError.value = userFacingError(error) }
+}
+
+function recoverShipment() {
+  if (!shipmentAttempt.value || formBusy.value) return
+  createForm.value = JSON.parse(JSON.stringify(shipmentAttempt.value.form))
+  editingDraftId.value = shipmentAttempt.value.draftNo
+  shipmentResult.value = null
+  tab.value = 'form'
+}
+
+async function postShipment(attempt: ShipmentAttempt) {
+  if (formBusy.value) return
+  shipmentBusy.value = true
+  shipmentError.value = ''
+  try {
+    const result = await inboundApi.create(attempt.payload)
+    shipmentResult.value = result
+    shipmentAttempt.value = null
+    try { clearShipmentAttempt(localStorage, app.authenticatedUser!.id) }
+    catch { ElMessage.warning('发运已完成，但本机核对信息未能清除；刷新后可核对原单，请勿重复新建') }
+    productDimMapLoaded.value = false
+    warehouseSkus.value = []
+    toast(`入库单 ${result.inboundNo} 已创建，库存和费用已同步`)
+    // Refresh failures must never turn a committed shipment into a failed submission.
+    await Promise.allSettled([load(), loadDrafts()])
+  } catch (error: any) {
+    shipmentError.value = userFacingError(error)
+    if ([400, 403, 404, 422].includes(error.status)) {
+      try { clearShipmentAttempt(localStorage, app.authenticatedUser!.id); shipmentAttempt.value = null }
+      catch { shipmentError.value += '；本机核对信息未能清除，请先核对原操作后重试' }
+    } else shipmentError.value = `发运结果待核对，请保持本次内容并点击「核对并重试原提交」。${shipmentError.value}`
+  } finally { shipmentBusy.value = false }
+}
+
+function retryShipment() {
+  if (shipmentAttempt.value) postShipment(shipmentAttempt.value)
+}
+
+function returnShipmentList() {
+  if (formBusy.value) return
+  inboundSource.value = 'erp_shipment'
+  if (shipmentResult.value?.inboundNo) inboundSearchQ.value = shipmentResult.value.inboundNo
+  tab.value = 'list'
+}
+
+function returnSourceStock() {
+  if (!formBusy.value) router.push({ path: '/logistics-wh', query: { tab: 'stock', wh: createForm.value.logisticsWhCode || String(route.query.wh || '') } })
+}
+
+function continueArrivalScan() {
+  if (shipmentResult.value && !formBusy.value) router.push({ path: '/inbound/arrival-scan', query: { inboundId: shipmentResult.value.id } })
 }
 
 function lineTotalQty(line: Pick<InboundLine, 'cartonCount' | 'qtyPerCarton' | 'expectedQty'>) {
@@ -432,7 +501,7 @@ function getSkuAvailable(sku: string) {
 }
 
 function getLineMaxQty(line: any) {
-  const available = getSkuAvailable(line.sku) || line.maxAvailable
+  const available = getSkuAvailable(line.sku)
   if (!available) return 1
   const usedElsewhere = createForm.value.lines
     .filter((l) => l.sku === line.sku && l !== line)
@@ -457,8 +526,12 @@ function clampLinePack(line: InboundLine) {
 }
 
 async function loadLogisticsStock(code: string) {
+  const version = ++stockLoadVersion
+  stockError.value = ''
+  if (shipmentAttempt.value || shipmentResult.value) { skuLoading.value = false; return false }
   if (!code) {
     warehouseSkus.value = []
+    skuLoading.value = false
     return
   }
   skuLoading.value = true
@@ -480,7 +553,8 @@ async function loadLogisticsStock(code: string) {
       page += 1
     }
 
-    warehouseSkus.value = allItems
+    if (version !== stockLoadVersion || code !== createForm.value.logisticsWhCode) return false
+    const rows = allItems
       .filter((r: any) => numDim(r.availableQty ?? r.available) > 0)
       .map((r: any) => {
         const dim = productDimMap.value.get(r.sku) || {
@@ -502,15 +576,19 @@ async function loadLogisticsStock(code: string) {
         }
       })
 
-    await hydrateWarehouseSkuDims(warehouseSkus.value)
-
-    for (const line of createForm.value.lines) {
-      if (line.sku) onLineSkuPick(line, line.sku)
+    await hydrateWarehouseSkuDims(rows)
+    if (version !== stockLoadVersion || code !== createForm.value.logisticsWhCode) return false
+    warehouseSkus.value = rows
+    for (const line of createForm.value.lines) line.maxAvailable = getSkuAvailable(line.sku)
+    return true
+  } catch (error) {
+    if (version === stockLoadVersion) {
+      warehouseSkus.value = []
+      stockError.value = `中转仓可发库存未能读取，请重新读取后提交。${userFacingError(error)}`
     }
-  } catch {
-    warehouseSkus.value = []
+    return false
   } finally {
-    skuLoading.value = false
+    if (version === stockLoadVersion) skuLoading.value = false
   }
 }
 
@@ -531,10 +609,12 @@ function onLineSkuPick(line: any, sku: string) {
 }
 
 function addLine() {
+  if (formLocked.value || !canCreateInbound.value) return
   createForm.value.lines.push(emptyLine())
 }
 
 function removeLine(idx: number) {
+  if (formLocked.value) return
   createForm.value.lines.splice(idx, 1)
 }
 
@@ -565,7 +645,7 @@ function inboundReceivingStarted(order: any): boolean {
   const raw = order?._raw || order
   const status = String(raw?.status || '')
   if (RECEIVING_STARTED_STATUSES.has(status)) return true
-  if (raw?.receivedAt) return true
+  if (raw?.receivedAt || Number(raw?.receivedCartonCount || 0) > 0) return true
   const items = raw?.items || []
   if (items.some((item: any) => Number(item.actualQty ?? 0) > 0 || Number(item.putawayQty ?? 0) > 0)) return true
   const cartons = raw?.cartons || []
@@ -576,7 +656,7 @@ function inboundReceivingStarted(order: any): boolean {
 function inboundIsErpManaged(order: any): boolean {
   if (!canCreateInbound.value) return false
   const raw = order?._raw || order
-  if (!raw || raw.readOnly || String(raw.id).startsWith('oms-')) return false
+  if (!raw || raw.readOnly || String(raw.id).startsWith('oms-') || raw.omsCustomerCode || !raw.sourceWarehouseCode) return false
   return inboundNumericId(order) != null || inboundNumericId(raw) != null
 }
 
@@ -611,8 +691,8 @@ const detailItems = computed(() => (detailOrder.value?.items || []) as any[])
 const detailHasFreight = computed(() => Boolean(inboundSeaFreight(detailOrder.value)))
 const detailCanEditFreight = computed(() => {
   const order = detailOrder.value
-  if (!order || !canEditFreight.value) return false
-  if (order.readOnly || String(order.id).startsWith('oms-')) return false
+  if (!order || !canEditFreight.value || detailLoading.value || maintenanceBusy.value || maintenanceAttempt.value || maintenanceStorageError.value || !order.seaFreightVersion || detailMutationWarning.value) return false
+  if (order.readOnly || String(order.id).startsWith('oms-') || order.omsCustomerCode || !order.sourceWarehouseCode) return false
   if ((order.status || '') === 'cancelled') return false
   return inboundNumericId(order) != null
 })
@@ -709,10 +789,14 @@ function fillFormFromOrder(order: any) {
     },
     lines,
     cartons: formCartons,
+    attachments: [],
   }
 }
 
 async function copyDeletedInbound(snapshot: any) {
+  if (formBusy.value || shipmentAttempt.value || shipmentAttemptError.value || maintenanceAttempt.value || maintenanceStorageError.value) return
+  shipmentResult.value = null
+  shipmentError.value = ''
   editingDraftId.value = null
   fillFormFromOrder(snapshot)
   tab.value = 'form'
@@ -722,39 +806,93 @@ async function copyDeletedInbound(snapshot: any) {
   toast('已填入原单内容，请核对后提交（将生成新入库单号）')
 }
 
+function refreshMaintenanceAttempt() {
+  try { maintenanceAttempt.value = readShipmentMaintenance(localStorage, app.authenticatedUser!.id); maintenanceStorageError.value = '' }
+  catch (error) { maintenanceStorageError.value = userFacingError(error) }
+}
+
+function canBeginMaintenance() {
+  refreshMaintenanceAttempt()
+  refreshShipmentAttempt()
+  return !formBusy.value && !maintenanceAttempt.value && !maintenanceStorageError.value && !shipmentAttempt.value && !shipmentAttemptError.value
+}
+
+async function startMaintenance(attempt: ShipmentMaintenanceAttempt) {
+  try {
+    saveShipmentMaintenance(localStorage, app.authenticatedUser!.id, attempt)
+    maintenanceAttempt.value = readShipmentMaintenance(localStorage, app.authenticatedUser!.id)
+  } catch (error) { maintenanceError.value = userFacingError(error); return }
+  await postMaintenance(maintenanceAttempt.value!)
+}
+
+async function postMaintenance(attempt: ShipmentMaintenanceAttempt) {
+  if (formBusy.value) return
+  maintenanceBusy.value = true
+  freightSubmitting.value = attempt.kind === 'freight'
+  maintenanceError.value = ''
+  maintenanceResult.value = null
+  try {
+    const result = attempt.kind === 'delete' ? await inboundApi.remove(attempt.inboundId)
+      : attempt.clear ? await inboundApi.clearSeaFreight(attempt.inboundId, attempt.payload) : await inboundApi.applySeaFreight(attempt.inboundId, attempt.payload)
+    maintenanceAttempt.value = null
+    try { clearShipmentMaintenance(localStorage, app.authenticatedUser!.id) }
+    catch { ElMessage.warning('操作已完成，但本机核对信息未能清除；刷新后请核对原操作') }
+    maintenanceResult.value = { ...result, kind: attempt.kind, inboundNo: attempt.inboundNo, clear: attempt.clear }
+    freightVisible.value = false
+    if (attempt.kind === 'delete') {
+      detailVisible.value = false
+      detailOrder.value = null
+      toast(`已删除 ${attempt.inboundNo}，原中转仓库存已返还`)
+    } else {
+      detailMutationWarning.value = result.refreshRequired ? result.warning : ''
+      detailOrder.value = result.refreshRequired ? attempt.snapshot : result
+      toast(result.refreshRequired ? '本次海运费操作已完成，请重新读取详情核对当前状态' : result.duplicate ? '原海运费操作已处理，已核对最新结果' : attempt.clear ? '海运费已清除并同步货盘与批次成本' : '海运费已保存并同步货盘与批次成本')
+    }
+    await Promise.allSettled([load(), loadDrafts()])
+  } catch (error: any) {
+    maintenanceError.value = userFacingError(error)
+    if ([400, 403, 404, 409, 422].includes(error.status)) {
+      try { clearShipmentMaintenance(localStorage, app.authenticatedUser!.id); maintenanceAttempt.value = null }
+      catch { maintenanceError.value += '；本机核对信息未能清除，请先核对原操作' }
+    } else maintenanceError.value = `操作结果待核对，请点击「核对并重试原操作」，不要重新建立操作。${maintenanceError.value}`
+  } finally { maintenanceBusy.value = false; freightSubmitting.value = false }
+}
+
+function retryMaintenance() { if (maintenanceAttempt.value) postMaintenance(maintenanceAttempt.value) }
+
+async function refreshMutationDetail() {
+  const id = inboundNumericId(detailOrder.value)
+  if (!id || maintenanceBusy.value || maintenanceAttempt.value) return
+  detailLoading.value = true
+  detailVisible.value = true
+  try {
+    detailOrder.value = await inboundApi.detail(id); detailMutationWarning.value = ''; maintenanceError.value = ''
+    if (maintenanceResult.value) maintenanceResult.value.refreshRequired = false
+  }
+  catch (error) { detailMutationWarning.value = `详情未能读取，请稍后重试。${userFacingError(error)}` }
+  finally { detailLoading.value = false }
+}
+
+async function copyMaintenanceDeleted() {
+  if (maintenanceBusy.value || maintenanceAttempt.value || !maintenanceResult.value?.deletedOrder) return
+  await copyDeletedInbound(maintenanceResult.value.deletedOrder)
+  maintenanceResult.value = null
+}
+
 async function removeInbound(row?: any) {
+  if (!canBeginMaintenance()) return
   const source = row || detailOrder.value
   const id = inboundNumericId(source)
   if (!id) return
-  if (!inboundCanDelete(source)) {
-    ElMessage.warning('已开始收货的入库单不能删除')
-    return
-  }
-  const inboundNo = source.inboundNo || source.id
-  const ok = await confirmAction(
-    `确认删除入库单 ${inboundNo}？海外仓作业中的该单也会一并删除。已开始收货的单据无法删除。`,
-    '删除入库单',
-  )
+  let snapshot: any
+  maintenanceBusy.value = true
+  try { snapshot = await inboundApi.detail(id) }
+  catch (error) { maintenanceError.value = `未能核对最新单据，本次尚未删除。${userFacingError(error)}`; return }
+  finally { maintenanceBusy.value = false }
+  if (!inboundCanDelete(snapshot)) { maintenanceError.value = '此单不是可删除的未收货 ERP 发运单，请查看最新仓库作业进度'; return }
+  const ok = await confirmAction(`确认删除入库单 ${snapshot.inboundNo}？未开始收货的良品库存将返还原中转仓；海外仓作业中的该单也会删除。`, '删除入库单')
   if (!ok) return
-
-  let snapshot = source._raw || source
-  try {
-    snapshot = await inboundApi.detail(id)
-  } catch {
-    // 用列表快照兜底
-  }
-
-  try {
-    await inboundApi.remove(id)
-    detailVisible.value = false
-    detailOrder.value = null
-    toast(`已删除 ${inboundNo}`)
-    await load()
-    const copy = await confirmAction('是否用原单内容复制一份新的入库单？提交后会生成新单号。', '复制新建')
-    if (copy) await copyDeletedInbound(snapshot)
-  } catch (e: any) {
-    ElMessage.error(displaySkuText(e?.message || '删除失败'))
-  }
+  await startMaintenance({ kind: 'delete', inboundId: id, inboundNo: snapshot.inboundNo, snapshot })
 }
 
 function freightLabel(sku: string, field: 'lineFreight' | 'unitFreight') {
@@ -800,6 +938,7 @@ function downloadSkuTemplate() {
 }
 
 function triggerSkuImport() {
+  if (formLocked.value || !canCreateInbound.value) return
   if (!createForm.value.logisticsWhCode) {
     ElMessage.warning('请先选择始发物流仓')
     return
@@ -811,7 +950,9 @@ async function handleSkuImportFile(e: Event) {
   const input = e.target as HTMLInputElement
   const file = input.files?.[0]
   input.value = ''
-  if (!file) return
+  if (!file || formLocked.value || !canCreateInbound.value) return
+  importBusy.value = true
+  try {
   if (!createForm.value.logisticsWhCode) {
     ElMessage.warning('请先选择始发物流仓')
     return
@@ -894,14 +1035,24 @@ async function handleSkuImportFile(e: Event) {
     moduleLabel: '明细导入',
     csvFilename: '入库明细导入失败明细',
   })
+  } catch (error) { ElMessage.error(`读取导入文件失败，请核对文件后重试。${userFacingError(error)}`) }
+  finally { importBusy.value = false }
 }
 
-watch(
-  () => createForm.value.logisticsWhCode,
-  (code) => { loadLogisticsStock(code) },
-)
+async function onSourceWarehouseChange(code: string) {
+  if (formLocked.value) return
+  createForm.value.lines = []
+  createForm.value.cartons = []
+  warehouseSkus.value = []
+  await loadLogisticsStock(code)
+}
 
 function openCreate() {
+  refreshShipmentAttempt()
+  refreshMaintenanceAttempt()
+  if (formBusy.value || shipmentAttempt.value || shipmentAttemptError.value || maintenanceAttempt.value || maintenanceStorageError.value) return
+  shipmentResult.value = null
+  shipmentError.value = ''
   editingDraftId.value = null
   createForm.value = emptyForm()
   if (logisticsWarehouses.value[0]?.warehouseCode) {
@@ -913,6 +1064,8 @@ function openCreate() {
 }
 
 function cancelForm() {
+  if (formBusy.value) return
+  if (shipmentAttempt.value || shipmentResult.value) { returnShipmentList(); return }
   editingDraftId.value = null
   createForm.value = emptyForm()
   tab.value = 'list'
@@ -930,17 +1083,24 @@ function buildRemark() {
   return parts.join(' ')
 }
 
+async function persistDraft() {
+  const draftNo = editingDraftId.value || `DRF-${crypto.randomUUID().replace(/-/g, '').slice(0, 26)}`
+  editingDraftId.value = draftNo
+  await inboundApi.saveDraft({ draftNo, form: createForm.value })
+  return draftNo
+}
+
 async function saveDraft() {
-  const draftNo = editingDraftId.value || `DRF-IN-${Date.now().toString().slice(-6)}`
+  if (formLocked.value || !canCreateInbound.value) return
+  draftBusy.value = true
   try {
-    await inboundApi.saveDraft({ draftNo, id: draftNo, form: createForm.value })
-    editingDraftId.value = draftNo
+    await persistDraft()
     await loadDrafts()
     toast('草稿已保存')
     tab.value = 'drafts'
   } catch (e: any) {
-    ElMessage.error(displaySkuText(e.message || '保存草稿失败'))
-  }
+    ElMessage.error(userFacingError(displaySkuText(e.message || '保存草稿失败')))
+  } finally { draftBusy.value = false }
 }
 
 function normalizeCarton(carton: CartonForm) {
@@ -968,6 +1128,7 @@ function cartonFromLine(line: InboundLine): CartonForm {
 }
 
 function addCarton() {
+  if (formLocked.value) return
   const line = createForm.value.lines.find((l) => l.sku)
   if (!line) {
     ElMessage.warning('请先在上方 SKU 明细中选择 SKU')
@@ -977,6 +1138,7 @@ function addCarton() {
 }
 
 function addCartonLine(carton: CartonForm) {
+  if (formLocked.value) return
   const sku = createForm.value.lines.find((l) => l.sku)?.sku || ''
   const line = createForm.value.lines.find((l) => l.sku === sku)
   carton.items.push({ sku, qty: Math.max(1, Number(line?.qtyPerCarton) || 1) })
@@ -1030,6 +1192,10 @@ function validateCartons(validLines: InboundLine[]) {
 }
 
 async function submitCreate() {
+  refreshShipmentAttempt()
+  refreshMaintenanceAttempt()
+  if (formLocked.value || !canCreateInbound.value) return
+  if (createLoading.value || refsError.value || skuLoading.value || stockError.value) { ElMessage.warning('请先重新读取仓库资料与可发库存'); return }
   if (!createForm.value.logisticsWhCode) {
     ElMessage.warning('请选择始发物流仓')
     return
@@ -1042,22 +1208,27 @@ async function submitCreate() {
     ElMessage.warning('请填写入仓号后再提交')
     return
   }
+  if (createForm.value.lines.some(l => !l.sku || !Number.isSafeInteger(lineTotalQty(l)) || lineTotalQty(l) <= 0 || !l.productId)) {
+    ElMessage.warning('请补全每条商品明细，发运数量须为正整数'); return
+  }
+  const rawFreight = createForm.value.seaFreightAmounts[createForm.value.seaFreightMode]
+  if (rawFreight !== '' && (!Number.isFinite(Number(rawFreight)) || Number(rawFreight) < 0)) { ElMessage.warning('海运费须为非负有效数值'); return }
   const validLines = createForm.value.lines.filter((l) => l.sku && lineTotalQty(l) > 0)
   if (!validLines.length) {
     ElMessage.warning('请至少填写一条 SKU 明细（入库箱数 × 每箱数量）')
     return
   }
-  const badPack = validLines.find((l) => !l.cartonCount || !l.qtyPerCarton)
+  const badPack = validLines.find((l) => !Number.isSafeInteger(l.cartonCount) || l.cartonCount <= 0 || !Number.isSafeInteger(l.qtyPerCarton) || l.qtyPerCarton <= 0)
   if (badPack) {
     ElMessage.warning(displaySkuText(`SKU「${displaySku(badPack)}」请填写入库箱数与每箱数量`))
     return
   }
-  const missingDim = validLines.find((l) => !l.lengthCm || !l.widthCm || !l.heightCm)
+  const missingDim = validLines.find((l) => ![l.lengthCm, l.widthCm, l.heightCm].every(v => Number.isFinite(v) && v > 0))
   if (missingDim) {
     ElMessage.warning(displaySkuText(`请填写 SKU「${displaySku(missingDim)}」的单件长、宽、高（cm）`))
     return
   }
-  const missingWeight = validLines.find((l) => !l.weightKg)
+  const missingWeight = validLines.find((l) => !Number.isFinite(l.weightKg) || l.weightKg <= 0)
   if (missingWeight) {
     ElMessage.warning(displaySkuText(`请填写 SKU「${displaySku(missingWeight)}」的单件重量（kg）`))
     return
@@ -1068,7 +1239,7 @@ async function submitCreate() {
   }
   for (const [sku, total] of skuTotals) {
     const available = getSkuAvailable(sku)
-    if (available && total > available) {
+    if (total > available) {
       ElMessage.warning(displaySkuText(`SKU「${sku}」入库数量合计 ${total} 件，超过本仓可发 ${available} 件`))
       return
     }
@@ -1082,66 +1253,34 @@ async function submitCreate() {
   }
   const cartonsPayload = cartonsSource.map((c, idx) => cartonToPayload(c, idx))
 
-  const ok = await withAction(async () => {
-    await Promise.all(
-      validLines
-        .filter((l) => l.productId)
-        .map((l) =>
-          productApi.update(l.productId, {
-            lengthCm: Number(l.lengthCm),
-            widthCm: Number(l.widthCm),
-            heightCm: Number(l.heightCm),
-            weightKg: Number(l.weightKg),
-          }).catch(() => {}),
-        ),
-    )
-    productDimMap.value.clear()
-    const freightBySku = new Map<string, { unitFreight: number }>()
-    for (const fl of freightAllocLines.value) {
-      freightBySku.set(fl.sku, { unitFreight: fl.unitFreight || 0 })
-    }
-    await inboundApi.create({
-      inboundNo: createForm.value.inboundNo.trim() || undefined,
-      sourceWarehouseCode: createForm.value.logisticsWhCode,
-      warehouseCode: createForm.value.destWarehouseCode,
-      warehouseNo: createForm.value.warehouseNo.trim(),
-      remark: buildRemark(),
-      items: validLines.map((l) => ({
-        productId: l.productId || undefined,
-        sku: l.sku,
-        productName: l.productName,
-        expectedQty: lineTotalQty(l),
-        remark: l.remark || undefined,
-      })),
-      cartons: cartonsPayload.length ? cartonsPayload : undefined,
-      freightLines: [...skuTotals.entries()].map(([sku, qty]) => {
-        const line = validLines.find((l) => l.sku === sku)
-        const alloc = freightBySku.get(sku)
-        return {
-          sku,
-          productName: line?.productName,
-          inboundQty: qty,
-          seaFreightPerUnit: alloc ? Math.round(alloc.unitFreight * 100) / 100 : 0,
-          costRmb: line?.unitPrice ? Number(line.unitPrice) : undefined,
-        }
-      }),
-    })
-    if (editingDraftId.value) {
-      await inboundApi.deleteDraft(editingDraftId.value).catch(() => {})
-      await loadDrafts()
-    }
-    await load()
-  }, '入库单已创建，海运费已自动同步至货盘库存')
-
-  if (ok) {
-    editingDraftId.value = null
-    createForm.value = emptyForm()
-    tab.value = 'list'
+  const freightBySku = new Map<string, number>()
+  for (const fl of freightAllocLines.value) freightBySku.set(fl.sku, fl.unitFreight || 0)
+  const payload = {
+    clientRequestId: crypto.randomUUID(),
+    inboundNo: createForm.value.inboundNo.trim() || undefined,
+    draftNo: editingDraftId.value || undefined,
+    sourceWarehouseCode: createForm.value.logisticsWhCode,
+    warehouseCode: createForm.value.destWarehouseCode,
+    warehouseNo: createForm.value.warehouseNo.trim(),
+    remark: buildRemark(),
+    items: validLines.map(l => ({ productId: l.productId, sku: l.sku, productName: l.productName, expectedQty: lineTotalQty(l), remark: l.remark || undefined,
+      lengthCm: Number(l.lengthCm), widthCm: Number(l.widthCm), heightCm: Number(l.heightCm), weightKg: Number(l.weightKg) })),
+    cartons: cartonsPayload,
+    freightLines: [...skuTotals.entries()].map(([sku, qty]) => ({ sku, inboundQty: qty, seaFreightPerUnit: Math.round((freightBySku.get(sku) || 0) * 100) / 100,
+      costRmb: validLines.find(l => l.sku === sku)?.unitPrice || undefined })),
   }
+  const attempt: ShipmentAttempt = { payload, form: JSON.parse(JSON.stringify(createForm.value)), draftNo: editingDraftId.value }
+  try {
+    saveShipmentAttempt(localStorage, app.authenticatedUser!.id, attempt)
+    shipmentAttempt.value = readShipmentAttempt(localStorage, app.authenticatedUser!.id)
+  } catch (error) { ElMessage.error(userFacingError(error)); return }
+  await postShipment(shipmentAttempt.value!)
 }
 
 async function openDetail(row: any) {
   const id = inboundNumericId(row)
+  if (maintenanceBusy.value || maintenanceAttempt.value) return
+  detailMutationWarning.value = ''
   detailVisible.value = true
   detailLoading.value = true
   detailOrder.value = row._raw || row
@@ -1150,7 +1289,7 @@ async function openDetail(row: any) {
       detailOrder.value = await inboundApi.detail(id)
     }
   } catch (e: any) {
-    ElMessage.error(displaySkuText(e?.message || '加载详情失败'))
+    ElMessage.error(userFacingError(displaySkuText(e?.message || '加载详情失败')))
     detailVisible.value = false
   } finally {
     detailLoading.value = false
@@ -1158,55 +1297,31 @@ async function openDetail(row: any) {
 }
 
 function openFreightDialog() {
+  if (!canBeginMaintenance() || !detailCanEditFreight.value) return
+  maintenanceError.value = ''
   const current = inboundSeaFreight(detailOrder.value)
-  freightForm.value = {
-    mode: current?.mode === 'fcl' ? 'fcl' : 'lcl',
-    amount: current?.total ? String(current.total) : '',
-  }
+  freightForm.value = { mode: current?.mode === 'fcl' ? 'fcl' : 'lcl', amount: current?.total ? String(current.total) : '' }
   freightVisible.value = true
 }
 
 async function submitFreight() {
+  if (!canBeginMaintenance() || !detailCanEditFreight.value) return
   const id = inboundNumericId(detailOrder.value)
-  if (!id || !detailCanEditFreight.value) return
-  if (!detailFreightTotal.value) {
-    ElMessage.warning('请填写海运费总额')
-    return
-  }
-  if (detailMissingDimSkus.value.length) {
-    ElMessage.warning(displaySkuText(`请先补齐尺寸：${detailMissingDimSkus.value.join('、')}`))
-    return
-  }
-  freightSubmitting.value = true
-  try {
-    const data = await inboundApi.applySeaFreight(id, {
-      mode: freightForm.value.mode,
-      totalAmount: detailFreightTotal.value,
-    })
-    detailOrder.value = data
-    freightVisible.value = false
-    toast('海运费已补录并同步货盘')
-    await load()
-  } catch (e: any) {
-    ElMessage.error(displaySkuText(e?.message || '补录海运费失败'))
-  } finally {
-    freightSubmitting.value = false
-  }
+  const total = Number(freightForm.value.amount)
+  if (!id) return
+  if (!Number.isFinite(total) || total <= 0 || total > 9999999999.99 || Math.abs(total * 100 - Math.round(total * 100)) > 0.0001) { ElMessage.warning('海运费总额须大于零，最多保留两位小数'); return }
+  if (detailMissingDimSkus.value.length) { ElMessage.warning(displaySkuText(`请先补齐尺寸：${detailMissingDimSkus.value.join('、')}`)); return }
+  await startMaintenance({ kind: 'freight', inboundId: id, inboundNo: detailOrder.value.inboundNo, clear: false,
+    payload: { clientRequestId: crypto.randomUUID(), expectedVersion: detailOrder.value.seaFreightVersion, mode: freightForm.value.mode, totalAmount: total }, snapshot: detailOrder.value })
 }
 
 async function clearFreight() {
+  if (!canBeginMaintenance() || !detailCanEditFreight.value) return
   const id = inboundNumericId(detailOrder.value)
-  if (!id || !detailCanEditFreight.value) return
-  const ok = await confirmAction('确认清除本单海运费？货盘与批次成本中的海运费也会清零。入库单本身不会删除。', '清除海运费')
-  if (!ok) return
-  try {
-    const data = await inboundApi.clearSeaFreight(id)
-    detailOrder.value = data
-    toast('海运费已清除，入库单仍保留')
-    await load()
-  } catch (e: any) {
-    ElMessage.error(displaySkuText(e?.message || '清除海运费失败'))
-  }
+  if (!id) return
+  if (!await confirmAction('确认清除本单海运费？本单批次成本的海运费将清零，关联本单的货盘费用一并更新；入库单仍保留。', '清除海运费')) return
+  await startMaintenance({ kind: 'freight', inboundId: id, inboundNo: detailOrder.value.inboundNo, clear: true,
+    payload: { clientRequestId: crypto.randomUUID(), expectedVersion: detailOrder.value.seaFreightVersion }, snapshot: detailOrder.value })
 }
 
 async function handleInboundDownload(command: string, row: any) {
@@ -1223,7 +1338,7 @@ async function downloadLabel(row: any) {
     triggerBlobDownload(blob, fileName)
     toast(`已下载 ${row.id} SKU 标签`)
   } catch (e: any) {
-    ElMessage.error(displaySkuText(e.message || '标签下载失败'))
+    ElMessage.error(userFacingError(displaySkuText(e.message || '标签下载失败')))
   }
 }
 
@@ -1235,7 +1350,7 @@ async function downloadOuterLabel(row: any) {
     triggerBlobDownload(blob, fileName)
     toast(`已下载 ${row.id} 外箱标`)
   } catch (e: any) {
-    ElMessage.error(displaySkuText(e.message || '外箱标下载失败'))
+    ElMessage.error(userFacingError(displaySkuText(e.message || '外箱标下载失败')))
   }
 }
 
@@ -1245,13 +1360,17 @@ async function downloadReceivingList(row: any) {
   try {
     await inboundApi.downloadReceivingList(id)
   } catch (e: any) {
-    ElMessage.error(displaySkuText(e.message || '入库清单下载失败'))
+    ElMessage.error(userFacingError(displaySkuText(e.message || '入库清单下载失败')))
   }
 }
 
 function editDraft(row: any) {
+  refreshShipmentAttempt()
+  if (formBusy.value || shipmentAttempt.value || shipmentAttemptError.value || maintenanceAttempt.value || maintenanceStorageError.value) return
+  shipmentResult.value = null
+  shipmentError.value = ''
   editingDraftId.value = row.id
-  createForm.value = JSON.parse(JSON.stringify(row._form))
+  createForm.value = { ...emptyForm(), ...JSON.parse(JSON.stringify(row._form)) }
   for (const line of createForm.value.lines) {
     normalizeInboundLine(line)
   }
@@ -1263,18 +1382,20 @@ function editDraft(row: any) {
 }
 
 async function deleteDraft(row: any) {
+  if (formBusy.value || shipmentAttempt.value || shipmentAttemptError.value || maintenanceAttempt.value || maintenanceStorageError.value) return
   if (await confirmAction(`确认删除草稿 ${row.id}？`, '删除草稿')) {
     try {
       await inboundApi.deleteDraft(row.id)
       await loadDrafts()
       toast('草稿已删除')
     } catch (e: any) {
-      ElMessage.error(displaySkuText(e.message || '删除失败'))
+      ElMessage.error(userFacingError(displaySkuText(e.message || '删除失败')))
     }
   }
 }
 
 function onAttachmentPick() {
+  if (formLocked.value || !canCreateInbound.value) return
   attachmentInputRef.value?.click()
 }
 
@@ -1282,22 +1403,27 @@ async function handleAttachmentFile(e: Event) {
   const input = e.target as HTMLInputElement
   const file = input.files?.[0]
   input.value = ''
-  if (!file) return
+  if (!file || formLocked.value || !canCreateInbound.value) return
+  attachmentBusy.value = true
   try {
+    if (!file.size) throw new Error('附件不能为空，请重新选择文件')
+    const draftNo = await persistDraft()
     const buf = await file.arrayBuffer()
     const bytes = new Uint8Array(buf)
     let binary = ''
     bytes.forEach((b) => { binary += String.fromCharCode(b) })
     const contentBase64 = btoa(binary)
     await inboundApi.uploadAttachment({
-      draftNo: editingDraftId.value || undefined,
+      draftNo,
       fileName: file.name,
       contentBase64,
     })
-    toast(`附件「${file.name}」已上传`)
+    createForm.value.attachments.push({ fileName: file.name })
+    await loadDrafts()
+    toast(`附件「${file.name}」已上传并关联本草稿`)
   } catch (err: any) {
-    ElMessage.error(displaySkuText(err.message || '附件上传失败'))
-  }
+    ElMessage.error(userFacingError(displaySkuText(err.message || '附件上传失败')))
+  } finally { attachmentBusy.value = false }
 }
 </script>
 
@@ -1306,7 +1432,7 @@ async function handleAttachmentFile(e: Event) {
     <template #header>
       <div class="page-header">
         <span class="page-title">创建入库单</span>
-        <el-button type="primary" size="small" @click="openCreate">新建入库单</el-button>
+        <el-button v-if="canCreateInbound" type="primary" size="small" :disabled="formBusy || !!shipmentAttempt || !!shipmentAttemptError || !!maintenanceAttempt || !!maintenanceStorageError" @click="openCreate">新建入库单</el-button>
       </div>
     </template>
 
@@ -1316,20 +1442,45 @@ async function handleAttachmentFile(e: Event) {
         {{ PIPELINE_INBOUND_CALLOUT }} 供应商送货、中转仓收货请在「物流中转仓」完成；货物到海外仓后的扫描、收货、上架请在「海外仓作业」模块处理。</div>
     </div>
 
+    <el-alert v-if="shipmentAttempt || shipmentAttemptError" type="warning" :closable="false" style="margin:12px 0">
+      <template #title>{{ shipmentAttemptError || '上次发运结果待核对，请使用原操作重试，避免重复扣减中转仓库存。' }}</template>
+      <el-button v-if="shipmentAttempt" :disabled="formBusy" @click="recoverShipment">恢复待核对发运</el-button>
+    </el-alert>
+    <el-alert v-if="refsError" :title="refsError" type="error" :closable="false"><el-button :loading="createLoading" @click="loadRefs">重新读取资料</el-button></el-alert>
+    <el-alert v-if="draftsError" :title="draftsError" type="error" :closable="false"><el-button @click="loadDrafts">重新读取草稿箱</el-button></el-alert>
+    <el-alert v-if="maintenanceAttempt || maintenanceStorageError" type="warning" :closable="false" style="margin:12px 0">
+      <template #title>{{ maintenanceStorageError || `上次${maintenanceAttempt?.kind === 'delete' ? '删除发运单' : maintenanceAttempt?.clear ? '清除海运费' : '补录海运费'}结果待核对：${maintenanceAttempt?.inboundNo}` }}</template>
+      <el-button v-if="maintenanceAttempt" :loading="maintenanceBusy" @click="retryMaintenance">核对并重试原操作</el-button>
+    </el-alert>
+    <el-alert v-if="maintenanceError" :title="maintenanceError" type="error" :closable="false" style="margin:12px 0" />
+    <el-alert v-if="maintenanceResult?.refreshRequired" :title="maintenanceResult.warning" type="warning" :closable="false"><el-button :loading="detailLoading" @click="refreshMutationDetail">重新读取最新详情</el-button></el-alert>
+    <el-alert v-if="maintenanceResult" type="success" :closable="false" style="margin:12px 0" :title="maintenanceResult.kind === 'delete' ? `已删除 ${maintenanceResult.inboundNo}，原中转仓良品库存已返还` : `海运费操作已完成：${maintenanceResult.inboundNo}`">
+      <el-button v-if="maintenanceResult.kind === 'delete' && maintenanceResult.deletedOrder" :disabled="formBusy" @click="copyMaintenanceDeleted">按已删除单复制新建</el-button>
+      <el-button :disabled="formBusy" @click="tab = 'list'">返回入库单管理</el-button>
+    </el-alert>
     <div class="tab-pills">
-      <button type="button" class="pill" :class="{ active: tab === 'form' }" @click="tab = 'form'">新建入库单</button>
-      <button type="button" class="pill" :class="{ active: tab === 'drafts' }" @click="tab = 'drafts'">
+      <button type="button" class="pill" :class="{ active: tab === 'form' }" :disabled="formBusy" @click="tab = 'form'">新建入库单</button>
+      <button type="button" class="pill" :class="{ active: tab === 'drafts' }" :disabled="formBusy" @click="tab = 'drafts'">
         草稿箱<span v-if="drafts.length"> ({{ drafts.length }})</span>
       </button>
-      <button type="button" class="pill" :class="{ active: tab === 'list' }" @click="tab = 'list'">入库单管理</button>
+      <button type="button" class="pill" :class="{ active: tab === 'list' }" :disabled="formBusy" @click="tab = 'list'">入库单管理</button>
     </div>
 
     <!-- 新建入库单 -->
     <div v-if="tab === 'form'" v-loading="createLoading" class="form-panel">
-      <div class="form-card">
+      <el-alert v-if="stockError" :title="stockError" type="error" :closable="false"><el-button :loading="skuLoading" @click="loadLogisticsStock(createForm.logisticsWhCode)">重新读取库存</el-button></el-alert>
+      <el-alert v-if="shipmentError" :title="shipmentError" type="error" :closable="false" style="margin:12px 0" />
+      <el-alert v-if="shipmentResult" type="success" :closable="false" style="margin:12px 0" :title="`发运成功：${shipmentResult.inboundNo}。库存、外箱与费用已同步，勿重复新建。`" />
+      <div v-if="shipmentAttempt || shipmentResult" style="display:flex;gap:12px;margin:12px 0">
+        <el-button v-if="shipmentAttempt" type="primary" :loading="shipmentBusy" @click="retryShipment">核对并重试原提交</el-button>
+        <el-button :disabled="formBusy" @click="returnShipmentList">返回入库单管理</el-button>
+        <el-button v-if="app.hasPerm('logistics_wh.view')" :disabled="formBusy" @click="returnSourceStock">查看中转仓库存</el-button>
+        <el-button v-if="shipmentResult && app.hasPerm('inbound.arrival_scan')" @click="continueArrivalScan">继续到仓扫描</el-button>
+      </div>
+      <el-form :disabled="formLocked || !canCreateInbound" class="form-card" @submit.prevent>
         <div class="form-card-header">
-          <span>{{ editingDraftId ? `编辑草稿 · ${editingDraftId}` : '新建入库单' }}</span>
-          <el-tag size="small" :type="editingDraftId ? 'info' : 'warning'">{{ editingDraftId ? '草稿' : '未保存' }}</el-tag>
+          <span>{{ shipmentResult ? `已创建 · ${shipmentResult.inboundNo}` : editingDraftId ? `发运草稿 · ${editingDraftId}` : '新建入库单' }}</span>
+          <el-tag size="small" :type="shipmentResult ? 'success' : 'info'">{{ shipmentResult ? '已创建' : shipmentAttempt ? '待核对' : editingDraftId ? '草稿' : '未保存' }}</el-tag>
         </div>
 
         <section class="form-section">
@@ -1348,7 +1499,7 @@ async function handleAttachmentFile(e: Event) {
             </el-col>
             <el-col :span="12">
               <el-form-item label="始发中转仓" required>
-                <el-select v-model="createForm.logisticsWhCode" placeholder="选择物流中转仓" filterable style="width:100%">
+                <el-select v-model="createForm.logisticsWhCode" placeholder="选择物流中转仓" filterable style="width:100%" @change="onSourceWarehouseChange">
                   <el-option
                     v-for="wh in logisticsWarehouses"
                     :key="wh.warehouseCode"
@@ -1498,8 +1649,8 @@ async function handleAttachmentFile(e: Event) {
             <div class="section-title">入库 SKU 明细（从本仓可发库存选择）</div>
             <div class="section-actions">
               <el-button size="small" link type="primary" @click="downloadSkuTemplate">下载模板</el-button>
-              <el-button size="small" :disabled="!createForm.logisticsWhCode" @click="triggerSkuImport">导入文件</el-button>
-              <el-button type="primary" size="small" :disabled="!createForm.logisticsWhCode" @click="addLine">+ 添加 SKU</el-button>
+              <el-button size="small" :disabled="formLocked || !canCreateInbound || !createForm.logisticsWhCode || skuLoading" @click="triggerSkuImport">导入文件</el-button>
+              <el-button type="primary" size="small" :disabled="formLocked || !canCreateInbound || !createForm.logisticsWhCode || skuLoading" @click="addLine">+ 添加 SKU</el-button>
             </div>
           </div>
           <input ref="skuFileInputRef" type="file" accept=".csv,.xls,.txt" style="display:none" @change="handleSkuImportFile" />
@@ -1702,14 +1853,16 @@ async function handleAttachmentFile(e: Event) {
           </el-form-item>
           <el-form-item label="附件">
             <div class="upload-zone" @click="onAttachmentPick">
-              点击上传或拖拽文件 · 支持装箱单、质检报告（PDF / XLSX）            </div>
+              {{ attachmentBusy ? '正在上传附件…' : '点击上传装箱单或质检报告（上传前自动保存草稿）' }}            </div>
+            <ul v-if="createForm.attachments.length"><li v-for="(file, index) in createForm.attachments" :key="index">{{ file.fileName }}</li></ul>
           </el-form-item>
         </section>
 
         <div class="form-footer">
           <el-button
             type="primary"
-            :disabled="!canCreateInbound"
+            :disabled="formLocked || !canCreateInbound || createLoading || skuLoading || !!refsError || !!stockError"
+            :loading="shipmentBusy"
             :title="canCreateInbound ? '' : '当前角色无创建权限'"
             @click="submitCreate"
           >
@@ -1717,8 +1870,9 @@ async function handleAttachmentFile(e: Event) {
           <el-button @click="saveDraft">保存草稿</el-button>
           <el-button @click="cancelForm">取消</el-button>
         </div>
-      </div>
-
+      </el-form>
+      <el-button :disabled="formBusy" @click="cancelForm">返回入库单管理</el-button>
+      <el-button v-if="app.hasPerm('logistics_wh.view')" :disabled="formBusy" @click="returnSourceStock">返回中转仓库存</el-button>
     </div>
 
     <!-- 草稿箱 -->
@@ -1751,7 +1905,7 @@ async function handleAttachmentFile(e: Event) {
       </el-table>
       <el-empty v-if="!drafts.length" description="暂无草稿，填写信息后点击「保存草稿」" />
       <ListPagination v-model:page="draftPage" v-model:page-size="draftPageSize" :total="draftTotal" />
-      <p class="text-muted footer-note">草稿保存在浏览器本地，提交后将转为正式入库单并从草稿箱移除</p>
+      <p class="text-muted footer-note">草稿按当前账号保存在服务端，提交成功后转为正式入库单，附件同时关联正式单据</p>
     </template>
 
     <!-- 入库单管理 -->
@@ -1763,9 +1917,17 @@ async function handleAttachmentFile(e: Event) {
         <div class="kpi ok"><strong>{{ listStats.completed }}</strong><span>已入库</span></div>
         <div class="kpi"><strong>{{ listStats.cbm !== '—' ? `约 ${listStats.cbm}m³` : '—' }}</strong><span>在途总立方</span></div>
         <span class="spacer" />
+        <el-select v-model="inboundSource" aria-label="入库单来源" style="width:180px">
+          <el-option label="ERP 中转仓发运" value="erp_shipment" />
+          <el-option label="OMS 客户预约" value="oms_customer" />
+          <el-option label="全部来源" value="all" />
+        </el-select>
         <el-input v-model="inboundSearchQ" placeholder="入库单 / SKU" clearable style="width:160px;margin-left:8px" />
       </div>
       <el-table v-loading="loading" :data="inboundPagedItems" stripe border size="small">
+        <el-table-column label="来源" width="145">
+          <template #default="{ row }">{{ row._raw?.sourceKind === 'erp_shipment' ? 'ERP 中转仓发运' : row._raw?.sourceKind === 'oms_customer' ? 'OMS 客户预约' : 'ERP 历史入库' }}</template>
+        </el-table-column>
         <el-table-column prop="id" label="入库单号" width="130">
           <template #default="{ row }"><span class="mono">{{ row.id }}</span></template>
         </el-table-column>
@@ -1797,7 +1959,7 @@ async function handleAttachmentFile(e: Event) {
               trigger="click"
               placement="bottom-end"
               popper-class="table-row-dropdown"
-              @command="(cmd) => handleInboundDownload(cmd, row)"
+              @command="(cmd: string) => handleInboundDownload(cmd, row)"
             >
               <el-button link type="primary" size="small" @click.stop>下载标签</el-button>
               <template #dropdown>
@@ -1813,7 +1975,7 @@ async function handleAttachmentFile(e: Event) {
               link
               type="danger"
               size="small"
-              :disabled="!inboundCanDelete(row)"
+              :disabled="maintenanceBusy || !!maintenanceAttempt || !inboundCanDelete(row)"
               :title="inboundDeleteHint(row)"
               @click="removeInbound(row)"
             >删除入库单</el-button>
@@ -1828,6 +1990,9 @@ async function handleAttachmentFile(e: Event) {
 
   <el-dialog
     v-model="detailVisible"
+    :close-on-click-modal="!maintenanceBusy"
+    :close-on-press-escape="!maintenanceBusy"
+    :show-close="!maintenanceBusy"
     :title="`入库详情 · ${detailOrder?.inboundNo || ''}`"
     width="960px"
     class="create-inbound-detail erp-detail"
@@ -1851,7 +2016,7 @@ async function handleAttachmentFile(e: Event) {
             </template>
             <span v-else class="text-muted">未填写</span>
           </el-descriptions-item>
-          <el-descriptions-item label="客户备注" :span="3">{{ parseInboundMeta(detailOrder.remark).userRemark }}</el-descriptions-item>
+          <el-descriptions-item label="备注" :span="3">{{ parseInboundMeta(detailOrder.remark).userRemark }}</el-descriptions-item>
         </el-descriptions>
 
         <div class="detail-section-title">SKU 明细（{{ detailItems.length }}）</div>
@@ -1888,6 +2053,11 @@ async function handleAttachmentFile(e: Event) {
         <el-empty v-if="!detailItems.length" description="该入库单没有 SKU 明细" :image-size="64" />
       </template>
     </div>
+    <el-alert v-if="detailMutationWarning" :title="detailMutationWarning" type="warning" :closable="false"><el-button :loading="detailLoading" @click="refreshMutationDetail">重新读取最新详情</el-button></el-alert>
+    <el-alert v-if="maintenanceError" :title="maintenanceError" type="error" :closable="false">
+      <el-button v-if="maintenanceAttempt" :loading="maintenanceBusy" @click="retryMaintenance">核对并重试原操作</el-button>
+      <el-button :disabled="maintenanceBusy || !!maintenanceAttempt" @click="refreshMutationDetail">重新读取最新详情</el-button>
+    </el-alert>
     <template #footer>
       <el-button
         v-if="detailCanEditFreight"
@@ -1903,21 +2073,29 @@ async function handleAttachmentFile(e: Event) {
       <el-button
         v-if="inboundIsErpManaged(detailOrder)"
         type="danger"
-        :disabled="!inboundCanDelete(detailOrder)"
+        :disabled="maintenanceBusy || !!maintenanceAttempt || !inboundCanDelete(detailOrder)"
         :title="inboundDeleteHint(detailOrder)"
         @click="removeInbound(detailOrder)"
       >删除入库单</el-button>
-      <el-button type="primary" @click="detailVisible = false">关闭</el-button>
+      <el-button type="primary" :disabled="maintenanceBusy" @click="detailVisible = false">关闭</el-button>
     </template>
   </el-dialog>
 
   <el-dialog
     v-model="freightVisible"
+    :close-on-click-modal="!maintenanceBusy"
+    :close-on-press-escape="!maintenanceBusy"
+    :show-close="!maintenanceBusy"
     :title="`补录海运费 · ${detailOrder?.inboundNo || ''}`"
     width="720px"
     class="create-inbound-freight"
     destroy-on-close
   >
+    <el-alert v-if="maintenanceError" :title="maintenanceError" type="error" :closable="false" />
+    <el-alert v-if="maintenanceAttempt" type="warning" :closable="false" title="原操作结果待核对，请保持原内容并重试">
+      <el-button :loading="maintenanceBusy" @click="retryMaintenance">核对并重试原操作</el-button>
+    </el-alert>
+    <el-form :disabled="maintenanceBusy || !!maintenanceAttempt" @submit.prevent>
     <p class="section-desc">选择运输方式并填写本票海运费总额，系统按各 SKU 体积占比分摊到单件，并同步货盘库存。</p>
     <div class="sea-mode-row">
       <el-radio-group v-model="freightForm.mode" size="small">
@@ -1966,9 +2144,10 @@ async function handleAttachmentFile(e: Event) {
         </div>
       </div>
     </div>
+    </el-form>
     <template #footer>
-      <el-button @click="freightVisible = false">取消</el-button>
-      <el-button type="primary" :loading="freightSubmitting" @click="submitFreight">保存并同步货盘</el-button>
+      <el-button :disabled="maintenanceBusy" @click="freightVisible = false">返回详情</el-button>
+      <el-button type="primary" :disabled="!!maintenanceAttempt || !detailCanEditFreight" :loading="freightSubmitting" @click="submitFreight">保存并同步货盘</el-button>
     </template>
   </el-dialog>
 </template>

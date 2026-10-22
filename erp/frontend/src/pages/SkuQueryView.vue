@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { userFacingError } from '@erp/shared/user-facing-error'
+
 import { displaySku, displaySkuText } from '@erp/shared/sku-display'
 import { ref, onMounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
@@ -96,7 +98,7 @@ async function load() {
   } catch (e: any) {
     rows.value = []
     listTotal.value = 0
-    ElMessage.error(displaySkuText(e?.message || '加载失败'))
+    ElMessage.error(userFacingError(displaySkuText(e?.message || '加载失败')))
   } finally {
     loading.value = false
   }
@@ -198,7 +200,7 @@ async function saveEdit() {
     ElMessage.success('保存成功')
     editVisible.value = false
   } catch (e: any) {
-    ElMessage.error(displaySkuText(e?.message || '保存失败'))
+    ElMessage.error(userFacingError(displaySkuText(e?.message || '保存失败')))
   } finally {
     editSaving.value = false
   }
@@ -222,10 +224,12 @@ function exportRows(list: any[]) {
     ElMessage.warning('没有可导出的数据')
     return
   }
-  const headers = ['SKU', 'SPU', '商品名', '规格', '条码', '品类', '品牌', '状态', '重量kg', '长宽高cm', '申报成本', '销售状态', '添加时间', '更新时间']
+  const headers = ['SKU', 'SPU', '商品名', '规格', '条码', '品类', '品牌', '状态', '重量kg', '长宽高cm', '申报成本', '销售状态', '客户商品状态', '添加时间', '更新时间']
   const lines = list.map((r) => [
     r.sku, r.spu, r.productName, r.spec, r.barcode, r.category, r.brand,
-    r.statusLabel, r.weightLabel, r.dimLabel, r.costRmb ?? '', r.salesStatus,
+    r.statusLabel, r.weightLabel, r.dimLabel, r.costRmb ?? '',
+    r.dataSource === 'oms' ? '' : r.salesStatus,
+    r.dataSource === 'oms' ? r.operationStatusLabel : '',
     fmtDate(r.createdAt), fmtDate(r.updatedAt),
   ])
   const bom = '\uFEFF'
@@ -263,7 +267,7 @@ onMounted(() => {
     <div class="filter-panel">
       <div class="filter-grid">
         <div class="filter-item">
-          <label>厂商代码</label>
+          <label>供应商</label>
           <el-input v-model="filters.supplierKeyword" placeholder="供应商代码/名称" clearable size="small" />
         </div>
         <div class="filter-item">
@@ -439,7 +443,9 @@ onMounted(() => {
               <div v-if="row.barcode"><span class="lbl">条码:</span> {{ row.barcode }}</div>
               <div v-if="row.brand"><span class="lbl">品牌:</span> {{ row.brand }}</div>
               <div v-if="row.supplierName"><span class="lbl">供应商:</span> {{ row.supplierName }}</div>
-              <div><span class="lbl">同步:</span> {{ row.syncStatus === 'synced' ? '已同步' : '待同步' }}</div>
+              <div v-if="row.customerName"><span class="lbl">客户:</span> {{ row.customerName }}</div>
+              <div v-if="row.dataSource === 'oms'"><span class="lbl">来源:</span> OMS 客户商品</div>
+              <div v-else><span class="lbl">同步:</span> {{ row.syncStatus === 'synced' ? '已同步' : '待同步' }}</div>
             </div>
           </template>
         </el-table-column>
@@ -454,7 +460,14 @@ onMounted(() => {
 
         <el-table-column label="销售状态" width="88" align="center">
           <template #default="{ row }">
-            <span :class="row.orderableOnOms ? 'sales-ok' : 'sales-muted'">{{ row.salesStatus }}</span>
+            <span v-if="row.dataSource === 'oms'" class="sales-muted">—</span>
+            <span v-else :class="row.orderableOnOms ? 'sales-ok' : 'sales-muted'">{{ row.salesStatus }}</span>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="客户商品状态" width="110" align="center">
+          <template #default="{ row }">
+            <span>{{ row.dataSource === 'oms' ? row.operationStatusLabel || '未知' : '—' }}</span>
           </template>
         </el-table-column>
 
@@ -505,7 +518,12 @@ onMounted(() => {
           <dt>仓租计费(cm)</dt><dd>{{ detailRow.billingDimLabel || '—' }}<span v-if="detailRow.billingDimSource" class="lbl">（{{ detailRow.billingDimSource === 'measured' ? '优先实测' : detailRow.billingDimSource === 'customer' ? '客户申报' : '—' }}）</span></dd>
           <dt>重量(kg)</dt><dd>{{ detailRow.weightLabel || '—' }}</dd>
           <dt>申报成本</dt><dd>{{ detailRow.costRmb != null ? detailRow.costRmb : '—' }}</dd>
-          <dt>销售状态</dt><dd>{{ detailRow.salesStatus }}</dd>
+          <template v-if="detailRow.dataSource === 'oms'">
+            <dt>客户商品状态</dt><dd>{{ detailRow.operationStatusLabel || '未知' }}</dd>
+          </template>
+          <template v-else>
+            <dt>销售状态</dt><dd>{{ detailRow.salesStatus }}</dd>
+          </template>
           <dt>添加时间</dt><dd>{{ fmtTime(detailRow.createdAt) }}</dd>
           <dt>更新时间</dt><dd>{{ fmtTime(detailRow.updatedAt) }}</dd>
         </dl>

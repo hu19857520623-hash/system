@@ -1,3 +1,5 @@
+
+import { userFacingError } from '../utils/userFacingError'
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { AlertTriangle, CheckCircle2, FileSearch, Plus, Trash2, ListOrdered, Upload } from 'lucide-react'
@@ -21,7 +23,7 @@ import {
   RETURN_WAREHOUSE_OPTIONS,
   canEditReturnOrder,
   nextReturnNo,
-  submitReturnToErp,
+  submitReturnWorkflow,
   type ReturnOrder,
 } from '../data/returnStore'
 import { todayDateInput, toDatetimeLocalInput, fromDatetimeLocalInput, fileToAttachment } from '../data/fileUtils'
@@ -34,7 +36,7 @@ import {
 } from '../data/importTemplates'
 import { ImportTemplateLegend } from '../components/ui/ImportTemplateLegend'
 import type { FileAttachment, Product } from '../data/mockData'
-import { notifyIfUserError } from '../utils/userNotify'
+import { notifyIfUserError, notifySuccess, notifyInfo } from '../utils/userNotify'
 import {
   detectTakealotDocKind,
   mergeTakealotParsed,
@@ -177,6 +179,11 @@ export default function ReturnApply() {
   const [createdAt, setCreatedAt] = useState(todayDateInput())
   const [draftCustomerId, setDraftCustomerId] = useState<string | undefined>()
   const [reEditingCancelled, setReEditingCancelled] = useState(false)
+  const [feedback, setFeedback] = useState('')
+  const [editError, setEditError] = useState('')
+  const [submissionUncertain, setSubmissionUncertain] = useState(false)
+  const inFlight = useRef(false)
+  const stableId = useRef(`rt-${crypto.randomUUID()}`)
 
   const erpCustomer = resolveErpCustomerContext({
     role,
@@ -195,16 +202,16 @@ export default function ReturnApply() {
 
   useEffect(() => {
     if (!editId) {
-      setReturnNo(prev => prev || nextReturnNo())
+      setReturnNo(customerCode ? nextReturnNo(customerCode) : '')
       setDraftCustomerId(customerIdFromRole)
       return
     }
     const existing = getReturnOrdersSnapshot().find(o => o.id === editId)
     if (!existing || !canEditReturnOrder(existing)) {
-      window.alert('该退件单不可编辑（仅草稿或已撤回可修改）')
-      navigate('/returns/processing')
+      setEditError('该退件单不存在或不可编辑，仅草稿和已撤回的退件可修改。请返回退件处理核对。')
       return
     }
+    setEditError('')
     setReEditingCancelled(existing.status === 'cancelled')
     setDraftCustomerId(existing.customerId ?? customerIdFromRole)
     setEditingId(existing.id)
@@ -242,21 +249,21 @@ export default function ReturnApply() {
       name: l.name,
       qty: l.qty,
     })))
-  }, [editId, navigate, customerIdFromRole])
+  }, [editId, navigate, customerIdFromRole, customerCode])
 
   const requireCustomer = () => {
     if (customerId && customerCode) return true
-    window.alert(
+    setFeedback(
       dataScope.isAdmin
         ? '请先在上方选择要代操作的客户端，再提交退件'
-        : '当前角色未绑定 ERP 客户编码，请联系管理员配置账号 code（需与 ERP customer_code 一致）',
+        : '当前账号未绑定客户编码，请联系管理员配置后再提交退件',
     )
     return false
   }
 
   const formFields = () => ({
-    editingId,
-    returnNo: returnNo || nextReturnNo(),
+    editingId: editingId || stableId.current,
+    returnNo: returnNo || nextReturnNo(customerCode),
     customerId,
     returnPlatform,
     filledBy,
@@ -337,7 +344,7 @@ export default function ReturnApply() {
       applyRecognizedTakealot(mergeTakealotParsed(...takealotParts))
       mergeAttachments(next)
     } catch (error) {
-      setRecognitionWarning(error instanceof Error ? error.message : '文件识别失败，请重新上传')
+      setRecognitionWarning(userFacingError(error instanceof Error ? error.message : '文件识别失败，请重新上传'))
     } finally {
       setRecognizingFiles(false)
       if (takealotFileInputRef.current) takealotFileInputRef.current.value = ''
@@ -353,7 +360,7 @@ export default function ReturnApply() {
       }))
       mergeAttachments(next)
     } catch (error) {
-      window.alert(error instanceof Error ? error.message : '文件上传失败，请重新上传')
+      window.alert(userFacingError(error instanceof Error ? error.message : '文件上传失败，请重新上传'))
     } finally {
       if (otherFileInputRef.current) otherFileInputRef.current.value = ''
     }
@@ -368,7 +375,7 @@ export default function ReturnApply() {
       }))
       mergeAttachments(next)
     } catch (error) {
-      window.alert(error instanceof Error ? error.message : '资料上传失败，请重新上传')
+      window.alert(userFacingError(error instanceof Error ? error.message : '资料上传失败，请重新上传'))
     }
   }
 
@@ -411,7 +418,10 @@ export default function ReturnApply() {
   )
 
   const addLine = () => {
-    if (!skuInput.trim() || !qtyInput) return
+    if (!skuInput.trim() || !Number.isSafeInteger(Number(qtyInput)) || Number(qtyInput) <= 0) {
+      setFeedback('请填写 SKU 和大于零的整数数量')
+      return
+    }
     const prod = findProductByCode(skuInput.trim(), customerId)
     const internalSku = prod?.internalSku ?? skuInput.trim()
     setLines(prev => [...prev, {
@@ -440,6 +450,9 @@ export default function ReturnApply() {
   }
 
   const handleSaveDraft = async () => {
+    if (inFlight.current || submissionUncertain || !requireCustomer()) return
+    inFlight.current = true
+    setFeedback('')
     setSavingDraft(true)
     try {
       const order = buildReturnOrder(formFields(), true)
@@ -448,73 +461,90 @@ export default function ReturnApply() {
       } else {
         await addReturnOrderOrThrow(order)
       }
-      window.alert(`草稿已保存：${order.returnNo}`)
+      notifySuccess(`草稿已保存：${order.returnNo}`)
       navigate('/returns/processing?tab=draft')
     } catch (err) {
-      notifyIfUserError(err, '保存草稿失败')
+      setFeedback(userFacingError(err))
     } finally {
+      inFlight.current = false
       setSavingDraft(false)
     }
   }
 
   const handleSubmit = async () => {
+    if (inFlight.current || submissionUncertain) return
+    setFeedback('')
     if (!requireCustomer()) return
     if (returnPlatform === 'takealot' && takealotAttachments.length === 0) {
-      window.alert('请在上方上传 Takealot 平台预约退货文件')
+      setFeedback('请在上方上传 Takealot 平台预约退货文件')
       return
     }
     if (returnPlatform === 'takealot' && (!filledBy.trim() || !department.trim())) {
-      window.alert('请填写 Takealot 退货资料中的填写人和所在部门')
+      setFeedback('请填写 Takealot 退货资料中的填写人和所在部门')
       return
     }
     if (returnPlatform === 'takealot' && (!inboundPoNumber.trim() || !purchasePrice)) {
-      window.alert('请填写 Takealot 退货资料中的送仓 PO Number 和当时采购价')
+      setFeedback('请填写 Takealot 退货资料中的送仓采购单号和当时采购价')
+      return
+    }
+    if (returnPlatform === 'takealot' && (!Number.isFinite(Number(purchasePrice)) || Number(purchasePrice) < 0)) {
+      setFeedback('当时采购价须为不小于零的有效金额')
       return
     }
     if (returnPlatform === 'takealot' && reasonScreenshotAttachments.length === 0) {
-      window.alert('请上传退货理由截图')
+      setFeedback('请上传退货理由截图')
       return
     }
     if (returnPlatform === 'takealot' && (sales30dAttachments.length === 0 || returns30dAttachments.length === 0)) {
-      window.alert('请上传近 30 天销售数据表和近 30 天退货数据')
+      setFeedback('请上传近 30 天销售数据表和近 30 天退货数据')
       return
     }
     if (returnPlatform === 'other' && otherPlatformAttachments.length === 0) {
-      window.alert('请在下方上传其他平台退货文件')
+      setFeedback('请在下方上传其他平台退货文件')
       return
     }
     if (!orderNo.trim()) {
-      window.alert(returnPlatform === 'takealot' ? '请填写系统退货 ID' : '请填写订单号')
+      setFeedback(returnPlatform === 'takealot' ? '请填写系统退货编号' : '请填写订单号')
       return
     }
     if (!returnReason.trim()) {
-      window.alert('请选择或填写退件原因')
+      setFeedback('请选择或填写退件原因')
       return
     }
     if (!returnWarehouse) {
-      window.alert('请选择退件仓库')
+      setFeedback('请选择退件仓库')
       return
     }
     if (lines.length === 0) {
-      window.alert('请添加 SKU 明细')
+      setFeedback('请添加 SKU 明细')
+      return
+    }
+    if (lines.some(line => !line.sku.trim() || !Number.isSafeInteger(line.qty) || line.qty <= 0)) {
+      setFeedback('退件明细需要有效 SKU 和大于零的整数数量，请核对后再提交')
       return
     }
     const order = buildReturnOrder(formFields(), false)
     setSubmitting(true)
+    inFlight.current = true
     try {
-      const result = await submitReturnToErp(order, { customerId, customerCode })
+      const result = await submitReturnWorkflow(order, { customerId, customerCode })
       if (!result.ok) {
-        window.alert(`提交失败：${result.error}`)
+        setSubmissionUncertain(Boolean(result.uncertain))
+        setFeedback(userFacingError(result.error))
         return
       }
-      window.alert(`退件单 ${result.order.returnNo} 已提交，仓库到货后将更新处理进度`)
+      if (result.warning) notifyInfo(result.warning)
+      else notifySuccess(`退件单 ${result.order.returnNo} 已提交，仓库到货后将更新处理进度`)
       navigate('/returns/processing')
     } catch (err) {
-      notifyIfUserError(err, '提交失败')
+      setFeedback(userFacingError(err))
     } finally {
+      inFlight.current = false
       setSubmitting(false)
     }
   }
+
+  if (editError) return <div className="page-shell"><Card className="p-6"><p role="alert">{editError}</p><Link className="mt-4 inline-block text-primary-600" to="/returns/processing">返回退件处理</Link></Card></div>
 
   return (
     <div className="page-shell">
@@ -530,12 +560,13 @@ export default function ReturnApply() {
                 : '填写退件信息与 SKU 明细，可先保存草稿再提交'}
           </p>
         </div>
-        <Link to="/returns/processing" className="inline-flex items-center gap-1.5 text-sm text-primary-600 hover:underline">
+        <Link to="/returns/processing" onClick={event => { if (submitting || savingDraft) event.preventDefault() }} className="inline-flex items-center gap-1.5 text-sm text-primary-600 hover:underline">
           <ListOrdered className="h-3.5 w-3.5" /> 查看退件处理
         </Link>
       </div>
 
-      <div className="space-y-6">
+      {feedback && <div role="alert" className="mb-4 rounded-lg bg-amber-50 p-4 text-sm text-amber-900">{feedback}{submissionUncertain && <Link to="/returns/processing" className="ml-3 underline">返回退件处理核对结果</Link>}</div>}
+      <fieldset disabled={submitting || savingDraft || submissionUncertain} className="space-y-6 border-0 p-0 m-0 min-w-0">
         {dataScope.isAdmin && (
           <Card className="p-4">
             <AdminCustomerFilter scope={dataScope} />
@@ -812,7 +843,7 @@ export default function ReturnApply() {
                     <td className="table-cell text-xs">{l.name}</td>
                     <td className="table-cell text-xs">{l.qty}</td>
                     <td className="table-cell">
-                      <button type="button" className="text-red-500" onClick={() => setLines(prev => prev.filter(x => x.id !== l.id))}>
+                      <button type="button" aria-label={`删除 ${l.sku} 明细`} className="text-red-500" onClick={() => setLines(prev => prev.filter(x => x.id !== l.id))}>
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
                     </td>
@@ -835,7 +866,7 @@ export default function ReturnApply() {
             {submitting ? '提交中…' : '提交退件申请'}
           </Button>
         </div>
-      </div>
+      </fieldset>
     </div>
   )
 }

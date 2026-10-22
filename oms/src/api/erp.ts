@@ -231,6 +231,8 @@ export type ErpInventoryViewItem = ErpSkuHolding & {
   warehouseAvailable: number
   warehouseLocked: number
   warehouseTotal: number
+  inTransitQty?: number
+  pendingShelvingQty?: number
   stockSource: 'catalog' | 'owned'
 }
 

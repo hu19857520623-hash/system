@@ -1,3 +1,5 @@
+
+import { userFacingError } from '../utils/userFacingError'
 import { useEffect, useRef, useState } from 'react'
 import { displaySku, displaySkuText } from '../data/skuDisplay'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
@@ -7,9 +9,9 @@ import { FormSection, FormGrid, FormField, formInput, formSelect, formTextarea }
 import { findProductByCode } from '../data/platformBindingUtils'
 import { useRole } from '../auth/RoleContext'
 import { getCustomerCode, getCustomerIdForRole } from '../data/dataScope'
-import { nextInboundNo, submitInboundToErp, updateInboundOnErp, reorderInboundOnErp, canEditInboundOrder, canReorderInboundOrder } from '../data/inboundStore'
+import { nextInboundNo, submitInboundToErp, updateInboundOnErp, reorderInboundOnErp, canEditInboundOrder, canReorderInboundOrder, inboundMutationFailure } from '../data/inboundStore'
 import { addInboundOrderOrThrow, updateInboundOrderOrThrow } from '../data/entityStore'
-import { notifyIfUserError } from '../utils/userNotify'
+import { notifyIfUserError, notifyError, notifySuccess, notifyInfo } from '../utils/userNotify'
 import { fileToAttachment, todayDateInput } from '../data/fileUtils'
 import { importCsvFile } from '../data/csvImportExport'
 import { reportLineImportResult } from '../utils/lineImportResult'
@@ -56,7 +58,10 @@ export default function Inbound() {
   const [lines, setLines] = useState<InboundBoxLine[]>([])
   const [attachments, setAttachments] = useState<FileAttachment[]>([])
   const [confirmWarehouseData, setConfirmWarehouseData] = useState(false)
-  const [saving, setSaving] = useState(false)
+  const [savingAction, setSavingAction] = useState<'draft' | 'submit' | null>(null)
+  const saving = savingAction !== null
+  const [submissionUncertain, setSubmissionUncertain] = useState(false)
+  const [feedback, setFeedback] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const hydratedEditId = useRef<string | null>(null)
   const redirectedEdit = useRef(false)
@@ -84,27 +89,27 @@ export default function Inbound() {
   }, [editOrder, role])
 
   useEffect(() => {
-    if ((!editId && !reorderId) || inboundOrders.length === 0 || redirectedEdit.current) return
+    if (saving || (!editId && !reorderId) || redirectedEdit.current) return
     if (!targetOrder) {
       redirectedEdit.current = true
-      window.alert('未找到该入库单')
+      notifyError('未找到该入库单')
       navigate('/inbound/records')
       return
     }
     if (reorderId) {
       if (!canReorderInboundOrder(targetOrder.status)) {
         redirectedEdit.current = true
-        window.alert('仅已作废的入库单可重新下单')
+        notifyError('仅已作废的入库单可重新下单')
         navigate('/inbound/records')
       }
       return
     }
     if (!canEditInboundOrder(targetOrder.status)) {
       redirectedEdit.current = true
-      window.alert('请先将在途入库单撤回为草稿，再修改并提交')
+      notifyError('请先将在途入库单撤回为草稿，再修改并提交')
       navigate('/inbound/records')
     }
-  }, [editId, reorderId, inboundOrders, navigate, targetOrder])
+  }, [editId, reorderId, inboundOrders, navigate, targetOrder, saving])
 
   const addPickerLines = (rows: OutboundSkuPickerConfirmRow[]) => {
     try {
@@ -118,7 +123,7 @@ export default function Inbound() {
       setBoxCountInput(''); setQtyPerBoxInput('')
       return true
     } catch (err) {
-      window.alert(displaySkuText(err instanceof Error ? err.message : '添加货品失败'))
+      notifyError(userFacingError(displaySkuText(err instanceof Error ? err.message : '添加货品失败')))
       return false
     }
   }
@@ -158,25 +163,31 @@ export default function Inbound() {
   }
 
   const handleSubmit = async (asDraft = false) => {
+    if (saving || submissionUncertain) return
+    setFeedback(null)
     if (editingInTransit && asDraft) return
     if (reordering && asDraft) return
     if (!asDraft && !editingInTransit && !confirmWarehouseData) {
-      window.alert('请先勾选「以仓库收货数据为准」后再提交')
+      setFeedback('请先勾选「以仓库收货数据为准」后再提交')
       return
     }
     if (lines.length === 0) {
-      window.alert('请先添加入库货品')
+      setFeedback('请先添加入库货品')
       return
     }
     const lineError = validateInboundBoxLines(lines)
     if (lineError) {
-      window.alert(displaySkuText(lineError))
+      setFeedback(displaySkuText(lineError))
       return
     }
 
     const totalQty = lines.reduce((s, l) => s + l.qty, 0)
     const boxCount = new Set(lines.map(l => l.boxNo)).size
-    const customerId = getCustomerIdForRole(role) ?? undefined
+    const customerId = getCustomerIdForRole(role) || editOrder?.customerId
+    if (!customerId || getCustomerCode(customerId) === '—') {
+      setFeedback('当前预约未绑定客户，请进入对应客户账号后再预约入库')
+      return
+    }
 
     const localOrder = {
       id: editOrder?.id || `ib-${Date.now()}`,
@@ -190,7 +201,7 @@ export default function Inbound() {
       skuCount: new Set(lines.map(l => l.sku)).size,
       totalQty,
       receivedQty: editingInTransit ? (editOrder?.receivedQty || 0) : 0,
-      status: (asDraft ? 'draft' : 'on_the_way') as InboundStatus,
+      status: (editingInTransit ? 'on_the_way' : 'draft') as InboundStatus,
       createdAt: editOrder?.createdAt || todayDateInput(),
       eta: eta || undefined,
       warehouse: INBOUND_WAREHOUSE_ID,
@@ -211,15 +222,18 @@ export default function Inbound() {
       attachments: attachments.length ? attachments : undefined,
     }
 
-    setSaving(true)
+    setSavingAction(asDraft ? 'draft' : 'submit')
+    let warning: string | undefined
     try {
       if (reordering) {
         const erpResult = await reorderInboundOnErp({ ...localOrder, status: 'voided' })
         if (!erpResult.ok) {
-          window.alert(displaySkuText(`重新下单失败：${erpResult.error}`))
+          setSubmissionUncertain(Boolean(erpResult.uncertain))
+          setFeedback(displaySkuText(erpResult.error))
           return
         }
-        window.alert(`入库单 ${localOrder.inboundNo} 已重新下单，进入在途`)
+        if (erpResult.warning) notifyInfo(displaySkuText(erpResult.warning))
+        else notifySuccess(`入库单 ${localOrder.inboundNo} 已重新下单，进入在途`)
         goRecords()
         return
       }
@@ -227,10 +241,12 @@ export default function Inbound() {
       if (editingInTransit) {
         const erpResult = await updateInboundOnErp(localOrder)
         if (!erpResult.ok) {
-          window.alert(displaySkuText(`保存失败：${erpResult.error}`))
+          setSubmissionUncertain(Boolean(erpResult.uncertain))
+          setFeedback(displaySkuText(erpResult.error))
           return
         }
-        window.alert(`入库单 ${localOrder.inboundNo} 已保存`)
+        if (erpResult.warning) notifyInfo(displaySkuText(erpResult.warning))
+        else notifySuccess(`入库单 ${localOrder.inboundNo} 已保存`)
         goRecords()
         return
       }
@@ -241,21 +257,26 @@ export default function Inbound() {
       if (!asDraft) {
         const erpResult = await submitInboundToErp(localOrder)
         if (!erpResult.ok) {
-          await updateInboundOrderOrThrow(localOrder.id, { status: 'draft' })
-          window.alert(displaySkuText(`同步 ERP 失败，已保留为草稿，请修改后重试：${erpResult.error}`))
+          setSubmissionUncertain(Boolean(erpResult.uncertain))
+          setFeedback(displaySkuText(erpResult.uncertain ? erpResult.error
+            : `ERP 未接受本次提交，已保留草稿，请修改后重试：${erpResult.error}`))
           return
         }
+        warning = erpResult.warning
       }
 
-      window.alert(asDraft ? `草稿已保存：${localOrder.inboundNo}` : `入库单 ${localOrder.inboundNo} 已提交`)
+      if (warning) notifyInfo(displaySkuText(warning))
+      else notifySuccess(asDraft ? `草稿已保存：${localOrder.inboundNo}` : `入库单 ${localOrder.inboundNo} 已提交`)
       setLines([])
       setAttachments([])
       setConfirmWarehouseData(false)
       goRecords()
     } catch (err) {
-      notifyIfUserError(err, asDraft ? '保存草稿失败' : reordering ? '重新下单失败' : editingInTransit ? '保存失败' : '提交失败')
+      const result = inboundMutationFailure(err)
+      setSubmissionUncertain(Boolean(result.uncertain))
+      setFeedback(displaySkuText(result.error))
     } finally {
-      setSaving(false)
+      setSavingAction(null)
     }
   }
 
@@ -406,7 +427,7 @@ export default function Inbound() {
                       </select>
                     </td>
                     <td className="table-cell">
-                      <button type="button" onClick={() => setLines(prev => prev.filter(l => l.id !== row.id))} className="text-red-500 hover:text-red-700">
+                      <button type="button" aria-label={`移除箱号 ${row.boxNo} 的货品 ${displaySku(row.sku, targetOrder?.customerId ?? getCustomerIdForRole(role))}`} onClick={() => setLines(prev => prev.filter(l => l.id !== row.id))} className="text-red-500 hover:text-red-700">
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
                     </td>
@@ -423,6 +444,11 @@ export default function Inbound() {
         </FormSection>
       </div>
 
+      {feedback && <div role="alert" className="my-4 rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-900">
+        <p>{feedback}</p>
+        {submissionUncertain && <Link to="/inbound/records" className="mt-2 inline-block font-medium underline">返回入库记录核对结果</Link>}
+      </div>}
+
       <div className="fixed bottom-0 left-0 right-0 z-30 border-t border-border-light bg-white/95 px-6 py-4 backdrop-blur-sm lg:pl-[220px]">
         <div className="mx-auto flex max-w-[1280px] items-center justify-between gap-3">
           <p className="hidden text-xs text-text-muted sm:block">
@@ -437,20 +463,20 @@ export default function Inbound() {
           <div className="flex gap-2">
             <Button variant="secondary" onClick={goRecords} disabled={saving}>取消</Button>
             {editingInTransit ? (
-              <Button disabled={saving} onClick={() => void handleSubmit(false)}>
+              <Button disabled={saving || submissionUncertain} onClick={() => void handleSubmit(false)}>
                 {saving ? '保存中…' : '保存修改'}
               </Button>
             ) : reordering ? (
-              <Button disabled={!confirmWarehouseData || saving} onClick={() => void handleSubmit(false)}>
+              <Button disabled={!confirmWarehouseData || saving || submissionUncertain} onClick={() => void handleSubmit(false)}>
                 {saving ? '提交中…' : '提交'}
               </Button>
             ) : (
               <>
-                <Button variant="secondary" disabled={saving} onClick={() => void handleSubmit(true)}>
-                  {saving ? '保存中…' : '保存草稿'}
+                <Button variant="secondary" disabled={saving || submissionUncertain} onClick={() => void handleSubmit(true)}>
+                  {savingAction === 'draft' ? '保存中…' : '保存草稿'}
                 </Button>
-                <Button disabled={!confirmWarehouseData || saving} onClick={() => void handleSubmit(false)}>
-                  {saving ? '提交中…' : '提交'}
+                <Button disabled={!confirmWarehouseData || saving || submissionUncertain} onClick={() => void handleSubmit(false)}>
+                  {savingAction === 'submit' ? '提交中…' : '提交'}
                 </Button>
               </>
             )}

@@ -1,13 +1,17 @@
 <script setup lang="ts">
+import { userFacingError } from '@erp/shared/user-facing-error'
+
 import { displaySku, displaySkuText } from '@erp/shared/sku-display'
 import { ref, computed, onMounted, nextTick, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { inboundApi, warehouseApi, locationApi } from '@/api/client.js'
 import { mapWarehouse } from '@/api/mappers.ts'
 import { useAppStore } from '@/stores/app'
 import { INBOUND_STATUS } from '@/constants/index.js'
-import { withAction } from '@/composables/useListLoader.ts'
+import WarehouseControlDialog from '@/components/inbound/WarehouseControlDialog.vue'
+import { warehouseControlOptions, type WarehouseControlKind } from '@/utils/warehouseControl'
+import { clearWarehouseAttempt, readWarehouseAttempts, runWarehouseAttempt, saveWarehouseAttempt, recoverWarehouseAttemptFailure, type WarehouseAttempt, type WarehouseOperation } from '@/utils/warehouseOperation'
 
 function bound990Text(row: any): string {
   const codes = [
@@ -36,6 +40,7 @@ function lineMatchesScan(line: any, raw: string): boolean {
 
 const app = useAppStore()
 const route = useRoute()
+const router = useRouter()
 
 type WorkStep = 'arrival' | 'receive' | 'qc' | 'putaway'
 
@@ -54,8 +59,44 @@ const loadingRecent = ref(false)
 const activeOrderId = ref<number | null>(null)
 const activeOrder = ref<any>(null)
 const loadingOrder = ref(false)
+const warehouseBusy = ref(false)
+const warehouseAttempts = ref<WarehouseAttempt[]>([])
+const warehouseAttemptError = ref('')
+const warehouseOperationError = ref('')
+const warehouseResult = ref<any>(null)
+const orderReadError = ref('')
+const referenceReadError = ref('')
+const recentReadError = ref('')
+const orderListReadError = ref('')
+const locationReadError = ref('')
+let recentReadVersion = 0, orderListReadVersion = 0, locationReadVersion = 0
+let orderReadVersion = 0
 const workStep = ref<WorkStep>('arrival')
 const activeOrders = ref<any[]>([])
+// 当前单据完成后会移出待作业列表，仍需保留其最新标签供用户核对结果。
+const activeOrderChoices = computed(() => {
+  const current = activeOrder.value
+  if (!current || current.warehouseCode !== warehouseCode.value) return activeOrders.value
+  return [current, ...activeOrders.value.filter(order => Number(order.id) !== Number(current.id))]
+})
+
+function changeActiveOrder(id: number | null) {
+  if (pageBusy.value) return
+  warehouseResult.value = null
+  warehouseOperationError.value = ''
+  orderReadError.value = ''
+  if (id) {
+    void loadActiveOrder(id)
+    return
+  }
+  activeOrder.value = null
+  ++orderReadVersion
+  qcLines.value = []
+  putawayDraftLines.value = []
+  qcSelectedItemId.value = null
+  putawaySelectedItemId.value = null
+  workStep.value = 'arrival'
+}
 
 /** 扫箱收货 */
 const manualCartonCount = ref<number | null>(null)
@@ -84,7 +125,10 @@ const putawayDraftLines = ref<any[]>([])
 const locationOptions = ref<any[]>([])
 const putawayScanRef = ref<{ focus: () => void } | null>(null)
 const locationScanRef = ref<{ focus: () => void } | null>(null)
-const putawaySubmitting = ref(false)
+const pendingWarehouseAttempt = computed(() => warehouseAttempts.value.find(row => row.inboundId === Number(activeOrderId.value)) || null)
+const pageBusy = computed(() => warehouseBusy.value || scanning.value || manualCartonSaving.value || boxScanning.value || qcScanning.value || qcSubmitting.value)
+const receivingLocked = computed(() => pageBusy.value || loadingOrder.value || !!pendingWarehouseAttempt.value || !!warehouseAttemptError.value || !!orderReadError.value)
+const cartonReady = computed(() => activeOrder.value?.cartonConfirmation?.ready === true)
 
 const canScan = computed(() => app.hasPerm('inbound.arrival_scan'))
 const canReceive = computed(() => app.hasPerm('inbound.receive'))
@@ -101,7 +145,7 @@ const activeStatusLabel = computed(() => {
   const o = activeOrder.value
   if (!o) return '—'
   const key = o.displayStatus || o.status
-  return INBOUND_STATUS[key]?.label || o.status || '—'
+  return INBOUND_STATUS[key]?.label || '待核对'
 })
 
 const receiveProgress = computed(() => {
@@ -165,7 +209,7 @@ const putawaySummary = computed(() => ({
 
 const measureSummary = computed(() => {
   const pending = putawayDraftLines.value
-  const measured = pending.filter((l) => hasDimensions(l))
+  const measured = pending.filter((l) => hasDimensions(l) && l.dimensionsSource === 'measured')
   return {
     total: pending.length,
     measured: measured.length,
@@ -173,17 +217,17 @@ const measureSummary = computed(() => {
   }
 })
 
-const putawayReadyLines = computed(() => putawayDraftLines.value.filter((l) => hasDimensions(l)))
+const putawayReadyLines = computed(() => putawayDraftLines.value.filter((l) => hasDimensions(l) && l.dimensionsSource === 'measured'))
 
 function hasDimensions(line: { lengthCm?: number; widthCm?: number; heightCm?: number }) {
-  return [line.lengthCm, line.widthCm, line.heightCm].every((v) => Number(v) > 0)
+  return [line.lengthCm, line.widthCm, line.heightCm].every((v) => Number.isFinite(Number(v)) && Number(v) > 0 && Number(v) <= 999999.99)
 }
 
 function orderNeedsMeasure(order: any) {
   return (order?.items || []).some((item: any) => {
     const actual = item.actualQty ?? item.expectedQty
     const remaining = actual - (item.putawayQty ?? 0)
-    return remaining > 0 && !hasDimensions(item)
+    return remaining > 0 && (!hasDimensions(item) || item.dimensionsSource !== 'measured')
   })
 }
 
@@ -205,11 +249,11 @@ const stepActiveIndex = computed(() => {
 function canShowQcStep(order: any) {
   if (!order) return false
   if (['arrived', 'receiving', 'exception'].includes(order.status)) return true
-  return order.status === 'pending_putaway' && orderNeedsMeasure(order)
+  return order.status === 'pending_putaway'
 }
 
 const canEditQcQty = computed(() =>
-  !!activeOrder.value && ['arrived', 'receiving'].includes(activeOrder.value.status),
+  canQc.value && !!activeOrder.value && ['arrived', 'receiving'].includes(activeOrder.value.status),
 )
 
 const qcSelectedLine = computed(() =>
@@ -235,6 +279,7 @@ function buildPutawayDraft(order: any) {
         lengthCm: item.lengthCm ?? undefined,
         widthCm: item.widthCm ?? undefined,
         heightCm: item.heightCm ?? undefined,
+        dimensionsSource: item.dimensionsSource || null,
       }
     })
     .filter((i: any) => i.remaining > 0)
@@ -293,18 +338,21 @@ function buildQcLines(order: any) {
 }
 
 async function loadWarehouses() {
+  referenceReadError.value = ''
   try {
     const res = await warehouseApi.list({ type: 'overseas' })
     overseasWarehouses.value = (Array.isArray(res) ? res : res.items || []).map(mapWarehouse)
     if (!warehouseCode.value && overseasWarehouses.value.length) {
       warehouseCode.value = overseasWarehouses.value[0].warehouseCode
     }
-  } catch {
-    overseasWarehouses.value = []
+  } catch (error) {
+    referenceReadError.value = `仓库选项未能读取，请重试。${userFacingError(error)}`
   }
 }
 
 async function loadRecent() {
+  const version = ++recentReadVersion, code = warehouseCode.value
+  recentReadError.value = ''
   if (!warehouseCode.value) {
     recentScans.value = []
     return
@@ -312,59 +360,75 @@ async function loadRecent() {
   loadingRecent.value = true
   try {
     const rows = await inboundApi.listArrivalScans({ warehouseCode: warehouseCode.value, limit: 30 })
+    if (version !== recentReadVersion || code !== warehouseCode.value) return
     recentScans.value = Array.isArray(rows) ? rows : []
-  } catch {
-    recentScans.value = []
+  } catch (error) {
+    if (version === recentReadVersion) recentReadError.value = `最近扫描记录未能刷新，不能据此判断是否已到仓。${userFacingError(error)}`
   } finally {
-    loadingRecent.value = false
+    if (version === recentReadVersion) loadingRecent.value = false
   }
 }
 
 async function loadActiveOrderList() {
+  const version = ++orderListReadVersion, code = warehouseCode.value
+  orderListReadError.value = ''
   if (!warehouseCode.value) {
     activeOrders.value = []
     return
   }
   try {
     const res = await inboundApi.list({ pageSize: 100 })
+    if (version !== orderListReadVersion || code !== warehouseCode.value) return
     const rows = res.items || []
     activeOrders.value = rows.filter((o: any) =>
       o.warehouseCode === warehouseCode.value
       && ['arrived', 'receiving', 'pending_putaway', 'exception'].includes(o.status),
     )
-  } catch {
-    activeOrders.value = []
+  } catch (error) {
+    if (version === orderListReadVersion) orderListReadError.value = `作业入库单未能刷新，请重新读取后选择。${userFacingError(error)}`
   }
 }
 
 async function loadActiveOrder(id: number, preferredStep?: WorkStep) {
+  const version = ++orderReadVersion
+  activeOrderId.value = id
   loadingOrder.value = true
+  orderReadError.value = ''
   try {
     const data = await inboundApi.detail(id)
+    if (version !== orderReadVersion || Number(activeOrderId.value) !== id) return false
     activeOrderId.value = id
     activeOrder.value = data
+    if (warehouseCode.value !== data.warehouseCode) warehouseCode.value = data.warehouseCode
     buildQcLines(data)
     workStep.value = preferredStep || deriveWorkStep(data)
+    if (workStep.value === 'putaway' && data.status === 'pending_putaway' && orderNeedsMeasure(data)) workStep.value = 'qc'
+    if (workStep.value === 'qc' && ['arrived', 'receiving'].includes(data.status) && !data.cartonConfirmation?.ready) workStep.value = 'receive'
     buildPutawayDraft(data)
     syncManualCartonCount(data)
     if (workStep.value === 'putaway') {
       await loadLocations(data.warehouseCode)
     }
+    return true
   } catch (e: any) {
-    ElMessage.error(displaySkuText(e?.message || '加载入库单失败'))
+    if (version === orderReadVersion) orderReadError.value = `最新单据未能读取，请重新读取后继续作业。${userFacingError(e)}`
+    return false
   } finally {
-    loadingOrder.value = false
+    if (version === orderReadVersion) loadingOrder.value = false
   }
 }
 
 async function loadLocations(wh?: string) {
   const code = wh || activeOrder.value?.warehouseCode
   if (!code) return
+  const version = ++locationReadVersion
+  locationReadError.value = ''; locationOptions.value = []
   try {
     const rows = await locationApi.list({ warehouseCode: code, status: 'available' })
+    if (version !== locationReadVersion) return
     locationOptions.value = Array.isArray(rows) ? rows : rows.items || []
-  } catch {
-    locationOptions.value = []
+  } catch (error) {
+    if (version === locationReadVersion) locationReadError.value = `可用库位未能读取，请重试后再上架。${userFacingError(error)}`
   }
 }
 
@@ -384,35 +448,119 @@ function focusQcScan() {
   nextTick(() => qcScanRef.value?.focus())
 }
 
-async function submitQcScan() {
-  if (!activeOrder.value) return
-  if (!canQc.value && !canPutaway.value) return
-  const code = qcSkuScan.value.trim()
-  if (!code) {
-    ElMessage.warning('请扫描 SKU')
-    return
+function refreshWarehouseAttempts() {
+  try { warehouseAttempts.value = readWarehouseAttempts(localStorage, app.authenticatedUser!.id); warehouseAttemptError.value = '' }
+  catch (error) { warehouseAttemptError.value = userFacingError(error) }
+}
+
+async function restoreWarehouseAttempt(attempt: WarehouseAttempt) {
+  if (pageBusy.value) return
+  warehouseCode.value = attempt.warehouseCode
+  await nextTick()
+  ++orderReadVersion
+  activeOrderId.value = attempt.inboundId
+  activeOrder.value = JSON.parse(JSON.stringify(attempt.snapshot.order))
+  if (attempt.snapshot.qcLines) qcLines.value = JSON.parse(JSON.stringify(attempt.snapshot.qcLines))
+  else buildQcLines(activeOrder.value)
+  manualCartonCount.value = attempt.payload.receivedCartonCount ?? activeOrder.value.receivedCartonCount
+  manualCartonDifferenceReason.value = attempt.payload.differenceReason || ''
+  qcSkuScan.value = attempt.kind === 'qc-scan' ? attempt.payload.scanCode : ''
+  qcScanIncrement.value = attempt.payload.increment ?? 1
+  boxScanCode.value = attempt.kind === 'carton-scan' ? attempt.payload.scanCode : ''
+  workStep.value = ['putaway', 'reduce-putaway'].includes(attempt.kind) ? 'putaway' : attempt.kind.startsWith('carton-') || attempt.kind === 'reduce-carton' ? 'receive' : 'qc'
+  if (['putaway', 'reduce-putaway'].includes(attempt.kind)) {
+    buildPutawayDraft(activeOrder.value)
+    for (const group of attempt.payload.items || []) {
+      const line = putawayDraftLines.value.find(row => Number(row.id) === Number(group.inboundItemId))
+      if (line) line.locationCode = group.lines?.[0]?.locationCode || ''
+    }
+    putawaySelectedItemId.value = attempt.kind === 'putaway' ? attempt.payload.items?.[0]?.inboundItemId ?? null : attempt.payload.inboundItemId ?? null
+    putawayQty.value = attempt.kind === 'putaway' ? attempt.payload.items?.[0]?.lines?.[0]?.qty ?? 1 : 1
   }
-  qcScanning.value = true
-  try {
-    const res = await inboundApi.scanQc(activeOrder.value.id, {
-      scanCode: code,
-      increment: qcScanIncrement.value,
-    })
-    await loadActiveOrder(activeOrder.value.id, 'qc')
-    qcSelectedItemId.value = res.itemId ?? qcSelectedItemId.value
-    ElMessage.success(displaySkuText(res.message || '扫描成功'))
-    qcSkuScan.value = ''
-    focusQcScan()
-  } catch (e: any) {
-    ElMessage.error(displaySkuText(e?.message || '扫描清点失败'))
-    focusQcScan()
-  } finally {
-    qcScanning.value = false
+  orderReadError.value = ''; warehouseOperationError.value = ''; warehouseResult.value = null
+  if (['resolve-exception', 'reopen-count', 'close-zero', 'reduce-qc', 'reduce-carton', 'reduce-putaway'].includes(attempt.kind)) {
+    controlKind.value = attempt.kind as WarehouseControlKind; controlVisible.value = true
   }
 }
 
+async function beginWarehouseOperation(kind: WarehouseOperation, payload: any) {
+  refreshWarehouseAttempts()
+  if (receivingLocked.value || !activeOrder.value) return false
+  const order = activeOrder.value
+  const attempt: WarehouseAttempt = { kind, inboundId: Number(order.id), inboundNo: order.inboundNo, warehouseCode: order.warehouseCode,
+    payload: { ...payload, clientRequestId: crypto.randomUUID() }, snapshot: { order, qcLines: qcLines.value } }
+  try { saveWarehouseAttempt(localStorage, app.authenticatedUser!.id, attempt); refreshWarehouseAttempts() }
+  catch (error) { warehouseOperationError.value = userFacingError(error); return false }
+  await postWarehouseOperation(warehouseAttempts.value.find(row => row.inboundId === attempt.inboundId)!)
+  return !warehouseOperationError.value && !warehouseAttempts.value.some(row => row.inboundId === attempt.inboundId)
+}
+
+async function postWarehouseOperation(attempt: WarehouseAttempt) {
+  if (pageBusy.value) return
+  warehouseBusy.value = true
+  const operatorId = Number(app.authenticatedUser?.id)
+  warehouseOperationError.value = ''; warehouseResult.value = null
+  let result: any
+  try {
+    result = await runWarehouseAttempt(inboundApi, attempt)
+    if (result.feePending || result.syncPending) {
+      warehouseOperationError.value = result.warning || '作业已保存，费用同步待核对，请用原操作重试'
+      warehouseResult.value = { ...result, inboundNo: attempt.inboundNo }; return
+    }
+    try { clearWarehouseAttempt(localStorage, operatorId, attempt); refreshWarehouseAttempts() }
+    catch { warehouseOperationError.value = '原操作已完成，但本机核对信息未能清除；请核对原操作，勿重新建立操作' }
+    warehouseResult.value = { ...result, inboundNo: attempt.inboundNo }
+    const preferred: WorkStep = ['putaway', 'reduce-putaway'].includes(attempt.kind) ? 'putaway' : attempt.kind.startsWith('carton-') || attempt.kind === 'reduce-carton' ? 'receive' : 'qc'
+    const fresh = await loadActiveOrder(attempt.inboundId, preferred)
+    if (!fresh) warehouseOperationError.value = '本次作业已保存，最新进度未能读取；请先重新读取单据，不要重复提交'
+    await Promise.allSettled([loadRecent(), loadActiveOrderList()])
+    ElMessage.success(displaySkuText(result.message || '仓库作业已保存'))
+    if (fresh) {
+      if (attempt.kind === 'qc-scan') { qcSelectedItemId.value = result.itemId; qcSkuScan.value = ''; focusQcScan() }
+      if (attempt.kind === 'carton-scan') { boxScanCode.value = ''; focusBoxScan() }
+      if (attempt.kind === 'carton-count') manualCartonDifferenceReason.value = ''
+      if (attempt.kind === 'putaway') {
+        putawaySkuScan.value = ''; putawayLocationScan.value = ''
+        if (putawayReadyLines.value.length) {
+          putawaySelectedItemId.value = putawayReadyLines.value[0].id; putawayQty.value = putawayReadyLines.value[0].remaining
+          focusPutawayScan()
+        }
+      }
+    }
+  } catch (error: any) {
+    const recovery = recoverWarehouseAttemptFailure(localStorage, operatorId, attempt, error)
+    warehouseOperationError.value = recovery.message
+    refreshWarehouseAttempts()
+    if (!recovery.retained) {
+      if (error.status === 404 || error.status === 409) orderReadError.value = '原单或作业进度已变更，请重新读取最新单据后继续'
+    }
+  } finally { warehouseBusy.value = false }
+  if (result && !result.feePending && !result.syncPending && !orderReadError.value && !pendingWarehouseAttempt.value) {
+    if (attempt.kind === 'carton-count' && canQc.value) goToQcStep()
+    if (attempt.kind === 'close-zero') workStep.value = 'putaway'
+    if (attempt.kind === 'resolve-exception' && activeOrder.value?.status === 'pending_putaway' && !orderNeedsMeasure(activeOrder.value) && receiveProgress.value.received > 0) await goPutawayStep()
+    if ((attempt.kind === 'qc-measure-submit' || attempt.kind === 'measure') && activeOrder.value?.status === 'pending_putaway' && !orderNeedsMeasure(activeOrder.value)) {
+      if (receiveProgress.value.received > 0) await goPutawayStep()
+      else ElMessage.info('全部实收为0，请返回入库单管理核对并选择零收货结束')
+    }
+  }
+}
+
+async function submitQcScan() {
+  if (!activeOrder.value || receivingLocked.value) return
+  const code = qcSkuScan.value.trim()
+  if (!code) { ElMessage.warning('请扫描 SKU'); return }
+  if (!canQc.value) {
+    const line = qcLines.value.find(line => lineMatchesScan(line, code))
+    if (!line) { ElMessage.warning('扫描码未匹配当前明细，请选择 SKU'); return }
+    qcSelectedItemId.value = line.id; qcSkuScan.value = ''; ElMessage.info('已定位 SKU，请填写测量数据后保存'); return
+  }
+  if (!Number.isSafeInteger(qcScanIncrement.value) || qcScanIncrement.value <= 0) { ElMessage.warning('每次件数须为正整数'); return }
+  await beginWarehouseOperation('qc-scan', { scanCode: code, increment: canEditQcQty.value ? qcScanIncrement.value : 0 })
+}
+
 async function submitArrivalScan() {
-  if (!canScan.value) return
+  if (!canScan.value || pageBusy.value) return
   const code = scanCode.value.trim()
   if (!warehouseCode.value) {
     ElMessage.warning('请选择海外仓')
@@ -446,8 +594,8 @@ async function submitArrivalScan() {
       focusScan()
     }
   } catch (e: any) {
-    lastResult.value = { ok: false, message: e?.message || '扫描失败' }
-    ElMessage.error(displaySkuText(e?.message || '扫描失败'))
+    lastResult.value = { ok: false, message: userFacingError(e) }
+    ElMessage.error(userFacingError(displaySkuText(e?.message || '扫描失败')))
     focusScan()
   } finally {
     scanning.value = false
@@ -455,61 +603,29 @@ async function submitArrivalScan() {
 }
 
 async function submitReceiveCartonScan() {
-  if (!canReceive.value || !activeOrder.value) return
+  if (!canReceive.value || !activeOrder.value || receivingLocked.value) return
   const code = boxScanCode.value.trim()
-  if (!code) {
-    ElMessage.warning('请扫描外箱标')
-    return
-  }
-  boxScanning.value = true
-  try {
-    const res = await inboundApi.receiveBox(activeOrder.value.id, { scanCode: code })
-    ElMessage.success(displaySkuText(res.message || '外箱已确认'))
-    boxScanCode.value = ''
-    await loadActiveOrder(activeOrder.value.id, 'receive')
-    focusBoxScan()
-  } catch (e: any) {
-    ElMessage.error(displaySkuText(e?.message || '扫描外箱失败'))
-    focusBoxScan()
-  } finally {
-    boxScanning.value = false
-  }
+  if (!code) { ElMessage.warning('请扫描外箱标'); return }
+  await beginWarehouseOperation('carton-scan', { scanCode: code })
 }
 
 async function submitManualCartonCount() {
-  if (!canReceive.value || !activeOrder.value) return
-  const count = Math.floor(Number(manualCartonCount.value))
-  if (!Number.isFinite(count) || count <= 0) {
-    ElMessage.warning('实收箱数须大于 0')
-    return
-  }
-  manualCartonSaving.value = true
-  try {
-    const res = await inboundApi.recordReceivedCartonCount(activeOrder.value.id, {
-      receivedCartonCount: count,
-      differenceReason: manualCartonDifferenceReason.value.trim() || undefined,
-    })
-    ElMessage.success(displaySkuText(res.message || '实收箱数已保存'))
-    await loadActiveOrder(activeOrder.value.id, 'receive')
-    await loadActiveOrderList()
-    manualCartonDifferenceReason.value = ''
-    if (canQc.value) goToQcStep()
-  } catch (e: any) {
-    ElMessage.error(displaySkuText(e?.message || '保存实收箱数失败'))
-  } finally {
-    manualCartonSaving.value = false
-  }
+  if (!canReceive.value || !activeOrder.value || receivingLocked.value) return
+  const count = Number(manualCartonCount.value)
+  if (!Number.isSafeInteger(count) || count <= 0 || count > 9999) { ElMessage.warning('实收箱数须为1至9999的整数'); return }
+  const expected = activeOrder.value.cartons?.length || 0, reason = manualCartonDifferenceReason.value.trim()
+  if (expected && expected !== count && reason.length < 2) { ElMessage.warning('实收箱数与应收不符，请填写差异原因'); return }
+  await beginWarehouseOperation('carton-count', { receivedCartonCount: count, differenceReason: reason || undefined })
 }
 
 function goToQcStep() {
-  if (!activeOrder.value) return
+  if (!activeOrder.value || pageBusy.value) return
   if (!canShowQcStep(activeOrder.value)) {
     ElMessage.warning('当前状态不可清点与测量')
     return
   }
-  const confirmed = activeOrder.value.receivedCartonCount
-  if (!confirmed || confirmed <= 0) {
-    ElMessage.warning('请先在「确认箱数」环节登记实收箱数')
+  if (['arrived', 'receiving'].includes(activeOrder.value.status) && !cartonReady.value) {
+    ElMessage.warning(activeOrder.value.cartonConfirmation?.message || '请先确认实收箱数')
     return
   }
   buildQcLines(activeOrder.value)
@@ -528,80 +644,26 @@ function measurePayloadFromQcLine(line: any) {
 }
 
 async function submitQcAndMeasure() {
-  if (!activeOrder.value) return
+  if (!activeOrder.value || receivingLocked.value) return
   const order = activeOrder.value
-
-  if (order.status === 'exception') {
-    ElMessage.warning('该单处于异常状态，请先点击「确认并继续」')
-    return
-  }
-
-  for (const line of qcLines.value.filter((line) => Number(line.actualQty) > 0)) {
-    if (!validateMeasureLine(line)) return
-  }
-
-  const measureItems = qcLines.value.filter((line) => Number(line.actualQty) > 0).map(measurePayloadFromQcLine)
+  if (order.status === 'exception') { ElMessage.warning('清点存在异常，请先核对并由有权限的岗位处理'); return }
   const needsQc = ['arrived', 'receiving'].includes(order.status)
-
+  if (needsQc && !canQc.value) { ElMessage.warning('当前岗位无清点提交权限'); return }
+  if (!needsQc && (order.status !== 'pending_putaway' || !canPutaway.value)) { ElMessage.warning('当前状态或岗位不能保存测量，请返回入库单管理查看进度'); return }
+  if (qcLines.value.some(line => !Number.isSafeInteger(Number(line.actualQty)) || Number(line.actualQty) < 0)) { ElMessage.warning('各SKU实收件数须为不小于零的整数'); return }
+  const positive = qcLines.value.filter(line => Number(line.actualQty) > 0)
+  if (canPutaway.value && positive.some(line => !hasDimensions(line))) { ElMessage.warning('实收大于零的SKU请填写完整有效的长宽高'); return }
   if (needsQc) {
-    if (!canQc.value) {
-      ElMessage.warning('无清点权限')
-      return
-    }
-    qcSubmitting.value = true
-    const qcOk = await withAction(async () => {
-      await inboundApi.qc(order.id, {
-        acceptDiff: qcAcceptDiff.value,
-        items: qcLines.value.map((l) => ({
-          id: l.id,
-          sku: l.sku,
-          actualQty: l.actualQty,
-          qcStatus: l.qcStatus,
-          qcRemark: l.qcRemark || undefined,
-        })),
-      })
-    }, `${order.inboundNo} 清点已提交`)
-    qcSubmitting.value = false
-    if (!qcOk) return
-
-    const refreshed = await inboundApi.detail(order.id)
-    activeOrder.value = refreshed
-    if (refreshed.status === 'exception') {
-      buildQcLines(refreshed)
-      ElMessage.warning('清点存在异常或数量差异，请确认后继续测量')
-      return
-    }
-  } else if (order.status !== 'pending_putaway') {
-    ElMessage.warning('当前状态不可提交清点与测量')
-    return
-  }
-
-  if (!measureItems.length) {
-    await loadActiveOrder(order.id, 'putaway')
-    await loadActiveOrderList()
-    ElMessage.info('清点数量全部为 0，请在入库单管理中选择「零收货结束」；填错数量可选择「更正清点」')
-    return
-  }
-
-  if (!canPutaway.value) {
-    ElMessage.warning('无测量权限')
-    return
-  }
-
-  qcSubmitting.value = true
-  const measureOk = await withAction(async () => {
-    const data = await inboundApi.measureDimensions(activeOrder.value.id, { items: measureItems })
-    activeOrder.value = data
-    buildQcLines(data)
-    buildPutawayDraft(data)
-    await loadActiveOrderList()
-    await loadRecent()
-  }, `${activeOrder.value.inboundNo} 清点与测量已保存`)
-  qcSubmitting.value = false
-
-  if (measureOk && !orderNeedsMeasure(activeOrder.value)) {
-    ElMessage.success('清点与测量已完成，可进入扫码上架')
-    await goPutawayStep()
+    const measured = canPutaway.value
+    await beginWarehouseOperation(measured ? 'qc-measure-submit' : 'qc-submit', {
+      expectedVersion: measured ? order.measurementVersion : order.receivingVersion,
+      acceptDiff: qcAcceptDiff.value,
+      items: qcLines.value.map(line => ({ id: Number(line.id), sku: line.sku, actualQty: Number(line.actualQty), qcStatus: line.qcStatus, qcRemark: line.qcRemark || undefined,
+        ...(measured && Number(line.actualQty) > 0 ? { lengthCm: Number(line.lengthCm), widthCm: Number(line.widthCm), heightCm: Number(line.heightCm) } : {}) })),
+    })
+  } else {
+    if (!positive.length) { ElMessage.info('全部实收为0，请返回入库单管理核对并选择零收货结束'); return }
+    await beginWarehouseOperation('measure', { expectedVersion: order.measurementVersion, items: positive.map(measurePayloadFromQcLine) })
   }
 }
 
@@ -612,14 +674,6 @@ function resolveLocationCode(raw: string) {
     (l: any) => String(l.locationCode || l.code || '').toUpperCase() === code,
   )
   return hit ? (hit.locationCode || hit.code) : raw.trim().toUpperCase()
-}
-
-function validateMeasureLine(item: any) {
-  if (!hasDimensions(item)) {
-    ElMessage.warning(displaySkuText(`请为 SKU ${displaySku(item)} 填写有效的长宽高（cm）`))
-    return false
-  }
-  return true
 }
 
 function onPutawaySkuScan() {
@@ -651,8 +705,10 @@ function onPutawayLocationScan() {
 }
 
 function validatePutawayLine(item: any, qty?: number) {
+  if (locationReadError.value) { ElMessage.warning('请先重新读取可用库位'); return false }
+  if (receivingLocked.value) { ElMessage.warning('请先核对原操作并重新读取最新单据'); return false }
   const targetQty = qty ?? item.remaining
-  if (!hasDimensions(item)) {
+  if (!hasDimensions(item) || item.dimensionsSource !== 'measured') {
     ElMessage.warning(displaySkuText(`${displaySku(item)} 请先完成体积测量`))
     return false
   }
@@ -660,7 +716,7 @@ function validatePutawayLine(item: any, qty?: number) {
     ElMessage.warning(displaySkuText(`请为 SKU ${displaySku(item)} 选择库位`))
     return false
   }
-  if (targetQty <= 0 || targetQty > item.remaining) {
+  if (!Number.isSafeInteger(targetQty) || targetQty <= 0 || targetQty > item.remaining) {
     ElMessage.warning(displaySkuText(`${displaySku(item)} 上架数量无效（待上架 ${item.remaining}）`))
     return false
   }
@@ -675,6 +731,7 @@ function putawayPayloadItem(item: any, qty: number) {
 }
 
 async function submitPutawayScan() {
+  if (receivingLocked.value) return
   if (!canPutaway.value || !activeOrder.value || !putawaySelectedLine.value) {
     ElMessage.warning('请选择待上架 SKU')
     return
@@ -690,34 +747,17 @@ async function submitPutawayScan() {
 
   applyLocationScanToSelected()
   const line = putawaySelectedLine.value
-  const qty = Math.min(Math.max(1, putawayQty.value), line.remaining)
+  const qty = Number(putawayQty.value)
   if (!validatePutawayLine(line, qty)) return
 
-  putawaySubmitting.value = true
-  const ok = await withAction(async () => {
-    await inboundApi.putaway(activeOrder.value.id, {
-      items: [putawayPayloadItem(line, qty)],
-    })
-    await loadActiveOrder(activeOrder.value.id, 'putaway')
-    await loadActiveOrderList()
-    await loadRecent()
-  }, `${line.sku} → ${resolveLocationCode(line.locationCode)} ×${qty}`)
-  putawaySubmitting.value = false
-
-  if (ok) {
-    putawayLocationScan.value = ''
-    putawaySkuScan.value = ''
-    if (putawayReadyLines.value.length) {
-      putawaySelectedItemId.value = putawayReadyLines.value[0].id
-      putawayQty.value = putawayReadyLines.value[0].remaining
-      focusPutawayScan()
-    } else {
-      ElMessage.success(`${activeOrder.value.inboundNo} 已全部上架完成`)
-    }
-  }
+  await beginWarehouseOperation('putaway', {
+    expectedVersion: activeOrder.value.measurementVersion,
+    items: [putawayPayloadItem(line, qty)],
+  })
 }
 
 async function submitPutawayAll() {
+  if (receivingLocked.value) return
   if (!canPutaway.value || !activeOrder.value) return
   if (activeOrder.value.status === 'exception') {
     ElMessage.warning('入库单处于异常状态，请先点击「确认并继续」后再上架')
@@ -736,24 +776,15 @@ async function submitPutawayAll() {
     if (!validatePutawayLine(item, item.remaining)) return
   }
 
-  putawaySubmitting.value = true
-  const ok = await withAction(async () => {
-    await inboundApi.putaway(activeOrder.value.id, {
-      items: putawayReadyLines.value.map((item) => putawayPayloadItem(item, item.remaining)),
-    })
-    await loadActiveOrder(activeOrder.value.id, 'putaway')
-    await loadActiveOrderList()
-    await loadRecent()
-  }, `${activeOrder.value.inboundNo} 上架完成`)
-  putawaySubmitting.value = false
-
-  if (ok && !putawayDraftLines.value.length) {
-    ElMessage.success(`${activeOrder.value.inboundNo} 已全部上架完成`)
-  }
+  await beginWarehouseOperation('putaway', {
+    expectedVersion: activeOrder.value.measurementVersion,
+    items: putawayReadyLines.value.map(item => putawayPayloadItem(item, item.remaining)),
+  })
 }
 
 async function goPutawayStep() {
-  if (!activeOrder.value) return
+  if (receivingLocked.value || !activeOrder.value) return
+  if (['completed', 'confirmed'].includes(activeOrder.value.status)) { workStep.value = 'putaway'; return }
   buildPutawayDraftFromActive()
   buildQcLines(activeOrder.value)
   if (measureSummary.value.pending > 0) {
@@ -772,13 +803,24 @@ async function goPutawayStep() {
   focusPutawayScan()
 }
 
-async function resolveAndPutaway() {
-  if (!activeOrder.value || activeOrder.value.status !== 'exception') return
-  const ok = await withAction(async () => {
-    await inboundApi.resolveException(activeOrder.value.id)
-    await loadActiveOrder(activeOrder.value.id, orderNeedsMeasure(activeOrder.value) ? 'qc' : 'putaway')
-  }, '已确认异常，可继续作业')
-  if (ok && workStep.value === 'putaway') await loadLocations()
+const controlVisible = ref(false)
+const controlKind = ref<WarehouseControlKind>('resolve-exception')
+const controlChoices = computed(() => warehouseControlOptions(activeOrder.value, permission => app.hasPerm(permission)))
+function openControl(kind: WarehouseControlKind) {
+  if (receivingLocked.value || !activeOrder.value) return
+  controlKind.value = kind; warehouseOperationError.value = ''; controlVisible.value = true
+}
+function resolveAndPutaway() { openControl('resolve-exception') }
+async function submitControl(data: { kind: WarehouseControlKind; order: any; payload: any }) {
+  if (warehouseBusy.value || pendingWarehouseAttempt.value || warehouseAttemptError.value) return false
+  activeOrder.value = data.order; activeOrderId.value = Number(data.order.id); orderReadError.value = ''
+  return beginWarehouseOperation(data.kind, data.payload)
+}
+async function retryControl(id: number) {
+  const attempt = warehouseAttempts.value.find(row => row.inboundId === id)
+  if (!attempt) return false
+  await postWarehouseOperation(attempt)
+  return !warehouseOperationError.value && !warehouseAttempts.value.some(row => row.inboundId === id)
 }
 
 function scanTypeLabel(type: string) {
@@ -804,6 +846,7 @@ watch(workStep, (step) => {
 })
 
 onMounted(async () => {
+  refreshWarehouseAttempts()
   await loadWarehouses()
   await loadRecent()
   await loadActiveOrderList()
@@ -817,7 +860,7 @@ onMounted(async () => {
         ? 'qc'
         : undefined
     await loadActiveOrder(inboundId, preferred)
-    if (step === 'putaway' || step === 'measure' || step === 'qc') workStep.value = step === 'putaway' ? 'putaway' : 'qc'
+    if (step === 'putaway' && activeOrder.value?.status === 'pending_putaway' && !orderNeedsMeasure(activeOrder.value)) workStep.value = 'putaway'
   } else {
     focusScan()
   }
@@ -829,12 +872,13 @@ onMounted(async () => {
     <template #header>
       <div class="page-header">
         <span class="page-title">海外仓到仓扫描</span>
+        <el-button size="small" :disabled="pageBusy" @click="router.push({ name: 'InboundReceipt' })">返回入库单管理</el-button>
         <el-select
           v-model="warehouseCode"
           placeholder="操作仓库"
           size="small"
           style="width: 280px"
-          @change="activeOrderId = null; activeOrder = null"
+          :disabled="pageBusy"
         >
           <el-option
             v-for="wh in overseasWarehouses"
@@ -853,6 +897,21 @@ onMounted(async () => {
       </div>
     </div>
 
+    <el-alert v-if="referenceReadError" :title="referenceReadError" type="error" :closable="false"><el-button @click="loadWarehouses">重新读取仓库</el-button></el-alert>
+    <el-alert v-if="recentReadError" :title="recentReadError" type="warning" :closable="false"><el-button @click="loadRecent">刷新扫描记录</el-button></el-alert>
+    <el-alert v-if="orderListReadError" :title="orderListReadError" type="warning" :closable="false"><el-button @click="loadActiveOrderList">刷新作业单</el-button></el-alert>
+    <el-alert v-if="locationReadError" :title="locationReadError" type="error" :closable="false"><el-button @click="loadLocations()">重新读取可用库位</el-button></el-alert>
+    <el-alert v-if="warehouseAttemptError" :title="warehouseAttemptError" type="error" :closable="false"><el-button @click="refreshWarehouseAttempts">重新读取核对信息</el-button></el-alert>
+    <el-alert v-for="attempt in warehouseAttempts" :key="attempt.payload.clientRequestId" type="warning" :closable="false" style="margin-bottom:10px" :title="`仓库作业待核对：${attempt.inboundNo}`">
+      <el-button :disabled="pageBusy" @click="restoreWarehouseAttempt(attempt)">恢复原操作</el-button>
+      <el-button :loading="warehouseBusy" @click="postWarehouseOperation(attempt)">核对并重试原操作</el-button>
+    </el-alert>
+    <el-alert v-if="warehouseOperationError" :title="warehouseOperationError" type="error" :closable="false" style="margin-bottom:10px" />
+    <el-alert v-if="warehouseResult" :type="warehouseResult.feePending || warehouseResult.syncPending ? 'warning' : 'success'" :closable="false" style="margin-bottom:10px" :title="`${warehouseResult.inboundNo}：${warehouseResult.message || '作业已保存'}`">
+      <el-button :disabled="pageBusy" @click="router.push({ name: 'InboundReceipt', query: { inboundId: String(activeOrderId || '') } })">返回入库单管理</el-button>
+    </el-alert>
+    <el-alert v-if="orderReadError" :title="orderReadError" type="error" :closable="false"><el-button :disabled="pageBusy || !activeOrderId" @click="loadActiveOrder(Number(activeOrderId), workStep)">重新读取最新单据</el-button></el-alert>
+    <el-alert v-if="activeOrder?.status === 'pending_putaway' && orderNeedsMeasure(activeOrder)" title="该单已完成清点，请先确认并保存实测尺寸，再继续上架" type="info" :closable="false" />
     <el-steps :active="stepActiveIndex" simple class="flow-steps">
       <el-step title="到仓扫描" />
       <el-step title="确认箱数" />
@@ -870,34 +929,40 @@ onMounted(async () => {
         filterable
         style="width: 320px"
         size="small"
-        @change="(id: number | null) => id && loadActiveOrder(id)"
+        :disabled="loadingOrder || pageBusy"
+        @change="changeActiveOrder"
       >
         <el-option
-          v-for="o in activeOrders"
+          v-for="o in activeOrderChoices"
           :key="o.id"
-          :label="`${o.inboundNo} · ${INBOUND_STATUS[o.displayStatus || o.status]?.label || o.status}`"
+          :label="`${o.inboundNo} · ${INBOUND_STATUS[o.displayStatus || o.status]?.label || '待核对'}`"
           :value="o.id"
         />
       </el-select>
       <el-button-group size="small">
-        <el-button :type="workStep === 'arrival' ? 'primary' : 'default'" @click="workStep = 'arrival'">到仓</el-button>
+        <el-button :type="workStep === 'arrival' ? 'primary' : 'default'" :disabled="pageBusy" @click="workStep = 'arrival'">到仓</el-button>
         <el-button
           :type="workStep === 'receive' ? 'primary' : 'default'"
-          :disabled="!activeOrder"
+          :disabled="!activeOrder || pageBusy"
           @click="workStep = 'receive'"
         >确认箱数</el-button>
         <el-button
           :type="workStep === 'qc' ? 'primary' : 'default'"
-          :disabled="!canShowQcStep(activeOrder)"
+          :disabled="pageBusy || !canShowQcStep(activeOrder)"
           @click="goToQcStep"
         >清点</el-button>
         <el-button
           :type="workStep === 'putaway' ? 'primary' : 'default'"
           :disabled="!activeOrder || !['pending_putaway','exception','completed'].includes(activeOrder?.status)"
           @click="goPutawayStep"
-        >上架</el-button>
+        >{{ ['completed', 'confirmed'].includes(activeOrder?.status) ? '上架结果' : '上架' }}</el-button>
       </el-button-group>
     </div>
+
+    <div v-if="activeOrder && controlChoices.length" style="margin:10px 0;display:flex;gap:8px;flex-wrap:wrap">
+      <el-button v-for="kind in controlChoices" :key="kind" size="small" :disabled="receivingLocked" @click="openControl(kind)">{{ ({ 'resolve-exception': '放行上架', 'reopen-count': '更正清点', 'close-zero': '零收货结束', 'reduce-qc': '减少实收件数', 'reduce-carton': '减少实收箱数', 'reduce-putaway': '撤回最近上架' })[kind] }}</el-button>
+    </div>
+    <WarehouseControlDialog v-model="controlVisible" :inbound-id="activeOrderId" :initial-kind="controlKind" :busy="warehouseBusy" :attempt="pendingWarehouseAttempt" :error-text="warehouseOperationError || warehouseAttemptError" :submit-action="submitControl" :retry-action="retryControl" />
 
     <!-- 到仓扫描 -->
     <div v-show="workStep === 'arrival'" class="panel">
@@ -925,6 +990,7 @@ onMounted(async () => {
 
     <!-- 确认箱数 -->
     <div v-show="workStep === 'receive'" v-loading="loadingOrder" class="panel">
+      <fieldset :disabled="receivingLocked" style="border:0;padding:0;margin:0;min-width:0">
       <template v-if="activeOrder">
         <el-descriptions :column="4" border size="small" class="order-summary">
           <el-descriptions-item label="入库单"><span class="mono">{{ activeOrder.inboundNo }}</span></el-descriptions-item>
@@ -1055,28 +1121,31 @@ onMounted(async () => {
         </el-table>
 
         <div class="panel-actions">
-          <el-button v-if="canQc" type="primary" @click="goToQcStep">箱数已确认，进入清点与测量</el-button>
+          <el-button v-if="canQc" type="primary" :disabled="receivingLocked || !cartonReady" @click="goToQcStep">箱数已确认，进入清点与测量</el-button>
+          <span v-if="!cartonReady" class="footer-hint">{{ activeOrder.cartonConfirmation?.message || '请先确认实收箱数' }}</span>
         </div>
       </template>
       <el-empty v-else description="请先到仓扫描或选择作业入库单" />
+      </fieldset>
     </div>
 
     <!-- 清点与测量 -->
     <div v-show="workStep === 'qc'" v-loading="loadingOrder" class="panel">
+      <fieldset :disabled="receivingLocked" style="border:0;padding:0;margin:0;min-width:0">
       <template v-if="activeOrder && canShowQcStep(activeOrder)">
         <el-alert v-if="activeOrder.status === 'exception'" type="error" :closable="false" show-icon style="margin-bottom:12px">
           该单清点存在异常，请确认后继续测量。
           <el-button v-if="canResolve" link type="primary" @click="resolveAndPutaway">确认并继续</el-button>
         </el-alert>
         <el-alert v-else type="info" :closable="false" show-icon style="margin-bottom:12px">
-          本环节确认 SKU 实收件数（支持 1 SKU 一箱扫 1 次、或一箱多件时设置「每次件数」后扫 SKU / 已绑 990 累加）；测量机回传长宽高会自动填入（也支持 JSON 或「SKU|长|宽|高」）。确认后点击「提交清点与测量」。
+          本环节确认 SKU 实收件数（支持 1 SKU 一箱扫 1 次、或一箱多件时设置「每次件数」后扫描完整仓库 SKU / 已绑 990 累加，仓库 SKU 见下方明细）；测量机回传长宽高会自动填入（也支持 JSON 或「SKU|长|宽|高」）。确认后点击「提交清点与测量」。
         </el-alert>
 
         <el-descriptions :column="4" border size="small" class="order-summary">
           <el-descriptions-item label="入库单"><span class="mono">{{ activeOrder.inboundNo }}</span></el-descriptions-item>
           <el-descriptions-item label="目的仓"><span class="mono">{{ activeOrder.warehouseCode || '—' }}</span></el-descriptions-item>
           <el-descriptions-item label="实收箱数">{{ activeOrder.receivedCartonCount ?? '—' }}</el-descriptions-item>
-          <el-descriptions-item label="测量进度">
+          <el-descriptions-item label="尺寸已填写">
             {{ qcMeasureSummary.measured }} / {{ qcMeasureSummary.total }} SKU
           </el-descriptions-item>
         </el-descriptions>
@@ -1098,7 +1167,7 @@ onMounted(async () => {
               <el-input
                 ref="qcScanRef"
                 v-model="qcSkuScan"
-                placeholder="SKU 标签 / 已绑 990 / 测量机输出"
+                  placeholder="完整仓库 SKU / 已绑 990 / 测量机输出"
                 style="width:320px"
                 clearable
                 :disabled="qcScanning"
@@ -1118,6 +1187,7 @@ onMounted(async () => {
           </el-form>
           <p v-if="qcSelectedLine" class="hint">
             当前：{{ displaySku(qcSelectedLine) }}<template v-if="bound990Text(qcSelectedLine)"> · 已绑 {{ bound990Text(qcSelectedLine) }}</template> · 实收 {{ qcSelectedLine.actualQty }} / {{ qcSelectedLine.expectedQty }}
+            <template v-if="displaySku(qcSelectedLine) !== qcSelectedLine.sku"> · 仓库 SKU：{{ qcSelectedLine.sku }}</template>
             <template v-if="hasDimensions(qcSelectedLine)">
               · {{ qcSelectedLine.lengthCm }}×{{ qcSelectedLine.widthCm }}×{{ qcSelectedLine.heightCm }} cm
             </template>
@@ -1137,6 +1207,7 @@ onMounted(async () => {
             <template #default="{ row }">
               <div class="sku-cell">
                 <span class="mono">{{ displaySku(row) }}</span>
+                <span v-if="displaySku(row) !== row.sku" class="bound-990 mono">仓库 SKU：{{ row.sku }}</span>
                 <span v-if="bound990Text(row)" class="bound-990">已绑 {{ bound990Text(row) }}</span>
               </div>
             </template>
@@ -1216,10 +1287,10 @@ onMounted(async () => {
               :loading="qcSubmitting"
               @click="submitQcAndMeasure"
             >
-              提交清点与测量
+              {{ canEditQcQty ? (canPutaway ? '提交清点与测量' : '提交清点') : '保存测量并继续上架' }}
             </el-button>
             <el-button
-              v-if="qcMeasureSummary.pending === 0 && activeOrder.status === 'pending_putaway'"
+              v-if="canPutaway && !orderNeedsMeasure(activeOrder) && activeOrder.status === 'pending_putaway'"
               @click="goPutawayStep"
             >
               进入扫码上架
@@ -1229,10 +1300,12 @@ onMounted(async () => {
       </template>
       <el-empty v-else-if="activeOrder" description="当前状态无需清点与测量，请进入扫码上架" />
       <el-empty v-else description="请选择作业入库单" />
+      </fieldset>
     </div>
 
     <!-- 扫码上架 -->
     <div v-show="workStep === 'putaway'" v-loading="loadingOrder" class="panel">
+      <fieldset :disabled="receivingLocked" style="border:0;padding:0;margin:0;min-width:0">
       <template v-if="activeOrder">
         <el-alert v-if="activeOrder.status === 'exception'" type="error" :closable="false" show-icon style="margin-bottom:12px">
           该单清点存在异常，请确认后继续上架。
@@ -1269,7 +1342,7 @@ onMounted(async () => {
                 <el-select
                   v-model="putawaySelectedItemId"
                   filterable
-                  placeholder="选择或扫描 SKU / 已绑 990"
+                  placeholder="选择或扫描完整仓库 SKU / 已绑 990"
                   style="width:260px"
                   size="small"
                 >
@@ -1283,7 +1356,7 @@ onMounted(async () => {
                 <el-input
                   ref="putawayScanRef"
                   v-model="putawaySkuScan"
-                  placeholder="扫描 SKU 或已绑 990"
+                  placeholder="扫描完整仓库 SKU 或已绑 990"
                   style="width:200px;margin-left:8px"
                   size="small"
                   clearable
@@ -1316,7 +1389,7 @@ onMounted(async () => {
                 </span>
               </el-form-item>
               <el-form-item>
-                <el-button v-if="canPutaway" type="primary" size="small" :loading="putawaySubmitting" @click="submitPutawayScan">
+                <el-button v-if="canPutaway" type="primary" size="small" :loading="warehouseBusy" @click="submitPutawayScan">
                   确认当前 SKU 上架
                 </el-button>
               </el-form-item>
@@ -1335,6 +1408,7 @@ onMounted(async () => {
                 <div class="sku-card-title">
                   <span class="sku-index">{{ idx + 1 }}</span>
                   <span class="mono sku-code">{{ displaySku(line) }}</span>
+                  <span v-if="displaySku(line) !== line.sku" class="bound-990 mono">仓库 SKU：{{ line.sku }}</span>
                   <span v-if="bound990Text(line)" class="bound-990">已绑 {{ bound990Text(line) }}</span>
                   <span v-if="line.productName" class="sku-name">{{ line.productName }}</span>
                 </div>
@@ -1371,7 +1445,7 @@ onMounted(async () => {
 
           <div class="panel-actions putaway-footer">
             <span class="footer-hint">提交后将写入库位库存</span>
-            <el-button v-if="canPutaway" type="primary" :loading="putawaySubmitting" @click="submitPutawayAll">
+            <el-button v-if="canPutaway" type="primary" :loading="warehouseBusy" @click="submitPutawayAll">
               确认全部上架
             </el-button>
           </div>
@@ -1383,6 +1457,7 @@ onMounted(async () => {
         <el-empty v-else description="暂无待上架明细，请先完成清点" />
       </template>
       <el-empty v-else description="请选择作业入库单，或从下方最近到仓记录继续作业" />
+      </fieldset>
     </div>
 
     <!-- 最近扫描 -->
@@ -1396,7 +1471,7 @@ onMounted(async () => {
         <el-table-column label="状态" width="96">
           <template #default="{ row }">
             <el-tag size="small" :type="statusTagType(row.status)">
-              {{ INBOUND_STATUS[row.status]?.label || row.status || '—' }}
+              {{ INBOUND_STATUS[row.status]?.label || '待核对' || '—' }}
             </el-tag>
           </template>
         </el-table-column>
@@ -1409,7 +1484,7 @@ onMounted(async () => {
         </el-table-column>
         <el-table-column label="操作" width="100" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" size="small" @click="loadActiveOrder(row.inboundId)">继续作业</el-button>
+            <el-button link type="primary" size="small" @click="loadActiveOrder(row.inboundId)">{{ ['completed', 'confirmed', 'cancelled'].includes(row.status) ? '查看结果' : '继续作业' }}</el-button>
           </template>
         </el-table-column>
       </el-table>

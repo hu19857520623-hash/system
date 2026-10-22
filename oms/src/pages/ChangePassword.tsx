@@ -1,3 +1,5 @@
+
+import { userFacingError } from '../utils/userFacingError'
 import { useState } from 'react'
 import { Navigate, useNavigate } from 'react-router-dom'
 import { Button, Card } from '../components/ui'
@@ -40,7 +42,7 @@ export default function ChangePassword() {
       await changePassword(currentPassword, newPassword)
       navigate('/', { replace: true })
     } catch (changeError) {
-      setError(changeError instanceof Error ? changeError.message : '密码修改失败')
+      setError(userFacingError(changeError instanceof Error ? changeError.message : '密码修改失败'))
     } finally {
       setSaving(false)
     }

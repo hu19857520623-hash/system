@@ -1,3 +1,5 @@
+
+import { userFacingError } from '../utils/userFacingError'
 import { useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { RefreshCw } from 'lucide-react'
@@ -18,8 +20,10 @@ import { useInboundOrders } from '../data/entityStore'
 import { useDataScope } from '../auth/useDataScope'
 import { AdminCustomerFilter, AdminCustomerCell } from '../components/admin/AdminCustomerFilter'
 import { useRole } from '../auth/RoleContext'
-import { getCustomerCode, getCustomerIdForRole } from '../data/dataScope'
-import { addInboundOrder, canEditInboundOrder, canVoidInboundOrder, canReorderInboundOrder, nextInboundNo, refreshInboundsFromErp, voidInboundOrder, withdrawInboundOrder } from '../data/inboundStore'
+import { getCustomerIdForRole } from '../data/dataScope'
+import { canEditInboundOrder, canVoidInboundOrder, canReorderInboundOrder, refreshInboundsFromErp, voidInboundOrder, withdrawInboundOrder, inboundMutationFailure } from '../data/inboundStore'
+import { addInboundOrdersOrThrow, getInboundOrdersSnapshot } from '../data/entityStore'
+import { buildImportedInboundDrafts } from '../data/inboundDraftImport'
 import { importCsvFile } from '../data/csvImportExport'
 import {
   INBOUND_ORDER_COLUMNS,
@@ -28,8 +32,7 @@ import {
   parseInboundOrders,
 } from '../data/importTemplates'
 import { ImportTemplateLegend } from '../components/ui/ImportTemplateLegend'
-import { todayDateInput } from '../data/fileUtils'
-import { notifyIfUserError } from '../utils/userNotify'
+import { notifyIfUserError, notifySuccess, notifyError, notifyInfo } from '../utils/userNotify'
 
 const statusTabs = [
   { id: 'all', label: '全部' },
@@ -103,14 +106,22 @@ export default function InboundRecords() {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [voiding, setVoiding] = useState(false)
   const [withdrawingId, setWithdrawingId] = useState<string | null>(null)
+  const [importing, setImporting] = useState(false)
+  const [importFeedback, setImportFeedback] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
 
   const handleWithdraw = async (order: InboundOrder) => {
     if (!window.confirm(`确认撤回入库单 ${order.inboundNo}？仓库将停止收货，之后可在草稿中修改并重新提交。`)) return
     setWithdrawingId(order.id)
     try {
       const result = await withdrawInboundOrder(order)
-      if (!result.ok) window.alert(`撤回失败：${result.error}`)
-      else if (detail?.id === order.id) setDetail(result.order)
+      if (!result.ok) notifyError(result.error)
+      else {
+        if (detail?.id === order.id) setDetail(result.order)
+        if (result.warning) notifyInfo(result.warning)
+        else notifySuccess('已撤回为草稿，可修改后重新提交')
+      }
+    } catch (error) {
+      notifyIfUserError(error, '撤回失败')
     } finally {
       setWithdrawingId(null)
     }
@@ -127,7 +138,7 @@ export default function InboundRecords() {
       const n = await refreshInboundsFromErp(customerId)
       window.alert(`已从 ERP 同步 ${n} 条入库单状态`)
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : String(err))
+      window.alert(userFacingError(err instanceof Error ? err.message : String(err)))
     } finally {
       setSyncing(false)
     }
@@ -156,49 +167,42 @@ export default function InboundRecords() {
   }
 
   const handleBulkImport = async () => {
+    if (importing) return
+    const customerId = dataScope.bindingCustomerId
+    const customerCode = dataScope.getCustomerCode(customerId ?? undefined)
+    if (!customerId || !customerCode || customerCode === '—') {
+      setImportFeedback({ kind: 'err', text: '请先选择导入客户，再导入入库预约单' })
+      return
+    }
+    setImporting(true)
+    setImportFeedback(null)
+    let savingImported = false
     try {
       const { data, errors } = await importCsvFile(INBOUND_ORDER_COLUMNS, parseInboundOrders)
       if (errors.length > 0) {
-        window.alert(`导入失败：\n${errors.slice(0, 8).join('\n')}${errors.length > 8 ? `\n…共 ${errors.length} 条` : ''}`)
+        setImportFeedback({ kind: 'err', text: `导入失败：\n${errors.slice(0, 8).join('\n')}${errors.length > 8 ? `\n…共 ${errors.length} 条` : ''}` })
         return
       }
       if (data.length === 0) {
-        window.alert('未解析到有效预约单，请使用最新模板')
+        setImportFeedback({ kind: 'err', text: '未解析到有效预约单，请使用最新模板' })
         return
       }
 
-      const customerId = getCustomerIdForRole(role) ?? undefined
-
-      for (const order of data) {
-        const totalQty = order.lines.reduce((s, l) => s + l.qty, 0)
-        addInboundOrder({
-          id: `ib-import-${Date.now()}-${order.headerKey}`,
-          customerId,
-          inboundNo: nextInboundNo(getCustomerCode(customerId)),
-          source: '客户自发',
-          inboundType: order.inboundType,
-          deliveryMethod: order.deliveryMethod,
-          stockSource: 'owned',
-          boxCount: new Set(order.lines.map(l => l.boxNo)).size,
-          skuCount: new Set(order.lines.map(l => l.sku)).size,
-          totalQty,
-          receivedQty: 0,
-          status: 'draft',
-          createdAt: todayDateInput(),
-          eta: order.eta,
-          warehouse: 'jhb1',
-          referenceNo: order.referenceNo || order.platformRef || undefined,
-          trackingNo: order.trackingNo,
-          skuHint: order.lines.map(l => l.sku).slice(0, 3).join(', '),
-          remark: order.remark,
-          lineItems: order.lines,
-        })
-      }
-
-      window.alert(`已导入 ${data.length} 张入库预约单（草稿），请在列表中核对后提交`)
+      const orders = buildImportedInboundDrafts(data, {
+        customerId, customerCode, existingNos: getInboundOrdersSnapshot().map(order => order.inboundNo),
+      })
+      savingImported = true
+      await addInboundOrdersOrThrow(orders)
+      setImportFeedback({ kind: 'ok', text: `已保存 ${orders.length} 张入库预约单（草稿），可在草稿列表继续编辑并提交` })
       setTab('draft')
     } catch (err) {
-      notifyIfUserError(err, '导入失败')
+      if (err === 'cancelled' || (err instanceof Error && err.message === 'cancelled')) return
+      const result = inboundMutationFailure(err)
+      setImportFeedback({ kind: 'err', text: savingImported && result.uncertain
+        ? '导入结果暂无法确认，请先点击“立即刷新”核对记录，请勿重复导入。' + userFacingError(err)
+        : `导入未完成：${result.error}` })
+    } finally {
+      setImporting(false)
     }
   }
 
@@ -242,22 +246,29 @@ export default function InboundRecords() {
     }
     if (!confirmVoid(targets)) return
     setVoiding(true)
+    const completed: InboundOrder[] = []
+    const warnings: string[] = []
     try {
       for (const order of targets) {
         const result = await voidInboundOrder(order)
         if (!result.ok) {
-          window.alert(`作废 ${order.inboundNo} 失败：${result.error}`)
+          notifyError(`${completed.length ? `已作废 ${completed.length} 张；` : ''}${order.inboundNo}：${result.error}`)
           return
         }
+        completed.push(result.order)
+        if (result.warning) warnings.push(result.warning)
       }
+      if (warnings.length) notifyInfo(warnings.join('\n'))
+      else notifySuccess(targets.length === 1 ? `入库单 ${targets[0].inboundNo} 已作废` : `已作废 ${targets.length} 张入库单`)
+    } catch (error) {
+      notifyIfUserError(error, `作废未全部完成，已完成 ${completed.length} 张`)
+    } finally {
       setSelected(prev => {
         const next = new Set(prev)
-        for (const order of targets) next.delete(order.id)
+        for (const order of completed) next.delete(order.id)
         return next
       })
-      if (detail && targets.some(o => o.id === detail.id)) setDetail(null)
-      window.alert(targets.length === 1 ? `入库单 ${targets[0].inboundNo} 已作废` : `已作废 ${targets.length} 张入库单`)
-    } finally {
+      if (detail && completed.some(o => o.id === detail.id)) setDetail(null)
       setVoiding(false)
     }
   }
@@ -266,14 +277,14 @@ export default function InboundRecords() {
     <div className="page-shell">
       <PageHeader
         title="入库记录"
-        desc={dataScope.isAdmin ? '全平台入库单，可按客户筛选' : '已提交的预约入库单列表，跟踪在途、收货与上架进度'}
+        desc={dataScope.isAdmin ? '全平台入库单，可按客户筛选' : '查看预约入库草稿，跟踪已提交单据的在途、收货与上架进度'}
         action={
           <div className="flex gap-2">
             <Button variant="secondary" size="sm" disabled={syncing} onClick={() => void syncFromErp()}>
               <RefreshCw className={`h-3.5 w-3.5 ${syncing ? 'animate-spin' : ''}`} />
               {syncing ? '刷新中…' : '立即刷新'}
             </Button>
-            <DropdownBtn label="导入/导出" items={[
+            <DropdownBtn label={importing ? '导入中…' : '导入/导出'} disabled={importing} items={[
               { label: '批量导入预约单', onClick: () => void handleBulkImport() },
               { label: '导出列表', onClick: () => exportInboundOrders(filtered) },
               { label: '导出选中', onClick: handleExportSelected },
@@ -282,6 +293,11 @@ export default function InboundRecords() {
           </div>
         }
       />
+
+      {importFeedback && <p role={importFeedback.kind === 'err' ? 'alert' : 'status'}
+        className={`mb-4 whitespace-pre-wrap rounded-lg px-4 py-3 text-sm ${importFeedback.kind === 'err' ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-800'}`}>
+        {importFeedback.text}
+      </p>}
 
       <ImportTemplateLegend columns={INBOUND_ORDER_COLUMNS} />
 

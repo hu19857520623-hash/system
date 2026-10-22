@@ -5,10 +5,13 @@ import {
   updateReturnOrder,
   upsertReturnOrder,
   upsertReturnOrderOrThrow,
+  cacheReturnOrder,
+  addReturnOrdersOrThrow,
 } from './entityStore'
 import type { FileAttachment } from './mockData'
 import { createErpReturn, cancelErpReturn, decideErpReturn, syncErpReturns, type ErpReturnOrder } from '../api/erp'
 import { getCustomerCode } from './dataScope'
+import { userFacingError } from '../utils/userFacingError'
 
 function formatArrivalFromErp(iso?: string | null, fallback?: string): string | undefined {
   if (iso) {
@@ -93,6 +96,7 @@ export const RETURN_WAREHOUSE_OPTIONS = [
 
 export const RETURN_STATUS_LABELS: Record<string, string> = {
   draft: '草稿',
+  submission_pending: '提交待核对',
   pending_arrival: '在途',
   received: '已收货',
   measured: '已测体积',
@@ -146,11 +150,15 @@ function splitAttachments(all?: FileAttachment[]) {
   }
 }
 
-export function nextReturnNo(): string {
-  const d = new Date()
+export function nextReturnNo(customerCode?: string, d = new Date(), existingNos = getReturnOrdersSnapshot().map(order => order.returnNo)): string {
   const date = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`
-  const seq = String(getReturnOrdersSnapshot().length + 1).padStart(3, '0')
-  return `RT-${date}${seq}`
+  const prefix = `RT-${customerCode?.trim() ? `${customerCode.trim()}-` : ''}${date}`
+  const last = existingNos.reduce((max, number) => {
+    const suffix = number.startsWith(prefix) ? number.slice(prefix.length) : ''
+    return /^\d+$/.test(suffix) ? Math.max(max, Number(suffix)) : max
+  }, 0)
+  const seq = String(last + 1).padStart(3, '0')
+  return `${prefix}${seq}`
 }
 
 export function buildReturnOrderFromErp(erp: ErpReturnOrder, customerId?: string): ReturnOrder {
@@ -211,16 +219,39 @@ export function buildReturnOrderFromErp(erp: ErpReturnOrder, customerId?: string
   return order
 }
 
-export function applyErpReturnToLocal(erp: ErpReturnOrder, customerId?: string): ReturnOrder {
+export function applyErpReturnToLocal(erp: ErpReturnOrder, customerId?: string, options: { persist?: boolean } = {}): ReturnOrder {
   const order = buildReturnOrderFromErp(erp, customerId)
-  upsertReturnOrder(order)
+  if (options.persist === false) cacheReturnOrder(order)
+  else upsertReturnOrder(order)
   return order
+}
+
+export type ReturnMutationResult =
+  | { ok: true; order: ReturnOrder; warning?: string }
+  | { ok: false; error: string; uncertain?: boolean }
+
+function uncertainReturnError(error: unknown, action: string): ReturnMutationResult {
+  const status = Number((error as { status?: unknown } | null)?.status)
+  const uncertain = !Number.isFinite(status) || status < 100 || status >= 500 || status === 408 || status === 409
+  return { ok: false, uncertain, error: uncertain
+    ? `退件${action}结果暂无法确认，请返回退件处理刷新核对，请勿重复操作。${userFacingError(error)}`
+    : userFacingError(error) }
+}
+
+async function saveConfirmedReturn(order: ReturnOrder, action: string): Promise<ReturnMutationResult> {
+  cacheReturnOrder(order)
+  try {
+    await upsertReturnOrderOrThrow(order)
+    return { ok: true, order }
+  } catch (error) {
+    return { ok: true, order, warning: `退件单 ${order.returnNo} 已在 ERP ${action}，但 OMS 回写失败。请返回退件处理刷新核对，请勿重复操作。${userFacingError(error)}` }
+  }
 }
 
 export async function submitReturnToErp(
   order: ReturnOrder,
   opts?: { customerCode?: string; customerId?: string },
-): Promise<{ ok: true; order: ReturnOrder } | { ok: false; error: string }> {
+): Promise<ReturnMutationResult> {
   const customerCode = opts?.customerCode?.trim() || getCustomerCode(opts?.customerId || order.customerId)
   if (!customerCode || customerCode === '—') {
     return { ok: false, error: '当前角色未绑定客户编码，无法同步 ERP' }
@@ -252,27 +283,39 @@ export async function submitReturnToErp(
         productName: l.name,
       })),
     })
-    const merged = buildReturnOrderFromErp(erp, order.customerId)
+    const merged = buildReturnOrderFromErp(erp, opts?.customerId || order.customerId)
     const finalOrder: ReturnOrder = {
       ...merged,
+      id: order.id,
       returnPlatform: order.returnPlatform,
       takealotReturnDetails: order.takealotReturnDetails,
       ...(order.attachments?.length ? { attachments: order.attachments } : {}),
     }
-    await upsertReturnOrderOrThrow(finalOrder)
-    return { ok: true, order: finalOrder }
+    return await saveConfirmedReturn(finalOrder, '接单')
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    return uncertainReturnError(err, '提交')
   }
+}
+
+/** Persist the stable request before ERP; an unknown result must never become an editable retry. */
+export async function submitReturnWorkflow(order: ReturnOrder, opts?: { customerCode?: string; customerId?: string }): Promise<ReturnMutationResult> {
+  try { await upsertReturnOrderOrThrow({ ...order, status: 'submission_pending', statusLabel: '提交待核对' }) }
+  catch (error) { return { ok: false, error: `退件单保存未确认，尚未发送 ERP，请刷新退件处理记录核对。${userFacingError(error)}` } }
+  const result = await submitReturnToErp(order, opts)
+  if (!result.ok && !result.uncertain) {
+    try { await upsertReturnOrderOrThrow({ ...order, status: 'draft', statusLabel: '草稿' }) }
+    catch (error) { return { ok: false, uncertain: true, error: `ERP 未接单，但草稿恢复未确认，请返回退件处理刷新核对。${userFacingError(error)}` } }
+  }
+  return result
 }
 
 export async function refreshReturnsFromErp(customerId: string): Promise<number> {
   const customerCode = getCustomerCode(customerId)
   if (!customerCode || customerCode === '—') return 0
   const data = await syncErpReturns(customerCode)
-  for (const item of data.items || []) {
-    applyErpReturnToLocal(item, customerId)
-  }
+  const confirmed = (data.items || []).map(item => applyErpReturnToLocal(item, customerId, { persist: false }))
+  try { await addReturnOrdersOrThrow(confirmed) }
+  catch (error) { throw new Error(`ERP 退件记录已读取，但 OMS 保存失败，请刷新核对。${userFacingError(error)}`) }
   return data.total
 }
 
@@ -280,7 +323,7 @@ export async function refreshReturnsFromErp(customerId: string): Promise<number>
 export async function withdrawReturnOrder(
   order: ReturnOrder,
   opts?: { customerCode?: string; customerId?: string },
-): Promise<{ ok: true; order: ReturnOrder } | { ok: false; error: string }> {
+): Promise<ReturnMutationResult> {
   if (order.status !== 'pending_arrival') {
     return { ok: false, error: '仅「待到货」状态的退件可撤回' }
   }
@@ -290,24 +333,21 @@ export async function withdrawReturnOrder(
   }
   try {
     const erp = await cancelErpReturn(order.returnNo, customerCode)
-    const merged = applyErpReturnToLocal(erp, order.customerId)
+    const merged = buildReturnOrderFromErp(erp, order.customerId)
     const finalOrder = order.attachments?.length
       ? { ...merged, attachments: order.attachments }
       : merged
-    if (order.attachments?.length) {
-      updateReturnOrder(finalOrder.id, { attachments: order.attachments })
-    }
-    return { ok: true, order: finalOrder }
+    return await saveConfirmedReturn(finalOrder, '撤回')
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    return uncertainReturnError(err, '撤回')
   }
 }
 
 /** 删除退件：草稿 / 已撤回 */
-export function removeReturnOrder(order: ReturnOrder): { ok: true } | { ok: false; error: string } {
+export async function removeReturnOrder(order: ReturnOrder): Promise<{ ok: true } | { ok: false; error: string }> {
   if (order.status === 'draft' || order.status === 'cancelled') {
-    deleteReturnOrder(order.id)
-    return { ok: true }
+    try { await deleteReturnOrder(order.id); return { ok: true } }
+    catch (error) { return { ok: false, error: `删除结果未确认，请刷新退件处理核对。${userFacingError(error)}` } }
   }
   if (order.status === 'pending_arrival') {
     return { ok: false, error: '请先撤回退件，再删除' }
@@ -320,7 +360,7 @@ export async function decideReturnOrder(
   order: ReturnOrder,
   decision: 'keep' | 'discard',
   opts?: { customerCode?: string; customerId?: string; processChoice?: string },
-): Promise<{ ok: true; order: ReturnOrder } | { ok: false; error: string }> {
+): Promise<ReturnMutationResult> {
   if (order.status !== 'awaiting_customer') {
     return { ok: false, error: '仅「待您确认」状态的退件可决策' }
   }
@@ -337,9 +377,8 @@ export async function decideReturnOrder(
       decision,
       processChoice: opts?.processChoice,
     })
-    const merged = applyErpReturnToLocal(erp, order.customerId)
-    return { ok: true, order: merged }
+    return await saveConfirmedReturn(buildReturnOrderFromErp(erp, order.customerId), '确认处理方式')
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    return uncertainReturnError(err, '确认')
   }
 }

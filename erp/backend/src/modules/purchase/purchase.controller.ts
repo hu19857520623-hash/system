@@ -30,7 +30,7 @@ export class PurchaseController {
 
   @RequirePerms('purchase.view')
   @Get('pre-purchase/my')
-  listMyPrePo(@Query() q: PaginationDto & { keyword?: string }, @CurrentUser() user: AuthUser) {
+  listMyPrePo(@Query() q: PaginationDto & { keyword?: string; status?: string }, @CurrentUser() user: AuthUser) {
     return this.prePurchase.listMy(q, user)
   }
 
@@ -72,8 +72,8 @@ export class PurchaseController {
 
   @RequirePerms('purchase.create')
   @Post('pre-purchase/:id/confirm')
-  confirmPrePo(@Param('id', ParseIntPipe) id: number, @CurrentUser('userId') userId: number) {
-    return this.prePurchase.confirm(id, userId)
+  confirmPrePo(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: AuthUser) {
+    return this.prePurchase.confirm(id, user)
   }
 
   @RequireAnyPerm('product_audit.purchase_qty', 'product_audit.approve')
@@ -138,6 +138,12 @@ export class PurchaseController {
     return this.service.create(body, userId)
   }
 
+  @RequirePerms('purchase.create')
+  @Post('import')
+  importCsv(@Body() body: { content?: string }, @CurrentUser('userId') userId: number) {
+    return this.service.importFromCsv(String(body?.content || ''), userId)
+  }
+
   @RequirePerms('purchase.po_audit')
   @Post(':id/approve')
   approve(@Param('id', ParseIntPipe) id: number, @Body() body: PoAuditDto, @CurrentUser('userId') userId: number) {
@@ -150,6 +156,16 @@ export class PurchaseController {
     return this.service.rejectPoAudit(id, userId, body.remark)
   }
 
+  @RequirePerms('purchase.create')
+  @Post(':id/resubmit')
+  resubmit(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: UpdatePrePurchaseDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.prePurchase.resubmitRejected(id, body, user)
+  }
+
   @RequirePerms('purchase.mark_paid')
   @Post(':id/mark-paid')
   markPaid(@Param('id', ParseIntPipe) id: number, @Body() body: PaymentRemarkDto, @CurrentUser('userId') userId: number) {
@@ -160,6 +176,12 @@ export class PurchaseController {
   @Post(':id/mark-unpaid')
   markUnpaid(@Param('id', ParseIntPipe) id: number, @Body() body: PaymentRemarkDto, @CurrentUser('userId') userId: number) {
     return this.service.setPaymentStatus(id, false, userId, body.remark)
+  }
+
+  @RequirePerms('purchase.create')
+  @Delete('pre-purchase/:id')
+  removePrePo(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: AuthUser) {
+    return this.prePurchase.removeCancelled(id, user)
   }
 
   @RequirePerms('purchase.create')

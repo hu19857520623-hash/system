@@ -1,3 +1,5 @@
+
+import { userFacingError } from '../../utils/userFacingError'
 import { useEffect, useRef, useState } from 'react'
 import { Upload, X, FileCheck, Eye, Download } from 'lucide-react'
 import { Button, MonoCode } from '../ui'
@@ -85,7 +87,7 @@ export function PodUploadModal({
       const url = await readFileAsDataUrl(selectedFile)
       const result = await uploadPodReceipt(record.id, selectedFile.name, url, customerCode)
       if (!result.ok) {
-        setError(result.error)
+        setError(userFacingError(result.error))
         return
       }
       onClose()
@@ -178,7 +180,7 @@ export function PodViewModal({
       })
       .catch((err) => {
         if (cancelled) return
-        setLoadError(err instanceof Error ? err.message : '加载签收单失败')
+        setLoadError(userFacingError(err instanceof Error ? err.message : '加载签收单失败'))
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
@@ -253,7 +255,7 @@ export function PodViewModal({
             type="button"
             className={actionLinkClass('justify-center bg-primary-600 px-4 py-2 text-white shadow-sm hover:bg-primary-700 hover:text-white')}
             onClick={() => void downloadPodFile(record.outboundNo, fileName).catch(error => {
-              setLoadError(error instanceof Error ? error.message : '下载签收单失败')
+              setLoadError(userFacingError(error instanceof Error ? error.message : '下载签收单失败'))
             })}
           >
             <Download className="h-3 w-3" /> 下载签收单
@@ -292,7 +294,7 @@ export function PodRowActions({
           onClick={() => void downloadPodFile(
             record.outboundNo,
             record.podFileName || `POD-${record.outboundNo}`,
-          ).catch(error => window.alert(error instanceof Error ? error.message : '下载签收单失败'))}
+          ).catch(error => window.alert(userFacingError(error instanceof Error ? error.message : '下载签收单失败')))}
         >
           下载
         </TableActionLink>

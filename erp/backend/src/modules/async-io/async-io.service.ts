@@ -5,6 +5,7 @@ import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
 import { AsyncIoExportService } from './async-io-export.service'
 import { LeadsService } from '../leads/leads.service'
 import { ProductsService } from '../products/products.service'
+import { PurchaseService } from '../purchase/purchase.service'
 import { serializeImportResultDetail, type ImportRowFailure } from '../../common/import-row-result.util'
 
 @Injectable()
@@ -15,6 +16,7 @@ export class AsyncIoService {
     private exporter: AsyncIoExportService,
     private leadsService: LeadsService,
     private productsService: ProductsService,
+    private purchaseService: PurchaseService,
   ) {}
 
   async list(q: PaginationDto & { jobType?: string }) {
@@ -134,9 +136,13 @@ export class AsyncIoService {
       const result = await this.productsService.importFromCsv(content, operatorId)
       return { ok: result.imported, fail: result.failed, failures: result.failures ?? [] }
     }
+    if (module === '采购订单' || module === 'purchase-orders') {
+      const result = await this.purchaseService.importFromCsv(content, operatorId)
+      return { ok: result.imported, fail: result.failed, failures: result.failures ?? [] }
+    }
 
     throw new BadRequestException(
-      '暂不支持该模块导入。支持：线索、商品主数据',
+      '暂不支持该模块导入。支持：线索、商品主数据、采购订单',
     )
   }
 

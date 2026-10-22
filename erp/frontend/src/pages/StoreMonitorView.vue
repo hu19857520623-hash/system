@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { userFacingError } from '@erp/shared/user-facing-error'
+
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { storeMonitorApi } from '@/api/client.js'
@@ -72,7 +74,7 @@ async function loadSession() {
       enabledEdits.value[row.slot] = row.enabled
     })
   } catch (e: any) {
-    ElMessage.error(e.message || '加载店铺监控失败')
+    ElMessage.error(userFacingError(e.message || '加载店铺监控失败'))
   } finally {
     loading.value = false
   }
@@ -95,7 +97,7 @@ function injectIframeSession() {
   try {
     frame.contentWindow.postMessage(payload, window.location.origin)
   } catch (error: any) {
-    ElMessage.error(error?.message || '店铺看板会话注入失败')
+    ElMessage.error(userFacingError(error?.message || '店铺看板会话注入失败'))
   }
 }
 
@@ -135,7 +137,7 @@ async function saveStoreKey(row: any) {
     await loadSession()
     injectIframeSession()
   } catch (e: any) {
-    ElMessage.error(e.message || '保存失败')
+    ElMessage.error(userFacingError(e.message || '保存失败'))
   } finally {
     savingSlot.value = null
   }
@@ -162,7 +164,7 @@ async function runBrowserBootstrap() {
     })
     await checkService()
   } catch (error: any) {
-    ElMessage.error(error?.message || '浏览器通道验证失败')
+    ElMessage.error(userFacingError(error?.message || '浏览器通道验证失败'))
   } finally {
     bootstrapBusy.value = false
   }
@@ -181,7 +183,7 @@ async function saveCoachAssign(row: any) {
     await loadSession()
     injectIframeSession()
   } catch (e: any) {
-    ElMessage.error(e.message || '分配失败')
+    ElMessage.error(userFacingError(e.message || '分配失败'))
   } finally {
     savingSlot.value = null
   }
@@ -202,7 +204,7 @@ async function testStoreConnection(row: any) {
     )
     await loadSession()
   } catch (error: any) {
-    ElMessage.error(error?.message || `店铺 ${row.slot} 连接失败`)
+    ElMessage.error(userFacingError(error?.message || `店铺 ${row.slot} 连接失败`))
   } finally {
     testingSlot.value = null
   }

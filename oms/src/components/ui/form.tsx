@@ -2,6 +2,7 @@ import {
   Children,
   cloneElement,
   isValidElement,
+  Fragment,
   useId,
   type ReactElement,
   type ReactNode,
@@ -33,36 +34,45 @@ function mergeDescribedBy(existing: unknown, hintId?: string) {
   return [existing, hintId].filter(Boolean).join(' ') || undefined
 }
 
-function bindFieldControl(node: ReactNode, fieldId: string, hintId?: string): ReactNode {
-  if (!isValidElement(node)) return node
+function isFieldControl(node: ReactElement<Record<string, unknown>>) {
+  if (typeof node.type === 'string') return NATIVE_CONTROLS.has(node.type)
+  // 图标也是 React 组件，不能把标签绑定到输入框前面的图标上。
+  return node.type !== Fragment && ('value' in node.props || 'checked' in node.props
+    || 'onChange' in node.props || node.props['data-field-control'] === true)
+}
+
+function firstControl(nodes: ReactNode): { id?: string } | undefined {
+  for (const child of Children.toArray(nodes)) {
+    if (!isValidElement(child)) continue
+    const node = child as ReactElement<Record<string, unknown>>
+    if (isFieldControl(node)) return { id: typeof node.props.id === 'string' ? node.props.id : undefined }
+    const nested = firstControl(node.props.children as ReactNode)
+    if (nested) return nested
+  }
+  return undefined
+}
+
+function bindFieldControl(node: ReactNode, fieldId: string, hintId?: string): { node: ReactNode; bound: boolean } {
+  if (!isValidElement(node)) return { node, bound: false }
 
   const props = node.props as Record<string, unknown>
-  const type = node.type
-
-  if (typeof type === 'string' && NATIVE_CONTROLS.has(type)) {
-    return cloneElement(node as ReactElement<Record<string, unknown>>, {
-      id: (typeof props.id === 'string' && props.id) || fieldId,
+  if (isFieldControl(node as ReactElement<Record<string, unknown>>)) {
+    return { node: cloneElement(node as ReactElement<Record<string, unknown>>, {
+      id: fieldId,
       'aria-describedby': mergeDescribedBy(props['aria-describedby'], hintId),
-    })
+    }), bound: true }
   }
 
-  if (typeof type !== 'string') {
-    return cloneElement(node as ReactElement<Record<string, unknown>>, {
-      id: (typeof props.id === 'string' && props.id) || fieldId,
-      'aria-describedby': mergeDescribedBy(props['aria-describedby'], hintId),
-    })
-  }
-
-  if (props.children == null) return node
+  if (props.children == null) return { node, bound: false }
 
   let bound = false
   const nextChildren = Children.map(props.children as ReactNode, child => {
     if (bound || !isValidElement(child)) return child
     const next = bindFieldControl(child, fieldId, hintId)
-    if (next !== child) bound = true
-    return next
+    if (next.bound) bound = true
+    return next.node
   })
-  return cloneElement(node as ReactElement<Record<string, unknown>>, { children: nextChildren })
+  return { node: bound ? cloneElement(node as ReactElement<Record<string, unknown>>, { children: nextChildren }) : node, bound }
 }
 
 function bindFirstControl(nodes: ReactNode, fieldId: string, hintId?: string): ReactNode {
@@ -70,8 +80,8 @@ function bindFirstControl(nodes: ReactNode, fieldId: string, hintId?: string): R
   return Children.map(nodes, child => {
     if (bound || !isValidElement(child)) return child
     const next = bindFieldControl(child, fieldId, hintId)
-    if (next !== child) bound = true
-    return next
+    if (next.bound) bound = true
+    return next.node
   })
 }
 
@@ -86,7 +96,7 @@ export function FormField({
   htmlFor?: string
 }) {
   const autoId = useId()
-  const fieldId = htmlFor || autoId
+  const fieldId = htmlFor || firstControl(children)?.id || autoId
   const hintId = hint ? `${fieldId}-hint` : undefined
 
   return (

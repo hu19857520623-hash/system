@@ -6,6 +6,7 @@ import { OmsBridge } from '../../common/decorators/oms-bridge.decorator'
 import { CreateOmsReturnDto } from './dto/oms-return.dto'
 import { RequireAnyPerm, RequirePerms } from '../../common/decorators/require-perms.decorator'
 import { CurrentUser } from '../../common/decorators/current-user.decorator'
+import { ProcessReturnDto } from './dto/process-return.dto'
 
 @Controller('returns')
 export class ReturnsController {
@@ -249,7 +250,7 @@ export class ReturnsController {
   @Post(':id/process')
   process(
     @Param('id', ParseIntPipe) id: number,
-    @Body() body: { processResult: string; processRemark?: string },
+    @Body() body: ProcessReturnDto,
     @CurrentUser('userId') userId: number,
   ) {
     return this.service.process(id, body, userId)

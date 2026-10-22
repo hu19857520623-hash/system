@@ -1,3 +1,5 @@
+
+import { userFacingError } from '../utils/userFacingError'
 import { useEffect, useState, type ReactNode } from 'react'
 import { apiGet, type BootstrapData } from '../api/client'
 import { hydrateEntities, setEntityError } from './entityStore'
@@ -10,6 +12,7 @@ import { hydratePaymentMethods } from './paymentMethodStore'
 import { hydrateAccounts } from '../auth/accountStore'
 import { useRole } from '../auth/RoleContext'
 import { hydrateFulfillmentWarehouses } from './fulfillmentWarehouseConfig'
+import { useNavigate } from 'react-router-dom'
 
 let bootPromise: Promise<void> | null = null
 let bootSessionKey = ''
@@ -46,7 +49,7 @@ export async function bootstrapFromApi(sessionKey: string, force = false) {
     })().catch(err => {
       if (generation === bootGeneration) {
         bootPromise = null
-        setEntityError(err instanceof Error ? err.message : String(err))
+        setEntityError(userFacingError(err instanceof Error ? err.message : String(err)))
       }
       throw err
     })
@@ -55,7 +58,8 @@ export async function bootstrapFromApi(sessionKey: string, force = false) {
 }
 
 export function DataBootstrap({ children }: { children: ReactNode }) {
-  const { isLoggedIn, authReady, authToken, mustChangePassword } = useRole()
+  const { isLoggedIn, authReady, authToken, mustChangePassword, logout } = useRole()
+  const navigate = useNavigate()
   const [bootedSessionKey, setBootedSessionKey] = useState('')
   const [bootingSessionKey, setBootingSessionKey] = useState('')
   const [bootError, setBootError] = useState('')
@@ -75,7 +79,7 @@ export function DataBootstrap({ children }: { children: ReactNode }) {
         if (!cancelled) setBootedSessionKey(authToken)
       })
       .catch(error => {
-        if (!cancelled) setBootError(error instanceof Error ? error.message : String(error))
+        if (!cancelled) setBootError(userFacingError(error instanceof Error ? error.message : String(error)))
       })
       .finally(() => {
         if (!cancelled) setBootingSessionKey('')
@@ -93,7 +97,7 @@ export function DataBootstrap({ children }: { children: ReactNode }) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50 px-6">
         <div className="max-w-md text-center space-y-3">
-          <div className="text-lg font-semibold text-slate-800">无法连接数据库 API</div>
+          <div className="text-lg font-semibold text-slate-800">暂时无法加载系统数据</div>
           <p className="text-sm text-slate-500 break-all">{bootError}</p>
           <button
             type="button"
@@ -101,6 +105,9 @@ export function DataBootstrap({ children }: { children: ReactNode }) {
             onClick={() => window.location.reload()}
           >
             重试
+          </button>
+          <button type="button" className="ml-3 px-4 py-2 rounded-lg border border-slate-300 text-sm" onClick={() => void logout().then(() => navigate('/login', { replace: true }))}>
+            返回登录
           </button>
         </div>
       </div>
@@ -112,7 +119,7 @@ export function DataBootstrap({ children }: { children: ReactNode }) {
       <div className="min-h-screen flex items-center justify-center bg-slate-50 text-slate-600">
         <div className="text-center space-y-2">
           <div className="text-sm font-medium">正在从数据库加载数据…</div>
-          <div className="text-xs text-slate-400">请确认 API 服务已启动（npm run dev）</div>
+          <div className="text-xs text-slate-400">请稍候；若长时间没有响应，可刷新页面重试。</div>
         </div>
       </div>
     )

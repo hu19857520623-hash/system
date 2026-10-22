@@ -82,7 +82,7 @@ export const RETURN_FEE_CHARGE_TYPES = {
 } as const
 
 export function isValidProcessMethod(v: string): v is ReturnProcessMethod {
-  return v in RETURN_PROCESS_METHODS
+  return Object.prototype.hasOwnProperty.call(RETURN_PROCESS_METHODS, v)
 }
 
 export function isValidInspectionResult(v: string) {

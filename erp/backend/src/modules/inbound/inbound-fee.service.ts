@@ -89,7 +89,7 @@ export class InboundFeeService {
     return this.present(row, customer)
   }
 
-  async recordOperation(order: InboundForFee, operation: InboundFeeOperation, quantity: number) {
+  async recordOperation(order: InboundForFee, operation: InboundFeeOperation, quantity: number, throwOnFailure = false) {
     try {
       const customerId = await this.resolveCustomerId(order.omsCustomerCode)
       if (!customerId) return null
@@ -120,6 +120,7 @@ export class InboundFeeService {
       })
     } catch (err) {
       console.warn(`[inbound-fee] ${order.inboundNo} ${operation} skipped:`, err)
+      if (throwOnFailure) throw err
       return null
     }
   }

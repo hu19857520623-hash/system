@@ -62,6 +62,7 @@ declare module 'vue' {
     ElTabPane: typeof import('element-plus/es')['ElTabPane']
     ElTabs: typeof import('element-plus/es')['ElTabs']
     ElTag: typeof import('element-plus/es')['ElTag']
+    ElText: typeof import('element-plus/es')['ElText']
     ElTimeline: typeof import('element-plus/es')['ElTimeline']
     ElTimelineItem: typeof import('element-plus/es')['ElTimelineItem']
     ElTooltip: typeof import('element-plus/es')['ElTooltip']
@@ -72,10 +73,12 @@ declare module 'vue' {
     OutboundLabelPanel: typeof import('./components/outbound/OutboundLabelPanel.vue')['default']
     OutboundPickDialog: typeof import('./components/outbound/OutboundPickDialog.vue')['default']
     OutboundShipDialog: typeof import('./components/outbound/OutboundShipDialog.vue')['default']
+    PageErrorBoundary: typeof import('./components/ui/PageErrorBoundary.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     StockFillBar: typeof import('./components/ui/StockFillBar.vue')['default']
     ThemeToggle: typeof import('./components/ThemeToggle.vue')['default']
+    WarehouseControlDialog: typeof import('./components/inbound/WarehouseControlDialog.vue')['default']
   }
   export interface GlobalDirectives {
     vLoading: typeof import('element-plus/es')['ElLoadingDirective']

@@ -1,3 +1,5 @@
+
+import { userFacingError } from '../utils/userFacingError'
 import { useMemo, useState, useEffect } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { Plus, ChevronDown, ChevronUp, RefreshCw, FileCheck } from 'lucide-react'
@@ -95,7 +97,7 @@ export default function OutboundRecords() {
       const n = await refreshLogisticsFromErp(customerCode)
       window.alert(`已从 ERP 同步 ${n} 条物流记录`)
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : String(err))
+      window.alert(userFacingError(err instanceof Error ? err.message : String(err)))
     } finally {
       setSyncing(false)
     }

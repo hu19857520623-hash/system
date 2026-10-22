@@ -1,3 +1,5 @@
+
+import { userFacingError } from '../utils/userFacingError'
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Button } from './ui'
@@ -18,7 +20,7 @@ export function PrintCodeTypeDialog({ title, initialType = 'qr', onClose, onConf
     setBusy(true)
     setError('')
     try { if (await onConfirm(codeType) !== false) onClose() }
-    catch (e) { setError(e instanceof Error ? e.message : '标签生成失败，请重试') }
+    catch (e) { setError(userFacingError(e instanceof Error ? e.message : '标签生成失败，请重试')) }
     finally { setBusy(false) }
   }
   return createPortal(

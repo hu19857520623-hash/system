@@ -10,12 +10,14 @@ const RECEIVING_STARTED_STATUSES = new Set([
 export function inboundReceivingStarted(order: {
   status?: string | null
   receivedAt?: Date | string | null
+  receivedCartonCount?: number | null
   items?: Array<{ actualQty?: number | null; putawayQty?: number | null }>
   cartons?: Array<{ status?: string | null }>
 }): boolean {
   const status = String(order.status || '')
   if (RECEIVING_STARTED_STATUSES.has(status)) return true
   if (order.receivedAt) return true
+  if (Number(order.receivedCartonCount || 0) > 0) return true
   if ((order.items || []).some((item) => Number(item.actualQty ?? 0) > 0 || Number(item.putawayQty ?? 0) > 0)) {
     return true
   }

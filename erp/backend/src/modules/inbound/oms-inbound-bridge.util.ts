@@ -32,7 +32,7 @@ export function mapOmsInboundStatus(status: string) {
 }
 
 function omsStatusesForErpFilter(status?: string): string[] | null {
-  if (!status) return null
+  if (!status || status === 'all') return null
   switch (status) {
     case 'pending_receipt':
       return ['on_the_way']
@@ -96,16 +96,18 @@ export async function fetchOmsInboundRows(
   prisma: PrismaService,
   filters: { keyword?: string; status?: string },
 ) {
-  const conditions: string[] = ['1=1']
-  const params: unknown[] = []
+  // 未提交草稿留在 OMS，不能进入 ERP 仓库作业列表或统计。
+  const excludedStatuses = ['draft', 'oms_draft']
+  const selectedStatus = filters.status?.trim()
+  if (excludedStatuses.includes(String(selectedStatus || '').toLowerCase())) return []
+  const conditions: string[] = ['LOWER(TRIM(i.status)) NOT IN (?, ?)']
+  const params: unknown[] = [...excludedStatuses]
 
-  const omsStatuses = omsStatusesForErpFilter(filters.status?.trim())
+  const omsStatuses = omsStatusesForErpFilter(selectedStatus)
   if (omsStatuses !== null) {
     if (!omsStatuses.length) return []
     conditions.push(`(${omsStatuses.map(() => 'i.status = ?').join(' OR ')})`)
     params.push(...omsStatuses)
-  } else {
-    // 全部：含 OMS 草稿
   }
 
   const keyword = filters.keyword?.trim()
@@ -125,7 +127,7 @@ export async function fetchOmsInboundRows(
   `
   try {
     const rows = await prisma.$queryRawUnsafe<Record<string, unknown>[]>(sql, ...params)
-    return rows.map(mapOmsInboundRow)
+    return rows.filter(r => !excludedStatuses.includes(String(r.status || '').trim().toLowerCase())).map(mapOmsInboundRow)
   } catch {
     return []
   }

@@ -188,6 +188,7 @@ export type ErpWarehouseRowInput = {
   warehouseName?: string | null
   available: number
   locked: number
+  total?: number
   inTransit: number
   pendingPutaway: number
   fallbackSupplierCode?: string | null
@@ -233,6 +234,7 @@ export function buildErpWarehouseInventoryRow(input: ErpWarehouseRowInput) {
     supplierName: input.fallbackSupplierName || '',
     ...warehouse,
     ...qty,
+    totalQty: input.total ?? qty.totalQty,
     alertQty: input.alertQty ?? 0,
     lastInboundDate: input.lastInboundDate || '',
     referenceNo: input.referenceNo || '',
@@ -315,6 +317,7 @@ export type CatalogHoldingRowInput = {
   sku: string
   productName: string
   quantity: number
+  lockedQty?: number
   unitPrice?: unknown
   updatedAt?: Date | null
   customerCode?: string
@@ -328,7 +331,7 @@ export function buildCatalogHoldingInventoryRow(input: CatalogHoldingRowInput) {
     customerName: input.customerName,
     customerSku: catalogBaseSkuFromInternal(input.sku),
   })
-  const qty = buildInventoryQuantityFields({ available: input.quantity, locked: 0 })
+  const qty = buildInventoryQuantityFields({ available: input.quantity, locked: input.lockedQty ?? 0 })
 
   return finalizeInventoryRow({
     id: `catalog-${input.id}`,

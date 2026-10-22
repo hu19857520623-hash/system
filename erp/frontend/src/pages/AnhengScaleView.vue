@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { userFacingError } from '@erp/shared/user-facing-error'
+
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { anhengApi } from '@/api/client.js'
@@ -144,7 +146,7 @@ async function loadConfig() {
     const res = await anhengApi.config()
     config.value = { ...config.value, ...res }
   } catch (e: any) {
-    ElMessage.error(e?.message || '加载配置失败')
+    ElMessage.error(userFacingError(e?.message || '加载配置失败'))
   }
 }
 
@@ -161,7 +163,7 @@ async function saveConfig() {
     config.value = { ...config.value, ...saved }
     ElMessage.success('配置已保存')
   } catch (e: any) {
-    ElMessage.error(e?.message || '保存失败')
+    ElMessage.error(userFacingError(e?.message || '保存失败'))
   } finally {
     saving.value = false
   }
@@ -181,7 +183,7 @@ async function loadEvents(silent = false) {
     if (!silent) {
       events.value = []
       eventTotal.value = 0
-      ElMessage.error(e?.message || '加载测量记录失败')
+      ElMessage.error(userFacingError(e?.message || '加载测量记录失败'))
     }
   } finally {
     loading.value = false
@@ -200,7 +202,7 @@ async function loadPhotos() {
   } catch (e: any) {
     photos.value = []
     photoTotal.value = 0
-    ElMessage.error(e?.message || '加载照片失败')
+    ElMessage.error(userFacingError(e?.message || '加载照片失败'))
   }
 }
 
@@ -227,7 +229,7 @@ async function simulateWeigh() {
     page.value = 1
     await loadEvents()
   } catch (e: any) {
-    ElMessage.error(e?.message || '模拟称重失败')
+    ElMessage.error(userFacingError(e?.message || '模拟称重失败'))
   }
 }
 
@@ -257,7 +259,7 @@ async function simulateImage() {
     tab.value = 'photos'
     await loadPhotos()
   } catch (e: any) {
-    ElMessage.error(e?.message || '模拟传图失败')
+    ElMessage.error(userFacingError(e?.message || '模拟传图失败'))
   }
 }
 
@@ -269,7 +271,7 @@ async function previewPhoto(row: any) {
     photoPreviewUrl.value = previewObjectUrl
     photoPreviewNo.value = row.expressNo
   } catch (e: any) {
-    ElMessage.error(e?.message || '打开照片失败')
+    ElMessage.error(userFacingError(e?.message || '打开照片失败'))
   }
 }
 
@@ -292,7 +294,7 @@ async function clearData() {
     ElMessage.success(`已删除测量 ${res.deletedEvents} 条、照片 ${res.deletedPhotos} 条`)
     await Promise.all([loadEvents(), loadPhotos()])
   } catch (e: any) {
-    if (e !== 'cancel') ElMessage.error(e?.message || '清空失败')
+    if (e !== 'cancel') ElMessage.error(userFacingError(e?.message || '清空失败'))
   }
 }
 

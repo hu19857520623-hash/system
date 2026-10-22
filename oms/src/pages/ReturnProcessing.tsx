@@ -1,21 +1,23 @@
+
+import { userFacingError } from '../utils/userFacingError'
 import { displaySku, displaySkuText } from '../data/skuDisplay'
 import { useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { RefreshCw, Plus } from 'lucide-react'
 import { Badge, Button, Card, MonoCode, PageHeader, Table, TableFooter } from '../components/ui'
 import { DropdownBtn } from '../components/ui/filters'
-import { useReturnOrders } from '../data/entityStore'
+import { useReturnOrders, addReturnOrdersOrThrow } from '../data/entityStore'
+import { buildImportedReturnDrafts } from '../data/returnDraftImport'
+import { returnInspectionLabel, returnProcessLabel, returnStatusLabel } from '../data/returnDisplay'
 import {
   RETURN_STATUS_LABELS,
   RETURN_PROCESS_OPTIONS,
-  addReturnOrder,
-  nextReturnNo,
   refreshReturnsFromErp,
   removeReturnOrder,
   withdrawReturnOrder,
   decideReturnOrder,
 } from '../data/returnStore'
-import { formatDatetimeDisplay, todayDateInput } from '../data/fileUtils'
+import { formatDatetimeDisplay } from '../data/fileUtils'
 import { importCsvFile } from '../data/csvImportExport'
 import { reportLineImportResult } from '../utils/lineImportResult'
 import {
@@ -27,7 +29,7 @@ import { useRole } from '../auth/RoleContext'
 import { useDataScope } from '../auth/useDataScope'
 import { getCustomerCode, getCustomerIdForRole, resolveErpCustomerContext } from '../data/dataScope'
 import { AdminCustomerFilter } from '../components/admin/AdminCustomerFilter'
-import { notifyIfUserError } from '../utils/userNotify'
+import { notifyIfUserError, notifySuccess, notifyInfo, notifyError } from '../utils/userNotify'
 
 type Tab = 'all' | 'draft' | 'pending_arrival' | 'awaiting_customer' | 'arrived' | 'completed' | 'cancelled'
 
@@ -77,17 +79,18 @@ export default function ReturnProcessing() {
   const detail = returns.find(r => r.id === detailId) || allReturns.find(r => r.id === detailId)
 
   const handleSync = async () => {
-    const customerId = getCustomerIdForRole(role)
+    if (syncing) return
+    const customerId = dataScope.bindingCustomerId
     if (!customerId) {
-      window.alert('请切换到客户角色后再同步 ERP 退件状态')
+      notifyInfo('请先选择要同步退件的客户')
       return
     }
     setSyncing(true)
     try {
       const n = await refreshReturnsFromErp(customerId)
-      window.alert(`已从 ERP 同步 ${n} 条退件状态`)
+      notifySuccess(`已从 ERP 同步 ${n} 条退件状态`)
     } catch (err) {
-      window.alert(displaySkuText(err instanceof Error ? err.message : String(err)))
+      notifyError(userFacingError(displaySkuText(err instanceof Error ? err.message : String(err))))
     } finally {
       setSyncing(false)
     }
@@ -102,24 +105,29 @@ export default function ReturnProcessing() {
         customerCode: erpCustomer?.customerCode || getCustomerCode(r.customerId),
       })
       if (!result.ok) {
-        window.alert(displaySkuText(result.error))
+        window.alert(userFacingError(displaySkuText(result.error)))
         return
       }
-      window.alert('已撤回；可在「已撤回」标签页查看该退件单')
+      if (result.warning) notifyInfo(result.warning)
+      else notifySuccess('已撤回；可在「已撤回」标签页查看该退件单')
       if (detailId === r.id) setDetailId(null)
     } finally {
       setActingId(null)
     }
   }
 
-  const handleDelete = (r: typeof returns[0]) => {
+  const handleDelete = async (r: typeof returns[0]) => {
+    if (actingId) return
     if (!window.confirm(`确认删除退件单 ${r.returnNo}？此操作不可恢复。`)) return
-    const result = removeReturnOrder(r)
+    setActingId(r.id)
+    const result = await removeReturnOrder(r)
+    setActingId(null)
     if (!result.ok) {
-      window.alert(displaySkuText(result.error))
+      notifyError(userFacingError(displaySkuText(result.error)))
       return
     }
     if (detailId === r.id) setDetailId(null)
+    notifySuccess('退件记录已删除')
   }
 
   const canWrite = can('returns:write')
@@ -136,31 +144,10 @@ export default function ReturnProcessing() {
 
       await reportLineImportResult(
         result,
-        () => {
-          for (const order of result.data) {
-            const totalQty = order.lineItems.reduce((s, l) => s + l.qty, 0)
-            addReturnOrder({
-              id: `rt-import-${Date.now()}-${order.headerKey}`,
-              customerId,
-              returnNo: nextReturnNo(),
-              orderNo: order.orderNo.trim(),
-              referenceNo: order.referenceNo,
-              trackingNo: order.trackingNo,
-              sellerStoreName: order.sellerStoreName,
-              sellerTaxNo: order.sellerTaxNo,
-              returnWarehouse: order.returnWarehouse,
-              expectedArrivalAt: order.expectedArrivalAt,
-              returnReason: order.returnReason,
-              returnDescription: order.returnDescription,
-              requestedProcess: order.requestedProcess,
-              status: 'draft',
-              statusLabel: '草稿',
-              createdAt: todayDateInput(),
-              lineItems: order.lineItems,
-              totalQty,
-              remark: order.remark,
-            })
-          }
+        async () => {
+          const orders = buildImportedReturnDrafts(result.data, { customerId: customerId || '',
+            customerCode: erpCustomer?.customerCode || getCustomerCode(customerId), existingNos: allReturns.map(order => order.returnNo) })
+          await addReturnOrdersOrThrow(orders)
           setTab('draft')
         },
         {
@@ -186,10 +173,11 @@ export default function ReturnProcessing() {
         processChoice: decision === 'keep' ? decideProcess : undefined,
       })
       if (!result.ok) {
-        window.alert(displaySkuText(result.error))
+        window.alert(userFacingError(displaySkuText(result.error)))
         return
       }
-      window.alert(decision === 'discard' ? '已确认不留，仓库将销毁' : '已确认留货，仓库将安排作业')
+      if (result.warning) notifyInfo(result.warning)
+      else notifySuccess(decision === 'discard' ? '已确认不留，仓库将销毁' : '已确认留货，仓库将安排作业')
       if (detailId === r.id) setDetailId(null)
     } finally {
       setActingId(null)
@@ -284,16 +272,16 @@ export default function ReturnProcessing() {
                   <td className="table-cell text-xs"><MonoCode>{displaySkuText(skuLabel)}</MonoCode></td>
                   <td className="table-cell text-xs">{r.totalQty ?? r.lineItems.reduce((s, i) => s + i.qty, 0)}</td>
                   <td className="table-cell text-xs text-text-secondary">{r.returnReason}</td>
-                  <td className="table-cell text-xs">{r.requestedProcessLabel || r.requestedProcess}</td>
+                  <td className="table-cell text-xs">{returnProcessLabel(r.requestedProcess, r.requestedProcessLabel)}</td>
                   <td className="table-cell text-xs">
                     {formatReturnFee(r.estimatedFeeTotal)}
                   </td>
                   <td className="table-cell">
-                    <Badge status={r.status} label={r.statusLabel || RETURN_STATUS_LABELS[r.status] || r.status} />
+                    <Badge status={r.status} label={returnStatusLabel(r.status, r.statusLabel, RETURN_STATUS_LABELS)} />
                   </td>
                   <td className="table-cell text-xs">
                     {r.status === 'completed'
-                      ? (r.processResultLabel || r.processResult || '—')
+                      ? returnProcessLabel(r.processResult, r.processResultLabel)
                       : '—'}
                   </td>
                   <td className="table-cell text-xs text-text-muted">{r.createdAt}</td>
@@ -379,13 +367,13 @@ export default function ReturnProcessing() {
                 ['卖家税号', detail.sellerTaxNo || '—'],
                 ['预计到货', formatDatetimeDisplay(detail.expectedArrivalAt)],
                 ['退件原因', detail.returnReason],
-                ['期望处理', detail.requestedProcessLabel || detail.requestedProcess],
-                ['当前状态', detail.statusLabel || RETURN_STATUS_LABELS[detail.status] || detail.status],
+                ['期望处理', returnProcessLabel(detail.requestedProcess, detail.requestedProcessLabel)],
+                ['当前状态', returnStatusLabel(detail.status, detail.statusLabel, RETURN_STATUS_LABELS)],
                 ['体积 CBM', detail.totalVolumeCbm != null ? String(detail.totalVolumeCbm) : '—'],
                 ['预估费用', formatReturnFee(detail.estimatedFeeTotal)],
-                ['质检结论', detail.inspectionResultLabel || detail.inspectionResult || '—'],
+                ['质检结论', returnInspectionLabel(detail.inspectionResult, detail.inspectionResultLabel)],
                 ['收货时间', detail.receivedAt || '—'],
-                ['处理结果', detail.processResultLabel || detail.processResult || '—'],
+                ['处理结果', returnProcessLabel(detail.processResult, detail.processResultLabel)],
                 ['处理时间', detail.processedAt || '—'],
               ].map(([k, v]) => (
                 <div key={k} className="contents">

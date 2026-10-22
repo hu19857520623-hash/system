@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { userFacingError } from '@erp/shared/user-facing-error'
+
 import { displaySku, displaySkuText } from '@erp/shared/sku-display'
 import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
@@ -49,6 +51,7 @@ watch([tab, statusFilter, searchQ], resetPage)
 const dialogVisible = ref(false)
 const selectedAudit = ref<any>(null)
 const form = ref({ purchaseQty: 0, remark: '' })
+const actionSubmitting = ref(false)
 
 const auditProfit = computed(() => {
   const row = selectedAudit.value
@@ -92,28 +95,32 @@ function openUrl(url?: string, label = '链接') {
 }
 
 async function approve() {
-  if (!selectedAudit.value) return
-  if (!form.value.purchaseQty || form.value.purchaseQty <= 0) {
-    ElMessage.warning('审核通过前请核定计划采购数量')
+  if (!selectedAudit.value || actionSubmitting.value) return
+  if (!Number.isSafeInteger(form.value.purchaseQty) || form.value.purchaseQty <= 0 || form.value.purchaseQty > 2147483647) {
+    ElMessage.warning('计划采购数量须为大于零且不超过 2147483647 的整数')
     return
   }
   const id = selectedAudit.value.id
-  const ok = await withAction(async () => {
-    await productDevApi.approve(id, {
-      purchaseQty: form.value.purchaseQty,
-      remark: form.value.remark,
-    })
-  }, `已通过，核定计划采购量 ${form.value.purchaseQty.toLocaleString()}，待采购分配`)
-  if (ok) {
-    dialogVisible.value = false
-    load()
-  }
+  actionSubmitting.value = true
+  try {
+    const ok = await withAction(async () => {
+      await productDevApi.approve(id, {
+        purchaseQty: form.value.purchaseQty,
+        remark: form.value.remark,
+      })
+    }, `已通过，核定计划采购量 ${form.value.purchaseQty.toLocaleString()}，待采购分配`)
+    if (ok) {
+      dialogVisible.value = false
+      load()
+    }
+  } finally { actionSubmitting.value = false }
 }
 
 async function reject() {
-  if (!selectedAudit.value) return
+  if (!selectedAudit.value || actionSubmitting.value) return
+  actionSubmitting.value = true
   try {
-    const { value } = await erpPrompt('请输入驳回原因', '驳回选品', { confirmButtonText: '确认驳回', cancelButtonText: '取消', inputType: 'textarea' })
+    const { value } = await erpPrompt('请输入驳回原因', '驳回选品', { confirmButtonText: '确认驳回', cancelButtonText: '返回审核', inputType: 'textarea', inputValidator: (value: string) => value.trim() ? true : '请填写驳回原因，便于修改后重新提交' })
     const ok = await withAction(async () => {
       await productDevApi.reject(selectedAudit.value.id, { remark: value })
     }, '已驳回，退回产品开发')
@@ -122,6 +129,7 @@ async function reject() {
       load()
     }
   } catch { /* cancelled */ }
+  finally { actionSubmitting.value = false }
 }
 
 async function downloadLabel(row: any) {
@@ -134,7 +142,7 @@ async function downloadLabel(row: any) {
     triggerBlobDownload(blob, fileName)
     ElMessage.success(displaySkuText(`已下载 ${displaySku(row)} SKU 标签`))
   } catch (e: any) {
-    ElMessage.error(displaySkuText(e.message || '标签下载失败'))
+    ElMessage.error(userFacingError(displaySkuText(e.message || '标签下载失败')))
   }
 }
 
@@ -208,9 +216,9 @@ function tagType(status: string) {
     <p class="page-foot">{{ PIPELINE_AUDIT_FOOTER }}</p>
   </el-card>
 
-  <el-dialog v-model="dialogVisible" :title="selectedAudit?.applyNo + ' · 选品审核'" width="780px" top="4vh" destroy-on-close class="erp-detail">
+  <el-dialog v-model="dialogVisible" :title="selectedAudit?.applyNo + ' · 选品审核'" width="780px" top="4vh" destroy-on-close class="erp-detail" :close-on-click-modal="!actionSubmitting" :close-on-press-escape="!actionSubmitting" :show-close="!actionSubmitting">
     <el-scrollbar v-if="selectedAudit" max-height="70vh">
-      <el-form label-width="118px" class="audit-detail-form">
+      <el-form label-width="118px" class="audit-detail-form" :disabled="actionSubmitting">
         <el-divider content-position="left">基本信息</el-divider>
         <el-form-item label="申请单号"><el-input :model-value="selectedAudit.applyNo" readonly /></el-form-item>
         <el-form-item label="选品名称"><el-input :model-value="selectedAudit.name" readonly /></el-form-item>
@@ -317,9 +325,9 @@ function tagType(status: string) {
       </el-form>
     </el-scrollbar>
     <template #footer>
-      <el-button @click="dialogVisible = false">关闭</el-button>
-      <el-button v-if="selectedAudit?.status === '待审核' && canReject" type="warning" @click="reject">驳回</el-button>
-      <el-button v-if="selectedAudit?.status === '待审核' && canApprove" type="primary" @click="approve">审核通过</el-button>
+      <el-button :disabled="actionSubmitting" @click="dialogVisible = false">返回列表</el-button>
+      <el-button v-if="selectedAudit?.status === '待审核' && canReject" :disabled="actionSubmitting" type="warning" @click="reject">驳回</el-button>
+      <el-button v-if="selectedAudit?.status === '待审核' && canApprove" :loading="actionSubmitting" :disabled="actionSubmitting" type="primary" @click="approve">审核通过</el-button>
     </template>
   </el-dialog>
 </template>

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { userFacingError } from '@erp/shared/user-facing-error'
+
 import { useAppStore } from '@/stores/app'
 import { useRouter } from 'vue-router'
 import { ref, computed, onMounted } from 'vue'
@@ -241,7 +243,7 @@ async function loadDashboard() {
     const scheduledRows = (scheduledRes?.items || []).map((a: any) => mapAnnouncementRow(a, 'scheduled'))
     announcements.value = [...scheduledRows, ...activeRows]
   } catch (e: any) {
-    ElMessage.error(e?.message || '加载工作台数据失败')
+    ElMessage.error(userFacingError(e?.message || '加载工作台数据失败'))
   } finally {
     loading.value = false
   }
@@ -280,7 +282,7 @@ async function publishAnnouncement() {
     }
     await loadDashboard()
   } catch (e: any) {
-    ElMessage.error(e?.message || '发布失败')
+    ElMessage.error(userFacingError(e?.message || '发布失败'))
   } finally {
     publishSaving.value = false
   }
@@ -311,7 +313,7 @@ async function saveAnnouncement() {
     ElMessage.success('公告已更新')
     await loadDashboard()
   } catch (e: any) {
-    ElMessage.error(e?.message || '保存失败')
+    ElMessage.error(userFacingError(e?.message || '保存失败'))
   } finally {
     editSaving.value = false
   }
@@ -323,7 +325,7 @@ async function deleteAnnouncement(ann: { id: string }) {
     ElMessage.success('公告已删除')
     await loadDashboard()
   } catch (e: any) {
-    ElMessage.error(e?.message || '删除失败')
+    ElMessage.error(userFacingError(e?.message || '删除失败'))
   }
 }
 

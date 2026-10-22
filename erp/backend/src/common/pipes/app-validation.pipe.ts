@@ -1,10 +1,12 @@
 import { ArgumentMetadata, Injectable, ValidationPipe } from '@nestjs/common'
+import { chineseValidationException } from './validation-feedback.util'
 
 const queryPipe = new ValidationPipe({
   whitelist: false,
   transform: true,
   forbidNonWhitelisted: false,
   transformOptions: { enableImplicitConversion: true },
+  exceptionFactory: chineseValidationException,
 })
 
 /**
@@ -15,7 +17,7 @@ const queryPipe = new ValidationPipe({
 @Injectable()
 export class AppValidationPipe extends ValidationPipe {
   constructor() {
-    super({ whitelist: true, transform: true, forbidNonWhitelisted: false })
+    super({ whitelist: true, transform: true, forbidNonWhitelisted: false, exceptionFactory: chineseValidationException })
   }
 
   override transform(value: unknown, metadata: ArgumentMetadata) {

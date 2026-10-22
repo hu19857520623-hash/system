@@ -10,6 +10,8 @@ export const OPERATION_MODULE_LABELS: Record<string, string> = {
 }
 
 export const OPERATION_ACTION_LABELS: Record<string, string> = {
+  reopen_count: '更正清点', close_zero_receipt: '零收货结束', reduce_qc: '减少实收件数', reduce_carton: '减少实收箱数', reduce_putaway: '撤回最近上架',
+  repair_damage_received: '核对破损已收数量',
   create: '创建',
   update: '修改',
   delete: '删除',
@@ -18,6 +20,7 @@ export const OPERATION_ACTION_LABELS: Record<string, string> = {
   reject: '审核驳回',
   po_approve: '采购审核通过',
   po_reject: '采购审核驳回',
+  resubmit_pre_po: '驳回后重新提交分配',
   po_mark_paid: '标记已打款',
   po_mark_unpaid: '标记未打款',
   assign_purchaser: '分配采购员',
@@ -31,8 +34,12 @@ export const OPERATION_ACTION_LABELS: Record<string, string> = {
   arrival_scan: '到仓扫描',
   scan_qc: '扫描清点',
   receive_carton_count: '登记实收箱数',
+  receive_carton: '确认外箱',
+  receive_carton_check: '核对已确认外箱',
   start_receive: '开始收货',
   qc: '收货清点',
+  qc_measure: '清点与测量',
+  measure_inbound: '入库测量',
   resolve_exception: '异常放行',
   putaway: '入库上架',
   adjust_qty: '调整数量',

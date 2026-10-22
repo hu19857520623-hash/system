@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { receiveInboundManually } from './manual-inbound-receive'
+import { receiveInboundManually, recordedReceivedCartonCount } from './manual-inbound-receive'
 
 const input = { count: 2, differenceReason: '', clientRequestId: 'manual-1' }
 function fixture(status = 'pending_receipt') {
@@ -12,6 +12,13 @@ function fixture(status = 'pending_receipt') {
 }
 
 describe('manual inbound receiving', () => {
+  it.each([0, null, undefined, -1, 1.5])('未登记的实收箱数%s显示待填写，不能被输入框下限显示为1', count => {
+    expect(recordedReceivedCartonCount({ receivedCartonCount: count })).toBeNull()
+  })
+  it('已有实际箱数可以回填，不使用申报箱数代替实际', () => {
+    expect(recordedReceivedCartonCount({ receivedCartonCount: 2 })).toBe(2)
+    expect(recordedReceivedCartonCount({})).toBeNull()
+  })
   it('confirms arrival before recording count, retaining the request identity', async () => {
     const api = fixture()
     await receiveInboundManually(api, 1, input)
@@ -45,5 +52,12 @@ describe('manual inbound receiving', () => {
     api.arrivalScan.mockRejectedValue(new Error('仓库不匹配'))
     await expect(receiveInboundManually(api, 1, input)).rejects.toThrow('仓库不匹配')
     expect(api.recordReceivedCartonCount).not.toHaveBeenCalled()
+  })
+  it('replays the original confirmed count even if later scans have increased the current count', async () => {
+    const api = fixture('receiving')
+    api.detail.mockResolvedValue({ status: 'receiving', cartons: [{ status: 'received' }, { status: 'received' }] } as any)
+    await receiveInboundManually(api, 1, { count: 1, differenceReason: '原短收原因', clientRequestId: 'original', replay: true })
+    expect(api.recordReceivedCartonCount).toHaveBeenCalledWith(1, { receivedCartonCount: 1, differenceReason: '原短收原因', clientRequestId: 'original' })
+    expect(api.arrivalScan).not.toHaveBeenCalled()
   })
 })

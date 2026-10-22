@@ -13,6 +13,30 @@ import { getCustomerCode } from './dataScope'
 import { findProductByCode } from './platformBindingUtils'
 import { buildOmsAsnItem } from './omsAsnItem'
 import { buildInboundNo, inboundNoPrefix, nextSeqFromNos } from './wmsDocNo'
+import { userFacingError } from '../utils/userFacingError'
+
+export type InboundMutationResult = { ok: true; order: InboundOrder; warning?: string }
+  | { ok: false; error: string; uncertain?: boolean }
+
+export function inboundMutationFailure(error: unknown): Extract<InboundMutationResult, { ok: false }> {
+  const status = error && typeof error === 'object' ? Number((error as { status?: number }).status) : NaN
+  const uncertain = !Number.isFinite(status) || status < 100 || status >= 500 || status === 408
+  const message = userFacingError(error)
+  return { ok: false, uncertain, error: uncertain
+    ? `本次操作结果暂无法确认，请返回入库记录并刷新核对，请勿重复提交。${message}` : message }
+}
+
+async function finishErpInboundMutation(order: InboundOrder, completed: string): Promise<InboundMutationResult> {
+  try {
+    await upsertInboundOrderOrThrow(order)
+    return { ok: true, order }
+  } catch (error) {
+    // ERP 已确认成功，不能因 OMS 回写失败而把作业退回未提交状态。
+    cacheInboundOrder(order)
+    return { ok: true, order,
+      warning: `${completed}，但 OMS 回写失败。请刷新入库记录核对，请勿重复操作。${userFacingError(error)}` }
+  }
+}
 
 export { pushInbound as addInboundOrder, updateInboundOrder, upsertInboundOrder }
 
@@ -154,7 +178,7 @@ function mergeLocalInboundAfterErp(erp: ErpInboundOrder, local: InboundOrder): I
 }
 
 /** 提交非草稿入库时推送 ERP ASN，并回写本地状态 */
-export async function submitInboundToErp(order: InboundOrder): Promise<{ ok: true; order: InboundOrder } | { ok: false; error: string }> {
+export async function submitInboundToErp(order: InboundOrder): Promise<InboundMutationResult> {
   const customerCode = getCustomerCode(order.customerId)
   if (!customerCode || customerCode === '—') {
     return { ok: false, error: '当前角色未绑定客户编码，无法同步 ERP' }
@@ -169,15 +193,14 @@ export async function submitInboundToErp(order: InboundOrder): Promise<{ ok: tru
       erp = await createErpInbound(payload)
     }
     const merged = mergeLocalInboundAfterErp(erp, order)
-    await upsertInboundOrderOrThrow(merged)
-    return { ok: true, order: merged }
+    return await finishErpInboundMutation(merged, `入库单 ${order.inboundNo} 已提交 ERP`)
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    return inboundMutationFailure(err)
   }
 }
 
 /** 在途入库单修改后同步 ERP，并回写本地状态 */
-export async function updateInboundOnErp(order: InboundOrder): Promise<{ ok: true; order: InboundOrder } | { ok: false; error: string }> {
+export async function updateInboundOnErp(order: InboundOrder): Promise<InboundMutationResult> {
   const customerCode = getCustomerCode(order.customerId)
   if (!customerCode || customerCode === '—') {
     return { ok: false, error: '当前角色未绑定客户编码，无法同步 ERP' }
@@ -185,30 +208,28 @@ export async function updateInboundOnErp(order: InboundOrder): Promise<{ ok: tru
   try {
     const erp = await updateErpInbound(order.inboundNo, erpAsnPayload(order, customerCode))
     const merged = mergeLocalInboundAfterErp(erp, order)
-    await upsertInboundOrderOrThrow(merged)
-    return { ok: true, order: merged }
+    return await finishErpInboundMutation(merged, `入库单 ${order.inboundNo} 在 ERP 的修改已保存`)
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    return inboundMutationFailure(err)
   }
 }
 
 /** 在途单撤回成草稿；ERP 停止收货，修改后重新提交时激活同一单号。 */
-export async function withdrawInboundOrder(order: InboundOrder): Promise<{ ok: true; order: InboundOrder } | { ok: false; error: string }> {
+export async function withdrawInboundOrder(order: InboundOrder): Promise<InboundMutationResult> {
   if (order.status !== 'on_the_way') return { ok: false, error: '仅在途入库单可撤回' }
   const customerCode = getCustomerCode(order.customerId)
   if (!customerCode || customerCode === '—') return { ok: false, error: '当前角色未绑定客户编码，无法同步 ERP' }
   try {
     const erp = await cancelErpInbound(order.inboundNo, { customerCode, customerId: order.customerId })
     const draft = { ...mergeLocalInboundAfterErp(erp, order), status: 'draft' as InboundStatus }
-    await upsertInboundOrderOrThrow(draft)
-    return { ok: true, order: draft }
+    return await finishErpInboundMutation(draft, `入库单 ${order.inboundNo} 已在 ERP 停止收货并撤回为草稿`)
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    return inboundMutationFailure(err)
   }
 }
 
 /** 草稿本地作废；在途单同步 ERP 后不再收货 */
-export async function voidInboundOrder(order: InboundOrder): Promise<{ ok: true; order: InboundOrder } | { ok: false; error: string }> {
+export async function voidInboundOrder(order: InboundOrder): Promise<InboundMutationResult> {
   if (!canVoidInboundOrder(order.status)) {
     return { ok: false, error: '仅草稿或在途入库单可作废' }
   }
@@ -226,15 +247,18 @@ export async function voidInboundOrder(order: InboundOrder): Promise<{ ok: true;
         ...mergeLocalInboundAfterErp(erp, order),
         status: 'voided' as InboundStatus,
       }
-      await upsertInboundOrderOrThrow(merged)
-      return { ok: true, order: merged }
+      return await finishErpInboundMutation(merged, `入库单 ${order.inboundNo} 已在 ERP 作废`)
     } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      return inboundMutationFailure(err)
     }
   }
   const next = { ...order, status: 'voided' as InboundStatus }
-  await upsertInboundOrderOrThrow(next)
-  return { ok: true, order: next }
+  try {
+    await upsertInboundOrderOrThrow(next)
+    return { ok: true, order: next }
+  } catch (error) {
+    return inboundMutationFailure(error)
+  }
 }
 
 function isNotFoundError(err: unknown) {
@@ -244,7 +268,7 @@ function isNotFoundError(err: unknown) {
 }
 
 /** 作废单确认后重新下单：ERP 已取消则激活，否则按新 ASN 提交，进入在途 */
-export async function reorderInboundOnErp(order: InboundOrder): Promise<{ ok: true; order: InboundOrder } | { ok: false; error: string }> {
+export async function reorderInboundOnErp(order: InboundOrder): Promise<InboundMutationResult> {
   if (!canReorderInboundOrder(order.status)) {
     return { ok: false, error: '仅已作废的入库单可重新下单' }
   }
@@ -268,10 +292,9 @@ export async function reorderInboundOnErp(order: InboundOrder): Promise<{ ok: tr
       ...mergeLocalInboundAfterErp(erp, order),
       status: 'on_the_way' as InboundStatus,
     }
-    await upsertInboundOrderOrThrow(merged)
-    return { ok: true, order: merged }
+    return await finishErpInboundMutation(merged, `入库单 ${order.inboundNo} 已在 ERP 重新下单`)
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    return inboundMutationFailure(err)
   }
 }
 

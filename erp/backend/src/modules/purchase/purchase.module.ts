@@ -7,6 +7,6 @@ import { PurchaseController } from './purchase.controller'
   imports: [],
   controllers: [PurchaseController],
   providers: [PurchaseService, PrePurchaseService],
-  exports: [PrePurchaseService],
+  exports: [PurchaseService, PrePurchaseService],
 })
 export class PurchaseModule {}

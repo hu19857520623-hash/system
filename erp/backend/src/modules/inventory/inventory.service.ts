@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
+import { buildInboundPipelineQtyMap, INBOUND_PIPELINE_STATUSES } from '../../common/inbound-pipeline.util'
 import { OperationLogService } from '../operation-log/operation-log.service'
 import {
   fetchCatalogInventoryRows,
@@ -28,6 +29,7 @@ import { InventoryMutationService } from '../../common/inventory/inventory-mutat
 import { ERP_MASTER_PRODUCT_WHERE, OMS_MANAGED_PRODUCT_WHERE } from '../../common/product-source.util'
 import type { InventoryTx } from '../../common/inventory/inventory-mutation.types'
 import { omsInventoryWithoutErpDuplicates } from './inventory-source.util'
+import { skuOperationStatusLabel } from './sku-operation-status.util'
 import {
   assertLogisticsWarehouse,
   parseLogisticsTransferBody,
@@ -303,6 +305,7 @@ export class InventoryService {
         warehouseName: wh?.warehouseName || JHB_WAREHOUSE_NAME,
         available: r.availableQty,
         locked: r.lockedQty,
+        total: r.totalQty,
         inTransit: pipeline.inTransit,
         pendingPutaway: pipeline.pendingPutaway,
         fallbackSupplierCode: supplier?.supplierCode,
@@ -547,7 +550,6 @@ export class InventoryService {
       ],
     }
     const omsFilters: MergedSkuFilters = {
-      customerCode: q.supplierKeyword?.trim(),
       title: (q.title || q.keyword || '').trim() || undefined,
       skuCodes: q.skuCodes,
       barcode: q.barcode?.trim(),
@@ -564,7 +566,7 @@ export class InventoryService {
 
     const [erpTotal, allOmsItems] = await Promise.all([
       this.prisma.product.count({ where }),
-      fetchOmsProductRows(this.prisma, omsFilters),
+      q.supplierKeyword?.trim() ? Promise.resolve([]) : fetchOmsProductRows(this.prisma, omsFilters),
     ])
 
     // ERP 与 OMS 是两个独立数据源。分页顺序固定为 ERP 主数据在前、OMS
@@ -654,13 +656,13 @@ export class InventoryService {
         costRmb: p.costRmb != null ? Number(p.costRmb) : null,
         status: p.status,
         statusLabel: statusLabel(p.status),
-        syncStatus: p.syncStatus || 'pending',
+        syncStatus: /OMS客户:|OMS 预约入库自动建档/.test(p.remark || '') ? null : p.syncStatus || 'pending',
         receiptFlag: hasMeasuredDims ? '已测量' : hasCustomerDims ? '客户申报' : '新产品',
         hasDimensions: billing.source !== 'none',
         customerCode: customer.customerCode || developer?.username || '',
         customerSku: customer.customerSku,
         customerName: customer.customerName,
-        supplierName: customer.customerName,
+        supplierName: /OMS客户:|OMS 预约入库自动建档/.test(p.remark || '') ? '' : supplier?.supplierName || '',
         developerName: developer?.realName || '',
         salesStatus,
         orderableOnOms: Boolean(pricing?.orderableOnOms),
@@ -730,6 +732,13 @@ export class InventoryService {
       return {
         ...r,
         erpProductId,
+        ...(r.dataSource === 'oms' ? {
+          salesStatus: null,
+          orderableOnOms: null,
+          visibleOnOms: null,
+          operationStatus: r.operationStatus || r.status,
+          operationStatusLabel: r.operationStatusLabel || skuOperationStatusLabel(String(r.status || '')),
+        } : {}),
         measuredLengthCm,
         measuredWidthCm,
         measuredHeightCm,
@@ -969,9 +978,8 @@ export class InventoryService {
 
   /** 在途 / 待上架数量（按 SKU+仓库） */
   private async loadPipelineQtyMap(warehouseCodes: string[]) {
-    const inTransitStatuses = ['pending_receipt', 'pending_push', 'arrived', 'receiving', 'exception']
     const where: any = {
-      status: { in: [...inTransitStatuses, 'pending_putaway'] },
+      status: { in: INBOUND_PIPELINE_STATUSES },
     }
     if (warehouseCodes.length) where.warehouseCode = { in: warehouseCodes }
 
@@ -991,23 +999,7 @@ export class InventoryService {
       },
     })
 
-    const map = new Map<string, { inTransit: number; pendingPutaway: number }>()
-    for (const order of orders) {
-      for (const item of order.items) {
-        const key = `${item.sku}::${order.warehouseCode}`
-        const prev = map.get(key) || { inTransit: 0, pendingPutaway: 0 }
-        if (inTransitStatuses.includes(order.status)) {
-          const remain = Math.max(0, item.expectedQty - (item.actualQty ?? 0))
-          prev.inTransit += remain > 0 ? remain : item.expectedQty
-        }
-        if (order.status === 'pending_putaway') {
-          const base = item.actualQty ?? item.expectedQty
-          prev.pendingPutaway += Math.max(0, base - (item.putawayQty ?? 0))
-        }
-        map.set(key, prev)
-      }
-    }
-    return map
+    return buildInboundPipelineQtyMap(orders)
   }
 
   private async productIdsByKeyword(keyword: string): Promise<bigint[]> {

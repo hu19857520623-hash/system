@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { userFacingError } from '@erp/shared/user-facing-error'
+
 import { displaySku, displaySkuText } from '@erp/shared/sku-display'
 import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
@@ -11,6 +13,7 @@ import { useTablePagination } from '@/composables/useTablePagination.ts'
 import { useAppStore } from '@/stores/app'
 import ListPagination from '@/components/ListPagination.vue'
 import { PIPELINE_DEV_ALERT } from '@/constants/productPipeline.ts'
+import { saveAndSubmitProductDev } from '@/utils/productDevWorkflow'
 
 const app = useAppStore()
 
@@ -110,6 +113,11 @@ const editingId = ref<number | null>(null)
 const form = ref<DevForm>(emptyForm())
 const priceImageUploading = ref(false)
 const alibabaImageUploading = ref(false)
+const formSubmitting = ref(false)
+const formFeedback = ref('')
+const formUncertain = ref(false)
+const previousRejectReason = ref('')
+const formBusy = computed(() => formSubmitting.value || priceImageUploading.value || alibabaImageUploading.value)
 
 const DEV_IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp'])
 
@@ -156,7 +164,7 @@ async function uploadDevImage(
     form.value[field] = res.imageUrl
     ElMessage.success(successText)
   } catch (err: any) {
-    ElMessage.error(displaySkuText(err?.message || '图片上传失败'))
+    ElMessage.error(userFacingError(displaySkuText(err?.message || '图片上传失败')))
   } finally {
     uploading.value = false
   }
@@ -244,10 +252,10 @@ function formPayload(status?: string) {
     packageLengthCm: form.value.packageLengthCm !== '' ? Number(form.value.packageLengthCm) : undefined,
     packageWidthCm: form.value.packageWidthCm !== '' ? Number(form.value.packageWidthCm) : undefined,
     packageHeightCm: form.value.packageHeightCm !== '' ? Number(form.value.packageHeightCm) : undefined,
-    estimatedCost: Number(form.value.cost) || undefined,
-    marketPrice: Number(form.value.marketPrice) || undefined,
-    sellPriceRmb: Number(form.value.sellPriceRmb) || undefined,
-    maxSellPriceRmb: Number(form.value.maxSellPriceRmb) || undefined,
+    estimatedCost: form.value.cost !== '' ? Number(form.value.cost) : undefined,
+    marketPrice: form.value.marketPrice !== '' ? Number(form.value.marketPrice) : undefined,
+    sellPriceRmb: form.value.sellPriceRmb !== '' ? Number(form.value.sellPriceRmb) : undefined,
+    maxSellPriceRmb: form.value.maxSellPriceRmb !== '' ? Number(form.value.maxSellPriceRmb) : undefined,
     seaFreightChannel: form.value.seaFreightChannel || undefined,
     cbm: form.value.cbm !== '' ? Number(form.value.cbm) : undefined,
     volumetricWeightKg: form.value.volumetricWeightKg !== '' ? Number(form.value.volumetricWeightKg) : undefined,
@@ -272,10 +280,10 @@ function fillFormFromProduct(p: ReturnType<typeof mapProductDev>) {
     packageLengthCm: p.packageLengthCm ? String(p.packageLengthCm) : '',
     packageWidthCm: p.packageWidthCm ? String(p.packageWidthCm) : '',
     packageHeightCm: p.packageHeightCm ? String(p.packageHeightCm) : '',
-    cost: p.cost ? String(p.cost) : '',
-    marketPrice: p.marketPrice ? String(p.marketPrice) : '',
-    sellPriceRmb: p.sellPriceRmb ? String(p.sellPriceRmb) : '',
-    maxSellPriceRmb: p.maxSellPriceRmb ? String(p.maxSellPriceRmb) : '',
+    cost: p._raw.estimatedCost != null ? String(p.cost) : '',
+    marketPrice: p._raw.marketPrice != null ? String(p.marketPrice) : '',
+    sellPriceRmb: p._raw.sellPriceRmb != null ? String(p.sellPriceRmb) : '',
+    maxSellPriceRmb: p._raw.maxSellPriceRmb != null ? String(p.maxSellPriceRmb) : '',
     seaFreightChannel: p.seaFreightChannel || '',
     cbm: p.cbm ? String(p.cbm) : '',
     volumetricWeightKg: p.volumetricWeightKg ? String(p.volumetricWeightKg) : '',
@@ -289,8 +297,8 @@ async function submitAudit(id: number) {
     if (!p.sku?.trim()) { ElMessage.warning('请填写 SKU'); return }
     if (!p.link || p.link === '#') { ElMessage.warning('请填写 Takealot 链接'); return }
     if (!p.takealotPriceImageUrl) { ElMessage.warning('请上传 Takealot 售价图'); return }
-    if (!p.cost) { ElMessage.warning('请填写采购价格'); return }
-    if (!p.marketPrice) { ElMessage.warning('请填写市场参考价'); return }
+    if (p._raw.estimatedCost == null) { ElMessage.warning('请填写采购价格'); return }
+    if (p._raw.marketPrice == null) { ElMessage.warning('请填写市场参考价'); return }
   }
   const ok = await withAction(async () => {
     await productDevApi.submit(id)
@@ -311,6 +319,9 @@ async function withdraw(id: number) {
 function openNewApply() {
   editingId.value = null
   form.value = emptyForm()
+  previousRejectReason.value = ''
+  formFeedback.value = ''
+  formUncertain.value = false
   dialogVisible.value = true
 }
 
@@ -319,43 +330,70 @@ function openEdit(id: number) {
   if (!p) return
   editingId.value = id
   fillFormFromProduct(p)
+  previousRejectReason.value = p.statusKey === 'rejected' ? p._raw.auditRemark || '请联系审核人核对修改要求' : ''
+  formFeedback.value = ''
+  formUncertain.value = false
   dialogVisible.value = true
 }
 
 async function saveDraft() {
-  if (!form.value.name) { ElMessage.warning('请填写商品名称'); return }
-  const ok = await withAction(async () => {
+  if (formBusy.value || formUncertain.value) return
+  if (!form.value.name.trim()) { formFeedback.value = '请填写商品名称'; return }
+  formSubmitting.value = true
+  formFeedback.value = ''
+  try {
     if (editingId.value) {
       await productDevApi.update(editingId.value, formPayload('draft'))
     } else {
       await productDevApi.create(formPayload('draft'))
     }
-  }, '已保存草稿')
-  if (ok) { dialogVisible.value = false; load() }
+    ElMessage.success('已保存草稿')
+    dialogVisible.value = false
+    await load()
+  } catch (error) { showFormFailure(error) }
+  finally { formSubmitting.value = false }
+}
+
+function showFormFailure(error: unknown) {
+  const status = Number((error as { status?: unknown })?.status)
+  formUncertain.value = !Number.isFinite(status) || status < 100 || status >= 500 || status === 408 || status === 409
+  formFeedback.value = formUncertain.value
+    ? `操作结果暂无法确认，请返回列表按 SKU 或商品名称查询，请勿重复新建或提交。${userFacingError(error)}`
+    : `${editingId.value ? '申请已保留，可修改后继续。' : ''}${userFacingError(error)}`
+}
+
+function returnToDevList() {
+  if (formBusy.value) return
+  dialogVisible.value = false
+  void load()
 }
 
 async function submitForm() {
+  if (formBusy.value || formUncertain.value) return
   const missing = submitMissingMessage()
-  if (missing) { ElMessage.warning(missing); return }
-  if (estProfit.value != null && estProfit.value < 0) {
-    try {
-      await erpConfirm(
-        `按当前售价与采购价测算，预估利润为 ¥${estProfit.value.toFixed(2)}，确认仍要提交吗？`,
-        '利润预警',
-        { type: 'warning', confirmButtonText: '仍然提交', cancelButtonText: '返回修改' },
-      )
-    } catch { return }
-  }
-  const ok = await withAction(async () => {
-    if (editingId.value) {
-      await productDevApi.update(editingId.value, formPayload())
-      await productDevApi.submit(editingId.value)
-    } else {
-      const created = await productDevApi.create(formPayload('draft'))
-      await productDevApi.submit(Number(created.id))
+  if (missing) { formFeedback.value = missing; return }
+  formSubmitting.value = true
+  formFeedback.value = ''
+  try {
+    if (estProfit.value != null && estProfit.value < 0) {
+      try {
+        await erpConfirm(
+          `按当前售价与采购价测算，预估利润为 ¥${estProfit.value.toFixed(2)}，确认仍要提交吗？`,
+          '利润预警',
+          { type: 'warning', confirmButtonText: '仍然提交', cancelButtonText: '返回修改' },
+        )
+      } catch { return }
     }
-  }, '选品申请已提交审核')
-  if (ok) { dialogVisible.value = false; load() }
+    await saveAndSubmitProductDev({
+      create: payload => productDevApi.create(payload),
+      update: (id, payload) => productDevApi.update(id, payload),
+      submit: id => productDevApi.submit(id),
+    }, editingId.value, formPayload(), id => { editingId.value = id })
+    ElMessage.success('选品申请已提交审核，可到产品审核查看进度')
+    dialogVisible.value = false
+    await load()
+  } catch (error) { showFormFailure(error) }
+  finally { formSubmitting.value = false }
 }
 </script>
 
@@ -441,9 +479,11 @@ async function submitForm() {
     <p style="font-size:11px;color:#8b95a8;margin-top:10px">提交审核时需填写 SKU、Takealot 链接、售价图、采购价格与市场参考价；包装尺寸填写后自动计算 CBM 与体积重。核定数量为计划参考，实际采购以采购单为准。</p>
   </el-card>
 
-  <el-dialog v-model="dialogVisible" :title="editingId ? '编辑选品申请' : '新建选品申请'" width="780px" top="4vh" destroy-on-close>
+  <el-dialog v-model="dialogVisible" :title="editingId ? '编辑选品申请' : '新建选品申请'" width="780px" top="4vh" destroy-on-close :close-on-click-modal="!formBusy" :close-on-press-escape="!formBusy" :show-close="!formBusy">
+    <el-alert v-if="previousRejectReason" :title="`上次驳回原因：${previousRejectReason}`" type="info" :closable="false" style="margin-bottom:12px" />
+    <el-alert v-if="formFeedback" :title="formFeedback" type="warning" :closable="false" role="alert" style="margin-bottom:12px" />
     <el-scrollbar max-height="70vh">
-      <el-form label-width="118px" class="dev-form">
+      <el-form label-width="118px" class="dev-form" :disabled="formBusy || formUncertain">
         <el-divider content-position="left">基本信息</el-divider>
         <el-form-item label="SKU" required>
           <el-input v-model="form.sku" placeholder="请填写 SKU" maxlength="30" />
@@ -582,9 +622,9 @@ async function submitForm() {
       </el-form>
     </el-scrollbar>
     <template #footer>
-      <el-button @click="dialogVisible = false">取消</el-button>
-      <el-button @click="saveDraft">保存草稿</el-button>
-      <el-button type="primary" @click="submitForm">提交申请</el-button>
+      <el-button :disabled="formBusy" @click="returnToDevList">{{ formUncertain ? '返回列表核对' : '取消' }}</el-button>
+      <el-button :disabled="formBusy || formUncertain" @click="saveDraft">保存草稿</el-button>
+      <el-button type="primary" :loading="formSubmitting" :disabled="formBusy || formUncertain" @click="submitForm">提交申请</el-button>
     </template>
   </el-dialog>
 </template>

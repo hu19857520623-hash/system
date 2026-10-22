@@ -1,3 +1,5 @@
+import { userFacingError } from '../utils/userFacingError'
+
 const API_BASE = '/api'
 const LOCAL_SESSION_KEY = 'oms-auth-session'
 const SESSION_SESSION_KEY = 'oms-auth-session-tab'
@@ -164,12 +166,12 @@ function describeOmsNetworkError(err: unknown) {
     || /failed to fetch|fetch failed|networkerror|econnrefused|econnreset/i.test(msg)
   ) {
     const error = new Error(
-      '无法连接 OMS 服务（127.0.0.1:3001）。请运行仓库根目录 dev-local.ps1，或单独启动 oms。',
+      '暂时无法连接服务，请检查网络后重试；如持续失败，请联系管理员。',
     ) as Error & { code?: string }
     error.code = 'NETWORK'
     return error
   }
-  return err instanceof Error ? err : new Error(msg)
+  return new Error(userFacingError(msg))
 }
 
 export function storeAuthSession(session: AuthSession | null, remember = true) {
@@ -243,7 +245,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       storeAuthSession(null)
       window.dispatchEvent(new Event('oms:unauthorized'))
     }
-    const error = new Error(message || `API ${path} failed: ${res.status}`) as Error & {
+    const error = new Error(userFacingError(message, res.status)) as Error & {
       status?: number
     }
     error.status = res.status
@@ -251,7 +253,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
   if (res.status === 204) return undefined as T
   const text = await res.text()
-  return (text ? JSON.parse(text) : undefined) as T
+  try {
+    return (text ? JSON.parse(text) : undefined) as T
+  } catch (err) {
+    throw new Error(userFacingError(err))
+  }
 }
 
 export function apiGet<T>(path: string) {

@@ -8,7 +8,7 @@ import type {
   SystemMessage,
 } from './mockData'
 import type { ReturnOrder } from './returnStore'
-import { notifyError, notifyPersistFailed } from '../utils/userNotify'
+import { notifyPersistFailed } from '../utils/userNotify'
 import { mergeInboundOrder, reconcileInboundIds } from './inboundOrderIdentity'
 
 export type AnnouncementItem = {
@@ -151,7 +151,29 @@ export function addInboundOrder(order: InboundOrder) {
 }
 
 export async function addInboundOrderOrThrow(order: InboundOrder) {
-  await persistInboundOrdersOrThrow(nextInboundOrdersWithUpsert(order))
+  await addInboundOrdersOrThrow([order])
+}
+
+/** 新导入的草稿在一次服务端事务中保存，不回写其他未修改单据的旧快照。 */
+export async function addInboundOrdersOrThrow(orders: InboundOrder[]) {
+  if (!orders.length) return
+  const before = state.inboundOrders
+  const next = orders.reduce((list, order) => nextInboundOrdersWithUpsert(order, list), before)
+  setInboundOrders(next)
+  try {
+    await saveInboundOrders(orders)
+  } catch (error) {
+    const imported = new Set(orders.map(order => order.inboundNo))
+    const optimistic = new Map(next.map(order => [order.inboundNo, order]))
+    const previous = new Map(before.map(order => [order.inboundNo, order]))
+    // 等待期间由 ERP 刷新过的记录继续采用新值，失败只撤销仍属于本次保存的乐观值。
+    setInboundOrders(state.inboundOrders.flatMap(order => {
+      if (!imported.has(order.inboundNo) || order !== optimistic.get(order.inboundNo)) return [order]
+      const old = previous.get(order.inboundNo)
+      return old ? [old] : []
+    }))
+    throw error
+  }
 }
 
 export function updateInboundOrder(id: string, patch: Partial<InboundOrder>) {
@@ -159,9 +181,9 @@ export function updateInboundOrder(id: string, patch: Partial<InboundOrder>) {
 }
 
 export async function updateInboundOrderOrThrow(id: string, patch: Partial<InboundOrder>) {
-  await persistInboundOrdersOrThrow(
-    state.inboundOrders.map(o => (o.id === id ? { ...o, ...patch } : o)),
-  )
+  const order = state.inboundOrders.find(item => item.id === id)
+  if (!order) throw new Error('未找到该入库单，请刷新后重试')
+  await addInboundOrdersOrThrow([{ ...order, ...patch }])
 }
 
 export function upsertInboundOrder(order: InboundOrder) {
@@ -169,7 +191,7 @@ export function upsertInboundOrder(order: InboundOrder) {
 }
 
 export async function upsertInboundOrderOrThrow(order: InboundOrder) {
-  await persistInboundOrdersOrThrow(nextInboundOrdersWithUpsert(order))
+  await addInboundOrdersOrThrow([order])
 }
 
 export function setOrders(list: Order[]) {
@@ -190,13 +212,17 @@ export function getInboundOrdersSnapshot() {
   return state.inboundOrders
 }
 
-export function deleteReturnOrder(id: string) {
-  const before = state.returnOrders
+export async function deleteReturnOrder(id: string) {
+  const before = state.returnOrders.find(order => order.id === id)
   setReturnOrders(state.returnOrders.filter(o => o.id !== id))
-  void apiDelete(`/return-orders/${encodeURIComponent(id)}`).catch(err => {
-    setReturnOrders(before)
-    notifyError(`删除退件单失败：${err instanceof Error ? err.message : String(err)}`)
-  })
+  try {
+    await apiDelete(`/return-orders/${encodeURIComponent(id)}`)
+  } catch (error) {
+    if (before && !state.returnOrders.some(order => order.id === before.id || order.returnNo === before.returnNo)) {
+      setReturnOrders([before, ...state.returnOrders])
+    }
+    throw error
+  }
 }
 
 export function setReturnOrders(list: ReturnOrder[]) {
@@ -204,18 +230,25 @@ export function setReturnOrders(list: ReturnOrder[]) {
   emit()
 }
 
-export function persistReturnOrders(list: ReturnOrder[]) {
+export function persistReturnOrders(list: ReturnOrder[], changed = list) {
   setReturnOrders(list)
-  void apiPut('/return-orders', list).catch(err => notifyPersistFailed('退件单', err))
+  void apiPut('/return-orders', changed).catch(err => notifyPersistFailed('退件单', err))
 }
 
-export async function persistReturnOrdersOrThrow(list: ReturnOrder[]) {
+export async function persistReturnOrdersOrThrow(list: ReturnOrder[], changed = list) {
   const before = state.returnOrders
   setReturnOrders(list)
   try {
-    await apiPut('/return-orders', list)
+    await apiPut('/return-orders', changed)
   } catch (err) {
-    setReturnOrders(before)
+    const affected = new Set(changed.map(order => order.returnNo))
+    const optimistic = new Map(list.map(order => [order.returnNo, order]))
+    const previous = new Map(before.map(order => [order.returnNo, order]))
+    setReturnOrders(state.returnOrders.flatMap(order => {
+      if (!affected.has(order.returnNo) || order !== optimistic.get(order.returnNo)) return [order]
+      const old = previous.get(order.returnNo)
+      return old ? [old] : []
+    }))
     throw err
   }
 }
@@ -231,29 +264,40 @@ function nextReturnOrdersWithUpsert(order: ReturnOrder, base = state.returnOrder
 }
 
 export function addReturnOrder(order: ReturnOrder) {
-  persistReturnOrders([order, ...state.returnOrders])
+  upsertReturnOrder(order)
 }
 
 export async function addReturnOrderOrThrow(order: ReturnOrder) {
-  await persistReturnOrdersOrThrow(nextReturnOrdersWithUpsert(order))
+  await upsertReturnOrderOrThrow(order)
+}
+
+export async function addReturnOrdersOrThrow(orders: ReturnOrder[]) {
+  if (!orders.length) return
+  const next = orders.reduce((list, order) => nextReturnOrdersWithUpsert(order, list), state.returnOrders)
+  await persistReturnOrdersOrThrow(next, orders)
 }
 
 export function updateReturnOrder(id: string, patch: Partial<ReturnOrder>) {
-  persistReturnOrders(state.returnOrders.map(o => (o.id === id ? { ...o, ...patch } : o)))
+  const next = state.returnOrders.map(o => (o.id === id ? { ...o, ...patch } : o))
+  persistReturnOrders(next, next.filter(order => order.id === id))
 }
 
 export async function updateReturnOrderOrThrow(id: string, patch: Partial<ReturnOrder>) {
-  await persistReturnOrdersOrThrow(
-    state.returnOrders.map(o => (o.id === id ? { ...o, ...patch } : o)),
-  )
+  const next = state.returnOrders.map(o => (o.id === id ? { ...o, ...patch } : o))
+  await persistReturnOrdersOrThrow(next, next.filter(order => order.id === id))
 }
 
 export function upsertReturnOrder(order: ReturnOrder) {
-  persistReturnOrders(nextReturnOrdersWithUpsert(order))
+  cacheReturnOrder(order)
+  void apiPut('/return-orders', [order]).catch(err => notifyPersistFailed('退件单', err))
 }
 
 export async function upsertReturnOrderOrThrow(order: ReturnOrder) {
-  await persistReturnOrdersOrThrow(nextReturnOrdersWithUpsert(order))
+  await addReturnOrdersOrThrow([order])
+}
+
+export function cacheReturnOrder(order: ReturnOrder) {
+  setReturnOrders(nextReturnOrdersWithUpsert(order))
 }
 
 export function getReturnOrdersSnapshot() {

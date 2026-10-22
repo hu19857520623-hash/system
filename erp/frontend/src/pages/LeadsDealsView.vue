@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { userFacingError } from '@erp/shared/user-facing-error'
+
 import { ref, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -304,7 +306,7 @@ async function downloadFile(leadId: number, deal: DealRecord, att: DealAttachmen
     a.click()
     URL.revokeObjectURL(url)
   } catch (e: any) {
-    ElMessage.error(e?.message || '下载失败')
+    ElMessage.error(userFacingError(e?.message || '下载失败'))
   }
 }
 
@@ -420,7 +422,7 @@ async function submitOmsAccount() {
     omsSuccessVisible.value = true
     await load()
   } catch (e: any) {
-    ElMessage.error(e?.message || '开通失败，请检查客户代码/登录邮箱是否已被使用')
+    ElMessage.error(userFacingError(e?.message || '开通失败，请检查客户代码/登录邮箱是否已被使用'))
   } finally {
     omsSaving.value = false
   }

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { userFacingError } from '@erp/shared/user-facing-error'
+
 import { displaySku, displaySkuText, formatSku } from '@erp/shared/sku-display'
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
@@ -93,8 +95,7 @@ const skuOptions = ref<any[]>([])
 const skuSearchLoading = ref(false)
 
 const qtyTypeOptions = [
-  { value: 'available', label: '可用' },
-  { value: 'total', label: '总量' },
+  { value: 'available', label: '总库存' },
   { value: 'locked', label: '锁定' },
 ]
 
@@ -147,7 +148,7 @@ async function load() {
   } catch (e: any) {
     rows.value = []
     listTotal.value = 0
-    ElMessage.error(displaySkuText(e?.message || '加载失败'))
+    ElMessage.error(userFacingError(displaySkuText(e?.message || '加载失败')))
   } finally {
     loading.value = false
   }
@@ -206,11 +207,10 @@ function exportRows(list = rows.value) {
     ElMessage.warning('没有可导出的数据')
     return
   }
-  const headers = ['SKU', '商品名', '来源', '品类', '客户代码', '客户名称', '可用', '锁定', '可售', '待出库', '在途', '待上架']
+  const headers = ['SKU', '商品名', '来源', '品类', '客户代码', '客户名称', '总库存', '锁定']
   const lines = list.map((r) => [
     r.sku, r.productName, r.dataSourceLabel || r.dataSource, r.category, r.customerCode,
-    r.customerName || r.supplierName, r.availableQty, r.lockedQty ?? 0,
-    r.sellableQty, r.pendingOutboundQty, r.inTransitQty, r.pendingPutawayQty,
+    r.customerName || r.supplierName, r.availableQty ?? 0, r.lockedQty ?? 0,
   ])
   const bom = '\uFEFF'
   const content = bom + [headers.join(','), ...lines.map((l) => l.map(escapeCsv).join(','))].join('\n')
@@ -252,7 +252,7 @@ async function openOutboundLogs(row: any) {
   try {
     outboundLogRows.value = await inventoryApi.outboundLogs(row.sku, { warehouseCode: row.warehouseCode })
   } catch (e: any) {
-    ElMessage.error(displaySkuText(e?.message || '加载失败'))
+    ElMessage.error(userFacingError(displaySkuText(e?.message || '加载失败')))
   } finally {
     outboundLogLoading.value = false
   }
@@ -304,7 +304,7 @@ async function openAdjustFromRow(row: any) {
     }
     await showSkuLocations(row)
   } catch (e: any) {
-    ElMessage.error(displaySkuText(e?.message || '加载库位失败'))
+    ElMessage.error(userFacingError(displaySkuText(e?.message || '加载库位失败')))
   }
 }
 
@@ -372,7 +372,7 @@ async function handleBatchImportFile(e: Event) {
     ElMessage.success(`已解析 ${batchPreviewRows.value.length} 行，请确认后提交`)
   } catch (err: any) {
     batchPreviewRows.value = []
-    ElMessage.error(displaySkuText(err?.message || '解析失败'))
+    ElMessage.error(userFacingError(displaySkuText(err?.message || '解析失败')))
   }
 }
 
@@ -416,7 +416,7 @@ async function submitBatchChange() {
       load()
     }
   } catch (e: any) {
-    ElMessage.error(displaySkuText(e?.message || '批量变更失败'))
+    ElMessage.error(userFacingError(displaySkuText(e?.message || '批量变更失败')))
   } finally {
     batchSubmitting.value = false
   }
@@ -591,22 +591,11 @@ watch([page, pageSize], () => load())
         </el-table-column>
 
         <el-table-column label="库存数量" align="center">
-          <el-table-column label="可用" min-width="64" align="right">
+          <el-table-column label="总库存" min-width="80" align="right">
             <template #default="{ row }"><strong class="qty-num">{{ row.availableQty ?? 0 }}</strong></template>
           </el-table-column>
           <el-table-column label="锁定" min-width="64" align="right">
             <template #default="{ row }"><span class="qty-num">{{ row.lockedQty ?? row.pendingOutboundQty ?? 0 }}</span></template>
-          </el-table-column>
-          <el-table-column label="在途" min-width="60" align="right">
-            <template #default="{ row }">
-              <button v-if="row.inTransitQty > 0 && row.dataSource === 'erp'" type="button" class="link-num" @click="router.push('/inbound/receipt')">
-                {{ row.inTransitQty }}
-              </button>
-              <span v-else class="qty-num">{{ row.inTransitQty ?? 0 }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="待上架" min-width="68" align="right">
-            <template #default="{ row }"><span class="qty-num">{{ row.pendingPutawayQty ?? 0 }}</span></template>
           </el-table-column>
         </el-table-column>
 

@@ -1,3 +1,5 @@
+
+import { userFacingError } from '../utils/userFacingError'
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Ban, Check, KeyRound, LogIn, Pencil, Plus, Receipt } from 'lucide-react'
@@ -216,16 +218,16 @@ export default function Accounts() {
         await refreshAccountList()
         setFeedback({
           kind: 'success',
-          message: `客户账号${createdCode ? ` ${createdCode}` : ''}已创建，首次登录时必须修改临时密码。`,
+          message: `客户账号${createdCode ? ` ${createdCode}` : ''}已创建，可使用登记手机号和临时密码登录。`,
         })
       } catch (refreshError) {
         setFeedback({
           kind: 'error',
-          message: `客户账号已创建，但列表刷新失败：${refreshError instanceof Error ? refreshError.message : String(refreshError)}`,
+          message: userFacingError(`客户账号已创建，但列表刷新失败：${refreshError instanceof Error ? refreshError.message : String(refreshError)}`),
         })
       }
     } catch (error) {
-      setCreateError(error instanceof Error ? error.message : '创建账号失败')
+      setCreateError(userFacingError(error instanceof Error ? error.message : '创建账号失败'))
     } finally {
       setCreateSaving(false)
     }
@@ -258,7 +260,7 @@ export default function Accounts() {
     } catch (error) {
       setFeedback({
         kind: 'error',
-        message: error instanceof Error ? error.message : '模拟登录失败',
+        message: userFacingError(error, undefined, '模拟登录失败'),
       })
     } finally {
       setImpersonatingId(null)
@@ -293,11 +295,11 @@ export default function Accounts() {
       } catch (refreshError) {
         setFeedback({
           kind: 'error',
-          message: `临时密码已重置，但列表刷新失败：${refreshError instanceof Error ? refreshError.message : String(refreshError)}`,
+          message: userFacingError(`临时密码已重置，但列表刷新失败：${refreshError instanceof Error ? refreshError.message : String(refreshError)}`),
         })
       }
     } catch (error) {
-      setResetError(error instanceof Error ? error.message : '重置失败')
+      setResetError(userFacingError(error instanceof Error ? error.message : '重置失败'))
     } finally {
       setResetSaving(false)
     }

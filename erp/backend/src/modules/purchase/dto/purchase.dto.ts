@@ -3,11 +3,13 @@ import {
   ArrayMinSize,
   IsArray,
   IsBoolean,
+  IsDateString,
   IsInt,
   IsNumber,
   IsOptional,
   IsString,
   MaxLength,
+  Max,
   Min,
   MinLength,
   ValidateIf,
@@ -194,6 +196,7 @@ export class SetActualQtyDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2147483647, { message: '实际采购数量不能超过 2147483647' })
   quantity!: number
 
   @IsOptional()
@@ -205,19 +208,19 @@ export class SetActualQtyDto {
 
 export class UpdatePrePurchaseDto {
   @IsOptional()
-  @Transform(trimOptional)
+  @Transform(trim)
   @IsString()
   @MaxLength(30)
   sku?: string
 
   @IsOptional()
-  @Transform(trimOptional)
+  @Transform(trim)
   @IsString()
   @MaxLength(300)
   productName?: string
 
   @IsOptional()
-  @Transform(trimOptional)
+  @Transform(trim)
   @IsString()
   @MaxLength(100)
   spec?: string
@@ -226,6 +229,7 @@ export class UpdatePrePurchaseDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2147483647, { message: "数量或天数不能超过 2147483647" })
   plannedQty?: number
 
   @IsOptional()
@@ -241,25 +245,25 @@ export class UpdatePrePurchaseDto {
   supplierId?: number
 
   @IsOptional()
-  @Transform(trimOptional)
+  @Transform(trim)
   @IsString()
   @MaxLength(200)
   supplierName?: string
 
   @IsOptional()
-  @Transform(trimOptional)
+  @Transform(trim)
   @IsString()
   @MaxLength(50)
   supplierContactName?: string
 
   @IsOptional()
-  @Transform(trimOptional)
+  @Transform(trim)
   @IsString()
   @MaxLength(30)
   supplierContactPhone?: string
 
   @IsOptional()
-  @Transform(trimOptional)
+  @Transform(trim)
   @IsString()
   @MaxLength(500)
   supplierAddress?: string
@@ -271,70 +275,72 @@ export class UpdatePrePurchaseDto {
   domesticFreight?: number
 
   @IsOptional()
-  @Transform(trimOptional)
+  @Transform(trim)
   @IsString()
   @MaxLength(30)
   warehouseCode?: string
 
   @IsOptional()
-  @Transform(trimOptional)
+  @Transform(trim)
   @IsString()
   @MaxLength(10)
   currency?: string
 
   @IsOptional()
-  @Transform(trimOptional)
+  @Transform(trim)
   @IsString()
+  @ValidateIf((row: UpdatePrePurchaseDto) => row.expectedArrival !== '')
+  @IsDateString({}, { message: '预计到货日期无效，请选择有效日期' })
   expectedArrival?: string
 
   @IsOptional()
-  @Transform(trimOptional)
+  @Transform(trim)
   @IsString()
   @MaxLength(2000)
   remark?: string
 
   @IsOptional()
-  @Transform(trimOptional)
+  @Transform(trim)
   @IsString()
   @MaxLength(500)
   productLink?: string
 
   @IsOptional()
-  @Transform(trimOptional)
+  @Transform(trim)
   @IsString()
   accessories?: string
 
   @IsOptional()
-  @Transform(trimOptional)
+  @Transform(trim)
   @IsString()
   @MaxLength(500)
   productImageUrl?: string
 
   @IsOptional()
-  @Transform(trimOptional)
+  @Transform(trim)
   @IsString()
   @MaxLength(500)
   manualUrl?: string
 
   @IsOptional()
-  @Transform(trimOptional)
+  @Transform(trim)
   @IsString()
   @MaxLength(100)
   sampleStatus?: string
 
   @IsOptional()
-  @Transform(trimOptional)
+  @Transform(trim)
   @IsString()
   samplePackageInfo?: string
 
   @IsOptional()
-  @Transform(trimOptional)
+  @Transform(trim)
   @IsString()
   @MaxLength(500)
   sampleImageUrl?: string
 
   @IsOptional()
-  @Transform(trimOptional)
+  @Transform(trim)
   @IsString()
   notPurchaseReason?: string
 
@@ -342,69 +348,82 @@ export class UpdatePrePurchaseDto {
   @Type(() => Number)
   @IsInt()
   @Min(0)
+  @Max(2147483647, { message: "数量或天数不能超过 2147483647" })
   moq?: number
 
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(0)
+  @Max(2147483647, { message: "数量或天数不能超过 2147483647" })
   leadTimeDays?: number
 
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(0)
+  @Max(2147483647, { message: "数量或天数不能超过 2147483647" })
   spareCartonQty?: number
 
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(0)
+  @Max(2147483647, { message: "数量或天数不能超过 2147483647" })
   piecesPerCarton?: number
 
   @IsOptional()
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
   taxRate?: number
 
   @IsOptional()
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
   invoiceTaxRate?: number
 
   @IsOptional()
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
   unitTax?: number
 
   @IsOptional()
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
   unitFreight?: number
 
   @IsOptional()
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
   packageWeightKg?: number
 
   @IsOptional()
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
   logoUnitFee?: number
 
   @IsOptional()
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
   logoTotalFee?: number
 
   @IsOptional()
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
   cartonTotalPrice?: number
 
   @IsOptional()
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
   spareCartonUnitPrice?: number
 
   @IsOptional()

@@ -1,3 +1,4 @@
+import { userFacingError } from '../../utils/userFacingError'
 import { displaySku, displaySkuText } from '../../data/skuDisplay'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
@@ -44,7 +45,7 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mo
   const [printKind, setPrintKind] = useState<InboundLabelKind | null>(null)
   const dataScope = useDataScope()
   const customerView = !isSysAdmin(role)
-  const [feedback, setFeedback] = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
+  const [feedback, setFeedback] = useState<{ type: 'ok' | 'err' | 'info'; text: string } | null>(null)
   const [voiding, setVoiding] = useState(false)
   const [withdrawing, setWithdrawing] = useState(false)
   const [reordering, setReordering] = useState(false)
@@ -70,9 +71,8 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mo
     }),
   }
 
-  const showFeedback = (type: 'ok' | 'err', text: string) => {
-    setFeedback({ type, text: displaySkuText(text) })
-    window.setTimeout(() => setFeedback(null), 4000)
+  const showFeedback = (type: 'ok' | 'err' | 'info', text: string) => {
+    setFeedback({ type, text: displaySkuText(type === 'err' ? userFacingError(text) : text) })
   }
 
   const handlePrint = async (kind: InboundLabelKind, codeType: LabelCodeType) => {
@@ -127,7 +127,7 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mo
         showFeedback('err', `作废失败：${result.error}`)
         return
       }
-      showFeedback('ok', '入库单已作废，可确认内容后重新下单')
+      showFeedback(result.warning ? 'info' : 'ok', result.warning || '入库单已作废，可确认内容后重新下单')
       onOrderChanged?.(result.order)
     } finally {
       setVoiding(false)
@@ -144,7 +144,7 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mo
         showFeedback('err', `撤回失败：${result.error}`)
         return
       }
-      showFeedback('ok', '已撤回为草稿，可修改后重新提交')
+      showFeedback(result.warning ? 'info' : 'ok', result.warning || '已撤回为草稿，可修改后重新提交')
       onOrderChanged?.(result.order)
     } finally {
       setWithdrawing(false)
@@ -164,9 +164,9 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mo
         showFeedback('err', `重新下单失败：${result.error}`)
         return
       }
-      showFeedback('ok', '已重新下单，进入在途')
+      showFeedback(result.warning ? 'info' : 'ok', result.warning || '已重新下单，进入在途')
       onOrderChanged?.(result.order)
-      window.setTimeout(onClose, 400)
+      if (!result.warning) window.setTimeout(onClose, 400)
     } finally {
       setReordering(false)
     }
@@ -186,14 +186,14 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mo
             <p className="text-sm font-semibold text-text-primary">预约入库详情</p>
             <MonoCode>{order.inboundNo}</MonoCode>
           </div>
-          <button type="button" onClick={onClose} className="rounded-lg p-2 text-text-muted hover:bg-surface-muted">
-            <X className="h-4 w-4" />
+          <button type="button" onClick={onClose} aria-label={mode === 'page' ? '返回入库记录' : '关闭入库详情'} className="flex items-center gap-1 rounded-lg p-2 text-sm text-text-muted hover:bg-surface-muted">
+            {mode === 'page' ? '返回入库记录' : <X className="h-4 w-4" />}
           </button>
         </div>
 
         <div className="flex-1 overflow-y-auto p-5 space-y-5">
           {feedback && (
-            <div className={`rounded-lg px-3 py-2 text-xs ${feedback.type === 'ok' ? 'bg-emerald-50 text-emerald-800 ring-1 ring-emerald-100' : 'bg-red-50 text-red-800 ring-1 ring-red-100'}`}>
+            <div role={feedback.type === 'ok' ? 'status' : 'alert'} className={`rounded-lg px-3 py-2 text-xs ${feedback.type === 'ok' ? 'bg-emerald-50 text-emerald-800 ring-1 ring-emerald-100' : feedback.type === 'info' ? 'bg-amber-50 text-amber-900 ring-1 ring-amber-100' : 'bg-red-50 text-red-800 ring-1 ring-red-100'}`}>
               {feedback.text}
             </div>
           )}

@@ -924,7 +924,7 @@ export class OutboundService {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       if (message.includes('pdf-lib dependency')) {
-        throw new ServiceUnavailableException('标签合并服务缺少 pdf-lib 依赖')
+        throw new ServiceUnavailableException('标签合并组件暂不可用，请联系管理员')
       }
       throw new BadRequestException(`标签 PDF 合并失败：${message}`)
     }
@@ -1138,7 +1138,7 @@ export class OutboundService {
         })
         break
       default:
-        throw new BadRequestException('无效的 markType')
+        throw new BadRequestException('标记类型无效')
     }
     await this.opLog.log({
       operatorId,
@@ -2310,7 +2310,7 @@ th{background:#f5f5f5}
   async downloadPodForOms(outboundNo: string, customerCode: string) {
     const no = String(outboundNo || '').trim()
     const code = String(customerCode || '').trim()
-    if (!code) throw new BadRequestException('缺少 customerCode')
+    if (!code) throw new BadRequestException('缺少客户代码')
     const order = await this.prisma.outboundOrder.findUnique({
       where: { outboundNo: no },
       include: {
@@ -2339,8 +2339,8 @@ th{background:#f5f5f5}
   ) {
     const no = String(outboundNo || '').trim()
     const customerCode = String(data.customerCode || '').trim()
-    if (!no) throw new BadRequestException('缺少 outboundNo')
-    if (!customerCode) throw new BadRequestException('缺少 customerCode')
+    if (!no) throw new BadRequestException('缺少出库单号')
+    if (!customerCode) throw new BadRequestException('缺少客户代码')
     if (!data.fileName?.trim() || !data.contentBase64) {
       throw new BadRequestException('请提供 POD 文件名与内容')
     }

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { userFacingError } from '@erp/shared/user-facing-error'
+
 import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { erpConfirm } from '@/utils/messageBox'
@@ -155,7 +157,7 @@ async function load() {
     rows.value = (res.items || []).map(mapUser)
     listTotal.value = res.total ?? rows.value.length
   } catch (e: any) {
-    ElMessage.error(e?.message || '加载失败')
+    ElMessage.error(userFacingError(e?.message || '加载失败'))
   } finally {
     loading.value = false
   }
@@ -348,7 +350,7 @@ async function submitEdit() {
     editVisible.value = false
     await reloadAll()
   } catch (e: any) {
-    ElMessage.error(e?.message || '保存失败')
+    ElMessage.error(userFacingError(e?.message || '保存失败'))
   } finally {
     editSaving.value = false
   }

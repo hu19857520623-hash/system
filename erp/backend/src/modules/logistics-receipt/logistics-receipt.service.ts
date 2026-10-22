@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common'
+import { Prisma } from '@prisma/client'
+import { CreateLogisticsReceiptDto } from './logistics-receipt.dto'
+import { logisticsReceiptNumber, logisticsReceiptRequest, receiptRequestMetadata, receiptStoredRemark } from './logistics-receipt-request.util'
+import { logisticsReceiptProgress } from './logistics-receipt-progress.util'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
 import { OperationLogService } from '../operation-log/operation-log.service'
@@ -16,6 +20,7 @@ export class LogisticsReceiptService {
   ) {}
 
   private serializeReceipt(row: any) {
+    const metadata = receiptRequestMetadata(row.remark)
     return {
       id: Number(row.id),
       receiptNo: row.receiptNo,
@@ -23,7 +28,8 @@ export class LogisticsReceiptService {
       poNo: row.poNo,
       warehouseCode: row.warehouseCode,
       operatorName: row.operatorName || '',
-      remark: row.remark || '',
+      remark: metadata?.request.remark ?? row.remark ?? '',
+      clientRequestId: metadata?.clientRequestId || null,
       receivedAt: fmtTime(row.receivedAt),
       items: (row.items || []).map((i: any) => ({
         id: Number(i.id),
@@ -62,17 +68,20 @@ export class LogisticsReceiptService {
         })
       : []
     const prodMap = new Map(products.map((p) => [Number(p.id), p]))
+    const receipts = pos.length ? await this.prisma.logisticsReceipt.findMany({ where: { poId: { in: pos.map(po => po.id) } }, include: { items: { orderBy: { id: 'asc' } } } }) : []
 
     return pos
       .map((po) => {
-        const pendingItems = po.items.filter((i) => (i.receivedQty ?? 0) < i.quantity)
-        if (!pendingItems.length) return null
+        const progress = logisticsReceiptProgress(po.items, receipts.filter(receipt => receipt.poId === po.id))
+        const pendingItems = progress.items.filter(item => item.pendingQty > 0)
+        if (!pendingItems.length && !progress.issues.length) return null
         return {
           id: Number(po.id),
           poNo: po.poNo,
           supplier: supMap.get(Number(po.supplierId)) || '—',
           warehouseCode: po.warehouseCode || '',
           skuCount: pendingItems.length,
+          receiptIssue: progress.issues.join('；'),
           amount: Number(po.totalAmount),
           expectedArrival: po.expectedArrival
             ? po.expectedArrival.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })
@@ -87,8 +96,9 @@ export class LogisticsReceiptService {
               name: i.productName || prod?.productName || i.sku,
               spec: prod?.spec || '',
               quantity: i.quantity,
-              receivedQty: i.receivedQty ?? 0,
-              pendingQty: i.quantity - (i.receivedQty ?? 0),
+              receivedQty: i.receivedQty,
+              damagedQty: i.damagedQty,
+              pendingQty: i.pendingQty,
               unitPrice: Number(i.unitPrice),
             }
           }),
@@ -117,142 +127,107 @@ export class LogisticsReceiptService {
     return { items: rows.map((r) => this.serializeReceipt(r)), total, page, pageSize }
   }
 
-  async create(data: any, operatorName?: string, operatorId?: number) {
-    const poId = Number(data.poId)
-    const po = await this.prisma.purchaseOrder.findUnique({ where: { id: BigInt(poId) }, include: { items: true } })
-    if (!po) throw new NotFoundException('采购单不存在')
-    if (!['finance_approved', 'at_logistics_wh', 'approved'].includes(po.status)) {
-      throw new BadRequestException('该采购单状态不可登记收货')
-    }
-
-    const warehouseCode = data.warehouseCode || po.warehouseCode
-    if (!warehouseCode) throw new BadRequestException('请指定物流仓库')
-    const warehouse = await this.prisma.warehouse.findUnique({
-      where: { warehouseCode },
-      select: { warehouseType: true },
-    })
-    if (!warehouse || warehouse.warehouseType !== 'logistics') {
-      throw new BadRequestException('请选择有效的物流中转仓')
-    }
-
-    const lines: any[] = data.items || []
-    if (!lines.length) throw new BadRequestException('请填写收货明细')
-
-    const receiptNo = data.receiptNo || `LR-${Date.now().toString().slice(-8)}`
-
-    return this.prisma.$transaction(async (tx) => {
-      const receipt = await tx.logisticsReceipt.create({
-        data: {
-          receiptNo,
-          poId: BigInt(poId),
-          poNo: po.poNo,
-          warehouseCode,
-          operatorName: operatorName || data.operatorName,
-          remark: data.remark,
-          items: {
-            create: lines.map((l) => {
-              const poItem = po.items.find((i) => Number(i.id) === Number(l.poItemId) || i.sku === l.sku)
-              if (!poItem) throw new BadRequestException(`SKU ${l.sku} 不在采购单中`)
-              const actual = Number(l.actualQty ?? 0)
-              const damaged = Number(l.damagedQty ?? 0)
-              const pending = poItem.quantity - (poItem.receivedQty ?? 0)
-              if (actual <= 0 && damaged <= 0) {
-                throw new BadRequestException(`${l.sku} 请填写良品实收或破损数量`)
-              }
-              if (actual + damaged > pending) {
-                throw new BadRequestException(`${l.sku} 良品 ${actual} + 破损 ${damaged} 超过待收 ${pending}`)
-              }
-              let qcStatus = l.qcStatus === 'fail' ? 'fail' : 'pass'
-              if (damaged > 0 && !l.qcStatus) qcStatus = 'fail'
-              return {
-                productId: poItem.productId,
-                sku: poItem.sku,
-                productName: poItem.productName,
-                expectedQty: pending,
-                actualQty: actual,
-                damagedQty: damaged,
-                qcStatus,
-                qcRemark: l.qcRemark?.trim() || undefined,
-              }
-            }),
-          },
-        },
-        include: { items: true },
-      })
-
-      for (const item of receipt.items) {
-        if (item.actualQty <= 0) continue
-        const poItem = po.items.find((i) => i.sku === item.sku)!
-        const newReceived = (poItem.receivedQty ?? 0) + item.actualQty
-        await tx.purchaseOrderItem.update({
-          where: { id: poItem.id },
-          data: { receivedQty: newReceived },
-        })
-
-        const inv = await tx.inventory.findUnique({
-          where: { productId_warehouseCode: { productId: item.productId, warehouseCode } },
-        })
-        const before = inv?.totalQty ?? 0
-        const after = before + item.actualQty
-        if (inv) {
-          await tx.inventory.update({
-            where: { id: inv.id },
-            data: { totalQty: after, availableQty: inv.availableQty + item.actualQty },
-          })
-        } else {
-          await tx.inventory.create({
-            data: {
-              productId: item.productId,
-              sku: item.sku,
-              warehouseCode,
-              totalQty: after,
-              availableQty: after,
-            },
-          })
+  /** Explicit maintenance command; ordinary list reads never mutate historical data. */
+  async reconcileDamagedReceipts(apply = false) {
+    const damaged = await this.prisma.logisticsReceipt.findMany({ where: { items: { some: { damagedQty: { gt: 0 } } } }, select: { poId: true } })
+    const results: Array<{ poId: number; poNo?: string; changed: boolean; applied?: boolean; issues: string[]; status?: string; lines?: { poItemId: number; receivedQty: number; damagedQty: number }[] }> = []
+    for (const poId of [...new Set(damaged.map(receipt => receipt.poId))]) {
+      results.push(await this.prisma.$transaction(async tx => {
+        await tx.$queryRaw`SELECT id FROM purchase_order WHERE id = ${poId} FOR UPDATE`
+        const po = await tx.purchaseOrder.findUnique({ where: { id: poId }, include: { items: true } })
+        if (!po || !['finance_approved', 'at_logistics_wh', 'approved', 'received'].includes(po.status)) return { poId: Number(poId), changed: false, issues: ['采购状态不属于可核对范围'] }
+        const receipts = await tx.logisticsReceipt.findMany({ where: { poId }, include: { items: { orderBy: { id: 'asc' } } } })
+        const progress = logisticsReceiptProgress(po.items, receipts)
+        const changes = progress.items.filter(item => item.receivedQty !== po.items.find(original => original.id === item.id)!.receivedQty)
+        const status = progress.allReceived ? 'received' : progress.items.some(item => item.receivedQty > 0) ? 'at_logistics_wh' : po.status
+        const changed = !progress.issues.length && (changes.length > 0 || status !== po.status)
+        if (apply && changed) {
+          for (const item of changes) await tx.purchaseOrderItem.update({ where: { id: item.id }, data: { receivedQty: item.receivedQty } })
+          await tx.purchaseOrder.update({ where: { id: po.id }, data: { status } })
+          await tx.operationLog.create({ data: { module: 'logistics_receipt', action: 'repair_damage_received', targetType: 'purchase_order', targetId: po.poNo,
+            detail: { message: '按原收货记录补齐破损已收数量，库存保持不变', fromStatus: po.status, toStatus: status,
+              lines: changes.map(item => ({ poItemId: Number(item.id), receivedQty: item.receivedQty, damagedQty: item.damagedQty })) } } })
         }
-        await tx.inventoryLog.create({
-          data: {
-            productId: item.productId,
-            sku: item.sku,
-            warehouseCode,
-            changeType: 'logistics_receive',
-            changeQty: item.actualQty,
-            beforeQty: before,
-            afterQty: after,
-            referenceNo: receiptNo,
-            remark: `PO ${po.poNo}`,
-          },
-        })
-      }
+        return { poId: Number(po.id), poNo: po.poNo, changed, applied: apply && changed, issues: progress.issues, status,
+          lines: changes.map(item => ({ poItemId: Number(item.id), receivedQty: item.receivedQty, damagedQty: item.damagedQty })) }
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted }))
+    }
+    return { apply, affectedOrders: results.filter(result => result.changed).length, results }
+  }
 
-      const updatedPo = await tx.purchaseOrder.findUnique({ where: { id: BigInt(poId) }, include: { items: true } })
-      const allReceived = updatedPo!.items.every((i) => (i.receivedQty ?? 0) >= i.quantity)
-      await tx.purchaseOrder.update({
-        where: { id: BigInt(poId) },
-        data: {
-          status: allReceived ? 'received' : 'at_logistics_wh',
-          warehouseCode: po.warehouseCode || warehouseCode,
-        },
-      })
-      if (!po.warehouseCode && po.prePoId) {
-        await tx.prePurchaseOrder.update({
-          where: { id: po.prePoId },
-          data: { warehouseCode },
-        })
+  async create(data: CreateLogisticsReceiptDto, operatorName?: string, operatorId?: number) {
+    // Validate before converting identifiers to BigInt, including callers outside the HTTP DTO.
+    logisticsReceiptRequest(data, String(data.warehouseCode || '').trim())
+    const receiptNo = logisticsReceiptNumber(data)
+    const result = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM purchase_order WHERE id = ${BigInt(data.poId)} FOR UPDATE`
+      const po = await tx.purchaseOrder.findUnique({ where: { id: BigInt(data.poId) }, include: { items: true } })
+      if (!po) throw new NotFoundException('采购单不存在')
+      const warehouseCode = String(data.warehouseCode || po.warehouseCode || '').trim()
+      const request = logisticsReceiptRequest(data, warehouseCode)
+      const existing = await tx.logisticsReceipt.findUnique({ where: { receiptNo }, include: { items: { orderBy: { id: 'asc' } } } })
+      if (existing) {
+        const metadata = receiptRequestMetadata(existing.remark)
+        if (!metadata || metadata.clientRequestId !== (data.clientRequestId || null) || JSON.stringify(metadata.request) !== JSON.stringify(request)) throw new ConflictException('该收货操作已用于其他内容，请刷新核对原收货记录，请勿重复入仓')
+        return { receipt: this.serializeReceipt(existing), duplicate: true, poStatus: po.status }
       }
-
-      return this.serializeReceipt(receipt)
-    }).then(async (result) => {
-      await this.opLog.log({
-        operatorId,
-        operatorName: operatorName || data.operatorName,
-        module: 'logistics_receipt',
-        action: 'create',
-        targetType: 'logistics_receipt',
-        targetId: result.receiptNo,
-        detail: { poNo: po.poNo, warehouseCode, itemCount: result.items?.length },
+      if (!['finance_approved', 'at_logistics_wh', 'approved'].includes(po.status)) throw new BadRequestException('该采购单状态不可登记收货，请刷新核对')
+      if (!warehouseCode) throw new BadRequestException('请指定物流中转仓')
+      if (po.warehouseCode && warehouseCode !== po.warehouseCode) throw new BadRequestException('收货仓库与采购单目标中转仓不一致，请核对后再提交')
+      const warehouse = await tx.warehouse.findUnique({ where: { warehouseCode } })
+      if (!warehouse || warehouse.warehouseType !== 'logistics' || warehouse.status !== 1) throw new BadRequestException('请选择有效且启用的物流中转仓')
+      const history = await tx.logisticsReceipt.findMany({ where: { poId: po.id }, include: { items: { orderBy: { id: 'asc' } } } })
+      const progress = logisticsReceiptProgress(po.items, history)
+      if (progress.issues.length) throw new BadRequestException(progress.issues.join('；'))
+      const lines = request.items.map(line => {
+        const poItem = po.items.find(item => Number(item.id) === line.poItemId)
+        if (!poItem || (line.sku && line.sku !== poItem.sku)) throw new BadRequestException('收货明细与采购单商品不一致，请刷新核对')
+        const pending = progress.items.find(item => item.id === poItem.id)!.pendingQty
+        if (line.actualQty + line.damagedQty > pending) throw new BadRequestException(`${poItem.sku} 良品与破损合计超过待收数量 ${pending}`)
+        return { ...line, poItem, pending }
       })
-      return result
-    })
+      // Product locks also serialize distinct POs sharing one product, including a missing stock row.
+      const productIds = [...new Set(lines.map(line => line.poItem.productId))].sort((a, b) => a < b ? -1 : a > b ? 1 : 0)
+      for (const productId of productIds) {
+        await tx.$queryRaw`SELECT id FROM product WHERE id = ${productId} FOR UPDATE`
+        const product = await tx.product.findUnique({ where: { id: productId } })
+        if (!product || lines.some(line => line.poItem.productId === productId && line.poItem.sku !== product.sku)) throw new BadRequestException('采购商品档案缺失或不一致，请先核对商品主数据')
+        await tx.$queryRaw`SELECT id FROM inventory WHERE product_id = ${productId} AND warehouse_code = ${warehouseCode} FOR UPDATE`
+      }
+      const receipt = await tx.logisticsReceipt.create({
+        data: { receiptNo, poId: po.id, poNo: po.poNo, warehouseCode, operatorName,
+          remark: receiptStoredRemark(request, data.clientRequestId),
+          items: { create: lines.map(line => ({ productId: line.poItem.productId, sku: line.poItem.sku,
+            productName: line.poItem.productName, expectedQty: line.pending, actualQty: line.actualQty,
+            damagedQty: line.damagedQty, qcStatus: line.qcStatus, qcRemark: line.qcRemark || undefined })) } },
+        include: { items: { orderBy: { id: 'asc' } } },
+      })
+      // Normalize legacy goods-only counters from immutable receipt records in the same transaction.
+      for (const item of progress.items) if (item.receivedQty !== po.items.find(line => line.id === item.id)!.receivedQty) await tx.purchaseOrderItem.update({ where: { id: item.id }, data: { receivedQty: item.receivedQty } })
+      for (const line of lines) {
+        const item = line.poItem
+        // Damaged pieces complete procurement receiving, but never enter usable inventory.
+        await tx.purchaseOrderItem.update({ where: { id: item.id }, data: { receivedQty: { increment: line.actualQty + line.damagedQty } } })
+        if (line.actualQty <= 0) continue
+        const inv = await tx.inventory.findUnique({ where: { productId_warehouseCode: { productId: item.productId, warehouseCode } } })
+        const before = inv?.totalQty ?? 0
+        if (before + line.actualQty > 2147483647 || (inv?.availableQty ?? 0) + line.actualQty > 2147483647) throw new BadRequestException('库存数量超出支持范围，请核对后再收货')
+        if (inv) await tx.inventory.update({ where: { id: inv.id }, data: { totalQty: { increment: line.actualQty }, availableQty: { increment: line.actualQty } } })
+        else await tx.inventory.create({ data: { productId: item.productId, sku: item.sku, warehouseCode, totalQty: line.actualQty, availableQty: line.actualQty } })
+        await tx.inventoryLog.create({ data: { productId: item.productId, sku: item.sku, warehouseCode,
+          changeType: 'logistics_receive', changeQty: line.actualQty, beforeQty: before, afterQty: before + line.actualQty,
+          referenceNo: receiptNo, operatorId: operatorId ? BigInt(operatorId) : undefined, remark: `采购单 ${po.poNo}` } })
+      }
+      const updatedPo = await tx.purchaseOrder.findUniqueOrThrow({ where: { id: po.id }, include: { items: true } })
+      const allReceived = updatedPo.items.every(item => (item.receivedQty ?? 0) >= item.quantity)
+      const poStatus = allReceived ? 'received' : 'at_logistics_wh'
+      await tx.purchaseOrder.update({ where: { id: po.id }, data: { status: poStatus, warehouseCode: po.warehouseCode || warehouseCode } })
+      if (!po.warehouseCode && po.prePoId) await tx.prePurchaseOrder.update({ where: { id: po.prePoId }, data: { warehouseCode } })
+      return { receipt: this.serializeReceipt(receipt), duplicate: false, poStatus }
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted })
+    if (!result.duplicate) await this.opLog.log({ operatorId, operatorName, module: 'logistics_receipt', action: 'create',
+      targetType: 'logistics_receipt', targetId: result.receipt.receiptNo,
+      detail: { poNo: result.receipt.poNo, warehouseCode: result.receipt.warehouseCode, itemCount: result.receipt.items.length } })
+    return { ...result.receipt, duplicate: result.duplicate, poStatus: result.poStatus }
   }
 }

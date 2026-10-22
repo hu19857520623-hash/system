@@ -1,3 +1,5 @@
+
+import { userFacingError } from '@erp/shared/user-facing-error'
 import { ElMessage } from 'element-plus'
 import { asyncIoApi } from '@/api/client.js'
 import { normalizeImportFileText } from '@/utils/csv'
@@ -29,7 +31,7 @@ export function useAsyncIo() {
       ElMessage.success(`${module}导出已完成，可在「异步导出导入」中下载`)
       return job
     } catch (e: any) {
-      ElMessage.error(e.message || '导出失败')
+      ElMessage.error(userFacingError(e.message || '导出失败'))
       return null
     }
   }
@@ -43,7 +45,7 @@ export function useAsyncIo() {
       await showImportResultFeedback(job)
       return job
     } catch (e: any) {
-      ElMessage.error(e.message || '导入失败')
+      ElMessage.error(userFacingError(e.message || '导入失败'))
       return null
     }
   }
@@ -54,7 +56,7 @@ export function useAsyncIo() {
       triggerBlobDownload(blob, fileName || fn)
       ElMessage.success('下载已开始')
     } catch (e: any) {
-      ElMessage.error(e.message || '下载失败')
+      ElMessage.error(userFacingError(e.message || '下载失败'))
     }
   }
 

@@ -38,13 +38,13 @@ export class WarehouseZoneService {
     const zoneCode = String(data.zoneCode || '').trim()
     const zoneName = String(data.zoneName || '').trim()
     if (!warehouseCode || !zoneCode || !zoneName) {
-      throw new BadRequestException('warehouseCode、zoneCode、zoneName 为必填')
+      throw new BadRequestException('仓库、库区编码和库区名称为必填项')
     }
     if (!PARTITION_LETTERS.test(zoneCode)) {
       throw new BadRequestException('库区编码须为 A-Z 单字母（如 A、B、C）')
     }
     const zoneType = String(data.zoneType || 'storage')
-    if (!ZONE_TYPES.has(zoneType)) throw new BadRequestException('无效的 zoneType')
+    if (!ZONE_TYPES.has(zoneType)) throw new BadRequestException('库区类型无效')
 
     const wh = await this.prisma.warehouse.findUnique({ where: { warehouseCode } })
     if (!wh) throw new BadRequestException(`仓库 ${warehouseCode} 不存在`)
@@ -76,7 +76,7 @@ export class WarehouseZoneService {
     if (!row) throw new NotFoundException('库区不存在')
 
     const zoneType = data.zoneType != null ? String(data.zoneType) : row.zoneType
-    if (!ZONE_TYPES.has(zoneType)) throw new BadRequestException('无效的 zoneType')
+    if (!ZONE_TYPES.has(zoneType)) throw new BadRequestException('库区类型无效')
 
     const updated = await this.prisma.warehouseZone.update({
       where: { id: BigInt(id) },

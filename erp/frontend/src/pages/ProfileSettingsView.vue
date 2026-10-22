@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { userFacingError } from '@erp/shared/user-facing-error'
+
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { User, Phone, Message, Lock } from '@element-plus/icons-vue'
@@ -56,7 +58,7 @@ async function loadProfile() {
       email: data.email || '',
     }
   } catch (e: any) {
-    ElMessage.error(e?.message || '加载个人信息失败')
+    ElMessage.error(userFacingError(e?.message || '加载个人信息失败'))
   } finally {
     loading.value = false
   }
@@ -81,7 +83,7 @@ async function saveProfile() {
     profile.value.email = updated.email || ''
     ElMessage.success('基本信息已保存')
   } catch (e: any) {
-    ElMessage.error(e?.message || '保存失败')
+    ElMessage.error(userFacingError(e?.message || '保存失败'))
   } finally {
     profileSaving.value = false
   }
@@ -107,7 +109,7 @@ async function savePassword() {
     passwordForm.value = { oldPassword: '', newPassword: '', confirmPassword: '' }
     ElMessage.success('密码已修改')
   } catch (e: any) {
-    ElMessage.error(e?.message || '修改密码失败')
+    ElMessage.error(userFacingError(e?.message || '修改密码失败'))
   } finally {
     passwordSaving.value = false
   }

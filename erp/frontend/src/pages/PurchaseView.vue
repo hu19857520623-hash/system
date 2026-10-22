@@ -1,11 +1,14 @@
 <script setup lang="ts">
+import { userFacingError } from '@erp/shared/user-facing-error'
 import { displaySku, displaySkuText } from '@erp/shared/sku-display'
 import { ref, computed, onMounted, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { erpConfirm, erpPrompt } from '@/utils/messageBox'
 import { purchaseApi, supplierApi, productDevApi, warehouseApi, productApi } from '@/api/client.js'
 import { mapPurchaseOrder, mapPrePurchaseOrder, mapProductDev } from '@/api/mappers.ts'
 import { useListLoader, withAction } from '@/composables/useListLoader.ts'
+import { pickFile } from '@/composables/useAsyncIo'
 import { useTablePagination } from '@/composables/useTablePagination.ts'
 import { useAppStore } from '@/stores/app'
 import ListPagination from '@/components/ListPagination.vue'
@@ -16,11 +19,16 @@ import {
   PIPELINE_PURCHASE_ORDERS,
 } from '@/constants/productPipeline.ts'
 import { productDevImageSrc } from '@/utils/productDevImage.ts'
+import { downloadPurchaseOrderImportTemplate } from '@/constants/importTemplates.ts'
+import { normalizeImportFileText } from '@/utils/csv'
+import { showImportResultFeedback } from '@/utils/importResultFeedback.ts'
 
 const app = useAppStore()
+const router = useRouter()
+const route = useRoute()
 
 const mainTab = ref('orders')
-const searchQ = ref('')
+const searchQ = ref(typeof route.query.poNo === 'string' ? route.query.poNo : '')
 
 const canCreate = computed(() => app.hasPerm('purchase.create'))
 const canAssignPurchaser = computed(() => app.hasPerm('purchase.assign'))
@@ -39,28 +47,42 @@ const assignSearchQ = ref('')
 const prePoLoading = ref(false)
 const prePoItems = ref<any[]>([])
 const prePoMySearchQ = ref('')
+const prePoStatusFilter = ref('assigned')
+const assignError = ref('')
+const prePoError = ref('')
+const prePoActionId = ref<number | null>(null)
+let assignLoadVersion = 0
+let prePoLoadVersion = 0
 
 async function loadPrePoPendingAssign() {
+  const version = ++assignLoadVersion
   assignLoading.value = true
+  assignError.value = ''
   try {
     const res = await purchaseApi.listPrePoPendingAssign({ pageSize: 200, keyword: assignSearchQ.value.trim() || undefined })
+    if (version !== assignLoadVersion) return
     assignItems.value = (res.items || []).map(mapPrePurchaseOrder)
-  } catch {
-    assignItems.value = []
+  } catch (error) {
+    if (version !== assignLoadVersion) return
+    assignError.value = `预采购分配加载失败，当前列表可能不是最新结果。${userFacingError(error)}`
   } finally {
-    assignLoading.value = false
+    if (version === assignLoadVersion) assignLoading.value = false
   }
 }
 
 async function loadMyPrePo() {
+  const version = ++prePoLoadVersion
   prePoLoading.value = true
+  prePoError.value = ''
   try {
-    const res = await purchaseApi.listMyPrePo({ pageSize: 200, keyword: prePoMySearchQ.value.trim() || undefined })
+    const res = await purchaseApi.listMyPrePo({ pageSize: 200, status: prePoStatusFilter.value, keyword: prePoMySearchQ.value.trim() || undefined })
+    if (version !== prePoLoadVersion) return
     prePoItems.value = (res.items || []).map(mapPrePurchaseOrder)
-  } catch {
-    prePoItems.value = []
+  } catch (error) {
+    if (version !== prePoLoadVersion) return
+    prePoError.value = `预采购单加载失败，当前列表可能不是最新结果。${userFacingError(error)}`
   } finally {
-    prePoLoading.value = false
+    if (version === prePoLoadVersion) prePoLoading.value = false
   }
 }
 
@@ -81,7 +103,7 @@ const tabs = computed(() => {
   if (canCreate.value) {
     list.push({
       id: 'pre_po',
-      label: prePoItems.value.length ? `预采购单 (${prePoItems.value.length})` : '预采购单',
+      label: prePoItems.value.some(row => row.statusKey === 'assigned' || row.statusKey === 'returned') ? `预采购单 (${prePoItems.value.filter(row => row.statusKey === 'assigned' || row.statusKey === 'returned').length})` : '预采购单',
     })
   }
   if (canSetActualQty.value) {
@@ -168,8 +190,13 @@ watch(mainTab, (tab) => {
 
 const prePoFiltered = computed(() => {
   const q = prePoMySearchQ.value.trim().toLowerCase()
-  if (!q) return prePoItems.value
-  return prePoItems.value.filter((r) =>
+  const rows = prePoItems.value.filter((row) => {
+    if (prePoStatusFilter.value === 'all') return true
+    if (prePoStatusFilter.value === 'assigned') return row.statusKey === 'assigned' || row.statusKey === 'returned'
+    return row.statusKey === prePoStatusFilter.value
+  })
+  if (!q) return rows
+  return rows.filter((r) =>
     r.sku.toLowerCase().includes(q) || r.productName.toLowerCase().includes(q) || r.prePoNo.toLowerCase().includes(q),
   )
 })
@@ -182,9 +209,10 @@ const {
   resetPage: resetPrePoPage,
 } = useTablePagination(prePoFiltered)
 
-watch([mainTab, prePoMySearchQ], () => {
+watch([mainTab, prePoMySearchQ, prePoStatusFilter], () => {
   if (mainTab.value === 'pre_po') resetPrePoPage()
 })
+watch(prePoStatusFilter, () => { if (mainTab.value === 'pre_po') void loadMyPrePo() })
 
 const assignFiltered = computed(() => {
   const q = assignSearchQ.value.trim().toLowerCase()
@@ -214,8 +242,8 @@ async function loadSupplierOptions() {
   try {
     const res = await supplierApi.list({ pageSize: 200 })
     supplierOptions.value = (res.items || []).map((s: any) => ({ id: s.id, label: s.supplierName || s.name }))
-  } catch {
-    supplierOptions.value = []
+  } catch (error) {
+    ElMessage.error(`供应商选项加载失败，可重新打开表单加载。${userFacingError(error)}`)
   }
 }
 
@@ -283,6 +311,19 @@ async function loadCreatePoResources() {
     } catch {
       createPoWarehouses.value = []
     }
+  }
+}
+
+async function importPurchaseOrders() {
+  const file = await pickFile()
+  if (!file) return
+  try {
+    const content = normalizeImportFileText(await file.text())
+    const result = await purchaseApi.importCsv(content)
+    await showImportResultFeedback(result)
+    await load()
+  } catch (error) {
+    ElMessage.error(`采购单导入失败，请核对模板后重试。${userFacingError(error)}`)
   }
 }
 
@@ -391,6 +432,14 @@ async function submitCreatePo() {
 }
 
 const prePoDialogVisible = ref(false)
+const prePoResubmitPoId = ref<number | null>(null)
+const prePoResubmitRemark = ref('')
+const prePoResubmitPoNo = ref('')
+const prePoDetailLoading = ref(false)
+const prePoSaving = ref(false)
+const prePoFeedback = ref('')
+const prePoUncertain = ref(false)
+const prePoTargetId = ref<number | null>(null)
 const editingPrePo = ref<any>(null)
 const prePoWarehouses = ref<any[]>([])
 
@@ -467,79 +516,111 @@ async function loadPrePoWarehouses() {
   if (prePoWarehouses.value.length) return
   try {
     const { warehouseApi } = await import('@/api/client.js')
-    const whRes = await warehouseApi.list()
+    const whRes = await warehouseApi.list({ type: 'logistics' })
     prePoWarehouses.value = whRes.items || whRes || []
-  } catch {
-    prePoWarehouses.value = []
+  } catch (error) {
+    ElMessage.error(`收货仓库选项加载失败，可重新打开表单加载。${userFacingError(error)}`)
   }
 }
 
-async function openPrePoEdit(row: any) {
+async function openPrePoEdit(row: any, options?: { resubmitPoId?: number; remark?: string; poNo?: string }) {
+  if (prePoSaving.value) return
+  prePoResubmitPoId.value = options?.resubmitPoId ?? null
+  prePoResubmitRemark.value = options?.remark || ''
+  prePoResubmitPoNo.value = options?.poNo || ''
   prePoDialogVisible.value = true
+  prePoTargetId.value = row.id
+  prePoFeedback.value = ''
+  prePoUncertain.value = false
   editingPrePo.value = null
-  const detailPromise = purchaseApi.prePoDetail(row.id).catch(() => row._raw || row)
-  await Promise.all([
-    detailPromise.then((detail) => {
-      editingPrePo.value = buildPrePoEditForm(detail)
-    }),
-    supplierOptions.value.length ? Promise.resolve() : loadSupplierOptions(),
-    loadPrePoWarehouses(),
-  ])
+  prePoDetailLoading.value = true
+  try {
+    const [detail] = await Promise.all([
+      purchaseApi.prePoDetail(row.id),
+      supplierOptions.value.length ? Promise.resolve() : loadSupplierOptions(),
+      loadPrePoWarehouses(),
+    ])
+    if (prePoTargetId.value !== row.id || !prePoDialogVisible.value) return
+    if (!['assigned', 'returned'].includes(detail.status)) throw new Error('该预采购单当前不能修改，请返回列表核对')
+    if (!prePoResubmitRemark.value && detail.linkedPoAuditRemark) prePoResubmitRemark.value = detail.linkedPoAuditRemark
+    if (!prePoResubmitPoNo.value && detail.linkedPoNo) prePoResubmitPoNo.value = detail.linkedPoNo
+    editingPrePo.value = buildPrePoEditForm(detail)
+  } catch (error) {
+    if (prePoTargetId.value === row.id) prePoFeedback.value = `读取最新单据失败，未启用旧资料编辑。${userFacingError(error)}`
+  } finally { if (prePoTargetId.value === row.id) prePoDetailLoading.value = false }
 }
 
 async function savePrePoEdit() {
-  if (!editingPrePo.value) return
+  if (!editingPrePo.value || prePoSaving.value || prePoUncertain.value) return
   const f = editingPrePo.value
-  const ok = await withAction(async () => {
-    await purchaseApi.updatePrePo(f.id, {
-      sku: f.sku,
-      productName: f.productName,
-      spec: f.spec,
-      plannedQty: f.plannedQty,
-      unitPrice: f.unitPrice,
-      supplierId: f.supplierId,
-      supplierName: f.supplierName,
-      supplierContactName: f.supplierContactName,
-      supplierContactPhone: f.supplierContactPhone,
-      supplierAddress: f.supplierAddress,
-      domesticFreight: f.domesticFreight !== '' ? f.domesticFreight : undefined,
-      warehouseCode: f.warehouseCode || undefined,
-      expectedArrival: f.expectedArrival || undefined,
-      productLink: f.productLink,
-      accessories: f.accessories,
-      productImageUrl: f.productImageUrl,
-      manualUrl: f.manualUrl,
-      moq: f.moq,
-      leadTimeDays: f.leadTimeDays,
-      taxRate: f.taxRate,
-      invoiceTaxRate: f.invoiceTaxRate,
-      unitTax: f.unitTax,
-      unitFreight: f.unitFreight,
-      productLengthCm: f.productLengthCm,
-      productWidthCm: f.productWidthCm,
-      productHeightCm: f.productHeightCm,
-      packageWeightKg: f.packageWeightKg,
-      packageLengthCm: f.packageLengthCm,
-      packageWidthCm: f.packageWidthCm,
-      packageHeightCm: f.packageHeightCm,
-      sampleStatus: f.sampleStatus,
-      samplePackageInfo: f.samplePackageInfo,
-      sampleImageUrl: f.sampleImageUrl,
-      doubleLayerCarton: f.doubleLayerCarton,
-      notPurchaseReason: f.notPurchaseReason,
-      logoUnitFee: f.logoUnitFee,
-      logoTotalFee: f.logoTotalFee,
-      cartonTotalPrice: f.cartonTotalPrice,
-      spareCartonUnitPrice: f.spareCartonUnitPrice,
-      spareCartonQty: f.spareCartonQty,
-      piecesPerCarton: f.piecesPerCarton,
-      remark: f.remark,
-    })
-  }, '预采购单已保存')
-  if (ok) {
-    prePoDialogVisible.value = false
-    loadMyPrePo()
+  const payload = {
+    sku: f.sku,
+    productName: f.productName,
+    spec: f.spec,
+    plannedQty: f.plannedQty,
+    unitPrice: f.unitPrice,
+    supplierId: f.supplierId,
+    supplierName: f.supplierName,
+    supplierContactName: f.supplierContactName,
+    supplierContactPhone: f.supplierContactPhone,
+    supplierAddress: f.supplierAddress,
+    domesticFreight: f.domesticFreight !== '' ? f.domesticFreight : undefined,
+    warehouseCode: f.warehouseCode || '',
+    expectedArrival: f.expectedArrival || '',
+    productLink: f.productLink,
+    accessories: f.accessories,
+    productImageUrl: f.productImageUrl,
+    manualUrl: f.manualUrl,
+    moq: f.moq,
+    leadTimeDays: f.leadTimeDays,
+    taxRate: f.taxRate,
+    invoiceTaxRate: f.invoiceTaxRate,
+    unitTax: f.unitTax,
+    unitFreight: f.unitFreight,
+    productLengthCm: f.productLengthCm,
+    productWidthCm: f.productWidthCm,
+    productHeightCm: f.productHeightCm,
+    packageWeightKg: f.packageWeightKg,
+    packageLengthCm: f.packageLengthCm,
+    packageWidthCm: f.packageWidthCm,
+    packageHeightCm: f.packageHeightCm,
+    sampleStatus: f.sampleStatus,
+    samplePackageInfo: f.samplePackageInfo,
+    sampleImageUrl: f.sampleImageUrl,
+    doubleLayerCarton: f.doubleLayerCarton,
+    notPurchaseReason: f.notPurchaseReason,
+    logoUnitFee: f.logoUnitFee,
+    logoTotalFee: f.logoTotalFee,
+    cartonTotalPrice: f.cartonTotalPrice,
+    spareCartonUnitPrice: f.spareCartonUnitPrice,
+    spareCartonQty: f.spareCartonQty,
+    piecesPerCarton: f.piecesPerCarton,
+    remark: f.remark,
   }
+  prePoSaving.value = true
+  prePoFeedback.value = ''
+  try {
+    if (prePoResubmitPoId.value) {
+      await purchaseApi.resubmit(prePoResubmitPoId.value, payload)
+      const poLabel = prePoResubmitPoNo.value ? `采购单 ${prePoResubmitPoNo.value}` : '采购单'
+      ElMessage.success(`${poLabel}已重新提交，进入预采购分配`)
+      prePoDialogVisible.value = false
+      detailVisible.value = false
+      await Promise.all([load(), loadMyPrePo(), canAssignPurchaser.value ? loadPrePoPendingAssign() : Promise.resolve()])
+      if (canAssignPurchaser.value) mainTab.value = 'pre_assign'
+    } else {
+      await purchaseApi.updatePrePo(f.id, payload)
+      ElMessage.success('预采购单已保存，可继续确认采购')
+      prePoDialogVisible.value = false
+      await loadMyPrePo()
+    }
+  } catch (error) {
+    const status = Number((error as { status?: unknown })?.status)
+    prePoUncertain.value = !Number.isFinite(status) || status < 100 || status >= 500 || status === 408 || status === 409
+    prePoFeedback.value = prePoUncertain.value
+      ? `保存结果暂无法确认，请返回列表重新读取单据核对，请勿重复保存。${userFacingError(error)}`
+      : userFacingError(error)
+  } finally { prePoSaving.value = false }
 }
 
 function formatPrePoVolume(form: any, prefix: 'product' | 'package') {
@@ -586,6 +667,8 @@ function financeSummary(po: any) {
 }
 
 async function cancelPrePoRow(row: any) {
+  if (prePoActionId.value) return
+  prePoActionId.value = row.id
   try {
     const { value } = await erpPrompt('请填写取消采购原因', '取消预采购', {
       confirmButtonText: '确认取消',
@@ -594,52 +677,59 @@ async function cancelPrePoRow(row: any) {
       inputErrorMessage: '原因不能为空',
       type: 'warning',
     })
-    const ok = await withAction(async () => {
-      await purchaseApi.cancelPrePo(row.id, { reason: value })
-    }, '预采购已取消')
-    if (ok) loadMyPrePo()
-  } catch { /* cancelled */ }
+    await purchaseApi.cancelPrePo(row.id, { reason: value })
+    ElMessage.success('预采购已取消，取消原因已保存')
+    prePoStatusFilter.value = 'cancelled'
+    await loadMyPrePo()
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') prePoError.value = userFacingError(error)
+  } finally { prePoActionId.value = null }
 }
 
 async function confirmPrePoRow(row: any) {
+  if (prePoActionId.value) return
+  prePoActionId.value = row.id
   try {
     await erpConfirm(
-      `确认预采购单 ${row.prePoNo}？将生成正式采购单，实际数量需产品主管核定。`,
+      `确认预采购单 ${row.prePoNo}？${row.convertedPoId ? '将重新提交原采购单' : '将生成正式采购单'}，实际数量需产品主管核定。`,
       '确认采购',
       { type: 'info' },
     )
-    const ok = await withAction(async () => {
-      await purchaseApi.confirmPrePo(row.id)
-    }, '已生成正式采购单')
-    if (ok) {
-      loadMyPrePo()
-      load()
+    const result = await purchaseApi.confirmPrePo(row.id)
+    ElMessage.success(`采购单 ${result.poNo} 已提交，下一步由产品主管核定实际数量`)
+    await Promise.all([loadMyPrePo(), load()])
+    mainTab.value = canSetActualQty.value ? 'actual_qty' : 'orders'
+    searchQ.value = result.poNo
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') {
+      const status = Number((error as { status?: unknown })?.status)
+      prePoError.value = status >= 400 && status < 500 && status !== 408 && status !== 409
+        ? userFacingError(error)
+        : `确认结果暂无法确定，请刷新预采购单及采购订单核对。${userFacingError(error)}`
     }
-  } catch { /* cancelled */ }
+  } finally { prePoActionId.value = null }
 }
 
 async function submitActualQty(po: any) {
+  if (!canOperatePo.value) return
   const line = po.items?.[0]
-  if (!line) return
-  try {
-    const { value } = await erpPrompt(
-      `计划数量 ${line.plannedQty ?? '—'}，请填写实际采购数量`,
-      `核定实际数量 · ${line.sku}`,
-      {
-        confirmButtonText: '提交',
-        cancelButtonText: '取消',
-        inputPattern: /^[1-9]\d*$/,
-        inputErrorMessage: '请输入有效数量',
-      },
-    )
-    const ok = await withAction(async () => {
-      await purchaseApi.setActualQty(po.id, { quantity: Number(value) })
-    }, '实际数量已提交，进入采购审核')
-    if (ok) {
-      detailVisible.value = false
-      load()
-    }
-  } catch { /* cancelled */ }
+  if (!line || po.items.length !== 1) { detailFeedback.value = '请联系管理员逐项核对该单的采购明细'; return }
+  actualQtyInput.value = ''
+  actualQtyVisible.value = true
+}
+
+async function saveActualQty() {
+  if (!canOperatePo.value || !selectedPo.value) return
+  if (!/^[1-9]\d*$/.test(actualQtyInput.value) || Number(actualQtyInput.value) > 2147483647) {
+    detailFeedback.value = '实际采购数量须为 1 至 2147483647 的整数'
+    return
+  }
+  const id = selectedPo.value.id
+  if (await runPoAction(() => purchaseApi.setActualQty(id, { quantity: Number(actualQtyInput.value) }), '实际数量已提交，下一步由采购主管审核')) {
+    actualQtyVisible.value = false
+    mainTab.value = 'po_pending'
+    await openDetail({ id })
+  }
 }
 
 const assignDialogVisible = ref(false)
@@ -647,6 +737,7 @@ const assigningRow = ref<any>(null)
 const assignDevDetail = ref<any>(null)
 const assignDevLoading = ref(false)
 const assignPurchaserId = ref<number | null>(null)
+const assignSubmitting = ref(false)
 const purchaserOptions = ref<{ id: number; label: string }[]>([])
 
 function assignDisplayVal(v: unknown, suffix = '') {
@@ -715,12 +806,14 @@ async function openAssignDialog(row: any) {
 }
 
 async function submitAssignPurchaser() {
-  if (!assigningRow.value) return
+  if (!assigningRow.value || assignSubmitting.value) return
   if (!assignPurchaserId.value) {
     ElMessage.warning('请选择采购员')
     return
   }
   const purchaser = purchaserOptions.value.find((p) => p.id === assignPurchaserId.value)
+  assignSubmitting.value = true
+  try {
   const ok = await withAction(async () => {
     await purchaseApi.assignPrePo(assigningRow.value.id, { purchaserId: assignPurchaserId.value })
     await Promise.all([loadPrePoPendingAssign(), loadMyPrePo()])
@@ -731,11 +824,20 @@ async function submitAssignPurchaser() {
     assignDevDetail.value = null
     assignPurchaserId.value = null
   }
+  } finally { assignSubmitting.value = false }
 }
 
 const detailVisible = ref(false)
 const detailLoading = ref(false)
 const selectedPo = ref<any>(null)
+const detailTargetId = ref<number | null>(null)
+const detailFeedback = ref('')
+const poActionBusy = ref(false)
+const poActionUncertain = ref(false)
+const actualQtyVisible = ref(false)
+const actualQtyInput = ref('')
+const canOperatePo = computed(() => Boolean(selectedPo.value) && !detailLoading.value && !poActionBusy.value && !poActionUncertain.value)
+let detailReadVersion = 0
 const auditWarehouseCode = ref('')
 const auditWarehouses = ref<any[]>([])
 
@@ -744,8 +846,9 @@ async function loadAuditWarehouses() {
   try {
     const result = await warehouseApi.list({ type: 'logistics' })
     auditWarehouses.value = result.items || result || []
-  } catch {
+  } catch (error) {
     auditWarehouses.value = []
+    throw error
   }
 }
 
@@ -763,12 +866,13 @@ const auditTimeline = computed(() => {
     type: 'primary',
   })
   if (p.auditedAtStr) {
+    const hasRejection = ['rejected', 'pending_actual_qty', 'pending_po_audit'].includes(p.statusKey) && Boolean(p.poAuditRemark)
     steps.push({
       time: p.auditedAtStr,
       role: p.auditorName,
-      action: p.statusKey === 'rejected' && p.poAuditRemark ? '采购主管驳回' : '采购主管审核',
+      action: hasRejection ? '上次采购主管驳回' : '采购主管审核',
       detail: p.poAuditRemark || '—',
-      type: p.statusKey === 'rejected' && p.poAuditRemark && !p.financeAtStr ? 'danger' : 'success',
+      type: hasRejection ? 'danger' : 'success',
     })
   }
   if (p.financeAtStr && p.statusKey === 'rejected' && p.financeRemark) {
@@ -793,41 +897,63 @@ const auditTimeline = computed(() => {
 })
 
 async function openDetail(po: any) {
+  if (poActionBusy.value) return
+  const version = ++detailReadVersion
   detailVisible.value = true
   detailLoading.value = true
-  selectedPo.value = po
+  detailTargetId.value = po.id
+  selectedPo.value = null
+  detailFeedback.value = ''
   auditWarehouseCode.value = ''
   try {
     const detail = await purchaseApi.detail(po.id)
+    if (version !== detailReadVersion) return
     selectedPo.value = mapPurchaseOrder(detail)
     if (selectedPo.value.statusKey === 'pending_po_audit' && !selectedPo.value.warehouseCode) {
       await loadAuditWarehouses()
     }
-  } catch {
-    /* keep list row */
+    if (version === detailReadVersion) poActionUncertain.value = false
+  } catch (error) {
+    if (version !== detailReadVersion) return
+    selectedPo.value = null
+    detailFeedback.value = `采购单详情未能完整读取，请重新读取后操作。${userFacingError(error)}`
   } finally {
-    detailLoading.value = false
+    if (version === detailReadVersion) detailLoading.value = false
   }
+}
+
+async function runPoAction(action: () => Promise<any>, success: string) {
+  if (!canOperatePo.value) return false
+  poActionBusy.value = true
+  detailFeedback.value = ''
+  try {
+    const result = await action()
+    selectedPo.value = mapPurchaseOrder({ ...result, purchaseConfirmation: result.purchaseConfirmation ?? selectedPo.value?.purchaseConfirmation })
+    ElMessage.success(success)
+    void load()
+    return true
+  } catch (error) {
+    const status = Number((error as { status?: unknown })?.status)
+    poActionUncertain.value = !(status >= 400 && status < 500 && status !== 408 && status !== 409)
+    detailFeedback.value = poActionUncertain.value
+      ? `操作结果暂无法确定，请重新读取采购单核对状态后继续。${userFacingError(error)}`
+      : userFacingError(error)
+    return false
+  } finally { poActionBusy.value = false }
 }
 
 async function passPoAudit() {
-  if (!selectedPo.value) return
+  if (!canOperatePo.value) return
   const warehouseCode = selectedPo.value.warehouseCode || auditWarehouseCode.value
   if (!warehouseCode) {
-    ElMessage.warning('请先选择目标中转仓')
+    detailFeedback.value = '请先选择目标中转仓'
     return
   }
-  const ok = await withAction(async () => {
-    await purchaseApi.approve(selectedPo.value.id, { remark: '审核通过', warehouseCode })
-  }, '采购审核已通过，已同步主数据，可安排入库；默认未打款，可在详情中标记打款状态')
-  if (ok) {
-    detailVisible.value = false
-    load()
-  }
+  await runPoAction(() => purchaseApi.approve(selectedPo.value.id, { remark: '审核通过', warehouseCode }), '采购审核已通过，已同步主数据，下一步安排中转仓收货；默认未打款')
 }
 
 async function rejectPoAudit() {
-  if (!selectedPo.value) return
+  if (!canOperatePo.value) return
   try {
     const { value } = await erpPrompt('请填写驳回原因，将退回采购员修改', '采购主管驳回', {
       confirmButtonText: '确认驳回',
@@ -836,40 +962,108 @@ async function rejectPoAudit() {
       inputErrorMessage: '驳回原因不能为空',
       type: 'warning',
     })
-    const ok = await withAction(async () => {
-      await purchaseApi.rejectPoAudit(selectedPo.value.id, { remark: value })
-    }, '采购单已驳回')
+    const ok = await runPoAction(() => purchaseApi.rejectPoAudit(selectedPo.value.id, { remark: value }), '采购单已驳回。请修改后重新提交，进入分配采购员')
     if (ok) {
-      detailVisible.value = false
-      load()
+      void loadMyPrePo()
     }
-  } catch { /* cancelled */ }
+  } catch (error) { if (error !== 'cancel' && error !== 'close') detailFeedback.value = userFacingError(error) }
 }
 
-async function refreshPoAfterPayment(id: number) {
-  const detail = await purchaseApi.detail(id)
-  const mapped = mapPurchaseOrder(detail)
-  if (selectedPo.value?.id === id) selectedPo.value = mapped
-  load()
-  return mapped
+function canDeletePo(row?: { statusKey?: string } | null) {
+  return !!row && (row.statusKey === 'rejected' || row.statusKey === 'draft')
+}
+
+const deletingPoId = ref<number | null>(null)
+
+async function removePurchaseOrder(row: { id: number; poNo?: string; prePoId?: number | null }) {
+  if (deletingPoId.value || poActionBusy.value) return
+  try {
+    await erpConfirm(
+      row.prePoId
+        ? `删除后不可恢复，关联预采购单会一并取消，不再进入分配。确认删除废弃采购单 ${row.poNo || ''}？`
+        : `删除后不可恢复。确认删除废弃采购单 ${row.poNo || ''}？`,
+      '删除采购单',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  deletingPoId.value = row.id
+  const ok = await withAction(async () => {
+    await purchaseApi.remove(row.id)
+  }, '采购单已删除')
+  deletingPoId.value = null
+  if (!ok) return
+  if (selectedPo.value?.id === row.id) detailVisible.value = false
+  await Promise.all([load(), loadMyPrePo(), canAssignPurchaser.value ? loadPrePoPendingAssign() : Promise.resolve()])
+}
+
+async function removeCancelledPrePo(row: { id: number; prePoNo?: string }) {
+  if (prePoActionId.value) return
+  try {
+    await erpConfirm(
+      `删除后不可恢复。确认删除已取消的预采购单 ${row.prePoNo || ''}？`,
+      '删除预采购单',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  prePoActionId.value = row.id
+  try {
+    await purchaseApi.removePrePo(row.id)
+    ElMessage.success('预采购单已删除')
+    await loadMyPrePo()
+  } catch (error) {
+    prePoError.value = userFacingError(error)
+  } finally {
+    prePoActionId.value = null
+  }
+}
+
+function canReviseRejected(row?: { statusKey?: string; prePoStatus?: string } | null) {
+  if (row?.statusKey !== 'rejected') return false
+  return row.prePoStatus !== 'pending_assign' && row.prePoStatus !== 'confirmed'
+}
+
+function openRejectedRevision(source: { poId?: number | null; prePoId?: number | null; poNo?: string; poAuditRemark?: string }) {
+  if (!source.prePoId || !source.poId) {
+    ElMessage.warning('该采购单没有关联预采购，无法退回分配采购员')
+    return
+  }
+  detailVisible.value = false
+  void openPrePoEdit({ id: source.prePoId }, {
+    resubmitPoId: source.poId,
+    remark: source.poAuditRemark || '',
+    poNo: source.poNo || '',
+  })
+}
+
+async function reviseRejectedPo(row?: { id?: number; prePoId?: number | null; poNo?: string; poAuditRemark?: string }) {
+  const po = row || selectedPo.value
+  if (!po) return
+  openRejectedRevision({
+    poId: po.id,
+    prePoId: po.prePoId,
+    poNo: po.poNo,
+    poAuditRemark: po.poAuditRemark,
+  })
 }
 
 async function markPoPaid(po?: { id: number }) {
   const target = po || selectedPo.value
-  if (!target) return
-  const ok = await withAction(async () => {
-    await purchaseApi.markPaid(target.id, { remark: '已打款' })
-  }, '已标记为已打款')
-  if (ok) await refreshPoAfterPayment(target.id)
+  if (!target || poActionBusy.value) return
+  if (po) await openDetail(po)
+  if (selectedPo.value?.id !== target.id) return
+  await runPoAction(() => purchaseApi.markPaid(target.id, { remark: '已打款' }), '已标记为已打款')
 }
 
 async function markPoUnpaid(po?: { id: number }) {
   const target = po || selectedPo.value
-  if (!target) return
-  const ok = await withAction(async () => {
-    await purchaseApi.markUnpaid(target.id)
-  }, '已标记为未打款')
-  if (ok) await refreshPoAfterPayment(target.id)
+  if (!target || poActionBusy.value) return
+  if (po) await openDetail(po)
+  if (selectedPo.value?.id !== target.id) return
+  await runPoAction(() => purchaseApi.markUnpaid(target.id), '已标记为未打款')
 }
 </script>
 
@@ -899,7 +1093,19 @@ async function markPoUnpaid(po?: { id: number }) {
               @keyup.enter="loadMyPrePo"
             />
             <el-input v-else-if="mainTab === 'orders' || mainTab === 'po_pending' || mainTab === 'payment' || mainTab === 'actual_qty'" v-model="searchQ" placeholder="搜索单号 / SKU / 供应商" clearable style="width:200px" size="small" />
-            <el-button v-if="canCreate && mainTab === 'orders'" type="primary" size="small" @click="openCreatePo">+ 创建采购单</el-button>
+            <template v-if="canCreate && mainTab === 'orders'">
+              <el-button type="primary" size="small" @click="openCreatePo">+ 创建采购单</el-button>
+              <el-button size="small" link type="primary" @click="downloadPurchaseOrderImportTemplate">下载模板</el-button>
+              <el-button size="small" @click="importPurchaseOrders">批量导入</el-button>
+            </template>
+            <el-button v-if="mainTab === 'pre_assign'" size="small" :loading="assignLoading" @click="loadPrePoPendingAssign">刷新列表</el-button>
+            <el-button v-if="mainTab === 'pre_po'" size="small" :loading="prePoLoading" @click="loadMyPrePo">刷新列表</el-button>
+            <el-select v-if="mainTab === 'pre_po'" v-model="prePoStatusFilter" size="small" style="width:120px" aria-label="预采购处理状态">
+              <el-option label="进行中" value="assigned" />
+              <el-option label="已取消" value="cancelled" />
+              <el-option label="已生成采购单" value="confirmed" />
+              <el-option label="全部记录" value="all" />
+            </el-select>
           </div>
         </div>
       </template>
@@ -909,11 +1115,12 @@ async function markPoUnpaid(po?: { id: number }) {
       </el-tabs>
 
       <div v-if="mainTab === 'pre_assign'" class="pending-skus-panel">
+        <el-alert v-if="assignError" :title="assignError" type="warning" :closable="false" role="alert" show-icon style="margin-bottom:12px" />
         <div class="callout info">
           <div class="callout-title">预采购单分配（采购主管）</div>
           <div class="callout-body">{{ PIPELINE_PURCHASE_ASSIGN }}</div>
         </div>
-        <el-table v-loading="assignLoading" :data="assignPagedItems" stripe border size="small">
+        <el-table v-loading="assignLoading" :data="assignPagedItems" :empty-text="assignError ? '加载未完成，请刷新重试' : '暂无数据'" stripe border size="small">
           <el-table-column prop="prePoNo" label="预采购单号" width="130"><template #default="{ row }"><span class="mono">{{ row.prePoNo }}</span></template></el-table-column>
           <el-table-column prop="applyNo" label="选品单号" width="120" />
           <el-table-column prop="sku" label="SKU" width="110"><template #default="{ row }"><span class="mono">{{ displaySku(row) }}</span></template></el-table-column>
@@ -926,7 +1133,7 @@ async function markPoUnpaid(po?: { id: number }) {
             </template>
           </el-table-column>
         </el-table>
-        <el-empty v-if="!assignLoading && !assignFiltered.length" description="暂无待分配预采购单" />
+        <el-empty v-if="!assignLoading && !assignError && !assignFiltered.length" description="暂无待分配预采购单" />
         <ListPagination v-model:page="assignPage" v-model:page-size="assignPageSize" :total="assignTotal" />
       </div>
 
@@ -935,28 +1142,39 @@ async function markPoUnpaid(po?: { id: number }) {
           <div class="callout-title">我的预采购单</div>
           <div class="callout-body">{{ PIPELINE_PRE_PO }}</div>
         </div>
-        <el-table v-loading="prePoLoading" :data="prePoPagedItems" stripe border size="small">
+        <el-alert v-if="prePoError" :title="prePoError" type="warning" :closable="false" role="alert" show-icon style="margin-bottom:12px" />
+        <el-table v-loading="prePoLoading" :data="prePoPagedItems" :empty-text="prePoError ? '加载未完成，请刷新重试' : '暂无数据'" stripe border size="small">
           <el-table-column prop="prePoNo" label="预采购单号" width="130"><template #default="{ row }"><span class="mono">{{ row.prePoNo }}</span></template></el-table-column>
           <el-table-column prop="sku" label="SKU" width="110"><template #default="{ row }"><span class="mono">{{ displaySku(row) }}</span></template></el-table-column>
           <el-table-column prop="productName" label="商品名称" min-width="130" show-overflow-tooltip />
           <el-table-column prop="supplier" label="供应商" width="110" show-overflow-tooltip />
           <el-table-column label="单价" width="80" align="right"><template #default="{ row }">{{ row.unitPrice != null ? `¥ ${row.unitPrice}` : '—' }}</template></el-table-column>
           <el-table-column label="计划量" width="70" align="right"><template #default="{ row }">{{ row.plannedQty }}</template></el-table-column>
+          <el-table-column label="状态" width="120"><template #default="{ row }">{{ ({ assigned: '进行中', returned: '退回待修改', cancelled: '已取消', confirmed: '已生成采购单', pending_assign: '待分配' } as Record<string, string>)[row.statusKey] || '待核对' }}</template></el-table-column>
+          <el-table-column prop="cancelReason" label="取消原因" min-width="150" show-overflow-tooltip />
           <el-table-column label="操作" width="200" fixed="right">
             <template #default="{ row }">
-              <el-button link type="primary" size="small" @click="openPrePoEdit(row)">编辑</el-button>
-              <el-button link type="success" size="small" @click="confirmPrePoRow(row)">确认采购</el-button>
-              <el-button link type="danger" size="small" @click="cancelPrePoRow(row)">取消</el-button>
+              <template v-if="row.statusKey === 'returned' || (row.statusKey === 'assigned' && row.linkedPoStatus === 'rejected')">
+                <el-button link type="warning" size="small" :disabled="prePoActionId !== null" @click="openRejectedRevision({ poId: row.convertedPoId, prePoId: row.id, poNo: row.linkedPoNo, poAuditRemark: row.linkedPoAuditRemark })">修改重提</el-button>
+              </template>
+              <template v-else-if="row.statusKey === 'assigned'">
+                <el-button link type="primary" size="small" :disabled="prePoActionId !== null" @click="openPrePoEdit(row)">编辑</el-button>
+                <el-button link type="success" size="small" :disabled="prePoActionId !== null || prePoLoading" @click="confirmPrePoRow(row)">确认采购</el-button>
+                <el-button link type="danger" size="small" :disabled="prePoActionId !== null || prePoLoading" @click="cancelPrePoRow(row)">取消</el-button>
+              </template>
+              <el-button v-else-if="row.statusKey === 'confirmed'" link type="primary" size="small" @click="mainTab = 'orders'; searchQ = row.sku; load()">查看关联采购</el-button>
+              <el-button v-else-if="row.statusKey === 'cancelled'" link type="danger" size="small" :disabled="prePoActionId !== null" @click="removeCancelledPrePo(row)">删除</el-button>
             </template>
           </el-table-column>
         </el-table>
-        <el-empty v-if="!prePoLoading && !prePoFiltered.length" description="暂无预采购单" />
+        <el-empty v-if="!prePoLoading && !prePoError && !prePoFiltered.length" description="暂无预采购单" />
         <ListPagination v-model:page="prePoPage" v-model:page-size="prePoPageSize" :total="prePoTotal" />
       </div>
 
       <template v-else-if="mainTab === 'orders' || mainTab === 'po_pending' || mainTab === 'payment' || mainTab === 'actual_qty'">
       <el-alert v-if="mainTab === 'orders'" type="info" :closable="false" show-icon style="margin-bottom:12px">
       <p class="flow-hint">{{ PIPELINE_PURCHASE_ORDERS }}</p>
+      <p v-if="canCreate" class="flow-hint">批量导入时，供应商、目标中转仓、预计到货、国内运费和备注相同的行会合并成一张采购单，创建后进入采购审核。</p>
       </el-alert>
       <el-alert v-if="mainTab === 'actual_qty'" type="warning" :closable="false" show-icon style="margin-bottom:12px">
         产品主管在此核定实际采购数量，提交后进入「采购审核」。
@@ -998,11 +1216,14 @@ async function markPoUnpaid(po?: { id: number }) {
           </template>
         </el-table-column>
         <el-table-column prop="createdAtStr" label="创建时间" width="110" />
-        <el-table-column label="操作" :width="mainTab === 'payment' ? 140 : 220" fixed="right">
+        <el-table-column label="操作" :width="mainTab === 'payment' ? 140 : 280" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="openDetail(row)">
               {{ (canSetActualQty && row.statusKey === 'pending_actual_qty') ? '核定数量' : (canPoAudit && row.statusKey === 'pending_po_audit') ? '去审核' : '详情' }}
             </el-button>
+            <el-button v-if="canCreate && row.statusKey === 'rejected' && canReviseRejected(row)" link type="warning" size="small" @click="reviseRejectedPo(row)">修改重提</el-button>
+            <span v-else-if="row.statusKey === 'rejected' && row.prePoStatus === 'pending_assign'">待分配</span>
+            <el-button v-if="canCreate && canDeletePo(row)" link type="danger" size="small" :disabled="deletingPoId === row.id" @click="removePurchaseOrder(row)">删除</el-button>
             <template v-if="canMarkPaid && canShowPayment(row.statusKey)">
               <el-button v-if="row.paymentStatus !== 'paid'" link type="success" size="small" @click="markPoPaid(row as { id: number })">标记已打款</el-button>
               <el-button v-else link type="warning" size="small" @click="markPoUnpaid(row as { id: number })">标记未打款</el-button>
@@ -1134,9 +1355,13 @@ async function markPoUnpaid(po?: { id: number }) {
     </div>
   </el-drawer>
 
-  <el-drawer v-model="detailVisible" :title="(selectedPo?.poNo || '') + ' · 采购单详情'" size="960px" direction="rtl" class="erp-detail">
+  <el-drawer v-model="detailVisible" :title="(selectedPo?.poNo || '') + ' · 采购单详情'" size="960px" direction="rtl" class="erp-detail" :close-on-click-modal="!poActionBusy" :close-on-press-escape="!poActionBusy" :show-close="!poActionBusy">
     <div v-loading="detailLoading" class="detail-body">
+      <el-alert v-if="detailFeedback" :title="detailFeedback" type="warning" :closable="false" role="alert" style="margin-bottom:12px" />
+      <el-button v-if="detailTargetId && !detailLoading" :disabled="poActionBusy" @click="openDetail({ id: detailTargetId })">重新读取采购单</el-button>
       <template v-if="selectedPo">
+        <el-alert v-if="selectedPo.statusKey === 'rejected' && selectedPo.prePoStatus === 'pending_assign'" title="已重新提交，正在等待采购主管在「预采购分配」中分配采购员。分配并确认后仍沿用本采购单号。" type="info" :closable="false" style="margin:12px 0" />
+        <el-alert v-else-if="selectedPo.statusKey === 'rejected'" :title="`驳回原因：${selectedPo.poAuditRemark || selectedPo.financeRemark || '请联系审核人核对'}。修改后重新提交将进入「预采购分配」，由采购主管重新分配采购员，仍沿用原采购单号。`" type="warning" :closable="false" style="margin:12px 0" />
         <DetailSheet
           :kicker="selectedPo.poNo"
           :title="selectedPo.supplier"
@@ -1180,6 +1405,7 @@ async function markPoUnpaid(po?: { id: number }) {
               v-if="selectedPo.statusKey === 'pending_po_audit' && canPoAudit && !selectedPo.warehouseCode"
               v-model="auditWarehouseCode"
               placeholder="请选择物流中转仓"
+              aria-label="目标中转仓"
               filterable
               style="width: 220px"
             >
@@ -1345,26 +1571,44 @@ async function markPoUnpaid(po?: { id: number }) {
     </div>
     <template #footer>
       <div class="detail-footer">
-        <el-button @click="detailVisible = false">关闭</el-button>
+        <el-button :disabled="poActionBusy" @click="detailVisible = false">返回列表</el-button>
         <template v-if="selectedPo?.statusKey === 'pending_actual_qty' && canSetActualQty">
-          <el-button type="primary" @click="submitActualQty(selectedPo)">提交实际采购数量</el-button>
+          <el-button type="primary" :disabled="!canOperatePo" @click="submitActualQty(selectedPo)">提交实际采购数量</el-button>
         </template>
         <template v-if="selectedPo?.statusKey === 'pending_po_audit' && canPoAudit">
-          <el-button type="danger" plain @click="rejectPoAudit">驳回</el-button>
-          <el-button type="primary" @click="passPoAudit">审核通过</el-button>
+          <el-button type="danger" plain :disabled="!canOperatePo" @click="rejectPoAudit">驳回</el-button>
+          <el-button type="primary" :loading="poActionBusy" :disabled="!canOperatePo" @click="passPoAudit">审核通过</el-button>
         </template>
+        <el-button v-if="canCreate && canReviseRejected(selectedPo)" type="primary" :disabled="!canOperatePo" @click="reviseRejectedPo()">修改并重新提交</el-button>
+        <el-button v-if="canCreate && canDeletePo(selectedPo)" type="danger" plain :disabled="!canOperatePo || deletingPoId === selectedPo?.id" @click="removePurchaseOrder(selectedPo)">删除</el-button>
+        <el-button v-if="selectedPo?.statusKey === 'finance_approved' && app.hasPerm('logistics_wh.view')" type="primary" :disabled="!canOperatePo" @click="router.push({ path: '/logistics-wh', query: { tab: 'pending', fromPo: selectedPo.poNo } })">前往中转仓收货</el-button>
         <template v-if="canMarkPaid && canShowPayment(selectedPo?.statusKey)">
-          <el-button v-if="selectedPo.paymentStatus !== 'paid'" type="success" @click="markPoPaid()">标记已打款</el-button>
-          <el-button v-else type="warning" plain @click="markPoUnpaid()">标记未打款</el-button>
+          <el-button v-if="selectedPo.paymentStatus !== 'paid'" type="success" :disabled="!canOperatePo" @click="markPoPaid()">标记已打款</el-button>
+          <el-button v-else type="warning" plain :disabled="!canOperatePo" @click="markPoUnpaid()">标记未打款</el-button>
         </template>
       </div>
     </template>
   </el-drawer>
 
-  <el-dialog v-model="prePoDialogVisible" :title="`编辑预采购单 · ${editingPrePo?.prePoNo || ''}`" width="760px" top="4vh" destroy-on-close>
-    <div v-loading="!editingPrePo" style="min-height:120px">
+  <el-dialog v-model="actualQtyVisible" title="核定实际采购数量" width="460px" :close-on-click-modal="!poActionBusy" :close-on-press-escape="!poActionBusy" :show-close="!poActionBusy">
+    <p>商品 {{ selectedPo?.items?.[0]?.sku }}，计划数量 {{ selectedPo?.items?.[0]?.plannedQty ?? '—' }}。提交后进入采购主管审核。</p>
+    <el-alert v-if="detailFeedback" :title="detailFeedback" type="warning" :closable="false" role="alert" style="margin-bottom:12px" />
+    <el-form label-width="110px" @submit.prevent="saveActualQty">
+      <el-form-item label="实际采购数量" required><el-input v-model="actualQtyInput" aria-label="实际采购数量" inputmode="numeric" :disabled="poActionBusy || poActionUncertain" placeholder="请输入大于零的整数" /></el-form-item>
+    </el-form>
+    <template #footer>
+      <el-button :disabled="poActionBusy" @click="actualQtyVisible = false">返回采购单</el-button>
+      <el-button type="primary" :loading="poActionBusy" :disabled="!canOperatePo" @click="saveActualQty">提交数量</el-button>
+    </template>
+  </el-dialog>
+
+  <el-dialog v-model="prePoDialogVisible" :title="prePoResubmitPoId ? `修改并重新提交 · ${prePoResubmitPoNo || editingPrePo?.prePoNo || ''}` : `编辑预采购单 · ${editingPrePo?.prePoNo || ''}`" width="760px" top="4vh" destroy-on-close :close-on-click-modal="!prePoSaving" :close-on-press-escape="!prePoSaving" :show-close="!prePoSaving">
+    <el-alert v-if="prePoResubmitPoId" :title="`驳回原因：${prePoResubmitRemark || '请联系审核人核对'}。提交后进入预采购分配，由采购主管重新分配采购员。`" type="warning" :closable="false" style="margin-bottom:12px" />
+    <el-alert v-if="prePoFeedback" :title="prePoFeedback" type="warning" :closable="false" role="alert" style="margin-bottom:12px" />
+    <el-button v-if="!editingPrePo && !prePoDetailLoading && prePoTargetId" @click="openPrePoEdit({ id: prePoTargetId }, prePoResubmitPoId ? { resubmitPoId: prePoResubmitPoId, remark: prePoResubmitRemark, poNo: prePoResubmitPoNo } : undefined)">重新读取单据</el-button>
+    <div v-loading="prePoDetailLoading" style="min-height:120px">
     <el-scrollbar v-if="editingPrePo" max-height="70vh">
-      <el-form label-width="112px" class="pre-po-confirm-form">
+      <el-form label-width="112px" class="pre-po-confirm-form" :disabled="prePoSaving || prePoUncertain">
         <el-divider content-position="left">基本信息</el-divider>
         <el-row :gutter="16">
           <el-col :span="12"><el-form-item label="SKU" required><el-input v-model="editingPrePo.sku" /></el-form-item></el-col>
@@ -1442,12 +1686,13 @@ async function markPoUnpaid(po?: { id: number }) {
     </el-scrollbar>
     </div>
     <template #footer>
-      <el-button @click="prePoDialogVisible = false">取消</el-button>
-      <el-button type="primary" @click="savePrePoEdit">保存</el-button>
+      <el-button :disabled="prePoSaving" @click="prePoDialogVisible = false">返回列表</el-button>
+      <el-button v-if="prePoResubmitPoId" type="primary" :loading="prePoSaving" :disabled="!editingPrePo || prePoDetailLoading || prePoUncertain" @click="savePrePoEdit">提交到分配采购员</el-button>
+      <el-button v-else type="primary" :loading="prePoSaving" :disabled="!editingPrePo || prePoDetailLoading || prePoUncertain" @click="savePrePoEdit">保存并返回</el-button>
     </template>
   </el-dialog>
 
-  <el-dialog v-model="assignDialogVisible" :title="`分配采购员 · ${assigningRow?.prePoNo || ''}`" width="780px" top="4vh" destroy-on-close>
+  <el-dialog v-model="assignDialogVisible" :title="`分配采购员 · ${assigningRow?.prePoNo || ''}`" width="780px" top="4vh" destroy-on-close :close-on-click-modal="!assignSubmitting" :close-on-press-escape="!assignSubmitting" :show-close="!assignSubmitting">
     <el-scrollbar v-if="assigningRow" v-loading="assignDevLoading" max-height="70vh">
       <el-form label-width="118px" class="assign-detail-form">
         <el-divider content-position="left">基本信息</el-divider>
@@ -1548,7 +1793,7 @@ async function markPoUnpaid(po?: { id: number }) {
 
         <el-divider content-position="left">分配采购员</el-divider>
         <el-form-item label="采购员" required>
-          <el-select v-model="assignPurchaserId" placeholder="选择采购员" filterable style="width: 100%">
+          <el-select v-model="assignPurchaserId" placeholder="选择采购员" :disabled="assignSubmitting" filterable style="width: 100%">
             <el-option v-for="p in purchaserOptions" :key="p.id" :label="p.label" :value="p.id" />
           </el-select>
           <span class="form-tip">分配后采购员可在「预采购单」中编辑并确认采购</span>
@@ -1556,8 +1801,8 @@ async function markPoUnpaid(po?: { id: number }) {
       </el-form>
     </el-scrollbar>
     <template #footer>
-      <el-button @click="assignDialogVisible = false">取消</el-button>
-      <el-button type="primary" :loading="assignDevLoading" @click="submitAssignPurchaser">确认分配</el-button>
+      <el-button :disabled="assignSubmitting" @click="assignDialogVisible = false">返回列表</el-button>
+      <el-button type="primary" :loading="assignSubmitting" :disabled="assignDevLoading || assignSubmitting" @click="submitAssignPurchaser">确认分配</el-button>
     </template>
   </el-dialog>
 </template>
@@ -1710,6 +1955,7 @@ async function markPoUnpaid(po?: { id: number }) {
 .detail-footer { display: flex; justify-content: flex-end; gap: 10px; }
 .qty-est-hint { display: block; font-size: 10px; color: #a39a8c; font-weight: 400; margin-top: 2px; }
 .flow-hint { margin: 0; font-size: 13px; line-height: 1.55; color: inherit; }
+.flow-hint + .flow-hint { margin-top: 4px; }
 .desc-required-label::before {
   content: '*';
   color: var(--el-color-danger);

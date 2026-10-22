@@ -26,6 +26,7 @@
     "import:local-exports": "ts-node prisma/import-local-exports.ts",
     "import:customers": "ts-node -r tsconfig-paths/register scripts/import-customers-xlsx.ts",
     "backfill:finance-costs": "ts-node -r tsconfig-paths/register prisma/backfill-finance-cost-ledger.ts",
+    "repair:logistics-damaged": "ts-node -r tsconfig-paths/register src/maintenance/repair-logistics-damaged-receipts.ts",
     "lint": "eslint src prisma scripts --max-warnings=0",
     "test": "jest --runInBand",
     "test:coverage": "jest --runInBand --coverage"

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { userFacingError } from '@erp/shared/user-facing-error'
+
 import { displaySku, displaySkuText, formatSku } from '@erp/shared/sku-display'
 import { downloadableOutboundSourceAttachments, isOutboundSourceAttachment } from '@/features/outbound/attachments'
 import { ref, computed, onMounted, reactive } from 'vue'
@@ -463,7 +465,7 @@ async function openDetail(row: any) {
   try {
     detailOrder.value = await outboundApi.detail(row.id)
   } catch (err: any) {
-    ElMessage.error(displaySkuText(err?.message || '加载出库详情失败'))
+    ElMessage.error(userFacingError(displaySkuText(err?.message || '加载出库详情失败')))
     detailVisible.value = false
   } finally {
     detailLoading.value = false
@@ -475,7 +477,7 @@ async function downloadAttachment(row: any) {
     const { blob, fileName } = await outboundApi.downloadAttachment(row.id)
     triggerBrowserDownload(blob, fileName || row.attachmentName || 'cpt-attachment')
   } catch (err: any) {
-    ElMessage.error(displaySkuText(err.message || '下载失败'))
+    ElMessage.error(userFacingError(displaySkuText(err.message || '下载失败')))
   }
 }
 
@@ -488,7 +490,7 @@ async function downloadAttachmentById(row: any, attachmentId: number) {
     const { blob, fileName } = await outboundApi.downloadAttachmentById(row.id, attachmentId)
     triggerBrowserDownload(blob, fileName || 'attachment')
   } catch (err: any) {
-    ElMessage.error(displaySkuText(err.message || '下载失败'))
+    ElMessage.error(userFacingError(displaySkuText(err.message || '下载失败')))
   }
 }
 
@@ -504,7 +506,7 @@ async function downloadPodAttachment(row: any) {
     triggerBrowserDownload(blob, name)
     ElMessage.success('POD 签收单下载已开始')
   } catch (err: any) {
-    ElMessage.error(displaySkuText(err.message || '下载 POD 签收单失败'))
+    ElMessage.error(userFacingError(displaySkuText(err.message || '下载 POD 签收单失败')))
   }
 }
 
@@ -513,7 +515,7 @@ async function downloadRowLabels(row: any) {
     const { blob, fileName } = await outboundApi.downloadSkuLabels(row.id)
     triggerBrowserDownload(blob, fileName || `${row.outboundNo || 'outbound'}-labels.pdf`)
   } catch (err: any) {
-    ElMessage.error(displaySkuText(err.message || '下载标签失败'))
+    ElMessage.error(userFacingError(displaySkuText(err.message || '下载标签失败')))
   }
 }
 
@@ -586,7 +588,7 @@ async function printOutboundLabels(
     ElMessage.success('标签 PDF 已打开；若未自动弹出打印框，请使用浏览器打印')
   } catch (err: any) {
     if (!printWindow.closed) printWindow.close()
-    ElMessage.error(displaySkuText(err?.message || '打开标签 PDF 失败'))
+    ElMessage.error(userFacingError(displaySkuText(err?.message || '打开标签 PDF 失败')))
   } finally {
     delete labelActionLoading[actionKey]
   }
@@ -620,7 +622,7 @@ async function openRelabel(row: any) {
       }))
     relabelVisible.value = true
   } catch (e: any) {
-    ElMessage.error(displaySkuText(e?.message || '加载换标明细失败'))
+    ElMessage.error(userFacingError(displaySkuText(e?.message || '加载换标明细失败')))
   }
 }
 
@@ -672,7 +674,7 @@ async function downloadPickList(row: any) {
   try {
     await outboundApi.downloadPickList(row.id)
   } catch (err: any) {
-    ElMessage.error(displaySkuText(err.message || '下载拣货清单失败'))
+    ElMessage.error(userFacingError(displaySkuText(err.message || '下载拣货清单失败')))
   }
 }
 
@@ -691,7 +693,7 @@ async function openPack(row: any) {
       await outboundApi.startReview(row.id)
       row.status = 'reviewing'
     } catch (err: any) {
-      ElMessage.error(displaySkuText(err?.message || '无法开始复核'))
+      ElMessage.error(userFacingError(displaySkuText(err?.message || '无法开始复核')))
       return
     }
   }
@@ -705,7 +707,7 @@ async function openPack(row: any) {
   try {
     packOrder.value = await outboundApi.detail(row.id)
   } catch (err: any) {
-    ElMessage.error(displaySkuText(err?.message || '加载复核明细失败'))
+    ElMessage.error(userFacingError(displaySkuText(err?.message || '加载复核明细失败')))
   } finally {
     packDetailLoading.value = false
   }
@@ -723,18 +725,28 @@ function removePackCarton(index: number) {
 async function submitPack() {
   if (!packOrder.value || !canPack.value) return
   const needsMeasure = !!packOrder.value.omsPreDeduct
-  const cartons = packCartons.value
+  const hasMeasure = packCartons.value.some(c => Object.values(c).some(value => value.trim() !== ''))
+  const cartons = (needsMeasure || hasMeasure ? packCartons.value : [])
     .map(c => ({
       lengthCm: Number(c.lengthCm),
       widthCm: Number(c.widthCm),
       heightCm: Number(c.heightCm),
-      grossWeightKg: Number(c.grossWeightKg) || 0,
+      grossWeightKg: Number(c.grossWeightKg),
     }))
-    .filter(c => c.lengthCm > 0 && c.widthCm > 0 && c.heightCm > 0)
 
   if (needsMeasure && cartons.length === 0) {
     ElMessage.warning('请填写外箱实测尺寸（长/宽/高 cm）')
     return
+  }
+  for (const [index, carton] of cartons.entries()) {
+    if (![carton.lengthCm, carton.widthCm, carton.heightCm].every(value => Number.isFinite(value) && value > 0)) {
+      ElMessage.warning(`请填写第 ${index + 1} 箱大于零的长、宽、高；不需要的箱行请先删除`)
+      return
+    }
+    if (!Number.isFinite(carton.grossWeightKg) || carton.grossWeightKg < 0) {
+      ElMessage.warning(`第 ${index + 1} 箱毛重无效，请填写不小于零的重量`)
+      return
+    }
   }
 
   const needsRelabel = !!packOrder.value.needsRelabel
@@ -964,7 +976,7 @@ async function doExport() {
     URL.revokeObjectURL(url)
     ElMessage.success('导出成功')
   } catch (err: any) {
-    ElMessage.error(displaySkuText(err.message || '导出失败'))
+    ElMessage.error(userFacingError(displaySkuText(err.message || '导出失败')))
   }
 }
 
@@ -1239,7 +1251,7 @@ function statusTag(status: string) {
                 trigger="click"
                 placement="bottom-end"
                 popper-class="outbound-row-dropdown"
-                @command="(command) => handleRowCommand(command, row)"
+                @command="(command: string) => handleRowCommand(command, row)"
               >
                 <el-button link type="primary" size="small" @click.stop>操作</el-button>
                 <template #dropdown>

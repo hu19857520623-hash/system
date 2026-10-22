@@ -6,6 +6,10 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator'
 import { RequireAnyPerm, RequirePerms } from '../../common/decorators/require-perms.decorator'
 import { OmsBridge } from '../../common/decorators/oms-bridge.decorator'
 import { CreateOmsAsnDto } from './dto/oms-asn.dto'
+import { ApplyShipmentFreightDto, CreateErpShipmentDto, SaveInboundDraftDto, ShipmentFreightMutationDto, UploadInboundAttachmentDto } from './dto/erp-shipment.dto'
+import { MeasureInboundDto, RecordInboundCartonsDto, ScanInboundCartonDto, ScanInboundQcDto, SubmitInboundQcDto } from './dto/inbound-receiving.dto'
+import { PutawayInboundDto } from './dto/inbound-putaway.dto'
+import { InboundControlDto } from './dto/inbound-control.dto'
 
 @Controller('inbound')
 export class InboundController {
@@ -86,20 +90,20 @@ export class InboundController {
 
   @RequirePerms('create_inbound.create')
   @Post('drafts')
-  saveDraft(@Body() body: any, @CurrentUser('userId') userId: number) {
-    return this.service.saveDraft(body.draftNo || body.id, body.form || body._form || body, userId)
+  saveDraft(@Body() body: SaveInboundDraftDto, @CurrentUser('userId') userId: number) {
+    return this.service.saveDraft(body.draftNo, body.form, userId)
   }
 
   @RequirePerms('create_inbound.create')
   @Delete('drafts/:draftNo')
-  deleteDraft(@Param('draftNo') draftNo: string) {
-    return this.service.deleteDraft(draftNo)
+  deleteDraft(@Param('draftNo') draftNo: string, @CurrentUser('userId') userId: number) {
+    return this.service.deleteDraft(draftNo, userId)
   }
 
   @RequirePerms('create_inbound.create')
   @Post('attachments')
-  uploadAttachment(@Body() body: any) {
-    return this.service.uploadAttachment(body)
+  uploadAttachment(@Body() body: UploadInboundAttachmentDto, @CurrentUser('userId') userId: number) {
+    return this.service.uploadAttachment(body, userId)
   }
 
   @RequireAnyPerm(
@@ -111,7 +115,7 @@ export class InboundController {
     'inbound.putaway',
   )
   @Get()
-  list(@Query() q: PaginationDto & { status?: string }) {
+  list(@Query() q: PaginationDto & { status?: string; source?: string }) {
     return this.service.list(q)
   }
 
@@ -198,7 +202,7 @@ export class InboundController {
 
   @RequirePerms('create_inbound.create')
   @Post()
-  create(@Body() body: any, @CurrentUser('userId') userId: number) {
+  create(@Body() body: CreateErpShipmentDto, @CurrentUser('userId') userId: number) {
     return this.service.create(body, userId)
   }
 
@@ -206,7 +210,7 @@ export class InboundController {
   @Post(':id/sea-freight')
   applySeaFreight(
     @Param('id', ParseIntPipe) id: number,
-    @Body() body: { mode?: string; totalAmount?: number },
+    @Body() body: ApplyShipmentFreightDto,
     @CurrentUser('userId') userId: number,
   ) {
     return this.service.applySeaFreight(id, body, userId)
@@ -214,8 +218,8 @@ export class InboundController {
 
   @RequirePerms('create_inbound.create')
   @Delete(':id/sea-freight')
-  clearSeaFreight(@Param('id', ParseIntPipe) id: number, @CurrentUser('userId') userId: number) {
-    return this.service.clearSeaFreight(id, userId)
+  clearSeaFreight(@Param('id', ParseIntPipe) id: number, @Body() body: ShipmentFreightMutationDto, @CurrentUser('userId') userId: number) {
+    return this.service.clearSeaFreight(id, body, userId)
   }
 
   @RequirePerms('create_inbound.create')
@@ -226,7 +230,7 @@ export class InboundController {
 
   @RequirePerms('inbound.receive')
   @Post(':id/receive-box')
-  receiveBox(@Param('id', ParseIntPipe) id: number, @Body() body: any, @CurrentUser('userId') userId: number) {
+  receiveBox(@Param('id', ParseIntPipe) id: number, @Body() body: ScanInboundCartonDto, @CurrentUser('userId') userId: number) {
     return this.service.receiveBox(id, body, userId)
   }
 
@@ -234,7 +238,7 @@ export class InboundController {
   @Post(':id/received-carton-count')
   recordReceivedCartonCount(
     @Param('id', ParseIntPipe) id: number,
-    @Body() body: { receivedCartonCount?: number; differenceReason?: string; clientRequestId?: string },
+    @Body() body: RecordInboundCartonsDto,
     @CurrentUser('userId') userId: number,
   ) {
     return this.service.recordReceivedCartonCount(id, body, userId)
@@ -248,43 +252,49 @@ export class InboundController {
 
   @RequirePerms('inbound.qc')
   @Post(':id/reopen-count')
-  reopenCount(@Param('id', ParseIntPipe) id: number, @Body() body: { reason?: string }, @CurrentUser('userId') userId: number) {
-    return this.service.manageCount(id, 'reopen', body.reason || '', userId)
+  reopenCount(@Param('id', ParseIntPipe) id: number, @Body() body: InboundControlDto, @CurrentUser('userId') userId: number) {
+    return this.service.manageCount(id, 'reopen', body, userId)
   }
 
   @RequireAnyPerm('inbound.confirm_diff', 'inbound.handle_exception')
   @Post(':id/close-zero')
-  closeZero(@Param('id', ParseIntPipe) id: number, @Body() body: { reason?: string }, @CurrentUser('userId') userId: number) {
-    return this.service.manageCount(id, 'close-zero', body.reason || '', userId)
+  closeZero(@Param('id', ParseIntPipe) id: number, @Body() body: InboundControlDto, @CurrentUser('userId') userId: number) {
+    return this.service.manageCount(id, 'close-zero', body, userId)
   }
 
   @RequirePerms('inbound.qc')
   @Post(':id/qc')
-  qc(@Param('id', ParseIntPipe) id: number, @Body() body: any, @CurrentUser('userId') userId: number) {
+  qc(@Param('id', ParseIntPipe) id: number, @Body() body: SubmitInboundQcDto, @CurrentUser('userId') userId: number) {
     return this.service.qc(id, body, userId)
+  }
+
+  @RequirePerms('inbound.qc', 'inbound.putaway')
+  @Post(':id/qc-and-measure')
+  qcAndMeasure(@Param('id', ParseIntPipe) id: number, @Body() body: SubmitInboundQcDto, @CurrentUser('userId') userId: number) {
+    return this.service.qcAndMeasure(id, body, userId)
   }
 
   @RequirePerms('inbound.qc')
   @Post(':id/scan-qc')
-  scanQc(@Param('id', ParseIntPipe) id: number, @Body() body: any, @CurrentUser('userId') userId: number) {
+  scanQc(@Param('id', ParseIntPipe) id: number, @Body() body: ScanInboundQcDto, @CurrentUser('userId') userId: number) {
     return this.service.scanQc(id, body, userId)
   }
 
   @RequirePerms('inbound.qc')
   @Post(':id/reduce-qc')
-  reduceQc(@Param('id', ParseIntPipe) id: number, @Body() body: any, @CurrentUser('userId') userId: number) {
+  reduceQc(@Param('id', ParseIntPipe) id: number, @Body() body: InboundControlDto, @CurrentUser('userId') userId: number) {
     return this.service.reduceQuantity(id, 'qc', body, userId)
   }
 
   @RequirePerms('inbound.receive')
   @Post(':id/reduce-carton')
-  reduceCarton(@Param('id', ParseIntPipe) id: number, @Body() body: any, @CurrentUser('userId') userId: number) {
+  reduceCarton(@Param('id', ParseIntPipe) id: number, @Body() body: InboundControlDto, @CurrentUser('userId') userId: number) {
     return this.service.reduceQuantity(id, 'carton', body, userId)
   }
 
   @RequirePerms('inbound.putaway')
   @Post(':id/reduce-putaway')
-  reducePutaway(@Param('id', ParseIntPipe) id: number, @Body() body: any, @CurrentUser('userId') userId: number) {
+  reducePutaway(@Param('id', ParseIntPipe) id: number, @Body() body: InboundControlDto, @CurrentUser('userId') userId: number) {
     return this.service.reduceQuantity(id, 'putaway', body, userId)
   }
 
@@ -302,23 +312,23 @@ export class InboundController {
 
   @RequireAnyPerm('inbound.qc', 'inbound.putaway', 'inbound.handle_exception', 'inbound.confirm_diff')
   @Post(':id/resolve-exception')
-  resolveException(@Param('id', ParseIntPipe) id: number, @Body() body: { reason?: string }, @CurrentUser('userId') userId: number) {
+  resolveException(@Param('id', ParseIntPipe) id: number, @Body() body: InboundControlDto, @CurrentUser('userId') userId: number) {
     return this.service.resolveException(id, body, userId)
   }
 
   @RequirePerms('inbound.putaway')
   @Post(':id/measure-dimensions')
-  measureDimensions(@Param('id', ParseIntPipe) id: number, @Body() body: any, @CurrentUser('userId') userId: number) {
+  measureDimensions(@Param('id', ParseIntPipe) id: number, @Body() body: MeasureInboundDto, @CurrentUser('userId') userId: number) {
     return this.service.measureDimensions(id, body, userId)
   }
 
   @RequirePerms('inbound.putaway')
   @Post(':id/putaway')
-  putaway(@Param('id', ParseIntPipe) id: number, @Body() body: any, @CurrentUser('userId') userId: number) {
+  putaway(@Param('id', ParseIntPipe) id: number, @Body() body: PutawayInboundDto, @CurrentUser('userId') userId: number) {
     return this.service.putaway(id, body, userId)
   }
 
-  /** @deprecated 兼容旧流程，内部走 qc + 默认待上架区 putaway */
+  /** @deprecated 旧的一键确认仅说明实际清点、测量与库位上架的正确入口。 */
   @RequireAnyPerm('inbound.confirm_diff', 'inbound.putaway')
   @Post(':id/confirm')
   confirm(@Param('id', ParseIntPipe) id: number, @Body() body: any, @CurrentUser('userId') userId: number) {

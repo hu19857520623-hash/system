@@ -331,6 +331,7 @@ export function pickCsvFile(
     const input = document.createElement('input')
     input.type = 'file'
     input.accept = accept
+    input.oncancel = () => reject(new Error('cancelled'))
     input.onchange = async () => {
       const file = input.files?.[0]
       if (!file) {

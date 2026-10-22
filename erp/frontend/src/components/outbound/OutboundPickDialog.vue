@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { userFacingError } from '@erp/shared/user-facing-error'
+
 import { displaySkuText, formatSku } from '@erp/shared/sku-display'
 import { ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
@@ -69,7 +71,7 @@ async function loadPickLines(row: NonNullable<typeof props.order>) {
       throw new Error('部分 SKU 暂无可用库位，请确认已上架')
     }
   } catch (err: any) {
-    ElMessage.error(displaySkuText(err?.message || '加载拣货库位失败'))
+    ElMessage.error(userFacingError(displaySkuText(err?.message || '加载拣货库位失败')))
     emit('update:modelValue', false)
   } finally {
     pickLoading.value = false

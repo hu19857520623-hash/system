@@ -7,6 +7,7 @@ import {
   Logger,
 } from '@nestjs/common'
 import { Response } from 'express'
+import { userFacingError } from '@erp/shared/user-facing-error'
 
 @Catch()
 export class HttpExceptionFilter implements ExceptionFilter {
@@ -25,10 +26,9 @@ export class HttpExceptionFilter implements ExceptionFilter {
       message = typeof res === 'string' ? res : res?.message || exception.message
       if (Array.isArray(message)) message = message.join('; ')
     } else if (exception instanceof Error) {
-      message = exception.message
       this.logger.error(exception.message, exception.stack)
     }
 
-    response.status(status).json({ code: status, message, data: null })
+    response.status(status).json({ code: status, message: userFacingError(message, status), data: null })
   }
 }

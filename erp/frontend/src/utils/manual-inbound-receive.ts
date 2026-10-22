@@ -1,5 +1,10 @@
 export const MANUAL_ARRIVAL_STATUSES = ['pending_receipt', 'pending_push', 'push_failed', 'pushed']
 
+export function recordedReceivedCartonCount(order: { receivedCartonCount?: number | null }): number | null {
+  const count = order.receivedCartonCount
+  return typeof count === 'number' && Number.isSafeInteger(count) && count > 0 ? count : null
+}
+
 type ReceiveApi = {
   detail: (id: number) => Promise<any>
   arrivalScan: (data: { scanCode: string; warehouseCode: string }) => Promise<any>
@@ -8,11 +13,14 @@ type ReceiveApi = {
 
 export async function receiveInboundManually(
   api: ReceiveApi, id: number,
-  input: { count: number | null; differenceReason: string; clientRequestId: string },
+  input: { count: number | null; differenceReason: string; clientRequestId: string; replay?: boolean },
 ) {
   const count = Number(input.count)
   if (!Number.isSafeInteger(count) || count <= 0 || count > 9999) throw new Error('实收箱数须为 1–9999 的整数')
   const order = await api.detail(id)
+  if (input.replay && !order.readOnly && !MANUAL_ARRIVAL_STATUSES.includes(order.status)) {
+    return api.recordReceivedCartonCount(id, { receivedCartonCount: count, differenceReason: input.differenceReason.trim() || undefined, clientRequestId: input.clientRequestId })
+  }
   if (order.readOnly || ![...MANUAL_ARRIVAL_STATUSES, 'arrived', 'receiving'].includes(order.status)) {
     throw new Error('当前单据不可手动收货，请刷新列表查看状态')
   }

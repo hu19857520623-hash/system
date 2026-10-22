@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { displaySku, displaySkuText } from '@erp/shared/sku-display'
+import { userFacingError } from '@erp/shared/user-facing-error'
 import { ref, computed, onMounted, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { warehouseApi, inventoryApi, logisticsReceiptApi } from '@/api/client.js'
 import { mapWarehouse, mapInventory, mapLogisticsReceipt } from '@/api/mappers.ts'
@@ -10,12 +11,21 @@ import { useTablePagination } from '@/composables/useTablePagination.ts'
 import { useRowActions } from '@/composables/useRowActions'
 import ListPagination from '@/components/ListPagination.vue'
 import StockFillBar from '@/components/ui/StockFillBar.vue'
+import { useAppStore } from '@/stores/app'
+import { clearReceiptAttempt, readReceiptAttempts, saveReceiptAttempt, type ReceiptAttempt } from '@/utils/logisticsReceiptAttempt'
 
 const { confirmAction, showDetail } = useRowActions()
 const router = useRouter()
+const route = useRoute()
+const app = useAppStore()
+const canReceive = computed(() => app.hasPerm('logistics_wh.receive'))
+const canManage = computed(() => app.hasPerm('logistics_wh.manage'))
+const canCreateInbound = computed(() => app.hasPerm('create_inbound.view') && app.hasPerm('create_inbound.create'))
 
-const tab = ref('manage')
-const stockWarehouse = ref('all')
+const initialTab = String(route.query.tab || '')
+const tab = ref(['stock', 'receipts', 'files'].includes(initialTab) ? initialTab : initialTab === 'pending' && canReceive.value ? 'pending' : 'manage')
+const fromPo = computed(() => typeof route.query.fromPo === 'string' ? route.query.fromPo : '')
+const stockWarehouse = ref(String(route.query.wh || 'all'))
 
 const { loading: whLoading, items: warehouses, load: loadWarehouses } = useListLoader(async () => {
   const res = await warehouseApi.list({ type: 'logistics' })
@@ -38,16 +48,24 @@ async function loadFileConfigWarehouses() {
 
 const pendingPos = ref<any[]>([])
 const pendingLoading = ref(false)
+const pendingError = ref('')
+let pendingLoadVersion = 0
 
 async function loadPendingPos() {
+  if (!canReceive.value) return false
+  const version = ++pendingLoadVersion
   pendingLoading.value = true
+  pendingError.value = ''
   try {
     const res = await logisticsReceiptApi.listPendingPos({})
+    if (version !== pendingLoadVersion) return false
     pendingPos.value = res || []
-  } catch {
-    pendingPos.value = []
+    return true
+  } catch (error) {
+    if (version === pendingLoadVersion) pendingError.value = `待收货列表未能刷新，请重新读取后操作。${userFacingError(error)}`
+    return false
   } finally {
-    pendingLoading.value = false
+    if (version === pendingLoadVersion) pendingLoading.value = false
   }
 }
 
@@ -68,6 +86,10 @@ const { loading: receiptLoading, items: receipts, load: loadReceipts } = useList
 onMounted(() => {
   loadWarehouses()
   loadPendingPos()
+  refreshReceiptAttempts()
+  if (tab.value === 'stock') loadStock()
+  if (tab.value === 'receipts') loadReceipts()
+  if (tab.value === 'files') loadFileConfigWarehouses()
 })
 
 watch(tab, (t) => {
@@ -83,7 +105,8 @@ watch(stockWarehouse, () => {
 })
 
 const { page: whPage, pageSize: whPageSize, total: whTotal, pagedItems: pagedWarehouses } = useTablePagination(warehouses)
-const { page: poPage, pageSize: poPageSize, total: poTotal, pagedItems: pagedPending } = useTablePagination(pendingPos)
+const filteredPendingPos = computed(() => fromPo.value ? pendingPos.value.filter(row => row.poNo === fromPo.value) : pendingPos.value)
+const { page: poPage, pageSize: poPageSize, total: poTotal, pagedItems: pagedPending } = useTablePagination(filteredPendingPos)
 const { page: stockPage, pageSize: stockPageSize, total: stockTotal, pagedItems: pagedStock } = useTablePagination(stockItems)
 const { page: rcPage, pageSize: rcPageSize, total: rcTotal, pagedItems: pagedReceipts } = useTablePagination(receipts)
 
@@ -181,8 +204,58 @@ const receiveVisible = ref(false)
 const receiveTarget = ref<any>(null)
 const receiveLines = ref<any[]>([])
 const receiveRemark = ref('')
+const receiveLoading = ref(false)
+const receiveBusy = ref(false)
+const receiveUncertain = ref(false)
+const receiveFeedback = ref('')
+const receiveRequestId = ref('')
+const receiveTargetId = ref<number | null>(null)
+const receivePayload = ref<any>(null)
+const receiveResult = ref<any>(null)
+const receiptAttempts = ref<ReceiptAttempt[]>([])
+const receiptAttemptError = ref('')
 
-function openReceive(row: any) {
+function refreshReceiptAttempts() {
+  try { receiptAttempts.value = readReceiptAttempts(localStorage, app.authenticatedUser!.id); receiptAttemptError.value = '' }
+  catch (error) { receiptAttemptError.value = userFacingError(error) }
+}
+
+function openReceiptRecovery(attempt: ReceiptAttempt) {
+  if (receiveBusy.value) return
+  receiveTargetId.value = attempt.payload.poId
+  receiveTarget.value = JSON.parse(JSON.stringify(attempt.target))
+  receiveLines.value = JSON.parse(JSON.stringify(attempt.lines))
+  receivePayload.value = JSON.parse(JSON.stringify(attempt.payload))
+  receiveRemark.value = String(attempt.payload.remark || '')
+  receiveRequestId.value = attempt.payload.clientRequestId
+  receiveUncertain.value = true
+  receiveResult.value = null
+  receiveFeedback.value = '上次收货结果待核对。输入已保留，核对并重试将使用同一次操作标识，避免重复入仓。'
+  receiveVisible.value = true
+}
+
+async function openReceive(requested: any) {
+  if (!canReceive.value || receiveBusy.value || receiptAttemptError.value) return
+  refreshReceiptAttempts()
+  const pendingAttempt = receiptAttempts.value.find(attempt => attempt.payload.poId === requested.id)
+  if (pendingAttempt) { openReceiptRecovery(pendingAttempt); return }
+  if (receiptAttemptError.value) return
+  receiveVisible.value = true
+  receiveLoading.value = true
+  receiveTargetId.value = requested.id
+  receiveTarget.value = null
+  receiveLines.value = []
+  receiveFeedback.value = ''
+  receiveUncertain.value = false
+  receivePayload.value = null
+  receiveResult.value = null
+  receiveRequestId.value = crypto.randomUUID()
+  try {
+    if (!await loadPendingPos()) { receiveFeedback.value = pendingError.value || '单据读取已更新，请重新读取'; return }
+    if (!receiveVisible.value || receiveTargetId.value !== requested.id) return
+    const row = pendingPos.value.find(po => po.id === requested.id)
+    if (!row) { receiveFeedback.value = '该采购单已收齐或状态已变化，请查看收货记录核对结果'; return }
+    if (row.receiptIssue) { receiveFeedback.value = row.receiptIssue; return }
   receiveTarget.value = row
   receiveLines.value = row.lines
     .filter((l: any) => l.pendingQty > 0)
@@ -197,7 +270,7 @@ function openReceive(row: any) {
       qcRemark: '',
     }))
   receiveRemark.value = ''
-  receiveVisible.value = true
+  } finally { receiveLoading.value = false }
 }
 
 function onDamagedChange(row: any) {
@@ -229,21 +302,26 @@ function onActualChange(row: any) {
   }
 }
 
-async function submitReceive() {
-  if (!receiveTarget.value) return
+async function submitReceive(replay = false) {
+  if (!receiveTarget.value || receiveBusy.value || receiveLoading.value || receiveResult.value || (!replay && receiveUncertain.value)) return
+  receiveFeedback.value = ''
   const items = receiveLines.value.filter((l) => l.actualQty > 0 || l.damagedQty > 0)
-  if (!items.length) { ElMessage.warning('请填写良品实收或破损数量'); return }
+  if (!replay && !items.length) { receiveFeedback.value = '请填写良品实收或破损数量'; return }
   for (const l of items) {
+    if (![l.actualQty, l.damagedQty].every(qty => Number.isSafeInteger(Number(qty)) && Number(qty) >= 0 && Number(qty) <= 2147483647)) { receiveFeedback.value = '良品实收和破损数量须为非负整数'; return }
     if (l.actualQty + l.damagedQty > l.pendingQty) {
-      ElMessage.warning(displaySkuText(`${displaySku(l)} 良品 + 破损超过待收 ${l.pendingQty}`))
+      receiveFeedback.value = displaySkuText(`${displaySku(l)} 良品与破损合计超过待收 ${l.pendingQty}`)
       return
     }
   }
-  const ok = await withAction(async () => {
-    await logisticsReceiptApi.create({
+  receiveBusy.value = true
+  let sent = false
+  try {
+    const payload = replay ? receivePayload.value : {
       poId: receiveTarget.value.id,
       warehouseCode: receiveTarget.value.warehouseCode,
       remark: receiveRemark.value,
+      clientRequestId: receiveRequestId.value,
       items: items.map((l) => ({
         poItemId: l.id,
         sku: l.sku,
@@ -252,14 +330,28 @@ async function submitReceive() {
         qcStatus: l.qcStatus,
         qcRemark: l.qcRemark || undefined,
       })),
-    })
-  }, `${receiveTarget.value.poNo} 已登记收货入仓`)
-  if (ok) {
-    receiveVisible.value = false
-    loadPendingPos()
-    if (tab.value === 'stock') loadStock()
-    if (tab.value === 'receipts') loadReceipts()
-  }
+    }
+    if (!payload) throw new Error('本次收货核对信息缺失，请重新读取单据')
+    // Persist before sending so reload and return-to-list keep the same idempotency key.
+    saveReceiptAttempt(localStorage, app.authenticatedUser!.id, { payload, target: receiveTarget.value, lines: receiveLines.value })
+    receivePayload.value = JSON.parse(JSON.stringify(payload))
+    sent = true
+    const result = await logisticsReceiptApi.create(payload)
+    receiveResult.value = result
+    receiveUncertain.value = false
+    receiveFeedback.value = `${result.duplicate ? '已核对原收货记录' : '本次收货已确认'}：${result.receiptNo}。${result.poStatus === 'received' ? '采购单已收齐，良品已入中转仓库存' : '仍有待收数量，可返回列表继续收货'}。破损件单独记录，不增加可用库存。`
+    try { clearReceiptAttempt(localStorage, app.authenticatedUser!.id, payload.poId) } catch { receiveFeedback.value += ' 本地核对信息暂未清除，可使用原操作标识再次核对。' }
+    refreshReceiptAttempts()
+    await loadPendingPos()
+    void loadStock()
+    void loadReceipts()
+  } catch (error) {
+    const status = Number((error as { status?: unknown })?.status)
+    receiveUncertain.value = (sent || replay) && !(status >= 400 && status < 500 && status !== 408 && status !== 409)
+    receiveFeedback.value = receiveUncertain.value ? `收货结果暂无法确定，请核对并重试本次收货。${userFacingError(error)}` : userFacingError(error)
+    if (!receiveUncertain.value && receivePayload.value) { try { clearReceiptAttempt(localStorage, app.authenticatedUser!.id, receiveTarget.value.id) } catch { /* retain safe replay metadata */ } }
+    refreshReceiptAttempts()
+  } finally { receiveBusy.value = false }
 }
 
 function receiptDetail(row: any) {
@@ -269,10 +361,17 @@ function receiptDetail(row: any) {
     ['备注', row.remark || '—'],
     ['SKU 明细', row.items.map((i: any) => {
       const dmg = i.damagedQty ? ` 破损${i.damagedQty}` : ''
-      const qc = i.qcStatus === 'fail' ? ' [QC异常]' : ''
+      const qc = i.qcStatus === 'fail' ? ' [质检异常]' : ''
       return `${i.sku} ${i.productName} 良品×${i.actualQty}${dmg}${qc}${i.qcRemark ? ` (${i.qcRemark})` : ''}`
     }).join('\n')],
   ])
+}
+
+function showReceiptNext(next: 'stock' | 'receipts') {
+  if (receiveBusy.value) return
+  stockWarehouse.value = receiveTarget.value?.warehouseCode || 'all'
+  receiveVisible.value = false
+  tab.value = next
 }
 
 const warehouseOptions = computed(() => warehouses.value.filter(w => w.statusCode === 1))
@@ -296,19 +395,25 @@ function goCreateInbound(row?: any) {
             <el-option v-for="wh in warehouseOptions" :key="wh.code" :label="wh.name" :value="wh.code" />
           </el-select>
           <el-button v-if="tab === 'stock'" size="small" @click="router.push('/logistics-inventory')">完整库存页</el-button>
-          <el-button v-if="tab === 'stock'" type="primary" size="small" @click="goCreateInbound()">创建入库单</el-button>
-          <el-button v-if="tab === 'manage'" type="primary" size="small" @click="openAddWarehouse">添加物流仓库</el-button>
+          <el-button v-if="tab === 'stock' && canCreateInbound" type="primary" size="small" @click="goCreateInbound()">创建入库单</el-button>
+          <el-button v-if="tab === 'manage' && canManage" type="primary" size="small" @click="openAddWarehouse">添加物流仓库</el-button>
         </div>
       </div>
     </template>
 
     <el-tabs v-model="tab" type="card">
       <el-tab-pane label="中转仓管理" name="manage" />
-      <el-tab-pane label="待收货 PO" name="pending" />
+      <el-tab-pane v-if="canReceive" label="待收货采购单" name="pending" />
       <el-tab-pane label="中转仓库存" name="stock" />
       <el-tab-pane label="收货记录" name="receipts" />
       <el-tab-pane label="出库文件配置" name="files" />
     </el-tabs>
+
+    <el-alert v-if="receiptAttemptError" :title="receiptAttemptError" type="warning" :closable="false" role="alert" style="margin-bottom:12px" />
+    <div v-if="canReceive && receiptAttempts.length" style="margin-bottom:12px">
+      <p>有收货结果尚待核对。请先核对原操作，避免重复登记。</p>
+      <el-button v-for="attempt in receiptAttempts" :key="attempt.payload.clientRequestId" :disabled="receiveBusy" @click="openReceiptRecovery(attempt)">核对收货 · {{ attempt.target.poNo }}</el-button>
+    </div>
 
     <!-- 物流仓库管理 -->
     <template v-if="tab === 'manage'">
@@ -339,8 +444,8 @@ function goCreateInbound(row?: any) {
         </el-table-column>
         <el-table-column label="操作" width="140" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" size="small" @click="openEditWarehouse(row)">编辑</el-button>
-            <el-button link :type="row.statusCode === 1 ? 'warning' : 'success'" size="small" @click="toggleWarehouseStatus(row)">
+            <el-button v-if="canManage" link type="primary" size="small" @click="openEditWarehouse(row)">编辑</el-button>
+            <el-button v-if="canManage" link :type="row.statusCode === 1 ? 'warning' : 'success'" size="small" @click="toggleWarehouseStatus(row)">
               {{ row.statusCode === 1 ? '停用' : '启用' }}
             </el-button>
           </template>
@@ -370,7 +475,7 @@ function goCreateInbound(row?: any) {
         </el-table-column>
         <el-table-column label="操作" width="90">
           <template #default="{ row }">
-            <el-button link type="primary" size="small" @click="openEditWarehouse(row)">配置</el-button>
+            <el-button v-if="canManage" link type="primary" size="small" @click="openEditWarehouse(row)">配置</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -378,9 +483,20 @@ function goCreateInbound(row?: any) {
 
     <!-- 待收货 PO -->
     <template v-if="tab === 'pending'">
+      <div v-if="fromPo" style="margin-bottom:12px">
+        <p>当前采购单：{{ fromPo }}。可登记本次到货数量，确认收货后增加中转仓库存。</p>
+        <el-button @click="router.push({ path: '/purchase', query: { poNo: fromPo } })">返回采购订单</el-button>
+        <el-button @click="router.replace({ path: '/logistics-wh', query: { tab: 'pending' } })">查看全部待收货</el-button>
+      </div>
       <el-alert type="info" :closable="false" show-icon style="margin-bottom:12px">
-        采购审核通过的采购单，供应商送货至<strong>物流中转仓</strong>后在此登记收货。良品写入中转仓库存；收货完成后方可在「创建入库单」从中转仓发运至海外仓。
+        采购审核通过的采购单，供应商送货至<strong>物流中转仓</strong>后在此登记收货。良品与破损均计入已收数量，只有良品增加可用库存；破损件单独留档。
       </el-alert>
+      <el-alert v-if="pendingError" :title="pendingError" type="warning" :closable="false" role="alert" style="margin-bottom:12px" />
+      <div style="margin-bottom:12px">
+        <el-button :loading="pendingLoading" :disabled="receiveBusy" @click="loadPendingPos">重新读取待收货</el-button>
+        <el-button @click="tab = 'receipts'">查看收货记录</el-button>
+        <el-button @click="tab = 'stock'">查看中转仓库存</el-button>
+      </div>
       <el-table v-loading="pendingLoading" :data="pagedPending" stripe border size="small" style="width: 100%">
         <el-table-column prop="poNo" label="采购单号" width="150">
           <template #default="{ row }"><span style="font-family:var(--font-mono);font-size:12px;color:#2563eb">{{ row.poNo }}</span></template>
@@ -395,6 +511,7 @@ function goCreateInbound(row?: any) {
               <span v-if="item.name" class="line-name" :title="item.name">{{ item.name }}</span>
               <span class="line-pending">× {{ item.pendingQty.toLocaleString() }}</span>
             </div>
+            <span v-if="row.receiptIssue" style="color:var(--el-color-danger)">{{ row.receiptIssue }}</span>
           </template>
         </el-table-column>
         <el-table-column label="金额 (RMB)" width="120" align="right">
@@ -403,7 +520,7 @@ function goCreateInbound(row?: any) {
         <el-table-column prop="expectedArrival" label="预计到货" width="100" />
         <el-table-column label="操作" width="120" fixed="right">
           <template #default="{ row }">
-            <el-button type="primary" size="small" link @click="openReceive(row)">登记收货</el-button>
+            <el-button v-if="canReceive" type="primary" size="small" link :disabled="pendingLoading || receiveBusy || Boolean(pendingError) || Boolean(row.receiptIssue) || Boolean(receiptAttemptError)" @click="openReceive(row)">登记收货</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -455,7 +572,7 @@ function goCreateInbound(row?: any) {
         </el-table-column>
         <el-table-column label="操作" width="88" fixed="right">
           <template #default="{ row }">
-            <el-button v-if="row.available > 0" link type="primary" size="small" @click="goCreateInbound(row)">发运</el-button>
+            <el-button v-if="row.available > 0 && canCreateInbound" link type="primary" size="small" @click="goCreateInbound(row)">发运</el-button>
             <span v-else class="title-en">不可发</span>
           </template>
         </el-table-column>
@@ -478,12 +595,15 @@ function goCreateInbound(row?: any) {
         <el-table-column label="实收总量" width="100" align="right">
           <template #default="{ row }">{{ row.totalQty.toLocaleString() }}</template>
         </el-table-column>
+        <el-table-column label="良品" width="70" align="right">
+          <template #default="{ row }">{{ row.goodQty.toLocaleString() }}</template>
+        </el-table-column>
         <el-table-column label="破损" width="70" align="right">
           <template #default="{ row }">
             <span :style="{ color: row.damagedQty > 0 ? '#e85d5d' : '#8b95a8' }">{{ row.damagedQty || 0 }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="QC" width="70" align="center">
+        <el-table-column label="质检" width="70" align="center">
           <template #default="{ row }">
             <el-tag v-if="row.hasQcIssue" type="danger" size="small">异常</el-tag>
             <el-tag v-else type="success" size="small">正常</el-tag>
@@ -540,8 +660,15 @@ function goCreateInbound(row?: any) {
     width="960px"
     class="receive-dialog"
     destroy-on-close
+    :close-on-click-modal="!receiveBusy"
+    :close-on-press-escape="!receiveBusy"
+    :show-close="!receiveBusy"
   >
+    <el-alert v-if="receiveFeedback" :title="receiveFeedback" :type="receiveResult ? 'success' : 'warning'" :closable="false" role="alert" style="margin-bottom:12px" />
+    <el-button v-if="!receiveTarget && !receiveLoading && receiveTargetId" @click="openReceive({ id: receiveTargetId })">重新读取单据</el-button>
+    <div v-loading="receiveLoading" style="min-height:80px">
     <template v-if="receiveTarget">
+      <el-text>良品与破损计入采购单已收数量，破损不进入可用库存。可分批登记实际到货。</el-text>
       <el-descriptions :column="3" border size="small" class="receive-summary">
         <el-descriptions-item label="供应商" :span="2">{{ receiveTarget.supplier }}</el-descriptions-item>
         <el-descriptions-item label="目标仓库">{{ receiveTarget.warehouseCode }}</el-descriptions-item>
@@ -560,7 +687,7 @@ function goCreateInbound(row?: any) {
           <el-table-column prop="spec" label="规格" width="88" show-overflow-tooltip>
             <template #default="{ row }">{{ row.spec || '—' }}</template>
           </el-table-column>
-          <el-table-column label="采购/已收/待收" width="128" align="center">
+          <el-table-column :label="receiveResult || receiveUncertain ? '提交前采购/已收/待收' : '采购/已收(含破损)/待收'" width="155" align="center">
             <template #default="{ row }">
               <span class="qty-cell">{{ row.quantity?.toLocaleString?.() ?? row.quantity }}</span>
               <span class="qty-sep">/</span>
@@ -573,6 +700,8 @@ function goCreateInbound(row?: any) {
             <template #default="{ row }">
               <el-input-number
                 v-model="row.actualQty"
+                :aria-label="`${row.sku} 良品实收`"
+                :disabled="receiveBusy || receiveUncertain || Boolean(receiveResult)"
                 :min="0"
                 :max="Math.max(0, row.pendingQty - (row.damagedQty || 0))"
                 size="small"
@@ -586,6 +715,8 @@ function goCreateInbound(row?: any) {
             <template #default="{ row }">
               <el-input-number
                 v-model="row.damagedQty"
+                :aria-label="`${row.sku} 破损数量`"
+                :disabled="receiveBusy || receiveUncertain || Boolean(receiveResult)"
                 :min="0"
                 :max="row.pendingQty"
                 size="small"
@@ -595,26 +726,33 @@ function goCreateInbound(row?: any) {
               />
             </template>
           </el-table-column>
-          <el-table-column label="QC" width="96" align="center">
+          <el-table-column label="质检" width="96" align="center">
             <template #default="{ row }">
-              <el-select v-model="row.qcStatus" size="small" class="receive-qc-select">
+              <el-select v-model="row.qcStatus" :aria-label="`${row.sku} 质检结论`" :disabled="receiveBusy || receiveUncertain || Boolean(receiveResult) || row.damagedQty > 0" size="small" class="receive-qc-select">
                 <el-option label="通过" value="pass" />
                 <el-option label="异常" value="fail" />
               </el-select>
             </template>
           </el-table-column>
-          <el-table-column label="QC 备注" min-width="140">
+          <el-table-column label="质检备注" min-width="140">
             <template #default="{ row }">
-              <el-input v-model="row.qcRemark" size="small" placeholder="破损说明等" clearable />
+              <el-input v-model="row.qcRemark" :disabled="receiveBusy || receiveUncertain || Boolean(receiveResult)" size="small" placeholder="破损说明等" clearable />
             </template>
           </el-table-column>
         </el-table>
       </div>
-      <el-input v-model="receiveRemark" type="textarea" :rows="2" placeholder="整单备注（可选）" class="receive-remark" />
+      <el-input v-model="receiveRemark" :disabled="receiveBusy || receiveUncertain || Boolean(receiveResult)" type="textarea" :rows="2" placeholder="整单备注（可选）" class="receive-remark" />
     </template>
+    </div>
     <template #footer>
-      <el-button @click="receiveVisible = false">取消</el-button>
-      <el-button type="primary" @click="submitReceive">确认收货入仓</el-button>
+      <el-button :disabled="receiveBusy" @click="receiveVisible = false">返回列表</el-button>
+      <template v-if="receiveResult">
+        <el-button v-if="receiveResult.poStatus !== 'received'" type="primary" :disabled="receiveBusy" @click="openReceive({ id: receiveTarget.id })">继续本单收货</el-button>
+        <el-button @click="showReceiptNext('receipts')">查看收货记录</el-button>
+        <el-button type="primary" @click="showReceiptNext('stock')">查看中转仓库存</el-button>
+      </template>
+      <el-button v-else-if="receiveUncertain" type="primary" :loading="receiveBusy" @click="submitReceive(true)">核对并重试本次收货</el-button>
+      <el-button v-else type="primary" :loading="receiveBusy" :disabled="receiveLoading || !receiveTarget" @click="submitReceive()">确认收货入仓</el-button>
     </template>
   </el-dialog>
 </template>

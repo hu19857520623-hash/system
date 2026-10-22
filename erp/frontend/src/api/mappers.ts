@@ -1,3 +1,4 @@
+import { userFacingError } from '@erp/shared/user-facing-error'
 /**
  * 后端字段 → 前端展示字段映射
  */
@@ -209,6 +210,9 @@ export function mapPrePurchaseOrder(row: any) {
     cancelReason: row.cancelReason || '',
     remark: row.remark || '',
     convertedPoId: row.convertedPoId,
+    linkedPoNo: row.linkedPoNo || '',
+    linkedPoStatus: row.linkedPoStatus || '',
+    linkedPoAuditRemark: row.linkedPoAuditRemark || '',
     createdAtStr: row.createdAtStr || '',
     _raw: row,
   }
@@ -294,6 +298,8 @@ export function mapPurchaseOrder(row: any) {
   }
   return {
     id: row.id,
+    prePoId: row.prePoId || null,
+    prePoStatus: row.prePoStatus || '',
     poNo: row.poNo,
     supplier: row.supplierName || '—',
     supplierId: row.supplierId,
@@ -490,7 +496,7 @@ export function mapSyncLog(row: any) {
     target: row.targetSystem,
     ref: row.refNo || '',
     status: row.status,
-    message: row.errorMsg || row.message || '',
+    message: row.status === 'failed' ? userFacingError(row.errorMsg || row.message) : row.errorMsg || row.message || '',
     time: fmtTime(row.createdAt),
     _raw: row,
   }
@@ -573,7 +579,8 @@ export function mapLogisticsReceipt(row: any) {
     remark: row.remark || '',
     items,
     skuCount: items.length,
-    totalQty: items.reduce((s: number, i: any) => s + (i.actualQty || 0), 0),
+    goodQty: items.reduce((s: number, i: any) => s + (i.actualQty || 0), 0),
+    totalQty: items.reduce((s: number, i: any) => s + (i.actualQty || 0) + (i.damagedQty || 0), 0),
     damagedQty: items.reduce((s: number, i: any) => s + (i.damagedQty || 0), 0),
     hasQcIssue: items.some((i: any) => (i.damagedQty || 0) > 0 || i.qcStatus === 'fail'),
     _raw: row,

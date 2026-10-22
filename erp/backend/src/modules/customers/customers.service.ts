@@ -6,6 +6,7 @@ import { PrismaService } from '../../common/prisma/prisma.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
 import { notifyOms } from '../../common/oms-notify.util'
 import { readableDisplayText } from '../../common/display-text.util'
+import { buildInboundPipelineQtyMap, INBOUND_PIPELINE_STATUSES } from '../../common/inbound-pipeline.util'
 import {
   buildOmsOnlyListItem,
   enrichErpWithOms,
@@ -155,18 +156,22 @@ export class CustomersService {
   /** OMS P1：客户库存视图（货盘持有 + 客户自有海外仓库存）。 */
   async inventoryViewForOms(customerCode: string, warehouseCode = 'WMS-JHB-01') {
     const customer = await this.findByCodeForOms(customerCode)
-    const [holdings, inboundItems] = await Promise.all([
+    const [holdings, inboundOrders] = await Promise.all([
       this.listSkuInventory(BigInt(customer.id)),
-      this.prisma.inboundOrderItem.findMany({
+      this.prisma.inboundOrder.findMany({
         where: {
-          order: {
-            omsCustomerCode: customer.customerCode,
-            status: { in: ['completed', 'confirmed'] },
-          },
+          omsCustomerCode: customer.customerCode,
+          warehouseCode,
+          status: { in: [...INBOUND_PIPELINE_STATUSES, 'completed', 'confirmed'] },
         },
-        select: { productId: true, sku: true },
+        select: {
+          warehouseCode: true, status: true,
+          items: { select: { productId: true, sku: true, expectedQty: true, actualQty: true, putawayQty: true } },
+        },
       }),
     ])
+    const inboundItems = inboundOrders.flatMap(order => order.items)
+    const pipeline = buildInboundPipelineQtyMap(inboundOrders)
     const catalogSkus = holdings.map((holding) => holding.sku)
     const ownedProductIdValues = [...new Set(inboundItems.map(item => item.productId.toString()))]
     const ownedProductIds = ownedProductIdValues.map(BigInt)
@@ -208,7 +213,7 @@ export class CustomersService {
 
     // A customer-owned SKU is linked to the customer by its OMS ASN. Unlike a
     // catalog holding, it has no customer_sku_inventory record, so include it
-    // directly from completed inbound orders and the warehouse inventory.
+    // directly from submitted inbound orders, including not-yet-stocked goods.
     const ownedProductIdSet = new Set(ownedProductIdValues)
     const ownedItems = products
       .filter(product => ownedProductIdSet.has(product.id.toString()))
@@ -228,6 +233,8 @@ export class CustomersService {
           warehouseAvailable: inventory?.availableQty ?? 0,
           warehouseLocked: inventory?.lockedQty ?? 0,
           warehouseTotal: inventory?.totalQty ?? 0,
+          inTransitQty: pipeline.get(`${product.sku}::${warehouseCode}`)?.inTransit ?? 0,
+          pendingShelvingQty: pipeline.get(`${product.sku}::${warehouseCode}`)?.pendingPutaway ?? 0,
           stockSource: 'owned' as const,
         }
       })

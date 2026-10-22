@@ -3,6 +3,7 @@ import { LogisticsReceiptService } from './logistics-receipt.service'
 import { PaginationDto } from '../../common/dto/pagination.dto'
 import { CurrentUser } from '../../common/decorators/current-user.decorator'
 import { RequirePerms } from '../../common/decorators/require-perms.decorator'
+import { CreateLogisticsReceiptDto } from './logistics-receipt.dto'
 
 @Controller('logistics-receipts')
 export class LogisticsReceiptController {
@@ -22,7 +23,7 @@ export class LogisticsReceiptController {
 
   @RequirePerms('logistics_wh.receive')
   @Post()
-  create(@Body() body: any, @CurrentUser('realName') realName: string, @CurrentUser('userId') userId: number) {
+  create(@Body() body: CreateLogisticsReceiptDto, @CurrentUser('realName') realName: string, @CurrentUser('userId') userId: number) {
     return this.service.create(body, realName, userId)
   }
 }

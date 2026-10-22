@@ -1,3 +1,5 @@
+
+import { userFacingError } from '../../utils/userFacingError'
 import { useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { Button } from '../ui'
@@ -10,6 +12,7 @@ import { getCustomerCode, getCustomerIdForRole } from '../../data/dataScope'
 import { getCustomerSkuDisplay } from '../../data/skuCode'
 import { validateCustomerSku } from '../../data/skuCode'
 import { readFileAsDataUrl } from '../../data/fileUtils'
+import { notifySuccess } from '../../utils/userNotify'
 
 interface ProductFormProps {
   product?: Product
@@ -50,9 +53,10 @@ function ProductEditorForm({ product, mode = 'create' }: ProductFormProps) {
   const [hasBattery, setHasBattery] = useState(product?.hasBattery ? 'yes' : 'no')
   const [image, setImage] = useState(product?.image || '')
   const [imageUploading, setImageUploading] = useState(false)
-  const [saving, setSaving] = useState(false)
+  const [savingAction, setSavingAction] = useState<'draft' | 'submit' | 'update' | null>(null)
+  const saving = savingAction !== null
   const [error, setError] = useState('')
-  const submittedProduct = Boolean(product && product.productStatus !== 'draft')
+  const submittedProduct = Boolean(mode === 'edit' && product && product.productStatus !== 'draft')
 
   const handleImageUpload = async (file?: File) => {
     if (!file) return
@@ -67,7 +71,7 @@ function ProductEditorForm({ product, mode = 'create' }: ProductFormProps) {
       const uploaded = await uploadErpProductDraftImage(file.name, contentBase64)
       setImage(uploaded.imageUrl)
     } catch (error) {
-      setError(`商品图片上传失败：${error instanceof Error ? error.message : String(error)}`)
+      setError(userFacingError(`商品图片上传失败：${error instanceof Error ? error.message : String(error)}`))
     } finally {
       setImageUploading(false)
     }
@@ -97,12 +101,12 @@ function ProductEditorForm({ product, mode = 'create' }: ProductFormProps) {
     const customerId = getCustomerIdForRole(role) || product?.customerId
     const customerCode = getCustomerCode(customerId ?? undefined)
     const isCreate = mode === 'create' || !product
-    const isDraft = product?.productStatus === 'draft'
+    const isDraft = mode === 'edit' && product?.productStatus === 'draft'
     const prepared = isCreate || isDraft
       ? prepareNewProductSkus(customerSku, customerCode, customerId ?? undefined, isDraft ? product?.id : undefined)
       : null
     if (prepared && 'ok' in prepared && prepared.ok === false) {
-      setError(prepared.error)
+      setError(userFacingError(prepared.error))
       return
     }
 
@@ -111,7 +115,7 @@ function ProductEditorForm({ product, mode = 'create' }: ProductFormProps) {
       : product!.internalSku
     const productId = isCreate ? `p-${internalSku}` : product!.id
 
-    setSaving(true)
+    setSavingAction(action)
     try {
       const local: Product = {
         id: productId,
@@ -146,9 +150,11 @@ function ProductEditorForm({ product, mode = 'create' }: ProductFormProps) {
       }
       const saved = await upsertLocalProduct(local)
       if (!saved.ok) {
-        window.alert(saved.error)
+        setError(userFacingError(saved.error))
         return
       }
+      notifySuccess(action === 'submit' ? '商品已提交，可在商品列表查看'
+        : action === 'update' ? '商品修改已保存' : '商品草稿已保存，可继续编辑或提交')
       if (action === 'submit') {
         navigate('/products')
         return
@@ -157,12 +163,12 @@ function ProductEditorForm({ product, mode = 'create' }: ProductFormProps) {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       if (/重复\s*SKU|SKU.*已存在|已被使用/i.test(msg)) {
-        window.alert(msg.includes('重复 SKU') ? msg : `重复 SKU：${internalSku}`)
+        setError(userFacingError(msg.includes('重复 SKU') ? msg : `重复 SKU：${internalSku}`))
       } else {
-        setError(msg)
+        setError(userFacingError(msg))
       }
     } finally {
-      setSaving(false)
+      setSavingAction(null)
     }
   }
 
@@ -243,7 +249,7 @@ function ProductEditorForm({ product, mode = 'create' }: ProductFormProps) {
       </FormSection>
 
       {error && (
-        <p className="rounded-lg bg-red-50 px-4 py-2 text-xs text-red-700 ring-1 ring-red-100">{error}</p>
+        <p role="alert" className="rounded-lg bg-red-50 px-4 py-2 text-xs text-red-700 ring-1 ring-red-100">{error}</p>
       )}
 
       <div className="fixed bottom-0 left-0 right-0 z-30 border-t border-border-light bg-white/95 px-6 py-4 backdrop-blur-sm lg:pl-[260px]">
@@ -251,15 +257,15 @@ function ProductEditorForm({ product, mode = 'create' }: ProductFormProps) {
           <Button variant="secondary" onClick={() => navigate('/products')} disabled={saving || imageUploading}>取消</Button>
           {submittedProduct ? (
             <Button disabled={saving} onClick={() => void handleSave('update')}>
-              {saving ? '保存中…' : '保存修改'}
+              {savingAction === 'update' ? '保存中…' : '保存修改'}
             </Button>
           ) : (
             <>
               <Button variant="secondary" disabled={saving || imageUploading} onClick={() => void handleSave('draft')}>
-                {saving ? '保存中…' : '保存'}
+                {savingAction === 'draft' ? '保存中…' : '保存'}
               </Button>
               <Button disabled={saving || imageUploading} onClick={() => void handleSave('submit')}>
-                {saving ? '提交中…' : '保存并提交'}
+                {savingAction === 'submit' ? '提交中…' : '保存并提交'}
               </Button>
             </>
           )}
@@ -270,6 +276,12 @@ function ProductEditorForm({ product, mode = 'create' }: ProductFormProps) {
 }
 
 export default function ProductForm({ product, mode = 'create' }: ProductFormProps) {
+  if (mode === 'edit' && !product) {
+    return <div role="alert" className="rounded-xl border border-border bg-white p-5">
+      <p>未找到该商品，或当前账号无权编辑。请返回商品列表重新选择。</p>
+      <Link to="/products" className="mt-3 inline-block text-primary-600">返回我的商品</Link>
+    </div>
+  }
   if (mode === 'edit' && product?.productStatus === 'discarded') {
     return <ProductEditBlocked product={product} />
   }

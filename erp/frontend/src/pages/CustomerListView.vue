@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { userFacingError } from '@erp/shared/user-facing-error'
+
 import { displaySku, displaySkuText } from '@erp/shared/sku-display'
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
@@ -258,7 +260,7 @@ async function load() {
     rows.value = (res.items || []).map(mapCustomer)
     listTotal.value = res.total ?? rows.value.length
   } catch (e: any) {
-    ElMessage.error(displaySkuText(e?.message || '加载失败'))
+    ElMessage.error(userFacingError(displaySkuText(e?.message || '加载失败')))
   } finally {
     loading.value = false
   }
@@ -352,7 +354,7 @@ async function submitPortalPassword() {
     ElMessage.success(`${actionLabel}成功：${result.customerCode} · ${result.portalUsername || result.portalLoginEmail}`)
     await reloadAll()
   } catch (e: any) {
-    ElMessage.error(displaySkuText(`${e?.message || `${actionLabel}失败`}；临时密码未保留，请重新输入`))
+    ElMessage.error(userFacingError(displaySkuText(`${e?.message || `${actionLabel}失败`}；临时密码未保留，请重新输入`)))
   } finally {
     saving.value = false
   }
@@ -408,7 +410,7 @@ async function submitCreate() {
     createSuccessVisible.value = true
     await reloadAll()
   } catch (e: any) {
-    ElMessage.error(displaySkuText(e?.message || '开户失败'))
+    ElMessage.error(userFacingError(displaySkuText(e?.message || '开户失败')))
   } finally {
     saving.value = false
   }
@@ -446,7 +448,7 @@ async function submitEdit() {
     editVisible.value = false
     await reloadAll()
   } catch (e: any) {
-    ElMessage.error(displaySkuText(e?.message || '保存失败'))
+    ElMessage.error(userFacingError(displaySkuText(e?.message || '保存失败')))
   } finally {
     saving.value = false
   }

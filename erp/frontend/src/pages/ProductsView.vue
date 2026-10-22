@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { userFacingError } from '@erp/shared/user-facing-error'
+
 import { displaySku, displaySkuText } from '@erp/shared/sku-display'
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
@@ -243,7 +245,7 @@ async function saveCreate() {
     await load()
     if (created.id) openEdit(created.id)
   } catch (err: any) {
-    ElMessage.error(displaySkuText(err.message || '创建失败'))
+    ElMessage.error(userFacingError(displaySkuText(err.message || '创建失败')))
   } finally {
     createSaving.value = false
   }
@@ -276,7 +278,7 @@ async function loadProductDialog(id: number, mode: 'detail' | 'edit') {
       dialogVisible.value = true
     }
   } catch (err: any) {
-    ElMessage.error(displaySkuText(err.message || '加载商品失败'))
+    ElMessage.error(userFacingError(displaySkuText(err.message || '加载商品失败')))
   }
 }
 
@@ -347,7 +349,7 @@ async function uploadProductImage(productId: number, file: File) {
     ElMessage.success('图片已上传')
     load()
   } catch (err: any) {
-    ElMessage.error(displaySkuText(err.message || '图片上传失败'))
+    ElMessage.error(userFacingError(displaySkuText(err.message || '图片上传失败')))
   } finally {
     imageUploading.value = false
   }
@@ -367,7 +369,7 @@ async function removeProductImage(productId: number, imageId: number | null) {
     ElMessage.success('图片已删除')
     load()
   } catch (err: any) {
-    if (err !== 'cancel') ElMessage.error(displaySkuText(err.message || '删除失败'))
+    if (err !== 'cancel') ElMessage.error(userFacingError(displaySkuText(err.message || '删除失败')))
   }
 }
 
@@ -447,7 +449,7 @@ async function printSkuLabels(items: Array<{ sku?: string; name?: string; barcod
         ref="tableRef"
         v-loading="loading"
         :data="pagedItems"
-        :row-key="(row) => row.id"
+        :row-key="(row: { id: string | number }) => String(row.id)"
         class="products-table"
         stripe
         border

@@ -1,6 +1,24 @@
 import { assertGlobalSkuAvailable } from '../../common/global-sku.util'
 import { isCatalogPurchaseInbound } from './catalog-inbound.util'
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
+import { Prisma } from '@prisma/client'
+import { randomUUID } from 'crypto'
+import { ApplyShipmentFreightDto, CreateErpShipmentDto, ShipmentFreightMutationDto } from './dto/erp-shipment.dto'
+import { removeErpShipment, writeErpShipmentFreight } from './erp-shipment-maintenance.util'
+import { shipmentSeaFreightVersion } from './erp-shipment-edit.util'
+import { runInboundReceiving } from './inbound-receiving-transaction.util'
+import { runInboundPutaway } from './inbound-putaway-transaction.util'
+import { runInboundControl, InboundControlKind } from './inbound-control-transaction.util'
+import { InboundControlDto } from './dto/inbound-control.dto'
+import { attachInboundWorkflowRevision } from './inbound-workflow-revision.util'
+import { PutawayInboundDto } from './dto/inbound-putaway.dto'
+import { pushCatalogStockToOms } from '../pricing/oms-catalog-sync.util'
+import { inboundMeasurementVersion, inboundReceivingVersion } from './inbound-receiving-version.util'
+import { inboundCartonReadiness } from './inbound-carton-readiness.util'
+import { MeasureInboundDto, RecordInboundCartonsDto, ScanInboundCartonDto, ScanInboundQcDto, SubmitInboundQcDto } from './dto/inbound-receiving.dto'
+import { erpShipmentFingerprint, erpShipmentRequest } from './erp-shipment-request.util'
+import { ERP_MASTER_PRODUCT_WHERE } from '../../common/product-source.util'
+import { syncCatalogFromInbound } from '../pricing/catalog-sync.util'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { FileStoreService } from '../../common/file-store.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
@@ -12,7 +30,6 @@ import { fetchOmsInboundRows, mergeInboundPaginate } from './oms-inbound-bridge.
 import { buildInboundRemark, parseOmsInboundMeta, stripOmsSystemTags } from '../../common/oms-sync-meta.util'
 import { numDim, resolveBillingDimensions } from '../../common/product-dimension.util'
 import { unitCostRmb } from '../../common/inventory/inventory-lot-cost.util'
-import { parseInboundQcScanInput } from './inbound-qc-scan.util'
 import { findInboundItemByScan as matchInboundItemByScan } from './inbound-item-scan.util'
 import { loadPlatformBarcodesByInternalSku, productScanFields } from '../../common/platform-barcode-lookup.util'
 import { InventoryMutationService } from '../../common/inventory/inventory-mutation.service'
@@ -36,14 +53,6 @@ import {
   matchCartonByScan,
   nextSeqFromNos,
 } from '@erp/shared/wms-doc-no'
-import {
-  allocateInboundSeaFreight,
-  parseSeaFreightMode,
-  patchInboundRemarkSeaFreight,
-} from './inbound-sea-freight.util'
-import { inboundReceivingStarted } from './inbound-delete.util'
-import { manageInboundCount } from './inbound-count-management.util'
-import { reduceInboundQuantity, InboundReduction } from './inbound-reduce.util'
 
 type OmsAsnLineInput = {
   sku: string
@@ -69,13 +78,17 @@ const QC_STATUSES = new Set(['arrived', 'receiving'])
 /** 可上架 */
 const PUTAWAY_STATUSES = new Set(['pending_putaway'])
 
-/** 一步确认（兼容旧接口） */
-const LEGACY_CONFIRM_STATUSES = new Set([
-  ...PENDING_RECEIPT_STATUSES,
-  'receiving',
-])
-
 const TERMINAL_STATUSES = new Set(['completed', 'confirmed', 'cancelled'])
+
+function inboundStatusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    oms_draft: '未提交草稿', pending_receipt: '在途', pending_push: '在途',
+    push_failed: '在途', pushed: '在途', arrived: '已到仓', receiving: '收货中',
+    pending_putaway: '待上架', completed: '已入库', confirmed: '已入库',
+    exception: '异常', cancelled: '作废',
+  }
+  return labels[status] || '暂无法识别，请刷新核对'
+}
 
 function pieceQty(items: Array<{ actualQty?: number | null; expectedQty?: number; putawayQty?: number | null }>, field?: 'putawayQty') {
   return (items || []).reduce((sum, item) => {
@@ -102,10 +115,19 @@ export class InboundService {
     private inboundFee: InboundFeeService,
   ) {}
 
-  async list(q: PaginationDto & { status?: string }) {
+  async list(q: PaginationDto & { status?: string; source?: string }) {
     const { page, pageSize } = getPagination(q)
     const where: any = {}
-    if (q.status) {
+    if (q.source && !['all', 'erp_shipment', 'oms_customer'].includes(q.source)) {
+      throw new BadRequestException('无效的入库单来源')
+    }
+    if (q.source === 'erp_shipment') {
+      where.AND = [{ sourceWarehouseCode: { not: null } }, { sourceWarehouseCode: { not: '' } }]
+    } else if (q.source === 'oms_customer') {
+      where.omsCustomerCode = { not: null }
+      where.AND = [{ OR: [{ sourceWarehouseCode: null }, { sourceWarehouseCode: '' }] }]
+    }
+    if (q.status && q.status !== 'all') {
       if (q.status === 'pending_receipt') {
         where.status = { in: [...PENDING_RECEIPT_STATUSES] }
       } else if (q.status === 'completed') {
@@ -142,11 +164,12 @@ export class InboundService {
       dataSource: order.omsCustomerCode ? 'erp_oms' : 'erp',
       dataSourceLabel: order.omsCustomerCode ? 'ERP·OMS客户' : 'ERP·发运',
       readOnly: false,
+      sourceKind: order.sourceWarehouseCode ? 'erp_shipment' : order.omsCustomerCode ? 'oms_customer' : 'erp_other',
       sortKey: order.createdAt.getTime(),
       items: order.items.map((item: any) => this.enrichInboundItem(item, prodMap, platformBySku)),
     }))
 
-    const omsItems = await fetchOmsInboundRows(this.prisma, {
+    const omsItems = q.source === 'erp_shipment' ? [] : await fetchOmsInboundRows(this.prisma, {
       keyword: q.keyword,
       status: q.status,
     })
@@ -162,15 +185,16 @@ export class InboundService {
       ...erpItems.map((r) => r.inboundNo),
       ...linkedErpOrders.map((r) => r.inboundNo),
     ])
-    const omsOnly = omsItems.filter((r) => !erpNoSet.has(r.inboundNo))
+    const omsOnly = omsItems.filter((r) => !erpNoSet.has(r.inboundNo)).map(r => ({ ...r, sourceKind: 'oms_customer' }))
 
     const { items, total } = mergeInboundPaginate([erpItems, omsOnly], page, pageSize)
     return { items, total, page, pageSize }
   }
 
-  async detail(id: number) {
-    const row = await this.prisma.inboundOrder.findUnique({ where: { id: BigInt(id) }, include: { items: true } })
+  async detail(id: number, options?: { reconcileCatalog?: boolean }) {
+    const row = await this.prisma.inboundOrder.findUnique({ where: { id: BigInt(id) }, include: { items: true, putawayItems: { orderBy: { id: 'desc' } } } })
     if (!row) throw new NotFoundException('入库单不存在')
+    await attachInboundWorkflowRevision(this.prisma, row)
 
     const productIds = [...new Set(row.items.map((i) => i.productId))]
     const products = productIds.length
@@ -182,7 +206,7 @@ export class InboundService {
     const cartons = await this.loadCartons(Number(row.id), row.inboundNo, row.items)
 
     const displayStatus = normalizeInboundStatus(row.status)
-    if (displayStatus === 'completed') {
+    if (displayStatus === 'completed' && options?.reconcileCatalog !== false) {
       try {
         await this.pricing.applyInboundActual({
           inboundNo: row.inboundNo,
@@ -200,6 +224,10 @@ export class InboundService {
       ...row,
       id: Number(row.id),
       displayStatus: normalizeInboundStatus(row.status),
+      seaFreightVersion: shipmentSeaFreightVersion(row, products),
+      receivingVersion: inboundReceivingVersion({ ...row, cartons }),
+      measurementVersion: inboundMeasurementVersion({ ...row, cartons }, products),
+      cartonConfirmation: await inboundCartonReadiness(this.prisma, { ...row, cartons }),
       items: row.items.map((item) => this.enrichInboundItem(item, prodMap, platformBySku)),
       cartons,
       omsAttachments: await this.loadOmsAttachments(Number(row.id)),
@@ -228,7 +256,7 @@ export class InboundService {
 
   async downloadOmsAttachment(inboundNo: string, attachmentId: number, customerCode: string) {
     const code = String(customerCode || '').trim()
-    if (!code) throw new BadRequestException('缺少 customerCode')
+    if (!code) throw new BadRequestException('缺少客户代码')
     const order = await this.prisma.inboundOrder.findUnique({ where: { inboundNo: inboundNo.trim() } })
     if (!order) throw new NotFoundException('入库单不存在')
     if (!order.omsCustomerCode || order.omsCustomerCode !== code) {
@@ -343,421 +371,100 @@ export class InboundService {
     return { ...row, id: Number(row.id) }
   }
 
-  async create(data: any, operatorId?: number) {
-    const lines: any[] = data.items || []
-    if (!lines.length) throw new BadRequestException('请填写入库明细')
-
-    const sourceWarehouseCode = String(data.sourceWarehouseCode || data.logisticsWhCode || '').trim()
-    if (!sourceWarehouseCode) throw new BadRequestException('请选择始发物流中转仓')
-
-    const destWarehouseCode = String(data.warehouseCode || '').trim()
-    if (!destWarehouseCode) throw new BadRequestException('请选择目的海外仓')
-
-    const sourceWh = await this.prisma.warehouse.findUnique({ where: { warehouseCode: sourceWarehouseCode } })
-    if (!sourceWh || sourceWh.warehouseType !== 'logistics') {
-      throw new BadRequestException('始发仓必须是物流中转仓')
-    }
-    const destWh = await this.prisma.warehouse.findUnique({ where: { warehouseCode: destWarehouseCode } })
-    if (!destWh || destWh.warehouseType !== 'wms') {
-      throw new BadRequestException('目的仓必须是海外仓')
-    }
-
-    const skuTotals = new Map<string, { productId: bigint; qty: number }>()
-    for (const line of lines) {
-      const sku = String(line.sku || '').trim()
-      const qty = Number(line.expectedQty ?? line.qty ?? 0)
-      const productId = BigInt(line.productId ?? 0)
-      if (!sku || qty <= 0) throw new BadRequestException('SKU 与入库数量无效')
-      if (!productId) throw new BadRequestException(`SKU ${sku} 缺少 productId`)
-      const prev = skuTotals.get(sku)
-      skuTotals.set(sku, { productId, qty: (prev?.qty ?? 0) + qty })
-    }
-
-    const inboundNo = String(data.inboundNo || '').trim()
-      || await this.allocateInboundNo(
-        data.omsCustomerCode || data.customerCode || deriveCustomerCodeFromInternalSku(String(lines[0]?.sku || '')),
-      )
-    const warehouseNo = String(data.warehouseNo || '').trim() || this.extractWarehouseNo(data.remark) || undefined
-    const trackingNo = String(data.trackingNo || '').trim() || undefined
-    const freightLines: any[] = data.freightLines || data.catalogSync || []
-    const freightBySku = new Map<string, { sea: number; domestic: number; cost?: number }>()
-    for (const line of freightLines) {
-      const sku = String(line?.sku || '').trim()
-      if (!sku) continue
-      freightBySku.set(sku, {
-        sea: Number(line.seaFreightPerUnit ?? line.unitFreight ?? line.seaFreight ?? 0) || 0,
-        domestic: Number(line.domesticFeePerUnit ?? line.domesticFee ?? 0) || 0,
-        cost: line.costRmb != null && line.costRmb !== '' ? Number(line.costRmb) : undefined,
-      })
-    }
-    const products = await this.prisma.product.findMany({
-      where: { id: { in: [...skuTotals.values()].map((row) => row.productId) } },
-      select: { id: true, costRmb: true, seaFreightPerUnit: true, domesticFeePerUnit: true },
-    })
-    const productCostMap = new Map(products.map((p) => [Number(p.id), p]))
-
-    return this.prisma.$transaction(async (tx) => {
-      for (const [sku, { productId, qty }] of skuTotals) {
-        const inv = await tx.inventory.findUnique({
-          where: { productId_warehouseCode: { productId, warehouseCode: sourceWarehouseCode } },
-        })
-        const available = inv?.availableQty ?? 0
-        if (available < qty) {
-          throw new BadRequestException(
-            `SKU ${sku} 在中转仓 ${sourceWarehouseCode} 可用 ${available} 件，不足发运 ${qty} 件；请先在物流中转仓完成收货`,
-          )
-        }
+  async create(data: CreateErpShipmentDto, operatorId?: number) {
+    if (!Number.isSafeInteger(operatorId) || !operatorId || operatorId <= 0) throw new ForbiddenException('请重新登录后创建发运单')
+    const request = erpShipmentRequest(data)
+    const fingerprint = erpShipmentFingerprint(request)
+    const operationKey = data.clientRequestId || `manual:${request.inboundNo}`
+    return this.prisma.$transaction(async tx => {
+      // Operations are scoped to the signed-in operator, including retries across tabs.
+      await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(operatorId)} FOR UPDATE`
+      const previous = await tx.operationLog.findFirst({ where: { operatorId: BigInt(operatorId), module: 'inbound', action: 'create', detail: { path: '$.clientRequestId', equals: operationKey } } })
+      if (previous) {
+        const detail = (previous.detail || {}) as Record<string, unknown>
+        if (detail.requestFingerprint !== fingerprint) throw new ConflictException('本次发运操作已用于其他内容，请先核对原入库单，请勿重复发运')
+        const originalId = Number(detail.inboundId)
+        const order = await tx.inboundOrder.findUnique({ where: Number.isSafeInteger(originalId) && originalId > 0 ? { id: BigInt(originalId) } : { inboundNo: previous.targetId || '' }, include: { items: true, cartons: { include: { items: true }, orderBy: { boxSeq: 'asc' } } } })
+        if (!order) throw new ConflictException('原发运单已删除或无法核对，请返回入库管理核对，请勿重复提交原操作')
+        if (!originalId && previous.createdAt && order.createdAt > previous.createdAt) throw new ConflictException('原发运单身份无法核对，请联系主管查看历史操作，请勿重复发运')
+        return { ...order, id: Number(order.id), duplicate: true }
       }
-
-      const order = await tx.inboundOrder.create({
-        data: {
-          inboundNo,
-          sourceWarehouseCode,
-          warehouseCode: destWarehouseCode,
-          warehouseNo,
-          trackingNo,
-          remark: data.remark,
-          status: 'pending_receipt',
-          items: {
-            create: lines.map((l) => {
-              const sku = String(l.sku || '').trim()
-              const productId = Number(l.productId ?? 0)
-              const freight = freightBySku.get(sku)
-              const product = productCostMap.get(productId)
-              const costRmb = freight?.cost ?? (product?.costRmb != null ? Number(product.costRmb) : undefined)
-              const seaFreightPerUnit = freight?.sea || (product?.seaFreightPerUnit != null ? Number(product.seaFreightPerUnit) : 0)
-              const domesticFeePerUnit = freight?.domestic || (product?.domesticFeePerUnit != null ? Number(product.domesticFeePerUnit) : 0)
-              return {
-                productId: BigInt(l.productId ?? 0),
-                sku,
-                expectedQty: Number(l.expectedQty ?? l.qty ?? 0),
-                remark: l.remark,
-                costRmb: costRmb != null && Number.isFinite(costRmb) ? costRmb : undefined,
-                seaFreightPerUnit,
-                domesticFeePerUnit,
-              }
-            }),
-          },
-        },
-        include: { items: true, cartons: { include: { items: true }, orderBy: { boxSeq: 'asc' } } },
-      })
-
-      for (const [sku, { productId, qty }] of skuTotals) {
-        const inv = await tx.inventory.findUnique({
-          where: { productId_warehouseCode: { productId, warehouseCode: sourceWarehouseCode } },
-        })
-        if (!inv) {
-          throw new BadRequestException(`SKU ${sku} 在中转仓 ${sourceWarehouseCode} 无库存记录`)
-        }
-        const before = inv.totalQty
-        const after = before - qty
-        await tx.inventory.update({
-          where: { id: inv.id },
-          data: {
-            totalQty: after,
-            availableQty: inv.availableQty - qty,
-          },
-        })
-        await tx.inventoryLog.create({
-          data: {
-            productId,
-            sku,
-            warehouseCode: sourceWarehouseCode,
-            changeType: 'inbound_allocate',
-            changeQty: -qty,
-            beforeQty: before,
-            afterQty: after,
-            referenceNo: inboundNo,
-            operatorId: operatorId ? BigInt(operatorId) : undefined,
-            remark: `发运至海外仓 ${destWarehouseCode}`,
-          },
-        })
+      if (request.inboundNo && await tx.inboundOrder.findUnique({ where: { inboundNo: request.inboundNo } })) throw new ConflictException('入库单号已存在，请核对原单或填写新单号')
+      if (request.inboundNo && await tx.operationLog.findFirst({ where: { module: 'inbound', targetId: request.inboundNo } })) throw new ConflictException('此入库单号曾经使用，不能重复使用历史单号，请填写新单号或留空自动生成')
+      if (request.draftNo) await this.requireOwnedDraft(tx, request.draftNo, operatorId)
+      const [sourceWh, destWh] = await Promise.all([
+        tx.warehouse.findUnique({ where: { warehouseCode: request.sourceWarehouseCode } }),
+        tx.warehouse.findUnique({ where: { warehouseCode: request.warehouseCode } }),
+      ])
+      if (!sourceWh || sourceWh.warehouseType !== 'logistics' || sourceWh.status !== 1) throw new BadRequestException('始发仓须为启用的物流中转仓')
+      if (!destWh || destWh.warehouseType !== 'wms' || destWh.status !== 1) throw new BadRequestException('目的仓须为启用的海外仓')
+      const ids = [...new Set(request.items.map(line => BigInt(line.productId)))].sort((a, b) => a < b ? -1 : a > b ? 1 : 0)
+      for (const id of ids) {
+        await tx.$queryRaw`SELECT id FROM product WHERE id = ${id} FOR UPDATE`
+        await tx.$queryRaw`SELECT id FROM inventory WHERE product_id = ${id} AND warehouse_code = ${request.sourceWarehouseCode} FOR UPDATE`
       }
-
-      return { ...order, id: Number(order.id) }
-    }).then(async (result) => {
-      await this.opLog.log({
-        operatorId,
-        module: 'inbound',
-        action: 'create',
-        targetType: 'inbound_order',
-        targetId: inboundNo,
-        detail: { sourceWarehouseCode, destWarehouseCode, itemCount: lines.length },
-      })
-      const withItems = await this.prisma.inboundOrder.findUnique({
-        where: { id: BigInt(result.id) },
-        include: { items: true, cartons: { include: { items: true }, orderBy: { boxSeq: 'asc' } } },
-      })
-      if (withItems) {
-        await this.persistCartons(this.prisma, withItems, data.cartons)
+      const products = await tx.product.findMany({ where: { AND: [ERP_MASTER_PRODUCT_WHERE, { id: { in: ids } }] } })
+      const productById = new Map(products.map(product => [Number(product.id), product]))
+      const freightBySku = new Map(request.freightLines.map(line => [line.sku, line]))
+      const resolved = [] as Array<{ line: typeof request.items[number]; product: typeof products[number]; stock: any; costRmb: number; seaFreightPerUnit: number; domesticFeePerUnit: number }>
+      for (const line of request.items) {
+        const product = productById.get(line.productId)
+        if (!product || product.sku !== line.sku || product.status !== 'active') throw new BadRequestException(`${line.sku} 不是有效的 ERP 商品主数据，请重新选择商品`)
+        const stock = await tx.inventory.findUnique({ where: { productId_warehouseCode: { productId: product.id, warehouseCode: request.sourceWarehouseCode } } })
+        if (!stock || stock.availableQty < line.expectedQty || stock.totalQty - stock.lockedQty < line.expectedQty) throw new BadRequestException(`${line.sku} 中转仓可发数量不足，请重新读取库存后修改发运数量`)
+        const dimensions = { lengthCm: line.lengthCm ?? Number(product.lengthCm), widthCm: line.widthCm ?? Number(product.widthCm), heightCm: line.heightCm ?? Number(product.heightCm), weightKg: line.weightKg ?? Number(product.weightKg) }
+        if (!Object.values(dimensions).every(value => Number.isFinite(value) && value > 0)) throw new BadRequestException(`${line.sku} 请补充完整且大于零的单件长、宽、高和重量`)
+        await tx.product.update({ where: { id: product.id }, data: dimensions })
+        const freight = freightBySku.get(line.sku)
+        resolved.push({ line, product, stock, costRmb: freight?.costRmb ?? Number(product.costRmb ?? 0), seaFreightPerUnit: freight?.seaFreightPerUnit ?? Number(product.seaFreightPerUnit ?? 0), domesticFeePerUnit: freight?.domesticFeePerUnit ?? Number(product.domesticFeePerUnit ?? 0) })
       }
-
-      const freightLines: any[] = data.freightLines || data.catalogSync || []
-      if (freightLines.length) {
-        await this.pricing.syncFromInbound({
-          inboundNo,
-          warehouseCode: destWarehouseCode,
-          lines: freightLines.map((l: any) => ({
-            sku: l.sku,
-            productName: l.productName,
-            spec: l.spec,
-            inboundQty: Number(l.inboundQty ?? l.expectedQty ?? l.qty ?? 0),
-            seaFreightPerUnit: Number(l.seaFreightPerUnit ?? l.unitFreight ?? l.seaFreight ?? 0),
-            domesticFeePerUnit: Number(l.domesticFeePerUnit ?? l.domesticFee ?? 0),
-            costRmb: l.costRmb != null ? Number(l.costRmb) : undefined,
-          })).filter((l) => l.sku && l.inboundQty > 0),
-        })
+      let order: any
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const inboundNo = request.inboundNo || await this.allocateInboundNo(deriveCustomerCodeFromInternalSku(request.items[0].sku), tx)
+        try {
+          order = await tx.inboundOrder.create({ data: { inboundNo, sourceWarehouseCode: request.sourceWarehouseCode, warehouseCode: request.warehouseCode,
+            warehouseNo: request.warehouseNo, trackingNo: request.trackingNo || null, remark: request.remark, status: 'pending_receipt',
+            items: { create: resolved.map(row => ({ productId: row.product.id, sku: row.line.sku, expectedQty: row.line.expectedQty, remark: row.line.remark || null,
+              costRmb: row.costRmb, seaFreightPerUnit: row.seaFreightPerUnit, domesticFeePerUnit: row.domesticFeePerUnit })) } },
+            include: { items: true, cartons: { include: { items: true }, orderBy: { boxSeq: 'asc' } } } })
+          break
+        } catch (error) { if (request.inboundNo || (error as { code?: string })?.code !== 'P2002' || attempt === 4) throw error }
       }
-
-      return result
-    })
+      await this.persistCartons(tx, order, request.cartons)
+      for (const row of resolved) {
+        await tx.inventory.update({ where: { id: row.stock.id }, data: { totalQty: { decrement: row.line.expectedQty }, availableQty: { decrement: row.line.expectedQty } } })
+        await tx.inventoryLog.create({ data: { productId: row.product.id, sku: row.line.sku, warehouseCode: request.sourceWarehouseCode, changeType: 'inbound_allocate', changeQty: -row.line.expectedQty,
+          beforeQty: row.stock.totalQty, afterQty: row.stock.totalQty - row.line.expectedQty, referenceNo: order.inboundNo, operatorId: BigInt(operatorId), remark: `发运至海外仓 ${request.warehouseCode}` } })
+      }
+      await syncCatalogFromInbound(tx, { inboundNo: order.inboundNo, warehouseCode: request.warehouseCode, lines: resolved.map(row => ({ sku: row.line.sku, productName: row.product.productName, spec: row.product.spec || undefined,
+        inboundQty: row.line.expectedQty, costRmb: row.costRmb, seaFreightPerUnit: row.seaFreightPerUnit, domesticFeePerUnit: row.domesticFeePerUnit })) })
+      if (request.draftNo) {
+        await tx.$executeRawUnsafe('UPDATE inbound_attachment SET inbound_id = ?, draft_no = NULL WHERE draft_no = ? AND inbound_id IS NULL', Number(order.id), request.draftNo)
+        await tx.$executeRawUnsafe('DELETE FROM inbound_draft WHERE draft_no = ? AND operator_id = ?', request.draftNo, operatorId)
+      }
+      await tx.operationLog.create({ data: { operatorId: BigInt(operatorId), module: 'inbound', action: 'create', targetType: 'inbound_order', targetId: order.inboundNo,
+        detail: { clientRequestId: operationKey, requestFingerprint: fingerprint, inboundId: Number(order.id), draftNo: request.draftNo, sourceWarehouseCode: request.sourceWarehouseCode, destWarehouseCode: request.warehouseCode, itemCount: resolved.length } } })
+      const completed = await tx.inboundOrder.findUniqueOrThrow({ where: { id: order.id }, include: { items: true, cartons: { include: { items: true }, orderBy: { boxSeq: 'asc' } } } })
+      return { ...completed, id: Number(completed.id), duplicate: false }
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted, timeout: 15000 })
   }
 
-  async remove(id: number, operatorId?: number) {
-    const order = await this.prisma.inboundOrder.findUnique({
-      where: { id: BigInt(id) },
-      include: { items: true, cartons: true },
-    })
-    if (!order) throw new NotFoundException('入库单不存在')
-    if (inboundReceivingStarted(order)) {
-      throw new BadRequestException('已开始收货的入库单不能删除')
-    }
-
-    const sourceWarehouseCode = String(order.sourceWarehouseCode || '').trim()
-    const skuTotals = new Map<string, { productId: bigint; qty: number }>()
-    for (const item of order.items) {
-      const qty = Number(item.expectedQty || 0)
-      if (!item.sku || qty <= 0 || !item.productId) continue
-      const prev = skuTotals.get(item.sku)
-      skuTotals.set(item.sku, { productId: item.productId, qty: (prev?.qty ?? 0) + qty })
-    }
-
-    await this.prisma.$transaction(async (tx) => {
-      if (sourceWarehouseCode) {
-        for (const [sku, { productId, qty }] of skuTotals) {
-          const inv = await tx.inventory.findUnique({
-            where: { productId_warehouseCode: { productId, warehouseCode: sourceWarehouseCode } },
-          })
-          if (inv) {
-            const before = inv.totalQty
-            const after = before + qty
-            await tx.inventory.update({
-              where: { id: inv.id },
-              data: {
-                totalQty: after,
-                availableQty: inv.availableQty + qty,
-              },
-            })
-            await tx.inventoryLog.create({
-              data: {
-                productId,
-                sku,
-                warehouseCode: sourceWarehouseCode,
-                changeType: 'inbound_release',
-                changeQty: qty,
-                beforeQty: before,
-                afterQty: after,
-                referenceNo: order.inboundNo,
-                operatorId: operatorId ? BigInt(operatorId) : undefined,
-                remark: '删除入库单，退回中转仓库存',
-              },
-            })
-          } else {
-            await tx.inventory.create({
-              data: {
-                productId,
-                sku,
-                warehouseCode: sourceWarehouseCode,
-                totalQty: qty,
-                availableQty: qty,
-                lockedQty: 0,
-              },
-            })
-            await tx.inventoryLog.create({
-              data: {
-                productId,
-                sku,
-                warehouseCode: sourceWarehouseCode,
-                changeType: 'inbound_release',
-                changeQty: qty,
-                beforeQty: 0,
-                afterQty: qty,
-                referenceNo: order.inboundNo,
-                operatorId: operatorId ? BigInt(operatorId) : undefined,
-                remark: '删除入库单，重建中转仓库存',
-              },
-            })
-          }
-        }
-      }
-
-      await tx.inboundArrivalScan.deleteMany({ where: { inboundId: order.id } })
-      await tx.inboundPutawayItem.deleteMany({ where: { inboundId: order.id } })
-      const cartonIds = order.cartons.map((carton) => carton.id)
-      if (cartonIds.length) {
-        await tx.inboundCartonItem.deleteMany({ where: { cartonId: { in: cartonIds } } })
-      }
-      await tx.inboundCarton.deleteMany({ where: { inboundId: order.id } })
-      await tx.inboundOrderItem.deleteMany({ where: { inboundId: order.id } })
-      await tx.$executeRawUnsafe('DELETE FROM inbound_attachment WHERE inbound_id = ?', Number(order.id))
-      await tx.inboundOrder.delete({ where: { id: order.id } })
-    })
-
-    if (order.omsCustomerCode) {
-      try {
-        const payload = this.mapInboundForOms({ ...order, status: 'cancelled' })
-        void notifyOms('inbound.status', order.omsCustomerCode, {
-          ...payload,
-          deleted: true,
-        } as unknown as Record<string, unknown>)
-      } catch (err) {
-        console.warn('[inbound] OMS delete notify skipped:', err)
-      }
-    }
-
-    await this.opLog.log({
-      operatorId,
-      module: 'inbound',
-      action: 'delete',
-      targetType: 'inbound_order',
-      targetId: order.inboundNo,
-      detail: {
-        sourceWarehouseCode,
-        destWarehouseCode: order.warehouseCode,
-        itemCount: order.items.length,
-        restored: Boolean(sourceWarehouseCode),
-      },
-    })
-
-    return { ok: true, inboundNo: order.inboundNo }
+  remove(id: number, operatorId?: number) {
+    return removeErpShipment(this.prisma, id, operatorId)
   }
 
-  async applySeaFreight(id: number, body: { mode?: string; totalAmount?: number }, operatorId?: number) {
-    const mode = parseSeaFreightMode(body?.mode)
-    const totalAmount = Math.round(Number(body?.totalAmount) * 100) / 100
-    if (!Number.isFinite(totalAmount) || totalAmount <= 0) {
-      throw new BadRequestException('请填写大于 0 的海运费总额')
-    }
-    return this.writeSeaFreight(id, { mode, totalAmount }, operatorId)
+  applySeaFreight(id: number, body: ApplyShipmentFreightDto, operatorId?: number) {
+    return this.writeSeaFreight(id, body, false, operatorId)
   }
 
-  async clearSeaFreight(id: number, operatorId?: number) {
-    return this.writeSeaFreight(id, null, operatorId)
+  clearSeaFreight(id: number, body: ShipmentFreightMutationDto, operatorId?: number) {
+    return this.writeSeaFreight(id, body, true, operatorId)
   }
 
-  private async writeSeaFreight(
-    id: number,
-    next: { mode: 'lcl' | 'fcl'; totalAmount: number } | null,
-    operatorId?: number,
-  ) {
-    const order = await this.prisma.inboundOrder.findUnique({
-      where: { id: BigInt(id) },
-      include: { items: true },
-    })
-    if (!order) throw new NotFoundException('入库单不存在')
-    if (order.status === 'cancelled') throw new BadRequestException('已作废的入库单不能修改海运费')
-
-    const products = order.items.length
-      ? await this.prisma.product.findMany({ where: { id: { in: order.items.map((i) => i.productId) } } })
-      : []
-    const prodMap = new Map(products.map((p) => [Number(p.id), p]))
-    const allocInput = order.items.map((item) => {
-      const prod = prodMap.get(Number(item.productId))
-      const dims = resolveBillingDimensions({
-        lengthCm: numDim(prod?.lengthCm),
-        widthCm: numDim(prod?.widthCm),
-        heightCm: numDim(prod?.heightCm),
-        measuredLengthCm: numDim(prod?.measuredLengthCm),
-        measuredWidthCm: numDim(prod?.measuredWidthCm),
-        measuredHeightCm: numDim(prod?.measuredHeightCm),
-      })
-      return {
-        id: item.id,
-        sku: item.sku,
-        productId: item.productId,
-        expectedQty: Number(item.expectedQty || 0),
-        lengthCm: dims.lengthCm,
-        widthCm: dims.widthCm,
-        heightCm: dims.heightCm,
-        costRmb: item.costRmb,
-        domesticFeePerUnit: item.domesticFeePerUnit,
-      }
-    })
-
-    let allocated = allocInput.map((line) => ({ ...line, lineFreight: 0, unitFreight: 0, volumePct: 0, lineCbm: 0 }))
-    if (next) {
-      const missing = allocInput.filter((line) => !line.lengthCm || !line.widthCm || !line.heightCm)
-      if (missing.length) {
-        throw new BadRequestException(`请先补齐尺寸再分摊海运费：${missing.map((l) => l.sku).join('、')}`)
-      }
-      allocated = allocateInboundSeaFreight(allocInput, next.totalAmount)
-    }
-
-    await this.prisma.$transaction(async (tx) => {
-      for (const line of allocated) {
-        const unit = next ? line.unitFreight : 0
-        await tx.inboundOrderItem.update({
-          where: { id: line.id },
-          data: { seaFreightPerUnit: unit },
-        })
-        if (line.productId && Number(line.productId) > 0) {
-          await tx.product.update({
-            where: { id: line.productId },
-            data: { seaFreightPerUnit: unit },
-          })
-        }
-        const lots = await tx.inventoryLocation.findMany({
-          where: { inboundNo: order.inboundNo, productId: line.productId },
-        })
-        for (const lot of lots) {
-          await tx.inventoryLocation.update({
-            where: { id: lot.id },
-            data: {
-              seaFreightPerUnit: unit,
-              unitCostRmb: unitCostRmb({
-                costRmb: lot.costRmb,
-                seaFreightPerUnit: unit,
-                domesticFeePerUnit: lot.domesticFeePerUnit,
-              }),
-            },
-          })
-        }
-      }
-      await tx.inboundOrder.update({
-        where: { id: order.id },
-        data: {
-          remark: patchInboundRemarkSeaFreight(
-            order.remark,
-            next ? { mode: next.mode, total: next.totalAmount } : null,
-          ),
-        },
-      })
-    })
-
-    try {
-      await this.pricing.applyInboundSeaFreight({
-        inboundNo: order.inboundNo,
-        action: next ? '入库海运费补录' : '入库海运费清除',
-        lines: allocated.map((line) => ({
-          sku: line.sku,
-          seaFreightPerUnit: next ? line.unitFreight : 0,
-        })),
-      })
-    } catch (err) {
-      console.warn('[inbound] catalog sea freight sync skipped:', err)
-    }
-
-    await this.opLog.log({
-      operatorId,
-      module: 'inbound',
-      action: next ? 'sea_freight_backfill' : 'sea_freight_clear',
-      targetType: 'inbound_order',
-      targetId: order.inboundNo,
-      detail: next
-        ? { mode: next.mode, totalAmount: next.totalAmount, skuCount: allocated.length }
-        : { cleared: true, skuCount: allocated.length },
-    })
-    return this.detail(id)
+  private async writeSeaFreight(id: number, body: ShipmentFreightMutationDto | ApplyShipmentFreightDto, clear: boolean, operatorId?: number) {
+    const result = await writeErpShipmentFreight(this.prisma, id, body, clear, operatorId)
+    try { return { ...(await this.detail(id, { reconcileCatalog: false })), ...result } }
+    catch { return { ...result, refreshRequired: true, warning: '本次海运费操作已经完成，但详情未能读取，请重新读取最新详情，勿重复新建操作' } }
   }
 
   /** 写入外箱装箱明细（未传则按 SKU 行自动生成一箱） */
@@ -791,11 +498,11 @@ export class InboundService {
       }))
     }
 
-    const merged = new Map<number, { boxCode?: string; boxSeq: number; items: { sku: string; qty: number }[] }>()
+    const merged = new Map<number, NonNullable<typeof cartonsInput>[number] & { boxSeq: number }>()
     let autoSeq = 0
     for (const carton of cartonsDef) {
       const boxSeq = Number(carton.boxSeq) > 0 ? Number(carton.boxSeq) : ++autoSeq
-      const current = merged.get(boxSeq) ?? { boxSeq, boxCode: carton.boxCode, items: [] as { sku: string; qty: number }[] }
+      const current = merged.get(boxSeq) ?? { ...carton, boxSeq, items: [] as { sku: string; qty: number }[] }
       if (!current.boxCode && carton.boxCode) current.boxCode = carton.boxCode
       for (const line of carton.items) {
         const sku = String(line.sku || '').trim()
@@ -866,13 +573,14 @@ export class InboundService {
     }
   }
 
-  private async allocateInboundNo(customerCode?: string) {
+  private async allocateInboundNo(customerCode?: string, db: Pick<PrismaService, 'inboundOrder' | 'operationLog'> = this.prisma) {
     const prefix = inboundNoPrefix(customerCode)
-    const rows = await this.prisma.inboundOrder.findMany({
+    const rows = await db.inboundOrder.findMany({
       where: { inboundNo: { startsWith: prefix } },
       select: { inboundNo: true },
     })
-    return buildInboundNo(customerCode, new Date(), nextSeqFromNos(rows.map((row) => row.inboundNo), prefix))
+    const history = await db.operationLog.findMany({ where: { module: 'inbound', targetId: { startsWith: prefix } }, select: { targetId: true } })
+    return buildInboundNo(customerCode, new Date(), nextSeqFromNos([...rows.map(row => row.inboundNo), ...history.map(row => row.targetId || '')], prefix))
   }
 
   private async findPendingCarton(inboundId: number, inboundNo: string, scanCode: string) {
@@ -900,219 +608,36 @@ export class InboundService {
   }
 
   /** 扫箱收货：人工清点实收箱数 */
-  async recordReceivedCartonCount(
-    id: number,
-    body: { receivedCartonCount?: number; differenceReason?: string; clientRequestId?: string },
-    operatorId?: number,
-  ) {
-    const clientRequestId = String(body.clientRequestId || '').trim().slice(0, 100)
-    if (clientRequestId && await this.opLog.hasClientRequest('inbound', 'receive_carton_count', clientRequestId)) {
-      return { ...(await this.detail(id)), duplicate: true }
-    }
-    const count = Math.floor(Number(body.receivedCartonCount))
-    if (!Number.isFinite(count) || count <= 0) throw new BadRequestException('实收箱数须大于 0')
-
-    let order = await this.detail(id)
-    if (TERMINAL_STATUSES.has(order.status)) throw new BadRequestException('该入库单已完结')
-    if (PENDING_RECEIPT_STATUSES.has(order.status)) {
-      throw new BadRequestException('请先在「到仓扫描」确认到货')
-    }
-    if (!['arrived', 'receiving'].includes(order.status)) {
-      throw new BadRequestException(`当前状态「${order.status}」不可登记实收箱数`)
-    }
-    if (order.status === 'arrived') {
-      await this.startReceive(id, operatorId)
-    }
-
-    const scannedCartonCount = await this.prisma.inboundCarton.count({
-      where: { inboundId: BigInt(id), status: 'received' },
-    })
-    if (count < scannedCartonCount) {
-      throw new BadRequestException(
-        `已扫码确认 ${scannedCartonCount} 箱，实收箱数不能改小`,
-      )
-    }
-    const expectedCartonCount = order.cartons?.length || 0
-    const differenceReason = String(body.differenceReason || '').trim()
-    if (expectedCartonCount > 0 && count !== expectedCartonCount && differenceReason.length < 2) {
-      throw new BadRequestException(`实收 ${count} 箱与应收 ${expectedCartonCount} 箱不一致，请填写差异原因`)
-    }
-
-    await this.prisma.inboundOrder.update({
-      where: { id: BigInt(id) },
-      data: { receivedCartonCount: count },
-    })
-
-    await this.opLog.log({
-      operatorId,
-      module: 'inbound',
-      action: 'receive_carton_count',
-      targetType: 'inbound_order',
-      targetId: order.inboundNo,
-      detail: {
-        receivedCartonCount: count,
-        expectedCartonCount,
-        differenceReason: differenceReason || null,
-        clientRequestId: clientRequestId || null,
-      },
-    })
-
-    const refreshed = await this.detail(id)
-    return {
-      message: `实收箱数已登记：${count} 箱`,
-      receivedCartonCount: count,
-      order: {
-        id: refreshed.id,
-        inboundNo: refreshed.inboundNo,
-        status: refreshed.status,
-        displayStatus: refreshed.displayStatus,
-        ...this.buildReceiveSummary(refreshed),
-      },
-    }
+  recordReceivedCartonCount(id: number, body: RecordInboundCartonsDto, operatorId?: number) {
+    return runInboundReceiving(this.prisma, id, 'carton-count', body, operatorId)
   }
 
-  reduceQuantity(id: number, mode: 'qc' | 'carton' | 'putaway', body: InboundReduction, operatorId?: number) {
-    return reduceInboundQuantity(this.prisma, this.inventoryMutation, id, mode, body, operatorId)
+  reduceQuantity(id: number, mode: 'qc' | 'carton' | 'putaway', body: InboundControlDto, operatorId?: number) {
+    return this.control(id, `reduce-${mode}`, body, operatorId)
   }
 
-  /** 扫外箱标：仅登记箱数，不写入 SKU 实收件数（件数在清点与测量确认） */
-  async receiveBox(
-    id: number,
-    data: { scanCode?: string; qty?: number; cartonCount?: number; clientRequestId?: string },
-    operatorId?: number,
-  ) {
-    const clientRequestId = String(data.clientRequestId || '').trim().slice(0, 100)
-    if (clientRequestId && await this.opLog.hasClientRequest('inbound', 'receive_carton', clientRequestId)) {
-      return { ...(await this.detail(id)), duplicate: true }
-    }
-    const code = String(data.scanCode || '').trim()
-    if (!code) throw new BadRequestException('请扫描外箱标')
-
-    let order = await this.detail(id)
-    if (TERMINAL_STATUSES.has(order.status)) throw new BadRequestException('该入库单已完结')
-    if (PENDING_RECEIPT_STATUSES.has(order.status)) {
-      throw new BadRequestException('请先在「到仓扫描」确认到货')
-    }
-    if (order.status === 'arrived') {
-      await this.startReceive(id, operatorId)
-      order = await this.detail(id)
-    }
-    if (order.status !== 'receiving') {
-      throw new BadRequestException(`当前状态「${order.status}」不可扫箱收货`)
-    }
-
-    const carton = await this.findPendingCarton(id, order.inboundNo, code)
-    if (!carton) {
-      throw new NotFoundException(
-        `扫描码 ${code} 未匹配到外箱标。本环节仅确认箱数；SKU 数量（含 1 SKU 一箱 / 一箱多件）请在「清点与测量」扫描确认`,
-      )
-    }
-    return this.receiveOuterCarton(id, carton, operatorId, order.inboundNo, clientRequestId)
-  }
-
-  private async receiveOuterCarton(
-    inboundId: number,
-    carton: { id: bigint; boxCode: string; items: { sku: string; qty: number; inboundItemId: bigint | null }[] },
-    operatorId: number | undefined,
-    inboundNo: string,
-    clientRequestId = '',
-  ) {
-    const received = await this.prisma.inboundCarton.findUnique({ where: { id: carton.id } })
-    if (!received || received.status === 'received') {
-      throw new BadRequestException(`外箱 ${carton.boxCode} 已确认，请勿重复扫描`)
-    }
-
-    const expectedCartons = await this.prisma.inboundCarton.count({ where: { inboundId: BigInt(inboundId) } })
-
-    await this.prisma.$transaction(async (tx) => {
-      await tx.inboundCarton.update({
-        where: { id: carton.id },
-        data: {
-          status: 'received',
-          receivedAt: new Date(),
-          receivedBy: operatorId ? BigInt(operatorId) : undefined,
-        },
-      })
-      const receivedCount = await tx.inboundCarton.count({
-        where: { inboundId: BigInt(inboundId), status: 'received' },
-      })
-      const currentOrder = await tx.inboundOrder.findUnique({
-        where: { id: BigInt(inboundId) },
-        select: { receivedCartonCount: true },
-      })
-      await tx.inboundOrder.update({
-        where: { id: BigInt(inboundId) },
-        data: {
-          receivedCartonCount: Math.max(
-            receivedCount,
-            currentOrder?.receivedCartonCount ?? 0,
-          ),
-        },
-      })
-    })
-
-    const refreshed = await this.detail(inboundId)
-    const summary = this.buildReceiveSummary(refreshed)
-    const detailText = carton.items.map((l) => `${l.sku}×${l.qty}`).join('、')
-    const receivedCartonCount = refreshed.receivedCartonCount ?? summary.scannedCartonCount
-
-    await this.opLog.log({
-      operatorId,
-      module: 'inbound',
-      action: 'receive_carton',
-      targetType: 'inbound_order',
-      targetId: inboundNo,
-      detail: { boxCode: carton.boxCode, items: carton.items, receivedCartonCount, clientRequestId: clientRequestId || null },
-    })
-
-    return {
-      scanType: 'outer_box' as const,
-      message: `[外箱标] ${carton.boxCode} 已确认（实收 ${receivedCartonCount}/${expectedCartons} 箱）${detailText ? ` · ${detailText}` : ''}`,
-      increment: 1,
-      receivedCartonCount,
-      carton: {
-        boxCode: carton.boxCode,
-        items: carton.items.map((l) => ({ sku: l.sku, qty: l.qty })),
-      },
-      item: null,
-      order: {
-        id: refreshed.id,
-        inboundNo: refreshed.inboundNo,
-        status: refreshed.status,
-        displayStatus: refreshed.displayStatus,
-        ...summary,
-      },
-    }
+  /** 扫外箱只确认箱数，SKU实收仍需清点，原请求可在响应丢失后重试。 */
+  receiveBox(id: number, body: ScanInboundCartonDto, operatorId?: number) {
+    return runInboundReceiving(this.prisma, id, 'carton-scan', body, operatorId)
   }
 
   async startReceive(id: number, operatorId?: number) {
-    const order = await this.detail(id)
-    if (TERMINAL_STATUSES.has(order.status)) throw new BadRequestException('该入库单已完结')
-    if (order.status === 'receiving') return order
-    if (order.status !== 'arrived') {
-      if (PENDING_RECEIPT_STATUSES.has(order.status)) {
-        throw new BadRequestException('请先在「到仓扫描」确认到货后再收货')
+    const result = await this.prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM inbound_order WHERE id = ${BigInt(id)} FOR UPDATE`
+      const order = await tx.inboundOrder.findUnique({ where: { id: BigInt(id) }, include: { items: true } })
+      if (!order) throw new NotFoundException('入库单已删除或不存在，请返回列表重新读取')
+      if (TERMINAL_STATUSES.has(order.status)) throw new BadRequestException('该入库单已完结')
+      if (order.status === 'receiving') return { ...order, duplicate: true }
+      if (order.status !== 'arrived') {
+        if (PENDING_RECEIPT_STATUSES.has(order.status)) throw new BadRequestException('请先在「到仓扫描」确认到货后再收货')
+        throw new BadRequestException(`当前状态「${inboundStatusLabel(order.status)}」不可开始收货`)
       }
-      throw new BadRequestException(`当前状态「${order.status}」不可开始收货`)
-    }
-    const updated = await this.prisma.inboundOrder.update({
-      where: { id: BigInt(id) },
-      data: {
-        status: 'receiving',
-        receivedAt: new Date(),
-        receivedBy: operatorId ? BigInt(operatorId) : undefined,
-      },
-      include: { items: true },
-    })
-    await this.opLog.log({
-      operatorId,
-      module: 'inbound',
-      action: 'start_receive',
-      targetType: 'inbound_order',
-      targetId: order.inboundNo,
-    })
-    await this.pushInboundStatusToOms(order.inboundNo)
-    return { ...updated, id: Number(updated.id) }
+      const updated = await tx.inboundOrder.update({ where: { id: order.id }, data: { status: 'receiving', receivedAt: new Date(), receivedBy: operatorId ? BigInt(operatorId) : undefined }, include: { items: true } })
+      await tx.operationLog.create({ data: { operatorId: operatorId ? BigInt(operatorId) : undefined, module: 'inbound', action: 'start_receive', targetType: 'inbound_order', targetId: order.inboundNo } })
+      return { ...updated, duplicate: false }
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted })
+    await this.pushInboundStatusToOms(result.inboundNo)
+    return { ...result, id: Number(result.id) }
   }
 
   /** 收货清点时扫描 SKU 标签，校验是否属于本入库单（不写入数量） */
@@ -1123,7 +648,7 @@ export class InboundService {
     const order = await this.detail(id)
     if (TERMINAL_STATUSES.has(order.status)) throw new BadRequestException('该入库单已完结')
     if (!['arrived', 'receiving'].includes(order.status)) {
-      throw new BadRequestException(`当前状态「${order.status}」不可扫描收货标签`)
+      throw new BadRequestException(`当前状态「${inboundStatusLabel(order.status)}」不可扫描收货标签`)
     }
 
     const normalized = code.toUpperCase()
@@ -1144,203 +669,9 @@ export class InboundService {
     }
   }
 
-  /** 清点与测量：扫描 SKU 累加实收，可选回写测量机长宽高 */
-  async scanQc(
-    id: number,
-    data: {
-      scanCode?: string
-      increment?: number
-      lengthCm?: number
-      widthCm?: number
-      heightCm?: number
-      weightKg?: number
-      clientRequestId?: string
-    },
-    operatorId?: number,
-  ) {
-    let parsed: ReturnType<typeof parseInboundQcScanInput>
-    try {
-      parsed = parseInboundQcScanInput(String(data.scanCode || ''), data.increment, data)
-    } catch (error: any) {
-      throw new BadRequestException(error?.message || '扫描内容无效')
-    }
-
-    const clientRequestId = String(data.clientRequestId || '').trim().slice(0, 100)
-    if (clientRequestId) {
-      const duplicate = await this.prisma.operationLog.findFirst({
-        where: {
-          module: 'inbound',
-          action: 'scan_qc',
-          detail: { path: '$.clientRequestId', equals: clientRequestId },
-        },
-        orderBy: { id: 'desc' },
-      })
-      if (duplicate) {
-        return {
-          message: '该扫码请求已处理，已按最新单据状态恢复',
-          increment: 0,
-          duplicate: true,
-        }
-      }
-    }
-
-    let order = await this.detail(id)
-    if (TERMINAL_STATUSES.has(order.status)) throw new BadRequestException('该入库单已完结')
-    if (order.status === 'exception') {
-      throw new BadRequestException('入库单处于异常状态，请先放行后再扫描')
-    }
-    if (PENDING_RECEIPT_STATUSES.has(order.status)) {
-      throw new BadRequestException('请先到仓扫描并完成扫箱收货')
-    }
-
-    const canCount = QC_STATUSES.has(order.status)
-    const canMeasureOnly = PUTAWAY_STATUSES.has(order.status)
-    if (!canCount && !canMeasureOnly) {
-      throw new BadRequestException(`当前状态「${order.status}」不可扫描清点`)
-    }
-
-    const productIds = [...new Set(order.items.map((i) => i.productId))]
-    const products = productIds.length
-      ? await this.prisma.product.findMany({ where: { id: { in: productIds } } })
-      : []
-    const prodMap = new Map(products.map((p) => [Number(p.id), p]))
-    const platformBySku = await this.loadPlatformScanIndex(order.items, prodMap)
-
-    const item = this.findInboundItemByScan(order, parsed.skuToken, prodMap, platformBySku)
-    if (!item) {
-      throw new NotFoundException(`扫描码 ${parsed.skuToken} 不属于入库单 ${order.inboundNo}`)
-    }
-
-    const requestedCount = parsed.increment > 0
-    if (requestedCount && !canCount) {
-      throw new BadRequestException('该入库单已提交清点，不能再累加实收，请到「上架」作业；改尺寸请点 SKU 后保存测量')
-    }
-
-    const increment = canCount && requestedCount ? parsed.increment : 0
-    const current = item.actualQty ?? 0
-    const newActual = increment > 0 ? current + increment : current
-
-    const hasDims = [parsed.lengthCm, parsed.widthCm, parsed.heightCm].every(
-      (v) => v != null && Number(v) > 0,
-    )
-    const weightRaw = Number(data.weightKg)
-    const hasWeight = Number.isFinite(weightRaw) && weightRaw > 0
-
-    if (!requestedCount && !hasDims && !hasWeight) {
-      throw new BadRequestException('请填写长宽高或重量后再确认')
-    }
-
-    await this.prisma.$transaction(async (tx) => {
-      if (canCount && increment > 0) {
-        await tx.inboundOrderItem.update({
-          where: { id: item.id },
-          data: { actualQty: newActual },
-        })
-      }
-      if (hasDims || hasWeight) {
-        await tx.product.update({
-          where: { id: item.productId },
-          data: {
-            ...(hasDims
-              ? {
-                  measuredLengthCm: parsed.lengthCm,
-                  measuredWidthCm: parsed.widthCm,
-                  measuredHeightCm: parsed.heightCm,
-                  measuredAt: new Date(),
-                }
-              : {}),
-            ...(hasWeight ? { weightKg: weightRaw } : {}),
-          },
-        })
-      }
-      if (clientRequestId) {
-        await tx.operationLog.create({
-          data: {
-            operatorId: operatorId ? BigInt(operatorId) : undefined,
-            module: 'inbound',
-            action: 'scan_qc',
-            targetType: 'inbound_order',
-            targetId: order.inboundNo,
-            detail: {
-              sku: item.sku,
-              increment,
-              actualQty: newActual,
-              lengthCm: parsed.lengthCm,
-              widthCm: parsed.widthCm,
-              heightCm: parsed.heightCm,
-              weightKg: hasWeight ? weightRaw : null,
-              clientRequestId,
-            },
-          },
-        })
-      }
-    })
-
-    const refreshed = await this.detail(id)
-    const line = refreshed.items.find((i) => Number(i.id) === Number(item.id))!
-    const summary = this.buildReceiveSummary(refreshed)
-
-    const dimText = hasDims
-      ? ` · 体积 ${parsed.lengthCm}×${parsed.widthCm}×${parsed.heightCm} cm`
-      : ''
-
-    if (!clientRequestId) await this.opLog.log({
-      operatorId,
-      module: 'inbound',
-      action: 'scan_qc',
-      targetType: 'inbound_order',
-      targetId: order.inboundNo,
-      detail: {
-        sku: item.sku,
-        increment,
-        actualQty: line.actualQty ?? newActual,
-        lengthCm: parsed.lengthCm,
-        widthCm: parsed.widthCm,
-        heightCm: parsed.heightCm,
-        weightKg: hasWeight ? weightRaw : null,
-        clientRequestId: null,
-      },
-    })
-
-    const weightText = hasWeight ? ` · 重量 ${weightRaw} kg` : ''
-
-    return {
-      message: canCount
-        ? increment > 0
-          ? `[清点] ${item.sku} +${increment} 件（累计 ${line.actualQty ?? newActual}/${line.expectedQty}）${dimText}${weightText}`
-          : `[测量] ${item.sku} 已更新${dimText}${weightText}`
-        : `[测量] ${item.sku} 尺寸已更新${dimText}${weightText}`,
-      sku: line.sku,
-      increment,
-      expectedQty: line.expectedQty,
-      actualQty: line.actualQty ?? newActual,
-      remaining: Math.max(0, line.expectedQty - (line.actualQty ?? newActual)),
-      itemId: line.id,
-      lengthCm: line.lengthCm ?? parsed.lengthCm ?? null,
-      widthCm: line.widthCm ?? parsed.widthCm ?? null,
-      heightCm: line.heightCm ?? parsed.heightCm ?? null,
-      dimensionsSource: line.dimensionsSource ?? (hasDims ? 'measured' : null),
-      item: {
-        id: line.id,
-        sku: line.sku,
-        productName: line.productName,
-        spec: line.spec,
-        expectedQty: line.expectedQty,
-        actualQty: line.actualQty ?? newActual,
-        remaining: Math.max(0, line.expectedQty - (line.actualQty ?? newActual)),
-        lengthCm: line.lengthCm ?? parsed.lengthCm ?? null,
-        widthCm: line.widthCm ?? parsed.widthCm ?? null,
-        heightCm: line.heightCm ?? parsed.heightCm ?? null,
-        dimensionsSource: line.dimensionsSource ?? (hasDims ? 'measured' : null),
-      },
-      order: {
-        id: refreshed.id,
-        inboundNo: refreshed.inboundNo,
-        status: refreshed.status,
-        displayStatus: refreshed.displayStatus,
-        ...summary,
-      },
-    }
+  /** 扫码增量和测量在单据锁内提交，防止并发覆盖。 */
+  scanQc(id: number, body: ScanInboundQcDto, operatorId?: number) {
+    return runInboundReceiving(this.prisma, id, 'qc-scan', body, operatorId)
   }
 
   async reportException(id: number, payload: any, operatorId?: number) {
@@ -1389,7 +720,7 @@ export class InboundService {
     if (!order) throw new NotFoundException('未找到当前仓库的入库单，请扫描完整入库单号')
     if (!isCatalogPurchaseInbound(order)) throw new BadRequestException('货盘入库只接受 ERP 货盘采购发运的入库单，不支持客户预约或客户自有货物入库单')
     if (!PENDING_RECEIPT_STATUSES.has(order.status) && !QC_STATUSES.has(order.status) && !PUTAWAY_STATUSES.has(order.status)) {
-      throw new BadRequestException(`当前状态「${order.status}」不可绑定货盘入库作业`)
+      throw new BadRequestException(`当前状态「${inboundStatusLabel(order.status)}」不可绑定货盘入库作业`)
     }
     if (PENDING_RECEIPT_STATUSES.has(order.status)) {
       await this.arrivalScan({ scanCode, warehouseCode }, operatorId)
@@ -1402,76 +733,23 @@ export class InboundService {
     const warehouseCode = String(data.warehouseCode || '').trim()
     if (!scanCode) throw new BadRequestException('请扫描或输入单号')
     if (!warehouseCode) throw new BadRequestException('请选择操作仓库')
-
-    const wh = await this.prisma.warehouse.findUnique({ where: { warehouseCode } })
-    if (!wh || wh.warehouseType !== 'wms') {
-      throw new BadRequestException('操作仓库必须是海外仓')
-    }
-
     const inboundNo = inboundNoFromScan(scanCode) || scanCode
-    const order = await this.prisma.inboundOrder.findFirst({
-      where: {
-        warehouseCode,
-        inboundNo,
-      },
-      include: { items: true },
-    })
-    if (!order) {
-      throw new NotFoundException(`未找到入库单号 ${scanCode}。到仓扫描只接受入库单号，不支持入仓号或跟踪号`)
-    }
-
-    const scanType = 'inbound_no'
-
-    if (order.status === 'arrived') {
-      return {
-        alreadyScanned: true,
-        message: '该入库单已到仓，无需重复扫描',
-        order: this.serializeInbound(order),
-      }
-    }
-    if (!PENDING_RECEIPT_STATUSES.has(order.status)) {
-      throw new BadRequestException(`入库单 ${order.inboundNo} 当前状态「${order.status}」不可到仓扫描`)
-    }
-
-    const now = new Date()
-    const updated = await this.prisma.$transaction(async (tx) => {
-      const row = await tx.inboundOrder.update({
-        where: { id: order.id },
-        data: {
-          status: 'arrived',
-          arrivedAt: now,
-          arrivedBy: operatorId ? BigInt(operatorId) : undefined,
-        },
-        include: { items: true, cartons: { include: { items: true }, orderBy: { boxSeq: 'asc' } } },
-      })
-      await tx.inboundArrivalScan.create({
-        data: {
-          inboundId: order.id,
-          scanCode,
-          scanType,
-          warehouseCode,
-          operatorId: operatorId ? BigInt(operatorId) : undefined,
-          scannedAt: now,
-        },
-      })
-      return row
-    })
-
-    await this.opLog.log({
-      operatorId,
-      module: 'inbound',
-      action: 'arrival_scan',
-      targetType: 'inbound_order',
-      targetId: updated.inboundNo,
-      detail: { scanCode, warehouseCode },
-    })
-    await this.pushInboundStatusToOms(updated.inboundNo)
-
-    return {
-      alreadyScanned: false,
-      message: `${updated.inboundNo} 到仓扫描成功`,
-      order: this.serializeInbound(updated),
-    }
+    const result = await this.prisma.$transaction(async tx => {
+      const wh = await tx.warehouse.findUnique({ where: { warehouseCode } })
+      if (!wh || wh.warehouseType !== 'wms' || wh.status !== 1) throw new BadRequestException('操作仓库必须是启用的海外仓')
+      await tx.$queryRaw`SELECT id FROM inbound_order WHERE inbound_no = ${inboundNo} AND warehouse_code = ${warehouseCode} FOR UPDATE`
+      const order = await tx.inboundOrder.findFirst({ where: { warehouseCode, inboundNo }, include: { items: true, cartons: { include: { items: true }, orderBy: { boxSeq: 'asc' } } } })
+      if (!order) throw new NotFoundException(`未找到入库单号 ${scanCode}。到仓扫描只接受入库单号，不支持入仓号或跟踪号`)
+      if (order.status === 'arrived' || (order.arrivedAt && ['receiving', 'pending_putaway', 'completed', 'confirmed'].includes(order.status))) return { order, alreadyScanned: true }
+      if (!PENDING_RECEIPT_STATUSES.has(order.status)) throw new BadRequestException(`入库单 ${order.inboundNo} 当前状态「${inboundStatusLabel(order.status)}」不可到仓扫描`)
+      const now = new Date()
+      const updated = await tx.inboundOrder.update({ where: { id: order.id }, data: { status: 'arrived', arrivedAt: now, arrivedBy: operatorId ? BigInt(operatorId) : undefined }, include: { items: true, cartons: { include: { items: true }, orderBy: { boxSeq: 'asc' } } } })
+      await tx.inboundArrivalScan.create({ data: { inboundId: order.id, scanCode, scanType: 'inbound_no', warehouseCode, operatorId: operatorId ? BigInt(operatorId) : undefined, scannedAt: now } })
+      await tx.operationLog.create({ data: { operatorId: operatorId ? BigInt(operatorId) : undefined, module: 'inbound', action: 'arrival_scan', targetType: 'inbound_order', targetId: order.inboundNo, detail: { scanCode, warehouseCode } } })
+      return { order: updated, alreadyScanned: false }
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted })
+    await this.pushInboundStatusToOms(result.order.inboundNo)
+    return { alreadyScanned: result.alreadyScanned, message: result.alreadyScanned ? '该入库单已登记到仓，已读取最新作业状态，无需重复扫描' : `${result.order.inboundNo} 到仓扫描成功`, order: this.serializeInbound(result.order) }
   }
 
   async listArrivalScans(q: { warehouseCode?: string; limit?: number }) {
@@ -1521,501 +799,137 @@ export class InboundService {
     }
   }
 
-  async manageCount(id: number, mode: 'reopen' | 'close-zero', reason: string, operatorId?: number) {
-    const result = await manageInboundCount(this.prisma, id, mode, reason, operatorId)
-    await this.pushInboundStatusToOms(result.inboundNo)
-    return result
+  manageCount(id: number, mode: 'reopen' | 'close-zero', body: InboundControlDto, operatorId?: number) {
+    return this.control(id, mode === 'reopen' ? 'reopen-count' : 'close-zero', body, operatorId)
   }
 
-  async qc(id: number, payload: any, operatorId?: number) {
-    const clientRequestId = String(payload?.clientRequestId || '').trim().slice(0, 100)
-    if (clientRequestId && await this.opLog.hasClientRequest('inbound', 'qc', clientRequestId)) {
-      return { ...(await this.detail(id)), duplicate: true }
-    }
-    let order = await this.detail(id)
-    if (TERMINAL_STATUSES.has(order.status)) throw new BadRequestException('该入库单已完结')
-    if (order.status === 'pending_putaway') return order
-    if (!QC_STATUSES.has(order.status) && order.status !== 'receiving') {
-      if (PENDING_RECEIPT_STATUSES.has(order.status)) {
-        throw new BadRequestException('请先到仓扫描，再提交清点')
-      }
-      throw new BadRequestException(`当前状态「${order.status}」不可清点`)
-    }
-
-    const inputs: any[] = payload?.items || []
-    if (!inputs.length) throw new BadRequestException('请提供清点明细')
-
-    const acceptDiff = Boolean(payload?.acceptDiff)
-    let hasFail = false
-    let hasDiff = false
-
-    for (const input of inputs) {
-      const item = order.items.find(
-        (i) => String(i.id) === String(input.id ?? input.inboundItemId) || i.sku === input.sku,
-      )
-      if (!item) throw new BadRequestException(`明细 ${input.id ?? input.sku} 不存在`)
-
-      const actual = Number(input.actualQty ?? item.actualQty ?? item.expectedQty)
-      const diff = actual - item.expectedQty
-      const qcStatus = String(input.qcStatus || 'pass')
-      if (qcStatus === 'fail') hasFail = true
-      if (diff !== 0) hasDiff = true
-
-      await this.prisma.inboundOrderItem.update({
-        where: { id: item.id },
-        data: {
-          actualQty: actual,
-          diffQty: diff,
-          qcStatus,
-          qcRemark: input.qcRemark || null,
-        },
-      })
-    }
-
-    let nextStatus: string
-    if (hasFail) {
-      nextStatus = 'exception'
-    } else if (hasDiff && !acceptDiff) {
-      nextStatus = 'exception'
-    } else {
-      nextStatus = 'pending_putaway'
-    }
-
-    const updated = await this.prisma.inboundOrder.update({
-      where: { id: BigInt(id) },
-      data: {
-        status: nextStatus,
-        qcAt: new Date(),
-        qcBy: operatorId ? BigInt(operatorId) : undefined,
-      },
-      include: { items: true },
-    })
-    await this.opLog.log({
-      operatorId,
-      module: 'inbound',
-      action: 'qc',
-      targetType: 'inbound_order',
-      targetId: order.inboundNo,
-      detail: { statusAfter: nextStatus, acceptDiff, clientRequestId: clientRequestId || null },
-    })
-    await this.inboundFee.recordOperation(updated, 'qc', pieceQty(updated.items))
-    return { ...updated, id: Number(updated.id) }
-  }
-
-  async resolveException(id: number, body: { reason?: string }, operatorId?: number) {
-    const order = await this.detail(id)
-    if (order.status !== 'exception') {
-      throw new BadRequestException('仅异常状态的入库单可确认继续作业')
-    }
-    const reason = String(body?.reason || '收货人员确认清点异常').trim()
-    if (reason.length < 2) throw new BadRequestException('请填写不少于 2 个字的异常放行原因')
-    const updated = await this.prisma.inboundOrder.update({
-      where: { id: BigInt(id) },
-      data: { status: 'pending_putaway' },
-      include: { items: true },
-    })
-    await this.opLog.log({
-      operatorId,
-      module: 'inbound',
-      action: 'resolve_exception',
-      targetType: 'inbound_order',
-      targetId: order.inboundNo,
-      detail: { reason },
-    })
-    return { ...updated, id: Number(updated.id) }
-  }
-
-  async measureDimensions(id: number, payload: any, operatorId?: number) {
-    const order = await this.detail(id)
-    if (TERMINAL_STATUSES.has(order.status)) throw new BadRequestException('该入库单已完结')
-    if (!PUTAWAY_STATUSES.has(order.status)) {
-      throw new BadRequestException(`当前状态「${order.status}」不可测量，请先完成清点`)
-    }
-
-    const groups: any[] = payload?.items || []
-    if (!groups.length) throw new BadRequestException('请提供测量明细')
-
-    const itemMap = new Map(order.items.map((i) => [Number(i.id), i]))
-
-    await this.prisma.$transaction(async (tx) => {
-      for (const group of groups) {
-        const inboundItemId = Number(group.inboundItemId ?? group.id)
-        const item = itemMap.get(inboundItemId)
-        if (!item) throw new BadRequestException(`明细 ${inboundItemId} 不存在`)
-
-        const lengthCm = Number(group.lengthCm)
-        const widthCm = Number(group.widthCm)
-        const heightCm = Number(group.heightCm)
-        const weightKg = Number(group.weightKg)
-        const hasWeight = Number.isFinite(weightKg) && weightKg > 0
-        if (![lengthCm, widthCm, heightCm].every((v) => Number.isFinite(v) && v > 0)) {
-          throw new BadRequestException(`${item.sku} 请填写有效的长宽高（cm）`)
-        }
-
-        await tx.product.update({
-          where: { id: item.productId },
-          data: {
-            measuredLengthCm: lengthCm,
-            measuredWidthCm: widthCm,
-            measuredHeightCm: heightCm,
-            measuredAt: new Date(),
-            ...(hasWeight ? { weightKg } : {}),
-          },
-        })
-      }
-    })
-
-    for (const group of groups) {
-      const lengthCm = Number(group.lengthCm)
-      const widthCm = Number(group.widthCm)
-      const heightCm = Number(group.heightCm)
-      const inboundItemId = Number(group.inboundItemId ?? group.id)
-      const item = itemMap.get(inboundItemId)
-      if (!item) continue
-      await this.opLog.log({
-        operatorId,
-        module: 'product',
-        action: 'dimension_measure',
-        targetType: 'product',
-        targetId: item.sku,
-        detail: {
-          message: `入库测量：长 ${lengthCm} × 宽 ${widthCm} × 高 ${heightCm} cm`,
-          inboundNo: order.inboundNo,
-          lengthCm,
-          widthCm,
-          heightCm,
-        },
-      })
-    }
-
-    const measuredItems = groups
-      .map((group: any) => itemMap.get(Number(group.inboundItemId ?? group.id)))
-      .filter(Boolean)
-    await this.inboundFee.recordOperation(order, 'measure', measuredItems.length || pieceQty(order.items))
-    return this.detail(id)
-  }
-
-  async putaway(id: number, payload: any, operatorId?: number) {
-    const clientRequestId = String(payload?.clientRequestId || '').trim().slice(0, 100)
-    if (clientRequestId && await this.opLog.hasClientRequest('inbound', 'putaway', clientRequestId)) {
-      return { ...(await this.detail(id)), duplicate: true }
-    }
-    const order = await this.detail(id)
-    if (TERMINAL_STATUSES.has(order.status)) throw new BadRequestException('该入库单已完结')
-    if (!PUTAWAY_STATUSES.has(order.status)) {
-      throw new BadRequestException(`当前状态「${order.status}」不可上架，请先完成清点`)
-    }
-
-    const groups: any[] = payload?.items || []
-    if (!groups.length) throw new BadRequestException('请提供上架明细')
-
-    const itemMap = new Map(order.items.map((i) => [Number(i.id), i]))
-
-    return this.prisma.$transaction(async (tx) => {
-      for (const group of groups) {
-        const inboundItemId = Number(group.inboundItemId ?? group.id)
-        const item = itemMap.get(inboundItemId)
-        if (!item) throw new BadRequestException(`明细 ${inboundItemId} 不存在`)
-
-        const targetQty = item.actualQty ?? item.expectedQty
-        const alreadyPutaway = item.putawayQty ?? 0
-        const lines: { locationCode: string; qty: number }[] = group.lines?.length
-          ? group.lines.map((l: any) => ({ locationCode: String(l.locationCode), qty: Number(l.qty) }))
-          : [{ locationCode: String(group.locationCode), qty: Number(group.qty) }]
-
-        let batchQty = 0
-        for (const line of lines) {
-          if (!line.locationCode || !line.qty || line.qty <= 0) {
-            throw new BadRequestException('库位与数量无效')
-          }
-          batchQty += line.qty
-
-          const locCode = String(line.locationCode || '').trim()
-          const locCodeUpper = locCode.toUpperCase()
-          const loc = await tx.warehouseLocation.findFirst({
-            where: {
-              warehouseCode: order.warehouseCode,
-              locationCode: locCodeUpper,
-              status: 'available',
-            },
-          }) ?? (locCode !== locCodeUpper
-            ? await tx.warehouseLocation.findFirst({
-                where: {
-                  warehouseCode: order.warehouseCode,
-                  locationCode: locCode,
-                  status: 'available',
-                },
-              })
-            : null)
-          if (!loc) throw new BadRequestException(`库位 ${line.locationCode} 不可用或不存在`)
-
-          await tx.inboundPutawayItem.create({
-            data: {
-              inboundId: BigInt(id),
-              inboundItemId: BigInt(inboundItemId),
-              locationId: loc.id,
-              locationCode: loc.locationCode,
-              qty: line.qty,
-              operatorId: operatorId ? BigInt(operatorId) : undefined,
-            },
-          })
-
-          await this.inventoryMutation.addLocationStock(
-            tx,
-            {
-              productId: item.productId,
-              sku: item.sku,
-              warehouseCode: order.warehouseCode,
-              locationId: loc.id,
-              locationCode: loc.locationCode,
-              qty: line.qty,
-              inboundNo: order.inboundNo,
-              batchNo: order.inboundNo,
-              costRmb: item.costRmb != null ? Number(item.costRmb) : undefined,
-              seaFreightPerUnit: item.seaFreightPerUnit != null ? Number(item.seaFreightPerUnit) : undefined,
-              domesticFeePerUnit: item.domesticFeePerUnit != null ? Number(item.domesticFeePerUnit) : undefined,
-            },
-            {
-              changeType: 'putaway',
-              operatorId,
-              referenceNo: order.inboundNo,
-              remark: loc.locationCode,
-            },
-          )
-        }
-
-        if (alreadyPutaway + batchQty > targetQty) {
-          throw new BadRequestException(`${item.sku} 上架数量超出实收`)
-        }
-        await tx.inboundOrderItem.update({
-          where: { id: item.id },
-          data: { putawayQty: alreadyPutaway + batchQty },
-        })
-        item.putawayQty = alreadyPutaway + batchQty
-
-        let lengthCm = Number(group.lengthCm)
-        let widthCm = Number(group.widthCm)
-        let heightCm = Number(group.heightCm)
-        if (![lengthCm, widthCm, heightCm].every((v) => Number.isFinite(v) && v > 0)) {
-          const product = await tx.product.findUnique({ where: { id: item.productId } })
-          lengthCm = Number(product?.measuredLengthCm ?? product?.lengthCm)
-          widthCm = Number(product?.measuredWidthCm ?? product?.widthCm)
-          heightCm = Number(product?.measuredHeightCm ?? product?.heightCm)
-        }
-        if (![lengthCm, widthCm, heightCm].every((v) => Number.isFinite(v) && v > 0)) {
-          throw new BadRequestException(`${item.sku} 上架前须先完成体积测量（长宽高 cm）`)
-        }
-        if (group.lengthCm != null || group.widthCm != null || group.heightCm != null) {
-          await tx.product.update({
-            where: { id: item.productId },
-            data: {
-              measuredLengthCm: lengthCm,
-              measuredWidthCm: widthCm,
-              measuredHeightCm: heightCm,
-              measuredAt: new Date(),
-            },
-          })
-        }
-      }
-
-      const refreshedItems = await tx.inboundOrderItem.findMany({ where: { inboundId: BigInt(id) } })
-      const allDone = refreshedItems.every((i) => (i.putawayQty ?? 0) >= (i.actualQty ?? i.expectedQty))
-
-      const updated = await tx.inboundOrder.update({
-        where: { id: BigInt(id) },
-        data: allDone
-          ? {
-              status: 'completed',
-              putawayAt: new Date(),
-              putawayBy: operatorId ? BigInt(operatorId) : undefined,
-              confirmedAt: new Date(),
-              confirmedBy: operatorId ? BigInt(operatorId) : undefined,
-            }
-          : {},
-        include: { items: true, cartons: { include: { items: true }, orderBy: { boxSeq: 'asc' } } },
-      })
-      if (clientRequestId) await tx.operationLog.create({
-        data: {
-          operatorId: operatorId ? BigInt(operatorId) : undefined,
-          module: 'inbound',
-          action: 'putaway',
-          targetType: 'inbound_order',
-          targetId: order.inboundNo,
-          detail: {
-            allDone,
-            lineCount: groups.length,
-            clientRequestId: clientRequestId || null,
-          },
-        },
-      })
-      return { ...updated, id: Number(updated.id), allDone }
-    }).then(async (result) => {
-      if (!clientRequestId) await this.opLog.log({
-        operatorId,
-        module: 'inbound',
-        action: 'putaway',
-        targetType: 'inbound_order',
-        targetId: order.inboundNo,
-        detail: { allDone: result.allDone, lineCount: groups.length, clientRequestId: null },
-      })
-      if (result.allDone) {
-        const skus = result.items.map((i: { sku: string }) => i.sku).filter(Boolean)
-        try {
-          await this.pricing.applyInboundActual({
-            inboundNo: result.inboundNo || order.inboundNo,
-            lines: result.items.map((i: { sku: string; actualQty?: number | null; putawayQty?: number | null }) => ({
-              sku: i.sku,
-              actualQty: Number(i.actualQty ?? i.putawayQty ?? 0),
-            })),
-          })
-        } catch (err) {
-          console.warn('[putaway] catalog actual qty sync skipped:', err)
-        }
-        try {
-          await tryMarkOrderableOnOmsForSkus(this.prisma, skus)
-        } catch (err) {
-          console.warn('[putaway] OMS orderable sync skipped:', err)
-        }
-      }
-      for (const group of groups) {
-        const lengthCm = Number(group.lengthCm)
-        const widthCm = Number(group.widthCm)
-        const heightCm = Number(group.heightCm)
-        if (![lengthCm, widthCm, heightCm].every((v) => Number.isFinite(v) && v > 0)) continue
-        const inboundItemId = Number(group.inboundItemId ?? group.id)
-        const item = itemMap.get(inboundItemId)
-        if (!item) continue
-        await this.opLog.log({
-          operatorId,
-          module: 'product',
-          action: 'dimension_measure',
-          targetType: 'product',
-          targetId: item.sku,
-          detail: {
-            message: `入库上架测量：长 ${lengthCm} × 宽 ${widthCm} × 高 ${heightCm} cm`,
-            inboundNo: order.inboundNo,
-            lengthCm,
-            widthCm,
-            heightCm,
-          },
-        })
-      }
-      if (result.allDone) {
-        await this.inboundFee.recordOperation(result, 'putaway', pieceQty(result.items, 'putawayQty'))
-      }
-      await this.pushInboundStatusToOms(order.inboundNo)
+  private async control(id: number, kind: InboundControlKind, body: InboundControlDto, operatorId?: number) {
+    const result = await runInboundControl(this.prisma, this.inventoryMutation, id, kind, body, operatorId)
+    try {
+      await this.pushInboundStatusToOms(result.inboundNo, true)
       return result
-    })
+    } catch {
+      return { ...result, syncPending: true, warning: '处理已保存，但OMS同步未完成；请核对并重试原操作，勿重新更正或撤回库存' }
+    }
   }
 
-  /** 兼容旧前端：清点 + 默认待上架区一键入库 */
-  async confirm(id: number, payload: any, operatorId?: number) {
-    const order = await this.detail(id)
-    if (TERMINAL_STATUSES.has(order.status)) throw new BadRequestException('该入库单已确认')
-
-    if (order.status === 'pending_putaway') {
-      return this.putawayToDefaultStaging(id, operatorId)
-    }
-
-    if (!LEGACY_CONFIRM_STATUSES.has(order.status) && order.status !== 'exception') {
-      throw new BadRequestException(`当前状态「${order.status}」不可确认入库`)
-    }
-
-    if (order.status === 'exception') {
-      await this.resolveException(id, { reason: String(payload?.reason || '旧流程确认放行') }, operatorId)
-    } else {
-      await this.qc(id, { ...payload, acceptDiff: true }, operatorId)
-    }
-    return this.putawayToDefaultStaging(id, operatorId)
+  qc(id: number, payload: SubmitInboundQcDto, operatorId?: number) {
+    return this.receivingWithFees(id, 'qc-submit', payload, operatorId)
   }
 
-  private async putawayToDefaultStaging(id: number, operatorId?: number) {
+  qcAndMeasure(id: number, payload: SubmitInboundQcDto, operatorId?: number) {
+    return this.receivingWithFees(id, 'qc-measure-submit', payload, operatorId)
+  }
+
+  private async receivingWithFees(id: number, kind: 'qc-submit' | 'qc-measure-submit' | 'measure', payload: SubmitInboundQcDto | MeasureInboundDto, operatorId?: number) {
+    const result = await runInboundReceiving(this.prisma, id, kind, payload, operatorId)
+    try {
+      const order = await this.prisma.inboundOrder.findUnique({ where: { id: BigInt(id) }, include: { items: true } })
+      if (!order) throw new Error('Original receipt unavailable')
+      if (kind !== 'measure') await this.inboundFee.recordOperation(order, 'qc', pieceQty(result.items || order.items), true)
+      if (kind !== 'qc-submit' && result.measuredCount > 0) await this.inboundFee.recordOperation(order, 'measure', result.measuredCount, true)
+      return result
+    } catch {
+      return { ...result, feePending: true, warning: '仓库作业已保存，但费用同步未完成；请用原操作重试核对，勿重新建立操作' }
+    }
+  }
+
+  resolveException(id: number, body: InboundControlDto, operatorId?: number) {
+    return this.control(id, 'resolve-exception', body, operatorId)
+  }
+
+  measureDimensions(id: number, payload: MeasureInboundDto, operatorId?: number) {
+    return this.receivingWithFees(id, 'measure', payload, operatorId)
+  }
+
+  async putaway(id: number, payload: PutawayInboundDto, operatorId?: number) {
+    const result = await runInboundPutaway(this.prisma, this.inventoryMutation, id, payload, operatorId)
+    try {
+      if (result.allDone) {
+        const skus: string[] = result.items.map(item => item.sku)
+        await tryMarkOrderableOnOmsForSkus(this.prisma, skus)
+        // Retry the latest presentation even if a previous attempt already set orderable.
+        for (const sku of [...new Set(skus)]) await pushCatalogStockToOms(this.prisma, sku)
+        await this.inboundFee.recordOperation(result, 'putaway', pieceQty(result.items, 'putawayQty'), true)
+      }
+      await this.pushInboundStatusToOms(result.inboundNo, true)
+      return result
+    } catch {
+      return { ...result, syncPending: true, warning: '上架与库存已保存，但费用或OMS同步尚未完成；请核对并重试原操作，不要重新上架' }
+    }
+  }
+
+  /** Legacy one-click completion cannot infer actual quantities, measurements or a physical bin. */
+  async confirm(id: number, _payload: any, _operatorId?: number) {
     const order = await this.detail(id)
-    if (!PUTAWAY_STATUSES.has(order.status) && !TERMINAL_STATUSES.has(order.status)) {
-      throw new BadRequestException('入库单未进入待上架状态')
-    }
-    if (TERMINAL_STATUSES.has(order.status)) return order
-
-    const staging = await this.prisma.warehouseLocation.findFirst({
-      where: {
-        warehouseCode: order.warehouseCode,
-        OR: [
-          { locationCode: 'STAGE-01' },
-          { zone: { zoneType: 'staging' } },
-        ],
-        status: 'available',
-      },
-      orderBy: { locationCode: 'asc' },
-    })
-    if (!staging) {
-      throw new BadRequestException(`仓库 ${order.warehouseCode} 未配置待上架区库位（STAGE-01）`)
-    }
-
-    const items = order.items.map((item: any) => {
-      const lengthCm = item.lengthCm != null ? Number(item.lengthCm) : null
-      const widthCm = item.widthCm != null ? Number(item.widthCm) : null
-      const heightCm = item.heightCm != null ? Number(item.heightCm) : null
-      if (![lengthCm, widthCm, heightCm].every((v) => v != null && v > 0)) {
-        throw new BadRequestException(`SKU ${item.sku} 尚未测量长宽高，请先在「到仓扫描 → 清点与测量」填写实测尺寸`)
-      }
-      return {
-        inboundItemId: Number(item.id),
-        lengthCm,
-        widthCm,
-        heightCm,
-        lines: [{ locationCode: staging.locationCode, qty: item.actualQty ?? item.expectedQty }],
-      }
-    })
-    return this.putaway(id, { items }, operatorId)
+    if (TERMINAL_STATUSES.has(order.status)) throw new BadRequestException('该入库单已确认，请返回入库单管理查看结果')
+    throw new BadRequestException('请在「到仓扫描」完成实际清点与测量，并选择实际库位上架；不能自动确认实收或默认上架')
   }
 
   // ── 草稿 ──
 
+  private requireDraftOperator(operatorId?: number): number {
+    if (!Number.isSafeInteger(operatorId) || !operatorId || operatorId <= 0) throw new ForbiddenException('请重新登录后操作草稿')
+    return operatorId
+  }
+
+  private async requireOwnedDraft(tx: Pick<PrismaService, '$queryRawUnsafe'>, draftNo: string, operatorId: number) {
+    const rows = await tx.$queryRawUnsafe<any[]>('SELECT operator_id AS operatorId FROM inbound_draft WHERE draft_no = ? FOR UPDATE', draftNo)
+    if (!rows.length) throw new NotFoundException('草稿不存在，请返回草稿箱重新读取')
+    if (Number(rows[0].operatorId) !== operatorId) throw new ForbiddenException('只能操作本人创建的草稿')
+  }
+
   async listDrafts(operatorId?: number) {
-    const rows: any[] = operatorId
-      ? await this.prisma.$queryRawUnsafe(
-          'SELECT draft_no as draftNo, form_data as formData, saved_at as savedAt FROM inbound_draft WHERE operator_id = ? ORDER BY saved_at DESC',
-          operatorId,
-        )
-      : await this.prisma.$queryRawUnsafe(
-          'SELECT draft_no as draftNo, form_data as formData, saved_at as savedAt FROM inbound_draft ORDER BY saved_at DESC',
-        )
-    return rows.map((r) => ({
-      id: r.draftNo,
-      draftNo: r.draftNo,
-      savedAt: r.savedAt,
-      _form: typeof r.formData === 'string' ? JSON.parse(r.formData) : r.formData,
-    }))
+    const ownerId = this.requireDraftOperator(operatorId)
+    const rows = await this.prisma.$queryRawUnsafe<any[]>('SELECT draft_no AS draftNo, form_data AS formData, saved_at AS savedAt FROM inbound_draft WHERE operator_id = ? ORDER BY saved_at DESC', ownerId)
+    const attachments = await this.prisma.$queryRawUnsafe<any[]>('SELECT a.id, a.draft_no AS draftNo, a.file_name AS fileName FROM inbound_attachment a JOIN inbound_draft d ON d.draft_no = a.draft_no WHERE d.operator_id = ? AND a.inbound_id IS NULL ORDER BY a.id', ownerId)
+    return rows.map(row => {
+      const form = typeof row.formData === 'string' ? JSON.parse(row.formData) : row.formData
+      return { id: row.draftNo, draftNo: row.draftNo, savedAt: row.savedAt, _form: { ...form, attachments: attachments.filter(file => file.draftNo === row.draftNo).map(file => ({ id: Number(file.id), fileName: file.fileName })) } }
+    })
   }
 
   async saveDraft(draftNo: string, formData: any, operatorId?: number) {
-    const json = JSON.stringify(formData)
-    await this.prisma.$executeRawUnsafe(
-      `INSERT INTO inbound_draft (draft_no, operator_id, form_data) VALUES (?, ?, ?)
-       ON DUPLICATE KEY UPDATE form_data = VALUES(form_data), saved_at = CURRENT_TIMESTAMP`,
-      draftNo,
-      operatorId ?? null,
-      json,
-    )
-    return { draftNo, savedAt: new Date() }
+    const ownerId = this.requireDraftOperator(operatorId)
+    if (!draftNo?.trim() || draftNo.length > 30 || !formData || typeof formData !== 'object' || Array.isArray(formData)) throw new BadRequestException('请提供有效草稿号和表单内容')
+    return this.prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(ownerId)} FOR UPDATE`
+      const submitted = await tx.operationLog.findFirst({ where: { operatorId: BigInt(ownerId), module: 'inbound', action: 'create', detail: { path: '$.draftNo', equals: draftNo } } })
+      if (submitted) throw new ConflictException('该草稿已转为正式入库单，请返回入库单管理查看，请勿重复保存发运')
+      const rows = await tx.$queryRawUnsafe<any[]>('SELECT operator_id AS operatorId FROM inbound_draft WHERE draft_no = ? FOR UPDATE', draftNo)
+      if (rows.length && Number(rows[0].operatorId) !== ownerId) throw new ForbiddenException('只能操作本人创建的草稿')
+      if (rows.length) await tx.$executeRawUnsafe('UPDATE inbound_draft SET form_data = ?, saved_at = CURRENT_TIMESTAMP WHERE draft_no = ? AND operator_id = ?', JSON.stringify(formData), draftNo, ownerId)
+      else await tx.$executeRawUnsafe('INSERT INTO inbound_draft (draft_no, operator_id, form_data) VALUES (?, ?, ?)', draftNo, ownerId, JSON.stringify(formData))
+      return { draftNo, savedAt: new Date() }
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted })
   }
 
-  async deleteDraft(draftNo: string) {
-    await this.prisma.$executeRawUnsafe('DELETE FROM inbound_draft WHERE draft_no = ?', draftNo)
-    return { ok: true }
+  async deleteDraft(draftNo: string, operatorId?: number) {
+    const ownerId = this.requireDraftOperator(operatorId)
+    return this.prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(ownerId)} FOR UPDATE`
+      await this.requireOwnedDraft(tx, draftNo, ownerId)
+      await tx.$executeRawUnsafe('DELETE FROM inbound_attachment WHERE draft_no = ? AND inbound_id IS NULL', draftNo)
+      await tx.$executeRawUnsafe('DELETE FROM inbound_draft WHERE draft_no = ? AND operator_id = ?', draftNo, ownerId)
+      return { ok: true }
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted })
   }
 
-  async uploadAttachment(data: { inboundId?: number; draftNo?: string; fileName: string; contentBase64: string }) {
-    const buf = Buffer.from(data.contentBase64, 'base64')
-    const { relativePath } = this.files.write('inbound-attachments', `${Date.now()}_${data.fileName}`, buf)
-    await this.prisma.$executeRawUnsafe(
-      'INSERT INTO inbound_attachment (inbound_id, draft_no, file_name, file_path) VALUES (?, ?, ?, ?)',
-      data.inboundId ?? null,
-      data.draftNo ?? null,
-      data.fileName,
-      relativePath,
-    )
-    return { fileName: data.fileName, path: relativePath }
+  async uploadAttachment(data: { inboundId?: number; draftNo?: string; fileName: string; contentBase64: string }, operatorId?: number) {
+    const ownerId = this.requireDraftOperator(operatorId)
+    if (!data.draftNo || data.inboundId) throw new BadRequestException('请先保存本人草稿后上传附件')
+    if (!data.fileName?.trim() || /[\\/\0]/.test(data.fileName) || ['.', '..'].includes(data.fileName)) throw new BadRequestException('附件文件名无效，请重新选择文件')
+    const encoded = String(data.contentBase64 || '')
+    if (!encoded || encoded.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) throw new BadRequestException('附件内容无效，请重新选择文件')
+    const buf = Buffer.from(encoded, 'base64')
+    if (!buf.length || buf.toString('base64') !== encoded) throw new BadRequestException('附件不能为空或已损坏，请重新选择文件')
+    return this.prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(ownerId)} FOR UPDATE`
+      await this.requireOwnedDraft(tx, data.draftNo!, ownerId)
+      const { relativePath } = this.files.write('inbound-attachments', `${randomUUID()}_${data.fileName}`, buf)
+      await tx.$executeRawUnsafe('INSERT INTO inbound_attachment (inbound_id, draft_no, file_name, file_path) VALUES (NULL, ?, ?, ?)', data.draftNo, data.fileName, relativePath)
+      return { fileName: data.fileName }
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted })
   }
 
   async downloadAttachment(id: number) {
@@ -2327,10 +1241,10 @@ export class InboundService {
     }
 
     const omsSql = code
-      ? 'SELECT internalSku FROM oms_product WHERE (customerSku = ? OR internalSku = ?) AND customerId IN (SELECT id FROM oms_customeraccount WHERE code = ?) LIMIT 1'
-      : 'SELECT internalSku FROM oms_product WHERE customerSku = ? OR internalSku = ? LIMIT 1'
+      ? 'SELECT internalSku, customerSku FROM oms_product WHERE (customerSku = ? OR internalSku = ?) AND customerId IN (SELECT id FROM oms_customeraccount WHERE code = ?) LIMIT 1'
+      : 'SELECT internalSku, customerSku FROM oms_product WHERE customerSku = ? OR internalSku = ? LIMIT 1'
     const omsParams = code ? [trimmed, trimmed, code] : [trimmed, trimmed]
-    const omsRows = await this.prisma.$queryRawUnsafe<Array<{ internalSku: string }>>(omsSql, ...omsParams)
+    const omsRows = await this.prisma.$queryRawUnsafe<Array<{ internalSku: string; customerSku?: string }>>(omsSql, ...omsParams)
     const mappedSku = String(omsRows[0]?.internalSku || '').trim()
     if (mappedSku) {
       const mapped = await this.prisma.product.findUnique({ where: { sku: mappedSku } })
@@ -2339,18 +1253,19 @@ export class InboundService {
       }
     }
 
-    let createSku = trimmed.slice(0, 30)
-    let createCustomerSku = trimmed.slice(0, 50)
-    if (code) {
+    let createSku = mappedSku || trimmed.slice(0, 30)
+    let createCustomerSku = inboundCustomerSku({ sku: mappedSku || trimmed, customerSku: omsRows[0]?.customerSku }, code).slice(0, 50)
+    if (code && !mappedSku) {
       const siblings = await this.prisma.product.findMany({
         where: { sku: { startsWith: `${code}-` } },
         select: { sku: true },
       })
-      createSku = buildInternalSku(code, trimmed, siblings.map((row) => row.sku))
-      createCustomerSku = trimmed.slice(0, 50)
+      createSku = trimmed.toUpperCase().startsWith(`${code}-`)
+        ? trimmed.slice(0, 30)
+        : buildInternalSku(code, trimmed, siblings.map((row) => row.sku))
     }
 
-    await assertGlobalSkuAvailable(this.prisma, { sku: createSku, customerSku: createCustomerSku, mirrorOmsSku: createSku })
+    await assertGlobalSkuAvailable(this.prisma, { sku: createSku, customerSku: createCustomerSku, mirrorOmsSku: mappedSku || undefined })
     const created = await this.prisma.product.create({
       data: {
         sku: createSku,
@@ -2496,7 +1411,7 @@ export class InboundService {
     attachments?: { fileName: string; contentBase64: string; fileType?: string }[]
   }) {
     const customerCode = String(data.customerCode || '').trim()
-    if (!customerCode) throw new BadRequestException('缺少客户编码 customerCode')
+    if (!customerCode) throw new BadRequestException('缺少客户编码')
     const customer = await this.prisma.customer.findUnique({ where: { customerCode } })
     if (!customer) throw new NotFoundException(`客户代码 ${customerCode} 不存在`)
     if (customer.status !== 1) throw new BadRequestException('客户已停用')
@@ -2789,15 +1704,17 @@ export class InboundService {
   }
 
   /** 状态变更后主动推送 OMS（无客户编码则跳过） */
-  private async pushInboundStatusToOms(inboundNo: string) {
+  private async pushInboundStatusToOms(inboundNo: string, strict = false) {
     try {
       const row = await this.prisma.inboundOrder.findUnique({
         where: { inboundNo },
         include: { items: true, cartons: { include: { items: true }, orderBy: { boxSeq: 'asc' } } },
       })
-      if (!row?.omsCustomerCode) return
+      if (!row) throw new NotFoundException('入库单状态暂无法读取')
+      if (!row.omsCustomerCode) return true
       const payload = this.mapInboundForOms(row)
-      void notifyOms('inbound.status', row.omsCustomerCode, payload as unknown as Record<string, unknown>)
+      const statusSent = await notifyOms('inbound.status', row.omsCustomerCode, payload as unknown as Record<string, unknown>)
+      if (strict && !statusSent) throw new Error('OMS入库状态待同步')
       if (payload.omsStatus === 'shelved' || payload.omsStatus === 'partial') {
         const inventoryRows = await this.prisma.inventory.findMany({
           where: {
@@ -2809,7 +1726,7 @@ export class InboundService {
         const inventoryByProductId = new Map(
           inventoryRows.map(item => [item.productId.toString(), item]),
         )
-        void notifyOms('inventory.changed', row.omsCustomerCode, {
+        const stockSent = await notifyOms('inventory.changed', row.omsCustomerCode, {
           reason: 'inbound_' + payload.omsStatus,
           inboundNo: row.inboundNo,
           stockSource: 'owned',
@@ -2824,9 +1741,13 @@ export class InboundService {
             }
           }),
         })
+        if (strict && !stockSent) throw new Error('OMS库存待同步')
       }
+      return true
     } catch (err) {
+      if (strict) throw err
       console.warn('[inbound] push OMS skipped:', err)
+      return false
     }
   }
 

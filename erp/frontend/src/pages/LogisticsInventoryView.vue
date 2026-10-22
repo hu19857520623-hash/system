@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { userFacingError } from '@erp/shared/user-facing-error'
+
 import { displaySku, displaySkuText } from '@erp/shared/sku-display'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
@@ -215,7 +217,7 @@ async function submitTransfer() {
     transferVisible.value = false
     await load()
   } catch (e: any) {
-    ElMessage.error(displaySkuText(e?.message || '调拨失败'))
+    ElMessage.error(userFacingError(displaySkuText(e?.message || '调拨失败')))
   } finally {
     transferring.value = false
   }

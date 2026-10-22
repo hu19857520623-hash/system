@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
 import { OperationLogService } from '../operation-log/operation-log.service'
@@ -30,6 +30,9 @@ import {
 } from './return-decision-fee.util'
 import { buildMeasurePhaseFeeLines, buildFeePreviewContext, defaultMeasureFeeRules, mapDbTemplateRules, normalizeTemplateRulesInput, type FeeTemplateRule } from './return-fee-template.util'
 import { ReturnsChargeService } from './returns-charge.service'
+import { InventoryMutationService } from '../../common/inventory/inventory-mutation.service'
+import { restockReturnToLocations, returnProcessFingerprint, returnRestockProgress, type ReturnProcessInput } from './return-restock.util'
+import { isCatalogInternalSku } from '../../common/catalog-customer.util'
 
 function round2Amount(n: number) {
   return Math.round(n * 100) / 100
@@ -61,6 +64,7 @@ export class ReturnsService {
     private files: FileStoreService,
     private billing: BillingService,
     private returnCharges: ReturnsChargeService,
+    private inventoryMutation: InventoryMutationService,
   ) {}
 
   private writeAttachment(fileName: string, contentBase64: string) {
@@ -191,7 +195,7 @@ export class ReturnsService {
       this.prisma.returnOrder.count({ where }),
     ])
     return {
-      items: rows.map((r) => this.enrichRow(r)),
+      items: await this.withRestockProgress(rows.map((r) => this.enrichRow(r))),
       total,
       page,
       pageSize,
@@ -206,7 +210,7 @@ export class ReturnsService {
     if (!row) throw new NotFoundException('退件单不存在')
     const enriched = this.enrichRow(row)
     const feeLines = await this.returnCharges.loadFeeLines(row.returnNo)
-    return { ...enriched, feeLines }
+    return { ...(await this.withRestockProgress([enriched]))[0], feeLines }
   }
 
   async listByOmsCustomer(customerCode: string) {
@@ -233,7 +237,7 @@ export class ReturnsService {
 
   async createFromOms(data: OmsCreateReturnInput) {
     const customerCode = String(data.customerCode || '').trim()
-    if (!customerCode) throw new BadRequestException('缺少 customerCode')
+    if (!customerCode) throw new BadRequestException('缺少客户代码')
     const customer = await this.prisma.customer.findUnique({ where: { customerCode } })
     if (!customer) throw new NotFoundException(`客户代码 ${customerCode} 不存在`)
     if (customer.status !== 1) throw new BadRequestException('客户已停用')
@@ -256,6 +260,9 @@ export class ReturnsService {
 
     const returnNo = String(data.returnNo || '').trim() || `RT-${Date.now().toString().slice(-10)}`
     const existing = await this.prisma.returnOrder.findUnique({ where: { returnNo } })
+    if (existing && existing.omsCustomerCode !== customerCode) {
+      throw new BadRequestException('客户编码与退件单不匹配，请刷新核对单号')
+    }
     if (existing && existing.status !== 'cancelled') {
       const detail = await this.prisma.returnOrder.findUnique({
         where: { id: existing.id },
@@ -368,13 +375,13 @@ export class ReturnsService {
       _sum: { quantity: true },
     })
     const receivedQty = body.receivedQty != null
-      ? Math.floor(Number(body.receivedQty))
+      ? Number(body.receivedQty)
       : expectedQty._sum.quantity || 0
     const receivedCartonCount = body.receivedCartonCount != null
-      ? Math.floor(Number(body.receivedCartonCount))
+      ? Number(body.receivedCartonCount)
       : 1
-    if (receivedQty <= 0) throw new BadRequestException('实收件数须大于 0')
-    if (receivedCartonCount <= 0) throw new BadRequestException('实收箱数须大于 0')
+    if (!Number.isSafeInteger(receivedQty) || receivedQty <= 0) throw new BadRequestException('实收件数须为大于零的整数')
+    if (!Number.isSafeInteger(receivedCartonCount) || receivedCartonCount <= 0) throw new BadRequestException('实收箱数须为大于零的整数')
 
     const updated = await this.prisma.returnOrder.update({
       where: { id: row.id },
@@ -413,13 +420,13 @@ export class ReturnsService {
     }
 
     const receivedQty = body.receivedQty != null
-      ? Math.floor(Number(body.receivedQty))
+      ? Number(body.receivedQty)
       : row.receivedQty || 0
     const receivedCartonCount = body.receivedCartonCount != null
-      ? Math.floor(Number(body.receivedCartonCount))
+      ? Number(body.receivedCartonCount)
       : row.receivedCartonCount || 1
-    if (receivedQty <= 0) throw new BadRequestException('实收件数须大于 0')
-    if (receivedCartonCount <= 0) throw new BadRequestException('实收箱数须大于 0')
+    if (!Number.isSafeInteger(receivedQty) || receivedQty <= 0) throw new BadRequestException('实收件数须为大于零的整数')
+    if (!Number.isSafeInteger(receivedCartonCount) || receivedCartonCount <= 0) throw new BadRequestException('实收箱数须为大于零的整数')
 
     await this.returnCharges.clearPendingReturnCharges(row.returnNo)
 
@@ -1028,7 +1035,7 @@ export class ReturnsService {
     if (!no) throw new BadRequestException('缺少退件单号')
     const decision = body.decision
     if (decision !== 'keep' && decision !== 'discard') {
-      throw new BadRequestException('decision 须为 keep 或 discard')
+      throw new BadRequestException('请选择留货或不留货的处理决定')
     }
 
     const row = await this.prisma.returnOrder.findUnique({
@@ -1037,7 +1044,7 @@ export class ReturnsService {
     })
     if (!row) throw new NotFoundException(`退件单 ${no} 不存在`)
     const code = body.customerCode?.trim()
-    if (!code) throw new BadRequestException('缺少 customerCode')
+    if (!code) throw new BadRequestException('缺少客户代码')
     if (!row.omsCustomerCode || row.omsCustomerCode !== code) {
       throw new BadRequestException('客户编码与退件单不匹配')
     }
@@ -1136,68 +1143,57 @@ export class ReturnsService {
     return this.enrichRow(updated)
   }
 
-  async process(
-    id: number,
-    body: { processResult?: string; processRemark?: string },
-    userId: number,
-  ) {
-    const row = await this.prisma.returnOrder.findUnique({ where: { id: BigInt(id) } })
-    if (!row) throw new NotFoundException('退件单不存在')
-    if (row.status === 'accepted_pending') {
+  private async withRestockProgress<T extends { returnNo: string; receivedQty: number | null; items: { sku: string; quantity: number }[] }>(rows: T[]) {
+    if (!rows.length) return []
+    const logs = await this.prisma.inventoryLog.findMany({ where: { changeType: 'return_restock', referenceNo: { in: rows.map(row => row.returnNo) } }, select: { referenceNo: true, sku: true, changeQty: true } })
+    return rows.map(row => {
+      const progress = returnRestockProgress(row, logs)
+      return { ...row, ...progress, items: row.items.map(item => ({ ...item, restockedQty: progress.restockedBySku[item.sku] || 0 })) }
+    })
+  }
+
+  async process(id: number, body: ReturnProcessInput, userId: number) {
+    const clientRequestId = String(body.clientRequestId || '').trim()
+    if (clientRequestId.length > 100) throw new BadRequestException('操作标识过长，请关闭弹窗后重新操作')
+    const result = await this.prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM return_order WHERE id = ${BigInt(id)} FOR UPDATE`
+      const row = await tx.returnOrder.findUnique({ where: { id: BigInt(id) }, include: { items: true } })
+      if (!row) throw new NotFoundException('退件单不存在')
       const processResult = String(body.processResult || row.customerProcessChoice || row.requestedProcess || '').trim()
-      if (!isValidProcessMethod(processResult) || processResult === 'destroy') {
-        throw new BadRequestException('无效的处理结果')
+      if (!isValidProcessMethod(processResult) || processResult === 'destroy') throw new BadRequestException('请选择有效的处理结果')
+      const fingerprint = returnProcessFingerprint(body, processResult)
+      if (clientRequestId) {
+        const previous = await tx.operationLog.findFirst({ where: { module: 'returns', action: 'process', targetId: row.returnNo, detail: { path: '$.clientRequestId', equals: clientRequestId } }, select: { detail: true } })
+        if (previous) {
+          if ((previous.detail as { requestFingerprint?: string } | null)?.requestFingerprint !== fingerprint) throw new ConflictException('同一次操作的内容已变化，请刷新退件记录核对后再继续')
+          return { duplicate: true, returnNo: row.returnNo, needsStock: ['restock', 'relabel'].includes(processResult), warehouseCode: String(body.warehouseCode || '').trim() }
+        }
       }
-      const updated = await this.prisma.returnOrder.update({
-        where: { id: row.id },
-        data: {
-          status: 'completed',
-          processResult,
-          processRemark: body.processRemark?.trim() || undefined,
-          processedAt: new Date(),
-          processedBy: BigInt(userId),
-        },
-        include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
-      })
-      await this.opLog.log({
-        module: 'returns',
-        action: 'process',
-        targetType: 'return_order',
-        targetId: row.returnNo,
-        operatorId: userId,
-        detail: { processResult, processRemark: body.processRemark },
-      })
-      void this.pushReturnStatusToOms(row.returnNo)
-      return this.enrichRow(updated)
-    }
-    if (!['arrived', 'processing'].includes(row.status)) {
-      throw new BadRequestException('请先完成质检与客户确认，或当前状态不可处理')
-    }
-    const processResult = String(body.processResult || '').trim()
-    if (!isValidProcessMethod(processResult) || processResult === 'destroy') {
-      throw new BadRequestException('无效的处理结果')
-    }
-    const updated = await this.prisma.returnOrder.update({
-      where: { id: row.id },
-      data: {
-        status: 'completed',
-        processResult,
-        processRemark: body.processRemark?.trim() || undefined,
-        processedAt: new Date(),
-        processedBy: BigInt(userId),
-      },
-      include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
-    })
-    await this.opLog.log({
-      module: 'returns',
-      action: 'process',
-      targetType: 'return_order',
-      targetId: row.returnNo,
-      operatorId: userId,
-      detail: { processResult, processRemark: body.processRemark },
-    })
-    void this.pushReturnStatusToOms(row.returnNo)
-    return this.enrichRow(updated)
+      if (!['accepted_pending', 'arrived', 'processing'].includes(row.status)) throw new BadRequestException('请先完成质检与客户确认，或当前状态不可处理')
+      if (row.status === 'accepted_pending' && row.customerProcessChoice && row.customerProcessChoice !== processResult) {
+        throw new BadRequestException(`客户确认的处理方式为${processMethodLabel(row.customerProcessChoice)}，请按客户确认结果执行`)
+      }
+      const needsStock = processResult === 'restock' || processResult === 'relabel'
+      if (needsStock && !clientRequestId) throw new BadRequestException('缺少本次上架操作标识，请刷新退件页面后再操作')
+      const stock = needsStock ? await restockReturnToLocations(tx, row, body, this.inventoryMutation, userId) : undefined
+      const completed = !stock || stock.remainingRestockQty === 0
+      await tx.returnOrder.update({ where: { id: row.id }, data: {
+        status: completed ? 'completed' : row.status, processResult,
+        processRemark: body.processRemark?.trim() || row.processRemark || undefined,
+        processedAt: completed ? new Date() : null, processedBy: BigInt(userId),
+      } })
+      await tx.operationLog.create({ data: {
+        module: 'returns', action: 'process', targetType: 'return_order', targetId: row.returnNo, operatorId: BigInt(userId),
+        detail: { processResult, processRemark: body.processRemark || null, clientRequestId: clientRequestId || null,
+          requestFingerprint: fingerprint, ...(stock ? { warehouseCode: body.warehouseCode, ...stock } : {}) },
+      } })
+      return { duplicate: false, returnNo: row.returnNo, needsStock, warehouseCode: String(body.warehouseCode || '').trim() }
+    }, { timeout: 20000 })
+    const statusPushed = await this.pushReturnStatusToOms(result.returnNo)
+    const inventoryPushed = result.needsStock
+      ? await this.pushReturnStockToOms(id, result.warehouseCode) : true
+    return { ...(await this.detail(id)), duplicate: result.duplicate,
+      ...(!statusPushed || !inventoryPushed ? { warning: '处理结果已保存，但 OMS 同步未完成，请在 OMS 刷新核对，请勿重复入库。' } : {}) }
   }
 
   private applyDateRange(
@@ -1451,7 +1447,7 @@ export class ReturnsService {
     })
     if (!row) throw new NotFoundException(`退件单 ${no} 不存在`)
     const code = String(customerCode || '').trim()
-    if (!code) throw new BadRequestException('缺少 customerCode')
+    if (!code) throw new BadRequestException('缺少客户代码')
     if (!row.omsCustomerCode || row.omsCustomerCode !== code) {
       throw new BadRequestException('客户编码与退件单不匹配')
     }
@@ -1480,7 +1476,7 @@ export class ReturnsService {
   async downloadAttachmentByReturnNo(returnNo: string, attachmentId: number, customerCode: string) {
     const no = returnNo.trim()
     const code = String(customerCode || '').trim()
-    if (!code) throw new BadRequestException('缺少 customerCode')
+    if (!code) throw new BadRequestException('缺少客户代码')
     const row = await this.prisma.returnOrder.findUnique({ where: { returnNo: no } })
     if (!row) throw new NotFoundException(`退件单 ${no} 不存在`)
     if (!row.omsCustomerCode || row.omsCustomerCode !== code) {
@@ -1495,11 +1491,27 @@ export class ReturnsService {
         where: { returnNo },
         include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
       })
-      if (!row?.omsCustomerCode) return
-      void notifyOms('return.status', row.omsCustomerCode, this.mapReturnForOms(row) as Record<string, unknown>)
+      if (!row?.omsCustomerCode) return true
+      return await notifyOms('return.status', row.omsCustomerCode, this.mapReturnForOms(row) as Record<string, unknown>)
     } catch (err) {
       console.warn('[returns] push OMS skipped:', err)
+      return false
     }
+  }
+
+  private async pushReturnStockToOms(id: number, warehouseCode: string) {
+    try {
+      const order = await this.prisma.returnOrder.findUnique({ where: { id: BigInt(id) }, include: { items: true } })
+      if (!order?.omsCustomerCode || !warehouseCode) return true
+      const skus = [...new Set(order.items.map(item => item.sku))]
+      const stock = await this.prisma.inventory.findMany({ where: { warehouseCode, sku: { in: skus } }, select: { sku: true, availableQty: true, lockedQty: true } })
+      const holdings = await this.prisma.customerSkuInventory.findMany({ where: { customerId: order.customerId, sku: { in: skus.filter(isCatalogInternalSku) } }, select: { sku: true, quantity: true } })
+      const results: boolean[] = []
+      const owned = stock.filter(line => !isCatalogInternalSku(line.sku))
+      if (owned.length) results.push(await notifyOms('inventory.changed', order.omsCustomerCode, { reason: 'return_restock', stockSource: 'owned', warehouseCode, items: owned }))
+      if (holdings.length) results.push(await notifyOms('inventory.changed', order.omsCustomerCode, { reason: 'return_restock', stockSource: 'catalog', warehouseCode, items: holdings.map(line => ({ sku: line.sku, holdingQty: line.quantity })) }))
+      return results.every(Boolean)
+    } catch (error) { console.warn('[returns] push inventory skipped:', error); return false }
   }
 
   /** 把带客户编码的退货状态再推给 OMS（只发 return.status）。 */

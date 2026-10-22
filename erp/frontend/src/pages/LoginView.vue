@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { userFacingError } from '@erp/shared/user-facing-error'
+
 import { ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -41,7 +43,7 @@ async function handleSubmit() {
     router.replace(redirect)
     ElMessage.success(`欢迎回来，${app.currentAccount.name}`)
   } catch (e: any) {
-    ElMessage.error(e.message || '登录失败，请检查账号密码')
+    ElMessage.error(userFacingError(e.message || '登录失败，请检查账号密码'))
   } finally {
     loading.value = false
   }

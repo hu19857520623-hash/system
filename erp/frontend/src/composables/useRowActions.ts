@@ -1,4 +1,5 @@
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { userFacingError } from '@erp/shared/user-facing-error'
 import { h } from 'vue'
 import { useAsyncIo } from './useAsyncIo'
 import { erpConfirm } from '@/utils/messageBox'
@@ -33,7 +34,7 @@ export function useRowActions() {
     })
   }
 
-  const toast = (msg: string, type: 'success' | 'info' | 'warning' | 'error' = 'success') => ElMessage({ message: msg, type })
+  const toast = (msg: string, type: 'success' | 'info' | 'warning' | 'error' = 'success') => ElMessage({ message: type === 'error' ? userFacingError(msg) : msg, type })
 
   const exportTask = (what = '数据') => exportModule(what)
 

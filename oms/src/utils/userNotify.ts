@@ -1,4 +1,5 @@
 import { displaySkuText } from '../data/skuDisplayText'
+import { userFacingError } from './userFacingError'
 
 export type UserToastKind = 'ok' | 'err' | 'info'
 
@@ -32,7 +33,7 @@ export function notifySuccess(text: string) {
 }
 
 export function notifyError(text: string) {
-  publish('err', text)
+  publish('err', userFacingError(text))
 }
 
 export function notifyInfo(text: string) {
@@ -40,15 +41,13 @@ export function notifyInfo(text: string) {
 }
 
 export function errorMessage(err: unknown, fallback = '操作失败'): string {
-  if (err instanceof Error) return err.message || fallback
-  if (typeof err === 'string' && err.trim()) return err.trim()
-  return fallback
+  return userFacingError(err, undefined, fallback)
 }
 
 /** Skips user-cancelled flows (e.g. file picker). */
 export function notifyIfUserError(err: unknown, fallback = '操作失败') {
+  if (err === 'cancelled' || (err instanceof Error && err.message === 'cancelled')) return
   const msg = errorMessage(err, fallback)
-  if (msg === 'cancelled') return
   notifyError(msg)
 }
 

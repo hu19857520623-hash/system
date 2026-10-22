@@ -1,4 +1,5 @@
 import { DashboardService } from './dashboard.service'
+import { ERP_MASTER_PRODUCT_WHERE } from '../../common/product-source.util'
 
 function createPrismaMock() {
   return {
@@ -59,6 +60,7 @@ describe('DashboardService', () => {
       inventoryAvailable: 120,
     })
     expect(prisma.supplier.count).toHaveBeenCalledWith({ where: { status: 1 } })
+    expect(prisma.product.count).toHaveBeenCalledWith({ where: ERP_MASTER_PRODUCT_WHERE })
   })
 
   it('stats filters KPI fields by role permissions', async () => {

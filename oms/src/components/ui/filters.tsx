@@ -80,11 +80,12 @@ export function FilterActions({ onQuery, onReset, align = 'right' }: { onQuery: 
   )
 }
 
-export function DropdownBtn({ label, icon, items, variant = 'secondary' }: {
+export function DropdownBtn({ label, icon, items, variant = 'secondary', disabled = false }: {
   label: string
   icon?: React.ReactNode
   items: { label: string; onClick?: () => void }[]
   variant?: 'secondary' | 'toolbar'
+  disabled?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -95,7 +96,7 @@ export function DropdownBtn({ label, icon, items, variant = 'secondary' }: {
   }, [])
   return (
     <div className="relative" ref={ref}>
-      <Button variant={variant} size="sm" onClick={() => setOpen(v => !v)}>
+      <Button variant={variant} size="sm" disabled={disabled} onClick={() => setOpen(v => !v)}>
         {icon}{label} <ChevronDown className="h-3 w-3" />
       </Button>
       {open && (
@@ -104,6 +105,7 @@ export function DropdownBtn({ label, icon, items, variant = 'secondary' }: {
             <button
               key={item.label}
               type="button"
+              disabled={disabled}
               onClick={() => { item.onClick?.(); setOpen(false) }}
               className="block w-full px-3 py-2 text-left text-xs text-text-secondary hover:bg-surface-muted hover:text-text-primary"
             >

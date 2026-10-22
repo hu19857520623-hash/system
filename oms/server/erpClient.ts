@@ -419,7 +419,9 @@ export type ErpInventoryViewItem = ErpSkuHolding & {
   warehouseAvailable: number
   warehouseLocked: number
   warehouseTotal: number
-  stockSource: 'catalog'
+  inTransitQty?: number
+  pendingShelvingQty?: number
+  stockSource: 'catalog' | 'owned'
 }
 
 export function createErpInboundAsn(body: {
@@ -601,7 +603,7 @@ export async function downloadErpReturnAttachment(
   customerCode: string,
 ) {
   const code = String(customerCode || '').trim()
-  if (!code) throw new ErpApiError(400, '缺少 customerCode')
+  if (!code) throw new ErpApiError(400, '缺少客户代码')
   const url = `${ERP_API_BASE}/returns/oms/by-no/${encodeURIComponent(returnNo)}/attachment/${attachmentId}?customerCode=${encodeURIComponent(code)}`
   const res = await fetch(url, { headers: { Accept: '*/*', ...internalHeaders() } })
   if (!res.ok) {
@@ -707,7 +709,7 @@ export function uploadErpPodReceipt(
 
 export async function downloadErpOutboundPod(outboundNo: string, customerCode: string) {
   const code = String(customerCode || '').trim()
-  if (!code) throw new ErpApiError(400, '缺少 customerCode')
+  if (!code) throw new ErpApiError(400, '缺少客户代码')
   const url = `${ERP_API_BASE}/outbound/oms/by-no/${encodeURIComponent(outboundNo)}/pod?customerCode=${encodeURIComponent(code)}`
   const res = await fetch(url, { headers: { Accept: '*/*', ...internalHeaders() } })
   if (!res.ok) {

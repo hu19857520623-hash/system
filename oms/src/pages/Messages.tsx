@@ -1,3 +1,5 @@
+
+import { userFacingError } from '../utils/userFacingError'
 import { useState } from 'react'
 import { Bell } from 'lucide-react'
 import { Badge, Button, Card, PageHeader, FilterChip } from '../components/ui'
@@ -17,7 +19,7 @@ export default function MessagesPage() {
     try {
       await markSystemMessagesRead(ids)
     } catch (error) {
-      window.alert(`标记已读失败：${error instanceof Error ? error.message : String(error)}`)
+      window.alert(userFacingError(`标记已读失败：${error instanceof Error ? error.message : String(error)}`))
     } finally {
       setSaving(false)
     }

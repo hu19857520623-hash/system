@@ -11,6 +11,7 @@ import {
   filterDashboardStats,
 } from '@erp/shared/dashboard-widgets'
 import { dayRangeUtc, mergeTrendCounts } from './dashboard.utils'
+import { ERP_MASTER_PRODUCT_WHERE } from '../../common/product-source.util'
 
 const SYNC_FAILED_WHERE: Prisma.SyncLogWhereInput = {
   status: 'failed',
@@ -41,7 +42,7 @@ export class DashboardService {
 
   async stats(userId?: number, roleCode?: string) {
     const [products, suppliers, leads, pendingPo, pendingAudit, syncFailed] = await Promise.all([
-      this.prisma.product.count(),
+      this.prisma.product.count({ where: ERP_MASTER_PRODUCT_WHERE }),
       this.prisma.supplier.count({ where: { status: 1 } }),
       this.prisma.lead.count(),
       this.prisma.purchaseOrder.count({ where: { status: 'pending_po_audit' } }),

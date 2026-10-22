@@ -1,3 +1,5 @@
+
+import { userFacingError } from '../utils/userFacingError'
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
@@ -95,7 +97,7 @@ export default function Login() {
       } else if (status === 429) {
         setError('登录尝试过于频繁，请稍后再试')
       } else {
-        setError(loginError instanceof Error ? loginError.message : '登录失败，请稍后重试')
+        setError(userFacingError(loginError instanceof Error ? loginError.message : '登录失败，请稍后重试'))
       }
     } finally {
       setSubmitting(false)
@@ -191,7 +193,7 @@ export default function Login() {
         </Card>
 
         <p className="mt-6 text-center text-[11px] text-text-muted">
-          首次登录后必须修改临时密码
+          登录遇到问题，请联系系统管理员
         </p>
       </div>
     </div>

@@ -1,3 +1,5 @@
+
+import { userFacingError } from '../utils/userFacingError'
 import { displaySku } from '../data/skuDisplay'
 import { useState, useMemo } from 'react'
 import { Link } from 'react-router-dom'
@@ -16,8 +18,8 @@ import { refreshInventoryFromErp, useInventoryItems } from '../data/inventorySto
 import { useOutboundOrders } from '../data/outboundStore'
 import { loadSkuOutboundLogs, type SkuOutboundLogRow } from '../data/inventoryOutboundLogs'
 import { useDataScope } from '../auth/useDataScope'
-import { getCustomerCode, getCustomerIdForRole } from '../data/dataScope'
-import { useRole } from '../auth/RoleContext'
+import { getCustomerCode } from '../data/dataScope'
+import { notifyError, notifySuccess } from '../utils/userNotify'
 import { AdminCustomerFilter } from '../components/admin/AdminCustomerFilter'
 import { exportInventoryCsv } from '../data/listExport'
 import { findProductByCode } from '../data/platformBindingUtils'
@@ -86,7 +88,6 @@ function applyInvFilters(list: ReturnType<typeof useInventoryItems>, f: InvFilte
 }
 
 export default function InventoryPage() {
-  const { role } = useRole()
   const dataScope = useDataScope()
   const allInventory = useInventoryItems()
   const allOutbound = useOutboundOrders()
@@ -129,25 +130,26 @@ export default function InventoryPage() {
         setOutboundDrawerHint('该 SKU 暂无出库记录。')
       }
     } catch (err) {
-      setOutboundDrawerHint(err instanceof Error ? err.message : '加载出库记录失败')
+      setOutboundDrawerHint(userFacingError(err instanceof Error ? err.message : '加载出库记录失败'))
     } finally {
       setOutboundDrawerLoading(false)
     }
   }
 
   const syncFromErp = async () => {
-    const customerId = getCustomerIdForRole(role)
+    if (syncing) return
+    const customerId = dataScope.bindingCustomerId
     const customerCode = getCustomerCode(customerId ?? undefined)
     if (!customerId || !customerCode || customerCode === '—') {
-      window.alert('请切换到客户角色后再同步 ERP 库存')
+      notifyError('请先选择需要同步库存的客户')
       return
     }
     setSyncing(true)
     try {
       const n = await refreshInventoryFromErp(customerId, customerCode)
-      window.alert(`已从 ERP 同步 ${n} 条客户持有库存`)
+      notifySuccess(`已从 ERP 同步 ${n} 条客户库存`)
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : String(err))
+      notifyError(userFacingError(err instanceof Error ? err.message : String(err)))
     } finally {
       setSyncing(false)
     }

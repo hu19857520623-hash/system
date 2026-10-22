@@ -1,3 +1,5 @@
+
+import { userFacingError } from '@erp/shared/user-facing-error'
 import { ref, watch, onMounted, type Ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { returnsApi } from '@/api/client.js'
@@ -97,7 +99,7 @@ export function useReturnList() {
       listTotal.value = res.total || 0
       selectedIds.value = []
     } catch (e: any) {
-      ElMessage.error(e?.message || '加载失败')
+      ElMessage.error(userFacingError(e?.message || '加载失败'))
     } finally {
       loading.value = false
     }

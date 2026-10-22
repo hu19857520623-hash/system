@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { userFacingError } from '@erp/shared/user-facing-error'
+
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, type TableInstance } from 'element-plus'
@@ -108,7 +110,7 @@ async function exportLeads() {
     triggerBrowserDownload(blob, fileName)
     ElMessage.success(selectedIds.length ? `已导出所选 ${selectedIds.length} 条线索` : '已按筛选条件导出全部匹配线索')
   } catch (error: any) {
-    ElMessage.error(error?.message || '线索导出失败')
+    ElMessage.error(userFacingError(error?.message || '线索导出失败'))
   } finally {
     exporting.value = false
   }
@@ -421,7 +423,7 @@ async function downloadDealFile(deal: any, att: { id: number; fileName: string }
     a.click()
     URL.revokeObjectURL(url)
   } catch (error: any) {
-    ElMessage.error(error?.message || '下载失败')
+    ElMessage.error(userFacingError(error?.message || '下载失败'))
   }
 }
 
@@ -435,7 +437,7 @@ async function detail(row: any) {
     detailData.value = await leadApi.detail(leadId)
   } catch (error: any) {
     detailVisible.value = false
-    ElMessage.error(error?.message || '加载线索详情失败')
+    ElMessage.error(userFacingError(error?.message || '加载线索详情失败'))
   } finally {
     detailLoading.value = false
   }

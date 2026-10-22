@@ -61,7 +61,7 @@ export async function settleOutboundFees(
   data: OutboundFeesPayload,
 ): Promise<{ ok: true; settlementDelta: number; alreadySettled?: boolean } | { ok: false; error: string }> {
   const outboundNo = String(data.outboundNo || '').trim()
-  if (!outboundNo) return { ok: false, error: '缺少 outboundNo' }
+  if (!outboundNo) return { ok: false, error: '缺少出库单号' }
 
   const settleId = `settle-${outboundNo}`
   const existingSettle = await prisma.feeRecord.findUnique({ where: { id: settleId } })
@@ -222,7 +222,7 @@ export async function refundOutboundPreDeduct(
   data: { outboundNo: string; preDeductTotal?: number; balance?: number | null; reason?: string },
 ): Promise<{ ok: true; alreadyRefunded?: boolean } | { ok: false; error: string }> {
   const outboundNo = String(data.outboundNo || '').trim()
-  if (!outboundNo) return { ok: false, error: '缺少 outboundNo' }
+  if (!outboundNo) return { ok: false, error: '缺少出库单号' }
 
   const refundId = `refund-${outboundNo}`
   const existing = await prisma.feeRecord.findUnique({ where: { id: refundId } })

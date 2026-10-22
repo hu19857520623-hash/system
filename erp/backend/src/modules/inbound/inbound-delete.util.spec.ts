@@ -11,5 +11,6 @@ describe('inboundReceivingStarted', () => {
     expect(inboundReceivingStarted({ status: 'pending_receipt', items: [{ actualQty: 2 }] })).toBe(true)
     expect(inboundReceivingStarted({ status: 'arrived', cartons: [{ status: 'received' }] })).toBe(true)
     expect(inboundReceivingStarted({ status: 'pending_receipt', receivedAt: new Date() })).toBe(true)
+    expect(inboundReceivingStarted({ status: 'arrived', receivedCartonCount: 1 })).toBe(true)
   })
 })

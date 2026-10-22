@@ -676,7 +676,10 @@ export class ProductsService {
   }
 
   async getSkuLabel(sku: string) {
-    const product = await this.findBySku(sku)
+    // Approved selections need labels before procurement creates the master product.
+    const product = await this.prisma.product.findUnique({ where: { sku } })
+      ?? await this.prisma.productDev.findFirst({ where: { sku, status: 'approved' }, select: { sku: true } })
+    if (!product) throw new NotFoundException('商品或已通过的选品不存在，请刷新核对')
     const html = this.buildSkuLabelHtml(product)
     return {
       fileName: `SKU标签_${sku}.html`,

@@ -849,7 +849,7 @@ onMounted(async () => {
 
         :data="pagedItems"
 
-        :row-key="(row) => row.rowKey"
+        :row-key="(row: { rowKey: string }) => row.rowKey"
 
         stripe
 
