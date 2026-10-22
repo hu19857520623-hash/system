@@ -975,7 +975,7 @@ function canDeletePo(row?: { statusKey?: string } | null) {
 
 const deletingPoId = ref<number | null>(null)
 
-async function removePurchaseOrder(row: { id: number; poNo?: string; prePoId?: number | null } | any) {
+async function removePurchaseOrder(row: any) {
   if (deletingPoId.value || poActionBusy.value) return
   try {
     await erpConfirm(
@@ -998,7 +998,7 @@ async function removePurchaseOrder(row: { id: number; poNo?: string; prePoId?: n
   await Promise.all([load(), loadMyPrePo(), canAssignPurchaser.value ? loadPrePoPendingAssign() : Promise.resolve()])
 }
 
-async function removeCancelledPrePo(row: { id: number; prePoNo?: string } | any) {
+async function removeCancelledPrePo(row: any) {
   if (prePoActionId.value) return
   try {
     await erpConfirm(
