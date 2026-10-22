@@ -9,7 +9,7 @@ import { mapUser } from '@/api/mappers.ts'
 import { withAction } from '@/composables/useListLoader.ts'
 import { useAppStore } from '@/stores/app'
 import ListPagination from '@/components/ListPagination.vue'
-import { PERM_GROUPS as FALLBACK_PERM_GROUPS, ROLE_DEFINITIONS, ROLE_SIDE_LABELS, isWarehouseStaffRole, type RoleSide } from '@erp/shared/permissions.catalog'
+import { EXPORT_PERM_ROLES, PERM_GROUPS as FALLBACK_PERM_GROUPS, ROLE_DEFINITIONS, ROLE_SIDE_LABELS, canAssignPermission, catalogRoleName, isExportPermission, isWarehouseStaffRole, type RoleSide } from '@erp/shared/permissions.catalog'
 
 const app = useAppStore()
 
@@ -286,7 +286,21 @@ function applyRoleTemplate() {
   ElMessage.success(`已加载「${roleName}」角色默认权限`)
 }
 
+function grantHint(permId: string) {
+  if (!isExportPermission(permId) || editForm.value.roleCode === 'admin') return ''
+  const names = (EXPORT_PERM_ROLES[permId] || []).map((code) => catalogRoleName(code)).join('、')
+  return names ? `仅${names}` : '仅系统管理员'
+}
+
+function canGrant(permId: string) {
+  return canAssignPermission(editForm.value.roleCode, permId)
+}
+
 function togglePerm(permId: string, checked: boolean) {
+  if (checked && !canGrant(permId)) {
+    ElMessage.warning(`「${grantHint(permId) || '当前职位'}」不能授予该导出权限`)
+    return
+  }
   permSource.value = 'custom'
   const set = new Set(selectedPerms.value)
   if (checked) set.add(permId)
@@ -297,7 +311,11 @@ function togglePerm(permId: string, checked: boolean) {
 function toggleGroup(perms: { id: string }[], checked: boolean) {
   permSource.value = 'custom'
   const set = new Set(selectedPerms.value)
-  perms.forEach((p) => (checked ? set.add(p.id) : set.delete(p.id)))
+  perms.forEach((p) => {
+    if (checked && !canGrant(p.id)) return
+    if (checked) set.add(p.id)
+    else set.delete(p.id)
+  })
   selectedPerms.value = [...set]
 }
 
@@ -312,7 +330,7 @@ function isGroupIndeterminate(perms: { id: string }[]) {
 
 function selectAllPerms() {
   permSource.value = 'custom'
-  selectedPerms.value = [...ALL_PERM_IDS.value]
+  selectedPerms.value = [...ALL_PERM_IDS.value.filter((id) => canGrant(id))]
 }
 
 function clearAllPerms() {
@@ -559,7 +577,7 @@ onMounted(async () => {
       <div class="edit-hint">
         职位区分办公与仓内岗位（收货/拣货/复核等），均在同一 ERP 网页登录，暂无独立 PDA 或仓储端 App。
         仓内账号请选「仓储职位」并配置出库拣货等权限；工位字段仅用于分配拣货员时的展示。
-        权限细分是该账号可访问的模块，切换职位会加载默认权限，之后可再勾选调整。
+        权限细分是该账号可访问的模块，切换职位会加载默认权限，之后可再勾选调整。导出权限只能授予对应职位，其他职位的勾选会禁用。
         <el-tag v-if="permSource === 'custom'" size="small" type="warning">当前为自定义权限</el-tag>
         <el-tag v-else size="small" type="info">跟随职位默认</el-tag>
       </div>
@@ -655,11 +673,12 @@ onMounted(async () => {
                 v-for="p in group.perms"
                 :key="p.id"
                 :model-value="selectedPerms.includes(p.id)"
+                :disabled="!canGrant(p.id)"
                 class="perm-item"
                 @change="(v: unknown) => togglePerm(p.id, Boolean(v))"
               >
                 <span class="perm-label">{{ p.label }}</span>
-                <span class="perm-code">{{ p.id }}</span>
+                <span class="perm-code">{{ grantHint(p.id) || p.id }}</span>
               </el-checkbox>
             </div>
           </el-collapse-item>

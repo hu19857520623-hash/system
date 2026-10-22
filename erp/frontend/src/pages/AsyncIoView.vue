@@ -6,6 +6,7 @@ import { useListLoader } from '@/composables/useListLoader.ts'
 import { useTablePagination } from '@/composables/useTablePagination.ts'
 import { useRowActions } from '@/composables/useRowActions'
 import { useAsyncIo } from '@/composables/useAsyncIo'
+import { useAppStore } from '@/stores/app'
 import { downloadLeadsImportTemplate, downloadProductImportTemplate, downloadPurchaseOrderImportTemplate } from '@/constants/importTemplates.ts'
 import {
   formatImportDetailFields,
@@ -17,6 +18,7 @@ import ListPagination from '@/components/ListPagination.vue'
 
 const { showDetail } = useRowActions()
 const { importCsv, downloadJob, exportModule } = useAsyncIo()
+const app = useAppStore()
 
 const tab = ref('import')
 
@@ -154,7 +156,7 @@ onMounted(load)
 
     <template v-else>
       <div style="margin-bottom:12px">
-        <el-button type="primary" size="small" @click="newExport">新建导出任务（库存）</el-button>
+        <el-button v-if="app.hasPerm('inventory_query.export')" type="primary" size="small" @click="newExport">新建导出任务（库存）</el-button>
       </div>
       <el-table :data="exportPagedItems" stripe border size="small">
         <el-table-column prop="id" label="任务编号" width="140">

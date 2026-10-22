@@ -6,12 +6,14 @@ import { mapCostLedger } from '@/api/mappers.ts'
 import { useListLoader } from '@/composables/useListLoader.ts'
 import { useTablePagination } from '@/composables/useTablePagination.ts'
 import { useRowActions } from '@/composables/useRowActions'
+import { useAppStore } from '@/stores/app'
 import ListPagination from '@/components/ListPagination.vue'
 
 defineOptions({ name: 'CostLedgerView' })
 withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false })
 
 const { showDetail, exportTask } = useRowActions()
+const app = useAppStore()
 
 function toBillRow(row: any) {
   const m = mapCostLedger({ ...row, amount: row.amountRmb })
@@ -94,11 +96,11 @@ onMounted(load)
           <div class="page-title">采购货款</div>
           <p class="page-subtitle">按费用类型、业务单号和发生日期追踪采购货款与相关费用</p>
         </div>
-        <el-button size="small" @click="exportTask('采购货款')">导出</el-button>
+        <el-button v-if="app.hasPerm('cost.export')" size="small" @click="exportTask('采购货款')">导出</el-button>
       </div>
     </template>
     <div v-if="embedded" class="embedded-toolbar">
-      <el-button size="small" @click="exportTask('采购货款')">导出</el-button>
+      <el-button v-if="app.hasPerm('cost.export')" size="small" @click="exportTask('采购货款')">导出</el-button>
     </div>
     <div class="filters">
       <el-input v-model="filters.keyword" clearable placeholder="货款单号 / SKU / 关联单号" style="width:220px" @keyup.enter="applyFilters" />

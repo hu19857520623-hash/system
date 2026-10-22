@@ -185,8 +185,14 @@ export class PurchaseController {
   }
 
   @RequirePerms('purchase.create')
+  @Post(':id/void')
+  voidOrder(@Param('id', ParseIntPipe) id: number, @CurrentUser('userId') userId: number) {
+    return this.service.voidOrder(id, userId)
+  }
+
+  @RequirePerms('purchase.create')
   @Delete(':id')
   remove(@Param('id', ParseIntPipe) id: number, @CurrentUser('userId') userId: number) {
-    return this.service.remove(id, userId)
+    return this.service.voidOrder(id, userId)
   }
 }

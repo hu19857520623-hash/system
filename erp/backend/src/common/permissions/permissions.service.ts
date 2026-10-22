@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common'
 import { PrismaService } from '../prisma/prisma.service'
-import { defaultPermsForRoleCode, normalizePermCodes } from './permissions.constants'
+import { defaultPermsForRoleCode, filterAssignablePerms, normalizePermCodes } from './permissions.constants'
 
 @Injectable()
 export class PermissionsService {
@@ -26,8 +26,8 @@ export class PermissionsService {
     return defaultPermsForRoleCode(roleCode)
   }
 
-  async setUserPermissions(userId: number, permissions: string[]) {
-    const codes = normalizePermCodes([...new Set(permissions.filter(Boolean))])
+  async setUserPermissions(userId: number, permissions: string[], roleCode: string) {
+    const codes = filterAssignablePerms(roleCode, permissions)
     await this.prisma.$transaction(async (tx) => {
       await tx.sysUserPermission.deleteMany({ where: { userId: BigInt(userId) } })
       if (codes.length) {

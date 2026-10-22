@@ -12,6 +12,7 @@ import { useListLoader, withAction } from '@/composables/useListLoader.ts'
 import { useTablePagination } from '@/composables/useTablePagination.ts'
 
 import { useRowActions } from '@/composables/useRowActions'
+import { useAppStore } from '@/stores/app'
 
 import ListPagination from '@/components/ListPagination.vue'
 
@@ -23,6 +24,7 @@ const { billingOptions: takealotDestOptions } = useTakealotDestConfig()
 
 
 const { showDetail, toast, confirmAction } = useRowActions()
+const app = useAppStore()
 
 
 
@@ -717,9 +719,9 @@ onMounted(async () => {
 
             <el-button type="primary" size="small" @click="openGenerate">生成账单</el-button>
 
-            <el-button size="small" :disabled="!selectedRows.length" @click="exportCharges()">导出选中</el-button>
+            <el-button v-if="app.hasPerm('billing.export')" size="small" :disabled="!selectedRows.length" @click="exportCharges()">导出选中</el-button>
 
-            <el-button size="small" @click="exportCharges(rawCharges)">导出全部</el-button>
+            <el-button v-if="app.hasPerm('billing.export')" size="small" @click="exportCharges(rawCharges)">导出全部</el-button>
 
           </div>
 

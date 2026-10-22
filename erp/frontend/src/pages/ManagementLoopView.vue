@@ -296,7 +296,7 @@ watch(warehouseCode, loadCurrent)
             />
             <el-button type="primary" @click="loadReports">查询</el-button>
           </div>
-          <el-button :loading="exporting" @click="exportReports">导出 CSV</el-button>
+          <el-button v-if="app.hasPerm('wms_reports.export')" :loading="exporting" @click="exportReports">导出 CSV</el-button>
         </div>
         <div class="metrics">
           <div class="metric"><span>入库单</span><strong>{{ reportSummary.inbound?.orderCount || 0 }}</strong><small>完成率 {{ reportSummary.inbound?.completionRate || 0 }}%</small></div>

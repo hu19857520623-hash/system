@@ -5,10 +5,12 @@ import { mapCustomer, fmtTime } from '@/api/mappers.ts'
 import { useListLoader, withAction } from '@/composables/useListLoader.ts'
 import { useTablePagination } from '@/composables/useTablePagination.ts'
 import { useRowActions } from '@/composables/useRowActions'
+import { useAppStore } from '@/stores/app'
 import ListPagination from '@/components/ListPagination.vue'
 import DetailSheet from '@/components/ui/DetailSheet.vue'
 
 const { exportTask, toast } = useRowActions()
+const app = useAppStore()
 
 const keyword = ref('')
 
@@ -206,7 +208,7 @@ onMounted(load)
         <span class="page-title">客户充值</span>
         <div class="header-actions">
           <el-button type="primary" size="small" @click="openRecharge()">充值</el-button>
-          <el-button size="small" @click="exportTask('客户充值')">导出</el-button>
+          <el-button v-if="app.hasPerm('budget_credit.export')" size="small" @click="exportTask('客户充值')">导出</el-button>
         </div>
       </div>
     </template>

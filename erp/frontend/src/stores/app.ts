@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { authApi } from '@/api/client'
 import { clearAccessToken, getAccessToken, setAccessToken } from '@/auth/tokenStore'
 import {
+  EXPORT_PERM_ROLES,
   ROLE_PERM_TEMPLATES,
   templatePermsForRoleName,
 } from '@erp/shared/permissions.catalog'
@@ -434,7 +435,7 @@ export const useAppStore = defineStore('app', {
         store_monitor: 'store_monitor.view',
         profit_analysis: ['profit_analysis.view', 'reports.view'],
         budget_credit: 'budget_credit.view',
-        async_io: ['async_io.import', 'async_io.export'],
+        async_io: ['async_io.import', 'async_io.export', ...Object.keys(EXPORT_PERM_ROLES)],
         permissions: 'permissions.view',
         user_management: 'permissions.view',
       }

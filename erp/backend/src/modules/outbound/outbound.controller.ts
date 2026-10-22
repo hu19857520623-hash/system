@@ -87,7 +87,7 @@ export class OutboundController {
     return this.service.statusCounts(q)
   }
 
-  @RequirePerms('outbound.view')
+  @RequirePerms('outbound.export')
   @Get('export')
   @Header('Content-Type', 'text/csv; charset=utf-8')
   @Header('Content-Disposition', 'attachment; filename="outbound-export.csv"')

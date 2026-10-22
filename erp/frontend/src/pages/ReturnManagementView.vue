@@ -983,7 +983,7 @@ void _removeExtraFeeLine
       </div>
       <div class="toolbar-right">
         <el-button size="small" @click="openFeeTemplates">收费模板</el-button>
-        <el-button size="small" @click="exportCsv">导出</el-button>
+        <el-button v-if="app.hasPerm('return.export')" size="small" @click="exportCsv">导出</el-button>
       </div>
     </div>
 

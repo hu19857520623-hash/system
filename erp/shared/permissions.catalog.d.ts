@@ -36,10 +36,17 @@ export declare const LEAD_ASSIGNEE_ROLE_CODES: readonly ["cs", "sales_manager"];
 /** 新建线索时强制归属当前登录人的销售角色（不含销售主管） */
 export declare const LEAD_SELF_ASSIGN_ROLE_CODES: readonly ["cs"];
 export declare const ALL_PERM_CODES: string[];
+/** 导出权限只能授予这些职位。系统管理员不在名单里，但始终可以授予。 */
+export declare const EXPORT_PERM_ROLES: Record<string, readonly string[]>;
+export declare const EXPORT_MODULE_PERM: Record<string, string>;
+export declare function isExportPermission(permId: string): boolean;
+export declare function canAssignPermission(roleCode: string, permId: string): boolean;
+export declare function exportPermForModule(module: string): string | null;
 export declare const STORE_MONITOR_ASSIGN_PERM = "store_monitor.assign";
 export declare function permLabel(code: string): string;
 export declare function permModule(code: string): string;
-/** 剔除废弃码、应用别名，仅保留 catalog 中存在的权限 */
+/** 剔除废弃码、应用别名，并去掉当前职位不能授予的导出权限 */
+export declare function filterAssignablePerms(roleCode: string, codes: string[]): string[];
 export declare function normalizePermCodes(codes: string[]): string[];
 export declare function defaultPermsForRoleCode(roleCode: string): string[];
 export declare function templatePermsForRoleName(roleName: string): string[];

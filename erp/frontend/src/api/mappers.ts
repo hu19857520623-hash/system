@@ -294,6 +294,7 @@ export function mapPurchaseOrder(row: any) {
     at_logistics_wh: '中转仓部分收货',
     received: '中转仓已收齐',
     rejected: '已驳回',
+    voided: '废订单',
     completed: '已完成',
   }
   return {

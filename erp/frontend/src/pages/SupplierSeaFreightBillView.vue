@@ -5,6 +5,7 @@ import { fmtTime, num } from '@/api/mappers.ts'
 import { useListLoader, withAction } from '@/composables/useListLoader.ts'
 import { useTablePagination } from '@/composables/useTablePagination.ts'
 import { useRowActions } from '@/composables/useRowActions'
+import { useAppStore } from '@/stores/app'
 import ListPagination from '@/components/ListPagination.vue'
 
 defineOptions({ name: 'SupplierSeaFreightBillView' })
@@ -29,6 +30,7 @@ type ContainerOption = {
 }
 
 const { exportTask, toast } = useRowActions()
+const app = useAppStore()
 
 const dialogVisible = ref(false)
 const detailVisible = ref(false)
@@ -178,13 +180,13 @@ onMounted(async () => {
         </div>
         <div class="header-actions">
           <el-button type="primary" size="small" @click="addExpense">录入费用</el-button>
-          <el-button size="small" @click="exportTask('海运账单')">导出</el-button>
+          <el-button v-if="app.hasPerm('receivable_payable.export')" size="small" @click="exportTask('海运账单')">导出</el-button>
         </div>
       </div>
     </template>
     <div v-if="embedded" class="embedded-toolbar">
       <el-button type="primary" size="small" @click="addExpense">录入费用</el-button>
-      <el-button size="small" @click="exportTask('海运账单')">导出</el-button>
+      <el-button v-if="app.hasPerm('receivable_payable.export')" size="small" @click="exportTask('海运账单')">导出</el-button>
     </div>
     <div class="bill-summary">
       <div>

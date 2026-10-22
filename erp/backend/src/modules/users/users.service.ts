@@ -150,7 +150,7 @@ export class UsersService {
   }
 
   setPermissions(userId: number, permissions: string[]) {
-    return this.detail(userId).then(() => this.permissions.setUserPermissions(userId, permissions))
+    return this.detail(userId).then((user) => this.permissions.setUserPermissions(userId, permissions, user.roleCode))
   }
 
   async resetPermissionsToRole(userId: number) {

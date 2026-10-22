@@ -13,6 +13,8 @@ export {
   canUseWarehouseClient,
   catalogRoleName,
   defaultPermsForRoleCode,
+  exportPermForModule,
+  filterAssignablePerms,
   isKnownRoleCode,
   isWarehouseStaffRole,
   normalizePermCodes,

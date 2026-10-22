@@ -9,10 +9,12 @@ import type { TableInstance } from 'element-plus'
 import { inventoryApi } from '@/api/client.js'
 import { fmtTime, fmtDate } from '@/api/mappers.ts'
 import ListPagination from '@/components/ListPagination.vue'
+import { useAppStore } from '@/stores/app'
 import DetailSheet from '@/components/ui/DetailSheet.vue'
 
 const router = useRouter()
 const route = useRoute()
+const app = useAppStore()
 const tableRef = ref<TableInstance>()
 const loading = ref(false)
 const rows = ref<any[]>([])
@@ -220,6 +222,7 @@ function escapeCsv(val: unknown) {
 }
 
 function exportRows(list: any[]) {
+  if (!app.hasPerm('sku_query.export')) return
   if (!list.length) {
     ElMessage.warning('没有可导出的数据')
     return
@@ -245,7 +248,10 @@ function exportRows(list: any[]) {
 }
 
 function handleBatch(cmd: string) {
-  if (cmd === 'export') exportRows(selectedRows.value)
+  if (cmd === 'export') {
+    if (!app.hasPerm('sku_query.export')) return
+    exportRows(selectedRows.value)
+  }
   if (cmd === 'clear') tableRef.value?.clearSelection()
 }
 
@@ -353,7 +359,7 @@ onMounted(() => {
             </el-button>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item command="export">导出选中</el-dropdown-item>
+                <el-dropdown-item v-if="app.hasPerm('sku_query.export')" command="export">导出选中</el-dropdown-item>
                 <el-dropdown-item command="clear">取消选择</el-dropdown-item>
               </el-dropdown-menu>
             </template>
@@ -364,8 +370,8 @@ onMounted(() => {
             </el-button>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item @click="exportRows(rows)">导出当前页</el-dropdown-item>
-                <el-dropdown-item @click="exportRows(selectedRows.length ? selectedRows : rows)">导出选中/当前页</el-dropdown-item>
+                <el-dropdown-item v-if="app.hasPerm('sku_query.export')" @click="exportRows(rows)">导出当前页</el-dropdown-item>
+                <el-dropdown-item v-if="app.hasPerm('sku_query.export')" @click="exportRows(selectedRows.length ? selectedRows : rows)">导出选中/当前页</el-dropdown-item>
               </el-dropdown-menu>
             </template>
           </el-dropdown>

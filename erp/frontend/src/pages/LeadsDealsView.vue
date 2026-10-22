@@ -10,10 +10,12 @@ import { mapLead, fmtTime } from '@/api/mappers.ts'
 import { useListLoader, withAction } from '@/composables/useListLoader.ts'
 import { useServerPagination } from '@/composables/useTablePagination.ts'
 import { useRowActions } from '@/composables/useRowActions'
+import { useAppStore } from '@/stores/app'
 import ListPagination from '@/components/ListPagination.vue'
 import { type OmsCustomerType } from '@erp/shared/oms-portal.permissions'
 
 const { exportTask } = useRowActions()
+const app = useAppStore()
 const router = useRouter()
 
 interface SalesUser {
@@ -444,7 +446,7 @@ onMounted(async () => {
     <template #header>
       <div class="page-header">
         <span class="page-title">成交管理</span>
-        <el-button size="small" @click="exportTask('成交客户')">导出</el-button>
+        <el-button v-if="app.hasPerm('leads_deals.export')" size="small" @click="exportTask('成交客户')">导出</el-button>
       </div>
     </template>
 

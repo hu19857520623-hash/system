@@ -87,6 +87,18 @@
         {
           "id": "leads_reports.view",
           "label": "获客报表 · 查看"
+        },
+        {
+          "id": "leads_pool.export",
+          "label": "线索池 · 导出"
+        },
+        {
+          "id": "leads_deals.export",
+          "label": "成交管理 · 导出"
+        },
+        {
+          "id": "leads_reports.export",
+          "label": "获客报表 · 导出"
         }
       ]
     },
@@ -108,6 +120,14 @@
         {
           "id": "products.print_label",
           "label": "商品主数据 · 打印 SKU 标签"
+        },
+        {
+          "id": "products.export",
+          "label": "商品主数据 · 导出"
+        },
+        {
+          "id": "sku_query.export",
+          "label": "SKU 查询 · 导出"
         },
         {
           "id": "product_dev.view",
@@ -173,6 +193,10 @@
         {
           "id": "purchase.mark_paid",
           "label": "采购订单 · 标记打款"
+        },
+        {
+          "id": "purchase.export",
+          "label": "采购订单 · 导出"
         }
       ]
     },
@@ -190,6 +214,10 @@
         {
           "id": "logistics_wh.manage",
           "label": "物流中转仓 · 管理"
+        },
+        {
+          "id": "logistics_wh.export",
+          "label": "中转仓库存 · 导出"
         },
         {
           "id": "create_inbound.view",
@@ -269,6 +297,10 @@
           "label": "退件 · 处理完成"
         },
         {
+          "id": "return.export",
+          "label": "退件 · 导出"
+        },
+        {
           "id": "outbound.view",
           "label": "出库单 · 查看"
         },
@@ -291,6 +323,10 @@
         {
           "id": "outbound.ship",
           "label": "出库 · 发运"
+        },
+        {
+          "id": "outbound.export",
+          "label": "出库单 · 导出"
         },
         {
           "id": "anheng.view",
@@ -318,6 +354,18 @@
           "label": "库存查询 · 调整库位"
         },
         {
+          "id": "inventory_query.export",
+          "label": "库存查询 · 导出"
+        },
+        {
+          "id": "wms_reports.view",
+          "label": "作业报表 · 查看"
+        },
+        {
+          "id": "wms_reports.export",
+          "label": "作业报表 · 导出"
+        },
+        {
           "id": "stocktake.view",
           "label": "盘点 · 查看"
         },
@@ -340,10 +388,6 @@
         {
           "id": "capacity.manage",
           "label": "容量预警 · 刷新"
-        },
-        {
-          "id": "wms_reports.view",
-          "label": "作业报表 · 查看"
         }
       ]
     },
@@ -388,12 +432,20 @@
           "label": "采购货款 · 查看"
         },
         {
+          "id": "cost.export",
+          "label": "采购货款 · 导出"
+        },
+        {
           "id": "operating_ledger.view",
           "label": "经营收支 · 查看"
         },
         {
           "id": "operating_ledger.manage",
           "label": "经营收支 · 记账"
+        },
+        {
+          "id": "operating_ledger.export",
+          "label": "经营收支 · 导出"
         },
         {
           "id": "billing.view",
@@ -406,6 +458,10 @@
         {
           "id": "billing.manual",
           "label": "客户结算 · 手工入账"
+        },
+        {
+          "id": "billing.export",
+          "label": "客户结算 · 导出"
         },
         {
           "id": "inbound_fee.view",
@@ -424,12 +480,20 @@
           "label": "海运账单 · 手工"
         },
         {
+          "id": "receivable_payable.export",
+          "label": "海运账单 · 导出"
+        },
+        {
           "id": "budget_credit.view",
           "label": "客户充值 · 查看"
         },
         {
           "id": "budget_credit.create",
           "label": "客户充值 · 创建"
+        },
+        {
+          "id": "budget_credit.export",
+          "label": "客户充值 · 导出"
         },
         {
           "id": "profit_analysis.view",
@@ -451,6 +515,18 @@
         {
           "id": "sync.retry",
           "label": "同步日志 · 重试"
+        },
+        {
+          "id": "sync.export",
+          "label": "同步日志 · 导出"
+        },
+        {
+          "id": "operation_log.view",
+          "label": "操作日志 · 查看"
+        },
+        {
+          "id": "flow_debug.export",
+          "label": "流程调试 · 导出"
         },
         {
           "id": "operation_log.view",
@@ -662,10 +738,15 @@
       "leads_deals.view",
       "leads_deals.edit",
       "leads_reports.view",
+      "leads_pool.export",
+      "leads_deals.export",
+      "leads_reports.export",
       "products.view",
       "products.edit",
       "products.import",
       "products.print_label",
+      "products.export",
+      "sku_query.export",
       "product_dev.view",
       "product_dev.create",
       "product_dev.edit",
@@ -681,9 +762,11 @@
       "purchase.assign",
       "purchase.po_audit",
       "purchase.mark_paid",
+      "purchase.export",
       "logistics_wh.view",
       "logistics_wh.receive",
       "logistics_wh.manage",
+      "logistics_wh.export",
       "create_inbound.view",
       "create_inbound.create",
       "create_inbound.label",
@@ -702,17 +785,20 @@
       "return.view",
       "return.receive",
       "return.process",
+      "return.export",
       "outbound.view",
       "outbound.create",
       "outbound.relabel",
       "outbound.pick",
       "outbound.pack",
       "outbound.ship",
+      "outbound.export",
       "anheng.view",
       "anheng.test",
       "inventory_query.view",
       "inventory_query.detail",
       "inventory_query.adjust",
+      "inventory_query.export",
       "stocktake.view",
       "stocktake.create",
       "stocktake.count",
@@ -720,6 +806,7 @@
       "capacity.view",
       "capacity.manage",
       "wms_reports.view",
+      "wms_reports.export",
       "inbound_fee.view",
       "inbound_fee.manage",
       "pricing.view",
@@ -730,20 +817,27 @@
       "store_monitor.manage",
       "store_monitor.assign",
       "cost.view",
+      "cost.export",
       "operating_ledger.view",
       "operating_ledger.manage",
+      "operating_ledger.export",
       "billing.view",
       "billing.generate",
       "billing.manual",
+      "billing.export",
       "receivable_payable.view",
       "receivable_payable.manual",
+      "receivable_payable.export",
       "budget_credit.view",
       "budget_credit.create",
+      "budget_credit.export",
       "profit_analysis.view",
       "reports.view",
       "sync.view",
       "sync.retry",
+      "sync.export",
       "operation_log.view",
+      "flow_debug.export",
       "async_io.import",
       "async_io.export",
       "permissions.view",
@@ -769,9 +863,12 @@
       "purchase.assign",
       "purchase.po_audit",
       "purchase.mark_paid",
+      "purchase.export",
+      "sku_query.export",
       "logistics_wh.view",
       "logistics_wh.receive",
       "logistics_wh.manage",
+      "logistics_wh.export",
       "create_inbound.view",
       "create_inbound.create",
       "create_inbound.label",
@@ -803,8 +900,10 @@
       "inventory_query.adjust",
       "pricing.view",
       "cost.view",
+      "cost.export",
       "sync.view",
       "sync.retry",
+      "sync.export",
       "operation_log.view",
       "profit_analysis.view",
       "async_io.import",
@@ -821,8 +920,11 @@
       "purchase.view",
       "purchase.create",
       "purchase.mark_paid",
+      "purchase.export",
+      "sku_query.export",
       "logistics_wh.view",
       "logistics_wh.receive",
+      "logistics_wh.export",
       "create_inbound.view",
       "create_inbound.create",
       "create_inbound.label",
@@ -846,7 +948,10 @@
       "leads_follow.edit",
       "leads_deals.view",
       "leads_deals.edit",
-      "leads_reports.view"
+      "leads_reports.view",
+      "leads_pool.export",
+      "leads_deals.export",
+      "leads_reports.export"
     ],
     "销售主管": [
       "dashboard.view",
@@ -860,6 +965,9 @@
       "leads_deals.view",
       "leads_deals.edit",
       "leads_reports.view",
+      "leads_pool.export",
+      "leads_deals.export",
+      "leads_reports.export",
       "operation_log.view",
       "async_io.export"
     ],
@@ -871,20 +979,25 @@
       "products.view",
       "purchase.view",
       "cost.view",
+      "cost.export",
       "operating_ledger.view",
       "operating_ledger.manage",
+      "operating_ledger.export",
       "billing.view",
       "billing.generate",
       "billing.manual",
+      "billing.export",
       "wms_reports.view",
       "inbound_fee.view",
       "inbound_fee.manage",
       "receivable_payable.view",
       "receivable_payable.manual",
+      "receivable_payable.export",
       "reports.view",
       "profit_analysis.view",
       "budget_credit.view",
       "budget_credit.create",
+      "budget_credit.export",
       "async_io.export"
     ],
     "产品开发主管": [
@@ -896,6 +1009,8 @@
       "products.edit",
       "products.import",
       "products.print_label",
+      "products.export",
+      "sku_query.export",
       "product_dev.view",
       "product_dev.create",
       "product_dev.edit",
@@ -926,6 +1041,7 @@
       "inventory_query.view",
       "inventory_query.detail",
       "inventory_query.adjust",
+      "sku_query.export",
       "store_monitor.view",
       "store_monitor.view_all"
     ],
@@ -1021,6 +1137,7 @@
       "return.view",
       "return.receive",
       "return.process",
+      "return.export",
       "anheng.view",
       "anheng.test",
       "outbound.view",
@@ -1029,9 +1146,11 @@
       "outbound.pick",
       "outbound.pack",
       "outbound.ship",
+      "outbound.export",
       "inventory_query.view",
       "inventory_query.detail",
       "inventory_query.adjust",
+      "inventory_query.export",
       "stocktake.view",
       "stocktake.create",
       "stocktake.count",
@@ -1039,6 +1158,7 @@
       "capacity.view",
       "capacity.manage",
       "wms_reports.view",
+      "wms_reports.export",
       "sync.view",
       "sync.retry",
       "operation_log.view"
@@ -1070,6 +1190,7 @@
       "return.view",
       "return.receive",
       "return.process",
+      "return.export",
       "anheng.view",
       "anheng.test",
       "outbound.view",
@@ -1078,14 +1199,17 @@
       "outbound.pick",
       "outbound.pack",
       "outbound.ship",
+      "outbound.export",
       "inventory_query.view",
       "inventory_query.detail",
       "inventory_query.adjust",
+      "inventory_query.export",
       "stocktake.view",
       "stocktake.create",
       "stocktake.count",
       "capacity.view",
       "wms_reports.view",
+      "wms_reports.export",
       "sync.view"
     ],
     "仓库主管": [
@@ -1100,6 +1224,7 @@
       "logistics_wh.view",
       "logistics_wh.receive",
       "logistics_wh.manage",
+      "logistics_wh.export",
       "create_inbound.view",
       "create_inbound.create",
       "create_inbound.label",
@@ -1116,6 +1241,7 @@
       "return.view",
       "return.receive",
       "return.process",
+      "return.export",
       "anheng.view",
       "anheng.test",
       "outbound.view",
@@ -1124,9 +1250,11 @@
       "outbound.pick",
       "outbound.pack",
       "outbound.ship",
+      "outbound.export",
       "inventory_query.view",
       "inventory_query.detail",
       "inventory_query.adjust",
+      "inventory_query.export",
       "stocktake.view",
       "stocktake.create",
       "stocktake.count",
@@ -1134,8 +1262,10 @@
       "capacity.view",
       "capacity.manage",
       "wms_reports.view",
+      "wms_reports.export",
       "sync.view",
       "sync.retry",
+      "sync.export",
       "operation_log.view"
     ],
     "入库员": [
@@ -1153,7 +1283,8 @@
       "anheng.view",
       "anheng.test",
       "inventory_query.view",
-      "inventory_query.detail"
+      "inventory_query.detail",
+      "inventory_query.export"
     ],
     "出库员": [
       "dashboard.view",
@@ -1165,8 +1296,10 @@
       "outbound.pick",
       "outbound.pack",
       "outbound.ship",
+      "outbound.export",
       "inventory_query.view",
-      "inventory_query.detail"
+      "inventory_query.detail",
+      "inventory_query.export"
     ],
     "退货员": [
       "dashboard.view",
@@ -1176,6 +1309,7 @@
       "return.view",
       "return.receive",
       "return.process",
+      "return.export",
       "inbound.view",
       "inventory_query.view",
       "inventory_query.detail"
@@ -1186,6 +1320,7 @@
       "products.view",
       "outbound.view",
       "outbound.pack",
+      "outbound.export",
       "inventory_query.view"
     ]
   },
@@ -1222,10 +1357,15 @@
     "leads_deals.view",
     "leads_deals.edit",
     "leads_reports.view",
+    "leads_pool.export",
+    "leads_deals.export",
+    "leads_reports.export",
     "products.view",
     "products.edit",
     "products.import",
     "products.print_label",
+    "products.export",
+    "sku_query.export",
     "product_dev.view",
     "product_dev.create",
     "product_dev.edit",
@@ -1241,9 +1381,11 @@
     "purchase.assign",
     "purchase.po_audit",
     "purchase.mark_paid",
+    "purchase.export",
     "logistics_wh.view",
     "logistics_wh.receive",
     "logistics_wh.manage",
+    "logistics_wh.export",
     "create_inbound.view",
     "create_inbound.create",
     "create_inbound.label",
@@ -1262,24 +1404,28 @@
     "return.view",
     "return.receive",
     "return.process",
+    "return.export",
     "outbound.view",
     "outbound.create",
     "outbound.relabel",
     "outbound.pick",
     "outbound.pack",
     "outbound.ship",
+    "outbound.export",
     "anheng.view",
     "anheng.test",
     "inventory_query.view",
     "inventory_query.detail",
     "inventory_query.adjust",
+    "inventory_query.export",
+    "wms_reports.view",
+    "wms_reports.export",
     "stocktake.view",
     "stocktake.create",
     "stocktake.count",
     "stocktake.approve",
     "capacity.view",
     "capacity.manage",
-    "wms_reports.view",
     "pricing.view",
     "pricing.set",
     "pricing.sync_oms",
@@ -1288,21 +1434,29 @@
     "store_monitor.assign",
     "store_monitor.manage",
     "cost.view",
+    "cost.export",
     "operating_ledger.view",
     "operating_ledger.manage",
+    "operating_ledger.export",
     "billing.view",
     "billing.generate",
     "billing.manual",
+    "billing.export",
     "inbound_fee.view",
     "inbound_fee.manage",
     "receivable_payable.view",
     "receivable_payable.manual",
+    "receivable_payable.export",
     "budget_credit.view",
     "budget_credit.create",
+    "budget_credit.export",
     "profit_analysis.view",
     "reports.view",
     "sync.view",
     "sync.retry",
+    "sync.export",
+    "operation_log.view",
+    "flow_debug.export",
     "operation_log.view",
     "async_io.import",
     "async_io.export",

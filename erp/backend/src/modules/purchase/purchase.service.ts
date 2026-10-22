@@ -414,7 +414,7 @@ export class PurchaseService {
     const skus = devs.map((d) => d.sku!).filter(Boolean)
     const [poItems, products] = await Promise.all([
       this.prisma.purchaseOrderItem.findMany({
-        where: { sku: { in: skus }, order: { status: { notIn: ['rejected', 'draft'] } } },
+        where: { sku: { in: skus }, order: { status: { notIn: ['rejected', 'draft', 'voided'] } } },
         select: { sku: true, quantity: true },
       }),
       this.prisma.product.findMany({ where: { sku: { in: skus } } }),
@@ -1113,41 +1113,50 @@ export class PurchaseService {
     return item
   }
 
-  async remove(id: number, operatorId?: number) {
-    const removed = await this.prisma.$transaction(async (tx) => {
+  /** 已驳回或草稿的采购单改为废订单，保留单据，不再进入分配和审核。 */
+  async voidOrder(id: number, operatorId?: number) {
+    const updated = await this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM purchase_order WHERE id = ${BigInt(id)} FOR UPDATE`
       const row = await tx.purchaseOrder.findUnique({ where: { id: BigInt(id) }, include: { items: true } })
       if (!row) throw new NotFoundException('采购单不存在')
-      if (!['rejected', 'draft'].includes(row.status)) throw new BadRequestException('仅已驳回或草稿的废弃采购单可以删除')
-      if (row.items.some((line) => (line.receivedQty ?? 0) > 0)) throw new BadRequestException('该采购单已有收货记录，不能删除')
+      if (row.status === 'voided') throw new BadRequestException('该采购单已是废订单')
+      if (!['rejected', 'draft'].includes(row.status)) throw new BadRequestException('仅已驳回或草稿的采购单可以标为废订单')
+      if (row.items.some((line) => (line.receivedQty ?? 0) > 0)) throw new BadRequestException('该采购单已有收货记录，不能标为废订单')
       const [receipts, inbounds, bills, costs] = await Promise.all([
         tx.logisticsReceipt.count({ where: { poId: row.id } }),
         tx.inboundOrder.count({ where: { poId: row.id } }),
         tx.supplierFreightBill.count({ where: { poId: row.id } }),
         tx.costLedger.count({ where: { referenceNo: row.poNo } }),
       ])
-      if (receipts || inbounds || bills || costs) throw new BadRequestException('该采购单已有收货、入库或费用记录，不能删除')
+      if (receipts || inbounds || bills || costs) throw new BadRequestException('该采购单已有收货、入库或费用记录，不能标为废订单')
       if (row.prePoId) {
         const prePo = await tx.prePurchaseOrder.findUnique({ where: { id: row.prePoId } })
-        if (prePo?.convertedPoId === row.id) {
+        if (prePo?.convertedPoId === row.id && ['returned', 'assigned', 'pending_assign', 'confirmed'].includes(prePo.status)) {
           await tx.prePurchaseOrder.update({
             where: { id: prePo.id },
-            data: { status: 'cancelled', cancelReason: prePo.cancelReason || '关联采购单已删除', convertedPoId: null },
+            data: { status: 'cancelled', cancelReason: prePo.cancelReason || '关联采购单已标为废订单', convertedPoId: null },
           })
         }
       }
-      await tx.purchaseOrderItem.deleteMany({ where: { poId: row.id } })
-      await tx.purchaseOrder.delete({ where: { id: row.id } })
-      return row
+      return tx.purchaseOrder.update({
+        where: { id: row.id },
+        data: { status: 'voided' },
+        include: { items: true },
+      })
     })
+    const [item] = await this.enrichOrders([updated])
     await this.opLog.log({
       operatorId,
       module: 'purchase',
-      action: 'delete',
+      action: 'void',
       targetType: 'purchase_order',
-      targetId: removed.poNo,
-      detail: { status: removed.status },
+      targetId: item.poNo,
+      detail: { statusAfter: 'voided' },
     })
-    return { id }
+    return item
+  }
+
+  async remove(id: number, operatorId?: number) {
+    return this.voidOrder(id, operatorId)
   }
 }

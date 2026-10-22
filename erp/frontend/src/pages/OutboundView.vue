@@ -316,7 +316,7 @@ const canRelabel = computed(() => app.hasPerm('outbound.relabel'))
 const canPick = computed(() => app.hasPerm('outbound.pick'))
 const canPack = computed(() => app.hasPerm('outbound.pack'))
 const canShip = computed(() => app.hasPerm('outbound.ship'))
-const canExport = computed(() => app.hasPerm('outbound.view'))
+const canExport = computed(() => app.hasPerm('outbound.export'))
 const relabelLabelSummary = computed(() => buildOutboundLabelSummary(relabelOrder.value))
 const relabelUsesPlatformUnitLabels = computed(() =>
   relabelLabelSummary.value.isTakealot && relabelLabelSummary.value.hasLabelMetadata,

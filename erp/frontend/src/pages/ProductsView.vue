@@ -431,7 +431,7 @@ async function printSkuLabels(items: Array<{ sku?: string; name?: string; barcod
             <el-button size="small" @click="selectAll">全选</el-button>
             <el-button size="small" :disabled="!selectedRows.length" @click="clearSelection">取消选择</el-button>
             <span v-if="selectedRows.length" class="sel-count">已选 {{ selectedRows.length }} 条</span>
-            <el-button type="primary" size="small" :disabled="!selectedRows.length" @click="exportSelected">导出选中</el-button>
+            <el-button v-if="app.hasPerm('products.export')" type="primary" size="small" :disabled="!selectedRows.length" @click="exportSelected">导出选中</el-button>
             <el-button v-if="canPrintLabel" size="small" :disabled="!selectedRows.length" @click="printSkuLabels(selectedRows)">打印 SKU 标签</el-button>
           </div>
         </div>

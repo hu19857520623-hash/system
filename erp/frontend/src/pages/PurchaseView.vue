@@ -29,6 +29,7 @@ const route = useRoute()
 
 const mainTab = ref('orders')
 const searchQ = ref(typeof route.query.poNo === 'string' ? route.query.poNo : '')
+const poStatusFilter = ref('active')
 
 const canCreate = computed(() => app.hasPerm('purchase.create'))
 const canAssignPurchaser = computed(() => app.hasPerm('purchase.assign'))
@@ -120,6 +121,7 @@ function canShowPayment(statusKey?: string) {
 function poTone(statusKey: string) {
   if (['finance_approved', 'at_logistics_wh', 'received', 'completed'].includes(statusKey)) return 'ok'
   if (statusKey === 'rejected') return 'danger'
+  if (statusKey === 'voided') return 'info'
   if (statusKey === 'pending_po_audit' || statusKey === 'pending_actual_qty') return 'warn'
   return 'info'
 }
@@ -159,6 +161,10 @@ function poProductNameLabel(items: any[] | undefined) {
 
 const poList = computed(() => {
   let list = poItems.value
+  if (mainTab.value === 'orders' && poStatusFilter.value === 'active') list = list.filter(p => p.statusKey !== 'voided')
+  if (mainTab.value === 'orders' && poStatusFilter.value !== 'active' && poStatusFilter.value !== 'all') {
+    list = list.filter(p => p.statusKey === poStatusFilter.value)
+  }
   if (mainTab.value === 'po_pending') list = list.filter(p => p.statusKey === 'pending_po_audit')
   if (mainTab.value === 'payment') list = list.filter(p => canShowPayment(p.statusKey))
   if (mainTab.value === 'actual_qty') list = list.filter(p => p.statusKey === 'pending_actual_qty')
@@ -181,7 +187,7 @@ const poList = computed(() => {
 })
 
 const { page, pageSize, total, pagedItems, resetPage } = useTablePagination(poList)
-watch([mainTab, searchQ], resetPage)
+watch([mainTab, searchQ, poStatusFilter], resetPage)
 
 watch(mainTab, (tab) => {
   if (tab === 'pre_assign') loadPrePoPendingAssign()
@@ -969,32 +975,32 @@ async function rejectPoAudit() {
   } catch (error) { if (error !== 'cancel' && error !== 'close') detailFeedback.value = userFacingError(error) }
 }
 
-function canDeletePo(row?: { statusKey?: string } | null) {
+function canVoidPo(row?: { statusKey?: string } | null) {
   return !!row && (row.statusKey === 'rejected' || row.statusKey === 'draft')
 }
 
-const deletingPoId = ref<number | null>(null)
+const voidingPoId = ref<number | null>(null)
 
-async function removePurchaseOrder(row: any) {
-  if (deletingPoId.value || poActionBusy.value) return
+async function voidPurchaseOrder(row: any) {
+  if (voidingPoId.value || poActionBusy.value) return
   try {
     await erpConfirm(
-      row.prePoId
-        ? `删除后不可恢复，关联预采购单会一并取消，不再进入分配。确认删除废弃采购单 ${row.poNo || ''}？`
-        : `删除后不可恢复。确认删除废弃采购单 ${row.poNo || ''}？`,
-      '删除采购单',
-      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
+      `标为废订单后不再进入审核和分配，单据仍可在「废订单」筛选中查看。确认把采购单 ${row.poNo || ''} 标为废订单？`,
+      '标为废订单',
+      { type: 'warning', confirmButtonText: '标为废订单', cancelButtonText: '取消' },
     )
   } catch {
     return
   }
-  deletingPoId.value = row.id
+  voidingPoId.value = row.id
   const ok = await withAction(async () => {
-    await purchaseApi.remove(row.id)
-  }, '采购单已删除')
-  deletingPoId.value = null
+    await purchaseApi.voidOrder(row.id)
+  }, '已标为废订单')
+  voidingPoId.value = null
   if (!ok) return
-  if (selectedPo.value?.id === row.id) detailVisible.value = false
+  if (selectedPo.value?.id === row.id) {
+    selectedPo.value = { ...selectedPo.value, statusKey: 'voided', status: '废订单' }
+  }
   await Promise.all([load(), loadMyPrePo(), canAssignPurchaser.value ? loadPrePoPendingAssign() : Promise.resolve()])
 }
 
@@ -1093,6 +1099,14 @@ async function markPoUnpaid(po?: { id: number }) {
               @keyup.enter="loadMyPrePo"
             />
             <el-input v-else-if="mainTab === 'orders' || mainTab === 'po_pending' || mainTab === 'payment' || mainTab === 'actual_qty'" v-model="searchQ" placeholder="搜索单号 / SKU / 供应商" clearable style="width:200px" size="small" />
+            <el-select v-if="mainTab === 'orders'" v-model="poStatusFilter" size="small" style="width:130px" aria-label="采购单状态">
+              <el-option label="有效订单" value="active" />
+              <el-option label="废订单" value="voided" />
+              <el-option label="已驳回" value="rejected" />
+              <el-option label="待主管审核" value="pending_po_audit" />
+              <el-option label="待核定数量" value="pending_actual_qty" />
+              <el-option label="全部状态" value="all" />
+            </el-select>
             <template v-if="canCreate && mainTab === 'orders'">
               <el-button type="primary" size="small" @click="openCreatePo">+ 创建采购单</el-button>
               <el-button size="small" link type="primary" @click="downloadPurchaseOrderImportTemplate">下载模板</el-button>
@@ -1216,14 +1230,14 @@ async function markPoUnpaid(po?: { id: number }) {
           </template>
         </el-table-column>
         <el-table-column prop="createdAtStr" label="创建时间" width="110" />
-        <el-table-column label="操作" :width="mainTab === 'payment' ? 140 : 280" fixed="right">
+        <el-table-column label="操作" :width="mainTab === 'payment' ? 140 : 320" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="openDetail(row)">
               {{ (canSetActualQty && row.statusKey === 'pending_actual_qty') ? '核定数量' : (canPoAudit && row.statusKey === 'pending_po_audit') ? '去审核' : '详情' }}
             </el-button>
             <el-button v-if="canCreate && row.statusKey === 'rejected' && canReviseRejected(row)" link type="warning" size="small" @click="reviseRejectedPo(row)">修改重提</el-button>
             <span v-else-if="row.statusKey === 'rejected' && row.prePoStatus === 'pending_assign'">待分配</span>
-            <el-button v-if="canCreate && canDeletePo(row)" link type="danger" size="small" :disabled="deletingPoId === row.id" @click="removePurchaseOrder(row)">删除</el-button>
+            <el-button v-if="canCreate && canVoidPo(row)" link type="danger" size="small" :disabled="voidingPoId === row.id" @click="voidPurchaseOrder(row)">标为废订单</el-button>
             <template v-if="canMarkPaid && canShowPayment(row.statusKey)">
               <el-button v-if="row.paymentStatus !== 'paid'" link type="success" size="small" @click="markPoPaid(row as { id: number })">标记已打款</el-button>
               <el-button v-else link type="warning" size="small" @click="markPoUnpaid(row as { id: number })">标记未打款</el-button>
@@ -1360,7 +1374,8 @@ async function markPoUnpaid(po?: { id: number }) {
       <el-alert v-if="detailFeedback" :title="detailFeedback" type="warning" :closable="false" role="alert" style="margin-bottom:12px" />
       <el-button v-if="detailTargetId && !detailLoading" :disabled="poActionBusy" @click="openDetail({ id: detailTargetId })">重新读取采购单</el-button>
       <template v-if="selectedPo">
-        <el-alert v-if="selectedPo.statusKey === 'rejected' && selectedPo.prePoStatus === 'pending_assign'" title="已重新提交，正在等待采购主管在「预采购分配」中分配采购员。分配并确认后仍沿用本采购单号。" type="info" :closable="false" style="margin:12px 0" />
+        <el-alert v-if="selectedPo.statusKey === 'voided'" title="该采购单已标为废订单，不再进入审核和分配。可在采购订单的「废订单」筛选中查看。" type="info" :closable="false" style="margin:12px 0" />
+        <el-alert v-else-if="selectedPo.statusKey === 'rejected' && selectedPo.prePoStatus === 'pending_assign'" title="已重新提交，正在等待采购主管在「预采购分配」中分配采购员。分配并确认后仍沿用本采购单号。" type="info" :closable="false" style="margin:12px 0" />
         <el-alert v-else-if="selectedPo.statusKey === 'rejected'" :title="`驳回原因：${selectedPo.poAuditRemark || selectedPo.financeRemark || '请联系审核人核对'}。修改后重新提交将进入「预采购分配」，由采购主管重新分配采购员，仍沿用原采购单号。`" type="warning" :closable="false" style="margin:12px 0" />
         <DetailSheet
           :kicker="selectedPo.poNo"
@@ -1580,7 +1595,7 @@ async function markPoUnpaid(po?: { id: number }) {
           <el-button type="primary" :loading="poActionBusy" :disabled="!canOperatePo" @click="passPoAudit">审核通过</el-button>
         </template>
         <el-button v-if="canCreate && canReviseRejected(selectedPo)" type="primary" :disabled="!canOperatePo" @click="reviseRejectedPo()">修改并重新提交</el-button>
-        <el-button v-if="canCreate && canDeletePo(selectedPo)" type="danger" plain :disabled="!canOperatePo || deletingPoId === selectedPo?.id" @click="removePurchaseOrder(selectedPo)">删除</el-button>
+        <el-button v-if="canCreate && canVoidPo(selectedPo)" type="danger" plain :disabled="!canOperatePo || voidingPoId === selectedPo?.id" @click="voidPurchaseOrder(selectedPo)">标为废订单</el-button>
         <el-button v-if="selectedPo?.statusKey === 'finance_approved' && app.hasPerm('logistics_wh.view')" type="primary" :disabled="!canOperatePo" @click="router.push({ path: '/logistics-wh', query: { tab: 'pending', fromPo: selectedPo.poNo } })">前往中转仓收货</el-button>
         <template v-if="canMarkPaid && canShowPayment(selectedPo?.statusKey)">
           <el-button v-if="selectedPo.paymentStatus !== 'paid'" type="success" :disabled="!canOperatePo" @click="markPoPaid()">标记已打款</el-button>

@@ -99,7 +99,7 @@ function currentFilters() {
 
 const exporting = ref(false)
 async function exportLeads() {
-  if (exporting.value) return
+  if (!app.hasPerm('leads_pool.export') || exporting.value) return
   exporting.value = true
   try {
     const selectedIds = selectedLeads.value.map(leadRowKey)
@@ -486,7 +486,7 @@ onMounted(async () => {
             <el-button type="primary" size="small" @click="openNewLead">新建线索</el-button>
             <el-button size="small" link type="primary" @click="downloadLeadsImportTemplate">下载模板</el-button>
             <el-button size="small" @click="importLeads">导入</el-button>
-            <el-button size="small" :loading="exporting" @click="exportLeads">
+            <el-button v-if="app.hasPerm('leads_pool.export')" size="small" :loading="exporting" @click="exportLeads">
               {{ selectedLeads.length ? `导出所选（${selectedLeads.length}）` : '按筛选导出' }}
             </el-button>
           </div>

@@ -231,7 +231,7 @@ onMounted(load)
           <p class="page-subtitle">记录公司日常收入与开销，不关联商品、订单和库存</p>
         </div>
         <div class="header-actions">
-          <el-button size="small" :disabled="!rows.length" @click="exportCsv">导出当前页</el-button>
+          <el-button v-if="app.hasPerm('operating_ledger.export')" size="small" :disabled="!rows.length" @click="exportCsv">导出当前页</el-button>
           <el-button v-if="canManage" size="small" @click="downloadTemplate">下载导入模板</el-button>
           <el-button v-if="canManage" size="small" @click="importCsv">导入</el-button>
           <el-button v-if="canManage" type="primary" size="small" @click="openCreate">新增收支</el-button>
@@ -239,7 +239,7 @@ onMounted(load)
       </div>
     </template>
     <div v-if="embedded" class="embedded-toolbar">
-      <el-button size="small" :disabled="!rows.length" @click="exportCsv">导出当前页</el-button>
+      <el-button v-if="app.hasPerm('operating_ledger.export')" size="small" :disabled="!rows.length" @click="exportCsv">导出当前页</el-button>
       <el-button v-if="canManage" size="small" @click="downloadTemplate">下载导入模板</el-button>
       <el-button v-if="canManage" size="small" @click="importCsv">导入</el-button>
       <el-button v-if="canManage" type="primary" size="small" @click="openCreate">新增收支</el-button>

@@ -66,7 +66,7 @@ onMounted(async () => {
       <el-input v-model="keyword" clearable placeholder="字段 / 数据库列 / 单据 / 接口 / 处理方法" style="width:340px" @input="page = 1" />
       <el-select v-model="system" clearable placeholder="系统" style="width:130px" @change="page = 1"><el-option label="ERP" value="ERP" /><el-option label="OMS" value="OMS" /></el-select>
       <el-select v-model="stage" clearable placeholder="业务功能" style="width:200px" @change="page = 1"><el-option v-for="s in stages" :key="s" :label="s" :value="s" /></el-select>
-      <el-button v-if="tab === 'fields'" @click="exportFields">导出字段总表</el-button>
+      <el-button v-if="tab === 'fields' && app.hasPerm('flow_debug.export')" @click="exportFields">导出字段总表</el-button>
     </div>
     <template v-if="tab === 'fields'">
       <el-table :data="pageFields" stripe border @row-click="selectedField = $event">
@@ -98,7 +98,7 @@ onMounted(async () => {
       </el-form>
       <el-alert type="info" :closable="false" title="按 SKU 查询必须填写客户。按单号查询会展开相关明细、商品、库存、费用和日志；每表最多 20 条，最多 4 层关联。" />
       <div v-if="trace" style="margin-top:16px">
-        <div class="header"><span>查询时间：{{ trace.capturedAt }} · {{ trace.sections.length }} 张相关表</span><el-button @click="download('流程调试快照.json', JSON.stringify(trace, null, 2), 'application/json')">导出当前快照</el-button></div>
+        <div class="header"><span>查询时间：{{ trace.capturedAt }} · {{ trace.sections.length }} 张相关表</span><el-button v-if="app.hasPerm('flow_debug.export')" @click="download('流程调试快照.json', JSON.stringify(trace, null, 2), 'application/json')">导出当前快照</el-button></div>
         <el-empty v-if="!trace.sections.length" description="未找到关联记录，请核对单号及客户 SKU" />
         <el-collapse>
           <el-collapse-item v-for="section in trace.sections" :key="section.system + section.table" :name="section.system + section.table">

@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
+import { ForbiddenException, BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { FileStoreService } from '../../common/file-store.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
@@ -6,6 +6,8 @@ import { AsyncIoExportService } from './async-io-export.service'
 import { LeadsService } from '../leads/leads.service'
 import { ProductsService } from '../products/products.service'
 import { PurchaseService } from '../purchase/purchase.service'
+import { PermissionsService } from '../../common/permissions/permissions.service'
+import { exportPermForModule } from '../../common/permissions/permissions.constants'
 import { serializeImportResultDetail, type ImportRowFailure } from '../../common/import-row-result.util'
 
 @Injectable()
@@ -17,9 +19,10 @@ export class AsyncIoService {
     private leadsService: LeadsService,
     private productsService: ProductsService,
     private purchaseService: PurchaseService,
+    private permissions: PermissionsService,
   ) {}
 
-  async list(q: PaginationDto & { jobType?: string }) {
+  async list(q: PaginationDto & { jobType?: string }, user?: { userId: number; roleCode: string }) {
     const { page, pageSize } = getPagination(q)
     const where: any = {}
     if (q.jobType) where.jobType = q.jobType
@@ -27,16 +30,44 @@ export class AsyncIoService {
       this.prisma.asyncIoJob.findMany({ where, skip: (page - 1) * pageSize, take: pageSize, orderBy: { id: 'desc' } }),
       this.prisma.asyncIoJob.count({ where }),
     ])
+    const visible = user ? await this.filterVisibleJobs(items, user) : items
     return {
-      items: items.map((r) => ({ ...r, id: Number(r.id) })),
-      total,
+      items: visible.map((r) => ({ ...r, id: Number(r.id) })),
+      total: user ? visible.length : total,
       page,
       pageSize,
     }
   }
 
+  private async filterVisibleJobs<T extends { jobType: string; module: string }>(
+    items: T[],
+    user: { userId: number; roleCode: string },
+  ) {
+    if (user.roleCode === 'admin') return items
+    const perms = new Set(await this.permissions.getUserPermissions(user.userId, user.roleCode))
+    const seesAllExports = perms.has('async_io.export')
+    const seesImports = perms.has('async_io.import')
+    return items.filter((job) => {
+      if (job.jobType !== 'export') return seesImports
+      if (seesAllExports) return true
+      const perm = exportPermForModule(job.module)
+      return Boolean(perm && perms.has(perm))
+    })
+  }
+
+  private async assertExportPerm(module: string, user?: { userId: number; roleCode: string }) {
+    const perm = exportPermForModule(module)
+    if (!perm) throw new BadRequestException('暂不支持该模块导出')
+    if (!user) throw new ForbiddenException('没有该模块的导出权限')
+    if (!(await this.permissions.userHasPerm(user.userId, user.roleCode, perm))) {
+      throw new ForbiddenException('没有该模块的导出权限')
+    }
+  }
+
   /** 创建并立即执行导出任务 */
-  async createExport(data: { module: string; fileName?: string; params?: Record<string, unknown> }, operatorId?: number) {
+  async createExport(data: { module: string; fileName?: string; params?: Record<string, unknown> }, user?: { userId: number; roleCode: string }) {
+    await this.assertExportPerm(data.module, user)
+    const operatorId = user?.userId
     const job = await this.prisma.asyncIoJob.create({
       data: {
         jobNo: 'EXP-' + Date.now().toString().slice(-8),
@@ -74,11 +105,11 @@ export class AsyncIoService {
   }
 
   /** 兼容旧 create 接口 */
-  async create(data: any, operatorId?: number) {
+  async create(data: any, user?: { userId: number; roleCode: string }) {
     if (data.jobType === 'import') {
-      return this.createImport(data, operatorId)
+      return this.createImport(data, user?.userId)
     }
-    return this.createExport({ module: data.module, fileName: data.fileName, params: data.params }, operatorId)
+    return this.createExport({ module: data.module, fileName: data.fileName, params: data.params }, user)
   }
 
   async createImport(data: { module: string; fileName?: string; content: string }, operatorId?: number) {
@@ -146,9 +177,10 @@ export class AsyncIoService {
     )
   }
 
-  async download(id: number) {
+  async download(id: number, user?: { userId: number; roleCode: string }) {
     const job = await this.prisma.asyncIoJob.findUnique({ where: { id: BigInt(id) } })
     if (!job?.fileUrl) throw new NotFoundException('文件不存在或任务未完成')
+    if (job.jobType === 'export') await this.assertExportPerm(job.module, user)
     const buf = this.files.read(job.fileUrl)
     return {
       fileName: job.fileName || 'export.csv',

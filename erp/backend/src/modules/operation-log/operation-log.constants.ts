@@ -20,6 +20,7 @@ export const OPERATION_ACTION_LABELS: Record<string, string> = {
   reject: '审核驳回',
   po_approve: '采购审核通过',
   po_reject: '采购审核驳回',
+  void: '标为废订单',
   resubmit_pre_po: '驳回后重新提交分配',
   po_mark_paid: '标记已打款',
   po_mark_unpaid: '标记未打款',

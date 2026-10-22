@@ -4,9 +4,13 @@
  * 后端、Java auth-service、用户管理页均由此导出；改分组/标签后请跑 sync:java-permissions + sync:permissions
  */
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.OFFICE_ROLE_CODES = exports.WAREHOUSE_STAFF_ROLE_CODES = exports.STORE_MONITOR_ASSIGN_PERM = exports.ALL_PERM_CODES = exports.LEAD_SELF_ASSIGN_ROLE_CODES = exports.LEAD_ASSIGNEE_ROLE_CODES = exports.ROLE_DEFINITIONS = exports.ROLE_SIDE_LABELS = exports.ROLE_CODE_TEMPLATE = exports.ROLE_PERM_TEMPLATES = exports.PERM_ALIASES = exports.DEPRECATED_PERM_CODES = exports.PERM_GROUPS = void 0;
+exports.OFFICE_ROLE_CODES = exports.WAREHOUSE_STAFF_ROLE_CODES = exports.STORE_MONITOR_ASSIGN_PERM = exports.EXPORT_MODULE_PERM = exports.EXPORT_PERM_ROLES = exports.ALL_PERM_CODES = exports.LEAD_SELF_ASSIGN_ROLE_CODES = exports.LEAD_ASSIGNEE_ROLE_CODES = exports.ROLE_DEFINITIONS = exports.ROLE_SIDE_LABELS = exports.ROLE_CODE_TEMPLATE = exports.ROLE_PERM_TEMPLATES = exports.PERM_ALIASES = exports.DEPRECATED_PERM_CODES = exports.PERM_GROUPS = void 0;
+exports.isExportPermission = isExportPermission;
+exports.canAssignPermission = canAssignPermission;
+exports.exportPermForModule = exportPermForModule;
 exports.permLabel = permLabel;
 exports.permModule = permModule;
+exports.filterAssignablePerms = filterAssignablePerms;
 exports.normalizePermCodes = normalizePermCodes;
 exports.defaultPermsForRoleCode = defaultPermsForRoleCode;
 exports.templatePermsForRoleName = templatePermsForRoleName;
@@ -47,6 +51,9 @@ exports.PERM_GROUPS = [
             { id: 'leads_deals.view', label: '成交管理 · 查看' },
             { id: 'leads_deals.edit', label: '成交管理 · 编辑/上传资料' },
             { id: 'leads_reports.view', label: '获客报表 · 查看' },
+            { id: 'leads_pool.export', label: '线索池 · 导出' },
+            { id: 'leads_deals.export', label: '成交管理 · 导出' },
+            { id: 'leads_reports.export', label: '获客报表 · 导出' },
         ],
     },
     {
@@ -56,6 +63,8 @@ exports.PERM_GROUPS = [
             { id: 'products.edit', label: '商品主数据 · 编辑' },
             { id: 'products.import', label: '商品主数据 · 导入' },
             { id: 'products.print_label', label: '商品主数据 · 打印 SKU 标签' },
+            { id: 'products.export', label: '商品主数据 · 导出' },
+            { id: 'sku_query.export', label: 'SKU 查询 · 导出' },
             { id: 'product_dev.view', label: '产品开发 · 查看' },
             { id: 'product_dev.create', label: '产品开发 · 新建' },
             { id: 'product_dev.edit', label: '产品开发 · 编辑' },
@@ -76,6 +85,7 @@ exports.PERM_GROUPS = [
             { id: 'purchase.assign', label: '采购订单 · 需求分配' },
             { id: 'purchase.po_audit', label: '采购订单 · 主管审核/驳回' },
             { id: 'purchase.mark_paid', label: '采购订单 · 标记打款' },
+            { id: 'purchase.export', label: '采购订单 · 导出' },
         ],
     },
     {
@@ -84,6 +94,7 @@ exports.PERM_GROUPS = [
             { id: 'logistics_wh.view', label: '物流中转仓 · 查看' },
             { id: 'logistics_wh.receive', label: '物流中转仓 · 收货' },
             { id: 'logistics_wh.manage', label: '物流中转仓 · 管理' },
+            { id: 'logistics_wh.export', label: '中转仓库存 · 导出' },
             { id: 'create_inbound.view', label: '发运海外仓 · 查看' },
             { id: 'create_inbound.create', label: '发运海外仓 · 创建' },
             { id: 'create_inbound.label', label: '发运海外仓 · 标签' },
@@ -107,12 +118,14 @@ exports.PERM_GROUPS = [
             { id: 'return.view', label: '退件 · 查看' },
             { id: 'return.receive', label: '退件 · 确认收货' },
             { id: 'return.process', label: '退件 · 处理完成' },
+            { id: 'return.export', label: '退件 · 导出' },
             { id: 'outbound.view', label: '出库单 · 查看' },
             { id: 'outbound.create', label: '出库单 · 创建' },
             { id: 'outbound.relabel', label: '出库 · 换标确认' },
             { id: 'outbound.pick', label: '出库 · 拣货（网页）' },
             { id: 'outbound.pack', label: '出库 · 打包' },
             { id: 'outbound.ship', label: '出库 · 发运' },
+            { id: 'outbound.export', label: '出库单 · 导出' },
             { id: 'anheng.view', label: '安衡测量仪 · 查看' },
             { id: 'anheng.test', label: '安衡测量仪 · 联调' },
         ],
@@ -123,13 +136,15 @@ exports.PERM_GROUPS = [
             { id: 'inventory_query.view', label: '库存查询 · 查看' },
             { id: 'inventory_query.detail', label: '库存查询 · 详情' },
             { id: 'inventory_query.adjust', label: '库存查询 · 调整库位' },
+            { id: 'inventory_query.export', label: '库存查询 · 导出' },
+            { id: 'wms_reports.view', label: '作业报表 · 查看' },
+            { id: 'wms_reports.export', label: '作业报表 · 导出' },
             { id: 'stocktake.view', label: '盘点 · 查看' },
             { id: 'stocktake.create', label: '盘点 · 创建' },
             { id: 'stocktake.count', label: '盘点 · 初盘/复盘（网页录入）' },
             { id: 'stocktake.approve', label: '盘点 · 审批调整' },
             { id: 'capacity.view', label: '容量预警 · 查看' },
             { id: 'capacity.manage', label: '容量预警 · 刷新' },
-            { id: 'wms_reports.view', label: '作业报表 · 查看' },
         ],
     },
     {
@@ -148,17 +163,22 @@ exports.PERM_GROUPS = [
         label: '财务',
         perms: [
             { id: 'cost.view', label: '采购货款 · 查看' },
+            { id: 'cost.export', label: '采购货款 · 导出' },
             { id: 'operating_ledger.view', label: '经营收支 · 查看' },
             { id: 'operating_ledger.manage', label: '经营收支 · 记账' },
+            { id: 'operating_ledger.export', label: '经营收支 · 导出' },
             { id: 'billing.view', label: '客户结算 · 查看' },
             { id: 'billing.generate', label: '客户结算 · 生成' },
             { id: 'billing.manual', label: '客户结算 · 手工入账' },
+            { id: 'billing.export', label: '客户结算 · 导出' },
             { id: 'inbound_fee.view', label: '入库计费 · 查看' },
             { id: 'inbound_fee.manage', label: '入库计费 · 配置' },
             { id: 'receivable_payable.view', label: '海运账单 · 查看' },
             { id: 'receivable_payable.manual', label: '海运账单 · 手工' },
+            { id: 'receivable_payable.export', label: '海运账单 · 导出' },
             { id: 'budget_credit.view', label: '客户充值 · 查看' },
             { id: 'budget_credit.create', label: '客户充值 · 创建' },
+            { id: 'budget_credit.export', label: '客户充值 · 导出' },
             { id: 'profit_analysis.view', label: '利润/采购分析 · 查看' },
             { id: 'reports.view', label: '经营报表 · 查看' },
         ],
@@ -168,6 +188,9 @@ exports.PERM_GROUPS = [
         perms: [
             { id: 'sync.view', label: '同步日志 · 查看' },
             { id: 'sync.retry', label: '同步日志 · 重试' },
+            { id: 'sync.export', label: '同步日志 · 导出' },
+            { id: 'operation_log.view', label: '操作日志 · 查看' },
+            { id: 'flow_debug.export', label: '流程调试 · 导出' },
             { id: 'operation_log.view', label: '操作日志 · 查看' },
         ],
     },
@@ -204,31 +227,32 @@ exports.ROLE_PERM_TEMPLATES = {
         'dashboard.pipeline_domestic', 'dashboard.pipeline_overseas',
         'leads_pool.view', 'leads_pool.create', 'leads_pool.assign', 'leads_pool.view_all', 'leads_follow.view', 'leads_follow.edit',
         'leads_deals.view', 'leads_deals.edit', 'leads_reports.view',
-        'products.view', 'products.edit', 'products.import', 'products.print_label',
+        'leads_pool.export', 'leads_deals.export', 'leads_reports.export',
+        'products.view', 'products.edit', 'products.import', 'products.print_label', 'products.export', 'sku_query.export',
         'product_dev.view', 'product_dev.create', 'product_dev.edit',
         'product_audit.view', 'product_audit.approve', 'product_audit.reject', 'product_audit.label', 'product_audit.purchase_qty',
         'suppliers.view', 'suppliers.edit',
-        'purchase.view', 'purchase.create', 'purchase.assign', 'purchase.po_audit', 'purchase.mark_paid',
-        'logistics_wh.view', 'logistics_wh.receive', 'logistics_wh.manage',
+        'purchase.view', 'purchase.create', 'purchase.assign', 'purchase.po_audit', 'purchase.mark_paid', 'purchase.export',
+        'logistics_wh.view', 'logistics_wh.receive', 'logistics_wh.manage', 'logistics_wh.export',
         'create_inbound.view', 'create_inbound.create', 'create_inbound.label',
         'mingrui.view', 'mingrui.manage',
         'warehouse_location.view', 'warehouse_location.edit', 'warehouse_location.batch_create',
         'inbound.view', 'inbound.arrival_scan', 'inbound.receive', 'inbound.qc', 'inbound.putaway', 'inbound.handle_exception', 'inbound.confirm_diff',
-        'return.view', 'return.receive', 'return.process',
-        'outbound.view', 'outbound.create', 'outbound.relabel', 'outbound.pick', 'outbound.pack', 'outbound.ship',
+        'return.view', 'return.receive', 'return.process', 'return.export',
+        'outbound.view', 'outbound.create', 'outbound.relabel', 'outbound.pick', 'outbound.pack', 'outbound.ship', 'outbound.export',
         'anheng.view', 'anheng.test',
-        'inventory_query.view', 'inventory_query.detail', 'inventory_query.adjust',
+        'inventory_query.view', 'inventory_query.detail', 'inventory_query.adjust', 'inventory_query.export',
         'stocktake.view', 'stocktake.create', 'stocktake.count', 'stocktake.approve',
-        'capacity.view', 'capacity.manage', 'wms_reports.view',
+        'capacity.view', 'capacity.manage', 'wms_reports.view', 'wms_reports.export',
         'inbound_fee.view', 'inbound_fee.manage',
         'pricing.view', 'pricing.set', 'pricing.sync_oms',
         'store_monitor.view', 'store_monitor.view_all', 'store_monitor.manage', 'store_monitor.assign',
-        'cost.view', 'operating_ledger.view', 'operating_ledger.manage',
-        'billing.view', 'billing.generate', 'billing.manual',
-        'receivable_payable.view', 'receivable_payable.manual',
-        'budget_credit.view', 'budget_credit.create',
+        'cost.view', 'cost.export', 'operating_ledger.view', 'operating_ledger.manage', 'operating_ledger.export',
+        'billing.view', 'billing.generate', 'billing.manual', 'billing.export',
+        'receivable_payable.view', 'receivable_payable.manual', 'receivable_payable.export',
+        'budget_credit.view', 'budget_credit.create', 'budget_credit.export',
         'profit_analysis.view', 'reports.view',
-        'sync.view', 'sync.retry', 'operation_log.view',
+        'sync.view', 'sync.retry', 'sync.export', 'operation_log.view', 'flow_debug.export',
         'async_io.import', 'async_io.export',
         'permissions.view', 'permissions.manage', 'announcement.manage',
     ],
@@ -236,8 +260,8 @@ exports.ROLE_PERM_TEMPLATES = {
         'dashboard.view', 'dashboard.kpi_inventory', 'dashboard.kpi_products', 'dashboard.kpi_suppliers', 'dashboard.kpi_purchase',
         'dashboard.kpi_audit', 'dashboard.kpi_sync', 'dashboard.trends_logistics', 'dashboard.pipeline_domestic', 'dashboard.pipeline_overseas',
         'products.view', 'suppliers.view', 'suppliers.edit',
-        'purchase.view', 'purchase.create', 'purchase.assign', 'purchase.po_audit', 'purchase.mark_paid',
-        'logistics_wh.view', 'logistics_wh.receive', 'logistics_wh.manage',
+        'purchase.view', 'purchase.create', 'purchase.assign', 'purchase.po_audit', 'purchase.mark_paid', 'purchase.export', 'sku_query.export',
+        'logistics_wh.view', 'logistics_wh.receive', 'logistics_wh.manage', 'logistics_wh.export',
         'create_inbound.view', 'create_inbound.create', 'create_inbound.label',
         'mingrui.view', 'mingrui.manage',
         'warehouse_location.view', 'warehouse_location.edit', 'warehouse_location.batch_create',
@@ -247,15 +271,15 @@ exports.ROLE_PERM_TEMPLATES = {
         'outbound.view', 'outbound.create', 'outbound.relabel', 'outbound.pick', 'outbound.pack', 'outbound.ship',
         'inventory_query.view', 'inventory_query.detail', 'inventory_query.adjust',
         'pricing.view',
-        'cost.view', 'sync.view', 'sync.retry', 'operation_log.view',
+        'cost.view', 'cost.export', 'sync.view', 'sync.retry', 'sync.export', 'operation_log.view',
         'profit_analysis.view',
         'async_io.import', 'async_io.export',
     ],
     采购: [
         'dashboard.view', 'dashboard.kpi_products', 'dashboard.kpi_suppliers', 'dashboard.kpi_purchase', 'dashboard.pipeline_domestic',
         'products.view', 'suppliers.view',
-        'purchase.view', 'purchase.create', 'purchase.mark_paid',
-        'logistics_wh.view', 'logistics_wh.receive',
+        'purchase.view', 'purchase.create', 'purchase.mark_paid', 'purchase.export', 'sku_query.export',
+        'logistics_wh.view', 'logistics_wh.receive', 'logistics_wh.export',
         'create_inbound.view', 'create_inbound.create', 'create_inbound.label',
         'mingrui.view', 'mingrui.manage',
         'warehouse_location.view',
@@ -270,6 +294,7 @@ exports.ROLE_PERM_TEMPLATES = {
         'leads_follow.view', 'leads_follow.edit',
         'leads_deals.view', 'leads_deals.edit',
         'leads_reports.view',
+        'leads_pool.export', 'leads_deals.export', 'leads_reports.export',
     ],
     销售主管: [
         'dashboard.view', 'dashboard.kpi_leads',
@@ -277,24 +302,25 @@ exports.ROLE_PERM_TEMPLATES = {
         'leads_follow.view', 'leads_follow.edit',
         'leads_deals.view', 'leads_deals.edit',
         'leads_reports.view',
+        'leads_pool.export', 'leads_deals.export', 'leads_reports.export',
         'operation_log.view', 'async_io.export',
     ],
     财务: [
         'dashboard.view', 'dashboard.kpi_purchase', 'dashboard.kpi_sync', 'dashboard.pipeline_domestic',
         'products.view',
         'purchase.view',
-        'cost.view', 'operating_ledger.view', 'operating_ledger.manage',
-        'billing.view', 'billing.generate', 'billing.manual',
+        'cost.view', 'cost.export', 'operating_ledger.view', 'operating_ledger.manage', 'operating_ledger.export',
+        'billing.view', 'billing.generate', 'billing.manual', 'billing.export',
         'wms_reports.view',
         'inbound_fee.view', 'inbound_fee.manage',
-        'receivable_payable.view', 'receivable_payable.manual',
+        'receivable_payable.view', 'receivable_payable.manual', 'receivable_payable.export',
         'reports.view', 'profit_analysis.view',
-        'budget_credit.view', 'budget_credit.create',
+        'budget_credit.view', 'budget_credit.create', 'budget_credit.export',
         'async_io.export',
     ],
     产品开发主管: [
         'dashboard.view', 'dashboard.kpi_products', 'dashboard.kpi_audit', 'dashboard.pipeline_domestic',
-        'products.view', 'products.edit', 'products.import', 'products.print_label',
+        'products.view', 'products.edit', 'products.import', 'products.print_label', 'products.export', 'sku_query.export',
         'product_dev.view', 'product_dev.create', 'product_dev.edit',
         'product_audit.view', 'product_audit.approve', 'product_audit.reject', 'product_audit.label', 'product_audit.purchase_qty',
         'pricing.view', 'pricing.set',
@@ -307,7 +333,7 @@ exports.ROLE_PERM_TEMPLATES = {
         'dashboard.view', 'dashboard.kpi_products',
         'products.view',
         'product_dev.view', 'product_dev.create', 'product_dev.edit',
-        'inventory_query.view', 'inventory_query.detail', 'inventory_query.adjust',
+        'inventory_query.view', 'inventory_query.detail', 'inventory_query.adjust', 'sku_query.export',
         'store_monitor.view', 'store_monitor.view_all',
     ],
     陪跑: [
@@ -355,12 +381,12 @@ exports.ROLE_PERM_TEMPLATES = {
         'create_inbound.view', 'create_inbound.create', 'create_inbound.label',
         'warehouse_location.view', 'warehouse_location.edit', 'warehouse_location.batch_create',
         'inbound.view', 'inbound.arrival_scan', 'inbound.receive', 'inbound.qc', 'inbound.putaway', 'inbound.confirm_diff',
-        'return.view', 'return.receive', 'return.process',
+        'return.view', 'return.receive', 'return.process', 'return.export',
         'anheng.view', 'anheng.test',
-        'outbound.view', 'outbound.create', 'outbound.relabel', 'outbound.pick', 'outbound.pack', 'outbound.ship',
-        'inventory_query.view', 'inventory_query.detail', 'inventory_query.adjust',
+        'outbound.view', 'outbound.create', 'outbound.relabel', 'outbound.pick', 'outbound.pack', 'outbound.ship', 'outbound.export',
+        'inventory_query.view', 'inventory_query.detail', 'inventory_query.adjust', 'inventory_query.export',
         'stocktake.view', 'stocktake.create', 'stocktake.count', 'stocktake.approve',
-        'capacity.view', 'capacity.manage', 'wms_reports.view',
+        'capacity.view', 'capacity.manage', 'wms_reports.view', 'wms_reports.export',
         'sync.view', 'sync.retry', 'operation_log.view',
     ],
     仓库操作: [
@@ -371,29 +397,29 @@ exports.ROLE_PERM_TEMPLATES = {
         'create_inbound.view', 'create_inbound.create', 'create_inbound.label',
         'warehouse_location.view', 'warehouse_location.edit', 'warehouse_location.batch_create',
         'inbound.view', 'inbound.arrival_scan', 'inbound.receive', 'inbound.qc', 'inbound.putaway', 'inbound.confirm_diff',
-        'return.view', 'return.receive', 'return.process',
+        'return.view', 'return.receive', 'return.process', 'return.export',
         'anheng.view', 'anheng.test',
-        'outbound.view', 'outbound.create', 'outbound.relabel', 'outbound.pick', 'outbound.pack', 'outbound.ship',
-        'inventory_query.view', 'inventory_query.detail', 'inventory_query.adjust',
+        'outbound.view', 'outbound.create', 'outbound.relabel', 'outbound.pick', 'outbound.pack', 'outbound.ship', 'outbound.export',
+        'inventory_query.view', 'inventory_query.detail', 'inventory_query.adjust', 'inventory_query.export',
         'stocktake.view', 'stocktake.create', 'stocktake.count',
-        'capacity.view', 'wms_reports.view',
+        'capacity.view', 'wms_reports.view', 'wms_reports.export',
         'sync.view',
     ],
     仓库主管: [
         'dashboard.view', 'dashboard.kpi_inventory', 'dashboard.kpi_products', 'dashboard.kpi_sync',
         'dashboard.trends_logistics', 'dashboard.pipeline_overseas',
         'products.view', 'products.print_label',
-        'logistics_wh.view', 'logistics_wh.receive', 'logistics_wh.manage',
+        'logistics_wh.view', 'logistics_wh.receive', 'logistics_wh.manage', 'logistics_wh.export',
         'create_inbound.view', 'create_inbound.create', 'create_inbound.label',
         'warehouse_location.view', 'warehouse_location.edit', 'warehouse_location.batch_create',
         'inbound.view', 'inbound.arrival_scan', 'inbound.receive', 'inbound.qc', 'inbound.putaway', 'inbound.handle_exception', 'inbound.confirm_diff',
-        'return.view', 'return.receive', 'return.process',
+        'return.view', 'return.receive', 'return.process', 'return.export',
         'anheng.view', 'anheng.test',
-        'outbound.view', 'outbound.create', 'outbound.relabel', 'outbound.pick', 'outbound.pack', 'outbound.ship',
-        'inventory_query.view', 'inventory_query.detail', 'inventory_query.adjust',
+        'outbound.view', 'outbound.create', 'outbound.relabel', 'outbound.pick', 'outbound.pack', 'outbound.ship', 'outbound.export',
+        'inventory_query.view', 'inventory_query.detail', 'inventory_query.adjust', 'inventory_query.export',
         'stocktake.view', 'stocktake.create', 'stocktake.count', 'stocktake.approve',
-        'capacity.view', 'capacity.manage', 'wms_reports.view',
-        'sync.view', 'sync.retry', 'operation_log.view',
+        'capacity.view', 'capacity.manage', 'wms_reports.view', 'wms_reports.export',
+        'sync.view', 'sync.retry', 'sync.export', 'operation_log.view',
     ],
     入库员: [
         'dashboard.view', 'dashboard.kpi_inventory', 'dashboard.pipeline_overseas',
@@ -401,26 +427,26 @@ exports.ROLE_PERM_TEMPLATES = {
         'warehouse_location.view',
         'inbound.view', 'inbound.arrival_scan', 'inbound.receive', 'inbound.qc', 'inbound.putaway',
         'anheng.view', 'anheng.test',
-        'inventory_query.view', 'inventory_query.detail',
+        'inventory_query.view', 'inventory_query.detail', 'inventory_query.export',
     ],
     出库员: [
         'dashboard.view', 'dashboard.kpi_inventory', 'dashboard.pipeline_overseas',
         'products.view',
-        'outbound.view', 'outbound.relabel', 'outbound.pick', 'outbound.pack', 'outbound.ship',
-        'inventory_query.view', 'inventory_query.detail',
+        'outbound.view', 'outbound.relabel', 'outbound.pick', 'outbound.pack', 'outbound.ship', 'outbound.export',
+        'inventory_query.view', 'inventory_query.detail', 'inventory_query.export',
     ],
     退货员: [
         'dashboard.view', 'dashboard.kpi_inventory',
         'products.view',
         'warehouse_location.view',
-        'return.view', 'return.receive', 'return.process',
+        'return.view', 'return.receive', 'return.process', 'return.export',
         'inbound.view',
         'inventory_query.view', 'inventory_query.detail',
     ],
     复核员: [
         'dashboard.view', 'dashboard.kpi_inventory',
         'products.view',
-        'outbound.view', 'outbound.pack',
+        'outbound.view', 'outbound.pack', 'outbound.export',
         'inventory_query.view',
     ],
 };
@@ -479,6 +505,82 @@ exports.LEAD_ASSIGNEE_ROLE_CODES = ['cs', 'sales_manager'];
 exports.LEAD_SELF_ASSIGN_ROLE_CODES = ['cs'];
 const PERM_LABEL_MAP = new Map(exports.PERM_GROUPS.flatMap((g) => g.perms.map((p) => [p.id, p.label])));
 exports.ALL_PERM_CODES = exports.PERM_GROUPS.flatMap((g) => g.perms.map((p) => p.id));
+/** 导出权限只能授予这些职位。系统管理员不在名单里，但始终可以授予。 */
+exports.EXPORT_PERM_ROLES = {
+    'leads_pool.export': ['cs', 'sales_manager'],
+    'leads_deals.export': ['cs', 'sales_manager'],
+    'leads_reports.export': ['cs', 'sales_manager'],
+    'products.export': ['dev_manager'],
+    'sku_query.export': ['viewer', 'dev_manager', 'purchaser', 'purchase_manager'],
+    'purchase.export': ['purchaser', 'purchase_manager'],
+    'logistics_wh.export': ['purchaser', 'purchase_manager', 'warehouse_manager'],
+    'return.export': ['returns_clerk', 'warehouse', 'warehouse_manager'],
+    'outbound.export': ['outbound_clerk', 'warehouse', 'warehouse_manager', 'warehouse_reviewer'],
+    'inventory_query.export': ['warehouse', 'warehouse_manager', 'inbound_clerk', 'outbound_clerk'],
+    'wms_reports.export': ['warehouse', 'warehouse_manager'],
+    'cost.export': ['finance', 'purchase_manager'],
+    'operating_ledger.export': ['finance'],
+    'billing.export': ['finance'],
+    'receivable_payable.export': ['finance'],
+    'budget_credit.export': ['finance'],
+    'sync.export': ['purchase_manager', 'warehouse_manager'],
+    'flow_debug.export': [],
+};
+exports.EXPORT_MODULE_PERM = {
+    '线索': 'leads_pool.export',
+    '线索池': 'leads_pool.export',
+    leads: 'leads_pool.export',
+    '成交客户': 'leads_deals.export',
+    leads_deals: 'leads_deals.export',
+    '获客报表': 'leads_reports.export',
+    leads_report: 'leads_reports.export',
+    '商品主数据': 'products.export',
+    products: 'products.export',
+    'SKU查询': 'sku_query.export',
+    sku_query: 'sku_query.export',
+    '采购订单': 'purchase.export',
+    purchase: 'purchase.export',
+    '中转仓库存': 'logistics_wh.export',
+    logistics_inventory: 'logistics_wh.export',
+    '退件': 'return.export',
+    returns: 'return.export',
+    '出库单': 'outbound.export',
+    outbound: 'outbound.export',
+    '库存': 'inventory_query.export',
+    inventory: 'inventory_query.export',
+    '作业报表': 'wms_reports.export',
+    wms_reports: 'wms_reports.export',
+    '采购货款': 'cost.export',
+    '成本台账': 'cost.export',
+    cost: 'cost.export',
+    '经营收支': 'operating_ledger.export',
+    operating_ledger: 'operating_ledger.export',
+    '客户结算': 'billing.export',
+    billing: 'billing.export',
+    '海运账单': 'receivable_payable.export',
+    freight: 'receivable_payable.export',
+    '客户充值': 'budget_credit.export',
+    customers: 'budget_credit.export',
+    '同步日志': 'sync.export',
+    sync: 'sync.export',
+    '流程调试': 'flow_debug.export',
+    flow_debug: 'flow_debug.export',
+};
+function isExportPermission(permId) {
+    return Object.prototype.hasOwnProperty.call(exports.EXPORT_PERM_ROLES, permId);
+}
+function canAssignPermission(roleCode, permId) {
+    const roles = exports.EXPORT_PERM_ROLES[permId];
+    if (!roles)
+        return true;
+    if (roleCode === 'admin')
+        return true;
+    return roles.includes(roleCode);
+}
+function exportPermForModule(module) {
+    const key = String(module || '').trim();
+    return exports.EXPORT_MODULE_PERM[key] ?? null;
+}
 exports.STORE_MONITOR_ASSIGN_PERM = 'store_monitor.assign';
 function permLabel(code) {
     return PERM_LABEL_MAP.get(code) || code;
@@ -486,7 +588,10 @@ function permLabel(code) {
 function permModule(code) {
     return code.split('.')[0] || code;
 }
-/** 剔除废弃码、应用别名，仅保留 catalog 中存在的权限 */
+/** 剔除废弃码、应用别名，并去掉当前职位不能授予的导出权限 */
+function filterAssignablePerms(roleCode, codes) {
+    return normalizePermCodes(codes).filter((code) => canAssignPermission(roleCode, code));
+}
 function normalizePermCodes(codes) {
     const valid = new Set(exports.ALL_PERM_CODES);
     const out = new Set();

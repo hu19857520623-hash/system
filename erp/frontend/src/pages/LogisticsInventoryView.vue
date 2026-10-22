@@ -241,7 +241,7 @@ onMounted(async () => {
           <p class="page-desc">采购收货后的在库。可发数量可调到其他中转仓，或发往海外仓；发运和调拨都会从这里扣减。</p>
         </div>
         <div class="head-actions">
-          <el-button v-if="rows.length" size="small" @click="exportTask('中转仓库存')">导出</el-button>
+          <el-button v-if="app.hasPerm('logistics_wh.export') && rows.length" size="small" @click="exportTask('中转仓库存')">导出</el-button>
         </div>
       </div>
 

@@ -3,9 +3,11 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { leadApi } from '@/api/client.js'
 import { useTablePagination } from '@/composables/useTablePagination.ts'
 import { useRowActions } from '@/composables/useRowActions'
+import { useAppStore } from '@/stores/app'
 import ListPagination from '@/components/ListPagination.vue'
 
 const { exportTask } = useRowActions()
+const app = useAppStore()
 
 const range = ref('all')
 const loading = ref(false)
@@ -102,7 +104,7 @@ watch(range, loadReport)
               <el-radio-button value="quarter">本季度</el-radio-button>
               <el-radio-button value="month">本月</el-radio-button>
             </el-radio-group>
-            <el-button size="small" @click="exportTask('获客报表')">导出报表</el-button>
+            <el-button v-if="app.hasPerm('leads_reports.export')" size="small" @click="exportTask('获客报表')">导出报表</el-button>
           </div>
         </div>
       </template>

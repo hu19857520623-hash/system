@@ -28,7 +28,7 @@ export class LeadsController {
     return this.service.importFromCsv(body.content, userId)
   }
 
-  @RequirePerms('leads_pool.view')
+  @RequirePerms('leads_pool.export')
   @Get('export')
   async exportCsv(@Query() q: LeadsListQueryDto, @CurrentUser() user: AuthUser, @Res() res: Response) {
     const file = await this.service.exportCsv(q, user)

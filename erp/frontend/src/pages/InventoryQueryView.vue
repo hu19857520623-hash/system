@@ -528,7 +528,7 @@ watch([page, pageSize], () => load())
         </el-radio-group>
         <div class="toolbar-actions">
           <el-button v-if="canAdjust" size="small" @click="openStockChange()">库存变更</el-button>
-          <el-button size="small" @click="exportRows()">导出</el-button>
+          <el-button v-if="app.hasPerm('inventory_query.export')" size="small" @click="exportRows()">导出</el-button>
         </div>
       </div>
 

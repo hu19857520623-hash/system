@@ -296,6 +296,7 @@ export const purchaseApi = {
   rejectPoAudit: (id, data) => api.post(`/purchase-orders/${id}/reject-po-audit`, data),
   markPaid: (id, data) => api.post(`/purchase-orders/${id}/mark-paid`, data || {}),
   markUnpaid: (id, data) => api.post(`/purchase-orders/${id}/mark-unpaid`, data || {}),
+  voidOrder: (id) => api.post(`/purchase-orders/${id}/void`),
   remove: (id) => api.delete(`/purchase-orders/${id}`),
   removePrePo: (id) => api.delete(`/purchase-orders/pre-purchase/${id}`),
 }
