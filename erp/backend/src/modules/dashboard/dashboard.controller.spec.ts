@@ -21,7 +21,8 @@ describe('DashboardController', () => {
 
     await expect(controller.stats(user as any)).resolves.toEqual({ leads: 1 })
     await expect(controller.announcements()).resolves.toEqual([])
-    await expect(controller.notifications()).resolves.toEqual({ total: 0, items: [], badges: {} })
+    await expect(controller.notifications(user as any)).resolves.toEqual({ total: 0, items: [], badges: {} })
+    expect(service.notifications).toHaveBeenCalledWith(user)
   })
 
   it('parses trends days query and falls back on invalid input', async () => {

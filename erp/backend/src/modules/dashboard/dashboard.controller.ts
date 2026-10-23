@@ -25,7 +25,7 @@ export class DashboardController {
   }
 
   @Get('notifications')
-  notifications() {
-    return this.service.notifications()
+  notifications(@CurrentUser() user: AuthUser) {
+    return this.service.notifications(user)
   }
 }

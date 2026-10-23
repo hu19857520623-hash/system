@@ -53,6 +53,21 @@ export function followSalesMatchTokens(user: {
   return tokens
 }
 
+/** 与待跟进列表相同：精确匹配「姓名(账号)」，并用姓名、账号做包含匹配。无法识别用户时不命中任何线索。 */
+export function followSalesScopeWhere(user: {
+  username?: string | null
+  realName?: string | null
+}): { OR: Array<{ followSales: string } | { followSales: { contains: string } }> } | { id: bigint } {
+  const or: Array<{ followSales: string } | { followSales: { contains: string } }> = []
+  const label = formatFollowSalesLabel(user)
+  if (label) or.push({ followSales: label })
+  for (const token of followSalesMatchTokens(user)) {
+    or.push({ followSales: { contains: token } })
+  }
+  if (!or.length) return { id: 0n }
+  return { OR: or }
+}
+
 export function followSalesMatchesUser(
   followSales: string | null | undefined,
   user: { username?: string | null; realName?: string | null },

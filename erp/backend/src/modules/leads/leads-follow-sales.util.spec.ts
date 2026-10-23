@@ -1,12 +1,29 @@
 import {
   canonicalizeFollowSales,
   followSalesMatchesUser,
+  followSalesScopeWhere,
   followSalesMatchTokens,
   formatFollowSalesLabel,
   parseFollowSalesFromRemark,
   resolveAssigneeIdByFollowSales,
   resolveFollowSales,
 } from './leads-follow-sales.util'
+
+describe('followSalesScopeWhere', () => {
+  it('matches the display label and the name or username', () => {
+    expect(followSalesScopeWhere({ realName: '系统管理员', username: 'admin' })).toEqual({
+      OR: [
+        { followSales: '系统管理员(admin)' },
+        { followSales: { contains: '系统管理员' } },
+        { followSales: { contains: 'admin' } },
+      ],
+    })
+  })
+
+  it('matches nothing when the account has no name', () => {
+    expect(followSalesScopeWhere({ realName: '', username: '' })).toEqual({ id: 0n })
+  })
+})
 
 describe('formatFollowSalesLabel', () => {
   it('joins real name and username', () => {

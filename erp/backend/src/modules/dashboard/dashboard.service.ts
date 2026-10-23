@@ -12,6 +12,10 @@ import {
 } from '@erp/shared/dashboard-widgets'
 import { dayRangeUtc, mergeTrendCounts } from './dashboard.utils'
 import { ERP_MASTER_PRODUCT_WHERE } from '../../common/product-source.util'
+import { followSalesScopeWhere } from '../leads/leads-follow-sales.util'
+import type { AuthUser } from '../../common/decorators/current-user.decorator'
+
+const FOLLOW_LIST_STATUSES = ['new', 'following', 'hot', 'nurture']
 
 const SYNC_FAILED_WHERE: Prisma.SyncLogWhereInput = {
   status: 'failed',
@@ -98,7 +102,7 @@ export class DashboardService {
     }
   }
 
-  async notifications() {
+  async notifications(user?: Pick<AuthUser, 'userId' | 'username' | 'realName'>) {
     const [
       leadsFollow,
       productAudit,
@@ -115,7 +119,7 @@ export class DashboardService {
       syncFailed,
       mingruiPending,
     ] = await Promise.all([
-      this.prisma.lead.count({ where: { status: 'following' } }),
+      this.countMyFollowLeads(user),
       this.prisma.productDev.count({ where: { status: 'submitted' } }),
       this.prisma.purchaseOrder.count({ where: { status: 'pending_po_audit' } }),
       this.prisma.purchaseOrder.count({ where: { paymentStatus: 'paid' } }),
@@ -158,6 +162,21 @@ export class DashboardService {
     const badges = Object.fromEntries(items.map((item) => [item.key, item.count]))
     badges.inbound_receipt = inboundReceipt
     return { total, items, badges }
+  }
+
+  /** 与待跟进页默认列表一致：进行中状态，且跟进销售属于当前账号。 */
+  private async countMyFollowLeads(user?: Pick<AuthUser, 'userId' | 'username' | 'realName'>) {
+    if (!user?.userId) return 0
+    const dbUser = await this.prisma.sysUser.findUnique({
+      where: { id: BigInt(user.userId) },
+      select: { username: true, realName: true },
+    })
+    return this.prisma.lead.count({
+      where: {
+        status: { in: FOLLOW_LIST_STATUSES },
+        AND: [followSalesScopeWhere(dbUser || user)],
+      },
+    })
   }
 
   private async countPendingLogistics() {

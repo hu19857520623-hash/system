@@ -11,7 +11,7 @@ import {
 } from '../../common/import-row-result.util'
 import {
   canonicalizeFollowSales,
-  followSalesMatchTokens,
+  followSalesScopeWhere,
   formatFollowSalesLabel,
   resolveFollowSales,
   resolveLeadStatus,
@@ -263,15 +263,7 @@ export class LeadsService {
       where: { id: BigInt(userId) },
       select: { username: true, realName: true },
     })
-    const user = dbUser || fallback
-    const or: Array<{ followSales: string } | { followSales: { contains: string } }> = []
-    const label = formatFollowSalesLabel(user)
-    if (label) or.push({ followSales: label })
-    for (const token of followSalesMatchTokens(user)) {
-      or.push({ followSales: { contains: token } })
-    }
-    if (!or.length) return { id: BigInt(0) }
-    return { OR: or }
+    return followSalesScopeWhere(dbUser || fallback)
   }
 
   async listAssignees(currentUserId: number) {

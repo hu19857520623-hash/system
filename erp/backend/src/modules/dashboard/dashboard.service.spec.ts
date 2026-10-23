@@ -15,6 +15,7 @@ function createPrismaMock() {
     outboundOrder: { count: jest.fn() },
     productPricing: { count: jest.fn() },
     mingruiShipment: { count: jest.fn() },
+    sysUser: { findUnique: jest.fn() },
     logisticsReceipt: { count: jest.fn() },
     logisticsReceiptItem: { aggregate: jest.fn() },
   }
@@ -154,13 +155,43 @@ describe('DashboardService', () => {
     prisma.productPricing.count.mockResolvedValue(0)
     prisma.syncLog.count.mockResolvedValue(0)
     prisma.mingruiShipment.count.mockResolvedValue(0)
+    prisma.sysUser.findUnique.mockResolvedValue({ username: 'admin', realName: '系统管理员' })
 
-    const result = await service.notifications()
+    const user = { userId: 1, username: 'admin', realName: '系统管理员' }
+    const result = await service.notifications(user)
+    expect(prisma.lead.count).toHaveBeenCalledWith({
+      where: {
+        status: { in: ['new', 'following', 'hot', 'nurture'] },
+        AND: [{
+          OR: [
+            { followSales: '系统管理员(admin)' },
+            { followSales: { contains: '系统管理员' } },
+            { followSales: { contains: 'admin' } },
+          ],
+        }],
+      },
+    })
+    expect(result.badges.leads_follow).toBe(1)
     expect(result.badges.logistics_wh).toBe(1)
     expect(result.badges.inbound_arrived).toBe(1)
     expect(result.badges.inbound_receipt).toBe(1)
     expect(result.badges.inbound_exception).toBe(4)
     expect(result.items.some((item) => item.key === 'inbound_exception')).toBe(true)
     expect(result.total).toBeGreaterThan(0)
+  })
+
+  it('notifications counts no follow-up leads when the request has no user', async () => {
+    prisma.productDev.count.mockResolvedValue(0)
+    prisma.purchaseOrder.count.mockResolvedValue(0)
+    prisma.purchaseOrder.findMany.mockResolvedValue([])
+    prisma.inboundOrder.count.mockResolvedValue(0)
+    prisma.outboundOrder.count.mockResolvedValue(0)
+    prisma.productPricing.count.mockResolvedValue(0)
+    prisma.syncLog.count.mockResolvedValue(0)
+    prisma.mingruiShipment.count.mockResolvedValue(0)
+
+    const result = await service.notifications()
+    expect(prisma.lead.count).not.toHaveBeenCalled()
+    expect(result.badges.leads_follow).toBe(0)
   })
 })
