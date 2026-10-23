@@ -1501,8 +1501,8 @@ async function markPoUnpaid(po?: { id: number }) {
             <el-button link type="primary" size="small" @click="openDetail(row)">
               {{ (canSetActualQty && row.statusKey === 'pending_actual_qty') ? '核定数量' : (canPoAudit && row.statusKey === 'pending_po_audit') ? '去审核' : '详情' }}
             </el-button>
-            <el-button v-if="canEditPendingAudit(row)" link type="primary" size="small" @click="openRevisePending(row)">修改订单</el-button>
-            <el-button v-if="canReopenAudit(row)" link type="warning" size="small" @click="reopenPoAudit(row)">撤回到待审核</el-button>
+            <el-button v-if="canEditPendingAudit(row)" link type="primary" size="small" @click="openRevisePending(row as any)">修改订单</el-button>
+            <el-button v-if="canReopenAudit(row)" link type="warning" size="small" @click="reopenPoAudit(row as any)">撤回到待审核</el-button>
             <el-button v-if="canCreate && row.statusKey === 'rejected' && canReviseRejected(row)" link type="warning" size="small" @click="reviseRejectedPo(row)">修改重提</el-button>
             <span v-else-if="row.statusKey === 'rejected' && row.prePoStatus === 'pending_assign'">待分配</span>
             <el-button v-if="canCreate && canVoidPo(row)" link type="danger" size="small" :disabled="voidingPoId === row.id" @click="voidPurchaseOrder(row)">标为废订单</el-button>
