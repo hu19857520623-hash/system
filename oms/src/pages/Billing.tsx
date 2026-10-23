@@ -1,4 +1,4 @@
-import type { RechargeAttempt } from '../../../erp/shared/recharge-workflow'
+import type { RechargeAttempt } from '../data/rechargeWorkflow'
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { CreditCard, Download, Copy, Check, Pencil, Save, X, ChevronDown, ChevronUp } from 'lucide-react'
 import { Link } from 'react-router-dom'
