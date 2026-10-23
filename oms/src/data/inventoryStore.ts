@@ -5,7 +5,8 @@ import { userFacingError } from '../utils/userFacingError'
 import { purchaseErpCatalog, type ErpCatalogItem, type ErpPurchaseResult } from '../api/erp'
 import type { InventoryItem, Product } from './mockData'
 import { getCustomerCode } from './dataScope'
-import { setCreditBalanceFromErp } from './billingStore'
+import { getFeeRecords, hydrateBilling } from './billingStore'
+import { readCatalogAttempts, saveCatalogAttempt, runCatalogAttempt, type CatalogPurchaseAttempt } from './catalogPurchaseWorkflow'
 import {
   buildInternalSku,
   CATALOG_CUSTOMER_CODE,
@@ -121,7 +122,7 @@ export function useCatalogPurchases(): CatalogPurchase[] {
   return useSyncExternalStore(subscribe, () => getSnapshot().purchases, () => getSnapshot().purchases)
 }
 
-export type LockStockResult = { ok: true; purchase: CatalogPurchase } | { ok: false; error: string }
+export type LockStockResult = { ok: true; purchase: CatalogPurchase } | { ok: false; error: string; uncertain?: boolean }
 
 function nextPurchaseNo(): string {
   const d = new Date()
@@ -196,7 +197,7 @@ function applyErpPurchaseLocally(
   const product = state.products.find(p => p.internalSku === result.sku)
   if (product) {
     product.availableQty = result.remainingStockQty
-    product.lockedQty += result.quantity
+    product.lockedQty = result.soldQty
     product.price = result.unitPrice
     if (result.remainingStockQty <= 0) product.productStatus = 'draft'
   }
@@ -213,18 +214,19 @@ function applyErpPurchaseLocally(
     i => i.sku === result.sku && i.stockSource === 'catalog' && i.customerId === customerId,
   )
   if (custIdx >= 0) {
-    state.inventory[custIdx].locked += result.quantity
+    if (result.inventoryMirrorId) state.inventory[custIdx].id = result.inventoryMirrorId
+    state.inventory[custIdx].locked = result.holdingQuantity
     state.inventory[custIdx].price = result.unitPrice
-  } else {
+  } else if (result.holdingQuantity > 0) {
     const pool = poolIdx >= 0 ? state.inventory[poolIdx] : undefined
     state.inventory.push({
-      id: `csi-${customerId}-${result.sku}`,
+      id: result.inventoryMirrorId!,
       customerId,
       sku: result.sku,
       name: productName || pool?.name || result.sku,
       image: pool?.image || product?.image || '',
       available: 0,
-      locked: result.quantity,
+      locked: result.holdingQuantity,
       inTransit: 0,
       safetyStock: 0,
       spec: pool?.spec || product?.spec || '',
@@ -257,36 +259,44 @@ function applyErpPurchaseLocally(
   if (!state.purchases.some(p => p.purchaseNo === purchase.purchaseNo)) {
     state.purchases.unshift(purchase)
   }
-  if (result.balanceAfter != null) setCreditBalanceFromErp(result.balanceAfter)
-  persistLocal()
+  hydrateBilling({ creditBalance: result.currentBalance, feeRecords: getFeeRecords() })
+  emit()
   return purchase
 }
 
-/** P0：经 OMS BFF 调用 ERP 货盘申购 */
-export async function purchaseCatalogProductViaErp(
-  internalSku: string,
-  qty: number,
-  customerId: string,
-): Promise<LockStockResult> {
-  if (qty <= 0) return { ok: false, error: '申购数量须大于 0' }
-  const customerCode = getCustomerCode(customerId)
-  if (!customerCode || customerCode === '—') {
-    return { ok: false, error: '当前角色未绑定客户编码，无法向 ERP 下单' }
-  }
+export function getPendingCatalogPurchases(customerId: string): CatalogPurchaseAttempt[] {
+  const user = getStoredAuthSession()?.user
+  if (!user || user.customerId !== customerId) throw new Error('请使用原客户账号登录后核对采购')
+  return readCatalogAttempts(localStorage, user.id, customerId)
+}
 
+/** Persist the original purchase number before sending; unknown outcomes must use that same request. */
+export async function purchaseCatalogProductViaErp(internalSku: string, qty: number, customerId: string, quotedUnitPrice?: number): Promise<LockStockResult> {
+  const user = getStoredAuthSession()?.user
+  const customerCode = getCustomerCode(customerId)
+  if (!user || user.customerId !== customerId || !customerCode || customerCode === '—') return { ok: false, error: '请使用已绑定的客户账号申购' }
+  if (!Number.isSafeInteger(qty) || qty <= 0) return { ok: false, error: '申购数量须为正整数' }
   try {
-    const result = await purchaseErpCatalog({
-      customerId,
-      customerCode,
-      sku: internalSku,
-      quantity: qty,
+    const previous = getPendingCatalogPurchases(customerId).find(row => row.sku === internalSku)
+    const price = quotedUnitPrice ?? state.products.find(p => p.internalSku === internalSku)?.price
+    if (!price || !Number.isFinite(price) || price <= 0) return { ok: false, error: '商品报价无效，请刷新货盘后核对' }
+    if (previous && (previous.quantity !== qty || previous.unitPrice !== price)) return { ok: false, uncertain: true, error: '此商品还有原采购待核对，请使用原数量和报价继续核对，勿再次购买' }
+    const attempt = previous || { orderNo: `CAT-${crypto.randomUUID()}`, customerId, customerCode, sku: internalSku, quantity: qty, unitPrice: price, name: state.products.find(p => p.internalSku === internalSku)?.name || internalSku }
+    if (!previous) saveCatalogAttempt(localStorage, user.id, attempt)
+    let purchase: CatalogPurchase | undefined
+    const response = await runCatalogAttempt(body => purchaseErpCatalog({ orderNo: body.orderNo, customerId: body.customerId, customerCode: body.customerCode, sku: body.sku, quantity: body.quantity, unitPrice: body.unitPrice }), localStorage, user.id, attempt, result => {
+      if (getStoredAuthSession()?.user.id !== user.id || getStoredAuthSession()?.user.customerId !== customerId) throw new Error('客户登录身份已变化，请使用原账号核对原采购，勿再次购买')
+      if (result.orderNo !== attempt.orderNo || result.sku !== attempt.sku || result.quantity !== attempt.quantity || result.customerCode !== attempt.customerCode || result.unitPrice !== attempt.unitPrice) throw new Error('采购返回内容与原清单不同，请核对原采购，勿再次购买')
+      if (!Number.isFinite(result.currentBalance) || !Number.isSafeInteger(result.holdingQuantity) || result.holdingQuantity < 0) throw new Error('采购已保存，但最新余额或持有未能核对')
+      if (result.holdingQuantity > 0 && (!result.inventoryMirrorId || result.inventoryMirrorId.length > 50)) throw new Error('采购已保存，但持有记录标识未能核对，请使用原采购单重试')
+      purchase = applyErpPurchaseLocally(result, customerId, attempt.name)
     })
-    const productName =
-      state.products.find(p => p.internalSku === internalSku)?.name || result.sku
-    const purchase = applyErpPurchaseLocally(result, customerId, productName)
+    if (!response.completed || !purchase) return { ok: false, uncertain: true, error: response.message }
     return { ok: true, purchase }
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    let uncertain = true
+    try { uncertain = getPendingCatalogPurchases(customerId).some(row => row.sku === internalSku) } catch { /* Keep unresolved stored operations protected. */ }
+    return { ok: false, uncertain, error: userFacingError(err) }
   }
 }
 

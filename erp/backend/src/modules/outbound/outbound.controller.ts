@@ -6,6 +6,7 @@ import { RequireAnyPerm, RequirePerms } from '../../common/decorators/require-pe
 import { OmsBridge } from '../../common/decorators/oms-bridge.decorator'
 import { CreateOmsOutboundDto } from './dto/oms-outbound.dto'
 import { AssignPickerDto, PickOutboundDto } from './dto/pick-outbound.dto'
+import { ShipOutboundDto } from './dto/ship-outbound.dto'
 
 function sendPdf(res: Response, file: { fileName: string; content: Buffer }) {
   res.setHeader('Content-Type', 'application/pdf')
@@ -246,8 +247,14 @@ export class OutboundController {
 
   @RequirePerms('outbound.ship')
   @Post(':id/ship')
-  ship(@Param('id', ParseIntPipe) id: number, @Body() body: any, @CurrentUser('userId') userId: number) {
+  ship(@Param('id', ParseIntPipe) id: number, @Body() body: ShipOutboundDto, @CurrentUser('userId') userId: number) {
     return this.service.ship(id, userId, body)
+  }
+
+  @RequirePerms('outbound.ship')
+  @Post(':id/sync-shipment')
+  syncShipment(@Param('id', ParseIntPipe) id: number) {
+    return this.service.syncShipment(id)
   }
 
   @RequirePerms('outbound.create')

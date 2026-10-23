@@ -1,7 +1,9 @@
 import { Transform, Type } from 'class-transformer'
 import {
+  Equals,
   IsArray,
   IsEmail,
+  IsEmpty,
   IsIn,
   IsInt,
   IsNumber,
@@ -91,9 +93,7 @@ export class CreateCustomerDto {
   status?: number
 
   @IsOptional()
-  @Type(() => Number)
-  @IsNumber({ maxDecimalPlaces: 2 })
-  @Min(0)
+  @Equals(0, { message: '新客户余额须为零，请开户后通过充值登记到账资金' })
   balance?: number
 
   /**
@@ -188,10 +188,7 @@ export class UpdateCustomerDto {
   @IsIn([0, 1])
   status?: number
 
-  @IsOptional()
-  @Type(() => Number)
-  @IsNumber({ maxDecimalPlaces: 2 })
-  @Min(0)
+  @IsEmpty({ message: '客户资料不能修改余额，请通过充值、出库或账单结算处理资金' })
   balance?: number
 
   @IsOptional()
@@ -277,38 +274,36 @@ export class InternalSetPortalTemporaryPasswordDto extends SetPortalTemporaryPas
 }
 
 export class RechargeCustomerDto {
-  @Type(() => Number)
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 2 }, { message: '充值金额须为数字且最多两位小数' })
   @Min(0.01, { message: '充值金额须大于 0' })
   amount: number
 
   @IsOptional()
   @Transform(trimOptional)
-  @IsString()
-  @MaxLength(30)
+  @IsString({ message: '充值方式须为文字' })
+  @MaxLength(20, { message: '充值方式最多20个字符' })
   paymentMethod?: string
 
   @IsOptional()
   @Transform(trimOptional)
-  @IsString()
-  @MaxLength(50)
+  @IsString({ message: '支付方式编号须为文字' })
+  @MaxLength(50, { message: '支付方式编号最多50个字符' })
   paymentMethodId?: string
 
   @IsOptional()
   @Transform(trimOptional)
-  @IsString()
-  @MaxLength(100)
+  @IsString({ message: '支付方式名称须为文字' })
+  @MaxLength(100, { message: '支付方式名称最多100个字符' })
   paymentMethodTitle?: string
 
-  @IsOptional()
-  @Transform(trimOptional)
-  @IsString()
-  @MaxLength(80)
-  rechargeNo?: string
+  @Transform(trim)
+  @IsString({ message: '请填写原充值单号' })
+  @Matches(/^[A-Za-z0-9_-]{1,30}$/, { message: '充值单号须为1至30位字母、数字、下划线或短横线' })
+  rechargeNo: string
 
   @IsOptional()
   @Transform(trimOptional)
-  @IsString()
-  @MaxLength(500)
+  @IsString({ message: '充值备注须为文字' })
+  @MaxLength(500, { message: '充值备注最多500个字符' })
   remark?: string
 }

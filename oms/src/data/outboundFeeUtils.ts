@@ -107,10 +107,11 @@ export function groupFeeRecordsByOutbound(feeRecords: FeeRecord[]): OutboundFeeG
       const settlementAdjust = records
         .filter(r => r.method === 'settlement_adjust')
         .reduce((s, r) => s + r.amount, 0)
-      const netChange = records.reduce((s, r) => s + r.amount, 0)
-      const settled = records.some(
+      const settled = actualTotal > 0 || records.some(
         r => r.id.startsWith('settle-') || r.method === 'settlement_adjust',
       )
+      // Actual fees already represent the final cost; reservations and adjustments explain its stages.
+      const netChange = actualTotal > 0 ? -actualTotal : settled ? -preDeductTotal + settlementAdjust : -preDeductTotal
       return {
         outboundNo,
         records: records.sort((a, b) => b.date.localeCompare(a.date)),

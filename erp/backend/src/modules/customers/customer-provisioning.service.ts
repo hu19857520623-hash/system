@@ -81,6 +81,9 @@ export class CustomerProvisioningService {
       afterCreate?: (tx: Prisma.TransactionClient, customer: Customer) => Promise<void>
     } = { requirePortal: false },
   ): Promise<CustomerProvisioningResult> {
+    if (data.balance != null && data.balance !== 0) {
+      throw new BadRequestException('新客户余额须为零，请开户后通过充值登记到账资金')
+    }
     const portalInput = this.resolveCreatePortalInput(data, options.requirePortal)
     const passwordHash = portalInput
       ? await this.hashTemporaryPassword(portalInput.temporaryPassword)
@@ -121,7 +124,7 @@ export class CustomerProvisioningService {
             contactName: data.contactName?.trim() || undefined,
             contactPhone: data.contactPhone?.trim() || undefined,
             status: data.status ?? 1,
-            balance: data.balance ?? 0,
+            balance: 0,
           },
         })
 
@@ -137,6 +140,9 @@ export class CustomerProvisioningService {
   }
 
   async update(id: number, data: UpdateCustomerDto): Promise<CustomerProvisioningResult> {
+    if (data.balance !== undefined) {
+      throw new BadRequestException('客户资料不能修改余额，请通过充值、出库或账单结算处理资金')
+    }
     const requestedPortalType = this.resolvePortalType(data)
     const requestedPermissions = this.resolveRequestedPermissions(
       data.permissionTemplate,
@@ -167,7 +173,6 @@ export class CustomerProvisioningService {
             contactName: data.contactName?.trim(),
             contactPhone: data.contactPhone?.trim(),
             status: data.status,
-            balance: data.balance,
           },
         })
 
@@ -277,7 +282,7 @@ export class CustomerProvisioningService {
         } else if (normalizedUsername || passwordHash) {
           if (!normalizedUsername || !passwordHash) {
             throw new BadRequestException(
-              '首次创建 OMS 登录用户时必须同时提供联系电话和 temporaryPassword',
+              '首次创建 OMS 登录用户时必须同时提供联系电话和临时密码',
             )
           }
           portalUserId = await this.savePortalUser(
@@ -396,7 +401,7 @@ export class CustomerProvisioningService {
       !permissions
     ) {
       throw new BadRequestException(
-        'OMS 开户必须提供 portalType、warehouse、权限、联系电话和 temporaryPassword',
+        'OMS 开户须填写客户类型、仓库、权限、联系电话和临时密码',
       )
     }
     return {
@@ -425,7 +430,7 @@ export class CustomerProvisioningService {
       !permissions
     ) {
       throw new BadRequestException(
-        '首次开通 OMS 时必须提供 portalType、warehouse、权限、联系电话和 temporaryPassword',
+        '首次开通 OMS 须填写客户类型、仓库、权限、联系电话和临时密码',
       )
     }
     return {
@@ -442,7 +447,7 @@ export class CustomerProvisioningService {
     omsType?: OmsCustomerType
   }): OmsCustomerType | undefined {
     if (data.portalType && data.omsType && data.portalType !== data.omsType) {
-      throw new BadRequestException('portalType 与兼容字段 omsType 不一致')
+      throw new BadRequestException('客户类型设置不一致，请重新选择客户类型')
     }
     return data.portalType || data.omsType
   }
@@ -535,7 +540,7 @@ export class CustomerProvisioningService {
 
     const account = await this.findOmsAccount(tx, customer.customerCode)
     if (!account) {
-      throw new Error('OMS customer account provisioning did not produce an account')
+      throw new Error('OMS 客户账户开通未完成，请核对后重试')
     }
 
     await this.upsertBillingAccount(tx, customer, account.id, portal.warehouse)
@@ -687,7 +692,7 @@ export class CustomerProvisioningService {
 
   private asPortalType(value: string): OmsCustomerType {
     if (value === 'ecommerce' || value === 'catalog' || value === 'hybrid') return value
-    throw new BadRequestException(`OMS 账户类型 ${value} 无效`)
+    throw new BadRequestException('OMS 客户类型无效，请重新选择')
   }
 
   private normalizeUsername(value: string): string {

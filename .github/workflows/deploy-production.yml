@@ -170,6 +170,14 @@ jobs:
           docker compose run -T --rm --no-deps --entrypoint npx erp-api \
             prisma db execute --file prisma/scripts/migrate_outbound_phase1_efficiency.sql </dev/null
 
+          echo '=== Apply supplier company name ==='
+          docker compose run -T --rm --no-deps --entrypoint npx erp-api \
+            prisma db execute --file prisma/scripts/migrate_supplier_company_name.sql </dev/null
+
+          echo '=== Apply purchase payment records ==='
+          docker compose run -T --rm --no-deps --entrypoint npx erp-api \
+            prisma db execute --file prisma/scripts/migrate_purchase_payment.sql </dev/null
+
           echo '=== Repair WMS loop schema ==='
           repair_sql="${PWD}/backend/prisma/scripts/migrate_wms_loop_schema_repair.sql"
           test -f "$repair_sql" || { echo "Missing $repair_sql"; exit 1; }

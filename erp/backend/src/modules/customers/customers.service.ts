@@ -1,3 +1,5 @@
+import { creditCustomer } from './customer-recharge.util'
+import { userFacingError } from '@erp/shared/user-facing-error'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
@@ -271,7 +273,7 @@ export class CustomersService {
     try {
       rows = JSON.parse(readFileSync(dataFile, 'utf8')) as Array<Record<string, unknown>>
     } catch {
-      throw new BadRequestException(`缺少导入文件: ${dataFile}`)
+      throw new BadRequestException('无法读取客户导入文件，请检查文件是否已准备且格式正确')
     }
     if (!Array.isArray(rows) || rows.length === 0) {
       throw new BadRequestException('导入文件为空')
@@ -282,6 +284,7 @@ export class CustomersService {
     let updated = 0
     let failed = 0
     const errors: Array<{ customerCode: string; message: string }> = []
+    const balanceReview: Array<{ customerCode: string; legacyBalance: number; message: string }> = []
 
     for (const raw of rows) {
       const customerCode = String(raw.customerCode || '').trim()
@@ -310,6 +313,19 @@ export class CustomersService {
           where: { customerCode },
           select: { id: true },
         })
+        // Portal backfill is not a financial migration. Re-running an old file
+        // must never reset a live wallet after subsequent payments or charges.
+        const rawBalance = raw.balance
+        let legacyBalance = 0
+        if (rawBalance != null && rawBalance !== '') {
+          if (!['string', 'number'].includes(typeof rawBalance) || !/^-?\d{1,12}(\.\d{1,2})?$/.test(String(rawBalance))) {
+            throw new BadRequestException('历史余额格式无效，请核对原始账务资料')
+          }
+          legacyBalance = Number(rawBalance)
+        }
+        if (!existing && legacyBalance !== 0) {
+          throw new BadRequestException('该新客户含非零历史余额，请先完成期初账务核对；门户导入不能直接写入资金')
+        }
         const oms = await this.findLegacyOmsAccount(customerCode)
 
         if (!existing) {
@@ -335,18 +351,14 @@ export class CustomersService {
           updated += 1
         }
 
-        const balance = Number(raw.balance)
-        if (Number.isFinite(balance) && balance < 0) {
-          await this.prisma.customer.update({
-            where: { customerCode },
-            data: { balance },
-          })
+        if (legacyBalance !== 0) {
+          balanceReview.push({ customerCode, legacyBalance, message: '已保留ERP现有余额，旧文件余额仅供财务核对' })
         }
       } catch (error) {
         failed += 1
         errors.push({
           customerCode,
-          message: error instanceof Error ? error.message : String(error),
+          message: userFacingError(error, undefined, '该客户导入失败，请检查资料后重试'),
         })
       }
     }
@@ -365,6 +377,8 @@ export class CustomersService {
       failed,
       linked,
       errors: errors.slice(0, 30),
+      balanceReviewCount: balanceReview.length,
+      balanceReview: balanceReview.slice(0, 30),
     }
   }
 
@@ -426,60 +440,16 @@ export class CustomersService {
 
   /** 客户充值：增加余额并记录充值单。 */
   async recharge(id: number, data: any, operatorId?: number) {
-    const customer = await this.detail(id)
-    const amount = Number(data.amount ?? 0)
-    if (!Number.isFinite(amount) || amount <= 0) {
-      throw new BadRequestException('充值金额须大于 0')
+    const result = await creditCustomer(this.prisma, id, data, operatorId)
+    const synced = await notifyOms('balance.changed', result.customerCode, {
+      balance: result.balance, rechargeNo: result.record.rechargeNo,
+      amount: result.record.amount, paymentMethod: result.record.paymentMethod,
+      remark: result.record.remark, createdAt: result.record.createdAt,
+    }).catch(() => false)
+    return { ...result, syncPending: !synced,
+      message: result.duplicate ? '原充值已到账，本次未重复入账' : '充值已到账',
+      ...(!synced ? { warning: '充值已到账，OMS同步待核对，请重试原充值单，勿重新充值' } : {}),
     }
-
-    let rechargeNo = String(data.rechargeNo || '').trim()
-    if (!rechargeNo) {
-      const date = new Date().toISOString().slice(0, 10).replace(/-/g, '')
-      rechargeNo = `RC-${date}-${Date.now().toString().slice(-6)}`
-    }
-    const duplicate = await this.prisma.customerRecharge.findUnique({
-      where: { rechargeNo },
-    })
-    if (duplicate) throw new BadRequestException(`充值单号 ${rechargeNo} 已存在`)
-
-    const result = await this.prisma.$transaction(async (tx) => {
-      const record = await tx.customerRecharge.create({
-        data: {
-          rechargeNo,
-          customerId: BigInt(id),
-          amount,
-          paymentMethod: data.paymentMethod || 'bank',
-          status: 'confirmed',
-          remark: data.remark,
-          operatorId: operatorId ? BigInt(operatorId) : undefined,
-        },
-      })
-      const updated = await tx.customer.update({
-        where: { id: BigInt(id) },
-        data: { balance: Number(customer.balance) + amount },
-      })
-      return {
-        record: {
-          ...record,
-          id: Number(record.id),
-          amount: Number(record.amount),
-          rechargeNo: record.rechargeNo,
-          paymentMethod: record.paymentMethod,
-          status: record.status,
-          createdAt: record.createdAt,
-        },
-        balance: Number(updated.balance),
-        customerCode: customer.customerCode,
-      }
-    })
-
-    void notifyOms('balance.changed', result.customerCode, {
-      balance: result.balance,
-      rechargeNo: result.record.rechargeNo,
-      amount: result.record.amount,
-      paymentMethod: result.record.paymentMethod,
-    })
-    return result
   }
 
   async rechargeHistory(id: number) {

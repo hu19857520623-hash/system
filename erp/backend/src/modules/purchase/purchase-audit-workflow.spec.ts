@@ -15,12 +15,19 @@ function setup(status = 'pending_actual_qty') {
       }),
       delete: jest.fn(),
     },
-    purchaseOrderItem: { deleteMany: jest.fn() },
     logisticsReceipt: { count: jest.fn().mockResolvedValue(0) },
     inboundOrder: { count: jest.fn().mockResolvedValue(0) },
     supplierFreightBill: { count: jest.fn().mockResolvedValue(0) },
-    costLedger: { count: jest.fn().mockResolvedValue(0) },
+    costLedger: { count: jest.fn().mockResolvedValue(0), deleteMany: jest.fn().mockResolvedValue({ count: 1 }) },
+    purchaseOrderItem: { deleteMany: jest.fn(), delete: jest.fn(), update: jest.fn(), create: jest.fn() },
     prePurchaseOrder: { findUnique: jest.fn(async () => ({ ...prePo })), update: jest.fn(async ({ data }) => Object.assign(prePo, data)) },
+    purchasePayment: {
+      findMany: jest.fn().mockResolvedValue([]),
+      count: jest.fn().mockResolvedValue(0),
+      deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+      create: jest.fn().mockResolvedValue({ id: 1 }),
+    },
+    supplier: { findFirst: jest.fn().mockResolvedValue({ id: 4n }), create: jest.fn() },
     warehouse: { findUnique: jest.fn().mockResolvedValue({ warehouseType: 'logistics', status: 1 }) },
   }
   // Serializes callbacks just as the row lock serializes competing writers in MySQL.
@@ -63,6 +70,24 @@ describe('采购核定、审核和驳回继续', () => {
     await expect(service.approve(9)).rejects.toThrow('启用的物流中转仓')
     expect(tx.purchaseOrder.update).not.toHaveBeenCalled(); expect(effects).not.toHaveBeenCalled()
   })
+  it('没有预采购的审核通过转入待分配，不写主数据和成本', async () => {
+    const { service, row, tx, effects } = setup('pending_po_audit')
+    row.prePoId = null
+    row.supplierId = 2n
+    row.items[0].quantity = 2
+    row.items[0].sku = 'AUDIT'
+    row.items[0].productName = '审核商品'
+    tx.productDev = { findFirst: jest.fn().mockResolvedValue(null), create: jest.fn(async ({ data }) => ({ id: 21n, applyNo: data.applyNo })) }
+    tx.prePurchaseOrder.create = jest.fn(async ({ data }) => ({ id: 31n, ...data }))
+    const result = await service.approve(9, 1, '通过')
+    expect(effects).not.toHaveBeenCalled()
+    expect(row.status).toBe('draft')
+    expect(row.prePoId).toBe(31n)
+    expect(tx.prePurchaseOrder.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ status: 'pending_assign', sku: 'AUDIT', convertedPoId: 9n }),
+    }))
+    expect(result.status).toBe('draft')
+  })
   it('并发审核只执行一份主数据和成本副作用', async () => {
     const { service, row, effects } = setup('pending_po_audit'); row.items[0].quantity = 2
     const results = await Promise.allSettled([service.approve(9), service.approve(9)])
@@ -90,6 +115,57 @@ describe('采购核定、审核和驳回继续', () => {
     expect(row.paymentStatus).toBe('unpaid'); expect(row.financeRemark).toBe('已标记未打款'); expect(row.paidAt).toBeNull()
     await expect(service.setPaymentStatus(9, false, 1)).rejects.toThrow('已是未打款')
     expect(costs).toHaveBeenCalledTimes(1)
+  })
+  it('定金和尾款分别记账，累计付清后才是已打款', async () => {
+    const { service, row, tx } = setup('finance_approved')
+    row.totalAmount = 100
+    row.paymentStatus = 'unpaid'
+    const payments: any[] = []
+    tx.purchasePayment.findMany.mockImplementation(async () => payments.map((item) => ({ ...item })))
+    tx.purchasePayment.create.mockImplementation(async ({ data }) => {
+      const created = { id: payments.length + 1, ...data }
+      payments.push(created)
+      return created
+    })
+    jest.spyOn(service as any, 'ensureCostRecordsForPo').mockResolvedValue({})
+    const deposit = await service.setPaymentStatus(9, true, 1, '先付定金', { paymentType: 'deposit', amount: 30 })
+    expect(deposit.paymentStatus).toBe('partial')
+    expect(deposit.financeRemark).toContain('定金 ¥30.00')
+    const balance = await service.setPaymentStatus(9, true, 1, undefined, { paymentType: 'balance', amount: 70 })
+    expect(balance.paymentStatus).toBe('paid')
+    expect(tx.purchasePayment.create).toHaveBeenCalledTimes(2)
+    await expect(service.setPaymentStatus(9, true, 1, undefined, { paymentType: 'full', amount: 1 })).rejects.toThrow('已付清')
+  })
+  it('审核通过且未付款收货的采购单可以撤回到待审核', async () => {
+    const { service, row, tx } = setup('finance_approved')
+    row.paymentStatus = 'unpaid'
+    row.totalAmount = 20
+    const result = await service.reopenAudit(9, 1, '数量要改')
+    expect(result.status).toBe('pending_po_audit')
+    expect(row.poAuditRemark).toBe('数量要改')
+    expect(tx.costLedger.deleteMany).toHaveBeenCalledWith({ where: { referenceNo: 'PO-AUDIT' } })
+  })
+  it('已登记付款的采购单不能撤回审核', async () => {
+    const { service, tx } = setup('finance_approved')
+    tx.purchasePayment.count.mockResolvedValue(1)
+    await expect(service.reopenAudit(9, 1)).rejects.toThrow('已登记付款')
+    expect(tx.purchaseOrder.update).not.toHaveBeenCalled()
+  })
+  it('撤回后的待审核采购单可以修改数量和单价', async () => {
+    const { service, row, tx } = setup('pending_po_audit')
+    row.items[0].quantity = 2
+    row.totalAmount = 20
+    tx.purchaseOrderItem.update.mockImplementation(async ({ data }) => Object.assign(row.items[0], data))
+    const result = await service.revisePendingAudit(9, {
+      supplierName: '示例供应商',
+      warehouseCode: 'LW-TEST',
+      items: [{ id: 11, sku: 'AUDIT', productName: '审核商品', quantity: 5, unitPrice: 12 }],
+    }, 1)
+    expect(result.status).toBe('pending_po_audit')
+    expect(row.totalAmount).toBe(60)
+    expect(tx.purchaseOrderItem.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ quantity: 5, unitPrice: 12, amount: 60 }),
+    }))
   })
   it('未审核单不能通过打款标记绕过审核写入成本', async () => {
     const { service, tx } = setup('pending_po_audit')

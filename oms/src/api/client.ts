@@ -327,6 +327,7 @@ export function resetOmsAccountPassword(accountId: string, body: OmsResetPasswor
 export type BootstrapData = {
   accounts: import('./types').CustomerAccountDto[]
   billing: {
+    readWarning?: string
     creditBalance: number
     monthlySpent: number
     pendingBill: number

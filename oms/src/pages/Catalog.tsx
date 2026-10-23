@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { userFacingError } from '../utils/userFacingError'
 import { ClipboardList, ImageOff, RefreshCw, ShoppingCart, Trash2 } from 'lucide-react'
 import { Badge, Button, Card, Drawer, MonoCode, PageHeader, SearchInput, Table, Tabs } from '../components/ui'
@@ -7,6 +7,7 @@ import {
   useProducts,
   useCatalogPurchases,
   purchaseCatalogProductViaErp,
+  getPendingCatalogPurchases,
   getCatalogAvailableQty,
   mergeErpCatalogIntoState,
   refreshInventoryFromErp,
@@ -17,6 +18,7 @@ import { getCreditBalance, setCreditBalanceFromErp, useBilling } from '../data/b
 import { useRole } from '../auth/RoleContext'
 import { getCustomerCode, getCustomerIdForRole } from '../data/dataScope'
 import { getCustomerSkuDisplay } from '../data/skuCode'
+import type { CatalogPurchaseAttempt } from '../data/catalogPurchaseWorkflow'
 
 interface CatalogCartLine {
   internalSku: string
@@ -82,6 +84,16 @@ export default function Catalog() {
   const [msg, setMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
   const [busySku, setBusySku] = useState<string | null>(null)
   const [checkoutBusy, setCheckoutBusy] = useState(false)
+  const checkoutBusyRef = useRef(false)
+  const [checkoutError, setCheckoutError] = useState('')
+  const [pendingPurchases, setPendingPurchases] = useState<CatalogPurchaseAttempt[]>([])
+  const [purchaseStorageError, setPurchaseStorageError] = useState('')
+  const loadPendingPurchases = () => {
+    if (!customerId) { setPendingPurchases([]);return }
+    try { setPendingPurchases(getPendingCatalogPurchases(customerId));setPurchaseStorageError('') }
+    catch (error) { setPurchaseStorageError(userFacingError(error)) }
+  }
+  useEffect(() => { loadPendingPurchases() }, [customerId])
   const [loadingCatalog, setLoadingCatalog] = useState(false)
   const [syncedAt, setSyncedAt] = useState<string | null>(null)
 
@@ -131,7 +143,7 @@ export default function Catalog() {
       setSyncedAt(catalog.syncedAt)
       if (customerCode && customerCode !== '—') {
         const bal = await getErpBalance(customerCode)
-        await setCreditBalanceFromErp(bal.balance)
+        await setCreditBalanceFromErp(bal.balance, customerCode)
       }
       setMsg({
         type: 'ok',
@@ -217,6 +229,8 @@ export default function Catalog() {
   }
 
   const openBuyNow = (internalSku: string) => {
+    if (pendingPurchases.length || purchaseStorageError) { showMsg('err', '请先核对原采购，再发起新的购买');return }
+    setCheckoutError('')
     const qty = getQty(internalSku)
     const line = buildLine(internalSku, qty)
     if (!line) {
@@ -229,6 +243,8 @@ export default function Catalog() {
   }
 
   const openCartCheckout = () => {
+    if (pendingPurchases.length || purchaseStorageError) { showMsg('err', '请先核对原采购，再发起新的购买');return }
+    setCheckoutError('')
     const lines = Object.values(cart)
     if (!lines.length) {
       showMsg('err', '购物车为空')
@@ -264,51 +280,56 @@ export default function Catalog() {
     })
   }
 
+  const refreshCheckoutQuotes = async () => {
+    if (checkoutBusyRef.current || pendingPurchases.length) return
+    checkoutBusyRef.current = true;setCheckoutBusy(true);setCheckoutError('')
+    try {
+      const catalog = await getErpCatalog();await mergeErpCatalogIntoState(catalog.items || [])
+      setCheckoutLines(prev => prev.map(line => {
+        const product = catalog.items.find(item => item.sku === line.internalSku)
+        return product ? { ...line, price: product.price, maxAvailable: product.orderableOnOms && product.shareStatus !== 'stopped' ? product.remainingStockQty : 0 } : { ...line, maxAvailable: 0 }
+      }))
+      if (customerCode && customerCode !== '—') { const balance = await getErpBalance(customerCode);await setCreditBalanceFromErp(balance.balance, customerCode) }
+    } catch (error) { setCheckoutError(`报价或余额读取失败，请重试后继续。${userFacingError(error)}`) }
+    finally { checkoutBusyRef.current = false;setCheckoutBusy(false) }
+  }
+
+  const resumePurchase = async (attempt: CatalogPurchaseAttempt) => {
+    if (!customerId || checkoutBusyRef.current) return
+    checkoutBusyRef.current = true;setCheckoutBusy(true);setCheckoutError('')
+    try {
+      const result = await purchaseCatalogProductViaErp(attempt.sku, attempt.quantity, customerId, attempt.unitPrice)
+      if (!result.ok) { setCheckoutError(result.error);showMsg('err', result.error);return }
+      if (checkoutSource === 'cart') removeFromCart(attempt.sku)
+      setCheckoutLines(prev => prev.filter(line => line.internalSku !== attempt.sku))
+      await syncCatalogAfterPurchase()
+      await refreshInventoryFromErp(customerId, customerCode)
+      showMsg('ok', '原采购已完成并核对，未重复扣款或增加持有')
+    } catch (error) { setCheckoutError(`采购结果已返回，但列表刷新未完成，请同步ERP后核对。${userFacingError(error)}`) }
+    finally { loadPendingPurchases();checkoutBusyRef.current = false;setCheckoutBusy(false) }
+  }
+
   const confirmCheckout = async () => {
-    if (!checkoutLines.length) return
-    if (!customerId) {
-      showMsg('err', '系统管理员不绑定客户身份，请使用已开通的客户账号申购')
-      return
-    }
-    setCheckoutBusy(true)
-    const purchased: string[] = []
-    const errors: string[] = []
-
-    for (const line of checkoutLines) {
-      setBusySku(line.internalSku)
-      const result = await purchaseCatalogProductViaErp(line.internalSku, line.qty, customerId)
-      setBusySku(null)
-      if (result.ok) {
-        purchased.push(`${line.name} × ${line.qty}`)
-        if (checkoutSource === 'cart') {
-          removeFromCart(line.internalSku)
-        }
-      } else {
-        errors.push(`${line.name}: ${result.error}`)
+    if (!checkoutLines.length || checkoutBusyRef.current) return
+    if (!customerId) { setCheckoutError('系统管理员不绑定客户身份，请使用已开通的客户账号申购');return }
+    if (pendingPurchases.length || purchaseStorageError) { setCheckoutError('还有原采购待核对，请先使用原采购单继续核对，勿再次购买');return }
+    checkoutBusyRef.current = true;setCheckoutBusy(true);setCheckoutError('')
+    const purchased: string[] = [], purchasedSkus = new Set<string>(), errors: string[] = []
+    try {
+      for (const line of checkoutLines) {
+        setBusySku(line.internalSku)
+        const result = await purchaseCatalogProductViaErp(line.internalSku, line.qty, customerId, line.price)
+        setBusySku(null)
+        if (result.ok) { purchased.push(`${line.name} × ${line.qty}`);purchasedSkus.add(line.internalSku);if (checkoutSource === 'cart') removeFromCart(line.internalSku) }
+        else { errors.push(`${line.name}：${result.error}`);if (result.uncertain) break }
       }
-    }
-
-    await syncCatalogAfterPurchase()
-    if (customerId && customerCode && customerCode !== '—') {
-      try {
-        await refreshInventoryFromErp(customerId, customerCode)
-      } catch { /* local apply already updated holdings */ }
-    }
-    setCheckoutBusy(false)
-    setCheckoutOpen(false)
-    setCheckoutLines([])
-
-    if (purchased.length && !errors.length) {
-      showMsg(
-        'ok',
-        `申购成功 ${purchased.length} 项 · 余额 ¥${getCreditBalance().toFixed(2)} · 购买记录已写入「订单管理」 · ${purchased.join('；')}`,
-      )
-      if (checkoutSource === 'cart') setCartOpen(false)
-    } else if (purchased.length && errors.length) {
-      showMsg('err', `部分成功：${purchased.join('；')}；失败：${errors.join('；')}`)
-    } else {
-      showMsg('err', errors[0] || '申购失败')
-    }
+      setCheckoutLines(prev => prev.filter(line => !purchasedSkus.has(line.internalSku)))
+      await syncCatalogAfterPurchase()
+      try { await refreshInventoryFromErp(customerId, customerCode) } catch { errors.push('库存列表刷新未完成，请使用“同步ERP”重新核对；已购买商品不会再次提交') }
+      if (errors.length) { setCheckoutError(errors.join('；'));showMsg('err', `${purchased.length ? `已成功${purchased.length}项；` : ''}${errors.join('；')}`) }
+      else { setCheckoutOpen(false);if (checkoutSource === 'cart') setCartOpen(false);showMsg('ok', `申购成功 ${purchased.length} 项 · 余额 ¥${getCreditBalance().toFixed(2)} · ${purchased.join('；')}`) }
+    } catch (error) { setCheckoutError(`采购结果尚待核对，请先继续核对原采购。${userFacingError(error)}`) }
+    finally { loadPendingPurchases();setBusySku(null);checkoutBusyRef.current = false;setCheckoutBusy(false) }
   }
 
   return (
@@ -348,6 +369,13 @@ export default function Catalog() {
         }
       />
 
+      {purchaseStorageError && <div className="mb-4 rounded-lg bg-red-50 p-4 text-sm text-red-800">{purchaseStorageError}</div>}
+      {pendingPurchases.map(attempt => (
+        <div key={attempt.orderNo} className="mb-3 rounded-lg bg-amber-50 p-4 text-sm text-amber-900">
+          <p>采购单 {attempt.orderNo} 待核对：{attempt.name} × {attempt.quantity}，原报价 {formatCurrency(attempt.unitPrice)}。请使用原请求核对，勿再次购买。</p>
+          <Button size="sm" variant="secondary" disabled={checkoutBusy} onClick={() => void resumePurchase(attempt)}>继续核对原采购</Button>
+        </div>
+      ))}
       {msg && (
         <div className={`mb-4 rounded-lg px-4 py-3 text-sm ${msg.type === 'ok' ? 'bg-emerald-50 text-emerald-800 ring-1 ring-emerald-100' : 'bg-red-50 text-red-800 ring-1 ring-red-100'}`}>
           {msg.text}
@@ -594,6 +622,8 @@ export default function Catalog() {
               </p>
             </div>
             <div className="max-h-[50vh] overflow-y-auto px-6 py-4">
+              {(checkoutError || purchaseStorageError) && <div className="mb-3 rounded bg-red-50 p-3 text-sm text-red-800">{checkoutError || purchaseStorageError}</div>}
+              {pendingPurchases.map(attempt => <div key={attempt.orderNo} className="mb-3 rounded bg-amber-50 p-3 text-sm">原采购 {attempt.orderNo} 待核对。<Button size="sm" variant="secondary" disabled={checkoutBusy} onClick={() => void resumePurchase(attempt)}>继续核对原采购</Button></div>)}
               <table className="w-full text-left text-sm">
                 <thead>
                   <tr className="border-b border-border-light text-xs text-text-muted">
@@ -618,12 +648,15 @@ export default function Catalog() {
                           min={1}
                           max={line.maxAvailable}
                           value={line.qty}
-                          disabled={checkoutBusy}
+                          disabled={checkoutBusy || pendingPurchases.length > 0}
                           onChange={e => updateCheckoutQty(line.internalSku, Number(e.target.value))}
                           className="w-16 rounded border border-border px-2 py-1 text-xs text-right"
                         />
                       </td>
-                      <td className="py-3 text-right align-top font-medium">{formatCurrency(lineTotal(line))}</td>
+                      <td className="py-3 text-right align-top font-medium">{formatCurrency(lineTotal(line))}
+                        {line.qty > line.maxAvailable && <p className="text-xs text-red-600">可售不足，请调整或移除</p>}
+                        <Button size="sm" variant="ghost" disabled={checkoutBusy || pendingPurchases.length > 0} onClick={() => setCheckoutLines(prev => prev.filter(item => item.internalSku !== line.internalSku))}>移除</Button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -642,11 +675,12 @@ export default function Catalog() {
               </div>
               <div className="flex justify-end gap-2">
                 <Button variant="secondary" size="sm" disabled={checkoutBusy} onClick={() => setCheckoutOpen(false)}>
-                  取消
+                  返回并保留未完成清单
                 </Button>
+                <Button variant="secondary" size="sm" disabled={checkoutBusy || pendingPurchases.length > 0} onClick={() => void refreshCheckoutQuotes()}>刷新报价与余额</Button>
                 <Button
                   size="sm"
-                  disabled={checkoutBusy || checkoutTotal > billing.creditBalance || !checkoutLines.length}
+                  disabled={checkoutBusy || pendingPurchases.length > 0 || !!purchaseStorageError || checkoutTotal > billing.creditBalance || !checkoutLines.length || checkoutLines.some(line => line.qty > line.maxAvailable || !Number.isSafeInteger(line.qty) || line.qty <= 0)}
                   onClick={() => void confirmCheckout()}
                 >
                   {checkoutBusy ? '提交 ERP…' : '确认购买'}

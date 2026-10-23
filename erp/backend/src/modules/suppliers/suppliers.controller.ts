@@ -26,6 +26,12 @@ export class SuppliersController {
   }
 
   @RequirePerms('suppliers.edit')
+  @Post('import')
+  importCsv(@Body() body: { content?: string }) {
+    return this.service.importFromCsv(String(body?.content || ''))
+  }
+
+  @RequirePerms('suppliers.edit')
   @Put(':id')
   update(@Param('id', ParseIntPipe) id: number, @Body() body: any) {
     return this.service.update(id, body)

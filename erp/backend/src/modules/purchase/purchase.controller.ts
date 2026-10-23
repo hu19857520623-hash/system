@@ -145,6 +145,18 @@ export class PurchaseController {
   }
 
   @RequirePerms('purchase.po_audit')
+  @Post(':id/reopen-audit')
+  reopenAudit(@Param('id', ParseIntPipe) id: number, @Body() body: PoAuditDto, @CurrentUser('userId') userId: number) {
+    return this.service.reopenAudit(id, userId, body.remark)
+  }
+
+  @RequireAnyPerm('purchase.create', 'purchase.po_audit')
+  @Put(':id/pending-audit')
+  revisePendingAudit(@Param('id', ParseIntPipe) id: number, @Body() body: any, @CurrentUser('userId') userId: number) {
+    return this.service.revisePendingAudit(id, body, userId)
+  }
+
+  @RequirePerms('purchase.po_audit')
   @Post(':id/approve')
   approve(@Param('id', ParseIntPipe) id: number, @Body() body: PoAuditDto, @CurrentUser('userId') userId: number) {
     return this.service.approve(id, userId, body.remark, body.warehouseCode)
@@ -169,7 +181,7 @@ export class PurchaseController {
   @RequirePerms('purchase.mark_paid')
   @Post(':id/mark-paid')
   markPaid(@Param('id', ParseIntPipe) id: number, @Body() body: PaymentRemarkDto, @CurrentUser('userId') userId: number) {
-    return this.service.setPaymentStatus(id, true, userId, body.remark)
+    return this.service.setPaymentStatus(id, true, userId, body.remark, { paymentType: body.paymentType, amount: body.amount })
   }
 
   @RequirePerms('purchase.mark_paid')

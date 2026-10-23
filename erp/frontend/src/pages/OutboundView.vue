@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { readShipAttempts, type ShipAttempt } from '@/utils/outboundShipping'
 import { userFacingError } from '@erp/shared/user-facing-error'
 
 import { displaySku, displaySkuText, formatSku } from '@erp/shared/sku-display'
@@ -69,6 +70,12 @@ const appointmentDateShortcuts = [
 
 const pickVisible = ref(false)
 const shipVisible = ref(false)
+const shipPending = ref<ShipAttempt[]>([]), shipStorageError = ref('')
+function loadShipPending() {
+  try { shipPending.value = readShipAttempts(localStorage, Number(app.authenticatedUser?.id));shipStorageError.value = '' }
+  catch (e) { shipStorageError.value = userFacingError(e) }
+}
+async function onShipPending() { loadShipPending();await reloadAll() }
 const assignVisible = ref(false)
 const problemVisible = ref(false)
 const exceptionVisible = ref(false)
@@ -224,6 +231,7 @@ function handleRowCommand(command: string, row: any) {
     case 'pack':
       openPack(row)
       break
+    case 'syncShipment':
     case 'ship':
       openShip(row)
       break
@@ -283,6 +291,7 @@ function resetFilters() {
 }
 
 onMounted(async () => {
+  loadShipPending()
   await loadTakealotDestConfig()
   const q = String(route.query.q || '').trim()
   if (q) searchQ.value = q
@@ -416,6 +425,7 @@ function rowCommands(row: any): RowAction[] {
   if (['picked', 'reviewing'].includes(status) && canPack.value) {
     cmds.push({ key: 'pack', command: 'pack', label: '复核打包' })
   }
+  if (['shipped', 'delivered', 'partial_delivered', 'delivery_failed'].includes(status) && canShip.value) cmds.push({ key: 'syncShipment', command: 'syncShipment', label: '核对发运同步' })
   if (status === 'packed' && canShip.value) {
     cmds.push({ key: 'ship', command: 'ship', label: '发运' })
   }
@@ -684,6 +694,7 @@ function openShip(row: any) {
 }
 
 async function onShipSuccess() {
+  loadShipPending()
   await reloadAll()
 }
 
@@ -1047,6 +1058,12 @@ function statusTag(status: string) {
         </div>
       </template>
 
+      <el-alert v-if="shipStorageError" :title="shipStorageError" type="error" :closable="false" />
+      <el-alert v-for="attempt in shipPending" :key="attempt.outboundId" type="warning" :closable="false" style="margin-bottom:8px">
+        <template #title>出库单 {{ attempt.outboundNo }} 还有原发运操作待核对，勿再次发运。</template>
+        <el-button v-if="canShip" size="small" @click="openShip(attempt.order)">继续核对原发运</el-button>
+        <span v-else>请恢复原账号岗位权限后继续核对。</span>
+      </el-alert>
       <div class="filter-card">
         <div class="filter-grid">
           <div class="filter-item filter-item--span2">
@@ -1405,6 +1422,7 @@ function statusTag(status: string) {
       :logistics-products="LOGISTICS_PRODUCTS"
       :carriers="CARRIERS"
       @success="onShipSuccess"
+      @pending="onShipPending"
     />
 
     <!-- 分配拣货员 -->

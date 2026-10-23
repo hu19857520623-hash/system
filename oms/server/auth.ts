@@ -199,8 +199,8 @@ export function requiredWritePermission(method: string, apiPath: string): string
   if (p === '/health' || p.startsWith('/erp/webhooks')) return null
   if (p === '/system-messages/read') return 'dashboard:read'
   if (p.includes('/recharge')) return 'billing:recharge'
-  if (p.startsWith('/billing/pre-deduct')) return 'outbound:write'
-  if (p.startsWith('/billing')) return 'billing:read'
+  if (p === '/billing' || p.startsWith('/billing/pre-deduct')) return '__readonly_billing__'
+  if (p.startsWith('/billing')) return '__unknown_write__'
   if (p.startsWith('/erp/purchase')) return 'catalog:write'
   if (p.startsWith('/erp/products') || p === '/erp/product-image') return 'product:write'
   if (p.startsWith('/erp/inbound') || p.startsWith('/inbound')) return 'inbound:write'
@@ -219,9 +219,19 @@ export function requiredWritePermission(method: string, apiPath: string): string
 export function assertApiWritePermission(req: AuthenticatedRequest, res: Response) {
   const required = requiredWritePermission(req.method, req.path)
   if (!required) return true
+  if (required === '__readonly_billing__') {
+    res.status(405).json({ error: '余额和费用不支持直接修改，请在充值、出库单或账单确认中操作；请刷新页面核对最新记录' })
+    return false
+  }
   if (req.auth?.role === 'sys_admin') return true
   if (required !== '__unknown_write__' && req.auth?.permissions?.includes(required)) return true
   res.status(403).json({ error: '没有此项操作权限' })
+  return false
+}
+
+export function assertBillingReadPermission(req: AuthenticatedRequest, res: Response) {
+  if (req.auth?.role === 'sys_admin' || req.auth?.permissions.includes('billing:read')) return true
+  res.status(403).json({ error: '没有读取账务明细的权限，请联系管理员核对岗位权限' })
   return false
 }
 

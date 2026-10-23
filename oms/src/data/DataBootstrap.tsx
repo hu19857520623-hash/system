@@ -41,6 +41,7 @@ export async function bootstrapFromApi(sessionKey: string, force = false) {
       hydrateBilling({
         creditBalance: data.billing?.creditBalance ?? 0,
         feeRecords: data.feeRecords,
+        readWarning: data.billing?.readWarning,
       })
       hydrateFeeTemplates(data.feeTemplates)
       hydratePaymentMethods(data.paymentMethods)

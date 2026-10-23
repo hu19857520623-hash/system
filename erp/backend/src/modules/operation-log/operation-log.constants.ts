@@ -1,4 +1,5 @@
 export const OPERATION_MODULE_LABELS: Record<string, string> = {
+  billing: '客户结算',
   purchase: '采购',
   product_audit: '产品审核',
   logistics_receipt: '物流收货',
@@ -10,6 +11,7 @@ export const OPERATION_MODULE_LABELS: Record<string, string> = {
 }
 
 export const OPERATION_ACTION_LABELS: Record<string, string> = {
+  billing_generate: '生成账单', billing_confirm: '确认账单扣未付费用', billing_manual_charge: '录入手工费用', outbound_payment: '确认发运支付凭据',
   reopen_count: '更正清点', close_zero_receipt: '零收货结束', reduce_qc: '减少实收件数', reduce_carton: '减少实收箱数', reduce_putaway: '撤回最近上架',
   repair_damage_received: '核对破损已收数量',
   create: '创建',
@@ -19,10 +21,12 @@ export const OPERATION_ACTION_LABELS: Record<string, string> = {
   approve: '审核通过',
   reject: '审核驳回',
   po_approve: '采购审核通过',
+  po_reopen_audit: '撤回采购审核',
+  po_revise: '修改待审核采购单',
   po_reject: '采购审核驳回',
   void: '标为废订单',
   resubmit_pre_po: '驳回后重新提交分配',
-  po_mark_paid: '标记已打款',
+  po_mark_paid: '登记付款',
   po_mark_unpaid: '标记未打款',
   assign_purchaser: '分配采购员',
   confirm_master: '确认主数据生效',

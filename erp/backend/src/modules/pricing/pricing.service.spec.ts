@@ -1,6 +1,14 @@
 import { PricingService } from './pricing.service'
 
 describe('PricingService historical display fallbacks', () => {
+  it.each([0, -1, 1.001, null, true, '10.00'])('无效售价%s不能写入并把商品推进不可恢复状态', async price => {
+    const db: any = { productPricing: { findUnique: jest.fn().mockResolvedValue({ id: 1n, pricingStatus: 'pending_pricing' }), update: jest.fn() } }
+    const service = new PricingService(db, {} as any, {} as any)
+    await expect(service.confirmPrice(1, { finalPrice: price, marketPrice: 100, visibleStockQty: 1 }, '验收')).rejects.toThrow()
+    db.productPricing.findUnique.mockResolvedValue({ id: 1n, pricingStatus: 'synced' })
+    await expect(service.reprice(1, { price }, '验收')).rejects.toThrow()
+    expect(db.productPricing.update).not.toHaveBeenCalled()
+  })
   it('replaces corrupted or empty price notes with a readable label', () => {
     const service = new PricingService({} as any, {} as any, {} as any)
     const serialized = (service as any).serialize({

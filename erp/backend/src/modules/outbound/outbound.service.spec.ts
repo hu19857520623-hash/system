@@ -246,7 +246,7 @@ describe('OutboundService.createFromOms transaction', () => {
       customer: { findUnique: jest.fn() },
       outboundOrder: { findUnique: jest.fn() },
       product: { findUnique: jest.fn() },
-      customerSkuInventory: { findUnique: jest.fn() },
+      customerSkuInventory: { findMany: jest.fn().mockResolvedValue([{id:11n,sku:'SKU-A',quantity:10}]), findUnique: jest.fn() },
       $transaction: jest.fn(),
     }
     const service = new OutboundService(
@@ -266,9 +266,10 @@ describe('OutboundService.createFromOms transaction', () => {
     )
 
     const tx = {
+      $queryRaw: jest.fn().mockResolvedValue([]),
       customerSkuInventory: {
         findUnique: jest.fn().mockResolvedValue({ id: 11n, quantity: 10 }),
-        update: jest.fn().mockResolvedValue({}),
+        updateMany: jest.fn().mockResolvedValue({count:1}),
       },
       customer: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
       outboundOrder: { findUnique: jest.fn().mockResolvedValue(freshOrder) },
@@ -304,8 +305,8 @@ describe('OutboundService.createFromOms transaction', () => {
       undefined,
       tx,
     )
-    expect(tx.customerSkuInventory.update).toHaveBeenCalledWith({
-      where: { id: 11n },
+    expect(tx.customerSkuInventory.updateMany).toHaveBeenCalledWith({
+      where: { id: 11n, quantity: { gte: 2 } },
       data: { quantity: { decrement: 2 } },
     })
     expect(tx.customer.updateMany).toHaveBeenCalledWith({

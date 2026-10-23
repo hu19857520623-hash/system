@@ -287,6 +287,7 @@ function applyRoleTemplate() {
 }
 
 function grantHint(permId: string) {
+  if (permId === 'inventory_query.reclaim_refund') return '仅财务和系统管理员'
   if (!isExportPermission(permId) || editForm.value.roleCode === 'admin') return ''
   const names = (EXPORT_PERM_ROLES[permId] || []).map((code) => catalogRoleName(code)).join('、')
   return names ? `仅${names}` : '仅系统管理员'
@@ -298,7 +299,7 @@ function canGrant(permId: string) {
 
 function togglePerm(permId: string, checked: boolean) {
   if (checked && !canGrant(permId)) {
-    ElMessage.warning(`「${grantHint(permId) || '当前职位'}」不能授予该导出权限`)
+    ElMessage.warning(`当前职位不能授予该权限${grantHint(permId) ? `（${grantHint(permId)}）` : ''}`)
     return
   }
   permSource.value = 'custom'
@@ -577,7 +578,7 @@ onMounted(async () => {
       <div class="edit-hint">
         职位区分办公与仓内岗位（收货/拣货/复核等），均在同一 ERP 网页登录，暂无独立 PDA 或仓储端 App。
         仓内账号请选「仓储职位」并配置出库拣货等权限；工位字段仅用于分配拣货员时的展示。
-        权限细分是该账号可访问的模块，切换职位会加载默认权限，之后可再勾选调整。导出权限只能授予对应职位，其他职位的勾选会禁用。
+        权限细分是该账号可访问的模块，切换职位会加载默认权限，之后可再勾选调整。导出权限只能授予对应职位；收回退款仅限财务和系统管理员，其他职位的勾选会禁用。
         <el-tag v-if="permSource === 'custom'" size="small" type="warning">当前为自定义权限</el-tag>
         <el-tag v-else size="small" type="info">跟随职位默认</el-tag>
       </div>

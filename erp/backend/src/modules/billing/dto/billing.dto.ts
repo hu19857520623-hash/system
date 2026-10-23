@@ -6,6 +6,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  IsUUID,
   Matches,
   MaxLength,
   Min,
@@ -129,7 +130,7 @@ export class GenerateBillingDto {
   dateTo?: string
 
   @IsOptional()
-  @Type(() => Number)
+  @Transform(({ value }) => typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : value)
   @IsInt()
   @Min(1)
   customerId?: number
@@ -151,6 +152,35 @@ export class GenerateBillingDto {
   @IsString()
   @MaxLength(30)
   chargeType?: string
+}
+
+export class BillingOperationDto {
+  @IsUUID('4', { message: '请提供有效的账务操作标识，重新打开页面后重试' })
+  clientRequestId!: string
+  @IsString() @Matches(/^[a-f0-9]{64}$/, { message: '请重新核对最新费用和余额后提交' })
+  expectedVersion!: string
+}
+
+export class SubmitGenerateBillingDto extends GenerateBillingDto {
+  @IsUUID('4', { message: '请提供有效的账务操作标识，重新打开页面后重试' })
+  clientRequestId!: string
+  @IsString() @Matches(/^[a-f0-9]{64}$/, { message: '请重新核对最新费用后生成账单' })
+  expectedVersion!: string
+}
+
+export class CreateManualBillingChargeDto {
+  @IsUUID('4', { message: '请提供有效的收费操作标识，重新打开页面后重试' })
+  clientRequestId!: string
+  @IsInt() @Min(1)
+  customerId!: number
+  @IsNumber({ maxDecimalPlaces: 2 }) @Min(0.01)
+  amount!: number
+  @IsString() @MaxLength(30)
+  chargeType!: string
+  @IsOptional() @Transform(trimOptional) @IsString() @MaxLength(500)
+  description?: string
+  @IsString() @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: '请填写有效收费日期' })
+  chargeDate!: string
 }
 
 export class BillingOrderItemDto {

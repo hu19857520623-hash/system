@@ -3,9 +3,8 @@ import { Prisma } from '@prisma/client'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
 import { notifyOms } from '../../common/oms-notify.util'
-import { parseOmsOutboundPreDeduct } from '../../common/oms-sync-meta.util'
 import { readableDisplayText } from '../../common/display-text.util'
-import { CreateBillingChargeDto, CreateBillingOrderDto, GenerateBillingDto } from './dto/billing.dto'
+import { CreateBillingChargeDto, CreateBillingOrderDto, GenerateBillingDto, SubmitGenerateBillingDto, BillingOperationDto, CreateManualBillingChargeDto } from './dto/billing.dto'
 import {
   applyDestinationSqlFilter,
   DESTINATION_JOIN_SQL,
@@ -15,37 +14,12 @@ import {
   returnChargeFulfillment,
   type ChargeFulfillment,
 } from './billing-charge-fulfillment.util'
+import { billingPaidChargeIds, billingGenerationSnapshot, billingSettlementSnapshot, generateBillingOrders, confirmBillingOrder, createManualBillingCharge } from './billing-workflow.util'
 import { inferTakealotDestFromWarehouseHint } from '../outbound/oms-warehouse.util'
+import { billingSourceSnapshot } from './billing-snapshot.util'
 
-export const BILLING_CHARGE_TYPE_LABELS: Record<string, string> = {
-  wms_outbound: '出库费',
-  order_fee: '订单处理费',
-  catalog_purchase: '货盘采购',
-  picking: '拣货费',
-  storage: '仓储费',
-  outbound_ship: '出库运费',
-  relabel: '换标',
-  repack: '换箱',
-  handling: '手工作业',
-  inspection: '质检',
-  return_receipt: '退件收货费',
-  return_measure: '退件测量费',
-  return_handling: '退件操作费',
-  return_logistics: '退件物流费',
-  return_inspection: '退件质检费',
-  return_destroy: '退件销毁费',
-  return_repack: '退件包装费',
-  return_restock: '退件上架费',
-  return_relabel: '退件换标费',
-  return_extra: '退件附加费',
-  inbound_receipt: '入库收货费',
-  inbound_carton: '入库箱处理费',
-  inbound_qc: '入库清点费',
-  inbound_measure: '入库测量费',
-  inbound_label: '入库贴标费',
-  inbound_putaway: '入库上架费',
-  other: '其他工费',
-}
+import { BILLING_CHARGE_TYPE_LABELS } from './billing.constants'
+export { BILLING_CHARGE_TYPE_LABELS } from './billing.constants'
 
 @Injectable()
 export class BillingService {
@@ -131,57 +105,14 @@ export class BillingService {
     return created
   }
 
-  /** 把已存在的 OMS 出库预扣补进结算明细，避免下单后本页空白 */
-  private async backfillOutboundCharges() {
-    try {
-      const orders = await this.prisma.outboundOrder.findMany({
-        where: { customerId: { not: null }, status: { not: 'cancelled' } },
-        select: { outboundNo: true, customerId: true, warehouseCode: true, remark: true, createdAt: true },
-        orderBy: { id: 'desc' },
-        take: 200,
-      })
-      for (const order of orders) {
-        if (!order.customerId) continue
-        const preDeduct = parseOmsOutboundPreDeduct(order.remark)
-        const lines = (preDeduct?.lines || []).filter((l) => Number(l.amount) > 0)
-        if (!lines.length) continue
-        await this.recordOutboundCharges({
-          customerId: Number(order.customerId),
-          outboundNo: order.outboundNo,
-          warehouseCode: order.warehouseCode,
-          source: 'erp',
-          lines,
-        })
-      }
-    } catch {
-      /* 补账失败不阻断费用列表 */
-    }
-  }
-
-  private buildPendingChargeFilters(data: GenerateBillingDto) {
-    const conds = ["c.status = 'pending'", 'c.billing_id IS NULL']
-    const params: unknown[] = []
-    if (data.dateFrom) { conds.push('c.charge_date >= ?'); params.push(data.dateFrom) }
-    if (data.dateTo) { conds.push('c.charge_date <= ?'); params.push(data.dateTo) }
-    if (data.customerId) { conds.push('c.customer_id = ?'); params.push(data.customerId) }
-    if (data.customerCode?.trim()) {
-      conds.push('cust.customer_code = ?')
-      params.push(data.customerCode.trim().toUpperCase())
-    }
-    if (data.source?.trim()) { conds.push('c.source = ?'); params.push(data.source.trim()) }
-    if (data.chargeType?.trim()) { conds.push('c.charge_type = ?'); params.push(data.chargeType.trim()) }
-    return { where: conds.join(' AND '), params }
-  }
-
   async listCharges(q: PaginationDto & { customerId?: number; customerCode?: string; chargeType?: string; source?: string; status?: string; dateFrom?: string; dateTo?: string; destination?: string }) {
-    await this.backfillOutboundCharges()
     const { page, pageSize } = getPagination(q)
     const conds: string[] = ['1=1']
     const params: unknown[] = []
     if (q.customerId) { conds.push('c.customer_id = ?'); params.push(q.customerId) }
     if (q.customerCode?.trim()) {
-      conds.push('cust.customer_code LIKE ?')
-      params.push(`%${q.customerCode.trim().toUpperCase()}%`)
+      conds.push('cust.customer_code = ?')
+      params.push(q.customerCode.trim().toUpperCase())
     }
     if (q.chargeType) { conds.push('c.charge_type = ?'); params.push(q.chargeType) }
     if (q.source) { conds.push('c.source = ?'); params.push(q.source) }
@@ -397,7 +328,7 @@ export class BillingService {
     }
   }
 
-  async createCharge(data: CreateBillingChargeDto, tx?: Prisma.TransactionClient) {
+  async createCharge(data: CreateBillingChargeDto, tx?: Prisma.TransactionClient, notifyInBackground = true) {
     if (!data.customerId) throw new BadRequestException('请选择客户')
     if (!data.amount || Number(data.amount) <= 0) throw new BadRequestException('请填写有效金额')
     const db = tx ?? this.prisma
@@ -460,17 +391,21 @@ export class BillingService {
       bizRef: row?.biz_ref || data.bizRef || null,
       ok: true,
     }
-    if (!tx) {
+    if (!tx && notifyInBackground) {
       void this.pushCustomerBillingToOms(Number(data.customerId))
     }
     return created
   }
 
-  async list(q: PaginationDto & { status?: string; customerId?: number }) {
+  async list(q: PaginationDto & { status?: string; customerId?: number; customerCode?: string }) {
     const { page, pageSize } = getPagination(q)
     const where: any = {}
     if (q.status) where.status = q.status
     if (q.customerId) where.customerId = BigInt(q.customerId)
+    if (q.customerCode?.trim()) {
+      const matches = await this.prisma.customer.findMany({ where: { customerCode: q.customerCode.trim().toUpperCase() }, select: { id: true } })
+      where.customerId = q.customerId ? { in: matches.filter(c => Number(c.id) === Number(q.customerId)).map(c => c.id) } : { in: matches.map(c => c.id) }
+    }
     if (q.keyword) where.billingNo = { contains: q.keyword }
     const [rows, total] = await Promise.all([
       this.prisma.billingOrder.findMany({ where, include: { items: true }, skip: (page - 1) * pageSize, take: pageSize, orderBy: { id: 'desc' } }),
@@ -503,132 +438,46 @@ export class BillingService {
       customerId: Number(row.customerId),
       customerName: readableDisplayText(customer?.customerName, customer?.customerCode),
       totalAmount: Number(row.totalAmount),
+      paidAmount: Number(row.paidAmount),
       items: row.items.map((i) => ({ ...i, id: Number(i.id), amount: Number(i.amount) })),
     }
   }
 
-  /** 汇总待入账费用生成账单（按客户） */
-  async generateFromCharges(data: GenerateBillingDto) {
-    const { where, params } = this.buildPendingChargeFilters(data)
-    const pending: any[] = await this.prisma.$queryRawUnsafe(
-      `SELECT c.* FROM billing_charge c LEFT JOIN customer cust ON cust.id = c.customer_id WHERE ${where}`,
-      ...params,
-    )
-    if (!pending.length) throw new BadRequestException('当前时间范围内暂无待入账费用')
-
-    const byCustomer = new Map<number, any[]>()
-    pending.forEach((c) => {
-      const cid = Number(c.customer_id)
-      if (!byCustomer.has(cid)) byCustomer.set(cid, [])
-      byCustomer.get(cid)!.push(c)
-    })
-
-    const period = (data.dateFrom || pending[0].charge_date?.toISOString?.()?.slice(0, 10) || new Date().toISOString().slice(0, 10)).slice(0, 7)
-
-    const result = await this.prisma.$transaction(async (tx) => {
-      const created: any[] = []
-      for (const [customerId, charges] of byCustomer) {
-        const total = charges.reduce((s, c) => s + Number(c.amount), 0)
-        const billingNo = `BL-${period.replace('-', '')}-${customerId}-${Date.now().toString().slice(-4)}`
-        const order = await tx.billingOrder.create({
-          data: {
-            billingNo,
-            customerId: BigInt(customerId),
-            billingMonth: period,
-            totalAmount: total,
-            status: 'pending',
-            remark: data.dateFrom && data.dateTo ? `${data.dateFrom} ~ ${data.dateTo}` : undefined,
-            items: {
-              create: charges.map((c) => ({
-                itemType: c.charge_type,
-                description: c.description || BILLING_CHARGE_TYPE_LABELS[c.charge_type] || c.charge_type,
-                quantity: c.quantity ?? 1,
-                unitPrice: c.unit_price ?? c.amount,
-                amount: c.amount,
-              })),
-            },
-          },
-          include: { items: true },
-        })
-
-        for (const c of charges) {
-          await tx.$executeRawUnsafe(
-            `UPDATE billing_charge SET billing_id = ?, status = 'confirmed' WHERE id = ?`,
-            order.id,
-            c.id,
-          )
-        }
-
-        const customer = await tx.customer.findUnique({ where: { id: BigInt(customerId) } })
-        created.push({
-          ...order,
-          id: Number(order.id),
-          customerId,
-          customerName: readableDisplayText(customer?.customerName, customer?.customerCode),
-          totalAmount: Number(order.totalAmount),
-          chargeCount: charges.length,
-        })
-      }
-
-      return { bills: created, count: created.length, totalCharges: pending.length }
-    })
-    for (const bill of result.bills as { customerId: number }[]) {
-      await this.pushCustomerBillingToOms(bill.customerId)
-    }
-    return result
+  /** 原请求可在生成后核对；费用归属与账单明细在同一事务提交。 */
+  async generateFromCharges(data: SubmitGenerateBillingDto, userId?: number) {
+    return this.syncBillingWorkflow(await generateBillingOrders(this.prisma, data, userId))
   }
 
-  /** 兼容旧接口：手动指定明细创建账单 */
-  generate(data: CreateBillingOrderDto) {
-    const lines = data.items
-    const total = lines.reduce((s, i) => s + Number(i.amount ?? 0), 0)
-    return this.prisma.billingOrder.create({
-      data: {
-        billingNo: data.billingNo || 'BL-' + Date.now().toString().slice(-8),
-        customerId: BigInt(data.customerId),
-        billingMonth: data.billingMonth,
-        totalAmount: total,
-        status: 'pending',
-        items: {
-          create: lines.map((i) => ({
-            itemType: i.itemType || 'other',
-            description: i.description,
-            quantity: i.quantity ?? 1,
-            unitPrice: i.unitPrice,
-            amount: i.amount,
-          })),
-        },
-      },
-      include: { items: true },
-    })
+  async createManualCharge(data: CreateManualBillingChargeDto, userId: number) {
+    return this.syncBillingWorkflow(await createManualBillingCharge(this.prisma, data, userId, (body, tx) => this.createCharge(body, tx)))
+  }
+
+  async settlementPreview(id: number) {
+    return billingSettlementSnapshot(this.prisma, id)
+  }
+
+  private async syncBillingWorkflow(result: any) {
+    const customerIds: number[] = [...new Set<number>(result.bills ? result.bills.map((bill: any) => Number(bill.customerId)) : [Number(result.customerId)])]
+    let pending = false
+    for (const customerId of customerIds) {
+      const ok = await this.pushCustomerBillingToOms(customerId, result.status === 'paid' ? { billingNo: result.billingNo, status: 'paid', totalAmount: result.totalAmount } : undefined)
+      if (!ok) pending = true
+    }
+    return pending ? { ...result, syncPending: true, warning: '账务操作已保存，但OMS账单或余额同步未完成；请用原操作重试，勿重新生成或扣款' } : { ...result, syncPending: false }
+  }
+
+  /** 旧的无来源账单不能判断费用是否已经扣款，请走有原始费用关联的入口。 */
+  generate(_data: CreateBillingOrderDto) {
+    throw new BadRequestException('请先在客户结算页录入原始费用，再通过“生成账单”核对并汇总；不能创建缺少费用关联的账单')
   }
 
   async previewGenerate(data: GenerateBillingDto) {
-    const { where, params } = this.buildPendingChargeFilters(data)
-    const rows: any[] = await this.prisma.$queryRawUnsafe(
-      `SELECT c.customer_id, c.amount FROM billing_charge c LEFT JOIN customer cust ON cust.id = c.customer_id WHERE ${where}`,
-      ...params,
-    )
-    const customerIds = [...new Set(rows.map((r) => Number(r.customer_id)))]
-    return {
-      chargeCount: rows.length,
-      totalAmount: rows.reduce((s, r) => s + Number(r.amount), 0),
-      customerCount: customerIds.length,
-    }
+    const { charges: _charges, filters: _filters, ...preview } = await billingGenerationSnapshot(this.prisma, data)
+    return preview
   }
 
-  async confirm(id: number) {
-    await this.detail(id)
-    const updated = await this.prisma.billingOrder.update({
-      where: { id: BigInt(id) },
-      data: { status: 'confirmed' },
-    })
-    await this.pushCustomerBillingToOms(Number(updated.customerId), {
-      billingNo: updated.billingNo,
-      status: 'confirmed',
-      totalAmount: Number(updated.totalAmount),
-    })
-    return updated
+  async confirm(id: number, data: BillingOperationDto, userId?: number) {
+    return this.syncBillingWorkflow(await confirmBillingOrder(this.prisma, id, data, userId))
   }
 
   /** OMS P2：客户费用明细 */
@@ -642,11 +491,13 @@ export class BillingService {
       page: 1,
       pageSize: 200,
     } as any)
+    const raw: any[] = await this.prisma.$queryRawUnsafe("SELECT * FROM billing_charge WHERE customer_id=? AND status IN ('pending','confirmed') ORDER BY id", customer.id)
+    const paidIds = await billingPaidChargeIds(this.prisma, customer, raw)
     return {
       customerCode: code,
       customerName: readableDisplayText(customer.customerName, customer.customerCode),
       balance: Number(customer.balance),
-      items: result.items,
+      items: result.items.map(item => ({ ...item, paymentStatus: paidIds.has(String(item.id)) ? 'paid' : 'unpaid' })),
       total: result.total,
     }
   }
@@ -669,7 +520,22 @@ export class BillingService {
     }
   }
 
-  /** 把 ERP 客户余额、已确认费用、充值镜像到 OMS（不把 pending 写成实扣）。 */
+  /** One consistent source snapshot; reading never repairs or mutates OMS caches. */
+  async snapshotForOms(customerCode: string) {
+    const code = String(customerCode || '').trim().toUpperCase()
+    if (!code) throw new BadRequestException('缺少客户编码，请重新登录后核对账单')
+    return this.prisma.$transaction(async tx => {
+      const customer = await tx.customer.findUnique({ where: { customerCode: code } })
+      if (!customer) throw new NotFoundException('客户不存在，请核对当前客户身份')
+      const snapshot = await billingSourceSnapshot(tx, customer)
+      const bills = await tx.billingOrder.findMany({ where: { customerId: customer.id }, orderBy: { id: 'desc' } })
+      return { customerCode: code, customerName: customer.customerName || code, creditBalance: Number(customer.balance), feeRecords: snapshot.feeRecords,
+        monthlySpent: snapshot.monthlyTotal, pendingBill: snapshot.pendingTotal, reservedAmount: snapshot.reservedAmount, reviewAmount: snapshot.reviewAmount, billingMonth: snapshot.billingMonth, provisionalChargeCount: snapshot.provisionalChargeCount,
+        bills: bills.map(b => ({ id: Number(b.id), customerId: Number(customer.id), customerName: customer.customerName || code, billingNo: b.billingNo, billingMonth: b.billingMonth, status: b.status, totalAmount: Number(b.totalAmount), paidAmount: Number(b.paidAmount) })), source: 'erp', snapshotAt: new Date().toISOString() }
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead, timeout: 30000 })
+  }
+
+  /** 账单归属不代表已付款，只把有支付依据的费用写成实扣。 */
   async pushCustomerBillingToOms(
     customerId: number,
     extra?: { billingNo?: string; status?: string; totalAmount?: number },
@@ -679,44 +545,12 @@ export class BillingService {
       if (!customer) return false
       await this.ensureOmsBillingMirror(customer)
 
-    const [confirmed, pendingRows, pendingSumRows, monthlyRows, recharges] = await Promise.all([
-      this.prisma.$queryRawUnsafe<Array<{
-        id: bigint
-        charge_no: string
-        charge_type: string
-        amount: unknown
-        description: string | null
-        biz_ref: string | null
-        charge_date: Date | string
-      }>>(
-        `SELECT id, charge_no, charge_type, amount, description, biz_ref, charge_date
-         FROM billing_charge WHERE customer_id = ? AND status = 'confirmed' ORDER BY id ASC`,
-        customer.id,
-      ),
-      this.prisma.$queryRawUnsafe<Array<{ id: bigint }>>(
-        `SELECT id FROM billing_charge WHERE customer_id = ? AND status = 'pending'`,
-        customer.id,
-      ),
-      this.prisma.$queryRawUnsafe<Array<{ total: unknown }>>(
-        `SELECT COALESCE(SUM(amount), 0) AS total FROM billing_charge WHERE customer_id = ? AND status = 'pending'`,
-        customer.id,
-      ),
-      this.prisma.$queryRawUnsafe<Array<{ total: unknown }>>(
-        `SELECT COALESCE(SUM(amount), 0) AS total FROM billing_charge
-         WHERE customer_id = ? AND status = 'confirmed' AND charge_date >= ?`,
-        customer.id,
-        this.currentMonthStart(),
-      ),
-      this.prisma.customerRecharge.findMany({
-        where: { customerId: customer.id, status: 'confirmed' },
-        orderBy: { id: 'asc' },
-      }),
-    ])
+    const { confirmed, pendingRows, pendingTotal, monthlyTotal, recharges, refunds } = await billingSourceSnapshot(this.prisma, customer)
 
     return notifyOms('billing.changed', customer.customerCode, {
       balance: Number(customer.balance),
-      pendingBill: Number(pendingSumRows[0]?.total || 0),
-      monthlySpent: Number(monthlyRows[0]?.total || 0),
+      pendingBill: pendingTotal,
+      monthlySpent: monthlyTotal,
       charges: confirmed.map((c) => ({
         id: Number(c.id),
         chargeNo: String(c.charge_no || ''),
@@ -733,6 +567,7 @@ export class BillingService {
         remark: r.remark,
         createdAt: r.createdAt.toISOString(),
       })),
+      refunds: refunds.map(r => ({referenceNo:r.referenceNo,amount:r.amount,createdAt:r.createdAt,allocations:r.allocations})),
       removeChargeIds: pendingRows.map((r) => Number(r.id)),
       ...(extra?.billingNo
         ? {
@@ -759,11 +594,6 @@ export class BillingService {
       out.push({ customerCode: customer.customerCode, balance: Number(customer.balance), ok })
     }
     return out
-  }
-
-  private currentMonthStart(): string {
-    const now = new Date()
-    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`
   }
 
   private toChargeDateStr(value: Date | string | null | undefined): string {

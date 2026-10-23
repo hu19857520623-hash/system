@@ -4,6 +4,8 @@ import bcrypt from 'bcryptjs'
 import type { NextFunction, Response } from 'express'
 import   {
     assertCustomerId,
+    assertApiWritePermission,
+    assertBillingReadPermission,
     authenticateApi,
     hasValidInternalToken,
     isLoginAllowed,
@@ -139,8 +141,8 @@ test('maps mutating OMS API paths to write permissions', () => {
   assert.equal(requiredWritePermission('POST', '/auth/change-password'), null)
   assert.equal(requiredWritePermission('POST', '/erp/outbound'), 'outbound:write')
   assert.equal(requiredWritePermission('POST', '/erp/customers/TKL0001/recharge'), 'billing:recharge')
-  assert.equal(requiredWritePermission('PUT', '/billing'), 'billing:read')
-  assert.equal(requiredWritePermission('DELETE', '/billing/pre-deduct/OUT-1'), 'outbound:write')
+  assert.equal(requiredWritePermission('PUT', '/billing'), '__readonly_billing__')
+  assert.equal(requiredWritePermission('DELETE', '/billing/pre-deduct/OUT-1'), '__readonly_billing__')
   assert.equal(requiredWritePermission('PUT', '/inbound-orders'), 'inbound:write')
   assert.equal(requiredWritePermission('PUT', '/erp/inbound/RVAFU260918001'), 'inbound:write')
   assert.equal(requiredWritePermission('POST', '/erp/inbound/RVAFU260918001/cancel'), 'inbound:write')
@@ -164,4 +166,19 @@ test('impersonated sessions keep mustChangePassword disabled after refresh merge
   const verified = verifyAccessToken(token)
   assert.equal(verified.mustChangePassword, false)
   assert.equal(verified.impersonatedBy, 'admin-1')
+})
+
+for (const role of ['sys_admin','ecommerce','catalog','hybrid'] as const) test(`${role}不能用任何权限直接回写余额/费用或退回旧预扣`, () => {
+  for (const [method,path] of [['PUT','/billing'],['DELETE','/billing/pre-deduct/DO-1']]) {
+    let status=0, message=''
+    const response={status:(n:number)=>{status=n;return response},json:(body:{error:string})=>{message=body.error;return response}} as unknown as Response
+    assert.equal(assertApiWritePermission({method,path,auth:{...claims,role,permissions:['billing:read','billing:recharge','outbound:write']}} as AuthenticatedRequest,response),false)
+    assert.equal(status,405);assert.match(message,/不支持直接修改/)
+  }
+})
+test('只读账务接口仍核对读取权限，管理员可以按客户读取', () => {
+  const response={status:()=>response,json:()=>response} as unknown as Response
+  assert.equal(assertBillingReadPermission({auth:claims} as AuthenticatedRequest,response),false)
+  assert.equal(assertBillingReadPermission({auth:{...claims,permissions:['billing:read']}} as AuthenticatedRequest,response),true)
+  assert.equal(assertBillingReadPermission({auth:{...claims,role:'sys_admin'}} as AuthenticatedRequest,response),true)
 })

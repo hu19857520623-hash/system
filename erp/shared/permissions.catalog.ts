@@ -128,6 +128,7 @@ export const PERM_GROUPS: PermissionGroup[] = [
       { id: 'inventory_query.view', label: '库存查询 · 查看' },
       { id: 'inventory_query.detail', label: '库存查询 · 详情' },
       { id: 'inventory_query.adjust', label: '库存查询 · 调整库位' },
+      { id: 'inventory_query.reclaim_refund', label: '货盘持有 · 收回并按原购买单退款' },
       { id: 'inventory_query.export', label: '库存查询 · 导出' },
       { id: 'wms_reports.view', label: '作业报表 · 查看' },
       { id: 'wms_reports.export', label: '作业报表 · 导出' },
@@ -236,7 +237,7 @@ export const ROLE_PERM_TEMPLATES: Record<string, string[]> = {
     'return.view', 'return.receive', 'return.process', 'return.export',
     'outbound.view', 'outbound.create', 'outbound.relabel', 'outbound.pick', 'outbound.pack', 'outbound.ship', 'outbound.export',
     'anheng.view', 'anheng.test',
-    'inventory_query.view', 'inventory_query.detail', 'inventory_query.adjust', 'inventory_query.export',
+    'inventory_query.view', 'inventory_query.detail', 'inventory_query.adjust', 'inventory_query.export', 'inventory_query.reclaim_refund',
     'stocktake.view', 'stocktake.create', 'stocktake.count', 'stocktake.approve',
     'capacity.view', 'capacity.manage', 'wms_reports.view', 'wms_reports.export',
     'inbound_fee.view', 'inbound_fee.manage',
@@ -303,6 +304,7 @@ export const ROLE_PERM_TEMPLATES: Record<string, string[]> = {
   财务: [
     'dashboard.view', 'dashboard.kpi_purchase', 'dashboard.kpi_sync', 'dashboard.pipeline_domestic',
     'products.view',
+    'pricing.view', 'inventory_query.view', 'inventory_query.detail', 'inventory_query.reclaim_refund',
     'purchase.view',
     'cost.view', 'cost.export', 'operating_ledger.view', 'operating_ledger.manage', 'operating_ledger.export',
     'billing.view', 'billing.generate', 'billing.manual', 'billing.export',
@@ -588,6 +590,7 @@ export function isExportPermission(permId: string): boolean {
 }
 
 export function canAssignPermission(roleCode: string, permId: string): boolean {
+  if (permId === 'inventory_query.reclaim_refund') return roleCode === 'admin' || roleCode === 'finance'
   const roles = EXPORT_PERM_ROLES[permId]
   if (!roles) return true
   if (roleCode === 'admin') return true
@@ -609,7 +612,7 @@ export function permModule(code: string): string {
   return code.split('.')[0] || code
 }
 
-/** 剔除废弃码、应用别名，并去掉当前职位不能授予的导出权限 */
+/** 剔除废弃码、应用别名，并去掉当前职位不能授予的权限 */
 export function filterAssignablePerms(roleCode: string, codes: string[]): string[] {
   return normalizePermCodes(codes).filter((code) => canAssignPermission(roleCode, code))
 }

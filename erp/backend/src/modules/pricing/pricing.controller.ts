@@ -5,6 +5,7 @@ import { PaginationDto } from '../../common/dto/pagination.dto'
 import { CurrentUser } from '../../common/decorators/current-user.decorator'
 import { RequirePerms } from '../../common/decorators/require-perms.decorator'
 import { OmsBridge } from '../../common/decorators/oms-bridge.decorator'
+import { OmsPurchaseDto } from './dto/oms-purchase.dto'
 
 @Controller('pricing')
 export class PricingController {
@@ -16,7 +17,7 @@ export class PricingController {
   /** OMS 客户下单回调（幂等：同一 orderNo 重复提交返回原结果） */
   @OmsBridge()
   @Post('oms/purchase')
-  omsPurchaseCallback(@Body() body: any) {
+  omsPurchaseCallback(@Body() body: OmsPurchaseDto) {
     return this.omsPurchase.recordPurchase(body)
   }
 

@@ -102,7 +102,7 @@ export class InboundFeeService {
         inboundNo: order.inboundNo,
       })
       if (!charge) return null
-      return await this.billing.createCharge({
+      const recorded = await this.billing.createCharge({
         customerId,
         chargeType: charge.chargeType,
         source: 'erp',
@@ -117,7 +117,11 @@ export class InboundFeeService {
         idempotencyKey: charge.idempotencyKey,
         calcBasis: charge.calcBasis,
         ruleSnapshot: charge.ruleSnapshot,
-      })
+      }, undefined, !throwOnFailure)
+      if (throwOnFailure && !await this.billing.pushCustomerBillingToOms(customerId)) {
+        throw new Error('入库费用已记录，OMS账单同步待核对')
+      }
+      return recorded
     } catch (err) {
       console.warn(`[inbound-fee] ${order.inboundNo} ${operation} skipped:`, err)
       if (throwOnFailure) throw err

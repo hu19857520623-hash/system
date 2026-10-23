@@ -73,6 +73,7 @@ model Supplier {
   id           BigInt   @id @default(autoincrement())
   supplierCode String   @unique @map("supplier_code") @db.VarChar(30)
   supplierName String   @map("supplier_name") @db.VarChar(200)
+  companyName  String?  @map("company_name") @db.VarChar(200)
   contactName  String?  @map("contact_name") @db.VarChar(50)
   contactPhone String?  @map("contact_phone") @db.VarChar(30)
   email        String?  @db.VarChar(100)
@@ -216,6 +217,7 @@ model PurchaseOrder {
   createdAt       DateTime            @default(now()) @map("created_at")
   updatedAt       DateTime            @updatedAt @map("updated_at")
   items           PurchaseOrderItem[]
+  payments        PurchasePayment[]
 
   @@index([supplierId], map: "idx_po_supplier")
   @@index([status], map: "idx_po_status")
@@ -240,6 +242,20 @@ model PurchaseOrderItem {
 
   @@index([poId], map: "idx_poi_po")
   @@map("purchase_order_item")
+}
+
+model PurchasePayment {
+  id          BigInt        @id @default(autoincrement())
+  poId        BigInt        @map("po_id")
+  paymentType String        @map("payment_type") @db.VarChar(20)
+  amount      Decimal       @db.Decimal(14, 2)
+  remark      String?       @db.VarChar(500)
+  paidAt      DateTime      @default(now()) @map("paid_at")
+  paidBy      BigInt?       @map("paid_by")
+  order       PurchaseOrder @relation(fields: [poId], references: [id])
+
+  @@index([poId], map: "idx_po_payment_po")
+  @@map("purchase_payment")
 }
 
 // ───────────── 预采购单（审核通过后生成，采购员确认后转正式 PO） ─────────────

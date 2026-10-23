@@ -4,6 +4,7 @@ import {
   IsArray,
   IsBoolean,
   IsDateString,
+  IsIn,
   IsInt,
   IsNumber,
   IsOptional,
@@ -170,6 +171,18 @@ export class PoRejectDto {
 }
 
 export class PaymentRemarkDto {
+  @IsOptional()
+  @Transform(trimOptional)
+  @IsString()
+  @IsIn(['deposit', 'balance', 'full', 'other'], { message: '请选择定金、尾款、全款或其他' })
+  paymentType?: string
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 }, { message: '付款金额最多两位小数' })
+  @Min(0.01, { message: '付款金额须大于 0' })
+  amount?: number
+
   @IsOptional()
   @Transform(trimOptional)
   @IsString()

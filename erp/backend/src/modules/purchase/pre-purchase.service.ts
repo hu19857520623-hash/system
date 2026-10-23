@@ -455,16 +455,16 @@ export class PrePurchaseService {
       let po
       if (row.convertedPoId) {
         await tx.$queryRaw`SELECT id FROM purchase_order WHERE id = ${row.convertedPoId} FOR UPDATE`
-        const rejected = await tx.purchaseOrder.findUnique({ where: { id: row.convertedPoId }, include: { items: true } })
-        if (rejected?.status === 'rejected') {
+        const existing = await tx.purchaseOrder.findUnique({ where: { id: row.convertedPoId }, include: { items: true } })
+        if (existing?.status === 'rejected') {
           const assignedAt = row.assignedAt ? new Date(row.assignedAt).getTime() : 0
-          const auditedAt = rejected.auditedAt ? new Date(rejected.auditedAt).getTime() : 0
+          const auditedAt = existing.auditedAt ? new Date(existing.auditedAt).getTime() : 0
           if (assignedAt <= auditedAt) throw new BadRequestException('采购单已驳回，请修改后重新提交，进入分配采购员')
         }
-        if (!rejected || rejected.prePoId !== row.id || rejected.status !== 'rejected' || rejected.items.length !== 1 || rejected.items.some(line => (line.receivedQty ?? 0) > 0)) throw new ConflictException('原采购单状态已变化，请刷新核对后再提交')
+        if (!existing || existing.prePoId !== row.id || !['rejected', 'draft'].includes(existing.status) || existing.items.length !== 1 || existing.items.some(line => (line.receivedQty ?? 0) > 0)) throw new ConflictException('原采购单状态已变化，请刷新核对后再提交')
         po = await tx.purchaseOrder.update({
-          where: { id: rejected.id },
-          data: { ...orderData, items: { update: { where: { id: rejected.items[0].id }, data: lineData } } },
+          where: { id: existing.id },
+          data: { ...orderData, items: { update: { where: { id: existing.items[0].id }, data: lineData } } },
           include: { items: true },
         })
       } else {

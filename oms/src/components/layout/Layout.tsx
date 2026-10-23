@@ -158,7 +158,7 @@ export default function Layout() {
   const [menuSearch, setMenuSearch] = useState('')
   const orders = useOrders()
   const customer = useCustomerProfile()
-  const { creditBalance } = useBilling()
+  const { creditBalance, readWarning } = useBilling()
   const activeAccount = dataScope.activeCustomerId
     ? accounts.find(a => a.id === dataScope.activeCustomerId)
     : undefined
@@ -352,7 +352,7 @@ export default function Layout() {
             {roleLabel === '系统管理员' ? (
               <p className="text-[11px] text-text-muted">管理 {accounts.length} 个客户账号</p>
             ) : (
-              <p className="text-xs font-semibold text-primary-700">{formatCurrency(creditBalance)}</p>
+              <p className="text-xs font-semibold text-primary-700">{formatCurrency(creditBalance)}{readWarning && <span className="ml-1 text-[10px] text-amber-700">缓存余额，请刷新核对</span>}</p>
             )}
           </div>
         </div>

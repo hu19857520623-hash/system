@@ -1,3 +1,5 @@
+import { catalogBaseSkuFromInternal, catalogSkuLookupKeys, toCatalogInternalSku } from '../../common/catalog-customer.util'
+import { ERP_MASTER_PRODUCT_WHERE } from '../../common/product-source.util'
 import {
   BadRequestException,
   ConflictException,
@@ -154,15 +156,18 @@ function idempotencyPayload(value: {
   preDeductTotal?: number
   recipient?: OutboundRecipientPayload | null
 }) {
+  const quantities=new Map<string,number>()
+  for(const item of value.items||[]) {
+    const sku=value.stockSource==='owned'?String(item.sku).trim():catalogBaseSkuFromInternal(String(item.sku).trim())
+    quantities.set(sku,(quantities.get(sku)||0)+Math.floor(Number(item.qty)||0))
+  }
   return JSON.stringify({
     customerCode: value.customerCode.trim(),
     warehouseCode: String(value.warehouseCode || 'WMS-JHB-01').trim(),
     stockSource: value.stockSource === 'owned' ? 'owned' : 'catalog',
-    items: (value.items || [])
-      .map(item => ({ sku: String(item.sku).trim(), qty: Math.floor(Number(item.qty) || 0) }))
-      .sort((a, b) => a.sku.localeCompare(b.sku) || a.qty - b.qty),
+    items: [...quantities].map(([sku,qty])=>({sku,qty})).sort((a,b)=>a.sku.localeCompare(b.sku)),
     preDeductTotal: Math.round((Number(value.preDeductTotal) || 0) * 100) / 100,
-    recipient: value.recipient ?? null,
+    recipient: value.recipient ? normalizeRecipient(value.recipient) : null,
   })
 }
 
@@ -1673,19 +1678,31 @@ th{background:#f5f5f5}
   }
 
   async ship(id: number, operatorId?: number, payload?: { trackingNo?: string; carrier?: string; logisticsProduct?: string; clientRequestId?: string }) {
-    const clientRequestId = String(payload?.clientRequestId || '').trim().slice(0, 100)
-    if (clientRequestId && await this.opLog.hasClientRequest('outbound', 'ship', clientRequestId)) {
-      return { ...(await this.detail(id)), duplicate: true }
-    }
-    const order = await this.prisma.outboundOrder.findUnique({
-      where: { id: BigInt(id) },
-      include: { items: true, pickAllocations: true },
-    })
-    if (!order) throw new NotFoundException('出库单不存在')
-    if (order.status === 'exception') throw new BadRequestException('异常单已暂停流程，请先解除异常')
-    if (order.status !== 'packed') throw new BadRequestException('当前状态不可发运')
-
-    await this.prisma.$transaction(async (tx) => {
+    if (!Number.isSafeInteger(operatorId) || !operatorId || operatorId <= 0) throw new BadRequestException('请重新登录后核对发运操作')
+    const clientRequestId = String(payload?.clientRequestId || '')
+    if (!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(clientRequestId)) throw new BadRequestException('请重新打开发运窗口，使用原操作标识提交')
+    const request = { id, trackingNo: payload?.trackingNo?.trim() || '', carrier: payload?.carrier?.trim() || '', logisticsProduct: payload?.logisticsProduct?.trim() || '' }
+    const requestFingerprint = createHash('sha256').update(JSON.stringify(request)).digest('hex')
+    const initial = await this.prisma.outboundOrder.findUnique({ where: { id: BigInt(id) } })
+    if (!initial) throw new NotFoundException('出库单不存在，请返回列表重新选择')
+    const result = await this.prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(operatorId)} FOR UPDATE`
+      const previous = await tx.operationLog.findFirst({ where: { module: 'outbound', action: 'ship', operatorId: BigInt(operatorId), detail: { path: '$.clientRequestId', equals: clientRequestId } } })
+      if (previous) {
+        if (previous.targetId !== initial.outboundNo || (previous.detail as any)?.requestFingerprint !== requestFingerprint) throw new ConflictException('原发运操作对应的单据或内容不同，请核对原请求，勿修改后重试')
+        return { duplicate: true }
+      }
+      if (initial.customerId) await tx.$queryRaw`SELECT id FROM customer WHERE id = ${initial.customerId} FOR UPDATE`
+      await tx.$queryRaw`SELECT id FROM outbound_order WHERE id = ${BigInt(id)} FOR UPDATE`
+      const order = await tx.outboundOrder.findUnique({ where: { id: BigInt(id) }, include: { items: true, pickAllocations: true } })
+      if (!order) throw new NotFoundException('出库单不存在，请返回列表重新选择')
+      if (order.customerId !== initial.customerId) throw new ConflictException('出库客户资料已变化，请重新核对单据后发运')
+      if (order.status === 'exception') throw new BadRequestException('异常单已暂停流程，请先解除异常')
+      if (order.status !== 'packed') throw new ConflictException('当前状态不可再次发运；已发运单据请使用“核对发运同步”继续，本次未再扣款')
+      await this.outboundBilling.recordShipCharges(order, tx, operatorId)
+      for (const productId of [...new Set(order.items.map(item => item.productId))].sort((a, b) => a < b ? -1 : 1)) {
+        await tx.$queryRaw`SELECT id FROM inventory WHERE product_id = ${productId} AND warehouse_code = ${order.warehouseCode} FOR UPDATE`
+      }
       for (const item of order.items) {
         const pickQty = item.pickedQty || item.qty
         await this.inventoryMutation.shipDeductWarehouse(tx, {
@@ -1742,34 +1759,24 @@ th{background:#f5f5f5}
       if (transitioned.count !== 1) {
         throw new BadRequestException('出库单状态已变化，发运操作已回滚，请刷新后重试')
       }
-      if (clientRequestId) await tx.operationLog.create({
-        data: {
-          operatorId: operatorId ? BigInt(operatorId) : undefined,
-          module: 'outbound',
-          action: 'ship',
-          targetType: 'outbound_order',
-          targetId: order.outboundNo,
-          detail: { clientRequestId: clientRequestId || null },
-        },
-      })
-    })
-    if (!clientRequestId) await this.opLog.log({
-      operatorId,
-      module: 'outbound',
-      action: 'ship',
-      targetType: 'outbound_order',
-      targetId: order.outboundNo,
-      detail: { clientRequestId: null },
-    })
+      await tx.operationLog.create({ data: { operatorId: BigInt(operatorId), module: 'outbound', action: 'ship', targetType: 'outbound_order', targetId: order.outboundNo, detail: { clientRequestId, requestFingerprint, request } } })
+      return { duplicate: false }
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted, timeout: 30000 })
+    return this.syncShipment(id, result.duplicate)
+  }
 
-    const shipCharges = await this.outboundBilling.recordShipCharges(order)
-
-    const detail = await this.detail(id)
-    await this.pushOutboundStatusToOms(order.outboundNo)
-    if (shipCharges.length) {
-      await this.pushOutboundFeesToOms(order.outboundNo, shipCharges)
-    }
-    return detail
+  /** Read the committed payment receipt and retry notifications; never deduct stock or funds here. */
+  async syncShipment(id: number, duplicate = false) {
+    const order = await this.prisma.outboundOrder.findUnique({ where: { id: BigInt(id) } })
+    if (!order) throw new NotFoundException('出库单不存在，请返回列表重新选择')
+    if (!order.shippedAt || (!isPostShipStatus(order.status) && order.status !== 'exception')) throw new BadRequestException('请先完成发运；当前单据无需恢复发运同步')
+    const charges = await this.outboundBilling.paidShipCharges(order)
+    const feeOk = order.customerId ? await this.pushOutboundFeesToOms(order.outboundNo, charges) : true
+    const billingOk = order.customerId ? await this.billing.pushCustomerBillingToOms(Number(order.customerId)) : true
+    const statusOk = await this.pushOutboundStatusToOms(order.outboundNo, true)
+    const feePending = !feeOk || !billingOk, syncPending = !statusOk
+    return { ...(await this.detail(id)), duplicate, feePending, syncPending,
+      ...(feePending || syncPending ? { warning: '发运、库存与扣费已保存，但OMS费用、状态或库存同步未完成。请使用原操作重试，或返回列表选择“核对发运同步”，勿再次发运或扣款' } : { message: duplicate ? '原发运操作已完成，本次仅核对同步，未重复扣库存或扣款' : '发运与费用已保存，OMS同步已完成' }) }
   }
 
   async cancelFromOms(outboundNo: string, customerCode: string) {
@@ -1802,6 +1809,7 @@ th{background:#f5f5f5}
     const preDeductTotal = Math.max(0, Number(preDeduct?.preDeductTotal) || 0)
 
     await this.prisma.$transaction(async (tx) => {
+      if (order.customerId) await tx.$queryRaw`SELECT id FROM customer WHERE id = ${order.customerId} FOR UPDATE`
       if (
         ['pending_pick', 'picking', 'picked', 'reviewing', 'pending_relabel', 'packed', 'exception'].includes(
           order.status,
@@ -1828,10 +1836,14 @@ th{background:#f5f5f5}
               data: { quantity: { increment: item.qty } },
             })
             if (restored.count === 0) {
-              await tx.customerSkuInventory.create({
+              const aliases=await tx.customerSkuInventory.findMany({where:{customerId:order.customerId,sku:{in:catalogSkuLookupKeys(item.sku)}}})
+              if(aliases.length>1)throw new BadRequestException('持有商品编码存在重复，取消操作已回滚，请先核对')
+              if(aliases[0]) {
+                await tx.customerSkuInventory.updateMany({where:{id:aliases[0].id},data:{quantity:{increment:item.qty}}})
+              } else await tx.customerSkuInventory.create({
                 data: {
                   customerId: order.customerId,
-                  sku: item.sku,
+                  sku: toCatalogInternalSku(item.sku),
                   productName: item.productName || item.sku,
                   quantity: item.qty,
                 },
@@ -2095,16 +2107,27 @@ th{background:#f5f5f5}
       },
       preDeduct,
     })
-    const resolved: { productId: bigint; sku: string; qty: number; productName: string; needsRelabel: boolean }[] = []
+    const resolved: { productId: bigint; sku: string; holdingSku: string; qty: number; productName: string; needsRelabel: boolean }[] = []
     for (const line of lines) {
       const sku = String(line.sku || '').trim()
-      const qty = Math.floor(Number(line.qty ?? 0))
-      if (!sku || qty <= 0) throw new BadRequestException('SKU 与出库数量无效')
+      const qty = line.qty
+      if (!sku || !Number.isSafeInteger(qty) || qty <= 0 || qty > 2147483647) throw new BadRequestException('请核对商品编码，出库数量须为有效正整数')
       const product = await this.prisma.product.findUnique({ where: { sku } })
+        ?? (stockSource === 'catalog' ? await this.prisma.product.findFirst({ where: { AND: [ERP_MASTER_PRODUCT_WHERE, {sku:{in:catalogSkuLookupKeys(sku)}}] } }) : null)
       if (!product) throw new NotFoundException(`SKU ${sku} 不存在，请先完成入库建档`)
+      let holdingSku=sku
+      if(stockSource==='catalog') {
+        const holdings=await this.prisma.customerSkuInventory.findMany({where:{customerId:customer.id,sku:{in:catalogSkuLookupKeys(sku)},quantity:{gt:0}}})
+        if(holdings.length>1)throw new BadRequestException('商品有多份持有编码，请先核对后预约出库')
+        if(!holdings.length)throw new BadRequestException(`客户持有库存不足：${sku} 当前没有可预约持有，请先核对货盘申购`)
+        holdingSku=holdings[0].sku
+      }
+      const grouped=resolved.find(item=>item.productId===product.id)
+      if(grouped){grouped.qty+=qty;if(!Number.isSafeInteger(grouped.qty)||grouped.qty>2147483647)throw new BadRequestException('合并后的商品数量超出支持范围');grouped.needsRelabel ||= line.needsRelabel!==false;continue}
       resolved.push({
         productId: product.id,
         sku: product.sku,
+        holdingSku,
         qty,
         productName: line.productName || product.productName,
         needsRelabel: line.needsRelabel !== false,
@@ -2114,7 +2137,7 @@ th{background:#f5f5f5}
     if (stockSource === 'catalog') {
       for (const line of resolved) {
         const holding = await this.prisma.customerSkuInventory.findUnique({
-          where: { customerId_sku: { customerId: customer.id, sku: line.sku } },
+          where: { customerId_sku: { customerId: customer.id, sku: line.holdingSku } },
         })
         if (!holding || holding.quantity < line.qty) {
           throw new BadRequestException(
@@ -2125,6 +2148,7 @@ th{background:#f5f5f5}
     }
 
     const { created, fresh } = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM customer WHERE id = ${customer.id} FOR UPDATE`
       const created = await this.create(
         {
           outboundNo,
@@ -2159,17 +2183,18 @@ th{background:#f5f5f5}
       if (stockSource === 'catalog') {
         for (const line of resolved) {
           const holding = await tx.customerSkuInventory.findUnique({
-            where: { customerId_sku: { customerId: customer.id, sku: line.sku } },
+            where: { customerId_sku: { customerId: customer.id, sku: line.holdingSku } },
           })
           if (!holding || holding.quantity < line.qty) {
             throw new BadRequestException(
               `客户持有库存不足：${line.sku} 持有 ${holding?.quantity ?? 0}，需要 ${line.qty}`,
             )
           }
-          await tx.customerSkuInventory.update({
-            where: { id: holding.id },
+          const consumed = await tx.customerSkuInventory.updateMany({
+            where: { id: holding.id, quantity: { gte: line.qty } },
             data: { quantity: { decrement: line.qty } },
           })
+          if (consumed.count !== 1) throw new BadRequestException('客户持有库存已变化，本次预约已回滚，请刷新后重试')
         }
       }
       if (preDeductTotal > 0) {
@@ -2393,12 +2418,12 @@ th{background:#f5f5f5}
   ) {
     try {
       const mapped = await this.getByOutboundNoForOms(outboundNo)
-      if (!mapped.customerCode) return
+      if (!mapped.customerCode) return true
       const row = await this.prisma.outboundOrder.findUnique({ where: { outboundNo } })
       const customer = row?.customerId
         ? await this.prisma.customer.findUnique({ where: { id: row.customerId } })
         : null
-      void notifyOms('outbound.fees', mapped.customerCode, {
+      return await notifyOms('outbound.fees', mapped.customerCode, {
         outboundNo,
         preDeduct: mapped.preDeduct,
         actualFees: mapped.actualFees,
@@ -2409,6 +2434,7 @@ th{background:#f5f5f5}
       })
     } catch (err) {
       console.warn('[outbound] push fees to OMS skipped:', err)
+      return false
     }
   }
 
@@ -2431,15 +2457,16 @@ th{background:#f5f5f5}
     }
   }
 
-  private async pushOutboundStatusToOms(outboundNo: string) {
+  private async pushOutboundStatusToOms(outboundNo: string, strict = false) {
     try {
       const mapped = await this.getByOutboundNoForOms(outboundNo)
-      if (!mapped.customerCode) return
-      void notifyOms(
+      if (!mapped.customerCode) return true
+      const notifications: Promise<boolean>[] = []
+      notifications.push(notifyOms(
         'outbound.status',
         mapped.customerCode,
         mapped as unknown as Record<string, unknown>,
-      )
+      ))
       if (isPostShipStatus(mapped.status) || mapped.status === 'exception') {
         const row = await this.prisma.outboundOrder.findUnique({
           where: { outboundNo },
@@ -2447,7 +2474,7 @@ th{background:#f5f5f5}
         })
         const podAtt = row?.attachments[0]
         const podStatus = row ? await this.resolvePodStatus(row) : 'pending'
-        void notifyOms('logistics.update', mapped.customerCode, {
+        notifications.push(notifyOms('logistics.update', mapped.customerCode, {
           id: `lg-erp-${mapped.id}`,
           refNo: mapped.outboundNo,
           outboundNo: mapped.outboundNo,
@@ -2462,7 +2489,7 @@ th{background:#f5f5f5}
           podUploadedAt: podAtt?.createdAt.toISOString() ?? null,
           shippedAt: mapped.shippedAt,
           deliveredAt: mapped.deliveredAt,
-        })
+        }))
       }
       if (mapped.status === 'shipped' || mapped.status === 'cancelled') {
         let inventoryItems: Array<Record<string, unknown>> = mapped.items
@@ -2480,16 +2507,21 @@ th{background:#f5f5f5}
             return inventory ? [{ ...item, availableQty: inventory.availableQty, lockedQty: inventory.lockedQty }] : []
           })
         }
-        void notifyOms('inventory.changed', mapped.customerCode, {
+        notifications.push(notifyOms('inventory.changed', mapped.customerCode, {
           reason: 'outbound_' + mapped.status,
           outboundNo: mapped.outboundNo,
           stockSource: mapped.stockSource,
           warehouseCode: mapped.warehouseCode,
           items: inventoryItems,
-        })
+        }))
       }
+      const completed = Promise.all(notifications).then(results => results.every(Boolean))
+      if (strict) return await completed
+      void completed
+      return true
     } catch (err) {
       console.warn('[outbound] push OMS skipped:', err)
+      return false
     }
   }
 

@@ -327,7 +327,8 @@ async function importPurchaseOrders() {
     const content = normalizeImportFileText(await file.text())
     const result = await purchaseApi.importCsv(content)
     await showImportResultFeedback(result)
-    await load()
+    await Promise.all([load(), canAssignPurchaser.value ? loadPrePoPendingAssign() : Promise.resolve()])
+    if (canAssignPurchaser.value) mainTab.value = 'pre_assign'
   } catch (error) {
     ElMessage.error(`采购单导入失败，请核对模板后重试。${userFacingError(error)}`)
   }
@@ -430,10 +431,11 @@ async function submitCreatePo() {
         remark: l.remark || undefined,
       })),
     })
-  }, '采购单已创建，进入采购审核')
+  }, '已提交到预采购分配，请分配采购员后再确认采购')
   if (ok) {
     createPoVisible.value = false
-    load()
+    await Promise.all([load(), canAssignPurchaser.value ? loadPrePoPendingAssign() : Promise.resolve()])
+    if (canAssignPurchaser.value) mainTab.value = 'pre_assign'
   }
 }
 
@@ -894,7 +896,7 @@ const auditTimeline = computed(() => {
     steps.push({
       time: p.paidAtStr,
       role: p.paidByName,
-      action: p.paymentStatus === 'paid' ? '标记已打款' : '标记未打款',
+      action: p.paymentStatus === 'paid' ? '已付清' : p.paymentStatus === 'partial' ? '登记部分付款' : '清除打款',
       detail: p.financeRemark || '—',
       type: p.paymentStatus === 'paid' ? 'success' : 'warning',
     })
@@ -928,14 +930,14 @@ async function openDetail(po: any) {
   }
 }
 
-async function runPoAction(action: () => Promise<any>, success: string) {
+async function runPoAction(action: () => Promise<any>, success: string | ((result: any) => string)) {
   if (!canOperatePo.value) return false
   poActionBusy.value = true
   detailFeedback.value = ''
   try {
     const result = await action()
     selectedPo.value = mapPurchaseOrder({ ...result, purchaseConfirmation: result.purchaseConfirmation ?? selectedPo.value?.purchaseConfirmation })
-    ElMessage.success(success)
+    ElMessage.success(typeof success === 'function' ? success(result) : success)
     void load()
     return true
   } catch (error) {
@@ -948,6 +950,102 @@ async function runPoAction(action: () => Promise<any>, success: string) {
   } finally { poActionBusy.value = false }
 }
 
+function canReopenAudit(row?: { statusKey?: string; paymentStatus?: string } | null) {
+  return canPoAudit.value && ['finance_approved', 'approved'].includes(String(row?.statusKey || '')) && row?.paymentStatus === 'unpaid'
+}
+
+function canEditPendingAudit(row?: { statusKey?: string } | null) {
+  return (canCreate.value || canPoAudit.value) && row?.statusKey === 'pending_po_audit'
+}
+
+const reviseVisible = ref(false)
+const reviseSaving = ref(false)
+const reviseForm = ref<any>(null)
+
+async function openRevisePending(po?: { id: number }) {
+  const target = po || selectedPo.value
+  if (!target) return
+  if (po) await openDetail(po)
+  if (selectedPo.value?.id !== target.id || selectedPo.value.statusKey !== 'pending_po_audit') return
+  await loadCreatePoResources()
+  const detail = selectedPo.value
+  reviseForm.value = {
+    id: detail.id,
+    poNo: detail.poNo,
+    supplierName: detail.supplier && detail.supplier !== '—' ? detail.supplier : '',
+    warehouseCode: detail.warehouseCode || '',
+    expectedArrival: toDateInput(detail.expectedArrivalStr),
+    domesticFreight: detail.domesticFreight,
+    remark: detail.remark || '',
+    lines: (detail.items || []).map((line: any) => ({
+      id: line.id,
+      sku: line.sku || '',
+      productName: line.productName || '',
+      quantity: Number(line.quantity) > 0 ? Number(line.quantity) : Number(line.plannedQty) || 1,
+      unitPrice: Number(line.unitPrice) || 0,
+    })),
+  }
+  reviseVisible.value = true
+}
+
+async function submitRevisePending() {
+  const form = reviseForm.value
+  if (!form || reviseSaving.value) return
+  if (!form.supplierName?.trim()) { ElMessage.warning('请选择供应商'); return }
+  if (!form.warehouseCode) { ElMessage.warning('请选择目标中转仓'); return }
+  if (!form.lines.length || form.lines.some((line: any) => !line.sku?.trim() || !line.productName?.trim() || !(Number(line.quantity) >= 1) || !(Number(line.unitPrice) > 0))) {
+    ElMessage.warning('请填写完整的 SKU、商品名称、数量和单价')
+    return
+  }
+  reviseSaving.value = true
+  try {
+    const result = mapPurchaseOrder(await purchaseApi.revisePending(form.id, {
+      supplierName: form.supplierName.trim(),
+      warehouseCode: form.warehouseCode,
+      expectedArrival: form.expectedArrival || '',
+      domesticFreight: form.domesticFreight ?? undefined,
+      remark: form.remark || '',
+      items: form.lines.map((line: any) => ({
+        id: line.id,
+        sku: line.sku.trim(),
+        productName: line.productName.trim(),
+        quantity: Number(line.quantity),
+        unitPrice: Number(line.unitPrice),
+      })),
+    }))
+    selectedPo.value = result
+    reviseVisible.value = false
+    ElMessage.success(`采购单 ${form.poNo} 已修改，请重新审核`)
+    mainTab.value = 'po_pending'
+    void load()
+  } catch (error) {
+    ElMessage.error(userFacingError(error))
+  } finally {
+    reviseSaving.value = false
+  }
+}
+
+async function reopenPoAudit(po?: { id: number }) {
+  const target = po || selectedPo.value
+  if (!target || poActionBusy.value) return
+  try {
+    await erpConfirm(
+      '撤回后采购单回到待审核，本次审核写入的采购成本会清掉。尚未收货、未付款才能撤回。修改后需要再审一次。',
+      '撤回到待审核',
+      { type: 'warning', confirmButtonText: '撤回', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  if (po) await openDetail(po)
+  if (selectedPo.value?.id !== target.id) return
+  await runPoAction(async () => {
+    const result = await purchaseApi.reopenAudit(target.id, { remark: '撤回审核，退回待审核' })
+    mainTab.value = 'po_pending'
+    return result
+  }, '已撤回到待审核，可修改后再次审核')
+}
+
 async function passPoAudit() {
   if (!canOperatePo.value) return
   const warehouseCode = selectedPo.value.warehouseCode || auditWarehouseCode.value
@@ -955,7 +1053,19 @@ async function passPoAudit() {
     detailFeedback.value = '请先选择目标中转仓'
     return
   }
-  await runPoAction(() => purchaseApi.approve(selectedPo.value.id, { remark: '审核通过', warehouseCode }), '采购审核已通过，已同步主数据，下一步安排中转仓收货；默认未打款')
+  await runPoAction(async () => {
+    const result = await purchaseApi.approve(selectedPo.value.id, { remark: '审核通过', warehouseCode })
+    if (result?.status === 'draft') {
+      detailVisible.value = false
+      if (canAssignPurchaser.value) {
+        mainTab.value = 'pre_assign'
+        await loadPrePoPendingAssign()
+      }
+    }
+    return result
+  }, (result) => result?.status === 'draft'
+    ? '审核已通过，已转入预采购分配'
+    : '采购审核已通过，已同步主数据，下一步安排中转仓收货；默认未打款')
 }
 
 async function rejectPoAudit() {
@@ -1153,12 +1263,71 @@ async function reviseRejectedPo(row?: { id?: number; prePoId?: number | null; po
   })
 }
 
-async function markPoPaid(po?: { id: number }) {
+const paymentVisible = ref(false)
+const paymentSaving = ref(false)
+const paymentTargetId = ref<number | null>(null)
+const paymentForm = ref({ paymentType: 'deposit', amount: undefined as number | undefined, remark: '' })
+const paymentTypeOptions = [
+  { value: 'deposit', label: '定金' },
+  { value: 'balance', label: '尾款' },
+  { value: 'full', label: '全款' },
+  { value: 'other', label: '其他' },
+]
+
+function paymentRemaining(po?: { paymentStatus?: string; unpaidAmount?: number; amount?: number } | null) {
+  if (!po || po.paymentStatus === 'paid') return 0
+  if (po.paymentStatus === 'partial') return Number(po.unpaidAmount) || 0
+  return Number(po.amount) || 0
+}
+
+async function openPaymentDialog(po?: { id: number }) {
   const target = po || selectedPo.value
   if (!target || poActionBusy.value) return
   if (po) await openDetail(po)
   if (selectedPo.value?.id !== target.id) return
-  await runPoAction(() => purchaseApi.markPaid(target.id, { remark: '已打款' }), '已标记为已打款')
+  const remaining = paymentRemaining(selectedPo.value)
+  paymentTargetId.value = target.id
+  paymentForm.value = {
+    paymentType: selectedPo.value?.paymentStatus === 'partial' ? 'balance' : 'deposit',
+    amount: undefined,
+    remark: '',
+  }
+  if (remaining > 0 && paymentForm.value.paymentType === 'full') paymentForm.value.amount = remaining
+  paymentVisible.value = true
+}
+
+function onPaymentTypeChange(paymentType: string) {
+  if (paymentType === 'full') paymentForm.value.amount = paymentRemaining(selectedPo.value)
+}
+
+async function submitPayment() {
+  if (!paymentTargetId.value || paymentSaving.value) return
+  const remaining = paymentRemaining(selectedPo.value)
+  const amount = paymentForm.value.paymentType === 'full' ? remaining : Number(paymentForm.value.amount)
+  if (!(amount > 0)) {
+    ElMessage.warning('请填写付款金额')
+    return
+  }
+  paymentSaving.value = true
+  try {
+    const result = mapPurchaseOrder(await purchaseApi.markPaid(paymentTargetId.value, {
+      paymentType: paymentForm.value.paymentType,
+      amount,
+      remark: paymentForm.value.remark.trim(),
+    }))
+    selectedPo.value = result
+    paymentVisible.value = false
+    ElMessage.success(result.paymentStatus === 'paid' ? `已付清 ¥${fmtMoney(result.paidAmount || amount)}` : `已登记${paymentTypeOptions.find((item) => item.value === paymentForm.value.paymentType)?.label || '付款'} ¥${fmtMoney(amount)}`)
+    void load()
+  } catch (error) {
+    ElMessage.error(userFacingError(error))
+  } finally {
+    paymentSaving.value = false
+  }
+}
+
+async function markPoPaid(po?: { id: number }) {
+  await openPaymentDialog(po)
 }
 
 async function markPoUnpaid(po?: { id: number }) {
@@ -1166,7 +1335,7 @@ async function markPoUnpaid(po?: { id: number }) {
   if (!target || poActionBusy.value) return
   if (po) await openDetail(po)
   if (selectedPo.value?.id !== target.id) return
-  await runPoAction(() => purchaseApi.markUnpaid(target.id), '已标记为未打款')
+  await runPoAction(() => purchaseApi.markUnpaid(target.id), '已清除打款记录')
 }
 </script>
 
@@ -1285,7 +1454,7 @@ async function markPoUnpaid(po?: { id: number }) {
       <template v-else-if="mainTab === 'orders' || mainTab === 'po_pending' || mainTab === 'payment' || mainTab === 'actual_qty'">
       <el-alert v-if="mainTab === 'orders'" type="info" :closable="false" show-icon style="margin-bottom:12px">
       <p class="flow-hint">{{ PIPELINE_PURCHASE_ORDERS }}</p>
-      <p v-if="canCreate" class="flow-hint">批量导入时，供应商、目标中转仓、预计到货、国内运费和备注相同的行会合并成一张采购单，创建后进入采购审核。</p>
+      <p v-if="canCreate" class="flow-hint">批量导入时，每条明细生成一张待分配预采购单。相同供应商、中转仓、到货、运费和备注会写在同一批预采购上，分配并确认后才生成正式采购单。</p>
       </el-alert>
       <el-alert v-if="mainTab === 'actual_qty'" type="warning" :closable="false" show-icon style="margin-bottom:12px">
         产品主管在此核定实际采购数量，提交后进入「采购审核」。
@@ -1318,10 +1487,10 @@ async function markPoUnpaid(po?: { id: number }) {
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="打款" width="90">
+        <el-table-column label="打款" width="150">
           <template #default="{ row }">
-            <el-tag v-if="canShowPayment(row.statusKey)" :type="row.paymentStatus === 'paid' ? 'success' : 'warning'" size="small">
-              {{ row.paymentStatusLabel || (row.paymentStatus === 'paid' ? '已打款' : '未打款') }}
+            <el-tag v-if="canShowPayment(row.statusKey)" :type="row.paymentStatus === 'paid' ? 'success' : row.paymentStatus === 'partial' ? 'warning' : 'info'" size="small">
+              {{ row.paymentStatusLabel || '未打款' }}
             </el-tag>
             <span v-else>—</span>
           </template>
@@ -1332,12 +1501,14 @@ async function markPoUnpaid(po?: { id: number }) {
             <el-button link type="primary" size="small" @click="openDetail(row)">
               {{ (canSetActualQty && row.statusKey === 'pending_actual_qty') ? '核定数量' : (canPoAudit && row.statusKey === 'pending_po_audit') ? '去审核' : '详情' }}
             </el-button>
+            <el-button v-if="canEditPendingAudit(row)" link type="primary" size="small" @click="openRevisePending(row)">修改订单</el-button>
+            <el-button v-if="canReopenAudit(row)" link type="warning" size="small" @click="reopenPoAudit(row)">撤回到待审核</el-button>
             <el-button v-if="canCreate && row.statusKey === 'rejected' && canReviseRejected(row)" link type="warning" size="small" @click="reviseRejectedPo(row)">修改重提</el-button>
             <span v-else-if="row.statusKey === 'rejected' && row.prePoStatus === 'pending_assign'">待分配</span>
             <el-button v-if="canCreate && canVoidPo(row)" link type="danger" size="small" :disabled="voidingPoId === row.id" @click="voidPurchaseOrder(row)">标为废订单</el-button>
             <template v-if="canMarkPaid && canShowPayment(row.statusKey)">
-              <el-button v-if="row.paymentStatus !== 'paid'" link type="success" size="small" @click="markPoPaid(row as { id: number })">标记已打款</el-button>
-              <el-button v-else link type="warning" size="small" @click="markPoUnpaid(row as { id: number })">标记未打款</el-button>
+              <el-button v-if="row.paymentStatus !== 'paid'" link type="success" size="small" @click="markPoPaid(row as { id: number })">标记付款</el-button>
+              <el-button v-if="row.paymentStatus !== 'unpaid'" link type="warning" size="small" @click="markPoUnpaid(row as { id: number })">清除打款</el-button>
             </template>
           </template>
         </el-table-column>
@@ -1357,7 +1528,7 @@ async function markPoUnpaid(po?: { id: number }) {
   >
     <div class="create-po-body">
       <div class="callout info">
-        <div class="callout-body">可直接创建正式采购单，无需经过预采购流程。提交后进入「采购审核」。</div>
+        <div class="callout-body">提交后进入「预采购分配」。采购主管分配采购员并确认后，才生成正式采购单，再核定数量并进入采购审核。</div>
       </div>
 
       <div class="form-section">
@@ -1542,17 +1713,24 @@ async function markPoUnpaid(po?: { id: number }) {
           <el-descriptions-item label="预计到货">{{ selectedPo.expectedArrivalStr || '—' }}</el-descriptions-item>
           <el-descriptions-item label="创建时间">{{ selectedPo.createdAtStr }}</el-descriptions-item>
           <el-descriptions-item v-if="canShowPayment(selectedPo.statusKey)" label="打款状态">
-            <el-tag :type="selectedPo.paymentStatus === 'paid' ? 'success' : 'warning'" size="small">
-              {{ selectedPo.paymentStatus === 'paid' ? '已打款' : '未打款' }}
+            <el-tag :type="selectedPo.paymentStatus === 'paid' ? 'success' : selectedPo.paymentStatus === 'partial' ? 'warning' : 'info'" size="small">
+              {{ selectedPo.paymentStatusLabel || '未打款' }}
             </el-tag>
-            <span v-if="selectedPo.paymentStatus === 'paid'" class="form-tip">
-              {{ selectedPo.paidByName }} · {{ selectedPo.paidAtStr }}
+            <span v-if="selectedPo.paymentStatus !== 'unpaid'" class="form-tip">
+              已付 ¥{{ fmtMoney(selectedPo.paidAmount || 0) }}，待付 ¥{{ fmtMoney(selectedPo.unpaidAmount || 0) }}
             </span>
           </el-descriptions-item>
           <el-descriptions-item label="备注" :span="2">{{ selectedPo.remark || '—' }}</el-descriptions-item>
         </el-descriptions>
 
         <template v-if="canShowPayment(selectedPo.statusKey)">
+          <div class="detail-section-title">付款记录</div>
+          <el-table :data="selectedPo.payments || []" border size="small" style="margin-bottom:16px" empty-text="尚未登记付款">
+            <el-table-column prop="paymentTypeLabel" label="类型" width="90" />
+            <el-table-column label="金额" width="120" align="right"><template #default="{ row }">¥{{ fmtMoney(row.amount) }}</template></el-table-column>
+            <el-table-column prop="remark" label="备注" min-width="140" show-overflow-tooltip />
+            <el-table-column prop="paidAtStr" label="时间" width="120" />
+          </el-table>
           <div class="detail-section-title">费用明细</div>
           <el-descriptions :column="2" border size="small" title="单据信息">
             <el-descriptions-item label="采购单号"><span class="mono">{{ selectedPo.poNo }}</span></el-descriptions-item>
@@ -1688,19 +1866,75 @@ async function markPoUnpaid(po?: { id: number }) {
           <el-button type="primary" :disabled="!canOperatePo" @click="submitActualQty(selectedPo)">提交实际采购数量</el-button>
         </template>
         <template v-if="selectedPo?.statusKey === 'pending_po_audit' && canPoAudit">
+          <el-button v-if="canEditPendingAudit(selectedPo)" :disabled="!canOperatePo" @click="openRevisePending()">修改订单</el-button>
           <el-button type="danger" plain :disabled="!canOperatePo" @click="rejectPoAudit">驳回</el-button>
           <el-button type="primary" :loading="poActionBusy" :disabled="!canOperatePo" @click="passPoAudit">审核通过</el-button>
         </template>
+        <el-button v-else-if="canEditPendingAudit(selectedPo)" :disabled="!canOperatePo" @click="openRevisePending()">修改订单</el-button>
+        <el-button v-if="canReopenAudit(selectedPo)" type="warning" plain :disabled="!canOperatePo" @click="reopenPoAudit()">撤回到待审核</el-button>
         <el-button v-if="canCreate && canReviseRejected(selectedPo)" type="primary" :disabled="!canOperatePo" @click="reviseRejectedPo()">修改并重新提交</el-button>
         <el-button v-if="canCreate && canVoidPo(selectedPo)" type="danger" plain :disabled="!canOperatePo || voidingPoId === selectedPo?.id" @click="voidPurchaseOrder(selectedPo)">标为废订单</el-button>
         <el-button v-if="selectedPo?.statusKey === 'finance_approved' && app.hasPerm('logistics_wh.view')" type="primary" :disabled="!canOperatePo" @click="router.push({ path: '/logistics-wh', query: { tab: 'pending', fromPo: selectedPo.poNo } })">前往中转仓收货</el-button>
         <template v-if="canMarkPaid && canShowPayment(selectedPo?.statusKey)">
-          <el-button v-if="selectedPo.paymentStatus !== 'paid'" type="success" :disabled="!canOperatePo" @click="markPoPaid()">标记已打款</el-button>
-          <el-button v-else type="warning" plain :disabled="!canOperatePo" @click="markPoUnpaid()">标记未打款</el-button>
+          <el-button v-if="selectedPo.paymentStatus !== 'paid'" type="success" :disabled="!canOperatePo" @click="markPoPaid()">标记付款</el-button>
+          <el-button v-if="selectedPo.paymentStatus !== 'unpaid'" type="warning" plain :disabled="!canOperatePo" @click="markPoUnpaid()">清除打款</el-button>
         </template>
       </div>
     </template>
   </el-drawer>
+
+  <el-dialog v-model="reviseVisible" :title="`修改采购单 · ${reviseForm?.poNo || ''}`" width="720px" :close-on-click-modal="!reviseSaving" :close-on-press-escape="!reviseSaving" :show-close="!reviseSaving">
+    <p class="form-tip">保存后仍停留在待审核。审核通过后才会按新的数量和单价重新写入成本。</p>
+    <el-form v-if="reviseForm" label-width="96px">
+      <el-form-item label="供应商" required>
+        <el-select v-model="reviseForm.supplierName" filterable allow-create default-first-option placeholder="选择或输入供应商" style="width:100%">
+          <el-option v-for="s in supplierOptions" :key="s.id" :label="s.label" :value="s.label" />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="目标中转仓" required>
+        <el-select v-model="reviseForm.warehouseCode" filterable placeholder="选择物流中转仓" style="width:100%">
+          <el-option v-for="w in createPoWarehouses" :key="w.warehouseCode || w.code" :label="w.warehouseName || w.name" :value="w.warehouseCode || w.code" />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="预计到货">
+        <el-date-picker v-model="reviseForm.expectedArrival" type="date" value-format="YYYY-MM-DD" placeholder="可选" style="width:100%" />
+      </el-form-item>
+      <el-form-item label="国内运费">
+        <el-input-number v-model="reviseForm.domesticFreight" :min="0" :precision="2" controls-position="right" style="width:100%" />
+      </el-form-item>
+      <el-table :data="reviseForm.lines" border size="small">
+        <el-table-column label="SKU" min-width="120"><template #default="{ row }"><el-input v-model="row.sku" /></template></el-table-column>
+        <el-table-column label="商品名称" min-width="140"><template #default="{ row }"><el-input v-model="row.productName" /></template></el-table-column>
+        <el-table-column label="数量" width="120"><template #default="{ row }"><el-input-number v-model="row.quantity" :min="1" :precision="0" controls-position="right" style="width:100%" /></template></el-table-column>
+        <el-table-column label="单价" width="130"><template #default="{ row }"><el-input-number v-model="row.unitPrice" :min="0.01" :precision="2" controls-position="right" style="width:100%" /></template></el-table-column>
+      </el-table>
+    </el-form>
+    <template #footer>
+      <el-button :disabled="reviseSaving" @click="reviseVisible = false">取消</el-button>
+      <el-button type="primary" :loading="reviseSaving" @click="submitRevisePending">保存并等待审核</el-button>
+    </template>
+  </el-dialog>
+
+  <el-dialog v-model="paymentVisible" title="标记付款" width="460px" :close-on-click-modal="!paymentSaving" :close-on-press-escape="!paymentSaving" :show-close="!paymentSaving">
+    <p class="form-tip">采购总额 ¥{{ fmtMoney(selectedPo?.amount || 0) }}，待付 ¥{{ fmtMoney(paymentRemaining(selectedPo)) }}。定金、尾款和全款会分别留下金额。</p>
+    <el-form label-width="96px">
+      <el-form-item label="付款类型" required>
+        <el-select v-model="paymentForm.paymentType" style="width:100%" @change="onPaymentTypeChange">
+          <el-option v-for="item in paymentTypeOptions" :key="item.value" :label="item.label" :value="item.value" />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="付款金额" required>
+        <el-input-number v-model="paymentForm.amount" :min="0.01" :precision="2" :disabled="paymentForm.paymentType === 'full' || paymentSaving" controls-position="right" style="width:100%" />
+      </el-form-item>
+      <el-form-item label="备注">
+        <el-input v-model="paymentForm.remark" maxlength="500" placeholder="付款说明，选填" :disabled="paymentSaving" />
+      </el-form-item>
+    </el-form>
+    <template #footer>
+      <el-button :disabled="paymentSaving" @click="paymentVisible = false">取消</el-button>
+      <el-button type="primary" :loading="paymentSaving" @click="submitPayment">确认登记</el-button>
+    </template>
+  </el-dialog>
 
   <el-dialog v-model="actualQtyVisible" title="核定实际采购数量" width="460px" :close-on-click-modal="!poActionBusy" :close-on-press-escape="!poActionBusy" :show-close="!poActionBusy">
     <p>商品 {{ selectedPo?.items?.[0]?.sku }}，计划数量 {{ selectedPo?.items?.[0]?.plannedQty ?? '—' }}。提交后进入采购主管审核。</p>

@@ -31,7 +31,7 @@ export default function Dashboard() {
   const outboundOrders = useOutboundOrders()
   const announcements = useAnnouncements()
   const customer = useCustomerProfile()
-  const { creditBalance } = useBilling()
+  const { creditBalance, readWarning } = useBilling()
   const messages = useSystemMessages()
   const scopedOrders = dataScope.scope(orders)
   const scopedInbound = dataScope.scope(inboundOrders)
@@ -68,8 +68,8 @@ export default function Dashboard() {
           </div>
           <div className="flex gap-4 rounded-xl bg-white/10 px-5 py-3 backdrop-blur-sm">
             <div className="text-center">
-              <p className="text-2xl font-bold">{formatCurrency(creditBalance)}</p>
-              <p className="text-[11px] text-white/70">账户余额</p>
+              <p className="text-2xl font-bold">{role === 'sys_admin' ? '分户账务' : formatCurrency(creditBalance)}</p>
+              <p className="text-[11px] text-white/70">{role === 'sys_admin' ? '在费用账单中选择客户查看' : readWarning ? '缓存余额，请刷新核对' : '账户余额'}</p>
             </div>
             <div className="w-px bg-white/20" />
             <div className="text-center">

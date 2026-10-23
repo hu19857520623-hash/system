@@ -68,6 +68,17 @@ describe('预采购确认与所属采购员', () => {
     expect(tx.purchaseOrder.create).not.toHaveBeenCalled()
     expect(tx.purchaseOrder.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ totalAmount: 0, items: { update: expect.objectContaining({ data: expect.objectContaining({ quantity: 0, plannedQty: 2 }) }) } }) }))
   })
+  it('审核通过后转入的草稿采购单，确认时沿用原单', async () => {
+    const { service, row, tx } = setup()
+    row.convertedPoId = 9n
+    row.assignedAt = new Date('2026-10-22T10:00:00Z')
+    tx.purchaseOrder.findUnique.mockResolvedValue({ id: 9n, prePoId: 8n, poNo: 'PO-DRAFT', status: 'draft', items: [{ id: 11n, receivedQty: 0 }] })
+    tx.purchaseOrder.update = jest.fn(async ({ data }) => ({ ...data, id: 9n, poNo: 'PO-DRAFT' }))
+    const result = await service.confirm(8, { userId: 1, roleCode: 'purchaser' })
+    expect(result.poNo).toBe('PO-DRAFT')
+    expect(result.status).toBe('pending_actual_qty')
+    expect(tx.purchaseOrder.create).not.toHaveBeenCalled()
+  })
   it('修改后原单已被推进时不覆盖已审核结果', async () => {
     const { service, row, tx } = setup(); row.convertedPoId = 9n
     tx.purchaseOrder.findUnique.mockResolvedValue({ id: 9n, prePoId: 8n, status: 'finance_approved', items: [{ id: 11n }] })

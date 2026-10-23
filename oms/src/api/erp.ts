@@ -46,6 +46,12 @@ export type ErpSkuHolding = {
 }
 
 export type ErpPurchaseResult = {
+  currentBalance: number
+  holdingQuantity: number
+  inventoryMirrorId?: string
+  syncPending?: boolean
+  warning?: string
+  message?: string
   id: number
   orderNo: string
   customerId: number
@@ -73,7 +79,7 @@ export function getErpCatalogSku(sku: string) {
 }
 
 export function purchaseErpCatalog(body: {
-  orderNo?: string
+  orderNo: string
   customerCode?: string
   customerId?: string
   sku: string
@@ -496,6 +502,7 @@ export type ErpChargeItem = {
   amount: number
   chargeDate: string
   bizRef: string | null
+  paymentStatus?: 'paid' | 'unpaid'
   status: string
 }
 
@@ -547,6 +554,11 @@ export function getErpBills(customerCode: string) {
   )
 }
 
+export type ErpBillingSnapshot = { customerCode: string; customerName: string; creditBalance: number; feeRecords: import('../data/mockData').FeeRecord[]; monthlySpent: number; pendingBill: number; reservedAmount: number; reviewAmount: number; billingMonth: string; provisionalChargeCount: number; bills: ErpBillItem[]; source: 'erp'; snapshotAt: string }
+export function getErpBillingSnapshot(customerCode: string) {
+  return apiGet<ErpBillingSnapshot>(`/erp/customers/${encodeURIComponent(customerCode)}/billing-snapshot`)
+}
+
 export function getErpRecharges(customerCode: string) {
   return apiGet<{
     customerCode: string
@@ -560,6 +572,7 @@ export function createErpRecharge(
   customerCode: string,
   body: {
     amount: number
+    rechargeNo: string
     paymentMethod?: string
     paymentMethodId?: string
     paymentMethodTitle?: string
@@ -569,6 +582,8 @@ export function createErpRecharge(
   return apiPost<{
     record: ErpRechargeItem
     balance: number
+    syncPending?: boolean
+    warning?: string
     customerCode: string
   }>(`/erp/customers/${encodeURIComponent(customerCode)}/recharge`, body)
 }

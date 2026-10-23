@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
 import { PrismaService } from '../../common/prisma/prisma.service'
+import { billingCents } from '../billing/billing-workflow.util'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
 import { tryMarkOrderableOnOms } from './oms-catalog.util'
 import { OperationLogService } from '../operation-log/operation-log.service'
@@ -398,8 +399,8 @@ export class PricingService {
 
   async freightCallback(id: number, role: string, body?: any) {
     const row = await this.prisma.productPricing.findUnique({ where: { id: BigInt(id) } })
-    if (!row) throw new NotFoundException('???????')
-    if (row.pricingStatus !== 'waiting_freight') throw new BadRequestException('???????????')
+    if (!row) throw new NotFoundException('货盘库存记录不存在，请返回列表重新选择')
+    if (row.pricingStatus !== 'waiting_freight') throw new BadRequestException('当前状态不能登记海运费，请核对费用进度后继续')
 
     const seaFreight = body?.seaFreight ?? (num(row.seaFreight) || num(row.costRmb) * 0.1)
     const domesticFee = body?.domesticFee ?? (num(row.domesticFee) || num(row.costRmb) * 0.04)
@@ -456,8 +457,10 @@ export class PricingService {
     if (!row) throw new NotFoundException('货盘库存记录不存在')
     if (row.pricingStatus !== 'pending_pricing') throw new BadRequestException('当前状态不可定价')
 
+    if (typeof data.finalPrice !== 'number' || billingCents(data.finalPrice) <= 0 || billingCents(data.finalPrice) > 999999999999) throw new BadRequestException('请填写大于零、最多两位小数的有效售价')
+    if (data.visibleStockQty != null && data.visibleStockQty !== '' && (!Number.isSafeInteger(data.visibleStockQty) || data.visibleStockQty < 0)) throw new BadRequestException('可见库存须为非负整数，请核对后继续定价')
     const visibleStockQty = data.visibleStockQty != null && data.visibleStockQty !== ''
-      ? Math.max(0, Math.floor(Number(data.visibleStockQty)))
+      ? data.visibleStockQty
       : (row.inboundQty > 0 ? row.inboundQty : row.purchaseQty)
     const marketPrice = num(data.marketPrice)
     if (marketPrice <= 0) throw new BadRequestException('请填写市场参考价')
@@ -497,9 +500,9 @@ export class PricingService {
 
   async syncOms(id: number, role: string) {
     const row = await this.prisma.productPricing.findUnique({ where: { id: BigInt(id) } })
-    if (!row) throw new NotFoundException('???????')
+    if (!row) throw new NotFoundException('货盘库存记录不存在，请返回列表重新选择')
     if (row.pricingStatus !== 'priced' && row.pricingStatus !== 'synced') {
-      throw new BadRequestException('???????? OMS')
+      throw new BadRequestException('请先完成定价，再同步至OMS')
     }
 
     const isFirst = row.pricingStatus === 'priced'
@@ -546,7 +549,7 @@ export class PricingService {
    */
   async setShareStatus(id: number, status: unknown, role: string) {
     if (status !== 'enabled' && status !== 'stopped') {
-      throw new BadRequestException('共享状态仅支持 enabled 或 stopped')
+      throw new BadRequestException('共享状态请选择开启或停止')
     }
     const row = await this.prisma.productPricing.findUnique({ where: { id: BigInt(id) } })
     if (!row) throw new NotFoundException('货盘库存记录不存在')
@@ -624,9 +627,11 @@ export class PricingService {
 
   async reprice(id: number, data: any, role: string) {
     const row = await this.prisma.productPricing.findUnique({ where: { id: BigInt(id) } })
-    if (!row) throw new NotFoundException('???????')
-    if (row.pricingStatus !== 'synced') throw new BadRequestException('?????????')
+    if (!row) throw new NotFoundException('货盘库存记录不存在，请返回列表重新选择')
+    if (row.pricingStatus !== 'synced') throw new BadRequestException('请先完成货盘同步，再继续调整售价')
 
+    const nextPrice = data.price ?? data.finalPrice
+    if (typeof nextPrice !== 'number' || billingCents(nextPrice) <= 0 || billingCents(nextPrice) > 999999999999) throw new BadRequestException('请填写大于零、最多两位小数的有效售价')
     const oldPrice = num(row.finalPrice)
     await this.prisma.productPricing.update({
       where: { id: BigInt(id) },

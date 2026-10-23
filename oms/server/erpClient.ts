@@ -800,19 +800,25 @@ export function fetchErpBills(customerCode: string) {
   )
 }
 
+export function fetchErpBillingSnapshot(customerCode: string) {
+  return erpRequest<{ customerCode: string; creditBalance: number; feeRecords: unknown[]; monthlySpent: number; pendingBill: number; reservedAmount: number; billingMonth: string; bills: unknown[]; source: string; snapshotAt: string }>(`/billing/oms/by-customer/${encodeURIComponent(customerCode)}/snapshot`)
+}
+
 export function createErpRecharge(
   customerCode: string,
   body: {
     amount: number
+    rechargeNo: string
     paymentMethod?: string
     paymentMethodTitle?: string
     remark?: string
-    rechargeNo?: string
   },
 ) {
   return erpRequest<{
     record: ErpRechargeItem
     balance: number
+    syncPending?: boolean
+    warning?: string
     customerCode: string
     customerName: string
   }>(`/customers/oms/by-code/${encodeURIComponent(customerCode)}/recharge`, {

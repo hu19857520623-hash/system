@@ -267,6 +267,7 @@ export const supplierApi = {
   list: (params) => api.get('/suppliers', params),
   detail: (id) => api.get(`/suppliers/${id}`),
   create: (data) => api.post('/suppliers', data),
+  importCsv: (content) => api.post('/suppliers/import', { content }),
   update: (id, data) => api.put(`/suppliers/${id}`, data),
   remove: (id) => api.delete(`/suppliers/${id}`),
 }
@@ -293,6 +294,8 @@ export const purchaseApi = {
   importCsv: (content) => api.post('/purchase-orders/import', { content }),
   resubmit: (id, data) => api.post(`/purchase-orders/${id}/resubmit`, data),
   approve: (id, data) => api.post(`/purchase-orders/${id}/approve`, data || {}),
+  reopenAudit: (id, data) => api.post(`/purchase-orders/${id}/reopen-audit`, data || {}),
+  revisePending: (id, data) => api.put(`/purchase-orders/${id}/pending-audit`, data),
   rejectPoAudit: (id, data) => api.post(`/purchase-orders/${id}/reject-po-audit`, data),
   markPaid: (id, data) => api.post(`/purchase-orders/${id}/mark-paid`, data || {}),
   markUnpaid: (id, data) => api.post(`/purchase-orders/${id}/mark-unpaid`, data || {}),
@@ -374,6 +377,9 @@ export const inventoryApi = {
   logs: (sku, params) => api.get(`/inventory/logs/${encodeURIComponent(sku)}`, params),
   outboundLogs: (sku, params) => api.get(`/inventory/logs/${encodeURIComponent(sku)}/outbound`, params),
   catalogPurchases: (params) => api.get('/inventory/catalog-purchases', params),
+  previewCatalogReclaim: (data) => api.post('/inventory/catalog-reclaim/preview', data),
+  catalogReclaimHistory: (params) => api.get('/inventory/catalog-reclaims', params),
+  retryCatalogReclaimSync: (id) => api.post(`/inventory/catalog-reclaims/${id}/retry-sync`),
   reclaimCatalogHolding: (data) => api.post('/inventory/catalog-reclaim', data),
   transferLogistics: (data) => api.post('/inventory/logistics-transfer', data),
 }
@@ -402,6 +408,7 @@ export const outboundApi = {
   pack: (id, data) => api.post(`/outbound/${id}/pack`, data || {}),
   deliver: (id, data) => api.post(`/outbound/${id}/deliver`, data || {}),
   ship: (id, data) => api.post(`/outbound/${id}/ship`, data || {}),
+  syncShipment: (id) => api.post(`/outbound/${id}/sync-shipment`, {}),
   cancel: (id) => api.post(`/outbound/${id}/cancel`),
   assignPicker: (data) => api.post('/outbound/assign-picker', data),
   setProblem: (id, data) => api.post(`/outbound/${id}/problem`, data),
@@ -515,7 +522,8 @@ export const billingApi = {
   generate: (data) => api.post('/billing/generate', data),
   detail: (id) => api.get(`/billing/${id}`),
   create: (data) => api.post('/billing', data),
-  confirm: (id) => api.post(`/billing/${id}/confirm`),
+  settlementPreview: (id) => api.get(`/billing/${id}/settlement-preview`),
+  confirm: (id, data) => api.post(`/billing/${id}/confirm`, data),
 }
 
 // ── 海运账单 ──

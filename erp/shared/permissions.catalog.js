@@ -136,6 +136,7 @@ exports.PERM_GROUPS = [
             { id: 'inventory_query.view', label: '库存查询 · 查看' },
             { id: 'inventory_query.detail', label: '库存查询 · 详情' },
             { id: 'inventory_query.adjust', label: '库存查询 · 调整库位' },
+            { id: 'inventory_query.reclaim_refund', label: '货盘持有 · 收回并按原购买单退款' },
             { id: 'inventory_query.export', label: '库存查询 · 导出' },
             { id: 'wms_reports.view', label: '作业报表 · 查看' },
             { id: 'wms_reports.export', label: '作业报表 · 导出' },
@@ -241,7 +242,7 @@ exports.ROLE_PERM_TEMPLATES = {
         'return.view', 'return.receive', 'return.process', 'return.export',
         'outbound.view', 'outbound.create', 'outbound.relabel', 'outbound.pick', 'outbound.pack', 'outbound.ship', 'outbound.export',
         'anheng.view', 'anheng.test',
-        'inventory_query.view', 'inventory_query.detail', 'inventory_query.adjust', 'inventory_query.export',
+        'inventory_query.view', 'inventory_query.detail', 'inventory_query.adjust', 'inventory_query.export', 'inventory_query.reclaim_refund',
         'stocktake.view', 'stocktake.create', 'stocktake.count', 'stocktake.approve',
         'capacity.view', 'capacity.manage', 'wms_reports.view', 'wms_reports.export',
         'inbound_fee.view', 'inbound_fee.manage',
@@ -308,6 +309,7 @@ exports.ROLE_PERM_TEMPLATES = {
     财务: [
         'dashboard.view', 'dashboard.kpi_purchase', 'dashboard.kpi_sync', 'dashboard.pipeline_domestic',
         'products.view',
+        'pricing.view', 'inventory_query.view', 'inventory_query.detail', 'inventory_query.reclaim_refund',
         'purchase.view',
         'cost.view', 'cost.export', 'operating_ledger.view', 'operating_ledger.manage', 'operating_ledger.export',
         'billing.view', 'billing.generate', 'billing.manual', 'billing.export',
@@ -570,6 +572,8 @@ function isExportPermission(permId) {
     return Object.prototype.hasOwnProperty.call(exports.EXPORT_PERM_ROLES, permId);
 }
 function canAssignPermission(roleCode, permId) {
+    if (permId === 'inventory_query.reclaim_refund')
+        return roleCode === 'admin' || roleCode === 'finance';
     const roles = exports.EXPORT_PERM_ROLES[permId];
     if (!roles)
         return true;
@@ -588,7 +592,7 @@ function permLabel(code) {
 function permModule(code) {
     return code.split('.')[0] || code;
 }
-/** 剔除废弃码、应用别名，并去掉当前职位不能授予的导出权限 */
+/** 剔除废弃码、应用别名，并去掉当前职位不能授予的权限 */
 function filterAssignablePerms(roleCode, codes) {
     return normalizePermCodes(codes).filter((code) => canAssignPermission(roleCode, code));
 }

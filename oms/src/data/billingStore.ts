@@ -1,20 +1,16 @@
+import { readRecharge, runRecharge, newRechargeNo, type RechargeAttempt } from '../../../erp/shared/recharge-workflow'
+import { userFacingError } from '../utils/userFacingError'
 import { useSyncExternalStore } from 'react'
-import { apiDelete, apiGet, apiPut } from '../api/client'
-import {
-  createErpRecharge,
-  getErpCharges,
-  getErpRecharges,
-  type ErpChargeItem,
-  type ErpRechargeItem,
-} from '../api/erp'
+import { getStoredAuthSession } from '../api/client'
+import { createErpRecharge, getErpBillingSnapshot, type ErpBillingSnapshot } from '../api/erp'
 import type { FeeRecord } from './mockData'
 import type { OutboundFeeLine } from './feeTemplates'
-import { mapErpChargeType } from './chargeType'
-import { notifyPersistFailed } from '../utils/userNotify'
 
 interface BillingState {
   creditBalance: number
   feeRecords: FeeRecord[]
+  readWarning?: string
+  snapshot?: ErpBillingSnapshot
 }
 
 let state: BillingState = { creditBalance: 0, feeRecords: [] }
@@ -22,25 +18,6 @@ const listeners = new Set<() => void>()
 
 function emit() {
   listeners.forEach(fn => fn())
-}
-
-function persist(next: BillingState) {
-  state = next
-  emit()
-  void apiPut('/billing', next).catch(err => notifyPersistFailed('账单', err))
-}
-
-async function persistOrThrow(next: BillingState) {
-  const previous = state
-  state = next
-  emit()
-  try {
-    await apiPut('/billing', next)
-  } catch (error) {
-    state = previous
-    emit()
-    throw error
-  }
 }
 
 function subscribe(listener: () => void) {
@@ -56,6 +33,8 @@ export function hydrateBilling(next: BillingState) {
   state = {
     creditBalance: next.creditBalance,
     feeRecords: structuredClone(next.feeRecords),
+    readWarning: next.readWarning,
+    snapshot: next.snapshot,
   }
   emit()
 }
@@ -68,182 +47,76 @@ export function getCreditBalance(): number {
   return state.creditBalance
 }
 
-/** 用 ERP 权威余额覆盖本地展示并持久化，刷新后不回退旧余额。 */
-export async function setCreditBalanceFromErp(balance: number) {
-  await persistOrThrow({ ...state, creditBalance: round2(balance) })
+/** Balance is read from ERP; applying it locally never writes a financial snapshot. */
+export async function setCreditBalanceFromErp(balance: number, expectedCustomerCode?: string) {
+  const user = getStoredAuthSession()?.user
+  if (expectedCustomerCode && user?.customerCode !== expectedCustomerCode) throw new Error('客户身份已变化，请使用原账号重新读取余额')
+  if (!Number.isFinite(balance)) throw new Error('余额读取结果无效，请重新读取后继续')
+  state = { ...state, creditBalance: round2(balance), readWarning: undefined };emit()
 }
 
-export function getFeeRecords(): FeeRecord[] {
-  return state.feeRecords
+export function getFeeRecords(): FeeRecord[] { return state.feeRecords }
+
+
+let readGeneration = 0
+export async function refreshBillingFromServer(): Promise<ErpBillingSnapshot> {
+  const code = getStoredAuthSession()?.user.customerCode
+  if (!code) throw new Error('请先选择客户，再读取账务')
+  return refreshBillingFromErp(code)
 }
 
-function chargeToFee(c: ErpChargeItem): FeeRecord {
-  const date = String(c.chargeDate || '').slice(0, 10)
-  return {
-    id: `erp-chg-${c.id}`,
-    date: date || new Date().toISOString().slice(0, 10),
-    type: mapErpChargeType(c.chargeType),
-    refNo: c.bizRef || c.chargeNo || '—',
-    desc: c.description || c.chargeTypeLabel || c.chargeType,
-    amount: -Math.abs(Number(c.amount) || 0),
-    method: 'actual',
-    customerCode: c.customerCode || undefined,
-  }
-}
-
-function rechargeToFee(r: ErpRechargeItem, customerCode?: string): FeeRecord {
-  const date = String(r.createdAt || '').slice(0, 10)
-  return {
-    id: `erp-rc-${r.rechargeNo}`,
-    date: date || new Date().toISOString().slice(0, 10),
-    type: 'recharge',
-    refNo: r.rechargeNo,
-    desc: r.remark || `充值 · ${r.paymentMethod}`,
-    amount: Math.abs(Number(r.amount) || 0),
-    method: 'actual',
-    customerCode,
-    rechargeNo: r.rechargeNo,
-    paymentMethodTitle: r.paymentMethod,
-  }
-}
-
-/** 从 OMS 服务端拉取费用流水（含 Webhook 对账结果） */
-export async function refreshBillingFromServer(): Promise<void> {
-  try {
-    const data = await apiGet<{ creditBalance: number; feeRecords: FeeRecord[] }>('/billing')
-    hydrateBilling({
-      creditBalance: data.creditBalance,
-      feeRecords: data.feeRecords,
-    })
-  } catch (err) {
-    notifyPersistFailed('账单同步', err)
-  }
-}
-
-/** 从 ERP 拉取费用 + 充值流水，保留本地预扣与对账记录 */
-export async function refreshBillingFromErp(customerCode: string): Promise<void> {
-  await refreshBillingFromServer()
-  const localBalance = state.creditBalance
-  const [charges, recharges] = await Promise.all([
-    getErpCharges(customerCode),
-    getErpRecharges(customerCode),
-  ])
-  const erpFees = [
-    ...recharges.items.filter(r => r.status === 'confirmed').map(r => rechargeToFee(r, customerCode)),
-    ...charges.items.filter(c => c.status === 'confirmed').map(chargeToFee),
-  ]
-  const localKeep = state.feeRecords.filter(
-    f =>
-      f.method === 'pre_deduct' ||
-      f.method === 'settlement_adjust' ||
-      f.id.startsWith('pd-') ||
-      f.id.startsWith('settle-') ||
-      f.id.startsWith('refund-') ||
-      f.id.startsWith('local-'),
-  )
-  const seen = new Set(erpFees.map(f => f.id))
-  const merged = [...erpFees, ...localKeep.filter(f => !seen.has(f.id))].sort((a, b) =>
-    b.date.localeCompare(a.date),
-  )
-  persist({
-    creditBalance: round2(localBalance),
-    feeRecords: merged,
-  })
-}
-
-/** OMS 自助充值 → ERP 即时到账 */
-export async function rechargeViaErp(params: {
-  customerCode: string
-  amount: number
-  paymentMethodId?: string
-  paymentMethodTitle?: string
-}): Promise<{ ok: true; balance: number } | { ok: false; error: string }> {
-  const amount = Number(params.amount)
-  if (!Number.isFinite(amount) || amount <= 0) {
-    return { ok: false, error: '请输入有效充值金额' }
-  }
-  try {
-    const result = await createErpRecharge(params.customerCode, {
-      amount,
-      paymentMethod: params.paymentMethodId || 'bank',
-      paymentMethodId: params.paymentMethodId,
-      paymentMethodTitle: params.paymentMethodTitle,
-    })
-    const fee = rechargeToFee(result.record, result.customerCode)
-    if (params.paymentMethodTitle) fee.paymentMethodTitle = params.paymentMethodTitle
-    if (params.paymentMethodId) fee.paymentMethodId = params.paymentMethodId
-    const withoutDup = state.feeRecords.filter(f => f.id !== fee.id && f.rechargeNo !== fee.rechargeNo)
-    persist({
-      creditBalance: round2(result.balance),
-      feeRecords: [fee, ...withoutDup],
-    })
-    return { ok: true, balance: result.balance }
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : String(e) }
-  }
-}
-
-/** 出库提交时预扣款：余额不足则返回 false */
-export async function preDeductOutboundFees(
-  outboundNo: string,
-  feeLines: OutboundFeeLine[],
-  customerCode?: string,
-): Promise<{ ok: true } | { ok: false; error: string }> {
-  const total = feeLines.reduce((s, f) => s + f.amount, 0)
-  if (total <= 0) return { ok: true }
-
-  if (state.creditBalance < total) {
-    return {
-      ok: false,
-      error: `账户余额不足，需预扣 ¥${total.toFixed(2)}，当前余额 ¥${state.creditBalance.toFixed(2)}，请先充值`,
+/** One read-only ERP snapshot, with no browser-generated financial rows or fallback success. */
+export async function refreshBillingFromErp(customerCode: string): Promise<ErpBillingSnapshot> {
+  const user = getStoredAuthSession()?.user, code = customerCode.trim().toUpperCase(), generation = ++readGeneration
+  if (!user || (user.role !== 'sys_admin' && user.customerCode !== code)) throw new Error('请使用当前客户身份读取账务，不能跨客户读取')
+  let snapshot: ErpBillingSnapshot
+  try { snapshot = await getErpBillingSnapshot(code) }
+  catch (error) {
+    if (user.role !== 'sys_admin' && getStoredAuthSession()?.user.id === user.id && getStoredAuthSession()?.user.customerId === user.customerId) {
+      state = { ...state, readWarning: '最新账务读取失败，当前保留上次结果，请重新读取后核对' };emit()
     }
+    throw error
   }
-
-  const date = new Date().toISOString().slice(0, 10)
-  const newRecords: FeeRecord[] = feeLines.map((f, i) => ({
-    id: `pd-${Date.now()}-${i}`,
-    date,
-    type: f.type,
-    refNo: outboundNo,
-    desc: `预扣 · ${f.detail}`,
-    amount: -f.amount,
-    method: 'pre_deduct',
-    customerCode: customerCode || undefined,
-  }))
-
-  try {
-    await persistOrThrow({
-      creditBalance: round2(state.creditBalance - total),
-      feeRecords: [...newRecords, ...state.feeRecords],
-    })
-  } catch (error) {
-    return {
-      ok: false,
-      error: `预扣保存失败：${error instanceof Error ? error.message : String(error)}`,
-    }
-  }
-
-  return { ok: true }
+  if (snapshot.customerCode !== code || !Array.isArray(snapshot.feeRecords) || !Array.isArray(snapshot.bills) || !Number.isFinite(snapshot.creditBalance) || !Number.isFinite(snapshot.monthlySpent) || !Number.isFinite(snapshot.pendingBill)) throw new Error('账务读取结果不完整，请重新读取后继续')
+  if (getStoredAuthSession()?.user.id !== user.id || getStoredAuthSession()?.user.customerId !== user.customerId) throw new Error('登录身份已变化，请使用原账号重新读取账务')
+  if (generation !== readGeneration) throw new Error('已有更新的账务读取请求，请核对最新读取结果')
+  if (user.role !== 'sys_admin') hydrateBilling({ creditBalance: snapshot.creditBalance, feeRecords: snapshot.feeRecords, snapshot })
+  return snapshot
 }
 
-/** ERP 创建失败时回滚本次 OMS 预扣，避免仅本地扣款。 */
-export async function rollbackPreDeductOutboundFees(outboundNo: string): Promise<number> {
-  const matched = state.feeRecords.filter(
-    f => f.refNo === outboundNo && f.method === 'pre_deduct',
-  )
-  const total = round2(matched.reduce((sum, fee) => sum + Math.abs(fee.amount), 0))
-  if (total <= 0) return 0
-  const result = await apiDelete<{ refunded: number; creditBalance: number }>(
-    `/billing/pre-deduct/${encodeURIComponent(outboundNo)}`,
-  )
-  state = {
-    creditBalance: result.creditBalance,
-    feeRecords: state.feeRecords.filter(
-      f => !(f.refNo === outboundNo && f.method === 'pre_deduct'),
-    ),
-  }
-  emit()
-  return round2(result.refunded)
+export function rechargeScope() {
+  const user = getStoredAuthSession()?.user
+  if (!user?.id || !user.customerCode) throw new Error('请使用原客户账号核对充值')
+  return `oms:${JSON.stringify([user.id, user.customerCode])}`
+}
+export function pendingRecharge() { return readRecharge(localStorage, rechargeScope()) }
+/** A failed or unknown request must keep its original immutable recharge number. */
+export async function rechargeViaErp(params: { customerCode: string; amount: number; paymentMethodId?: string; paymentMethodTitle?: string }, retry = false): Promise<{ ok: true; balance: number; pending: boolean; message: string } | { ok: false; error: string }> {
+  const user = getStoredAuthSession()?.user
+  if (!user || user.customerCode !== params.customerCode) return { ok: false, error: '请使用原客户账号核对充值' }
+  try {
+    const scope = rechargeScope(), original = readRecharge(localStorage, scope)
+    if (retry && !original) throw new Error('原充值已核对完成或已被其它页面处理，请重新读取充值记录，勿再次充值')
+    if (original && !retry) throw new Error('还有原充值待核对，请点击重试原充值，勿再次充值')
+    const attempt: RechargeAttempt = original || { ...params, rechargeNo: newRechargeNo(), paymentMethod: params.paymentMethodId || 'bank' }
+    const response = await runRecharge(localStorage, scope, attempt, async body => {
+      const result = await createErpRecharge(body.customerCode, body)
+      if (getStoredAuthSession()?.user.id !== user.id || getStoredAuthSession()?.user.customerCode !== user.customerCode) throw new Error('登录身份已变化，请使用原账号核对')
+      // Read current source-ledger state before clearing the original retry.
+      try { await refreshBillingFromErp(user.customerCode) }
+      catch (error) { throw new Error(`充值已返回，最新账务读取尚未完成，请保留原单重试核对。${userFacingError(error)}`) }
+      return result
+    })
+    return { ok: true, balance: state.creditBalance, pending: !response.completed, message: response.message }
+  } catch (error) { return { ok: false, error: userFacingError(error) } }
+}
+
+/** Legacy clients must use the order workflow, which owns reservation and refund transactions. */
+export async function preDeductOutboundFees(_outboundNo: string, _feeLines: OutboundFeeLine[], _customerCode?: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  return { ok: false, error: '请刷新页面后通过出库预约提交，预扣由出库单统一处理' }
+}
+export async function rollbackPreDeductOutboundFees(_outboundNo: string): Promise<number> {
+  throw new Error('请通过出库单撤回或取消并核对预扣退还，勿直接调整账务')
 }
 
 function round2(n: number): number {

@@ -1,3 +1,4 @@
+import { applyCatalogReclaimSnapshot } from './catalog-reclaim-snapshot.util.js'
 import { assertOwnedBindingMutation, OwnedBindingLockedError } from './owned-binding-lock.util.js'
 import { localizedErrorResponse } from './error-response.util.js'
 import { missingRequiredAccountMessage } from './account-validation.util.js'
@@ -35,6 +36,7 @@ import {
   requireInternalToken,
   requireSysAdmin,
   assertApiWritePermission,
+  assertBillingReadPermission,
   SYS_ADMIN_PERMISSIONS,
   type AuthClaims,
   type AuthenticatedRequest,
@@ -52,7 +54,7 @@ import {
   settleOutboundFees,
   type OutboundFeesPayload,
 } from './outbound-settlement.util.js'
-import { applyErpBillingChanged, openPreDeductTotal, type ErpBillingChangedPayload } from './billing-sync.util.js'
+import { applyErpBillingChanged, type ErpBillingChangedPayload } from './billing-sync.util.js'
 import {
   ErpApiError,
   createErpInboundAsn,
@@ -73,6 +75,7 @@ import {
   fetchErpCatalog,
   fetchErpCatalogSku,
   fetchErpCharges,
+  fetchErpBillingSnapshot,
   fetchErpCustomerByCode,
   fetchErpInboundByNo,
   fetchErpInboundsByCustomer,
@@ -450,7 +453,7 @@ async function buildBootstrap(auth: AuthClaims) {
 
   if (auth.role === 'sys_admin') {
     const billingAccounts = await prisma.billingAccount.findMany({ orderBy: { id: 'asc' } })
-    return { ...all, accounts: accountsWithReadiness, billingAccounts }
+    return { ...all, accounts: accountsWithReadiness, billing: null, feeRecords: [], billingAccounts }
   }
 
   const customerId = auth.customerId!
@@ -461,15 +464,22 @@ async function buildBootstrap(auth: AuthClaims) {
   const customerOutbound = all.outboundOrders.filter(item => item.customerId === customerId)
   const outboundNos = new Set(customerOutbound.map(item => item.outboundNo))
   const billing = await prisma.billingAccount.findUnique({ where: { customerId } })
+  let sourceBilling: Awaited<ReturnType<typeof fetchErpBillingSnapshot>> | null = null
+  let readWarning = '', sourceBalance: number | undefined
+  try {
+    if (auth.permissions.includes('billing:read')) { sourceBilling = await fetchErpBillingSnapshot(customerCode);sourceBalance = sourceBilling.creditBalance }
+    else sourceBalance = (await fetchErpCustomerByCode(customerCode)).balance
+  } catch { readWarning = '最新账务暂未读取，当前为缓存余额；请刷新账务后核对，勿重复提交扣费或充值' }
 
   return {
     ...all,
     accounts: account ? [account] : [],
     billing: billing
       ? {
-          creditBalance: billing.creditBalance,
-          monthlySpent: billing.monthlySpent,
-          pendingBill: billing.pendingBill,
+          creditBalance: sourceBalance ?? billing.creditBalance,
+          monthlySpent: sourceBilling?.monthlySpent ?? 0,
+          pendingBill: sourceBilling?.pendingBill ?? 0,
+          readWarning,
           budgetUsed: billing.budgetUsed,
           name: billing.name,
           code: billing.code,
@@ -478,7 +488,7 @@ async function buildBootstrap(auth: AuthClaims) {
         }
       : null,
     billingAccounts: billing ? [billing] : [],
-    feeRecords: all.feeRecords.filter(item => item.customerCode === customerCode),
+    feeRecords: sourceBilling?.feeRecords || [],
     stores: all.stores.filter(item => item.customerId === customerId),
     products: customerProducts,
     inventory: all.inventory.filter(item => item.customerId === customerId),
@@ -1055,22 +1065,23 @@ app.post('/api/erp/purchase', async (req, res) => {
     if (!customerCode) return res.status(400).json({ error: '缺少客户代码或有效的客户信息' })
 
     const sku = String(body.sku || '').trim()
-    const quantity = Math.floor(Number(body.quantity))
+    const quantity = body.quantity
     if (!sku) return res.status(400).json({ error: '缺少 SKU 编码' })
-    if (!Number.isFinite(quantity) || quantity <= 0) return res.status(400).json({ error: '购买数量须大于 0' })
+    if (typeof quantity !== 'number' || !Number.isSafeInteger(quantity) || quantity <= 0) return res.status(400).json({ error: '购买数量须为有效正整数' })
 
-    const orderNo =
-      String(body.orderNo || '').trim() ||
-      `CAT-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}${Date.now().toString().slice(-6)}`
+    const orderNo = typeof body.orderNo === 'string' ? body.orderNo.trim() : ''
+    if (!orderNo || orderNo.length > 50) return res.status(400).json({ error: '缺少有效的原采购单号，请重新打开确认清单后提交' })
+    if (body.unitPrice != null && (typeof body.unitPrice !== 'number' || !Number.isFinite(body.unitPrice) || body.unitPrice <= 0)) return res.status(400).json({ error: '商品报价无效，请重新核对' })
 
     const result = await purchaseErpCatalog({
       orderNo,
       customerCode,
       sku,
       quantity,
-      unitPrice: body.unitPrice != null ? Number(body.unitPrice) : undefined,
+      unitPrice: body.unitPrice,
     })
 
+    try {
     let productName = result.sku
     try {
       const catalogSku = await fetchErpCatalogSku(result.sku)
@@ -1081,50 +1092,49 @@ app.post('/api/erp/purchase', async (req, res) => {
 
     // 本地镜像：申购记录 + 客户货盘锁定库存，便于库存页/出库页继续用
     const account = await prisma.customerAccount.findFirst({ where: { code: customerCode } })
-    const customerId = account?.id ?? String(body.customerId || '')
+    if (!account) throw new Error('采购客户镜像未完成')
+    const customerId = account.id
     const now = new Date().toISOString().slice(0, 19).replace('T', ' ')
-    const erpHoldings = await fetchErpSkuInventoryByCode(customerCode).catch(() => [])
+    const mirrorState = await prisma.$transaction(async mirrorTx => {
+    let inventoryMirrorId: string | undefined
+    await mirrorTx.$queryRaw`SELECT id FROM oms_customeraccount WHERE id = ${customerId} FOR UPDATE`
+    const erpHoldings = await fetchErpSkuInventoryByCode(customerCode)
     const canonicalHolding = erpHoldings.find(item => item.sku === result.sku)
-    const canonicalQuantity = canonicalHolding?.quantity
+    const canonicalQuantity = canonicalHolding?.quantity ?? 0
+    const latestCustomer = await fetchErpCustomerByCode(customerCode)
 
     if (customerId) {
-      await prisma.catalogPurchase.create({
-        data: {
-          id: `erp-${result.id}`,
-          purchaseNo: result.orderNo,
-          customerId,
-          sku: result.sku,
-          productName,
-          qty: result.quantity,
-          createdAt: now,
-        },
-      }).catch(() => undefined)
+      await mirrorTx.catalogPurchase.upsert({
+        where: { id: `erp-${result.id}` }, update: {},
+        create: { id: `erp-${result.id}`, purchaseNo: result.orderNo, customerId, sku: result.sku, productName, qty: result.quantity, createdAt: now },
+      })
 
-      const mirrorId = `csi-${customerId}-${result.sku}`
-      const existing = await prisma.inventoryItem.findFirst({
+      const mirrorId = `csi-${createHash('sha256').update(JSON.stringify([customerId, result.sku])).digest('hex').slice(0, 40)}`
+      const existing = await mirrorTx.inventoryItem.findFirst({
         where: { sku: result.sku, stockSource: 'catalog', customerId },
-      }) ?? await prisma.inventoryItem.findUnique({ where: { id: mirrorId } })
+      }) ?? await mirrorTx.inventoryItem.findUnique({ where: { id: mirrorId } })
       if (existing) {
-        await prisma.inventoryItem.update({
+        inventoryMirrorId = existing.id
+        await mirrorTx.inventoryItem.update({
           where: { id: existing.id },
           data: {
             sku: result.sku,
             customerId,
             stockSource: 'catalog',
             locked:
-              canonicalQuantity ??
-              (result.idempotent ? existing.locked : existing.locked + result.quantity),
+              canonicalQuantity,
           },
         })
-      } else {
-        const pool = await prisma.inventoryItem.findFirst({
+      } else if (canonicalQuantity > 0) {
+        inventoryMirrorId = mirrorId
+        const pool = await mirrorTx.inventoryItem.findFirst({
           where: {
             sku: result.sku,
             stockSource: 'catalog',
             OR: [{ customerId: null }, { customerId: 'tkl' }],
           },
         })
-        await prisma.inventoryItem.create({
+        await mirrorTx.inventoryItem.create({
           data: {
             id: mirrorId,
             customerId,
@@ -1132,7 +1142,7 @@ app.post('/api/erp/purchase', async (req, res) => {
             name: pool?.name || productName,
             image: pool?.image || '',
             available: 0,
-            locked: canonicalQuantity ?? result.quantity,
+            locked: canonicalQuantity,
             inTransit: 0,
             safetyStock: 0,
             spec: pool?.spec || '',
@@ -1152,13 +1162,20 @@ app.post('/api/erp/purchase', async (req, res) => {
         })
       }
 
-      await prisma.billingAccount.updateMany({
+      await mirrorTx.billingAccount.updateMany({
         where: { customerId },
-        data: { creditBalance: result.balanceAfter ?? 0 },
+        data: { creditBalance: latestCustomer.balance },
       })
     }
 
-    res.json(result)
+    return { currentBalance: latestCustomer.balance, holdingQuantity: canonicalQuantity, inventoryMirrorId }
+    }, { timeout: 20000 })
+
+    res.json({ ...result, ...mirrorState })
+    } catch (mirrorError) {
+      console.error('[catalog purchase mirror]', mirrorError)
+      res.json({ ...result, syncPending: true, warning: '采购与扣款已保存，但OMS购买记录或持有同步未完成，请使用原采购单号重试，勿再次购买' })
+    }
   } catch (e) {
     sendErpError(res, e)
   }
@@ -1214,6 +1231,13 @@ app.get('/api/erp/customers/:customerCode/inventory-view', async (req, res) => {
   }
 })
 
+app.get('/api/erp/customers/:customerCode/billing-snapshot', async (req: AuthenticatedRequest, res) => {
+  try {
+    if (!assertBillingReadPermission(req, res)) return
+    res.json(await fetchErpBillingSnapshot(String(req.params.customerCode)))
+  } catch (error) { sendErpError(res, error) }
+})
+
 /** P2：费用明细 */
 app.get('/api/erp/customers/:customerCode/charges', async (req, res) => {
   try {
@@ -1243,44 +1267,18 @@ app.post('/api/erp/customers/:customerCode/recharge', async (req, res) => {
       remark?: string
       rechargeNo?: string
     }
-    const amount = Number(body.amount)
-    if (!Number.isFinite(amount) || amount <= 0) {
-      return res.status(400).json({ error: '充值金额无效' })
+    if (typeof body.amount !== 'number' || !/^\d+(\.\d{1,2})?$/.test(String(body.amount)) || body.amount <= 0 || typeof body.rechargeNo !== 'string' || !/^[A-Za-z0-9_-]{1,30}$/.test(body.rechargeNo)) {
+      return res.status(400).json({ error: '请核对充值金额（最多两位小数）和原充值单号' })
     }
     const result = await createErpRecharge(req.params.customerCode, {
-      amount,
+      amount: body.amount,
       paymentMethod: body.paymentMethod || body.paymentMethodId || 'bank',
       paymentMethodTitle: body.paymentMethodTitle,
       remark: body.remark,
       rechargeNo: body.rechargeNo,
     })
-
-    const account = await prisma.customerAccount.findFirst({ where: { code: req.params.customerCode } })
-    if (account) {
-      await prisma.billingAccount.updateMany({
-        where: { customerId: account.id },
-        data: { creditBalance: result.balance },
-      })
-    }
-    const feeId = `erp-rc-${result.record.rechargeNo}`
-    const existingFee = await prisma.feeRecord.findUnique({ where: { id: feeId } })
-    if (!existingFee) {
-      await prisma.feeRecord.create({
-        data: {
-          id: feeId,
-          date: new Date().toISOString().slice(0, 10),
-          type: 'recharge',
-          refNo: result.record.rechargeNo,
-          desc: `充值到账 · ${body.paymentMethodTitle || result.record.paymentMethod || 'bank'}`,
-          amount: result.record.amount,
-          method: 'actual',
-          customerCode: result.customerCode,
-          rechargeNo: result.record.rechargeNo,
-          paymentMethodId: body.paymentMethodId || body.paymentMethod || null,
-          paymentMethodTitle: body.paymentMethodTitle || result.record.paymentMethod || null,
-        },
-      })
-    }
+    // ERP owns the atomic receipt and webhook mirror. Never overwrite its latest
+    // balance here with a response that may predate another purchase or debit.
 
     res.json(result)
   } catch (e) {
@@ -1479,7 +1477,7 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
             amount: Number(data.amount || 0),
             paymentMethod: String(data.paymentMethod || 'bank'),
             remark: data.remark ? String(data.remark) : null,
-            createdAt: new Date().toISOString().slice(0, 10),
+            createdAt: String(data.createdAt || new Date().toISOString()).slice(0, 10),
           },
         ]
       }
@@ -1500,8 +1498,8 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
               data: {
                 id: msgId,
                 customerId: account.id,
-                title: `账单 ${billingNo} 已确认`,
-                content: `金额 ¥${Number(data.totalAmount || 0).toFixed(2)}，状态：${String(data.status || 'confirmed')}`,
+                title: `账单 ${billingNo} ${data.status === 'paid' ? '已结清' : '已入账'}`,
+                content: `金额 ¥${Number(data.totalAmount || 0).toFixed(2)}，状态：${data.status === 'paid' ? '已结清' : '已入账待核对'}`,
                 type: 'billing',
                 read: false,
                 createdAt: new Date().toISOString().slice(0, 16).replace('T', ' '),
@@ -1726,37 +1724,10 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
           holdingQty?: number
         }>
       }
-      if (payload.action === 'catalog_reclaim' && customerId && payload.sku && payload.quantity) {
-        const sku = String(payload.sku).trim()
-        const qty = Math.floor(Number(payload.quantity))
-        if (qty > 0) {
-          const inv = await prisma.inventoryItem.findFirst({
-            where: { customerId, sku, stockSource: 'catalog' },
-          })
-          if (inv) {
-            const nextLocked = Math.max(0, inv.locked - qty)
-            if (nextLocked <= 0) {
-              await prisma.inventoryItem.delete({ where: { id: inv.id } }).catch(() => undefined)
-            } else {
-              await prisma.inventoryItem.update({
-                where: { id: inv.id },
-                data: { locked: nextLocked },
-              })
-            }
-          }
-          const product = await prisma.product.findFirst({ where: { internalSku: sku } })
-          if (product) {
-            await prisma.product.update({
-              where: { id: product.id },
-              data: {
-                lockedQty: Math.max(0, product.lockedQty - qty),
-                availableQty: Math.max(0, product.availableQty - qty),
-                ...(payload.remainingQty === 0 ? { inCatalog: true, productStatus: 'draft' } : {}),
-              },
-            })
-          }
-        }
+      if (payload.action === 'catalog_reclaim' && customerId && payload.sku) {
+        await applyCatalogReclaimSnapshot(prisma, customerId, String(payload.sku).trim(), () => fetchErpSkuInventoryByCode(customerCode))
       }
+
       if (
         customerId &&
         payload.stockSource === 'catalog' &&
@@ -3258,32 +3229,12 @@ app.delete('/api/outbound-orders/:outboundNo', async (req, res) => {
 
 app.get('/api/billing', async (req: AuthenticatedRequest, res) => {
   try {
-    const scope = customerScope(req)
-    const billing = scope
-      ? await prisma.billingAccount.findUnique({ where: { customerId: scope } })
-      : await prisma.billingAccount.findFirst({ orderBy: { id: 'asc' } })
-    const feeRecords = await prisma.feeRecord.findMany({
-      where: scope ? { customerCode: req.auth!.customerCode } : undefined,
-      orderBy: { date: 'desc' },
-    })
-    let creditBalance = billing?.creditBalance ?? 0
-    if (scope && req.auth?.customerCode) {
-      try {
-        const erp = await fetchErpCustomerByCode(req.auth.customerCode)
-        const preDeduct = openPreDeductTotal(feeRecords)
-        creditBalance = Math.round((Number(erp.balance) - preDeduct) * 100) / 100
-      } catch {
-        // ERP 不可用时回退本地镜像余额
-      }
-    }
-    res.json({
-      creditBalance,
-      feeRecords,
-    })
-  } catch (e) {
-    console.error(e)
-    res.status(500).json({ error: String(e) })
-  }
+    if (!assertBillingReadPermission(req, res)) return
+    if (req.auth?.role !== 'sys_admin' && req.query.customerCode && String(req.query.customerCode).trim().toUpperCase() !== req.auth?.customerCode) return res.status(403).json({ error: '不能读取其它客户的账务，请使用当前客户身份核对' })
+    const code = req.auth?.role === 'sys_admin' ? String(req.query.customerCode || '').trim() : req.auth?.customerCode || ''
+    if (!code) return res.json({ creditBalance: 0, feeRecords: [], bills: [], monthlySpent: 0, pendingBill: 0, reservedAmount: 0, customerSelectionRequired: true, source: 'unselected' })
+    res.json(await fetchErpBillingSnapshot(code))
+  } catch (error) { sendErpError(res, error) }
 })
 
 app.put('/api/logistics', async (req, res) => {
@@ -3340,120 +3291,12 @@ app.put('/api/logistics', async (req, res) => {
   }
 })
 
-app.put('/api/billing', async (req: AuthenticatedRequest, res) => {
-  try {
-  const { creditBalance, feeRecords: submittedFeeRecords } = req.body as {
-      creditBalance: number
-      feeRecords: Record<string, unknown>[]
-    }
-    const feeRecords = await filterDeletedSnapshotRows('fee', submittedFeeRecords || [])
-    const requestedBalance = Math.round(Number(creditBalance) * 100) / 100
-    if (!Number.isFinite(requestedBalance)) {
-      return res.status(400).json({ error: 'Invalid creditBalance' })
-    }
-
-    await prisma.$transaction(async tx => {
-      const scope = customerScope(req)
-      const billing = scope
-        ? await tx.billingAccount.findUnique({ where: { customerId: scope } })
-        : await tx.billingAccount.findFirst({ orderBy: { id: 'asc' } })
-      if (!billing) throw new Error('Billing account not found')
-      if (!scope) {
-        await tx.billingAccount.update({
-          where: { id: billing.id },
-          data: { creditBalance: requestedBalance },
-        })
-      }
-      for (const f of feeRecords || []) {
-        const id = String(f.id)
-        const data = {
-          date: String(f.date),
-          type: String(f.type),
-          refNo: String(f.refNo),
-          desc: String(f.desc),
-          amount: Number(f.amount),
-          method: (f.method as string | null | undefined) ?? null,
-          customerCode: scope
-            ? req.auth!.customerCode
-            : (f.customerCode as string | null | undefined) ?? null,
-          rechargeNo: (f.rechargeNo as string | null | undefined) ?? null,
-          paymentMethodId: (f.paymentMethodId as string | null | undefined) ?? null,
-          paymentMethodTitle: (f.paymentMethodTitle as string | null | undefined) ?? null,
-        }
-        await tx.feeRecord.upsert({
-          where: { id },
-          create: { id, ...data },
-          update: data,
-        })
-      }
-    })
-    res.json({ ok: true })
-  } catch (e) {
-    console.error(e)
-    res.status(500).json({ error: String(e) })
-  }
+// Financial records are produced by ERP operations, never by browser snapshots.
+app.put('/api/billing', (_req, res) => {
+  res.status(405).json({ error: '余额和费用不支持直接修改，请刷新页面后通过账单、充值或出库单核对' })
 })
-
-app.delete('/api/billing/pre-deduct/:outboundNo', async (req: AuthenticatedRequest, res) => {
-  try {
-    const outboundNo = String(req.params.outboundNo || '').trim()
-    if (!outboundNo) return res.status(400).json({ error: '缺少出库单号' })
-    const scope = customerScope(req)
-    if (scope) {
-      try {
-        await fetchErpOutboundByNo(outboundNo)
-        return res.status(409).json({ error: '出库单已提交 ERP，不能自行退回预扣' })
-      } catch (e) {
-        if (!(e instanceof ErpApiError) || (e.status !== 404 && e.status !== 400)) {
-          throw e
-        }
-      }
-    }
-    const result = await prisma.$transaction(async tx => {
-      const records = await tx.feeRecord.findMany({
-        where: {
-          refNo: outboundNo,
-          method: 'pre_deduct',
-          ...(scope ? { customerCode: req.auth!.customerCode } : {}),
-        },
-      })
-      const refunded = records.reduce((sum, record) => sum + Math.abs(record.amount), 0)
-      const billing = scope
-        ? await tx.billingAccount.findUnique({ where: { customerId: scope } })
-        : await tx.billingAccount.findFirst({ orderBy: { id: 'asc' } })
-      if (records.length > 0) {
-        await tx.feeRecord.deleteMany({
-          where: {
-            refNo: outboundNo,
-            method: 'pre_deduct',
-            ...(scope ? { customerCode: req.auth!.customerCode } : {}),
-          },
-        })
-      }
-      const nextBalance = (billing?.creditBalance ?? 0) + refunded
-      if (billing && !scope) {
-        await tx.billingAccount.update({ where: { id: billing.id }, data: { creditBalance: nextBalance } })
-      }
-      return { refunded, creditBalance: nextBalance }
-    })
-    let creditBalance = result.creditBalance
-    if (scope && req.auth?.customerCode) {
-      try {
-        const erp = await fetchErpCustomerByCode(req.auth.customerCode)
-        const remaining = await prisma.feeRecord.findMany({
-          where: { customerCode: req.auth.customerCode },
-        })
-        const preDeduct = openPreDeductTotal(remaining)
-        creditBalance = Math.round((Number(erp.balance) - preDeduct) * 100) / 100
-      } catch {
-        creditBalance = Math.round((Number(result.creditBalance) - Number(result.refunded)) * 100) / 100
-      }
-    }
-    res.json({ ok: true, refunded: result.refunded, creditBalance })
-  } catch (e) {
-    console.error(e)
-    res.status(500).json({ error: String(e) })
-  }
+app.delete('/api/billing/pre-deduct/:outboundNo', (_req, res) => {
+  res.status(405).json({ error: '请通过出库单撤回或取消并核对预扣退还；历史差异请联系财务' })
 })
 
 app.put('/api/fee-templates', async (req, res) => {

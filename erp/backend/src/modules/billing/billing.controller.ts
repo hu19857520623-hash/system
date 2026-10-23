@@ -3,7 +3,8 @@ import { BillingService } from './billing.service'
 import { PaginationDto } from '../../common/dto/pagination.dto'
 import { RequirePerms } from '../../common/decorators/require-perms.decorator'
 import { OmsBridge } from '../../common/decorators/oms-bridge.decorator'
-import { CreateBillingChargeDto, CreateBillingOrderDto, GenerateBillingDto } from './dto/billing.dto'
+import { CreateBillingOrderDto, GenerateBillingDto, SubmitGenerateBillingDto, BillingOperationDto, CreateManualBillingChargeDto } from './dto/billing.dto'
+import { CurrentUser } from '../../common/decorators/current-user.decorator'
 
 @Controller('billing')
 export class BillingController {
@@ -23,6 +24,12 @@ export class BillingController {
     return this.service.listBillsForOms(customerCode)
   }
 
+  @OmsBridge()
+  @Get('oms/by-customer/:customerCode/snapshot')
+  omsSnapshot(@Param('customerCode') customerCode: string) {
+    return this.service.snapshotForOms(customerCode)
+  }
+
   @RequirePerms('billing.view')
   @Get('charges')
   listCharges(@Query() q: PaginationDto & { customerId?: number; customerCode?: string; chargeType?: string; source?: string; status?: string; dateFrom?: string; dateTo?: string; destination?: string }) {
@@ -31,8 +38,8 @@ export class BillingController {
 
   @RequirePerms('billing.manual')
   @Post('charges')
-  createCharge(@Body() body: CreateBillingChargeDto) {
-    return this.service.createCharge(body)
+  createCharge(@Body() body: CreateManualBillingChargeDto, @CurrentUser('userId') userId: number) {
+    return this.service.createManualCharge(body, userId)
   }
 
   @RequirePerms('billing.generate')
@@ -43,14 +50,20 @@ export class BillingController {
 
   @RequirePerms('billing.generate')
   @Post('generate')
-  generateFromCharges(@Body() body: GenerateBillingDto) {
-    return this.service.generateFromCharges(body)
+  generateFromCharges(@Body() body: SubmitGenerateBillingDto, @CurrentUser('userId') userId: number) {
+    return this.service.generateFromCharges(body, userId)
   }
 
   @RequirePerms('billing.view')
   @Get()
-  list(@Query() q: PaginationDto & { status?: string; customerId?: number }) {
+  list(@Query() q: PaginationDto & { status?: string; customerId?: number; customerCode?: string }) {
     return this.service.list(q)
+  }
+
+  @RequirePerms('billing.view')
+  @Get(':id/settlement-preview')
+  settlementPreview(@Param('id', ParseIntPipe) id: number) {
+    return this.service.settlementPreview(id)
   }
 
   @RequirePerms('billing.view')
@@ -67,7 +80,7 @@ export class BillingController {
 
   @RequirePerms('billing.generate')
   @Post(':id/confirm')
-  confirm(@Param('id', ParseIntPipe) id: number) {
-    return this.service.confirm(id)
+  confirm(@Param('id', ParseIntPipe) id: number, @Body() body: BillingOperationDto, @CurrentUser('userId') userId: number) {
+    return this.service.confirm(id, body, userId)
   }
 }

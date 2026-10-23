@@ -354,6 +354,10 @@
           "label": "库存查询 · 调整库位"
         },
         {
+          "id": "inventory_query.reclaim_refund",
+          "label": "货盘持有 · 收回并按原购买单退款"
+        },
+        {
           "id": "inventory_query.export",
           "label": "库存查询 · 导出"
         },
@@ -799,6 +803,7 @@
       "inventory_query.detail",
       "inventory_query.adjust",
       "inventory_query.export",
+      "inventory_query.reclaim_refund",
       "stocktake.view",
       "stocktake.create",
       "stocktake.count",
@@ -977,6 +982,10 @@
       "dashboard.kpi_sync",
       "dashboard.pipeline_domestic",
       "products.view",
+      "pricing.view",
+      "inventory_query.view",
+      "inventory_query.detail",
+      "inventory_query.reclaim_refund",
       "purchase.view",
       "cost.view",
       "cost.export",
@@ -1417,6 +1426,7 @@
     "inventory_query.view",
     "inventory_query.detail",
     "inventory_query.adjust",
+    "inventory_query.reclaim_refund",
     "inventory_query.export",
     "wms_reports.view",
     "wms_reports.export",

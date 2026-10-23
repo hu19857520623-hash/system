@@ -1,4 +1,5 @@
 import { assertGlobalSkuAvailable } from '../../common/global-sku.util'
+import { randomUUID } from 'crypto'
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
@@ -20,6 +21,34 @@ import {
 function fmtTime(d: Date | null | undefined): string {
   if (!d) return ''
   return d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
+const PAYMENT_TYPE_LABELS: Record<string, string> = {
+  deposit: '定金',
+  balance: '尾款',
+  full: '全款',
+  other: '其他',
+}
+
+function decimalCents(value: unknown, label = '采购金额') {
+  const numeric = Number(value)
+  const text = Number.isFinite(numeric) ? numeric.toFixed(2) : ''
+  if (!/^\d{1,12}\.\d{2}$/.test(text)) throw new BadRequestException(`${label}无效，请核对后再登记付款`)
+  const [whole, fraction] = text.split('.')
+  return Number(whole) * 100 + Number(fraction)
+}
+
+function moneyCents(value: unknown) {
+  const text = typeof value === 'number' ? value.toFixed(2) : String(value ?? '').trim()
+  if (!/^\d{1,12}(\.\d{1,2})?$/.test(text)) throw new BadRequestException('付款金额须为大于 0、最多两位小数的金额')
+  const [whole, fraction = ''] = text.split('.')
+  const cents = Number(whole) * 100 + Number(fraction.padEnd(2, '0'))
+  if (!Number.isSafeInteger(cents) || cents <= 0) throw new BadRequestException('付款金额须为大于 0、最多两位小数的金额')
+  return cents
+}
+
+function centsToMoney(cents: number) {
+  return Number((cents / 100).toFixed(2))
 }
 
 function fmtDate(d: Date | null | undefined): string {
@@ -65,8 +94,22 @@ export class PurchaseService {
     const userMap = new Map<number, string>(users.map((u) => [Number(u.id), u.realName] as [number, string]))
     const whMap = new Map<string, string>(warehouses.map((w) => [w.warehouseCode, w.warehouseName] as [string, string]))
     const prePoStatusMap = new Map<number, string>(prePos.map((item) => [Number(item.id), item.status] as [number, string]))
+    const paymentRows = rows.length
+      ? await this.prisma.purchasePayment.findMany({ where: { poId: { in: rows.map((row) => row.id) } }, orderBy: { id: 'asc' } })
+      : []
+    const paymentsByPo = new Map<string, any[]>()
+    for (const payment of paymentRows) {
+      const key = String(payment.poId)
+      paymentsByPo.set(key, [...(paymentsByPo.get(key) || []), payment])
+    }
 
-    return rows.map((row) => this.serialize(row, supMap, userMap, whMap, prePoStatusMap.get(Number(row.prePoId)) || ''))
+    return rows.map((row) => this.serialize(
+      { ...row, payments: paymentsByPo.get(String(row.id)) || [] },
+      supMap,
+      userMap,
+      whMap,
+      prePoStatusMap.get(Number(row.prePoId)) || '',
+    ))
   }
 
   private serialize(row: any, supMap: Map<number, string>, userMap: Map<number, string>, whMap: Map<string, string>, prePoStatus = '') {
@@ -99,7 +142,7 @@ export class PurchaseService {
       financeAt: row.financeAt,
       financeAtStr: fmtTime(row.financeAt),
       financeRemark: row.financeRemark || '',
-      paymentStatus: row.paymentStatus === 'paid' ? 'paid' : 'unpaid',
+      ...this.paymentView(row),
       paidAt: row.paidAt,
       paidAtStr: fmtTime(row.paidAt),
       paidBy: row.paidBy ? Number(row.paidBy) : null,
@@ -528,60 +571,115 @@ export class PurchaseService {
     if (!lines.length) throw new BadRequestException('请添加采购明细')
 
     const supplierId = await this.resolveSupplierForCreate(data)
-
+    const warehouseCode = String(data.warehouseCode || '').trim()
+    if (!warehouseCode) throw new BadRequestException('请选择目标中转仓')
+    const prepared = lines.map((line) => {
+      const quantity = Number(line.quantity ?? line.qty ?? 0)
+      const unitPrice = Number(line.unitPrice ?? 0)
+      const sku = String(line.sku ?? '').trim()
+      const productName = String(line.productName ?? line.name ?? '').trim()
+      if (!sku) throw new BadRequestException('SKU 不能为空')
+      if (sku.length > 30) throw new BadRequestException('SKU 不能超过 30 字')
+      if (!productName) throw new BadRequestException('请填写商品名称')
+      if (!Number.isSafeInteger(quantity) || quantity < 1) throw new BadRequestException('采购数量须为大于零的整数')
+      if (!Number.isFinite(unitPrice) || unitPrice <= 0) throw new BadRequestException('请填写大于零的采购单价')
+      return { sku, productName, quantity, unitPrice, remark: line.remark ? String(line.remark) : undefined }
+    })
     const orderDomestic = data.domesticFreight != null && data.domesticFreight !== '' ? Number(data.domesticFreight) : 0
-    const totalQty = lines.reduce((s, l) => s + (Number(l.quantity ?? l.qty ?? 0) || 0), 0)
 
-    const items = lines.map((l) => {
-      const quantity = Number(l.quantity ?? l.qty ?? 0)
-      const unitPrice = Number(l.unitPrice ?? 0)
-      const plannedQty = l.plannedQty != null && l.plannedQty !== '' ? Number(l.plannedQty) : undefined
-      let lineDomestic = l.domesticFreight != null && l.domesticFreight !== '' ? Number(l.domesticFreight) : undefined
-      if (lineDomestic == null && orderDomestic > 0 && totalQty > 0) {
-        lineDomestic = Math.round((orderDomestic * quantity) / totalQty * 100) / 100
-      }
-      return {
-        productId: BigInt(l.productId ?? 0),
-        sku: l.sku ?? '',
-        productName: l.productName ?? l.name,
-        plannedQty,
-        quantity,
-        unitPrice,
-        amount: quantity * unitPrice,
-        domesticFreight: lineDomestic,
-        remark: l.remark,
-      }
-    })
-    const totalAmount = items.reduce((s, i) => s + i.amount, 0)
-    const row = await this.prisma.purchaseOrder.create({
-      data: {
-        poNo: data.poNo || 'PO-' + Date.now().toString().slice(-8),
+    const created = await this.prisma.$transaction(async (tx) => {
+      const warehouse = await tx.warehouse.findUnique({ where: { warehouseCode } })
+      if (!warehouse || warehouse.status !== 1 || warehouse.warehouseType !== 'logistics') throw new BadRequestException('请选择有效且启用的物流中转仓')
+      return this.createAssignmentPreOrders(tx, {
         supplierId,
-        warehouseCode: data.warehouseCode,
-        currency: data.currency || 'RMB',
-        expectedArrival: data.expectedArrival ? new Date(data.expectedArrival) : undefined,
+        warehouseCode,
+        expectedArrival: data.expectedArrival,
         remark: data.remark,
-        status: 'pending_po_audit',
-        totalAmount,
         domesticFreight: orderDomestic > 0 ? orderDomestic : undefined,
-        purchaserId: purchaserId ? BigInt(purchaserId) : undefined,
-        items: { create: items },
-      },
-      include: { items: true },
+        lines: prepared,
+        reason: '创建采购单后进入分配',
+      })
     })
-    const [item] = await this.enrichOrders([row])
     await this.opLog.log({
       operatorId: purchaserId,
       module: 'purchase',
       action: 'create',
-      targetType: 'purchase_order',
-      targetId: item.poNo,
-      detail: { supplierName: item.supplierName, totalAmount: item.totalAmount, itemCount: item.items?.length },
+      targetType: 'pre_purchase_order',
+      targetId: created[0]?.prePoNo,
+      detail: { count: created.length, prePoNos: created.map((row) => row.prePoNo), warehouseCode },
     })
-    return item
+    return {
+      status: 'pending_assign',
+      count: created.length,
+      prePurchaseOrders: created.map((row) => ({
+        id: Number(row.id),
+        prePoNo: row.prePoNo,
+        sku: row.sku,
+        status: row.status,
+      })),
+    }
   }
 
-  /** 按创建采购单的字段批量导入。相同供应商、中转仓、到货、运费和备注的行合并为一张采购单。 */
+  /** 直接创建或尚未关联预采购的审核通过：按明细生成待分配预采购，不进入打款。 */
+  private async createAssignmentPreOrders(db: any, input: {
+    supplierId: bigint
+    warehouseCode?: string | null
+    expectedArrival?: Date | string | null
+    remark?: string | null
+    domesticFreight?: number | null
+    lines: { sku: string; productName: string; quantity: number; unitPrice: number; remark?: string }[]
+    convertedPoId?: bigint
+    reason: string
+  }) {
+    const totalQty = input.lines.reduce((sum, line) => sum + line.quantity, 0)
+    const orderFreight = input.domesticFreight != null ? Number(input.domesticFreight) : 0
+    const created: any[] = []
+    for (let index = 0; index < input.lines.length; index++) {
+      const line = input.lines[index]
+      if (!line.sku) throw new BadRequestException('SKU 不能为空')
+      if (!line.productName) throw new BadRequestException('请填写商品名称')
+      let dev = await db.productDev.findFirst({ where: { sku: line.sku } })
+      if (!dev) {
+        const stamp = `${Date.now().toString(36)}${randomUUID().replace(/-/g, '').slice(0, 6)}`.toUpperCase()
+        dev = await db.productDev.create({
+          data: {
+            applyNo: `PD-${stamp}${index}`.slice(0, 30),
+            sku: line.sku,
+            productName: line.productName,
+            status: 'approved',
+            purchaseQty: line.quantity,
+            estimatedCost: line.unitPrice,
+            reason: input.reason,
+          },
+        })
+      }
+      const lineFreight = orderFreight > 0 && totalQty > 0
+        ? Math.round((orderFreight * line.quantity) / totalQty * 100) / 100
+        : undefined
+      const stamp = `${Date.now().toString(36)}${randomUUID().replace(/-/g, '').slice(0, 6)}`.toUpperCase()
+      created.push(await db.prePurchaseOrder.create({
+        data: {
+          prePoNo: `PRE-${stamp}${index}`.slice(0, 30),
+          devId: dev.id,
+          applyNo: dev.applyNo,
+          sku: line.sku,
+          productName: line.productName,
+          plannedQty: line.quantity,
+          unitPrice: line.unitPrice,
+          supplierId: input.supplierId,
+          warehouseCode: input.warehouseCode || null,
+          domesticFreight: lineFreight,
+          expectedArrival: input.expectedArrival ? new Date(input.expectedArrival) : undefined,
+          remark: line.remark || input.remark || undefined,
+          status: 'pending_assign',
+          convertedPoId: input.lines.length === 1 ? input.convertedPoId : undefined,
+        },
+      }))
+    }
+    return created
+  }
+
+  /** 按创建采购单的字段批量导入。每条明细生成一张待分配预采购单；相同抬头的行分摊同一笔国内运费。 */
   async importFromCsv(content: string, purchaserId?: number): Promise<ImportRowResult> {
     let parsed: ReturnType<typeof parsePurchaseImportCsv>
     try {
@@ -671,6 +769,36 @@ export class PurchaseService {
       const warehouse = await tx.warehouse.findUnique({ where: { warehouseCode: targetWarehouseCode } })
       if (!warehouse || warehouse.status !== 1 || warehouse.warehouseType !== 'logistics') throw new BadRequestException('请选择有效且启用的物流中转仓')
       if (!row.items.length || row.items.some(line => !Number.isSafeInteger(line.quantity) || line.quantity <= 0 || !Number.isFinite(Number(line.unitPrice)) || Number(line.unitPrice) <= 0)) throw new BadRequestException('请先核对采购明细，每项数量须为正整数、采购单价须大于零')
+      if (!row.prePoId) {
+        if (!row.supplierId) throw new BadRequestException('请先补充供应商后再转入分配')
+        const pres = await this.createAssignmentPreOrders(tx, {
+          supplierId: row.supplierId,
+          warehouseCode: targetWarehouseCode,
+          expectedArrival: row.expectedArrival,
+          remark: row.remark,
+          domesticFreight: row.domesticFreight != null ? Number(row.domesticFreight) : undefined,
+          lines: row.items.map((line) => ({
+            sku: String(line.sku || '').trim(),
+            productName: String(line.productName || line.sku || '').trim(),
+            quantity: line.quantity,
+            unitPrice: Number(line.unitPrice),
+          })),
+          convertedPoId: row.items.length === 1 ? row.id : undefined,
+          reason: `采购审核通过后转入分配 ${row.poNo}`,
+        })
+        return tx.purchaseOrder.update({
+          where: { id: BigInt(id) },
+          data: {
+            status: 'draft',
+            prePoId: row.items.length === 1 ? pres[0].id : undefined,
+            warehouseCode: row.warehouseCode ? undefined : targetWarehouseCode,
+            auditorId: auditorId ? BigInt(auditorId) : undefined,
+            auditedAt: new Date(),
+            poAuditRemark: remark || '审核通过，转入预采购分配',
+          } as any,
+          include: { items: true },
+        })
+      }
       const order = await tx.purchaseOrder.update({
         where: { id: BigInt(id) },
         data: {
@@ -966,7 +1094,7 @@ export class PurchaseService {
         productName: line.productName || line.sku,
         costRmb: unitPrice,
         purchaseQty: existing
-          ? (samePo ? existing.purchaseQty : (existing.purchaseQty ?? 0) + qty)
+          ? (samePo ? qty : (existing.purchaseQty ?? 0) + qty)
           : qty,
         poNo: po.poNo,
         domesticFee: domesticPerUnit,
@@ -1025,22 +1153,98 @@ export class PurchaseService {
     }
   }
 
-  async setPaymentStatus(id: number, paid: boolean, operatorId?: number, remark?: string) {
-    const next = paid ? 'paid' : 'unpaid'
+  private paymentView(row: any) {
+    const payments = (row.payments || []).map((payment: any) => ({
+      id: Number(payment.id),
+      paymentType: payment.paymentType,
+      paymentTypeLabel: PAYMENT_TYPE_LABELS[payment.paymentType] || payment.paymentType,
+      amount: Number(payment.amount),
+      remark: payment.remark || '',
+      paidAtStr: fmtTime(payment.paidAt),
+      paidByName: payment.paidByName || '',
+    }))
+    const totalCents = Number.isFinite(Number(row.totalAmount)) ? decimalCents(row.totalAmount) : 0
+    const paidCents = (row.payments || []).reduce((sum: number, payment: any) => sum + decimalCents(payment.amount), 0)
+    const unpaidCents = Math.max(totalCents - paidCents, 0)
+    const legacyPaid = row.paymentStatus === 'paid' && payments.length === 0
+    const paymentStatus = legacyPaid ? 'paid' : paidCents <= 0 ? 'unpaid' : unpaidCents <= 0 ? 'paid' : 'partial'
+    const paidAmount = centsToMoney(paidCents)
+    const paymentStatusLabel = paymentStatus === 'unpaid'
+      ? '未打款'
+      : paymentStatus === 'paid'
+        ? (legacyPaid ? '已打款' : `已付清 ¥${paidAmount.toFixed(2)}`)
+        : `${payments[payments.length - 1]?.paymentTypeLabel || '部分付款'} ¥${paidAmount.toFixed(2)}`
+    return {
+      paymentStatus,
+      paymentStatusLabel,
+      paidAmount,
+      unpaidAmount: legacyPaid ? 0 : centsToMoney(unpaidCents),
+      payments,
+    }
+  }
+
+  async setPaymentStatus(
+    id: number,
+    paid: boolean,
+    operatorId?: number,
+    remark?: string,
+    payment?: { paymentType?: string; amount?: number },
+  ) {
     const updated = await this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM purchase_order WHERE id = ${BigInt(id)} FOR UPDATE`
       const row = await tx.purchaseOrder.findUnique({ where: { id: BigInt(id) }, include: { items: true } })
       if (!row) throw new NotFoundException('采购单不存在')
       const markable = ['finance_approved', 'at_logistics_wh', 'received', 'completed', 'approved']
       if (!markable.includes(row.status)) throw new BadRequestException('采购审核通过后才能标记打款状态')
-      if ((row.paymentStatus || 'unpaid') === next) throw new BadRequestException(paid ? '该采购单已是已打款' : '该采购单已是未打款')
+      const existing = await tx.purchasePayment.findMany({ where: { poId: row.id }, orderBy: { id: 'asc' } })
+      if (!paid) {
+        if ((row.paymentStatus || 'unpaid') === 'unpaid' && existing.length === 0) throw new BadRequestException('该采购单已是未打款')
+        await tx.purchasePayment.deleteMany({ where: { poId: row.id } })
+        const order = await tx.purchaseOrder.update({
+          where: { id: BigInt(id) },
+          data: {
+            paymentStatus: 'unpaid',
+            paidAt: null,
+            paidBy: null,
+            financeRemark: remark?.trim() || '已标记未打款',
+          } as any,
+          include: { items: true },
+        })
+        await this.ensureCostRecordsForPo(tx, order, operatorId)
+        return order
+      }
+      const totalCents = decimalCents(row.totalAmount)
+      const paidCents = existing.reduce((sum, item) => sum + decimalCents(item.amount), 0)
+      const paymentType = String(payment?.paymentType || '')
+      const typeLabel = PAYMENT_TYPE_LABELS[paymentType]
+      if (!typeLabel) throw new BadRequestException('请选择定金、尾款、全款或其他')
+      if ((row.paymentStatus || 'unpaid') === 'paid' && paidCents === 0) throw new BadRequestException('该采购单已标记付清但没有付款明细，请先清除打款后再按金额登记')
+      const remaining = totalCents - paidCents
+      if (remaining <= 0) throw new BadRequestException('该采购单已付清')
+      const amountCents = moneyCents(payment?.amount)
+      if (amountCents > remaining) throw new BadRequestException(`付款金额不能超过待付 ¥${centsToMoney(remaining).toFixed(2)}`)
+      if (paymentType === 'full' && amountCents !== remaining) throw new BadRequestException(`全款须等于待付金额 ¥${centsToMoney(remaining).toFixed(2)}`)
+      if (paymentType === 'deposit' && amountCents >= totalCents) throw new BadRequestException('定金须小于采购总额，付清请选择全款')
+      if (paymentType === 'balance' && existing.length === 0) throw new BadRequestException('尚未登记定金或其他付款，不能标记尾款')
+      const amount = centsToMoney(amountCents)
+      const note = remark?.trim() || ''
+      await tx.purchasePayment.create({
+        data: {
+          poId: row.id,
+          paymentType,
+          amount: amount.toFixed(2),
+          remark: note || null,
+          paidBy: operatorId ? BigInt(operatorId) : null,
+        },
+      })
+      const nextStatus = paidCents + amountCents >= totalCents ? 'paid' : 'partial'
       const order = await tx.purchaseOrder.update({
         where: { id: BigInt(id) },
         data: {
-          paymentStatus: next,
-          paidAt: paid ? new Date() : null,
-          paidBy: paid && operatorId ? BigInt(operatorId) : null,
-          financeRemark: remark?.trim() || (paid ? '已标记已打款' : '已标记未打款'),
+          paymentStatus: nextStatus,
+          paidAt: new Date(),
+          paidBy: operatorId ? BigInt(operatorId) : null,
+          financeRemark: note ? `${typeLabel} ¥${amount.toFixed(2)}，${note}` : `${typeLabel} ¥${amount.toFixed(2)}`,
         } as any,
         include: { items: true },
       })
@@ -1055,8 +1259,10 @@ export class PurchaseService {
       targetType: 'purchase_order',
       targetId: item.poNo,
       detail: {
-        paymentStatus: next,
-        remark: remark?.trim() || (paid ? '已标记已打款' : '已标记未打款'),
+        paymentStatus: item.paymentStatus,
+        paymentType: payment?.paymentType || null,
+        amount: payment?.amount ?? null,
+        remark: remark?.trim() || (paid ? '登记付款' : '已标记未打款'),
         totalAmount: item.totalAmount,
         supplierName: item.supplierName,
       },
@@ -1109,6 +1315,145 @@ export class PurchaseService {
       targetType: 'purchase_order',
       targetId: item.poNo,
       detail: { remark: remark?.trim() },
+    })
+    return item
+  }
+
+  /** 审核通过且尚未收货、付款的采购单退回待审核，并清掉本次审核写入的成本，改完后重新审核。 */
+  async reopenAudit(id: number, operatorId?: number, remark?: string) {
+    const reason = String(remark || '').trim() || '撤回审核，退回待审核'
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM purchase_order WHERE id = ${BigInt(id)} FOR UPDATE`
+      const row = await tx.purchaseOrder.findUnique({ where: { id: BigInt(id) }, include: { items: true } })
+      if (!row) throw new NotFoundException('采购单不存在')
+      if (!['finance_approved', 'approved'].includes(row.status)) throw new BadRequestException('仅审核通过且尚未收货的采购单可以撤回到待审核')
+      if (row.items.some((line) => (line.receivedQty ?? 0) > 0)) throw new BadRequestException('该采购单已有收货数量，不能撤回审核')
+      const [receipts, inbounds, bills, payments] = await Promise.all([
+        tx.logisticsReceipt.count({ where: { poId: row.id } }),
+        tx.inboundOrder.count({ where: { poId: row.id } }),
+        tx.supplierFreightBill.count({ where: { poId: row.id } }),
+        tx.purchasePayment.count({ where: { poId: row.id } }),
+      ])
+      if (receipts || inbounds) throw new BadRequestException('该采购单已有收货或入库记录，不能撤回审核')
+      if (bills) throw new BadRequestException('该采购单已有运费账单，不能撤回审核')
+      if (payments || row.paymentStatus === 'paid' || row.paymentStatus === 'partial') throw new BadRequestException('该采购单已登记付款，请先清除打款后再撤回审核')
+      await tx.costLedger.deleteMany({ where: { referenceNo: row.poNo } })
+      return tx.purchaseOrder.update({
+        where: { id: row.id },
+        data: {
+          status: 'pending_po_audit',
+          paymentStatus: 'unpaid',
+          paidAt: null,
+          paidBy: null,
+          poAuditRemark: reason,
+        } as any,
+        include: { items: true },
+      })
+    })
+    const [item] = await this.enrichOrders([updated])
+    await this.opLog.log({
+      operatorId,
+      module: 'purchase',
+      action: 'po_reopen_audit',
+      targetType: 'purchase_order',
+      targetId: item.poNo,
+      detail: { remark: reason, statusAfter: 'pending_po_audit' },
+    })
+    return item
+  }
+
+  /** 待审核采购单可改供应商、仓库、数量和单价，保存后仍停留在待审核。 */
+  async revisePendingAudit(id: number, data: any, operatorId?: number) {
+    const lines = Array.isArray(data?.items) ? data.items : Array.isArray(data?.lines) ? data.lines : []
+    if (!lines.length) throw new BadRequestException('请保留至少一条采购明细')
+    const prepared = lines.map((line: any) => {
+      const quantity = Number(line.quantity ?? line.qty ?? 0)
+      const unitPrice = Number(line.unitPrice ?? 0)
+      const sku = String(line.sku || '').trim()
+      const productName = String(line.productName || line.name || '').trim()
+      if (!sku) throw new BadRequestException('SKU 不能为空')
+      if (sku.length > 30) throw new BadRequestException('SKU 不能超过 30 字')
+      if (!productName) throw new BadRequestException('请填写商品名称')
+      if (!Number.isSafeInteger(quantity) || quantity < 1) throw new BadRequestException('采购数量须为大于零的整数')
+      if (!Number.isFinite(unitPrice) || unitPrice <= 0) throw new BadRequestException('请填写大于零的采购单价')
+      return {
+        id: line.id != null && line.id !== '' ? BigInt(line.id) : null,
+        sku,
+        productName,
+        quantity,
+        unitPrice,
+        remark: line.remark ? String(line.remark).slice(0, 500) : null,
+        productId: line.productId,
+      }
+    })
+    const warehouseCode = String(data.warehouseCode || '').trim()
+    if (!warehouseCode) throw new BadRequestException('请选择目标中转仓')
+    const supplierName = String(data.supplierName || '').trim()
+    if (!supplierName) throw new BadRequestException('请选择或填写供应商')
+    const orderDomestic = data.domesticFreight != null && data.domesticFreight !== '' ? Number(data.domesticFreight) : 0
+    if (!Number.isFinite(orderDomestic) || orderDomestic < 0) throw new BadRequestException('国内运费须为不小于 0 的金额')
+    const totalQty = prepared.reduce((sum, line) => sum + line.quantity, 0)
+    const totalAmount = Math.round(prepared.reduce((sum, line) => sum + line.quantity * line.unitPrice, 0) * 100) / 100
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM purchase_order WHERE id = ${BigInt(id)} FOR UPDATE`
+      const row = await tx.purchaseOrder.findUnique({ where: { id: BigInt(id) }, include: { items: true } })
+      if (!row) throw new NotFoundException('采购单不存在')
+      if (row.status !== 'pending_po_audit') throw new BadRequestException('仅待审核的采购单可以修改，请先撤回到待审核')
+      const warehouse = await tx.warehouse.findUnique({ where: { warehouseCode } })
+      if (!warehouse || warehouse.status !== 1 || warehouse.warehouseType !== 'logistics') throw new BadRequestException('请选择有效且启用的物流中转仓')
+      const supplierId = await this.resolveSupplierForCreate({ supplierName, supplierId: row.supplierId })
+      const kept = new Set(prepared.filter((line) => line.id).map((line) => String(line.id)))
+      for (const existing of row.items) {
+        if (!kept.has(String(existing.id))) {
+          if ((existing.receivedQty ?? 0) > 0) throw new BadRequestException(`明细 ${existing.sku} 已有收货数量，不能删除`)
+          await tx.purchaseOrderItem.delete({ where: { id: existing.id } })
+        }
+      }
+      for (const line of prepared) {
+        const lineDomestic = orderDomestic > 0 && totalQty > 0
+          ? Math.round((orderDomestic * line.quantity) / totalQty * 100) / 100
+          : null
+        const amount = Math.round(line.quantity * line.unitPrice * 100) / 100
+        const itemData = {
+          sku: line.sku,
+          productName: line.productName,
+          quantity: line.quantity,
+          plannedQty: line.quantity,
+          unitPrice: line.unitPrice,
+          amount,
+          domesticFreight: lineDomestic,
+          remark: line.remark,
+        }
+        if (line.id) {
+          const current = row.items.find((item) => item.id === line.id)
+          if (!current) throw new BadRequestException('采购明细已变化，请刷新后再修改')
+          await tx.purchaseOrderItem.update({ where: { id: line.id }, data: itemData })
+        } else {
+          await tx.purchaseOrderItem.create({ data: { ...itemData, poId: row.id, productId: BigInt(line.productId || 0) } })
+        }
+      }
+      return tx.purchaseOrder.update({
+        where: { id: row.id },
+        data: {
+          supplierId,
+          warehouseCode,
+          expectedArrival: data.expectedArrival ? new Date(data.expectedArrival) : null,
+          domesticFreight: orderDomestic > 0 ? orderDomestic : null,
+          remark: data.remark != null ? String(data.remark) : row.remark,
+          totalAmount,
+        },
+        include: { items: true },
+      })
+    })
+    const [item] = await this.enrichOrders([updated])
+    await this.opLog.log({
+      operatorId,
+      module: 'purchase',
+      action: 'po_revise',
+      targetType: 'purchase_order',
+      targetId: item.poNo,
+      detail: { totalAmount, itemCount: prepared.length },
     })
     return item
   }

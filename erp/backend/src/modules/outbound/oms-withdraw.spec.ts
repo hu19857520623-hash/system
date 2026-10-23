@@ -8,6 +8,7 @@ describe('OMS outbound withdrawal', () => {
       items: [{ productId: 3n, sku: 'SKU-1', productName: '商品', qty: 2 }], pickAllocations: [],
     }
     const tx = {
+      $queryRaw: jest.fn().mockResolvedValue([]),
       inventory: {
         findUnique: jest.fn().mockResolvedValue({ id: 4n, availableQty: 8, lockedQty: 2 }),
         update: jest.fn().mockResolvedValue({}),

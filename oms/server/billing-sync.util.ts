@@ -28,6 +28,7 @@ export type ErpBillingChangedPayload = {
   totalAmount?: number
   charges?: ErpBillingChargePayload[]
   recharges?: ErpBillingRechargePayload[]
+  refunds?: Array<{ referenceNo: string; amount: number; createdAt?: unknown; allocations?: Array<{orderNo:string;quantity:number}> }>
   removeChargeIds?: number[]
 }
 
@@ -147,6 +148,12 @@ export async function applyErpBillingChanged(
       })
     }
 
+    for (const refund of data.refunds || []) {
+      if (!/^RCL-[a-f0-9]{32}$/i.test(refund.referenceNo) || !Number.isFinite(refund.amount) || refund.amount <= 0) throw new Error('货盘退款同步资料无效，请核对原收回操作')
+      const id = `erp-ref-${refund.referenceNo}`, row = { date: toDateStr(refund.createdAt), type: 'catalog_refund', refNo: refund.referenceNo,
+        desc: `收回货盘持有退款 · ${(refund.allocations || []).map(a => `${a.orderNo} × ${a.quantity}`).join('、')}`, amount: refund.amount, method: 'actual' as const, customerCode }
+      await tx.feeRecord.upsert({ where: { id }, create: {id,...row}, update: row })
+    }
     for (const r of data.recharges || []) {
       const rechargeNo = String(r.rechargeNo || '').trim()
       const amount = Number(r.amount || 0)

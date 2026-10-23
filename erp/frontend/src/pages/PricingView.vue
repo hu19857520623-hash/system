@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { readReclaimAttempt, runReclaimAttempt, reclaimRequestId, type ReclaimAttempt } from '@/utils/catalogReclaimWorkflow'
 import { userFacingError } from '@erp/shared/user-facing-error'
 
 import { displaySku, displaySkuText } from '@erp/shared/sku-display'
@@ -102,6 +103,7 @@ const { loading, items, load } = useListLoader<PriceItem>(async () => {
 })
 
 onMounted(() => {
+  readPendingReclaim()
   load()
   if (route.query.section === 'holdings') section.value = 'holdings'
 })
@@ -115,7 +117,7 @@ const pricingStatusMap: Record<string, { label: string; type: string }> = {
 
 const canSetPrice = computed(() => app.hasPerm('pricing.set'))
 const canSyncOms = computed(() => app.hasPerm('pricing.sync_oms'))
-const canReclaim = computed(() => app.hasPerm('inventory_query.adjust'))
+const canReclaim = computed(() => ['admin', 'finance'].includes(app.authenticatedUser?.roleCode || '') && app.hasPerm('inventory_query.reclaim_refund'))
 
 interface HoldingRow {
   id: string
@@ -134,6 +136,7 @@ interface HoldingRow {
 }
 
 const holdingsLoading = ref(false)
+const holdingsError = ref('')
 const holdingRows = ref<HoldingRow[]>([])
 const holdingsTotal = ref(0)
 const holdingsPage = ref(1)
@@ -142,11 +145,21 @@ const holdingsCustomerCode = ref('')
 const holdingsProductCode = ref('')
 const catalogPurchaseVisible = ref(false)
 const catalogPurchaseLoading = ref(false)
+const catalogPurchaseError = ref('')
 const catalogPurchaseSku = ref('')
 const catalogPurchaseCustomer = ref('')
 const catalogPurchaseRows = ref<any[]>([])
 const reclaimDialogVisible = ref(false)
 const reclaimSubmitting = ref(false)
+const reclaimPending = ref<ReclaimAttempt | null>(null), reclaimStorageError = ref(''), reclaimError = ref(''), reclaimQuoteError = ref(''), reclaimReading = ref(false)
+const reclaimQuote = ref<any>(null), reclaimLotQuantities = ref<Record<number,number>>({})
+let reclaimReadSequence = 0
+const reclaimLocked = computed(() => reclaimSubmitting.value || !!reclaimPending.value || !!reclaimStorageError.value)
+const reclaimRefund = computed(() => reclaimPending.value?.payload.expectedRefundAmount ?? (reclaimQuote.value?.lots || []).reduce((sum:number,lot:any) => sum + (reclaimLotQuantities.value[lot.orderId] || 0)*lot.unitCents,0)/100)
+function readPendingReclaim() {
+  try { reclaimPending.value = readReclaimAttempt(localStorage, Number(app.authenticatedUser?.id));reclaimStorageError.value = '' }
+  catch (error) { reclaimStorageError.value = userFacingError(error) }
+}
 const reclaimForm = ref({
   customerCode: '',
   sku: '',
@@ -158,6 +171,7 @@ const reclaimForm = ref({
 
 async function loadHoldings() {
   holdingsLoading.value = true
+  holdingsError.value = ''
   try {
     const p: Record<string, unknown> = {
       page: holdingsPage.value,
@@ -176,7 +190,7 @@ async function loadHoldings() {
   } catch (e: any) {
     holdingRows.value = []
     holdingsTotal.value = 0
-    ElMessage.error(userFacingError(displaySkuText(e?.message || '加载货盘持有失败')))
+    holdingsError.value = userFacingError(displaySkuText(e?.message || '加载货盘持有失败'))
   } finally {
     holdingsLoading.value = false
   }
@@ -204,6 +218,7 @@ async function openCatalogPurchases(row: HoldingRow) {
   catalogPurchaseCustomer.value = row.customerCode || ''
   catalogPurchaseVisible.value = true
   catalogPurchaseLoading.value = true
+  catalogPurchaseError.value = ''
   catalogPurchaseRows.value = []
   try {
     const res = await inventoryApi.catalogPurchases({
@@ -214,52 +229,71 @@ async function openCatalogPurchases(row: HoldingRow) {
     })
     catalogPurchaseRows.value = res.items || []
   } catch (e: any) {
-    ElMessage.error(userFacingError(displaySkuText(e?.message || '加载失败')))
+    catalogPurchaseError.value = userFacingError(displaySkuText(e?.message || '加载购买明细失败'))
   } finally {
     catalogPurchaseLoading.value = false
   }
 }
 
 function openReclaim(row: HoldingRow) {
+  if (reclaimLocked.value || !canReclaim.value) return
   if (!isReclaimableRow(row)) return ElMessage.warning('该客户没有可收回的持有数量')
-  const maxQty = Number(row.availableQty ?? row.sellableQty ?? 0)
-  reclaimForm.value = {
-    customerCode: row.customerCode || '',
-    sku: row.sku,
-    productName: row.productName || '',
-    maxQty,
-    quantity: maxQty > 0 ? maxQty : 1,
-    remark: '',
-  }
-  reclaimDialogVisible.value = true
+  reclaimForm.value = { customerCode: row.customerCode || '', sku: row.sku, productName: row.productName || '', maxQty: Number(row.availableQty ?? row.sellableQty ?? 0), quantity: 0, remark: '' }
+  reclaimQuote.value = null;reclaimError.value = '';reclaimDialogVisible.value = true
+  void readReclaimQuote()
 }
-
-async function submitReclaim() {
-  const f = reclaimForm.value
-  if (!f.customerCode.trim()) return ElMessage.warning('请填写客户代码')
-  if (!f.sku.trim()) return ElMessage.warning('缺少 SKU')
-  if (!f.quantity || f.quantity <= 0) return ElMessage.warning('收回数量须大于 0')
-  if (f.maxQty <= 0) return ElMessage.warning('没有可收回的持有数量')
-  if (f.quantity > f.maxQty) {
-    return ElMessage.warning(`最多可收回 ${f.maxQty} 件`)
-  }
-  reclaimSubmitting.value = true
+watch(() => app.authenticatedUser?.id, () => {
+  ++reclaimReadSequence
+  reclaimDialogVisible.value = false
+  reclaimQuote.value = null
+  reclaimReading.value = false
+  reclaimPending.value = null
+  reclaimError.value = ''
+  readPendingReclaim()
+}, { flush: 'sync' })
+function reopenPendingReclaim() {
+  readPendingReclaim();const original = reclaimPending.value;if (!original) return
+  reclaimForm.value = { ...original.payload, productName: original.productName, maxQty: original.maxQty, remark: original.payload.remark || '' }
+  reclaimQuote.value = null;reclaimError.value = '';reclaimDialogVisible.value = true
+}
+function updateReclaimQuantity() { reclaimForm.value.quantity = Object.values(reclaimLotQuantities.value).reduce((sum,q) => sum+(Number.isSafeInteger(q)?q:0),0) }
+async function readReclaimQuote() {
+  if (reclaimLocked.value || !canReclaim.value) return
+  const sequence=++reclaimReadSequence, customerCode=reclaimForm.value.customerCode, sku=reclaimForm.value.sku
+  reclaimReading.value=true;reclaimQuoteError.value='';reclaimQuote.value=null
   try {
-    const res = await inventoryApi.reclaimCatalogHolding({
-      customerCode: f.customerCode.trim(),
-      sku: f.sku.trim(),
-      quantity: f.quantity,
-      remark: f.remark.trim() || undefined,
-    })
-    ElMessage.success(displaySkuText(res.message || '货盘持有已收回'))
-    reclaimDialogVisible.value = false
-    loadHoldings()
-    load()
-  } catch (e: any) {
-    ElMessage.error(userFacingError(displaySkuText(e?.message || '收回失败')))
-  } finally {
-    reclaimSubmitting.value = false
-  }
+    const result=await inventoryApi.previewCatalogReclaim({customerCode,sku})
+    if (sequence!==reclaimReadSequence || !reclaimDialogVisible.value) return
+    if(result.customerCode!==customerCode || result.sku!==sku || !Number.isSafeInteger(result.holdingQuantity) || result.holdingQuantity<0 || !Array.isArray(result.lots)) throw new Error('购买核对结果不完整，请重新读取')
+    reclaimQuote.value=result;reclaimForm.value.maxQty=result.holdingQuantity
+    let left=result.holdingQuantity;const quantities:Record<number,number>={}
+    for(const lot of result.lots){const q=Math.min(left,lot.refundableQuantity);quantities[lot.orderId]=q;left-=q}
+    reclaimLotQuantities.value=quantities;updateReclaimQuantity()
+  } catch(error) { if(sequence===reclaimReadSequence) reclaimQuoteError.value=`原购买记录未能核对，请重新读取后继续。${userFacingError(error)}` }
+  finally { if(sequence===reclaimReadSequence) reclaimReading.value=false }
+}
+async function submitReclaim(retry=false) {
+  if (reclaimSubmitting.value || reclaimStorageError.value) return
+  if (!canReclaim.value) { reclaimError.value='当前岗位无收回退款权限';return }
+  if (reclaimPending.value && !retry) { reclaimError.value='请先重试原收回退款';return }
+  const f=reclaimForm.value
+  if (!retry && (!reclaimQuote.value || reclaimReading.value || reclaimQuoteError.value)) { reclaimError.value='请先重新读取原购买记录';return }
+  if (!retry && (!Number.isSafeInteger(f.quantity) || f.quantity<=0 || f.quantity>f.maxQty)) { reclaimError.value=`请分摊有效收回数量，当前最多 ${f.maxQty} 件`;return }
+  const operatorId=Number(app.authenticatedUser?.id)
+  reclaimSubmitting.value=true;reclaimError.value=''
+  try {
+    const attempt:ReclaimAttempt = reclaimPending.value || { productName:f.productName,maxQty:f.maxQty,refundLines:(reclaimQuote.value.lots as any[]).filter(lot=>reclaimLotQuantities.value[lot.orderId]>0).map(lot=>({orderId:lot.orderId,orderNo:lot.orderNo,quantity:reclaimLotQuantities.value[lot.orderId]!,unitPrice:lot.unitPrice})),payload:{ clientRequestId:reclaimRequestId(),customerCode:f.customerCode,sku:f.sku,quantity:f.quantity,remark:f.remark.trim()||undefined,
+      allocations:(reclaimQuote.value.lots as any[]).filter(lot=>reclaimLotQuantities.value[lot.orderId]>0).map(lot=>({orderId:lot.orderId,quantity:reclaimLotQuantities.value[lot.orderId]!})),expectedRefundAmount:reclaimRefund.value } }
+    const response=await runReclaimAttempt(async body=>{
+      if(Number(app.authenticatedUser?.id)!==operatorId)throw new Error('登录账号已变化，请使用原账号核对')
+      const result=await inventoryApi.reclaimCatalogHolding(body)
+      if(Number(app.authenticatedUser?.id)!==operatorId)throw new Error('登录账号已变化，请使用原账号核对')
+      return result
+    },localStorage,operatorId,attempt)
+    reclaimError.value=response.message
+    if(response.completed){ElMessage.success(response.message);reclaimDialogVisible.value=false;void loadHoldings();void load()}
+  } catch(error){reclaimError.value=userFacingError(error)}
+  finally {readPendingReclaim();reclaimSubmitting.value=false}
 }
 
 watch(section, (v) => {
@@ -679,6 +713,11 @@ async function submitReprice() {
     </template>
 
     <template v-else>
+      <el-alert v-if="holdingsError" :title="holdingsError" type="error" :closable="false" />
+      <el-button v-if="holdingsError" :loading="holdingsLoading" @click="loadHoldings">重新读取持有记录</el-button>
+      <el-alert v-if="reclaimStorageError" :title="reclaimStorageError" type="error" :closable="false" />
+      <el-alert v-if="reclaimPending" :title="`原收回退款待核对：${reclaimPending.payload.customerCode} · ${reclaimPending.payload.quantity}件 · ¥${reclaimPending.payload.expectedRefundAmount.toFixed(2)}`" type="warning" :closable="false" />
+      <el-button v-if="reclaimPending" :disabled="reclaimSubmitting || !canReclaim" @click="reopenPendingReclaim">核对原收回退款</el-button>
       <el-alert type="info" :closable="false" show-icon style="margin-bottom:14px">
         持有量为可收回数量；锁定量为已预约、尚未发货的货盘数量。历史持有量与锁定量均为 0 的记录不显示。
       </el-alert>
@@ -718,7 +757,7 @@ async function submitReprice() {
         <el-table-column label="操作" width="160" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="openCatalogPurchases(row as HoldingRow)">购买明细</el-button>
-            <el-button v-if="canReclaim && isReclaimableRow(row as HoldingRow)" link type="danger" size="small" @click="openReclaim(row as HoldingRow)">收回持有</el-button>
+            <el-button v-if="canReclaim && isReclaimableRow(row as HoldingRow)" link type="danger" size="small" :disabled="reclaimLocked" @click="openReclaim(row as HoldingRow)">收回持有</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -971,6 +1010,8 @@ async function submitReprice() {
     width="820px"
     destroy-on-close
   >
+    <el-alert v-if="catalogPurchaseError" :title="catalogPurchaseError" type="error" :closable="false" />
+    <el-button v-if="catalogPurchaseError" :loading="catalogPurchaseLoading" @click="openCatalogPurchases({ sku: catalogPurchaseSku, customerCode: catalogPurchaseCustomer } as HoldingRow)">重新读取购买明细</el-button>
     <el-table v-loading="catalogPurchaseLoading" :data="catalogPurchaseRows" border size="small" max-height="420">
       <el-table-column prop="orderNo" label="订单号" width="140">
         <template #default="{ row }"><span class="mono">{{ row.orderNo }}</span></template>
@@ -988,14 +1029,18 @@ async function submitReprice() {
         <template #default="{ row }">{{ fmtTime(row.createdAt) }}</template>
       </el-table-column>
     </el-table>
-    <el-empty v-if="!catalogPurchaseLoading && !catalogPurchaseRows.length" description="暂无购买记录" :image-size="64" />
+    <el-empty v-if="!catalogPurchaseError && !catalogPurchaseLoading && !catalogPurchaseRows.length" description="暂无购买记录" :image-size="64" />
+    <template #footer><el-button @click="catalogPurchaseVisible = false">返回货盘持有</el-button></template>
   </el-dialog>
 
-  <el-dialog v-model="reclaimDialogVisible" title="收回货盘持有" width="480px" destroy-on-close>
+  <el-dialog v-model="reclaimDialogVisible" title="收回持有并按原购买单退款" width="680px" destroy-on-close>
     <p class="reclaim-tip">
-      客户申购后可使用该库存发货；收回后库存回流 ERP 货盘池，并同步扣减 OMS 客户发货权限。
+      收回未预约的持有数量，按选定原购买记录的成交价退回客户余额；收回、库存回流和退款一起保存。
     </p>
-    <el-form label-width="90px" size="small">
+    <el-alert v-if="reclaimError" :title="reclaimError" type="warning" :closable="false" />
+    <el-alert v-if="reclaimQuoteError" :title="reclaimQuoteError" type="error" :closable="false" />
+    <el-button v-if="!reclaimPending" :loading="reclaimReading" :disabled="reclaimLocked" @click="readReclaimQuote">重新读取原购买记录</el-button>
+    <el-form label-width="90px" size="small" :disabled="reclaimLocked || reclaimReading">
       <el-form-item label="客户代码" required>
         <el-input v-model="reclaimForm.customerCode" disabled />
       </el-form-item>
@@ -1009,15 +1054,29 @@ async function submitReprice() {
         <span>{{ reclaimForm.maxQty.toLocaleString() }} 件</span>
       </el-form-item>
       <el-form-item label="收回数量" required>
-        <el-input-number v-model="reclaimForm.quantity" :min="1" :max="Math.max(reclaimForm.maxQty, 1)" />
+        <strong>{{ reclaimForm.quantity }} 件（由原购买单分摊合计）</strong>
       </el-form-item>
+      <el-form-item label="原购买单">
+        <div v-if="reclaimPending"><p v-for="line in reclaimPending.refundLines || []" :key="line.orderId">{{ line.orderNo }} · 原价 ¥{{ line.unitPrice.toFixed(2) }} · 退款 {{ line.quantity }} 件</p></div>
+        <div v-else-if="reclaimQuote" style="width:100%">
+          <p>默认按购买时间从早到晚分摊，可调整各单退款数量；已退数量不可重复退。</p>
+          <div v-for="lot in reclaimQuote.lots" :key="lot.orderId" style="margin:10px 0">
+            <div>{{ lot.orderNo }} · 原单价 ¥{{ lot.unitPrice.toFixed(2) }} · 已退 {{ lot.alreadyRefunded }} 件</div>
+            <el-input-number v-if="lot.refundableQuantity > 0" v-model="reclaimLotQuantities[lot.orderId]" :min="0" :max="Math.min(lot.refundableQuantity,reclaimForm.maxQty)" :precision="0" @change="updateReclaimQuantity" />
+            <span v-else>{{ lot.reason || '该购买单已无可退数量' }}</span>
+          </div>
+          <p v-if="!reclaimQuote.lots.length">缺少可核对的原购买记录，请联系财务核对后再收回退款。</p>
+        </div>
+      </el-form-item>
+      <el-form-item label="退款合计"><strong>¥{{ reclaimRefund.toFixed(2) }}</strong></el-form-item>
       <el-form-item label="备注">
         <el-input v-model="reclaimForm.remark" type="textarea" :rows="2" placeholder="如：违规占用、订单取消等" />
       </el-form-item>
     </el-form>
     <template #footer>
-      <el-button @click="reclaimDialogVisible = false">取消</el-button>
-      <el-button type="danger" :loading="reclaimSubmitting" @click="submitReclaim">确认收回</el-button>
+      <el-button @click="reclaimDialogVisible = false">{{ reclaimPending || reclaimSubmitting ? '返回（保留原操作）' : '取消' }}</el-button>
+      <el-button v-if="reclaimPending" type="danger" :loading="reclaimSubmitting" :disabled="!canReclaim || !!reclaimStorageError" @click="submitReclaim(true)">重试原收回退款</el-button>
+      <el-button v-else type="danger" :loading="reclaimSubmitting" :disabled="!canReclaim || !!reclaimStorageError || reclaimReading || !reclaimQuote || reclaimRefund <= 0" @click="submitReclaim()">确认收回并退款</el-button>
     </template>
   </el-dialog>
 </template>

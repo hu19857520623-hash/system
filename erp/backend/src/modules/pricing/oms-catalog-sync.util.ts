@@ -1,6 +1,6 @@
 import type { PrismaService } from '../../common/prisma/prisma.service'
 import { catalogStockPool, remainingCatalogStock } from './catalog-stock.util'
-import { CATALOG_CUSTOMER_CODE, catalogBaseSkuFromInternal, catalogSkuLookupKeys } from '../../common/catalog-customer.util'
+import { CATALOG_CUSTOMER_CODE, catalogBaseSkuFromInternal, catalogSkuLookupKeys, toCatalogInternalSku } from '../../common/catalog-customer.util'
 
 function num(v: unknown, fallback = 0): number {
   if (v == null || v === '') return fallback
@@ -122,7 +122,8 @@ export async function pushCatalogStockToOms(
   prisma: PrismaService,
   sku: string,
 ): Promise<OmsCatalogStockPayload | null> {
-  const pricing = await prisma.productPricing.findFirst({ where: { sku: { in: catalogSkuLookupKeys(sku) } } })
+  const pricing = await prisma.productPricing.findUnique({ where: { sku: toCatalogInternalSku(sku) } })
+    ?? await prisma.productPricing.findFirst({ where: { sku: { in: catalogSkuLookupKeys(sku) } } })
   if (!pricing?.visibleOnOms) return null
   const product = await prisma.product.findFirst({ where: { sku: { in: catalogSkuLookupKeys(sku) } } })
 

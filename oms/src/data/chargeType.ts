@@ -1,6 +1,8 @@
 /** ERP billing_charge.charge_type → OMS FeeRecord.type */
 
 export const FEE_TYPE_LABELS: Record<string, string> = {
+  outbound_pre_deduct: '出库预扣',
+  inbound_receipt: '入库收货费', inbound_carton: '入库箱处理费', inbound_qc: '入库清点费', inbound_measure: '入库测量费', inbound_label: '入库贴标费', inbound_putaway: '入库上架费',
   storage: '仓储费',
   handling: '操作费',
   shipping: '物流费',
@@ -10,6 +12,7 @@ export const FEE_TYPE_LABELS: Record<string, string> = {
   other: '其他费用',
   recharge: '充值',
   catalog_purchase: '货盘采购',
+  catalog_refund: '货盘收回退款',
   repack: '换箱费',
   wms_outbound: 'WMS出库费',
   order_fee: '订单处理费',
@@ -33,5 +36,5 @@ export function mapErpChargeType(chargeType: string): string {
 }
 
 export function feeTypeLabel(type: string): string {
-  return FEE_TYPE_LABELS[type] || type
+  return FEE_TYPE_LABELS[type] || '其他费用'
 }

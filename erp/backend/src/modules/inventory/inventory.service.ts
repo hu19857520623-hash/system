@@ -1,3 +1,8 @@
+import { billingSourceSnapshot } from '../billing/billing-snapshot.util'
+import { previewCatalogReclaim, reclaimCatalog } from './catalog-reclaim.util'
+import { catalogReclaimHistory, catalogReclaimSyncReceipt } from './catalog-reclaim-history.util'
+import type { CatalogReclaimHistoryQueryDto } from './dto/catalog-reclaim.dto'
+import type { CatalogReclaimDto } from './dto/catalog-reclaim.dto'
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
@@ -18,7 +23,6 @@ import { JHB_WAREHOUSE_NAME } from '../../common/warehouse-display.util'
 import { parseInventoryAdjustCsv, type InventoryAdjustImportRow } from './inventory-adjust-import.util'
 import { notifyOms } from '../../common/oms-notify.util'
 import { pushCatalogStockToOms } from '../pricing/oms-catalog-sync.util'
-import { remainingCatalogStock } from '../pricing/catalog-stock.util'
 import { CATALOG_CUSTOMER_CODE, catalogSkuLookupKeys } from '../../common/catalog-customer.util'
 import {
   formatDimLabel,
@@ -1065,120 +1069,41 @@ export class InventoryService {
    * ERP 收回客户货盘持有：客户申购后虽可发货，控制权仍在 ERP。
    * 收回后库存回流货盘池，并同步 OMS 扣减客户锁定量（收回发货权限）。
    */
+  previewCatalogReclaim(body: {customerCode: string;sku: string}, operatorId?: number) { return previewCatalogReclaim(this.prisma, body, operatorId) }
+
+  catalogReclaimHistory(query: CatalogReclaimHistoryQueryDto, operatorId?: number) { return catalogReclaimHistory(this.prisma, query, operatorId) }
+
+  async retryCatalogReclaimSync(id: number, operatorId?: number) {
+    const result = await catalogReclaimSyncReceipt(this.prisma, id, operatorId)
+    return this.deliverCatalogReclaim(result, 'ERP 核对原收回退款同步')
+  }
+
   async reclaimCatalogHolding(
-    body: { customerCode: string; sku: string; quantity: number; remark?: string },
+    body: CatalogReclaimDto,
     operatorId?: number,
   ) {
-    const customerCode = body.customerCode?.trim()
-    const sku = body.sku?.trim()
-    const quantity = Math.floor(Number(body.quantity))
-    if (!customerCode) throw new BadRequestException('请填写客户代码')
-    if (customerCode.toUpperCase() === CATALOG_CUSTOMER_CODE) {
-      throw new BadRequestException('不能从平台货盘客户 TKL 收回，请指定申购客户')
-    }
-    if (!sku) throw new BadRequestException('请填写 SKU')
-    if (!Number.isFinite(quantity) || quantity <= 0) {
-      throw new BadRequestException('收回数量须大于 0')
-    }
+    const result = await reclaimCatalog(this.prisma, body, operatorId)
+    return this.deliverCatalogReclaim(result, body.remark || 'ERP 收回货盘持有')
+  }
 
-    const customer = await this.prisma.customer.findUnique({ where: { customerCode } })
-    if (!customer) throw new NotFoundException(`客户 ${customerCode} 不存在`)
-    if (customer.status !== 1) throw new BadRequestException(`客户 ${customerCode} 已停用`)
-
-    const holding = await this.prisma.customerSkuInventory.findFirst({
-      where: { customerId: customer.id, sku: { in: catalogSkuLookupKeys(sku) }, quantity: { gt: 0 } },
-    })
-    if (!holding || holding.quantity < quantity) {
-      throw new BadRequestException(
-        `客户 ${customerCode} 持有 ${sku} 仅 ${holding?.quantity ?? 0} 件，无法收回 ${quantity} 件`,
-      )
-    }
-
-    const pricing = await this.prisma.productPricing.findFirst({ where: { sku: { in: catalogSkuLookupKeys(sku) } } })
-    if (!pricing) throw new NotFoundException(`SKU ${sku} 不在货盘定价池中`)
-
-    const refNo = `RCL-${Date.now()}`
-    const remark = body.remark?.trim() || 'ERP 收回货盘持有'
-    const soldBefore = pricing.soldQty ?? 0
-    const holdBefore = holding.quantity
-
-    const result = await this.prisma.$transaction(async (tx) => {
-      const remainQty = holding.quantity - quantity
-      if (remainQty <= 0) {
-        await tx.customerSkuInventory.delete({ where: { id: holding.id } })
-      } else {
-        await tx.customerSkuInventory.update({
-          where: { id: holding.id },
-          data: { quantity: remainQty },
-        })
-      }
-
-      const newSoldQty = Math.max(0, soldBefore - quantity)
-      await tx.productPricing.update({
-        where: { id: pricing.id },
-        data: { soldQty: newSoldQty },
-      })
-
-      await tx.productPricingHistory.create({
-        data: {
-          pricingId: pricing.id,
-          operatorRole: 'ERP',
-          action: '收回持有',
-          detail:
-            `从客户 ${customerCode} 收回 ${quantity} 件（持有 ${holdBefore} → ${remainQty}）；` +
-            `货盘已售 ${soldBefore} → ${newSoldQty}。${remark}`,
-        },
-      })
-
-      await tx.syncLog.create({
-        data: {
-          syncType: 'catalog_reclaim',
-          targetSystem: 'OMS',
-          referenceNo: refNo,
-          status: 'success',
-          requestBody: { customerCode, sku, quantity, remark } as object,
-          responseBody: { remainQty, newSoldQty },
-        },
-      })
-
-      return { remainQty, newSoldQty }
-    })
-
-    await pushCatalogStockToOms(this.prisma, sku)
-    await notifyOms('inventory.changed', customerCode, {
-      action: 'catalog_reclaim',
-      sku,
-      quantity,
-      remainingQty: result.remainQty,
-      reason: remark,
-      referenceNo: refNo,
-    })
-
-    await this.opLog.log({
-      operatorId,
-      module: 'inventory',
-      action: 'catalog_reclaim',
-      targetType: 'customer_sku_inventory',
-      targetId: sku,
-      detail: {
-        customerCode,
-        quantity,
-        remainingQty: result.remainQty,
-        remark,
-        referenceNo: refNo,
-      },
-    })
-
-    const refreshed = await this.prisma.productPricing.findUnique({ where: { sku } })
-    return {
-      customerCode,
-      sku,
-      quantity,
-      remainingQty: result.remainQty,
-      catalogSoldQty: result.newSoldQty,
-      catalogRemainingStock: refreshed ? remainingCatalogStock(refreshed) : 0,
-      referenceNo: refNo,
-      message: `已从客户 ${customerCode} 收回 ${quantity} 件，货盘池已回流；客户对应发货权限已扣减`,
+  private async deliverCatalogReclaim(result: any, reason: string) {
+    let syncPending = false
+    try { await pushCatalogStockToOms(this.prisma, result.sku) } catch { syncPending = true }
+    const sent = await notifyOms('inventory.changed', result.customerCode, {
+      action: 'catalog_reclaim', sku: result.sku, quantity: result.quantity,
+      remainingQty: result.remainingQty, reason, referenceNo: result.referenceNo,
+    }).catch(() => false)
+    if (!sent) syncPending = true
+    try {
+      const customer = await this.prisma.customer.findUnique({ where: { customerCode: result.customerCode } })
+      if (!customer) throw new Error('退款客户待核对')
+      const snapshot = await billingSourceSnapshot(this.prisma, customer)
+      if (!await notifyOms('billing.changed', result.customerCode, { balance: Number(customer.balance), monthlySpent: snapshot.monthlyTotal, pendingBill: snapshot.pendingTotal,
+        refunds: snapshot.refunds.map(r => ({ referenceNo:r.referenceNo, amount:r.amount, createdAt:r.createdAt, allocations:r.allocations })) })) syncPending = true
+    } catch { syncPending = true }
+    return { ...result, syncPending,
+      ...(syncPending ? { warning: '收回与退款已保存，OMS同步待核对，请重试原收回操作，勿再次收回' }
+        : result.duplicate ? { message: '原收回操作已完成，本次仅核对同步，未重复扣减持有或退款' } : {}),
     }
   }
 

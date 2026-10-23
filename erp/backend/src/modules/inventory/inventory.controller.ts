@@ -1,8 +1,10 @@
+import { CatalogReclaimDto, CatalogReclaimPreviewDto, CatalogReclaimHistoryQueryDto } from './dto/catalog-reclaim.dto'
 import { Body, Controller, Get, Param, ParseIntPipe, Patch, Post, Query } from '@nestjs/common'
 import { InventoryService } from './inventory.service'
 import { PaginationDto } from '../../common/dto/pagination.dto'
 import { RequireAnyPerm, RequirePerms } from '../../common/decorators/require-perms.decorator'
 import { CurrentUser } from '../../common/decorators/current-user.decorator'
+import { Roles } from '../../common/decorators/roles.decorator'
 import { LogisticsTransferDto } from './dto/logistics-transfer.dto'
 
 @Controller('inventory')
@@ -141,10 +143,18 @@ export class InventoryController {
     return this.service.updateLocationLine(id, body, userId)
   }
 
-  @RequirePerms('inventory_query.adjust')
+  @Roles('admin', 'finance')
+  @RequirePerms('inventory_query.reclaim_refund')
+  @Post('catalog-reclaim/preview')
+  previewCatalogReclaim(@Body() body: CatalogReclaimPreviewDto, @CurrentUser('userId') userId: number) {
+    return this.service.previewCatalogReclaim(body, userId)
+  }
+
+  @Roles('admin', 'finance')
+  @RequirePerms('inventory_query.reclaim_refund')
   @Post('catalog-reclaim')
   reclaimCatalogHolding(
-    @Body() body: { customerCode: string; sku: string; quantity: number; remark?: string },
+    @Body() body: CatalogReclaimDto,
     @CurrentUser('userId') userId: number,
   ) {
     return this.service.reclaimCatalogHolding(body, userId)
@@ -156,6 +166,20 @@ export class InventoryController {
     @Query() q: PaginationDto & { sku?: string; customerCode?: string },
   ) {
     return this.service.catalogPurchases(q)
+  }
+
+  @Roles('admin', 'finance')
+  @RequirePerms('inventory_query.reclaim_refund')
+  @Get('catalog-reclaims')
+  catalogReclaimHistory(@Query() q: CatalogReclaimHistoryQueryDto, @CurrentUser('userId') userId: number) {
+    return this.service.catalogReclaimHistory(q, userId)
+  }
+
+  @Roles('admin', 'finance')
+  @RequirePerms('inventory_query.reclaim_refund')
+  @Post('catalog-reclaims/:id/retry-sync')
+  retryCatalogReclaimSync(@Param('id', ParseIntPipe) id: number, @CurrentUser('userId') userId: number) {
+    return this.service.retryCatalogReclaimSync(id, userId)
   }
 
   @RequireAnyPerm('inventory_query.view', 'inventory_query.detail', 'logistics_wh.view')

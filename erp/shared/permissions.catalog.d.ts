@@ -45,7 +45,7 @@ export declare function exportPermForModule(module: string): string | null;
 export declare const STORE_MONITOR_ASSIGN_PERM = "store_monitor.assign";
 export declare function permLabel(code: string): string;
 export declare function permModule(code: string): string;
-/** 剔除废弃码、应用别名，并去掉当前职位不能授予的导出权限 */
+/** 剔除废弃码、应用别名，并去掉当前职位不能授予的权限 */
 export declare function filterAssignablePerms(roleCode: string, codes: string[]): string[];
 export declare function normalizePermCodes(codes: string[]): string[];
 export declare function defaultPermsForRoleCode(roleCode: string): string[];

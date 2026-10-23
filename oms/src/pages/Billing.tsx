@@ -1,14 +1,15 @@
-import { useState, useEffect, useMemo } from 'react'
+import type { RechargeAttempt } from '../../../erp/shared/recharge-workflow'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { CreditCard, Download, Copy, Check, Pencil, Save, X, ChevronDown, ChevronUp } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { Button, PageHeader, Card, MonoCode, StatCard, Table, TableFooter, FilterChip, Badge } from '../components/ui'
 import { formInput, formTextarea } from '../components/ui/form'
 import { formatCurrency } from '../data/mockData'
-import { rechargeViaErp, useBilling } from '../data/billingStore'
+import { rechargeViaErp, pendingRecharge, useBilling, refreshBillingFromErp } from '../data/billingStore'
 import { groupFeeRecordsByOutbound, isOutboundRefNo } from '../data/outboundFeeUtils'
 import { useRole } from '../auth/RoleContext'
 import { useDataScope } from '../auth/useDataScope'
-import { getErpBills, type ErpBillItem } from '../api/erp'
+import type { ErpBillingSnapshot } from '../api/erp'
 import {
   usePaymentMethods,
   updatePaymentMethods,
@@ -18,6 +19,7 @@ import { DEFAULT_PAYMENT_METHODS } from '../data/feeTemplates'
 import { getCustomerCode, getCustomerIdForRole } from '../data/dataScope'
 import { exportFeeRecordsCsv } from '../data/listExport'
 import { feeTypeLabel } from '../data/chargeType'
+import { userFacingError } from '../utils/userFacingError'
 
 const feeTypeColors: Record<string, string> = {
   storage: 'text-indigo-600', handling: 'text-purple-600', shipping: 'text-sky-600', recharge: 'text-emerald-600',
@@ -257,32 +259,43 @@ export default function BillingPage({ rechargeOnly }: BillingPageProps) {
   const [feeTab, setFeeTab] = useState('all')
   const [rechargeAmount, setRechargeAmount] = useState(10000)
   const [recharging, setRecharging] = useState(false)
+  const rechargeBusy = useRef(false)
+  const [originalRecharge, setOriginalRecharge] = useState<RechargeAttempt | null>(null)
+  const [rechargeStorageError, setRechargeStorageError] = useState('')
+  const [rechargeDraft, setRechargeDraft] = useState<{ customerCode: string; amount: number; paymentMethodId: string; paymentMethodTitle?: string } | null>(null)
   const [rechargeMsg, setRechargeMsg] = useState<{ ok: boolean; text: string } | null>(null)
-  const [erpBills, setErpBills] = useState<ErpBillItem[]>([])
+  const [billingView, setBillingView] = useState<ErpBillingSnapshot | null>(null)
+  const [reading, setReading] = useState(false), [readError, setReadError] = useState('')
+  const readSequence = useRef(0)
   const { can, role } = useRole()
   const dataScope = useDataScope()
-  const { creditBalance, feeRecords } = useBilling()
+  const globalBilling = useBilling()
   const allMethods = usePaymentMethods()
   const enabledMethods = allMethods.filter(m => m.enabled).sort((a, b) => a.sortOrder - b.sortOrder)
   const [payMethodId, setPayMethodId] = useState(enabledMethods[0]?.id ?? 'bank')
 
-  useEffect(() => {
-    const customerId = getCustomerIdForRole(role)
-    const customerCode = getCustomerCode(customerId ?? undefined, dataScope.customerOptions)
-    if (!customerCode || customerCode === '—') {
-      setErpBills([])
-      return
-    }
-    void getErpBills(customerCode)
-      .then(r => setErpBills(r.items || []))
-      .catch(() => setErpBills([]))
-  }, [role, dataScope.customerOptions])
+  const selectedCode = dataScope.isAdmin
+    ? dataScope.customerOptions.find(c => c.id === dataScope.customerFilter)?.code || ''
+    : getCustomerCode(getCustomerIdForRole(role) || undefined)
+  const ready = !!billingView && billingView.customerCode === selectedCode
+  const creditBalance = ready ? billingView.creditBalance : 0, feeRecords = ready ? billingView.feeRecords : [], erpBills = ready ? billingView.bills : []
+  const month = ready ? billingView.billingMonth : new Date().toISOString().slice(0, 7)
+  const monthlyPaidFees = feeRecords.filter(f => f.method === 'actual' && f.type !== 'recharge' && f.amount < 0 && f.date.slice(0, 7) === month)
+  const monthlyRefunds = feeRecords.filter(f => f.type === 'catalog_refund' && f.amount > 0 && f.date.slice(0,7) === month)
+  const monthlyGrossPaid = monthlyPaidFees.reduce((sum,f) => sum-f.amount,0)
+  const monthlyRefunded = monthlyRefunds.reduce((sum,f) => sum+f.amount,0)
+  const monthlySpent = ready ? billingView.monthlySpent : 0
+  const readBilling = async () => {
+    const sequence = ++readSequence.current
+    if (!selectedCode || selectedCode === '—') { setBillingView(null);setReadError('');setReading(false);return }
+    setReading(true);setReadError('')
+    try { const result = await refreshBillingFromErp(selectedCode);if (sequence === readSequence.current) setBillingView(result) }
+    catch (error) { if (sequence === readSequence.current) setReadError(`最新账务读取失败，请重新读取后继续。${userFacingError(error)}`) }
+    finally { if (sequence === readSequence.current) setReading(false) }
+  }
+  useEffect(() => { setBillingView(null);void readBilling();return () => { readSequence.current++ } }, [selectedCode])
+  useEffect(() => { if (!dataScope.isAdmin && globalBilling.snapshot?.customerCode === selectedCode) setBillingView(globalBilling.snapshot) }, [globalBilling.snapshot, selectedCode, dataScope.isAdmin])
 
-  const monthlySpent = feeRecords
-    .filter(f => f.type !== 'recharge' && f.amount < 0)
-    .reduce((s, f) => s + Math.abs(f.amount), 0)
-
-  const preDeductCount = feeRecords.filter(f => f.method === 'pre_deduct').length
   const outboundGroups = useMemo(() => groupFeeRecordsByOutbound(feeRecords), [feeRecords])
   const [expandedOutbound, setExpandedOutbound] = useState<string | null>(null)
 
@@ -293,35 +306,46 @@ export default function BillingPage({ rechargeOnly }: BillingPageProps) {
     return f.type === feeTab
   })
 
-  const handleRecharge = async () => {
-    const customerId = getCustomerIdForRole(role)
-    const customerCode = getCustomerCode(customerId ?? undefined)
-    if (!customerCode || customerCode === '—') {
-      setRechargeMsg({ ok: false, text: '未绑定 ERP 客户编码，无法充值' })
-      return
-    }
-    const method = enabledMethods.find(m => m.id === payMethodId) || enabledMethods[0]
-    if (!window.confirm(`确认使用“${method?.title || '默认方式'}”充值 ${formatCurrency(rechargeAmount)}？`)) return
-    setRecharging(true)
-    setRechargeMsg(null)
-    const result = await rechargeViaErp({
-      customerCode,
-      amount: rechargeAmount,
-      paymentMethodId: method?.id || 'bank',
-      paymentMethodTitle: method?.title,
-    })
-    setRecharging(false)
-    if (result.ok) {
-      setRechargeMsg({ ok: true, text: `充值成功，当前余额 ¥${result.balance.toFixed(2)}` })
-    } else {
-      setRechargeMsg({ ok: false, text: result.error })
-    }
+  const readOriginalRecharge = () => {
+    try { setOriginalRecharge(pendingRecharge());setRechargeStorageError('') }
+    catch (error) { setRechargeStorageError(userFacingError(error)) }
   }
+  useEffect(() => { if (!dataScope.isAdmin) readOriginalRecharge();setRechargeDraft(null) }, [selectedCode, dataScope.isAdmin])
+  const handleRecharge = () => {
+    if (rechargeBusy.current || originalRecharge || rechargeStorageError) return
+    if (!selectedCode || dataScope.isAdmin) { setRechargeMsg({ ok: false, text: '请使用已绑定客户的原账号充值' });return }
+    if (!Number.isFinite(rechargeAmount) || rechargeAmount <= 0 || !/^\d{1,12}(\.\d{1,2})?$/.test(String(rechargeAmount))) { setRechargeMsg({ok:false,text:'请输入有效充值金额，最多两位小数'});return }
+    const method = enabledMethods.find(m => m.id === payMethodId)
+    if (!method) { setRechargeMsg({ok:false,text:'请选择有效的支付方式'});return }
+    setRechargeDraft({ customerCode: selectedCode, amount: rechargeAmount, paymentMethodId: method.id, paymentMethodTitle: method.title })
+  }
+  const submitRecharge = async (retry = false) => {
+    const request = retry ? originalRecharge : rechargeDraft
+    if (!request || rechargeBusy.current) return
+    rechargeBusy.current = true;setRecharging(true);setRechargeMsg(null)
+    try {
+      const result = await rechargeViaErp(request, retry)
+      setRechargeMsg(result.ok ? {ok:!result.pending,text:`${result.message}，当前余额 ${formatCurrency(result.balance)}`} : {ok:false,text:result.error})
+      setRechargeDraft(null);readOriginalRecharge()
+      if (result.ok) await readBilling()
+    } finally { rechargeBusy.current = false;setRecharging(false) }
+  }
+
+  const billingReadControls = <div className="mb-4 space-y-2">
+    {dataScope.isAdmin && <select className={formInput()} value={dataScope.customerFilter} onChange={e => dataScope.setCustomerFilter(e.target.value)}><option value="all">请选择客户读取账务</option>{dataScope.customerOptions.map(c => <option key={c.id} value={c.id}>{c.code} · {c.name}</option>)}</select>}
+    {readError && <p className="rounded bg-red-50 p-3 text-sm text-red-800">{readError}{ready ? ' 当前保留上次读取结果，导出暂不可用。' : ''}</p>}
+    {!dataScope.isAdmin && globalBilling.readWarning && !readError && <p className="rounded bg-amber-50 p-3 text-sm text-amber-900">{globalBilling.readWarning}</p>}
+    {ready && billingView.reviewAmount > 0 && <p className="rounded bg-amber-50 p-3 text-sm text-amber-900">发运费用 {formatCurrency(billingView.reviewAmount)} 缺少完整支付依据，请财务核对；本页不将其自动计为未付或再次扣款。</p>}
+    {!selectedCode && <p className="text-sm text-text-muted">请先选择客户，余额、费用和账单将使用同一客户范围。</p>}
+    <Button size="sm" variant="secondary" disabled={!selectedCode || reading} onClick={() => void readBilling()}>{reading ? '正在读取账务…' : '重新读取账务'}</Button>
+    {ready && <p className="text-xs text-text-muted">读取时间：{new Date(billingView.snapshotAt).toLocaleString()} · 待结算出库预扣 {formatCurrency(billingView.reservedAmount)}</p>}
+  </div>
 
   if (rechargeOnly) {
     return (
       <div className="page-shell">
-        <PageHeader title="账户充值" desc="充值账户余额，用于出库预扣款与仓租自动扣费（即时到账至 ERP）" />
+        <PageHeader title="账户充值" desc="充值账户余额，用于出库预扣款与待付费用" />
+        {billingReadControls}
 
         <div className="mb-4">
           <PaymentMethodsCard />
@@ -336,6 +360,7 @@ export default function BillingPage({ rechargeOnly }: BillingPageProps) {
                 <label className="mb-1.5 block text-xs font-medium text-text-secondary">支付方式</label>
                 <select
                   value={payMethodId}
+                  disabled={recharging || !!originalRecharge || !!rechargeDraft || !!rechargeStorageError}
                   onChange={e => setPayMethodId(e.target.value)}
                   className="w-full rounded-lg border border-border bg-white px-3 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
                 >
@@ -349,10 +374,22 @@ export default function BillingPage({ rechargeOnly }: BillingPageProps) {
                 <input
                   type="number"
                   value={rechargeAmount}
+                  disabled={recharging || !!originalRecharge || !!rechargeDraft || !!rechargeStorageError}
+                  min="0.01" step="0.01"
                   onChange={e => setRechargeAmount(Number(e.target.value))}
                   className="w-full rounded-lg border border-border bg-white px-3 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
                 />
               </div>
+              {rechargeStorageError && <p role="alert" className="text-sm text-red-700">{rechargeStorageError}</p>}
+              {originalRecharge && <div role="status" className="space-y-2 rounded bg-amber-50 p-3 text-sm">
+                <p>原充值待核对：{originalRecharge.customerCode} · {originalRecharge.rechargeNo} · {formatCurrency(originalRecharge.amount)}。请保留原单号，勿另建单。</p>
+                <Button disabled={recharging || !can('billing:recharge')} onClick={() => void submitRecharge(true)}>重试原充值</Button>
+              </div>}
+              {rechargeDraft && <div role="region" aria-label="核对充值" className="space-y-3 rounded border p-3 text-sm">
+                <p>请核对：客户 {rechargeDraft.customerCode}，{rechargeDraft.paymentMethodTitle}，充值 {formatCurrency(rechargeDraft.amount)}。</p>
+                <Button variant="secondary" disabled={recharging} onClick={() => setRechargeDraft(null)}>返回修改</Button>
+                <Button disabled={recharging || !can('billing:recharge')} onClick={() => void submitRecharge()}>确认入账</Button>
+              </div>}
               {rechargeMsg && (
                 <p className={`text-xs ${rechargeMsg.ok ? 'text-emerald-600' : 'text-red-600'}`}>
                   {rechargeMsg.text}
@@ -362,7 +399,7 @@ export default function BillingPage({ rechargeOnly }: BillingPageProps) {
                 <Link to="/billing" className="flex-1">
                   <Button variant="secondary" className="w-full">取消</Button>
                 </Link>
-                <Button className="flex-1" disabled={recharging} onClick={() => void handleRecharge()}>
+                <Button className="flex-1" disabled={recharging || !!originalRecharge || !!rechargeDraft || !!rechargeStorageError || !can('billing:recharge')} onClick={handleRecharge}>
                   <CreditCard className="h-4 w-4" /> {recharging ? '提交中…' : '确认充值'}
                 </Button>
               </div>
@@ -404,8 +441,8 @@ export default function BillingPage({ rechargeOnly }: BillingPageProps) {
         desc="出库提交时预扣试算费用；ERP 发运后按实测实算对账，差额自动补扣或退还"
         action={
           <>
-            <Button variant="secondary" size="sm" onClick={() => exportFeeRecordsCsv(filteredFees)}>
-              <Download className="h-3.5 w-3.5" /> 下载账单
+            <Button variant="secondary" size="sm" disabled={!ready || reading || !!readError} onClick={() => exportFeeRecordsCsv(filteredFees)}>
+              <Download className="h-3.5 w-3.5" /> 导出流水（含对账阶段）
             </Button>
             {can('billing:recharge') && (
               <Link to="/billing/recharge"><Button size="sm"><CreditCard className="h-3.5 w-3.5" /> 充值</Button></Link>
@@ -414,28 +451,29 @@ export default function BillingPage({ rechargeOnly }: BillingPageProps) {
         }
       />
 
+      {billingReadControls}
       <div className="mb-4 rounded-xl bg-primary-50 px-4 py-3 ring-1 ring-primary-100">
         <p className="text-xs font-semibold text-primary-900">预扣 + 实算对账</p>
         <p className="mt-1 text-[11px] leading-relaxed text-primary-800">
           出库提交时按模板<strong>预扣</strong>操作/物流费；ERP 发运后按实测<strong>实算</strong>入账，
-          系统自动比对预扣与实扣差额（补扣或退还）。换标等附加费单独计入实扣。
+          系统自动比对预扣与实扣差额（补扣或退还）。预扣与差额用于对账，实际费用只计一次。
         </p>
       </div>
 
       <div className="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <StatCard label="账户余额" value={formatCurrency(creditBalance)} sub="来自 ERP 账本余额" />
-        <StatCard label="累计扣费" value={formatCurrency(monthlySpent)} sub="本页流水中的扣费合计（含预扣与实算）" />
-        <StatCard label="预扣笔数" value={preDeductCount} sub="出库提交时产生" />
+        <StatCard label="账户余额" value={ready ? formatCurrency(creditBalance) : '—'} sub="来自账本的当前余额" />
+        <StatCard label="本月净支出" value={ready ? formatCurrency(monthlySpent) : '—'} sub="已付费用减当月退款；预扣和对账差额不重复计入" />
+        <StatCard label="待付费用" value={ready ? formatCurrency(billingView.pendingBill) : '—'} sub="不含尚未完成最终计费的预估费用" />
       </div>
 
       <Card className="mb-4 p-5">
-        <p className="mb-4 text-sm font-semibold text-text-primary">2026年7月（进行中）</p>
+        <p className="mb-4 text-sm font-semibold text-text-primary">{month} · 已付费用及退款</p>
         <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
           {[
-            { label: '仓储费', value: feeRecords.filter(f => f.type === 'storage').reduce((s, f) => s + Math.abs(f.amount), 0), color: 'bg-indigo-50 text-indigo-700 ring-indigo-100' },
-            { label: '操作费', value: feeRecords.filter(f => f.type === 'handling').reduce((s, f) => s + Math.abs(f.amount), 0), color: 'bg-purple-50 text-purple-700 ring-purple-100' },
-            { label: '物流费', value: feeRecords.filter(f => f.type === 'shipping').reduce((s, f) => s + Math.abs(f.amount), 0), color: 'bg-sky-50 text-sky-700 ring-sky-100' },
-            { label: '换标费', value: feeRecords.filter(f => f.type === 'relabel').reduce((s, f) => s + Math.abs(f.amount), 0), color: 'bg-amber-50 text-amber-700 ring-amber-100' },
+            { label: '仓储费', value: monthlyPaidFees.filter(f => f.type === 'storage').reduce((s, f) => s + Math.abs(f.amount), 0), color: 'bg-indigo-50 text-indigo-700 ring-indigo-100' },
+            { label: '操作费', value: monthlyPaidFees.filter(f => f.type === 'handling').reduce((s, f) => s + Math.abs(f.amount), 0), color: 'bg-purple-50 text-purple-700 ring-purple-100' },
+            { label: '物流费', value: monthlyPaidFees.filter(f => f.type === 'shipping').reduce((s, f) => s + Math.abs(f.amount), 0), color: 'bg-sky-50 text-sky-700 ring-sky-100' },
+            { label: '换标费', value: monthlyPaidFees.filter(f => f.type === 'relabel').reduce((s, f) => s + Math.abs(f.amount), 0), color: 'bg-amber-50 text-amber-700 ring-amber-100' },
           ].map(f => (
             <div key={f.label} className={`rounded-xl px-4 py-4 ring-1 ${f.color}`}>
               <p className="text-xs opacity-80">{f.label}</p>
@@ -444,9 +482,9 @@ export default function BillingPage({ rechargeOnly }: BillingPageProps) {
           ))}
         </div>
         <div className="flex items-center justify-between">
-          <p className="text-sm text-text-secondary">合计 <span className="font-bold text-text-primary">{formatCurrency(monthlySpent)}</span></p>
-          <Button variant="secondary" size="sm" onClick={() => exportFeeRecordsCsv(feeRecords.filter(f => f.type !== 'recharge' && f.amount < 0))}>
-            <Download className="h-3.5 w-3.5" /> 导出扣费明细
+          <p className="text-sm text-text-secondary">已付 {formatCurrency(monthlyGrossPaid)} · 退款 {formatCurrency(monthlyRefunded)} · 净支出 <span className="font-bold text-text-primary">{formatCurrency(monthlySpent)}</span></p>
+          <Button variant="secondary" size="sm" disabled={!ready || reading || !!readError} onClick={() => exportFeeRecordsCsv([...monthlyPaidFees,...monthlyRefunds])}>
+              <Download className="h-3.5 w-3.5" /> 导出已付费用及退款
           </Button>
         </div>
       </Card>
@@ -475,7 +513,7 @@ export default function BillingPage({ rechargeOnly }: BillingPageProps) {
                   <td className="table-cell">
                     <Badge
                       status={b.status === 'confirmed' ? 'available' : b.status === 'pending' ? 'reviewing' : 'shipped'}
-                      label={b.status === 'confirmed' ? '已确认' : b.status === 'pending' ? '待确认' : b.status}
+                      label={b.status === 'paid' ? '已结清' : b.status === 'confirmed' ? '已入账待核对' : b.status === 'pending' ? '待确认' : b.status === 'cancelled' ? '已取消' : '待核对'}
                     />
                   </td>
                   <td className="table-cell text-right text-sm font-semibold">{formatCurrency(b.totalAmount)}</td>

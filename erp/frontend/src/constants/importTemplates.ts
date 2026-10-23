@@ -171,7 +171,7 @@ export interface InventoryAdjustImportRow {
   remark?: string
 }
 
-/** 采购订单 — 与 PurchaseView 创建采购单字段一致。相同供应商、中转仓、预计到货、国内运费、备注的行合并为一张采购单。 */
+/** 采购订单 — 与 PurchaseView 创建采购单字段一致。每条明细生成一张待分配预采购单。 */
 export const PURCHASE_ORDER_IMPORT_FIELDS: ImportFieldDef[] = [
   { key: 'supplierName', label: '供应商', required: true, hint: '可填已有供应商，也可填新名称' },
   { key: 'warehouse', label: '目标中转仓', required: true, hint: '仓库名称或仓库代码，须为已启用的物流中转仓' },
@@ -193,6 +193,30 @@ export const PURCHASE_ORDER_IMPORT_SAMPLE_ROWS: unknown[][] = [
 
 export function downloadPurchaseOrderImportTemplate() {
   downloadImportTemplate('采购订单导入模板.xls', PURCHASE_ORDER_IMPORT_FIELDS, PURCHASE_ORDER_IMPORT_SAMPLE_ROWS)
+}
+
+/** 供应商 — 与供应商管理添加表单字段一致。供应商代码留空时自动生成。 */
+export const SUPPLIER_IMPORT_FIELDS: ImportFieldDef[] = [
+  { key: 'supplierCode', label: '供应商代码', required: false, hint: '字母、数字、下划线或短横线；留空自动生成' },
+  { key: 'supplierName', label: '供应商名称', required: true },
+  { key: 'companyName', label: '公司名称', required: false },
+  { key: 'address', label: '地址', required: false },
+  { key: 'contactName', label: '联系人', required: true },
+  { key: 'contactPhone', label: '电话', required: true },
+  { key: 'email', label: '邮箱', required: false },
+  { key: 'city', label: '城市', required: false },
+  { key: 'country', label: '国家', required: false, hint: '留空默认 China' },
+  { key: 'paymentTerms', label: '结算方式', required: false, hint: '现结、月结或预付30%；留空为现结' },
+  { key: 'leadTimeDays', label: '账期天数', required: false, hint: '0 至 9999 的整数' },
+  { key: 'remark', label: '备注', required: false },
+]
+
+export const SUPPLIER_IMPORT_SAMPLE_ROWS: unknown[][] = [
+  ['SUP-001', '宁波百晟', '宁波百晟钣金制造有限公司', '宁波市鄞州区', '黄钰涵', '13800001111', 'buyer@example.com', '宁波', '中国', '月结', '15', '钣金'],
+]
+
+export function downloadSupplierImportTemplate() {
+  downloadImportTemplate('供应商导入模板.xls', SUPPLIER_IMPORT_FIELDS, SUPPLIER_IMPORT_SAMPLE_ROWS)
 }
 
 export function parseInventoryAdjustCsvClient(content: string, defaultWarehouse = 'WMS-JHB-01'): InventoryAdjustImportRow[] {

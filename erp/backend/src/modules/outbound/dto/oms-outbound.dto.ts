@@ -86,9 +86,8 @@ export class OmsOutboundItemDto {
   @MaxLength(30)
   sku!: string
 
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
+  @IsInt({ message: '出库数量须为正整数' })
+  @Min(1, { message: '出库数量须为正整数' })
   qty!: number
 
   @IsOptional()

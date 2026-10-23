@@ -7,6 +7,8 @@ export default defineConfig(({ mode }) => {
 
   return {
     base: singleFile ? './' : '/',
+    // Shared ERP sources also have CommonJS build outputs beside them.
+    resolve: { extensions: ['.ts', '.tsx', '.mts', '.mjs', '.js', '.jsx', '.json'] },
     plugins: [react(), ...(singleFile ? [viteSingleFile()] : [])],
     server: {
       host: '127.0.0.1',

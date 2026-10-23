@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { customerApi } from '@/api/client.js'
 import { mapCustomer, fmtTime } from '@/api/mappers.ts'
-import { useListLoader, withAction } from '@/composables/useListLoader.ts'
+import { useListLoader } from '@/composables/useListLoader.ts'
 import { useTablePagination } from '@/composables/useTablePagination.ts'
 import { useRowActions } from '@/composables/useRowActions'
 import { useAppStore } from '@/stores/app'
+import { userFacingError } from '@erp/shared/user-facing-error'
+import { newRechargeNo, readRecharge, runRecharge, type RechargeAttempt } from '@erp/shared/recharge-workflow'
 import ListPagination from '@/components/ListPagination.vue'
 import DetailSheet from '@/components/ui/DetailSheet.vue'
 
@@ -37,9 +39,13 @@ function num(v: any) {
   return Number.isFinite(n) ? n : 0
 }
 
-function genRechargeNo() {
-  const ds = new Date().toISOString().slice(0, 10).replace(/-/g, '')
-  return `RC-${ds}-${String(Date.now()).slice(-6)}`
+const genRechargeNo = newRechargeNo
+const rechargeBusy = ref(false), rechargePending = ref<RechargeAttempt | null>(null), rechargeError = ref(''), rechargeStorageError = ref('')
+const rechargeLocked = computed(() => rechargeBusy.value || !!rechargePending.value || !!rechargeStorageError.value)
+const rechargeScope = () => { if (!app.authenticatedUser?.id) throw new Error('请重新登录后核对充值');return `erp:${app.authenticatedUser.id}` }
+function readOriginalRecharge() {
+  try { rechargePending.value = readRecharge(localStorage, rechargeScope());rechargeStorageError.value = '' }
+  catch (error) { rechargeStorageError.value = userFacingError(error) }
 }
 
 const { loading, items: customers, load } = useListLoader(async () => {
@@ -64,7 +70,8 @@ const rechargeForm = ref({
 const detailVisible = ref(false)
 const detailCustomer = ref<any>(null)
 const detailHistory = ref<any[]>([])
-const detailLoading = ref(false)
+const detailLoading = ref(false), detailError = ref('')
+let detailReadSequence = 0
 
 function resetRechargeForm(row?: any) {
   rechargeForm.value = {
@@ -78,7 +85,11 @@ function resetRechargeForm(row?: any) {
 }
 
 function openRecharge(row?: any) {
-  resetRechargeForm(row)
+  readOriginalRecharge()
+  if (rechargePending.value) {
+    const original = rechargePending.value
+    rechargeForm.value = { customerId: original.customerId!, customerCode: original.customerCode, customerName: original.customerName || '', rechargeNo: original.rechargeNo, amount: original.amount, remark: original.remark || '' }
+  } else resetRechargeForm(row)
   dialogVisible.value = true
 }
 
@@ -89,6 +100,7 @@ function syncFromCustomer(row: { _id: number; id: string; name: string }) {
 }
 
 async function onCodeBlur() {
+  if (rechargeLocked.value) return
   const code = rechargeForm.value.customerCode.trim()
   if (!code) {
     rechargeForm.value.customerId = null
@@ -102,7 +114,8 @@ async function onCodeBlur() {
   try {
     const res = await customerApi.list({ keyword: code, pageSize: 20 })
     const items = (res.items || []).map(toCustomerRow)
-    const exact = items.find((c: any) => c.id.toLowerCase() === code.toLowerCase()) || items[0]
+    const exact = items.find((c: any) => c.id.toLowerCase() === code.toLowerCase())
+    if (rechargeLocked.value || rechargeForm.value.customerCode.trim() !== code) return
     if (exact) syncFromCustomer(exact)
     else {
       rechargeForm.value.customerId = null
@@ -133,6 +146,7 @@ function onNameSelect(item: any) {
 }
 
 function onNameBlur() {
+  if (rechargeLocked.value) return
   const name = rechargeForm.value.customerName.trim()
   if (!name) {
     rechargeForm.value.customerId = null
@@ -145,48 +159,43 @@ function onNameBlur() {
   }
   customerApi.list({ keyword: name, pageSize: 20 }).then((res) => {
     const items = (res.items || []).map(toCustomerRow)
-    const exact = items.find((c: any) => c.name === name) || items[0]
-    if (exact) syncFromCustomer(exact)
+    const exact = items.find((c: any) => c.name === name)
+    if (!rechargeLocked.value && rechargeForm.value.customerName.trim() === name && exact) syncFromCustomer(exact)
   }).catch(() => {})
 }
 
-async function submitRecharge() {
-  if (!rechargeForm.value.customerId) {
-    toast('请填写有效的客户 ID 或名称', 'warning')
-    return
-  }
-  if (!rechargeForm.value.rechargeNo.trim()) {
-    toast('请填写充值单号', 'warning')
-    return
-  }
-  if (!rechargeForm.value.amount || rechargeForm.value.amount <= 0) {
-    toast('请填写充值金额', 'warning')
-    return
-  }
-  const rechargeNo = rechargeForm.value.rechargeNo.trim()
-  const ok = await withAction(async () => {
-    const res = await customerApi.recharge(rechargeForm.value.customerId!, {
-      amount: rechargeForm.value.amount,
-      rechargeNo,
-      remark: rechargeForm.value.remark,
+async function submitRecharge(retry = false) {
+  if (rechargeBusy.value || rechargeStorageError.value) return
+  if (!app.hasPerm('budget_credit.create')) { rechargeError.value = '当前岗位无充值权限';return }
+  if (rechargePending.value && !retry) { rechargeError.value = '请先重试原充值';return }
+  const form = rechargeForm.value
+  if (!form.customerId || !form.customerCode || !form.rechargeNo.trim()) { rechargeError.value = '请选择有效客户并填写充值单号';return }
+  if (!/^[A-Za-z0-9_-]{1,30}$/.test(form.rechargeNo.trim())) { rechargeError.value = '充值单号须为1至30位字母、数字、下划线或短横线';return }
+  const attempt: RechargeAttempt = rechargePending.value || { customerId: form.customerId, customerCode: form.customerCode, customerName: form.customerName, rechargeNo: form.rechargeNo.trim(), amount: form.amount, remark: form.remark }
+  const operatorId = String(app.authenticatedUser?.id), scope = rechargeScope()
+  rechargeBusy.value = true;rechargeError.value = ''
+  try {
+    const response = await runRecharge(localStorage, scope, attempt, async original => {
+      if (String(app.authenticatedUser?.id) !== operatorId) throw new Error('登录身份已变化，请使用原账号核对')
+      const result = await customerApi.recharge(original.customerId!, { amount: original.amount, rechargeNo: original.rechargeNo, remark: original.remark })
+      if (String(app.authenticatedUser?.id) !== operatorId) throw new Error('登录身份已变化，请使用原账号核对')
+      return result
     })
+    rechargeError.value = response.message
+    if (response.completed) { dialogVisible.value = false;toast(response.message, 'success') }
     await load()
-    return res
-  }, `充值成功 · 单号 ${rechargeNo}`)
-  if (ok) dialogVisible.value = false
+  } catch (error) { rechargeError.value = userFacingError(error) }
+  finally { readOriginalRecharge();rechargeBusy.value = false }
 }
 
 async function showDetail(row: any) {
-  detailCustomer.value = row
-  detailVisible.value = true
-  detailLoading.value = true
+  const sequence = ++detailReadSequence
+  detailCustomer.value = row;detailVisible.value = true;detailLoading.value = true;detailError.value = '';detailHistory.value = []
   try {
-    detailHistory.value = await customerApi.rechargeHistory(row._id)
-  } catch {
-    detailHistory.value = []
-  } finally {
-    detailLoading.value = false
-  }
+    const result = await customerApi.rechargeHistory(row._id)
+    if (sequence === detailReadSequence) detailHistory.value = result
+  } catch (error) { if (sequence === detailReadSequence) detailError.value = `充值明细未能读取，请重试后核对。${userFacingError(error)}` }
+  finally { if (sequence === detailReadSequence) detailLoading.value = false }
 }
 
 function search() {
@@ -198,7 +207,7 @@ function resetSearch() {
   load()
 }
 
-onMounted(load)
+onMounted(() => { readOriginalRecharge();void load() })
 </script>
 
 <template>
@@ -207,12 +216,14 @@ onMounted(load)
       <div class="page-header">
         <span class="page-title">客户充值</span>
         <div class="header-actions">
-          <el-button type="primary" size="small" @click="openRecharge()">充值</el-button>
+          <el-button type="primary" size="small" v-if="app.hasPerm('budget_credit.create')" @click="openRecharge()">充值</el-button>
           <el-button v-if="app.hasPerm('budget_credit.export')" size="small" @click="exportTask('客户充值')">导出</el-button>
         </div>
       </div>
     </template>
 
+    <el-alert v-if="rechargePending" :title="`原充值待核对：${rechargePending.customerCode} · ${rechargePending.rechargeNo}。请打开充值，重试原单。`" type="warning" :closable="false" />
+    <el-alert v-if="rechargeStorageError" :title="rechargeStorageError" type="error" :closable="false" />
     <div class="filter-bar">
       <el-input
         v-model="keyword"
@@ -251,7 +262,7 @@ onMounted(load)
       <el-table-column prop="lastRechargeAt" label="最近充值" width="100" />
       <el-table-column label="操作" width="120" fixed="right">
         <template #default="{ row }">
-          <el-button link type="primary" size="small" @click="openRecharge(row)">充值</el-button>
+          <el-button v-if="app.hasPerm('budget_credit.create')" link type="primary" size="small" @click="openRecharge(row)">充值</el-button>
           <el-button link type="primary" size="small" @click="showDetail(row)">明细</el-button>
         </template>
       </el-table-column>
@@ -261,12 +272,16 @@ onMounted(load)
   </el-card>
 
   <el-dialog v-model="dialogVisible" title="客户充值" width="520px">
-    <el-form label-width="90px" size="small">
+    <el-alert v-if="rechargeStorageError" :title="rechargeStorageError" type="error" :closable="false" />
+    <el-alert v-if="rechargeError" :title="rechargeError" type="warning" :closable="false" />
+    <el-alert v-if="rechargePending" title="原充值待核对。客户、金额与单号已保留，请重试原充值，勿另建单。" type="warning" :closable="false" />
+    <el-form label-width="90px" size="small" :disabled="rechargeLocked">
       <el-form-item label="客户 ID" required>
         <el-input
           v-model="rechargeForm.customerCode"
           placeholder="输入客户 ID，如 CUS-001"
           @blur="onCodeBlur"
+          @input="rechargeForm.customerId = null"
         />
       </el-form-item>
       <el-form-item label="客户名称" required>
@@ -278,6 +293,7 @@ onMounted(load)
           :trigger-on-focus="true"
           @select="onNameSelect"
           @blur="onNameBlur"
+          @input="rechargeForm.customerId = null"
         />
       </el-form-item>
       <el-form-item label="充值单号" required>
@@ -288,7 +304,7 @@ onMounted(load)
         </el-input>
       </el-form-item>
       <el-form-item label="充值金额" required>
-        <el-input-number v-model="rechargeForm.amount" :min="0.01" :step="1000" style="width:100%" />
+        <el-input-number v-model="rechargeForm.amount" :min="0.01" :precision="2" :step="1000" style="width:100%" />
       </el-form-item>
       <el-form-item label="备注">
         <el-input v-model="rechargeForm.remark" type="textarea" placeholder="备注信息" />
@@ -296,7 +312,8 @@ onMounted(load)
     </el-form>
     <template #footer>
       <el-button @click="dialogVisible = false">取消</el-button>
-      <el-button type="primary" @click="submitRecharge">确认充值</el-button>
+      <el-button v-if="rechargePending" type="primary" :loading="rechargeBusy" :disabled="!!rechargeStorageError || !app.hasPerm('budget_credit.create')" @click="submitRecharge(true)">重试原充值</el-button>
+      <el-button v-else type="primary" :loading="rechargeBusy" :disabled="!!rechargeStorageError || !app.hasPerm('budget_credit.create')" @click="submitRecharge()">确认充值</el-button>
     </template>
   </el-dialog>
 
@@ -326,6 +343,8 @@ onMounted(load)
         </div>
       </template>
     </DetailSheet>
+    <el-alert v-if="detailError" :title="detailError" type="error" :closable="false" />
+    <el-button v-if="detailError" :loading="detailLoading" @click="showDetail(detailCustomer)">重新读取充值明细</el-button>
     <el-table v-loading="detailLoading" :data="detailHistory" border size="small" max-height="360">
       <el-table-column prop="rechargeNo" label="充值单号" width="160">
         <template #default="{ row }"><span class="mono">{{ row.rechargeNo }}</span></template>
@@ -336,7 +355,7 @@ onMounted(load)
       <el-table-column prop="status" label="状态" width="80">
         <template #default="{ row }">
           <el-tag :type="row.status === 'confirmed' ? 'success' : 'info'" size="small">
-            {{ row.status === 'confirmed' ? '已确认' : row.status }}
+            {{ row.status === 'confirmed' ? '已确认' : row.status === 'pending' ? '待确认' : row.status === 'cancelled' ? '已取消' : '待核对' }}
           </el-tag>
         </template>
       </el-table-column>
@@ -345,7 +364,7 @@ onMounted(load)
         <template #default="{ row }">{{ fmtTime(row.createdAt) }}</template>
       </el-table-column>
     </el-table>
-    <el-empty v-if="!detailLoading && !detailHistory.length" description="暂无充值记录" :image-size="64" />
+    <el-empty v-if="!detailLoading && !detailError && !detailHistory.length" description="暂无充值记录" :image-size="64" />
   </el-dialog>
 </template>
 
