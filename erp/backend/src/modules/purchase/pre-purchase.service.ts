@@ -500,7 +500,7 @@ export class PrePurchaseService {
     const po = await this.prisma.purchaseOrder.findUnique({ where: { id: BigInt(poId) } })
     if (!po) throw new NotFoundException('采购单不存在')
     if (po.status !== 'rejected') throw new BadRequestException('仅已驳回的采购单可修改后重新提交')
-    if (!po.prePoId) throw new BadRequestException('该采购单没有关联预采购，无法退回分配采购员')
+    if (!po.prePoId) return this.resubmitDirectRejected(po, data, viewer)
 
     await this.update(Number(po.prePoId), data, viewer)
 
@@ -530,6 +530,102 @@ export class PrePurchaseService {
       detail: { poNo: po.poNo, sku: updated.sku },
     })
     const [item] = await this.enrich([updated])
+    return item
+  }
+
+  /** 直接创建、没有预采购的驳回单：按当前明细生成预采购并进入分配。 */
+  private async resubmitDirectRejected(po: { id: bigint; poNo: string; purchaserId?: bigint | null }, data: any, viewer?: { userId: number; roleCode: string }) {
+    const full = await this.prisma.purchaseOrder.findUnique({ where: { id: po.id }, include: { items: true } })
+    if (!full || full.status !== 'rejected') throw new BadRequestException('仅已驳回的采购单可修改后重新提交')
+    if (viewer?.roleCode === 'purchaser' && full.purchaserId && Number(full.purchaserId) !== viewer.userId) {
+      throw new ForbiddenException('无权提交未分配给您的采购单')
+    }
+    if (full.items.length !== 1) throw new BadRequestException('该采购单包含多项明细，请先保留一项后再退回分配采购员')
+    const line = full.items[0]
+    const sku = String(data.sku ?? line.sku ?? '').trim()
+    const productName = String(data.productName ?? line.productName ?? '').trim()
+    const plannedQty = Number(data.plannedQty ?? (Number(line.quantity) > 0 ? line.quantity : line.plannedQty))
+    const unitPrice = Number(data.unitPrice ?? line.unitPrice)
+    if (!sku) throw new BadRequestException('SKU 不能为空')
+    if (sku.length > 30) throw new BadRequestException('SKU 不能超过 30 字')
+    if (!productName) throw new BadRequestException('请填写商品名称')
+    if (!Number.isSafeInteger(plannedQty) || plannedQty < 1) throw new BadRequestException('采购数量须为大于零的整数')
+    if (!Number.isFinite(unitPrice) || unitPrice <= 0) throw new BadRequestException('请填写大于零的采购单价')
+
+    const created = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM purchase_order WHERE id = ${po.id} FOR UPDATE`
+      const current = await tx.purchaseOrder.findUnique({ where: { id: po.id } })
+      if (!current || current.status !== 'rejected' || current.prePoId) throw new ConflictException('采购单状态已变化，请刷新核对后再提交')
+      const supplierId = await this.resolveSupplier(data, current.supplierId, tx)
+      if (!supplierId) throw new BadRequestException('请选择供应商')
+      const warehouseCode = data.warehouseCode !== undefined ? String(data.warehouseCode || '').trim() : (current.warehouseCode || '')
+      if (warehouseCode) {
+        const warehouse = await tx.warehouse.findUnique({ where: { warehouseCode } })
+        if (!warehouse || warehouse.status !== 1 || warehouse.warehouseType !== 'logistics') throw new BadRequestException('请选择有效的国内中转收货仓库')
+      }
+      let dev = await tx.productDev.findFirst({ where: { sku } })
+      if (!dev) {
+        dev = await tx.productDev.create({
+          data: {
+            applyNo: `PD-${current.poNo}`.slice(0, 30),
+            sku,
+            productName,
+            status: 'approved',
+            purchaseQty: plannedQty,
+            estimatedCost: unitPrice,
+            reason: `驳回采购单 ${current.poNo} 退回分配`,
+          },
+        })
+      }
+      const pre = await tx.prePurchaseOrder.create({
+        data: {
+          prePoNo: `PRE-${current.poNo}`.slice(0, 30),
+          devId: dev.id,
+          applyNo: dev.applyNo,
+          sku,
+          productName,
+          plannedQty,
+          unitPrice,
+          supplierId,
+          warehouseCode: warehouseCode || null,
+          domesticFreight: data.domesticFreight != null && data.domesticFreight !== '' ? Number(data.domesticFreight) : current.domesticFreight,
+          expectedArrival: data.expectedArrival ? new Date(data.expectedArrival) : current.expectedArrival,
+          remark: data.remark != null ? String(data.remark) : current.remark,
+          status: 'pending_assign',
+          convertedPoId: current.id,
+        },
+      })
+      const amount = Math.round(plannedQty * unitPrice * 100) / 100
+      await tx.purchaseOrder.update({
+        where: { id: current.id },
+        data: {
+          prePoId: pre.id,
+          supplierId,
+          warehouseCode: warehouseCode || null,
+          domesticFreight: data.domesticFreight != null && data.domesticFreight !== '' ? Number(data.domesticFreight) : current.domesticFreight,
+          expectedArrival: data.expectedArrival ? new Date(data.expectedArrival) : current.expectedArrival,
+          remark: data.remark != null ? String(data.remark) : current.remark,
+          totalAmount: amount,
+          items: {
+            update: {
+              where: { id: line.id },
+              data: { sku, productName, quantity: plannedQty, plannedQty, unitPrice, amount },
+            },
+          },
+        },
+      })
+      return pre
+    })
+
+    await this.opLog.log({
+      operatorId: viewer?.userId,
+      module: 'purchase',
+      action: 'resubmit_pre_po',
+      targetType: 'pre_purchase_order',
+      targetId: created.prePoNo,
+      detail: { poNo: po.poNo, sku: created.sku, createdFromDirectPo: true },
+    })
+    const [item] = await this.enrich([created])
     return item
   }
 

@@ -100,10 +100,22 @@ describe('预采购确认与所属采购员', () => {
     expect(item.status).toBe('pending_assign')
     expect(item.purchaserId).toBeNull()
   })
-  it('没有关联预采购的驳回单不能退回分配', async () => {
-    const { service, tx } = setup()
-    tx.purchaseOrder.findUnique.mockResolvedValue({ id: 9n, prePoId: null, status: 'rejected' })
-    await expect(service.resubmitRejected(9, {}, { userId: 1, roleCode: 'purchaser' })).rejects.toThrow('没有关联预采购')
+  it('没有关联预采购的驳回单按明细生成预采购并进入分配', async () => {
+    const { service, tx, log } = setup()
+    const direct = { id: 9n, prePoId: null, poNo: 'PO-DIRECT', status: 'rejected', supplierId: 2n, purchaserId: 1n, warehouseCode: 'LW-SZ', items: [{ id: 11n, sku: '22222', productName: '01111', quantity: 1, plannedQty: 1, unitPrice: 20 }] }
+    tx.purchaseOrder.findUnique.mockImplementation(async () => direct)
+    tx.purchaseOrder.update = jest.fn(async ({ data }) => ({ ...direct, ...data }))
+    tx.productDev = { findFirst: jest.fn().mockResolvedValue(null), create: jest.fn(async ({ data }) => ({ id: 21n, applyNo: data.applyNo, ...data })) }
+    tx.prePurchaseOrder.create = jest.fn(async ({ data }) => ({ id: 31n, ...data }))
+    tx.warehouse = { findUnique: jest.fn().mockResolvedValue({ warehouseCode: 'LW-SZ', status: 1, warehouseType: 'logistics' }) }
+    jest.spyOn(service as any, 'enrich').mockImplementation(async (rows: any[]) => rows)
+    const item = await service.resubmitRejected(9, { sku: '22222', productName: '01111', plannedQty: 1, unitPrice: 20, supplierName: '宁波百晟钣金制造有限公司', warehouseCode: 'LW-SZ' }, { userId: 1, roleCode: 'purchaser' })
+    expect(tx.productDev.create).toHaveBeenCalled()
+    expect(tx.prePurchaseOrder.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ status: 'pending_assign', sku: '22222', convertedPoId: 9n }),
+    }))
+    expect(item.status).toBe('pending_assign')
+    expect(log.log).toHaveBeenCalledWith(expect.objectContaining({ detail: expect.objectContaining({ createdFromDirectPo: true }) }))
   })
   it('已取消且没有采购单的预采购可以删除', async () => {
     const { service, row, tx, log } = setup()
