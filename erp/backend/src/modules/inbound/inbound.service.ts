@@ -607,8 +607,8 @@ export class InboundService {
   }
 
   /** 扫箱收货：人工清点实收箱数 */
-  recordReceivedCartonCount(id: number, body: RecordInboundCartonsDto, operatorId?: number) {
-    return runInboundReceiving(this.prisma, id, 'carton-count', body, operatorId)
+  async recordReceivedCartonCount(id: number, body: RecordInboundCartonsDto, operatorId?: number) {
+    return this.syncReceivingStatus(await runInboundReceiving(this.prisma, id, 'carton-count', body, operatorId))
   }
 
   reduceQuantity(id: number, mode: 'qc' | 'carton' | 'putaway', body: InboundControlDto, operatorId?: number) {
@@ -616,8 +616,8 @@ export class InboundService {
   }
 
   /** 扫外箱只确认箱数，SKU实收仍需清点，原请求可在响应丢失后重试。 */
-  receiveBox(id: number, body: ScanInboundCartonDto, operatorId?: number) {
-    return runInboundReceiving(this.prisma, id, 'carton-scan', body, operatorId)
+  async receiveBox(id: number, body: ScanInboundCartonDto, operatorId?: number) {
+    return this.syncReceivingStatus(await runInboundReceiving(this.prisma, id, 'carton-scan', body, operatorId))
   }
 
   async startReceive(id: number, operatorId?: number) {
@@ -669,8 +669,8 @@ export class InboundService {
   }
 
   /** 扫码增量和测量在单据锁内提交，防止并发覆盖。 */
-  scanQc(id: number, body: ScanInboundQcDto, operatorId?: number) {
-    return runInboundReceiving(this.prisma, id, 'qc-scan', body, operatorId)
+  async scanQc(id: number, body: ScanInboundQcDto, operatorId?: number) {
+    return this.syncReceivingStatus(await runInboundReceiving(this.prisma, id, 'qc-scan', body, operatorId))
   }
 
   async reportException(id: number, payload: any, operatorId?: number) {
@@ -822,14 +822,27 @@ export class InboundService {
 
   private async receivingWithFees(id: number, kind: 'qc-submit' | 'qc-measure-submit' | 'measure', payload: SubmitInboundQcDto | MeasureInboundDto, operatorId?: number) {
     const result = await runInboundReceiving(this.prisma, id, kind, payload, operatorId)
+    let feePending = false
     try {
       const order = await this.prisma.inboundOrder.findUnique({ where: { id: BigInt(id) }, include: { items: true } })
       if (!order) throw new Error('Original receipt unavailable')
       if (kind !== 'measure') await this.inboundFee.recordOperation(order, 'qc', pieceQty(result.items || order.items), true)
       if (kind !== 'qc-submit' && result.measuredCount > 0) await this.inboundFee.recordOperation(order, 'measure', result.measuredCount, true)
-      return result
     } catch {
-      return { ...result, feePending: true, warning: '仓库作业已保存，但费用同步未完成；请用原操作重试核对，勿重新建立操作' }
+      feePending = true
+    }
+    const synced = await this.syncReceivingStatus(result)
+    return feePending ? { ...synced, feePending: true, warning: synced.syncPending
+      ? '仓库作业已保存，但费用与OMS状态同步未完成；请用原操作重试核对，勿重新建立操作'
+      : '仓库作业已保存，但费用同步未完成；请用原操作重试核对，勿重新建立操作' } : synced
+  }
+
+  private async syncReceivingStatus<T extends { inboundNo: string }>(result: T) {
+    try {
+      await this.pushInboundStatusToOms(result.inboundNo, true)
+      return { ...result, syncPending: false }
+    } catch {
+      return { ...result, syncPending: true, warning: '仓库作业已保存，但OMS状态或库存同步未完成；请用原操作重试核对，勿重新收箱或清点' }
     }
   }
 
