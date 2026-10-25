@@ -7,3 +7,8 @@ export function internalRedirect(value: unknown): string {
     return value
   } catch { return '/dashboard' }
 }
+
+export function sessionReturnPath(location: { pathname: string; search?: string; hash?: string }): string {
+  if (location.pathname === '/access-denied') return internalRedirect(new URLSearchParams(location.search || '').get('redirect'))
+  return internalRedirect(location.pathname + (location.search || '') + (location.hash || ''))
+}

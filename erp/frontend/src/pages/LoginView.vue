@@ -101,6 +101,7 @@ async function handleSubmit() {
           <h3>登录系统</h3>
           <p>使用您的账号密码进入工作台</p>
         </div>
+          <el-alert v-if="route.query.reason === 'session-expired'" title="登录已失效，请重新登录后继续原页面" type="warning" :closable="false" style="margin-bottom:16px" />
 
         <el-form label-position="top" @submit.prevent="handleSubmit">
           <el-form-item label="登录名">

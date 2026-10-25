@@ -3,6 +3,7 @@
  * 文档：backend/docs/API.md
  */
 import { clearAccessToken, getAccessToken } from '@/auth/tokenStore'
+import { sessionReturnPath } from '@/auth/internalRedirect'
 import { userFacingError } from '@erp/shared/user-facing-error'
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
@@ -24,9 +25,24 @@ function describeNetworkError(err) {
 }
 
 function shouldClearErpSession(url, status) {
+  const path = String(url).split('?')[0]
   return status === 401
-    && !String(url).includes('/auth/login')
-    && !String(url).includes('/store-monitor')
+    && !/^\/auth\/login(?:\/|$)/.test(path)
+    && !/^\/store-monitor(?:\/|$)/.test(path)
+}
+
+function responseFailure(url, status, payload, requestToken) {
+  const sessionFailure = shouldClearErpSession(url, status)
+  const changed = requestToken !== getAccessToken()
+  const message = sessionFailure && changed ? '原登录请求已失效，请使用当前账号继续' : userFacingError(payload, status)
+  if (sessionFailure && !changed) {
+    const target = sessionReturnPath(window.location)
+    clearAccessToken()
+    if (!/^\/login(?:\/|$)/i.test(window.location.pathname)) window.location.href = `/login?reason=session-expired&redirect=${encodeURIComponent(target)}`
+  }
+  const failure = new Error(message)
+  failure.status = status
+  return failure
 }
 
 async function downloadRequest(url) {
@@ -41,15 +57,7 @@ async function downloadRequest(url) {
   }
   if (!response.ok) {
     const error = await response.json().catch(() => ({ message: response.statusText }))
-    if (shouldClearErpSession(url, response.status)) {
-      clearAccessToken()
-      if (!window.location.pathname.startsWith('/login')) {
-        window.location.href = `/login?redirect=${encodeURIComponent(window.location.pathname)}`
-      }
-    }
-    const failure = new Error(userFacingError(error, response.status))
-    failure.status = response.status
-    throw failure
+    throw responseFailure(url, response.status, error, token)
   }
   const blob = await response.blob()
   const disposition = response.headers.get('Content-Disposition') || ''
@@ -88,7 +96,7 @@ async function openHtmlPrint(url) {
   }
   if (!response.ok) {
     const error = await response.json().catch(() => ({ message: response.statusText }))
-    throw new Error(userFacingError(error, response.status))
+    throw responseFailure(url, response.status, error, token)
   }
   const html = await response.text()
   const win = window.open('', '_blank')
@@ -120,15 +128,7 @@ async function request(url, options = {}) {
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ message: response.statusText }))
-    if (shouldClearErpSession(url, response.status)) {
-      clearAccessToken()
-      if (!window.location.pathname.startsWith('/login')) {
-        window.location.href = `/login?redirect=${encodeURIComponent(window.location.pathname)}`
-      }
-    }
-    const failure = new Error(userFacingError(error, response.status))
-    failure.status = response.status
-    throw failure
+    throw responseFailure(url, response.status, error, token)
   }
 
   let json
@@ -136,7 +136,7 @@ async function request(url, options = {}) {
 
   if (json && typeof json === 'object' && 'code' in json) {
     if (json.code !== 0) {
-      throw new Error(userFacingError(json.message, Number(json.code)))
+      throw responseFailure(url, Number(json.code), json.message, token)
     }
     return json.data
   }
