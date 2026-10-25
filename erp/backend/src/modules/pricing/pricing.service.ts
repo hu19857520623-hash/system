@@ -102,7 +102,7 @@ export class PricingService {
       pricingStatus: row.pricingStatus,
       omsSyncTime: fmtTime(row.omsSyncAt),
       visibleOnOms: Boolean(row.visibleOnOms),
-      orderableOnOms: Boolean(row.orderableOnOms),
+      orderableOnOms: Boolean(row.orderableOnOms) && row.shareStatus !== 'stopped' && remainingStockQty > 0,
       shareStatus: row.shareStatus === 'stopped' ? 'stopped' : 'enabled',
       visibleOnOmsAt: fmtTime(row.visibleOnOmsAt),
       orderableOnOmsAt: fmtTime(row.orderableOnOmsAt),

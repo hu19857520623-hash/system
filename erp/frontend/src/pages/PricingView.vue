@@ -662,8 +662,7 @@ async function submitReprice() {
       </el-table-column>
       <el-table-column label="对客户可见" width="96" align="right">
         <template #default="{ row }">
-          <span v-if="row.visibleStockQty != null">{{ row.visibleStockQty.toLocaleString() }}</span>
-          <span v-else style="color:#b0a89c">—</span>
+          <span>{{ row.catalogStockPool.toLocaleString() }}</span>
         </template>
       </el-table-column>
       <el-table-column label="已售" width="72" align="right">
@@ -788,8 +787,8 @@ async function submitReprice() {
             <strong>¥ {{ editing.seaFreight }}</strong>
           </div>
           <div class="erp-detail__metric">
-            <label>对客户可见</label>
-            <strong>{{ editing.visibleStockQty != null ? editing.visibleStockQty.toLocaleString() : '—' }}</strong>
+            <label>有效可见总额度</label>
+            <strong>{{ editing.catalogStockPool.toLocaleString() }}</strong>
           </div>
           <div class="erp-detail__metric is-accent">
             <label>在途</label>
@@ -821,9 +820,8 @@ async function submitReprice() {
         <el-descriptions-item label="汇率(¥→R)">{{ editing.exchangeRate }}</el-descriptions-item>
         <el-descriptions-item label="本批入库">{{ editing.inboundQty ? editing.inboundQty.toLocaleString() : '—' }} <span class="form-tip">（发运按预期写入，完结后按实收回写）</span></el-descriptions-item>
         <el-descriptions-item label="累计良品实收">{{ editing.receivedGoodQty }} <span class="form-tip">（总可见额度上限，已售量另扣）</span></el-descriptions-item>
-        <el-descriptions-item label="对客户可见库存">
-          <span v-if="editing.visibleStockQty != null">{{ editing.visibleStockQty.toLocaleString() }}</span>
-          <span v-else style="color:#b0a89c">—</span>
+        <el-descriptions-item label="有效可见总额度">
+          <span>{{ editing.catalogStockPool.toLocaleString() }}</span>
         </el-descriptions-item>
         <el-descriptions-item label="已售">
           <span style="font-weight:600">{{ editing.soldQty?.toLocaleString?.() ?? 0 }}</span>
@@ -903,7 +901,7 @@ async function submitReprice() {
             <span v-if="editing.visibleOnOmsAt" class="desc-time">{{ editing.visibleOnOmsAt }}</span>
           </el-descriptions-item>
           <el-descriptions-item label="允许下单">
-            <el-tag :type="editing.orderableOnOms ? 'success' : 'warning'" size="small">{{ editing.orderableOnOms ? '是' : '否（待海外仓库存）' }}</el-tag>
+            <el-tag :type="editing.orderableOnOms ? 'success' : 'warning'" size="small">{{ editing.orderableOnOms ? '是' : editing.shareStatus === 'stopped' ? '否（已停止共享）' : '否（额度或库存不足）' }}</el-tag>
             <span v-if="editing.orderableOnOmsAt" class="desc-time">{{ editing.orderableOnOmsAt }}</span>
           </el-descriptions-item>
           <el-descriptions-item label="共享状态">
@@ -921,7 +919,7 @@ async function submitReprice() {
           </el-descriptions-item>
           <el-descriptions-item label="OMS 展示剩余">
             <span style="font-weight:600;color:#1f9d92">{{ editing.remainingStockQty?.toLocaleString?.() ?? '—' }}</span>
-            <span class="form-tip">可见 {{ editing.visibleStockQty?.toLocaleString?.() ?? '—' }} − 已售；非仓内可用自动同步</span>
+            <span class="form-tip">有效总额度 {{ editing.catalogStockPool.toLocaleString() }} − 已售；总额度受累计良品实收限制</span>
           </el-descriptions-item>
           <el-descriptions-item label="客户购买">
             {{ editing.soldQty?.toLocaleString?.() ?? '—' }}

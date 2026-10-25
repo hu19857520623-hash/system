@@ -1,6 +1,18 @@
 import { PricingService } from './pricing.service'
 
 describe('PricingService historical display fallbacks', () => {
+  it.each([
+    {receivedGoodQty:0,soldQty:0,shareStatus:'enabled',expected:false},
+    {receivedGoodQty:8,soldQty:8,shareStatus:'enabled',expected:false},
+    {receivedGoodQty:8,soldQty:1,shareStatus:'enabled',expected:true},
+    {receivedGoodQty:8,soldQty:1,shareStatus:'stopped',expected:false},
+  ])('ERP展示的下单状态与实收上限一致 %p', data => {
+    const service=new PricingService({} as any,{} as any,{} as any)
+    const row=(service as any).serialize({id:1n,sku:'TKL-A',visibleStockQty:200,orderableOnOms:true,...data})
+    expect(row.orderableOnOms).toBe(data.expected)
+    expect(row.catalogStockPool).toBe(data.receivedGoodQty)
+    expect(row.visibleStockQty).toBe(200)
+  })
   it.each([0, -1, 1.001, null, true, '10.00'])('无效售价%s不能写入并把商品推进不可恢复状态', async price => {
     const db: any = { productPricing: { findUnique: jest.fn().mockResolvedValue({ id: 1n, pricingStatus: 'pending_pricing' }), update: jest.fn() } }
     const service = new PricingService(db, {} as any, {} as any)

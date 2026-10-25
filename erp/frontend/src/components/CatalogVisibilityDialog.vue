@@ -77,10 +77,12 @@ watch(()=>app.authenticatedUser?.id,()=>{++sequence;quote.value=null;pending.val
     <el-descriptions v-if="quote" :column="2" border style="margin-top:14px">
       <el-descriptions-item label="商品" :span="2">{{ quote.name }} · {{ quote.sku }}</el-descriptions-item>
       <el-descriptions-item label="累计良品实收">{{ quote.receivedGoodQty }} 件</el-descriptions-item>
-      <el-descriptions-item label="原可见总额度">{{ quote.visibleStockQty ?? '未设置' }}</el-descriptions-item>
+      <el-descriptions-item label="原设置总额度">{{ quote.visibleStockQty ?? '未设置' }}</el-descriptions-item>
+      <el-descriptions-item label="有效可见总额度">{{ quote.catalogStockPool }} 件</el-descriptions-item>
       <el-descriptions-item label="已售量">{{ quote.soldQty }} 件</el-descriptions-item>
       <el-descriptions-item label="当前剩余可售">{{ quote.remainingStockQty }} 件</el-descriptions-item>
     </el-descriptions>
+    <el-alert v-if="quote && quote.visibleStockQty > quote.receivedGoodQty" type="warning" :closable="false" title="原设置超过累计良品实收，当前已按实收限制；保存时请填写上限内的额度。" />
     <el-form v-if="quote||pending" label-width="140px" style="margin-top:14px">
       <el-form-item label="新总可见额度"><el-input-number v-model="quantity" :min="0" :max="quote?.receivedGoodQty ?? pending?.payload.expectedReceivedGoodQty ?? 0" :precision="0" :disabled="!allowed||saving||reading||!!pending" /></el-form-item>
     </el-form>
