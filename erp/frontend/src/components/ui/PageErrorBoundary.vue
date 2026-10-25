@@ -1,34 +1,26 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onErrorCaptured, ref, watch } from 'vue'
+import { onBeforeUnmount, onErrorCaptured } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { createPageRecovery, reloadRecoveryPage } from '@/router/pageRecovery'
 
-const failed = ref(false)
 const route = useRoute()
 const router = useRouter()
-const removeRouterError = router.onError(error => {
-  console.error('页面加载失败', error)
-  failed.value = true
-})
-onBeforeUnmount(removeRouterError)
+const { failed, targetTitle, feedback, returning, capture, reload, returnHome, dispose } = createPageRecovery(router, reloadRecoveryPage)
+onBeforeUnmount(dispose)
 onErrorCaptured(error => {
   console.error('页面显示失败', error)
-  failed.value = true
+  capture(route.fullPath)
   return false
 })
-watch(() => route.fullPath, () => { failed.value = false })
-function reload() { window.location.reload() }
-function returnHome() {
-  failed.value = false
-  void router.push('/dashboard')
-}
 </script>
 
 <template>
   <section v-if="failed" class="page-error" role="alert">
     <h1>页面暂时无法显示</h1>
-    <p>请重新加载页面；如仍无法打开，可返回工作台重新进入，或联系管理员。</p>
-    <el-button type="primary" @click="reload">重新加载</el-button>
-    <el-button @click="returnHome">返回工作台</el-button>
+    <p>「{{ targetTitle }}」未能打开。重新加载会继续打开原目标页面；如仍失败，可返回工作台或联系管理员。</p>
+    <el-alert v-if="feedback" :title="feedback" type="warning" :closable="false" />
+    <el-button type="primary" :disabled="returning" @click="reload">重新加载</el-button>
+    <el-button :loading="returning" @click="returnHome">返回工作台</el-button>
   </section>
   <slot v-else />
 </template>
