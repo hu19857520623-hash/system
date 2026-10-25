@@ -3,9 +3,9 @@ import { userFacingError } from '@erp/shared/user-facing-error'
 
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage, type TableInstance } from 'element-plus'
+import { ElMessage, ElMessageBox, type TableInstance } from 'element-plus'
 import { leadApi, triggerBrowserDownload } from '@/api/client.js'
-import { fmtTime, mapLead, formatLeadContact, looksLikeLeadPhone } from '@/api/mappers.ts'
+import { fmtTime, mapLead, formatLeadContact } from '@/api/mappers.ts'
 import { useListLoader, withAction } from '@/composables/useListLoader.ts'
 import { useServerPagination } from '@/composables/useTablePagination.ts'
 import { useAsyncIo } from '@/composables/useAsyncIo'
@@ -15,6 +15,15 @@ import DetailSheet from '@/components/ui/DetailSheet.vue'
 import { useAppStore } from '@/stores/app'
 import { LEAD_SELF_ASSIGN_ROLE_CODES } from '@erp/shared/permissions.catalog'
 import { LEAD_STATUS } from '@/constants/index.js'
+import { ownLeadCanBeCorrected } from '@/features/leads/leadCorrection.ts'
+import {
+  LEAD_CONTACT_TYPE_OPTIONS,
+  contactFieldPlaceholder,
+  inferLeadContactType,
+  isSameCompanyQrPrompt,
+  leadContactInputValue,
+  type LeadContactType,
+} from '@/features/leads/leadContact.ts'
 
 const POOL_FOLLOWABLE_STATUSES = new Set(['new', 'lost', 'nurture', 'recall'])
 
@@ -147,6 +156,19 @@ const sourceOptions = [
 ]
 
 const dialogVisible = ref(false)
+const correctVisible = ref(false)
+const correctSaving = ref(false)
+const correctForm = ref({
+  company: '',
+  contactType: 'phone' as LeadContactType,
+  contact: '',
+  email: '',
+  source: '',
+  remark: '',
+  qrFileName: '',
+  qrImage: null as { fileName: string; contentBase64: string } | null,
+})
+const qrPreviewUrl = ref('')
 const followDialogVisible = ref(false)
 const followSaving = ref(false)
 const followTarget = ref<any>(null)
@@ -161,12 +183,100 @@ const detailData = ref<any>(null)
 const newLead = ref({
   leadNo: '',
   company: '',
+  contactType: 'phone' as LeadContactType,
   contact: '',
   source: 'Takealot',
   assigneeId: null as number | null,
   followSales: '',
   remark: '',
+  qrFileName: '',
+  qrImage: null as { fileName: string; contentBase64: string } | null,
 })
+
+function readQrFile(file: File) {
+  if (!/^image\/(jpeg|png|webp|gif)$/.test(file.type) && !/\.(jpe?g|png|webp|gif)$/i.test(file.name)) {
+    throw new Error('二维码图片只支持 jpg、png、webp、gif')
+  }
+  if (file.size > 5 * 1024 * 1024) throw new Error('二维码图片不能超过 5MB')
+  return new Promise<{ fileName: string; contentBase64: string }>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve({ fileName: file.name, contentBase64: String(reader.result || '') })
+    reader.onerror = () => reject(new Error('二维码图片读取失败'))
+    reader.readAsDataURL(file)
+  })
+}
+
+async function onQrFile(event: Event, target: 'new' | 'correct') {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  try {
+    const image = await readQrFile(file)
+    if (target === 'new') {
+      newLead.value.qrImage = image
+      newLead.value.qrFileName = file.name
+    } else {
+      correctForm.value.qrImage = image
+      correctForm.value.qrFileName = file.name
+    }
+  } catch (error: any) {
+    ElMessage.warning(error?.message || '二维码图片无效')
+  }
+}
+
+function contactReady(type: LeadContactType, contact: string, image: { contentBase64: string } | null, hasExistingImage = false) {
+  if (type === 'qrcode') return Boolean(contact.trim() || image || hasExistingImage)
+  return Boolean(contact.trim())
+}
+
+async function saveLead(
+  run: (confirmSameCompanyQr: boolean) => Promise<void>,
+  okMsg: string,
+) {
+  try {
+    await run(false)
+  } catch (error: any) {
+    const message = userFacingError(error?.message || '操作失败')
+    if (!isSameCompanyQrPrompt(message)) {
+      ElMessage.error(message)
+      return false
+    }
+    try {
+      await ElMessageBox.confirm(message, '可能是同一客户', {
+        confirmButtonText: '仍要保存',
+        cancelButtonText: '返回修改',
+        type: 'warning',
+      })
+    } catch {
+      return false
+    }
+    try {
+      await run(true)
+    } catch (retryError: any) {
+      ElMessage.error(userFacingError(retryError?.message || '操作失败'))
+      return false
+    }
+  }
+  ElMessage.success(okMsg)
+  return true
+}
+
+function revokeQrPreview() {
+  if (qrPreviewUrl.value) URL.revokeObjectURL(qrPreviewUrl.value)
+  qrPreviewUrl.value = ''
+}
+
+async function loadQrPreview(lead: any) {
+  revokeQrPreview()
+  if (!lead?.qrImageHash || lead?.id == null) return
+  try {
+    const { blob } = await leadApi.qrImage(lead.id)
+    qrPreviewUrl.value = URL.createObjectURL(blob)
+  } catch {
+    qrPreviewUrl.value = ''
+  }
+}
 
 async function loadSalesUsers() {
   try {
@@ -222,35 +332,43 @@ function openNewLead() {
   newLead.value = {
     leadNo: '',
     company: '',
+    contactType: 'phone',
     contact: '',
     source: 'Takealot',
     assigneeId: defaultAssigneeId(),
     followSales: '',
     remark: '',
+    qrFileName: '',
+    qrImage: null,
   }
   dialogVisible.value = true
 }
 
 async function submitNewLead() {
-  if (!newLead.value.company || !newLead.value.contact) {
-    ElMessage.warning('请填写客户名称和联系方式')
+  if (!newLead.value.company.trim()) {
+    ElMessage.warning('请填写客户名称')
+    return
+  }
+  if (!contactReady(newLead.value.contactType, newLead.value.contact, newLead.value.qrImage)) {
+    ElMessage.warning(newLead.value.contactType === 'qrcode' ? '请上传二维码，或填写昵称、群名等说明' : '请填写联系方式')
     return
   }
   if (!newLead.value.assigneeId) {
     ElMessage.warning('请选择归属运营')
     return
   }
-  const ok = await withAction(async () => {
-    const contact = newLead.value.contact.trim()
+  const ok = await saveLead(async (confirmSameCompanyQr) => {
     const payload: Record<string, unknown> = {
-      companyName: newLead.value.company,
-      contactName: contact,
-      contactPhone: looksLikeLeadPhone(contact) ? contact : undefined,
+      companyName: newLead.value.company.trim(),
+      contactType: newLead.value.contactType,
+      contact: newLead.value.contact.trim(),
       source: newLead.value.source,
       assigneeId: newLead.value.assigneeId,
       followSales: newLead.value.followSales.trim() || undefined,
       remark: newLead.value.remark,
+      confirmSameCompanyQr,
     }
+    if (newLead.value.qrImage) payload.qrImage = newLead.value.qrImage
     const leadNo = newLead.value.leadNo.trim()
     if (leadNo) payload.leadNo = leadNo
     await leadApi.create(payload)
@@ -427,6 +545,67 @@ async function downloadDealFile(deal: any, att: { id: number; fileName: string }
   }
 }
 
+const canCorrectDetail = computed(() =>
+  app.hasPerm('leads_pool.create') && ownLeadCanBeCorrected(detailData.value, app.authenticatedUser?.id),
+)
+
+const correctSourceOptions = computed(() => {
+  const current = correctForm.value.source.trim()
+  if (current && !sourceOptions.includes(current)) return [current, ...sourceOptions]
+  return sourceOptions
+})
+
+function openCorrect() {
+  const lead = detailData.value
+  if (!lead) return
+  correctForm.value = {
+    company: lead.companyName || '',
+    contactType: inferLeadContactType(lead),
+    contact: leadContactInputValue(lead),
+    email: lead.email || '',
+    source: lead.source || '',
+    remark: lead.remark || '',
+    qrFileName: lead.qrImageHash ? '已上传二维码，可重新选择替换' : '',
+    qrImage: null,
+  }
+  correctVisible.value = true
+}
+
+async function submitCorrect() {
+  const leadId = detailData.value?.id
+  if (leadId == null) return
+  if (!correctForm.value.company.trim()) {
+    ElMessage.warning('请填写客户名称')
+    return
+  }
+  if (!contactReady(
+    correctForm.value.contactType,
+    correctForm.value.contact,
+    correctForm.value.qrImage,
+    Boolean(detailData.value?.qrImageHash) && correctForm.value.contactType === 'qrcode',
+  )) {
+    ElMessage.warning(correctForm.value.contactType === 'qrcode' ? '请上传二维码，或填写昵称、群名等说明' : '请填写联系方式')
+    return
+  }
+  correctSaving.value = true
+  const ok = await saveLead(async (confirmSameCompanyQr) => {
+    detailData.value = await leadApi.correct(leadId, {
+      companyName: correctForm.value.company.trim(),
+      contactType: correctForm.value.contactType,
+      contact: correctForm.value.contact.trim(),
+      email: correctForm.value.email.trim(),
+      source: correctForm.value.source.trim(),
+      remark: correctForm.value.remark.trim(),
+      qrImage: correctForm.value.qrImage || undefined,
+      confirmSameCompanyQr,
+    })
+    await load()
+    await loadQrPreview(detailData.value)
+  }, '资料已更正')
+  correctSaving.value = false
+  if (ok) correctVisible.value = false
+}
+
 async function detail(row: any) {
   detailVisible.value = true
   detailLoading.value = true
@@ -435,6 +614,7 @@ async function detail(row: any) {
     const leadId = row._raw?.id
     if (leadId == null) throw new Error('线索 ID 缺失')
     detailData.value = await leadApi.detail(leadId)
+    await loadQrPreview(detailData.value)
   } catch (error: any) {
     detailVisible.value = false
     ElMessage.error(userFacingError(error?.message || '加载线索详情失败'))
@@ -444,6 +624,7 @@ async function detail(row: any) {
 }
 
 watch([page, pageSize], load)
+watch(detailVisible, (open) => { if (!open) revokeQrPreview() })
 const previousFollowSales = computed(() => previousFollowSalesOf(followTarget.value))
 const createFollowSalesOptions = computed(() => {
   const names = new Set<string>()
@@ -621,16 +802,34 @@ onMounted(async () => {
             {{ LEAD_STATUS_LABELS[detailData.status] || detailData.status || '—' }}
           </el-descriptions-item>
           <el-descriptions-item label="客户名称">{{ detailData.companyName || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="登记人">{{ detailData.createdByName || '—' }}</el-descriptions-item>
           <el-descriptions-item label="归属运营">{{ detailData.assigneeName || '未分配' }}</el-descriptions-item>
           <el-descriptions-item label="跟进销售">{{ detailData.followSales || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="联系方式">{{ formatLeadContact(detailData) || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="联系方式">
+            <div>{{ formatLeadContact(detailData) || '—' }}</div>
+            <img v-if="qrPreviewUrl" :src="qrPreviewUrl" alt="客户二维码" class="qr-preview" />
+          </el-descriptions-item>
           <el-descriptions-item label="邮箱">{{ detailData.email || '—' }}</el-descriptions-item>
           <el-descriptions-item label="来源">{{ detailData.source || '—' }}</el-descriptions-item>
           <el-descriptions-item label="创建时间">{{ fmtTime(detailData.createdAt) || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="更新时间">{{ fmtTime(detailData.updatedAt) || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="更新时间" :span="2">{{ fmtTime(detailData.updatedAt) || '—' }}</el-descriptions-item>
           <el-descriptions-item label="备注" :span="2">{{ detailData.remark || '—' }}</el-descriptions-item>
           <el-descriptions-item label="跟进情况" :span="2">{{ detailFollowSituation }}</el-descriptions-item>
         </el-descriptions>
+
+        <div class="detail-section-title">更正记录（{{ detailData.corrections?.length || 0 }}）</div>
+        <el-empty v-if="!detailData.corrections?.length" description="暂无更正记录" :image-size="42" />
+        <div v-else class="correction-list">
+          <div v-for="item in detailData.corrections" :key="item.id" class="follow-card">
+            <div class="follow-head">
+              <strong>{{ item.operatorName || '未知操作人' }}</strong>
+              <span>{{ fmtTime(item.createdAt) }}</span>
+            </div>
+            <div v-for="change in item.changes || []" :key="change.field" class="correction-change">
+              {{ change.label }}：{{ change.before || '空' }} → {{ change.after || '空' }}
+            </div>
+          </div>
+        </div>
 
         <div class="detail-section-title">跟进记录（{{ detailData.followUps?.length || 0 }}）</div>
         <el-empty v-if="!detailData.followUps?.length" description="暂无跟进记录" :image-size="42" />
@@ -688,6 +887,7 @@ onMounted(async () => {
       </template>
     </div>
     <template #footer>
+      <el-button v-if="canCorrectDetail" type="primary" @click="openCorrect">更正资料</el-button>
       <el-button @click="detailVisible = false">关闭</el-button>
     </template>
   </el-dialog>
@@ -742,6 +942,45 @@ onMounted(async () => {
     </template>
   </el-dialog>
 
+  <el-dialog v-model="correctVisible" title="更正资料" width="520px" append-to-body destroy-on-close>
+    <el-form label-width="96px">
+      <el-form-item label="客户名称" required>
+        <el-input v-model="correctForm.company" maxlength="200" placeholder="输入客户名称" />
+      </el-form-item>
+      <el-form-item label="联系方式" required>
+        <el-radio-group v-model="correctForm.contactType">
+          <el-radio v-for="item in LEAD_CONTACT_TYPE_OPTIONS" :key="item.value" :value="item.value">{{ item.label }}</el-radio>
+        </el-radio-group>
+        <el-input
+          v-model="correctForm.contact"
+          maxlength="100"
+          :placeholder="contactFieldPlaceholder(correctForm.contactType)"
+          style="margin-top: 8px"
+        />
+        <div v-if="correctForm.contactType === 'qrcode'" class="qr-upload">
+          <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" @change="onQrFile($event, 'correct')" />
+          <span v-if="correctForm.qrFileName">{{ correctForm.qrFileName }}</span>
+        </div>
+      </el-form-item>
+      <el-form-item label="来源">
+        <el-select v-model="correctForm.source" clearable placeholder="未填写" style="width:100%">
+          <el-option v-for="source in correctSourceOptions" :key="source" :label="source" :value="source" />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="邮箱">
+        <el-input v-model="correctForm.email" maxlength="100" placeholder="选填" />
+      </el-form-item>
+      <el-form-item label="备注">
+        <el-input v-model="correctForm.remark" type="textarea" :rows="2" maxlength="2000" show-word-limit placeholder="备注信息" />
+      </el-form-item>
+    </el-form>
+    <p class="follow-sales-hint">只改登记资料。归属、跟进状态和成交记录保持不变。</p>
+    <template #footer>
+      <el-button @click="correctVisible = false">取消</el-button>
+      <el-button type="primary" :loading="correctSaving" @click="submitCorrect">保存</el-button>
+    </template>
+  </el-dialog>
+
   <el-dialog v-model="dialogVisible" title="新建线索" width="520px">
     <el-form label-width="96px">
       <el-form-item label="线索编号">
@@ -751,7 +990,19 @@ onMounted(async () => {
         <el-input v-model="newLead.company" placeholder="输入客户名称" />
       </el-form-item>
       <el-form-item label="联系方式" required>
-        <el-input v-model="newLead.contact" maxlength="100" placeholder="姓名 / 微信 / 手机，不可与已有线索重复" />
+        <el-radio-group v-model="newLead.contactType">
+          <el-radio v-for="item in LEAD_CONTACT_TYPE_OPTIONS" :key="item.value" :value="item.value">{{ item.label }}</el-radio>
+        </el-radio-group>
+        <el-input
+          v-model="newLead.contact"
+          maxlength="100"
+          :placeholder="contactFieldPlaceholder(newLead.contactType)"
+          style="margin-top: 8px"
+        />
+        <div v-if="newLead.contactType === 'qrcode'" class="qr-upload">
+          <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" @change="onQrFile($event, 'new')" />
+          <span v-if="newLead.qrFileName">{{ newLead.qrFileName }}</span>
+        </div>
       </el-form-item>
       <el-form-item label="来源">
         <el-select v-model="newLead.source" style="width:100%">
@@ -821,6 +1072,10 @@ onMounted(async () => {
 .filter-assignee { width: 160px; }
 .filter-date { width: 260px; }
 .lead-detail { min-height: 180px; }
+.correction-list { display: flex; flex-direction: column; gap: 8px; }
+.correction-change { line-height: 1.6; }
+.qr-upload { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px; color: var(--el-text-color-secondary); }
+.qr-preview { display: block; width: 120px; height: 120px; margin-top: 8px; object-fit: contain; background: var(--el-fill-color-light); border-radius: 4px; }
 .detail-section-title {
   margin: 20px 0 12px;
   font-size: 14px;

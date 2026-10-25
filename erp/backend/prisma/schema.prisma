@@ -748,10 +748,14 @@ model Lead {
   companyName  String         @map("company_name") @db.VarChar(200)
   contactName  String?        @map("contact_name") @db.VarChar(100)
   contactPhone String?        @map("contact_phone") @db.VarChar(30)
+  contactType  String?        @map("contact_type") @db.VarChar(20)
+  qrImagePath  String?        @map("qr_image_path") @db.VarChar(500)
+  qrImageHash  String?        @map("qr_image_hash") @db.VarChar(64)
   email        String?        @db.VarChar(100)
   source       String?        @db.VarChar(30)
   status       String         @default("new") @db.VarChar(20)
   assigneeId   BigInt?        @map("assignee_id")
+  createdById  BigInt?        @map("created_by_id")
   followSales  String?        @map("follow_sales") @db.VarChar(50)
   remark       String?        @db.Text
   customerId   BigInt?        @map("customer_id")
@@ -759,11 +763,14 @@ model Lead {
   updatedAt    DateTime       @updatedAt @map("updated_at")
   followUps    LeadFollowUp[]
   deals        LeadDeal[]
+  corrections  LeadCorrection[]
 
   @@index([status], map: "idx_lead_status")
   @@index([assigneeId], map: "idx_lead_assignee")
+  @@index([createdById], map: "idx_lead_created_by")
   @@index([followSales], map: "idx_lead_follow_sales")
   @@index([customerId], map: "idx_lead_customer")
+  @@index([qrImageHash], map: "idx_lead_qr_hash")
   @@map("lead")
 }
 
@@ -779,6 +786,18 @@ model LeadFollowUp {
   lead         Lead      @relation(fields: [leadId], references: [id])
 
   @@map("lead_follow_up")
+}
+
+model LeadCorrection {
+  id         BigInt   @id @default(autoincrement())
+  leadId     BigInt   @map("lead_id")
+  operatorId BigInt   @map("operator_id")
+  changes    Json
+  createdAt  DateTime @default(now()) @map("created_at")
+  lead       Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([leadId], map: "idx_lead_correction_lead")
+  @@map("lead_correction")
 }
 
 model LeadDeal {

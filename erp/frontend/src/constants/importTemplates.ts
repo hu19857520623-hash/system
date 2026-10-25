@@ -78,19 +78,21 @@ export function validateInboundSkuImportRow(row: InboundSkuImportRow): string | 
 export const LEADS_IMPORT_FIELDS: ImportFieldDef[] = [
   { key: 'leadNo', label: '线索编号', required: false, hint: '留空自动生成' },
   { key: 'company', label: '客户名称', required: true },
-  { key: 'contact', label: '联系方式', required: true, hint: '姓名 / 微信 / 手机均可，不可与已有线索重复；兼容旧表头「联系人」' },
+  { key: 'contact', label: '联系方式', required: true, hint: '手机或微信号不可重复；客户只留二维码时填「二维码」。兼容旧表头「联系人」' },
   { key: 'phone', label: '电话', required: false, hint: '可选；与联系方式重复时可留空' },
-  { key: 'source', label: '来源', required: false, hint: '默认 Takealot' },
+  { key: 'source', label: '来源', required: false, hint: '留空默认 Takealot。请填写：Takealot、官网、展会、推荐、小红书、抖音、视频号、公众号、其他' },
   { key: 'assignee', label: '归属运营', required: false, hint: '用户名或姓名；留空则当前登录用户' },
   { key: 'followSales', label: '跟进销售', required: false, hint: '跟进该线索的销售姓名' },
   { key: 'remark', label: '备注', required: false },
+  { key: 'contactType', label: '联系方式类型', required: false, hint: '手机 / 微信 / 二维码 / 其他；留空则按联系方式自动判断' },
 ]
 
 export const LEADS_IMPORT_HEADERS = LEADS_IMPORT_FIELDS.map((f) => f.label)
 
 export const LEADS_IMPORT_SAMPLE_ROWS: unknown[][] = [
-  ['', '示例科技有限公司', '张三', '13800138000', 'Takealot', 'sales01', '陈琪珍', ''],
-  ['LD-XHS-0099', '开普敦贸易', '李四', '0821234567', '展会', '', '', '重点客户'],
+  ['', '示例科技有限公司', '张三', '13800138000', 'Takealot', 'sales01', '陈琪珍', '', '手机'],
+  ['LD-XHS-0099', '开普敦贸易', '李四', '0821234567', '展会', '', '', '重点客户', ''],
+  ['', '视频号客户', '二维码', '', '视频号', '', '', '只留了二维码', '二维码'],
 ]
 
 export function downloadLeadsImportTemplate() {

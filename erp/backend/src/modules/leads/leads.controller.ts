@@ -69,6 +69,16 @@ export class LeadsController {
     return this.service.detail(id)
   }
 
+  @RequireAnyPerm('leads_pool.view', 'leads_follow.view', 'leads_deals.view')
+  @Get(':id/qr-image')
+  async qrImage(@Param('id', ParseIntPipe) id: number, @Res() res: Response) {
+    const file = await this.service.readQrImage(id)
+    res.setHeader('Content-Type', file.contentType)
+    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(file.fileName)}"`)
+    res.setHeader('Cache-Control', 'private, max-age=3600')
+    res.send(file.content)
+  }
+
   @RequirePerms('leads_pool.create')
   @Post()
   create(@Body() body: any, @CurrentUser('userId') userId: number) {
@@ -79,6 +89,16 @@ export class LeadsController {
   @Put(':id')
   update(@Param('id', ParseIntPipe) id: number, @Body() body: any) {
     return this.service.update(id, body)
+  }
+
+  @RequirePerms('leads_pool.create')
+  @Post(':id/correct')
+  correct(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: any,
+    @CurrentUser('userId') userId: number,
+  ) {
+    return this.service.correct(id, body, userId)
   }
 
   @RequirePerms('leads_follow.edit')

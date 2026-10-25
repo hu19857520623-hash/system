@@ -34,13 +34,28 @@ export function looksLikeLeadPhone(raw?: string | null): boolean {
   return /^1[3-9]\d{9}$/.test(digits) || /^0\d{10,11}$/.test(digits) || /^\+?27\d{8,10}$/.test(digits)
 }
 
-/** 线索池把姓名 / 微信 / 电话合成一列展示，避免和客户名称重复。 */
+const LEAD_CONTACT_PLACEHOLDERS = new Set(['二维码', '微信二维码', '无', '未知', '暂无', '同上'])
+
+function isLeadContactPlaceholder(raw?: string | null) {
+  return LEAD_CONTACT_PLACEHOLDERS.has(String(raw || '').trim().toLowerCase())
+}
+
+/** 线索池把姓名 / 微信 / 电话合成一列展示。二维码只显示说明。 */
 export function formatLeadContact(row: {
+  contactType?: string | null
   contactName?: string | null
   contactPhone?: string | null
   companyName?: string | null
   company?: string | null
 }): string {
+  const name = String(row.contactName || '').trim()
+  const phone = String(row.contactPhone || '').trim()
+  const qr = row.contactType === 'qrcode'
+    || (!row.contactType && (isLeadContactPlaceholder(name) || isLeadContactPlaceholder(phone)) && !looksLikeLeadPhone(phone) && !looksLikeLeadPhone(name))
+  if (qr) {
+    const note = isLeadContactPlaceholder(name) ? '' : name
+    return note ? `二维码 · ${note}` : '二维码'
+  }
   const company = String(row.companyName || row.company || '').trim()
   const uniq: string[] = []
   for (const raw of [row.contactName, row.contactPhone]) {

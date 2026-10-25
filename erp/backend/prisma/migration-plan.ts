@@ -75,6 +75,8 @@ export const MIGRATION_ORDER = [
   'migrate_supplier_company_name.sql',
   'migrate_purchase_payment.sql',
   'migrate_async_io_execution_lease.sql',
+  'migrate_lead_correction.sql',
+  'migrate_lead_contact_type.sql',
 ] as const
 
 /**

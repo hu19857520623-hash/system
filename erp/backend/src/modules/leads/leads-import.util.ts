@@ -27,6 +27,7 @@ export interface ParsedLeadImportRow {
   companyName: string
   contactName: string
   contactPhone?: string
+  contactType?: string
   source: string
   assigneeKey?: string
   followSales?: string
@@ -45,6 +46,7 @@ export function parseLeadsImportCsv(content: string): ParsedLeadImportRow[] {
   const assigneeIdx = colIdx(header, ['归属运营', '归属销售', 'assignee', 'assigneeName'])
   const followSalesIdx = colIdx(header, ['跟进销售', '再次对接销售', 'followSales', 'follow_sales'])
   const remarkIdx = colIdx(header, ['备注', 'remark'])
+  const typeIdx = colIdx(header, ['联系方式类型', 'contactType', 'contact_type'])
   if (nameIdx < 0) throw new Error('CSV 需包含「客户名称」列')
 
   const parsed: ParsedLeadImportRow[] = []
@@ -60,6 +62,7 @@ export function parseLeadsImportCsv(content: string): ParsedLeadImportRow[] {
       companyName,
       contactName,
       contactPhone: phoneIdx >= 0 ? cols[phoneIdx]?.trim() || undefined : undefined,
+      contactType: typeIdx >= 0 ? normalizeImportedContactType(cols[typeIdx]) : undefined,
       source: sourceIdx >= 0 ? cols[sourceIdx]?.trim() || 'Takealot' : 'Takealot',
       assigneeKey: assigneeIdx >= 0 ? cols[assigneeIdx]?.trim() || undefined : undefined,
       followSales: followSalesIdx >= 0 ? cols[followSalesIdx]?.trim() || undefined : undefined,
@@ -67,4 +70,14 @@ export function parseLeadsImportCsv(content: string): ParsedLeadImportRow[] {
     })
   }
   return parsed
+}
+
+function normalizeImportedContactType(raw?: string): string | undefined {
+  const text = String(raw || '').trim().toLowerCase()
+  if (!text) return undefined
+  if (text === '手机' || text === '电话' || text === 'phone') return 'phone'
+  if (text === '微信' || text === '微信号' || text === 'wechat') return 'wechat'
+  if (text === '二维码' || text === 'qrcode' || text === 'qr') return 'qrcode'
+  if (text === '其他' || text === 'other') return 'other'
+  return text
 }

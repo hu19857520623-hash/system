@@ -18,6 +18,7 @@ export function downloadCsv(filename: string, headers: string[], rows: unknown[]
 export interface ImportTemplateColumn {
   label: string
   required?: boolean
+  hint?: string
 }
 
 function escapeHtml(value: unknown) {
@@ -36,7 +37,7 @@ function templateColumnWidth(column: ImportTemplateColumn, rows: unknown[][], in
   return Math.min(34, Math.max(14, contentLength + 6))
 }
 
-/** 下载 Excel 可直接打开的导入模板：第一行为字段，第二行起为示例。 */
+/** 下载 Excel 可直接打开的导入模板：第一行是字段，有说明时第二行是填写说明，其后是示例。 */
 export function downloadImportTemplate(
   filename: string,
   columns: ImportTemplateColumn[],
@@ -52,6 +53,9 @@ export function downloadImportTemplate(
   const header = columns
     .map((column) => `<th class="${column.required ? 'required' : 'optional'}">${escapeHtml(column.label)}</th>`)
     .join('')
+  const hintRow = columns.some((column) => column.hint)
+    ? `<tr class="hint">${columns.map((column) => `<td>${escapeHtml(column.hint || '')}</td>`).join('')}</tr>`
+    : ''
   const examples = exampleRows
     .map((row) => `<tr class="example">${columns.map((_, index) => `<td>${escapeHtml(row[index])}</td>`).join('')}</tr>`)
     .join('')
@@ -79,10 +83,17 @@ export function downloadImportTemplate(
     th.required { background: #fee2e2; color: #991b1b; }
     th.optional { background: #e2e8f0; }
     tr:nth-child(even) td { background: #f8fafc; }
+    tr.hint td {
+      background: #fff7ed;
+      color: #9a3412;
+      font-size: 12px;
+      white-space: normal;
+      height: auto;
+    }
   </style>
 </head>
 <body>
-  <table>${colGroup}<thead><tr>${header}</tr></thead><tbody>${examples}${inputRows}</tbody></table>
+  <table>${colGroup}<thead><tr>${header}</tr>${hintRow}</thead><tbody>${examples}${inputRows}</tbody></table>
 </body>
 </html>`
   const blob = new Blob(['\uFEFF', html], { type: 'application/vnd.ms-excel;charset=utf-8' })
@@ -100,7 +111,7 @@ export function normalizeImportFileText(text: string) {
   if (!/<table[\s>]/i.test(normalized)) return text
 
   const doc = new DOMParser().parseFromString(normalized, 'text/html')
-  const rows = [...doc.querySelectorAll('table tr:not(.example)')].map((row) =>
+  const rows = [...doc.querySelectorAll('table tr:not(.example):not(.hint)')].map((row) =>
     [...row.querySelectorAll('th,td')].map((cell) => cell.textContent?.trim() ?? ''),
   )
   if (!rows.length) return text

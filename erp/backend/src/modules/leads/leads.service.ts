@@ -1,4 +1,5 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
+import { Prisma } from '@prisma/client'
 import * as path from 'path'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { FileStoreService } from '../../common/file-store.service'
@@ -17,14 +18,22 @@ import {
   resolveLeadStatus,
 } from './leads-follow-sales.util'
 import { stripLeadRemarkImportPrefix } from './leads-remark.util'
+import { planLeadCorrection } from './leads-correction.util'
 import {
   buildLeadContactIndex,
   collectLeadContactKeys,
   findIndexedLeadContactConflict,
+  inferLeadContactType,
   leadContactDuplicateMessage,
+  normalizeLeadCompanyKey,
+  prepareLeadContact,
+  qrImageDuplicateMessage,
   rememberLeadContacts,
+  rememberQrLead,
+  sameCompanyQrMessage,
   type LeadContactOwner,
 } from './leads-contact.util'
+import { decodeLeadQrImage } from './leads-qr-image.util'
 import type { AuthUser } from '../../common/decorators/current-user.decorator'
 import {
   LEAD_ASSIGNEE_ROLE_CODES,
@@ -326,6 +335,7 @@ export class LeadsService {
       where: { id: BigInt(id) },
       include: {
         followUps: { orderBy: { id: 'desc' } },
+        corrections: { orderBy: { id: 'desc' as const } },
         deals: {
           orderBy: { id: 'desc' },
           include: {
@@ -340,7 +350,9 @@ export class LeadsService {
     if (!row) throw new NotFoundException('线索不存在')
     const userIds = [
       row.assigneeId,
+      row.createdById,
       ...row.followUps.map((item) => item.operatorId),
+      ...row.corrections.map((item) => item.operatorId),
     ].filter((userId): userId is bigint => userId != null)
     const users = userIds.length
       ? await this.prisma.sysUser.findMany({
@@ -361,7 +373,15 @@ export class LeadsService {
         }),
       ),
       assigneeName: row.assigneeId ? userNameMap.get(row.assigneeId.toString()) ?? null : null,
+      createdByName: row.createdById ? userNameMap.get(row.createdById.toString()) ?? null : null,
       remark: stripLeadRemarkImportPrefix(row.remark) || null,
+      corrections: row.corrections.map((item) => ({
+        ...item,
+        operatorName: item.operatorId
+          ? userNameMap.get(item.operatorId.toString()) ?? null
+          : null,
+        changes: Array.isArray(item.changes) ? item.changes : [],
+      })),
       followUps: row.followUps.map((item) => ({
         ...item,
         operatorName: item.operatorId
@@ -371,7 +391,17 @@ export class LeadsService {
     }
   }
 
-  async create(data: any, operatorId?: number, contactIndex?: Map<string, LeadContactOwner>) {
+  async create(
+    data: any,
+    operatorId?: number,
+    contactIndex?: Map<string, LeadContactOwner>,
+    options?: {
+      allowQrPlaceholder?: boolean
+      promptSameCompany?: boolean
+      qrCompanies?: Map<string, LeadContactOwner>
+      qrHashes?: Map<string, LeadContactOwner>
+    },
+  ) {
     const operator = operatorId
       ? await this.prisma.sysUser.findUnique({
           where: { id: BigInt(operatorId) },
@@ -394,12 +424,34 @@ export class LeadsService {
     ) {
       throw new BadRequestException('归属运营无效或已停用')
     }
-    const contactName = String(data.contactName || '').trim()
-    const contactPhone = String(data.contactPhone || '').trim()
-    if (!collectLeadContactKeys(contactName, contactPhone).length) {
-      throw new BadRequestException('请填写联系方式')
+    let prepared: ReturnType<typeof prepareLeadContact>
+    try {
+      prepared = prepareLeadContact({
+        contactType: data.contactType,
+        contact: data.contact ?? data.contactName,
+        contactPhone: data.contactPhone,
+        hasQrImage: Boolean(data.qrImage?.contentBase64),
+      }, { allowQrPlaceholder: options?.allowQrPlaceholder === true })
+    } catch (error: any) {
+      throw new BadRequestException(error?.message || '请填写联系方式')
     }
-    await this.assertLeadContactUnique({ contactName, contactPhone, index: contactIndex })
+    const qrImage = prepared.contactType === 'qrcode' && data.qrImage?.contentBase64
+      ? this.storeQrImage(data.qrImage)
+      : null
+    await this.assertLeadContactUnique({
+      contactName: prepared.contactName,
+      contactPhone: prepared.contactPhone,
+      contactType: prepared.contactType,
+      companyName: data.companyName,
+      qrImageHash: qrImage?.hash,
+      confirmSameCompanyQr: data.confirmSameCompanyQr === true,
+      promptSameCompany: options?.promptSameCompany !== false,
+      index: contactIndex,
+      qrCompanies: options?.qrCompanies,
+      qrHashes: options?.qrHashes,
+    })
+    const contactName = prepared.contactName
+    const contactPhone = prepared.contactPhone
     const leadNo = data.leadNo || 'LD-' + Date.now().toString().slice(-8)
     const followSalesUsers = await this.prisma.sysUser.findMany({
       where: { status: 1 },
@@ -412,18 +464,28 @@ export class LeadsService {
         companyName: data.companyName,
         contactName,
         contactPhone: contactPhone || undefined,
+        contactType: prepared.contactType,
+        qrImagePath: qrImage?.path,
+        qrImageHash: qrImage?.hash,
         email: data.email,
         source: data.source,
         status: resolveLeadStatus(data.status, followSales),
         remark: data.remark,
         assigneeId: assignee.id,
+        createdById: operator?.id,
         followSales,
       },
     })
+    const owner = { leadNo: created.leadNo, companyName: created.companyName }
     if (contactIndex) {
-      rememberLeadContacts(contactIndex, contactName, contactPhone, {
-        leadNo: created.leadNo,
+      rememberLeadContacts(contactIndex, contactName, contactPhone, owner, prepared.contactType)
+    }
+    if (options?.qrCompanies || options?.qrHashes) {
+      rememberQrLead(options.qrCompanies || new Map(), options.qrHashes || new Map(), {
+        ...prepared,
         companyName: created.companyName,
+        leadNo: created.leadNo,
+        qrImageHash: qrImage?.hash,
       })
     }
     return created
@@ -431,24 +493,111 @@ export class LeadsService {
 
   async update(id: number, data: any) {
     const existing = await this.detail(id)
-    const { followUps: _followUps, deals: _deals, assigneeId: _assigneeId, ...rest } = data
-    if (rest.contactName !== undefined || rest.contactPhone !== undefined) {
-      const contactName =
-        rest.contactName !== undefined ? String(rest.contactName || '').trim() : existing.contactName
-      const contactPhone =
-        rest.contactPhone !== undefined ? String(rest.contactPhone || '').trim() : existing.contactPhone
-      if (collectLeadContactKeys(contactName, contactPhone).length) {
-        await this.assertLeadContactUnique({ contactName, contactPhone, excludeId: id })
-      }
-      if (rest.contactName !== undefined) rest.contactName = contactName || null
-      if (rest.contactPhone !== undefined) rest.contactPhone = contactPhone || null
-    }
+    const {
+      followUps: _followUps,
+      deals: _deals,
+      corrections: _corrections,
+      assigneeId: _assigneeId,
+      createdById: _createdById,
+      companyName: _companyName,
+      contactName: _contactName,
+      contactPhone: _contactPhone,
+      contactType: _contactType,
+      qrImagePath: _qrImagePath,
+      qrImageHash: _qrImageHash,
+      email: _email,
+      source: _source,
+      remark: _remark,
+      ...rest
+    } = data
     const followSales = resolveFollowSales(
       rest.followSales !== undefined ? rest.followSales : existing.followSales,
-      rest.remark !== undefined ? rest.remark : existing.remark,
+      existing.remark,
     )
     rest.status = resolveLeadStatus(rest.status ?? existing.status, followSales)
     return this.prisma.lead.update({ where: { id: BigInt(id) }, data: rest })
+  }
+
+  /** 更正登记资料。仅登记人本人可改，且线索尚未成交。 */
+  async correct(id: number, data: any, operatorId?: number) {
+    if (!operatorId) throw new ForbiddenException('请先登录')
+    const existing = await this.prisma.lead.findUnique({
+      where: { id: BigInt(id) },
+      include: { deals: { select: { id: true }, take: 1 } },
+    })
+    if (!existing) throw new NotFoundException('线索不存在')
+    if (existing.status === 'deal' || existing.customerId != null || existing.deals.length > 0) {
+      throw new BadRequestException('已成交线索不能更正资料')
+    }
+    if (existing.createdById == null || Number(existing.createdById) !== operatorId) {
+      throw new ForbiddenException('只能更正本人登记的线索')
+    }
+
+    const incomingImage = data?.qrImage?.contentBase64 ? this.storeQrImage(data.qrImage) : null
+    let planned: ReturnType<typeof planLeadCorrection>
+    try {
+      planned = planLeadCorrection(existing, {
+        ...(data || {}),
+        hasQrImage: Boolean(incomingImage) || Boolean(existing.qrImageHash),
+      })
+    } catch (error: any) {
+      throw new BadRequestException(error?.message || '线索资料不正确')
+    }
+    const nextType = planned.contactType || inferLeadContactType(planned)
+    const qrImagePath = nextType === 'qrcode' ? (incomingImage?.path || existing.qrImagePath || null) : null
+    const qrImageHash = nextType === 'qrcode' ? (incomingImage?.hash || existing.qrImageHash || null) : null
+    const hadImage = Boolean(existing.qrImageHash)
+    const hasImage = Boolean(qrImageHash)
+    if (incomingImage && incomingImage.hash !== existing.qrImageHash) {
+      planned.changes.push({
+        field: 'qrImage',
+        label: '二维码图片',
+        before: hadImage ? '已上传' : '',
+        after: hadImage ? '已更新' : '已上传',
+      })
+    } else if (hadImage && !hasImage) {
+      planned.changes.push({
+        field: 'qrImage',
+        label: '二维码图片',
+        before: '已上传',
+        after: '',
+      })
+    }
+    if (!planned.changes.length) throw new BadRequestException('没有需要保存的修改')
+    await this.assertLeadContactUnique({
+      contactName: planned.contactName,
+      contactPhone: planned.contactPhone,
+      contactType: nextType,
+      companyName: planned.companyName,
+      qrImageHash,
+      confirmSameCompanyQr: data?.confirmSameCompanyQr === true,
+      excludeId: id,
+    })
+
+    await this.prisma.$transaction([
+      this.prisma.lead.update({
+        where: { id: BigInt(id) },
+        data: {
+          companyName: planned.companyName,
+          contactType: planned.contactType,
+          contactName: planned.contactName,
+          contactPhone: planned.contactPhone,
+          qrImagePath,
+          qrImageHash,
+          email: planned.email,
+          source: planned.source,
+          remark: planned.remark,
+        },
+      }),
+      this.prisma.leadCorrection.create({
+        data: {
+          leadId: BigInt(id),
+          operatorId: BigInt(operatorId),
+          changes: planned.changes as unknown as Prisma.InputJsonValue,
+        },
+      }),
+    ])
+    return this.detail(id)
   }
 
   async addFollowUp(id: number, data: any, operatorId?: number) {
@@ -654,6 +803,7 @@ export class LeadsService {
 
   async remove(id: number) {
     await this.detail(id)
+    await this.prisma.leadCorrection.deleteMany({ where: { leadId: BigInt(id) } })
     await this.prisma.leadFollowUp.deleteMany({ where: { leadId: BigInt(id) } })
     await this.prisma.leadDealAttachment.deleteMany({ where: { deal: { leadId: BigInt(id) } } })
     await this.prisma.leadDeal.deleteMany({ where: { leadId: BigInt(id) } })
@@ -681,9 +831,19 @@ export class LeadsService {
     }
 
     const existingContacts = await this.prisma.lead.findMany({
-      select: { contactName: true, contactPhone: true, leadNo: true, companyName: true },
+      select: {
+        contactName: true,
+        contactPhone: true,
+        contactType: true,
+        qrImageHash: true,
+        leadNo: true,
+        companyName: true,
+      },
     })
     const contactIndex = buildLeadContactIndex(existingContacts)
+    const qrCompanies = new Map<string, LeadContactOwner>()
+    const qrHashes = new Map<string, LeadContactOwner>()
+    for (const row of existingContacts) rememberQrLead(qrCompanies, qrHashes, row)
 
     let ok = 0
     let fail = 0
@@ -697,7 +857,8 @@ export class LeadsService {
 
     for (const row of parsed) {
       try {
-        if (findIndexedLeadContactConflict(contactIndex, row.contactName, row.contactPhone)) {
+        const importedType = row.contactType || inferLeadContactType(row)
+        if (findIndexedLeadContactConflict(contactIndex, row.contactName, row.contactPhone, importedType)) {
           recordFail(row.lineNo, '联系方式与客户名称组合已存在')
           continue
         }
@@ -720,6 +881,7 @@ export class LeadsService {
             companyName: row.companyName,
             contactName: row.contactName,
             contactPhone: row.contactPhone,
+            contactType: row.contactType,
             source: row.source,
             remark: row.remark,
             assigneeId: Number(assigneeId),
@@ -727,6 +889,12 @@ export class LeadsService {
           },
           defaultAssigneeId,
           contactIndex,
+          {
+            allowQrPlaceholder: true,
+            promptSameCompany: false,
+            qrCompanies,
+            qrHashes,
+          },
         )
         ok++
       } catch (e: any) {
@@ -736,29 +904,85 @@ export class LeadsService {
     return { imported: ok, failed: fail, failures } satisfies ImportRowResult
   }
 
+  private storeQrImage(file: { fileName?: string; contentBase64?: string }) {
+    try {
+      const decoded = decodeLeadQrImage(file)
+      const written = this.files.write('lead-qr', `${decoded.hash}${decoded.ext}`, decoded.bytes)
+      return { hash: decoded.hash, path: written.relativePath }
+    } catch (error: any) {
+      throw new BadRequestException(error?.message || '二维码图片无效')
+    }
+  }
+
+  async readQrImage(id: number) {
+    const lead = await this.prisma.lead.findUnique({
+      where: { id: BigInt(id) },
+      select: { qrImagePath: true },
+    })
+    if (!lead?.qrImagePath) throw new NotFoundException('这条线索没有二维码图片')
+    const ext = path.extname(lead.qrImagePath).toLowerCase()
+    const contentType = ext === '.png' ? 'image/png'
+      : ext === '.webp' ? 'image/webp'
+        : ext === '.gif' ? 'image/gif'
+          : 'image/jpeg'
+    return {
+      fileName: path.basename(lead.qrImagePath),
+      contentType,
+      content: this.files.read(lead.qrImagePath),
+    }
+  }
+
   private async assertLeadContactUnique(opts: {
     contactName?: string | null
     contactPhone?: string | null
+    contactType?: string | null
+    companyName?: string | null
+    qrImageHash?: string | null
+    confirmSameCompanyQr?: boolean
+    promptSameCompany?: boolean
     excludeId?: number
     index?: Map<string, LeadContactOwner>
+    qrCompanies?: Map<string, LeadContactOwner>
+    qrHashes?: Map<string, LeadContactOwner>
   }) {
-    const keys = collectLeadContactKeys(opts.contactName, opts.contactPhone)
-    if (!keys.length) return
-    if (opts.index) {
-      const conflict = findIndexedLeadContactConflict(opts.index, opts.contactName, opts.contactPhone)
-      if (conflict) throw new BadRequestException(leadContactDuplicateMessage(conflict))
-      return
-    }
-    const rows = await this.prisma.lead.findMany({
-      where: opts.excludeId ? { id: { not: BigInt(opts.excludeId) } } : undefined,
-      select: { contactName: true, contactPhone: true, leadNo: true, companyName: true },
-    })
-    const conflict = findIndexedLeadContactConflict(
-      buildLeadContactIndex(rows),
-      opts.contactName,
-      opts.contactPhone,
-    )
+    const keys = collectLeadContactKeys(opts.contactName, opts.contactPhone, opts.contactType)
+    const needsRows = (!opts.index && keys.length > 0)
+      || (opts.contactType === 'qrcode' && !opts.confirmSameCompanyQr && !opts.qrCompanies)
+      || (Boolean(opts.qrImageHash) && !opts.qrHashes)
+    const rows = needsRows
+      ? await this.prisma.lead.findMany({
+        where: opts.excludeId ? { id: { not: BigInt(opts.excludeId) } } : undefined,
+        select: {
+          contactName: true,
+          contactPhone: true,
+          contactType: true,
+          qrImageHash: true,
+          leadNo: true,
+          companyName: true,
+        },
+      })
+      : []
+    const conflict = opts.index
+      ? findIndexedLeadContactConflict(opts.index, opts.contactName, opts.contactPhone, opts.contactType)
+      : findIndexedLeadContactConflict(buildLeadContactIndex(rows), opts.contactName, opts.contactPhone, opts.contactType)
     if (conflict) throw new BadRequestException(leadContactDuplicateMessage(conflict))
+
+    if (opts.qrImageHash) {
+      const hashed = opts.qrHashes
+        ? opts.qrHashes.get(opts.qrImageHash)
+        : rows.find((row) => row.qrImageHash === opts.qrImageHash)
+      if (hashed) throw new BadRequestException(qrImageDuplicateMessage(hashed))
+    }
+
+    if (opts.contactType === 'qrcode' && !opts.confirmSameCompanyQr) {
+      const companyKey = normalizeLeadCompanyKey(opts.companyName)
+      const sameCompany = !companyKey ? undefined : opts.qrCompanies
+        ? opts.qrCompanies.get(companyKey)
+        : rows.find((row) => inferLeadContactType(row) === 'qrcode' && normalizeLeadCompanyKey(row.companyName) === companyKey)
+      if (sameCompany) {
+        throw new BadRequestException(sameCompanyQrMessage(sameCompany, opts.promptSameCompany !== false))
+      }
+    }
   }
 
   /** 获客报表汇总 */
