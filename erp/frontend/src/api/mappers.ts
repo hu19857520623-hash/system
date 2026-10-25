@@ -611,6 +611,7 @@ export function mapPricing(row: any) {
     cost: num(row.cost ?? row.costRmb),
     purchaseQty: row.purchaseQty ?? 0,
     inboundQty: row.inboundQty ?? 0,
+    receivedGoodQty: row.receivedGoodQty ?? 0,
     visibleStockQty: row.visibleStockQty != null ? Number(row.visibleStockQty) : null,
     soldQty: row.soldQty ?? 0,
     remainingStockQty: row.remainingStockQty ?? 0,

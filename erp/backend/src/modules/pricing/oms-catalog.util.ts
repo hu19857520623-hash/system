@@ -2,6 +2,7 @@ import type { PrismaService } from '../../common/prisma/prisma.service'
 import { remainingCatalogStock } from './catalog-stock.util'
 import { pushCatalogStockToOms } from './oms-catalog-sync.util'
 import { catalogSkuLookupKeys, toCatalogInternalSku } from '../../common/catalog-customer.util'
+import { withCatalogReceiptCaps } from './catalog-receipts.util'
 
 /** 海外仓有可用库存、货盘已对 OMS 可见且仍有可售剩余时，标记为可下单 */
 export async function tryMarkOrderableOnOms(prisma: PrismaService, sku: string): Promise<boolean> {
@@ -12,9 +13,11 @@ export async function tryMarkOrderableOnOms(prisma: PrismaService, sku: string):
     ?? await prisma.productPricing.findFirst({ where: { sku: { in: catalogSkuLookupKeys(sku) } } })
   // 人工停止共享优先级高于库存自动开售，补货或重新查询均不得把它重新打开。
   if (pricing?.shareStatus === 'stopped') return false
-  if (!pricing?.visibleOnOms || pricing.orderableOnOms) return Boolean(pricing?.orderableOnOms)
+  if (!pricing?.visibleOnOms) return false
 
-  if (remainingCatalogStock(pricing) <= 0) return false
+  const [bounded] = await withCatalogReceiptCaps(prisma, [pricing])
+  if (remainingCatalogStock(bounded) <= 0) return false
+  if (pricing.orderableOnOms) return true
 
   const wmsCodes = (
     await prisma.warehouse.findMany({

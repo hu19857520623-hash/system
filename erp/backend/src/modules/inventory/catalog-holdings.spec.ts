@@ -56,4 +56,17 @@ describe('catalog holding availability and outbound locks', () => {
     expect(await fetchCatalogInventoryRows(prisma as any, {})).toEqual([])
     expect(prisma.omsCatalogOrder.findMany).not.toHaveBeenCalled()
   })
+  it('uses the real holder to join purchase counts across catalog SKU aliases without mixing customers',async()=>{
+    const prisma=fixture([holding(1n,1n,'TKL-SKU-1',2),holding(2n,2n,'TKL-SKU-1',3)])
+    const last=new Date('2026-10-23'),old=new Date('2026-10-01')
+    prisma.omsCatalogOrder.findMany.mockResolvedValue([
+      {sku:'SKU-1',customerCode:'TKL0001',createdAt:last},
+      {sku:'TKL-SKU-1',customerCode:'TKL0001',createdAt:old},
+      {sku:'SKU-1',customerCode:'TKL0002',createdAt:old},
+    ])
+    const rows=await fetchCatalogInventoryRows(prisma as any,{})
+    expect(rows[0]).toMatchObject({customerCode:'TKL0001',purchaseOrderCount:2,lastPurchaseAt:last})
+    expect(rows[1]).toMatchObject({customerCode:'TKL0002',purchaseOrderCount:1,lastPurchaseAt:old})
+    expect(prisma.omsCatalogOrder.findMany.mock.calls[0][0].where.sku.in).toEqual(expect.arrayContaining(['SKU-1','TKL-SKU-1']))
+  })
 })

@@ -13,6 +13,8 @@ import { useListLoader, withAction } from '@/composables/useListLoader.ts'
 import { useTablePagination } from '@/composables/useTablePagination.ts'
 import { useAppStore } from '@/stores/app'
 import ListPagination from '@/components/ListPagination.vue'
+import CatalogRefundHistoryDialog from '@/components/CatalogRefundHistoryDialog.vue'
+import CatalogVisibilityDialog from '@/components/CatalogVisibilityDialog.vue'
 import DetailSheet from '@/components/ui/DetailSheet.vue'
 import {
   CATALOG_CUSTOMER_CODE,
@@ -41,6 +43,7 @@ interface PriceItem {
   cost: number
   purchaseQty: number
   inboundQty: number
+  receivedGoodQty: number
   visibleStockQty: number | null
   soldQty: number
   remainingStockQty: number
@@ -118,6 +121,9 @@ const pricingStatusMap: Record<string, { label: string; type: string }> = {
 const canSetPrice = computed(() => app.hasPerm('pricing.set'))
 const canSyncOms = computed(() => app.hasPerm('pricing.sync_oms'))
 const canReclaim = computed(() => ['admin', 'finance'].includes(app.authenticatedUser?.roleCode || '') && app.hasPerm('inventory_query.reclaim_refund'))
+const refundHistoryVisible = ref(false)
+const visibilityVisible=ref(false),visibilityId=ref<number|undefined>(),hasPendingVisibility=ref(false)
+function openVisibility(row:PriceItem){visibilityId.value=row.id;visibilityVisible.value=true}
 
 interface HoldingRow {
   id: string
@@ -343,7 +349,7 @@ async function openPricing(id: number) {
   if (editing.value) {
     ensureFeeDefaults(editing.value)
     if (editing.value.visibleStockQty == null && editing.value.pricingStatus === 'pending_pricing') {
-      editing.value.visibleStockQty = editing.value.inboundQty || editing.value.purchaseQty || 0
+      editing.value.visibleStockQty = editing.value.receivedGoodQty
     }
   }
   pricingVisible.value = true
@@ -598,6 +604,7 @@ async function submitReprice() {
     </template>
 
     <template v-if="section === 'pool'">
+    <el-button v-if="hasPendingVisibility && canSetPrice" style="margin-bottom:12px" @click="visibilityId=undefined;visibilityVisible=true">核对原额度设置</el-button>
     <el-alert type="info" :closable="false" show-icon style="margin-bottom:14px">
       {{ PIPELINE_PRICING_ALERT }} · 货盘池客户代码统一为 TKL；OMS 申购后的客户持有请到「货盘持有」查看。
     </el-alert>
@@ -646,6 +653,7 @@ async function submitReprice() {
       <el-table-column prop="inboundQty" label="本批入库" width="88" align="right">
         <template #default="{ row }">{{ row.inboundQty ? row.inboundQty.toLocaleString() : '—' }}</template>
       </el-table-column>
+      <el-table-column prop="receivedGoodQty" label="累计良品实收" width="112" align="right" />
       <el-table-column label="海运费/件" width="92" align="right">
         <template #default="{ row }">
           <span v-if="row.seaFreight > 0">¥ {{ row.seaFreight }}</span>
@@ -694,9 +702,10 @@ async function submitReprice() {
           </div>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="210" fixed="right">
+      <el-table-column label="操作" width="290" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" size="small" @click="openPricing(row.id)">{{ needMyAction(row) ? '去处理' : '查看详情' }}</el-button>
+          <el-button v-if="canSetPrice && ['priced','synced'].includes(row.pricingStatus)" link type="primary" size="small" @click="openVisibility(row as PriceItem)">调整额度</el-button>
           <el-button v-if="row.pricingStatus === 'priced' && canSyncOms" link type="success" size="small" @click="syncRow(row.id)">同步OMS</el-button>
           <el-button v-if="row.pricingStatus === 'synced' && canSyncOms" link type="warning" size="small" @click="openReprice(row.id)">调价</el-button>
           <el-button
@@ -713,6 +722,7 @@ async function submitReprice() {
     </template>
 
     <template v-else>
+      <el-button v-if="canReclaim" style="margin-bottom:12px" @click="refundHistoryVisible = true">收回退款记录</el-button>
       <el-alert v-if="holdingsError" :title="holdingsError" type="error" :closable="false" />
       <el-button v-if="holdingsError" :loading="holdingsLoading" @click="loadHoldings">重新读取持有记录</el-button>
       <el-alert v-if="reclaimStorageError" :title="reclaimStorageError" type="error" :closable="false" />
@@ -810,6 +820,7 @@ async function submitReprice() {
         <el-descriptions-item label="国内费用/件">¥ {{ editing.domesticFee }} <span class="form-tip">（采购单国内运费分摊）</span></el-descriptions-item>
         <el-descriptions-item label="汇率(¥→R)">{{ editing.exchangeRate }}</el-descriptions-item>
         <el-descriptions-item label="本批入库">{{ editing.inboundQty ? editing.inboundQty.toLocaleString() : '—' }} <span class="form-tip">（发运按预期写入，完结后按实收回写）</span></el-descriptions-item>
+        <el-descriptions-item label="累计良品实收">{{ editing.receivedGoodQty }} <span class="form-tip">（总可见额度上限，已售量另扣）</span></el-descriptions-item>
         <el-descriptions-item label="对客户可见库存">
           <span v-if="editing.visibleStockQty != null">{{ editing.visibleStockQty.toLocaleString() }}</span>
           <span v-else style="color:#b0a89c">—</span>
@@ -870,13 +881,13 @@ async function submitReprice() {
           <el-input-number
             v-model="editing.visibleStockQty"
             :min="0"
-            :max="Math.max(editing.inboundQty || editing.purchaseQty || 99999, editing.warehouseAvailableQty || 0)"
+            :max="editing.receivedGoodQty"
             :disabled="!canSetPrice"
             style="width:180px"
           />
           <span class="form-tip">
-            手工设定 OMS 可售上限（可低于「仓内可用」）。确认定价并同步 OMS 后，客户侧剩余 = 可见库存 − 已售。
-            系统不会按海外仓库存自动补货或改可见量（自动补货规则尚未上线）。
+            累计良品实收 {{ editing.receivedGoodQty }} 件；总额度不可超出该范围，在途和破损不计入。剩余可售 = 总额度 − 已售。
+            可以设置较低额度，系统不会自动补足。
           </span>
         </el-form-item>
         <el-form-item label="最终售价(¥)">
@@ -1033,6 +1044,8 @@ async function submitReprice() {
     <template #footer><el-button @click="catalogPurchaseVisible = false">返回货盘持有</el-button></template>
   </el-dialog>
 
+  <CatalogRefundHistoryDialog v-if="canReclaim" v-model="refundHistoryVisible" @refreshed="loadHoldings" />
+  <CatalogVisibilityDialog v-if="canSetPrice" v-model="visibilityVisible" :pricing-id="visibilityId" @pending-change="hasPendingVisibility=$event" @updated="load" />
   <el-dialog v-model="reclaimDialogVisible" title="收回持有并按原购买单退款" width="680px" destroy-on-close>
     <p class="reclaim-tip">
       收回未预约的持有数量，按选定原购买记录的成交价退回客户余额；收回、库存回流和退款一起保存。

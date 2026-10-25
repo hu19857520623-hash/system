@@ -51,6 +51,8 @@ describe('tryMarkOrderableOnOms', () => {
       warehouse: {
         findMany: jest.fn().mockResolvedValue([{ warehouseCode: 'WMS-JHB-01' }]),
       },
+      product:{findMany:jest.fn().mockResolvedValue([{id:1n,sku:'FUR-BED-MAT-002'}])},
+      inboundOrder:{findMany:jest.fn().mockResolvedValue([{inboundNo:'RECEIVED',status:'completed',sourceWarehouseCode:'CN',items:[{sku:'FUR-BED-MAT-002',productId:1n,actualQty:72,qcStatus:'pass'}]}])},
       inventory: {
         findFirst: jest.fn().mockResolvedValue({
           sku: 'FUR-BED-MAT-002',

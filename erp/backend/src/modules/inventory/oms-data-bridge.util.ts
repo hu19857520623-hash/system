@@ -1,6 +1,7 @@
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { CATALOG_CUSTOMER_CODE, catalogBaseSkuFromInternal, catalogSkuLookupKeys } from '../../common/catalog-customer.util'
 import { remainingCatalogStock } from '../pricing/catalog-stock.util'
+import { withCatalogReceiptCaps } from '../pricing/catalog-receipts.util'
 import {
   buildCatalogHoldingInventoryRow,
   buildOmsWarehouseInventoryRow,
@@ -230,7 +231,8 @@ export async function fetchCatalogPoolRows(prisma: PrismaService, filters: Merge
     take: 5000,
   })
 
-  let mapped = rows.map((r) => mapCatalogPoolRow(r))
+  const bounded = await withCatalogReceiptCaps(prisma, rows)
+  let mapped = bounded.map((r) => mapCatalogPoolRow(r))
   if (filters.lowStockOnly || filters.onlyAvailable) {
     mapped = mapped.filter((r) => r.availableQty > 0)
   }
@@ -506,7 +508,7 @@ export async function attachCatalogPurchaseStats<T extends { sku: string; custom
   rows: T[],
 ) {
   if (!rows.length) return rows
-  const skus = [...new Set(rows.map((r) => r.sku))]
+  const skus = [...new Set(rows.flatMap((r) => catalogSkuLookupKeys(r.sku)))]
   const orders = await prisma.omsCatalogOrder.findMany({
     where: { sku: { in: skus } },
     select: { sku: true, customerCode: true, createdAt: true },
@@ -514,14 +516,14 @@ export async function attachCatalogPurchaseStats<T extends { sku: string; custom
   })
   const statsMap = new Map<string, { purchaseOrderCount: number; lastPurchaseAt: Date | null }>()
   for (const o of orders) {
-    const key = `${o.customerCode || ''}::${o.sku}`
+    const key = `${o.customerCode || ''}::${catalogBaseSkuFromInternal(o.sku)}`
     const prev = statsMap.get(key) || { purchaseOrderCount: 0, lastPurchaseAt: null }
     prev.purchaseOrderCount += 1
     if (!prev.lastPurchaseAt) prev.lastPurchaseAt = o.createdAt
     statsMap.set(key, prev)
   }
   return rows.map((r) => {
-    const stats = statsMap.get(`${r.customerCode}::${r.sku}`)
+    const stats = statsMap.get(`${r.customerCode}::${catalogBaseSkuFromInternal(r.sku)}`)
     return {
       ...r,
       purchaseOrderCount: stats?.purchaseOrderCount ?? 0,

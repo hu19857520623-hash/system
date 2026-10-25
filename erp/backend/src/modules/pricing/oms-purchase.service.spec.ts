@@ -20,7 +20,8 @@ function fixture() {
       upsert: async ({ where, create, update }: any) => { const old = get().holdings.find((h: any) => h.customerId === where.customerId_sku.customerId && h.sku === where.customerId_sku.sku);if (old) old.quantity += update.quantity.increment;else get().holdings.push({ id: BigInt(get().holdings.length + 1), ...create }) } },
     productPricingHistory: { create: async ({ data }: any) => { if (fail === 'history') throw Error('定价历史末尾失败');get().histories.push(data) } },
     syncLog: { create: async ({ data }: any) => { if ((fail === 'receipt' && data.syncType === 'oms_catalog_purchase') || (fail === 'catalog-sync' && data.syncType === 'oms_catalog_stock')) throw Error('同步凭据失败');get().sync.push(data) } },
-    product: { findFirst: async () => null },
+    product: { findFirst: async () => null, findMany: async () => [{id:1n,sku:'TKL-A'},{id:2n,sku:'TKL-B'}] },
+    inboundOrder:{findMany:async()=>get().receipts || [{inboundNo:'RECEIVED',status:'completed',sourceWarehouseCode:'CN',items:[{sku:'TKL-A',actualQty:10,qcStatus:'pass'},{sku:'TKL-B',actualQty:10,qcStatus:'pass'}]}]},
   })
   const prisma = db(() => state)
   prisma.$transaction = (work: any) => { const result = queue.then(async () => { const draft = structuredClone(state), tx = db(() => draft);tx._state = draft;const result = await work(tx);state = draft;return result });queue = result.then(() => undefined, () => undefined);return result }
@@ -31,6 +32,14 @@ function fixture() {
 }
 
 describe('货盘采购的事务、价格与原请求恢复', () => {
+  it('历史可见额度超出累计良品实收时，直接申购接口也拒绝超额且不扣款',async()=>{
+    const f=fixture();f.state().prices[0].visibleStockQty=200;f.state().prices[0].finalPrice='1.00'
+    f.state().receipts=[{inboundNo:'RECEIVED',status:'completed',sourceWarehouseCode:'CN',items:[{sku:'TKL-A',actualQty:8,qcStatus:'pass'}]}]
+    const before=f.core()
+    await expect(f.service.recordPurchase({...f.body,quantity:9,unitPrice:1})).rejects.toThrow('剩余 8 件')
+    expect(f.core()).toEqual(before)
+    expect(await f.service.recordPurchase({...f.body,quantity:8,unitPrice:1})).toMatchObject({remainingStockQty:0,catalogStockPool:8,totalAmount:8,currentBalance:42})
+  })
   it('扣款、持有、已售、费用及凭据一起提交，优先使用已发布TKL行', async () => {
     const f = fixture();f.state().prices.unshift({ ...f.state().prices[0], id: 3n, sku: 'A', visibleOnOms: false, finalPrice: 1 })
     expect(await f.service.recordPurchase(f.body)).toMatchObject({ sku: 'TKL-A', totalAmount: 10, balanceAfter: 40, currentBalance: 40, holdingQuantity: 1, remainingStockQty: 9, syncPending: false })

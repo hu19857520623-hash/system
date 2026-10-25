@@ -467,6 +467,7 @@ export const logisticsReceiptApi = {
 // ── 定价 ──
 
 export const pricingApi = {
+  setVisibleStock: (id, data) => api.post(`/pricing/${id}/visible-stock`, data),
   list: (params) => api.get('/pricing', params),
   detail: (id) => api.get(`/pricing/${id}`),
   create: (data) => api.post('/pricing', data),

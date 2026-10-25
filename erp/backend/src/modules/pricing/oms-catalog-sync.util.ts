@@ -1,4 +1,5 @@
 import type { PrismaService } from '../../common/prisma/prisma.service'
+import { withCatalogReceiptCaps } from './catalog-receipts.util'
 import { catalogStockPool, remainingCatalogStock } from './catalog-stock.util'
 import { CATALOG_CUSTOMER_CODE, catalogBaseSkuFromInternal, catalogSkuLookupKeys, toCatalogInternalSku } from '../../common/catalog-customer.util'
 
@@ -40,6 +41,7 @@ export function buildOmsCatalogPayload(pricing: {
   inboundQty?: number | null
   purchaseQty?: number | null
   soldQty?: number | null
+  receivedGoodQty?: number | null
   visibleOnOms?: boolean
   pricingStatus?: string | null
   orderableOnOms?: boolean
@@ -70,7 +72,7 @@ export function buildOmsCatalogPayload(pricing: {
     // visibleOnOms flag. Treat those rows as published as well so they are not
     // silently hidden from the OMS catalog.
     visibleOnOms: Boolean(pricing.visibleOnOms) || pricing.pricingStatus === 'synced',
-    orderableOnOms: Boolean(pricing.orderableOnOms),
+    orderableOnOms: Boolean(pricing.orderableOnOms) && remainingCatalogStock(pricing) > 0,
     shareStatus: pricing.shareStatus === 'stopped' ? 'stopped' : 'enabled',
     syncedAt: new Date().toISOString(),
   }
@@ -127,7 +129,8 @@ export async function pushCatalogStockToOms(
   if (!pricing?.visibleOnOms) return null
   const product = await prisma.product.findFirst({ where: { sku: { in: catalogSkuLookupKeys(sku) } } })
 
-  const payload = buildOmsCatalogPayload(mergeProductDimensions(pricing, product))
+  const [bounded] = await withCatalogReceiptCaps(prisma, [pricing])
+  const payload = buildOmsCatalogPayload(mergeProductDimensions(bounded, product))
   await prisma.syncLog.create({
     data: {
       syncType: 'oms_catalog_stock',
@@ -168,7 +171,8 @@ export async function listOmsCatalogForDisplay(
       })
     : []
   const productBySku = new Map(products.map(product => [product.sku, product]))
-  return rows.map(row => {
+  const boundedRows = await withCatalogReceiptCaps(prisma, rows)
+  return boundedRows.map(row => {
     const product = catalogSkuLookupKeys(row.sku).map((key) => productBySku.get(key)).find(Boolean)
     return buildOmsCatalogPayload(mergeProductDimensions(row, product, resolveImageUrl))
   })
@@ -191,5 +195,6 @@ export async function getOmsCatalogSkuForDisplay(
       },
     },
   })
-  return buildOmsCatalogPayload(mergeProductDimensions(pricing, product, resolveImageUrl))
+  const [bounded] = await withCatalogReceiptCaps(prisma, [pricing])
+  return buildOmsCatalogPayload(mergeProductDimensions(bounded, product, resolveImageUrl))
 }

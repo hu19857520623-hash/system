@@ -9,6 +9,8 @@ function fixture() {
     {id:21n,customerId:1n,customerCode:'TKL9001',sku:'TKL-A',orderNo:'CAT-OLD-1',quantity:2,unitPrice:'1.25',totalAmount:'2.50',balanceBefore:'100',balanceAfter:'97.50',status:'confirmed'},
     {id:22n,customerId:1n,customerCode:'TKL9001',sku:'TKL-A',orderNo:'CAT-OLD-2',quantity:4,unitPrice:'2.25',totalAmount:'9.00',balanceBefore:'97.50',balanceAfter:'88.50',status:'confirmed'}],charges:[{id:31n,bizRef:'CAT-OLD-1',amount:'2.50',status:'confirmed'},{id:32n,bizRef:'CAT-OLD-2',amount:'9.00',status:'confirmed'}]}
   const tx:any={
+    inboundOrder:{findMany:jest.fn().mockResolvedValue([{inboundNo:'RECEIVED',status:'completed',sourceWarehouseCode:'CN',items:[{sku:'TKL-A',actualQty:6,qcStatus:'pass'}]}])},
+    product:{findMany:jest.fn().mockResolvedValue([{id:1n,sku:'TKL-A'}])},
     sysUser:{findUnique:jest.fn().mockResolvedValue({roleCode:'admin',status:1})},
     sysUserPermission:{findMany:jest.fn().mockResolvedValue([])},
     sysRolePermission:{findMany:jest.fn().mockResolvedValue([])},

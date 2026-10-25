@@ -1021,7 +1021,7 @@ export class InventoryService {
     const and: Record<string, unknown>[] = []
     const sku = q.sku?.trim()
     const customerCode = q.customerCode?.trim()
-    if (sku) and.push({ sku })
+    if (sku) and.push({ sku: { in: catalogSkuLookupKeys(sku) } })
     if (customerCode) and.push({ customerCode })
 
     const where = and.length ? { AND: and } : {}

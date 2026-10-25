@@ -6,6 +6,7 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator'
 import { RequirePerms } from '../../common/decorators/require-perms.decorator'
 import { OmsBridge } from '../../common/decorators/oms-bridge.decorator'
 import { OmsPurchaseDto } from './dto/oms-purchase.dto'
+import { CatalogVisibilityDto } from './dto/catalog-visibility.dto'
 
 @Controller('pricing')
 export class PricingController {
@@ -50,6 +51,12 @@ export class PricingController {
   @Post()
   create(@Body() body: any) {
     return this.service.create(body)
+  }
+
+  @RequirePerms('pricing.set')
+  @Post(':id/visible-stock')
+  setVisibleStock(@Param('id', ParseIntPipe) id:number,@Body() body:CatalogVisibilityDto,@CurrentUser('userId') userId:number) {
+    return this.service.setVisibleStock(id,body,userId)
   }
 
   @RequirePerms('pricing.set')

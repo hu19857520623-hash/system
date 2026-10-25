@@ -9,7 +9,7 @@ import { PERMS_KEY } from '../../common/decorators/require-perms.decorator'
 import { InventoryController } from './inventory.controller'
 
 const permission = 'inventory_query.reclaim_refund'
-const endpoints = ['previewCatalogReclaim', 'reclaimCatalogHolding'] as const
+const endpoints = ['previewCatalogReclaim', 'reclaimCatalogHolding', 'catalogReclaimHistory', 'retryCatalogReclaimSync'] as const
 
 function context(method: typeof endpoints[number], roleCode: string): ExecutionContext {
   return {

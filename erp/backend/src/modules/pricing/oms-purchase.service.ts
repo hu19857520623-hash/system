@@ -6,6 +6,7 @@ import { BillingService } from '../billing/billing.service'
 import { catalogStockPool, remainingCatalogStock } from './catalog-stock.util'
 import { pushCatalogStockToOms } from './oms-catalog-sync.util'
 import { catalogSkuLookupKeys, toCatalogInternalSku } from '../../common/catalog-customer.util'
+import { withCatalogReceiptCaps } from './catalog-receipts.util'
 
 function num(v: unknown, fallback = 0): number {
   if (v == null || v === '') return fallback
@@ -55,7 +56,8 @@ export class OmsPurchaseService {
         const found = await this.findCatalogPricing(sku, tx)
         if (!found) throw new NotFoundException(`SKU ${sku} 不在货盘库存中`)
         await tx.$queryRaw`SELECT id FROM product_pricing WHERE id = ${found.id} FOR UPDATE`
-        const pricing = await tx.productPricing.findUnique({ where: { id: found.id } })
+        const rawPricing = await tx.productPricing.findUnique({ where: { id: found.id } })
+        const pricing = rawPricing ? (await withCatalogReceiptCaps(tx, [rawPricing]))[0] : null
         if (!pricing || (!pricing.visibleOnOms && pricing.pricingStatus !== 'synced')) throw new BadRequestException('商品尚未发布，请返回货盘列表重新选择')
         if (pricing.shareStatus === 'stopped' || !pricing.orderableOnOms) throw new BadRequestException('商品已停止申购或可售库存不足，请返回货盘列表重新选择')
         const remaining = remainingCatalogStock(pricing), pool = catalogStockPool(pricing)
@@ -96,7 +98,8 @@ export class OmsPurchaseService {
       saved.order.pricingId ? this.prisma.productPricing.findUnique({ where: { id: saved.order.pricingId } }) : this.findCatalogPricing(sku),
     ])
     if (!customer) throw new Error('采购已保存，当前客户资料暂未读取，请使用原采购单号核对')
-    return { ...this.buildPurchaseResult(saved.order, { soldQty: pricing?.soldQty ?? 0, remainingStockQty: pricing ? remainingCatalogStock(pricing) : 0, catalogStockPool: pricing ? catalogStockPool(pricing) : 0, balanceBefore: num(saved.order.balanceBefore), balanceAfter: num(saved.order.balanceAfter), idempotent: saved.idempotent }),
+    const bounded = pricing ? (await withCatalogReceiptCaps(this.prisma, [pricing]))[0] : null
+    return { ...this.buildPurchaseResult(saved.order, { soldQty: bounded?.soldQty ?? 0, remainingStockQty: bounded ? remainingCatalogStock(bounded) : 0, catalogStockPool: bounded ? catalogStockPool(bounded) : 0, balanceBefore: num(saved.order.balanceBefore), balanceAfter: num(saved.order.balanceAfter), idempotent: saved.idempotent }),
       currentBalance: Number(customer.balance), holdingQuantity: holding?.quantity ?? 0, syncPending,
       ...(syncPending ? { warning: '采购、扣款与持有已保存，但货盘或账单同步未完成，请使用原采购单号重试，勿再次购买' } : { message: saved.idempotent ? '原采购已完成，本次仅核对同步，未重复扣款或增加持有' : '采购已完成，余额与持有已更新' }) }
   }

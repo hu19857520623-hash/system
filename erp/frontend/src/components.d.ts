@@ -11,6 +11,8 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
+    CatalogRefundHistoryDialog: typeof import('./components/CatalogRefundHistoryDialog.vue')['default']
+    CatalogVisibilityDialog: typeof import('./components/CatalogVisibilityDialog.vue')['default']
     DashboardTrendChart: typeof import('./components/ui/DashboardTrendChart.vue')['default']
     DetailSheet: typeof import('./components/ui/DetailSheet.vue')['default']
     ElAlert: typeof import('element-plus/es')['ElAlert']

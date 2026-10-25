@@ -4,6 +4,7 @@ import { receivedCatalogQtyPatch } from './catalog-stock.util'
 import { pushCatalogStockToOms } from './oms-catalog-sync.util'
 import { assertGlobalSkuAvailable } from '../../common/global-sku.util'
 import { Prisma } from '@prisma/client'
+import { catalogReceiptTotals, withCatalogReceiptCaps } from './catalog-receipts.util'
 
 function num(v: unknown, fallback = 0): number {
   if (v == null || v === '') return fallback
@@ -117,7 +118,7 @@ export type InboundActualCatalogLine = {
 
 /** 入库完结后按实收回写货盘本批入库（只改本单对应的货盘行） */
 export async function writeInboundActualToCatalog(
-  prisma: Pick<PrismaService, 'productPricing' | 'productPricingHistory' | '$queryRaw'>,
+  prisma: Pick<PrismaService, 'productPricing' | 'productPricingHistory' | '$queryRaw' | 'inboundOrder'>,
   input: { inboundNo: string; lines: InboundActualCatalogLine[] },
 ) {
   const results: { sku: string; pricingId: number; inboundQty: number; changed: boolean }[] = []
@@ -131,8 +132,11 @@ export async function writeInboundActualToCatalog(
     if (!row) continue
     if (row.inboundNo && row.inboundNo !== input.inboundNo) continue
 
-    const actualQty = Math.max(0, Math.floor(num(line.actualQty)))
-    const patch = receivedCatalogQtyPatch(row, actualQty)
+    const receipts = await catalogReceiptTotals(prisma, [row])
+    const actualQty = receipts.batches.get(input.inboundNo)?.get(toCatalogInternalSku(row.sku))
+    if (actualQty == null) continue // Uncompleted or customer-owned receipts cannot raise catalog availability.
+    const receivedGoodQty = receipts.totals.get(toCatalogInternalSku(row.sku)) || 0
+    const patch = receivedCatalogQtyPatch(row, actualQty, receivedGoodQty)
     if (!patch) {
       results.push({ sku: row.sku, pricingId: Number(row.id), inboundQty: Number(row.inboundQty ?? 0), changed: false })
       continue
@@ -179,14 +183,14 @@ export async function reconcileCatalogFromCompletedInbounds<
     inboundQty?: number | null
     visibleStockQty?: number | null
   },
->(prisma: PrismaService, rows: T[]): Promise<T[]> {
+>(prisma: PrismaService, rows: T[]): Promise<Array<T & { receivedGoodQty: number }>> {
   const nos = [...new Set(rows.map((r) => r.inboundNo).filter(Boolean))] as string[]
-  if (!nos.length) return rows
+  if (!nos.length) return withCatalogReceiptCaps(prisma, rows)
   const orders = await prisma.inboundOrder.findMany({
     where: { inboundNo: { in: nos }, status: { in: ['completed', 'confirmed'] } },
     include: { items: true },
   })
-  if (!orders.length) return rows
+  if (!orders.length) return withCatalogReceiptCaps(prisma, rows)
 
   const orderByNo = new Map(orders.map((o) => [o.inboundNo, o]))
   const out = [...rows]
@@ -208,12 +212,11 @@ export async function reconcileCatalogFromCompletedInbounds<
     out[i] = {
       ...row,
       inboundQty: changed.inboundQty,
-      ...(row.visibleStockQty != null && Number(row.visibleStockQty) > actualQty
-        ? { visibleStockQty: actualQty }
-        : {}),
     }
   }
-  return out
+  const fresh = await prisma.productPricing.findMany({ where: { sku: { in: out.map(row => row.sku) } }, select: { sku: true, visibleStockQty: true } })
+  const visible = new Map(fresh.map(row => [row.sku, row.visibleStockQty]))
+  return withCatalogReceiptCaps(prisma, out.map(row => ({ ...row, ...(visible.has(row.sku) ? { visibleStockQty: visible.get(row.sku) } : {}) })))
 }
 
 /** 补录/清除入库海运费时只回写货盘海运费，不改本批入库数量 */

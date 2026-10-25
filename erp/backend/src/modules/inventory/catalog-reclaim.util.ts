@@ -5,6 +5,7 @@ import { CATALOG_CUSTOMER_CODE, catalogSkuLookupKeys, toCatalogInternalSku } fro
 import { billingCents } from '../billing/billing-workflow.util'
 import { catalogRefundReference, paidCatalogPurchase, readCatalogRefunds } from '../billing/catalog-refund-ledger.util'
 import { remainingCatalogStock } from '../pricing/catalog-stock.util'
+import { withCatalogReceiptCaps } from '../pricing/catalog-receipts.util'
 import type { CatalogReclaimDto } from './dto/catalog-reclaim.dto'
 import { PermissionsService } from '../../common/permissions/permissions.service'
 
@@ -73,7 +74,8 @@ export async function reclaimCatalog(prisma: any, data: CatalogReclaimDto, actor
       ?? await tx.productPricing.findFirst({ where: { sku: { in: keys } } })
     if (!found) throw new NotFoundException('商品不在货盘定价池，请返回列表核对')
     await tx.$queryRaw`SELECT id FROM product_pricing WHERE id = ${found.id} FOR UPDATE`
-    const pricing = await tx.productPricing.findUnique({ where: { id: found.id } })
+    const rawPricing = await tx.productPricing.findUnique({ where: { id: found.id } })
+    const pricing = rawPricing ? (await withCatalogReceiptCaps(tx, [rawPricing]))[0] : null
     await tx.$queryRaw`SELECT id FROM customer_sku_inventory WHERE customer_id = ${customer.id} AND sku IN (${Prisma.join(keys)}) ORDER BY id FOR UPDATE`
     const holdings = await tx.customerSkuInventory.findMany({ where: { customerId: customer.id, sku: { in: keys }, quantity: { gt: 0 } }, orderBy: { id: 'asc' } })
     if (holdings.length > 1) throw new ConflictException('同一商品存在多份持有记录，请先核对商品编码，勿直接收回')

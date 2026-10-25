@@ -18,7 +18,7 @@ async function verifiedRow(db: any, row: any, actor: number, customers: Map<numb
   const saved = row.detail.response, refund = refunds.find((r: any) => r.referenceNo === saved?.referenceNo)
   if (!refund || typeof saved?.sku !== 'string' || !saved.sku.trim()) throw new BadRequestException('退款回执依据不完整，请联系财务核对')
   return { id: Number(row.id), referenceNo: refund.referenceNo, customerCode: customer.customerCode, customerName: customer.customerName || '', sku: saved.sku,
-    quantity: saved.quantity, amount: refund.amount, balanceBefore: row.detail.refund.balanceBefore, balanceAfter: row.detail.refund.balanceAfter,
+    quantity: saved.quantity, amount: refund.amount, balanceBefore: Number(row.detail.refund.balanceBefore), balanceAfter: Number(row.detail.refund.balanceAfter),
     createdAt: row.createdAt, operatorId: Number(row.operatorId), canRetrySync: Number(row.operatorId) === actor,
     remark: typeof row.detail.request?.remark === 'string' ? row.detail.request.remark : '',
     allocations: refund.allocations.map((a: any) => ({ orderId: a.orderId, orderNo: a.orderNo, quantity: a.quantity, unitPrice: a.unitCents / 100, amount: a.amountCents / 100 })),

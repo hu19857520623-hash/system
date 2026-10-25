@@ -18,6 +18,7 @@ describe('listOmsCatalogForDisplay', () => {
     const prisma = {
       productPricing: { findMany: jest.fn().mockResolvedValue([row]) },
       product: { findMany: jest.fn().mockResolvedValue([]) },
+      inboundOrder: { findMany: jest.fn().mockResolvedValue([]) },
     } as unknown as PrismaService
 
     const items = await listOmsCatalogForDisplay(prisma)
@@ -62,6 +63,7 @@ describe('listOmsCatalogForDisplay', () => {
     const prisma = {
       productPricing: { findMany: jest.fn().mockResolvedValue([row]) },
       product: { findMany: jest.fn().mockResolvedValue([product]) },
+      inboundOrder:{findMany:jest.fn().mockResolvedValue([{inboundNo:'RECEIVED',status:'completed',sourceWarehouseCode:'CN',items:[{sku:product.sku,productId:product.id,actualQty:5,qcStatus:'pass'}]}])},
     } as unknown as PrismaService
 
     const items = await listOmsCatalogForDisplay(prisma, (url) => `https://img.example/${url.slice(6)}`)

@@ -17,6 +17,9 @@ import {
   pushCatalogStockToOms,
 } from './oms-catalog-sync.util'
 import { catalogStockPool, remainingCatalogStock } from './catalog-stock.util'
+import { withCatalogReceiptCaps } from './catalog-receipts.util'
+import { setCatalogVisibility } from './catalog-visibility.util'
+import type { CatalogVisibilityDto } from './dto/catalog-visibility.dto'
 import {
   addQtyForCatalogSku,
   buildCatalogSkuIndex,
@@ -76,6 +79,7 @@ export class PricingService {
       cost: num(row.costRmb),
       purchaseQty,
       inboundQty: row.inboundQty ?? 0,
+      receivedGoodQty: row.receivedGoodQty ?? 0,
       visibleStockQty: row.visibleStockQty != null ? Number(row.visibleStockQty) : null,
       soldQty,
       remainingStockQty,
@@ -361,6 +365,14 @@ export class PricingService {
     return this.attachHolderFields(this.serialize(ready, stockMap.get(ready.sku) || 0, pipelineMap.get(ready.sku)), holdersMap)
   }
 
+  /** 累计良品实收范围内设置总额度，并补同步 OMS。 */
+  async setVisibleStock(id:number,body:CatalogVisibilityDto,actor?:number) {
+    const result=await setCatalogVisibility(this.prisma,id,body,actor)
+    let syncPending=false
+    try {await tryMarkOrderableOnOms(this.prisma,result.sku);await pushCatalogStockToOms(this.prisma,result.sku)} catch {syncPending=true}
+    return {...result,syncPending,message:syncPending?'额度已保存，OMS展示待同步；请核对原设置，勿另建不同额度':result.duplicate?'原额度已核对，未重复调整':'总可见额度已保存，已售量另扣，仓内库存与余额未变'}
+  }
+
   /** 入库发运创建时自动同步货盘库存（海运费、入库数量等） */
   async syncFromInbound(input: SyncInboundCatalogInput) {
     return syncCatalogFromInbound(this.prisma, input)
@@ -459,9 +471,11 @@ export class PricingService {
 
     if (typeof data.finalPrice !== 'number' || billingCents(data.finalPrice) <= 0 || billingCents(data.finalPrice) > 999999999999) throw new BadRequestException('请填写大于零、最多两位小数的有效售价')
     if (data.visibleStockQty != null && data.visibleStockQty !== '' && (!Number.isSafeInteger(data.visibleStockQty) || data.visibleStockQty < 0)) throw new BadRequestException('可见库存须为非负整数，请核对后继续定价')
+    const [bounded] = await withCatalogReceiptCaps(this.prisma, [row])
     const visibleStockQty = data.visibleStockQty != null && data.visibleStockQty !== ''
       ? data.visibleStockQty
-      : (row.inboundQty > 0 ? row.inboundQty : row.purchaseQty)
+        : bounded.receivedGoodQty
+    if (visibleStockQty > bounded.receivedGoodQty) throw new BadRequestException(`可见总额度最多为累计良品实收 ${bounded.receivedGoodQty} 件，在途与破损不计入`)
     const marketPrice = num(data.marketPrice)
     if (marketPrice <= 0) throw new BadRequestException('请填写市场参考价')
 
@@ -576,7 +590,8 @@ export class PricingService {
         `已停止新的 OMS 申购；${holderCount ? `现有 ${holderCount} 个客户持仓及已建出库单不受影响` : '暂无客户持仓'}`,
       )
     } else {
-      if (remainingCatalogStock(row) <= 0) {
+      const [bounded] = await withCatalogReceiptCaps(this.prisma, [row])
+      if (remainingCatalogStock(bounded) <= 0) {
         throw new BadRequestException('OMS 展示剩余库存为 0，不能开启共享')
       }
       const stockMap = await this.loadWarehouseAvailableBySku([row.sku])
@@ -599,7 +614,7 @@ export class PricingService {
         BigInt(id),
         role,
         '开启共享',
-        `OMS 已恢复新客户申购；海外仓可用库存 ${warehouseAvailableQty} 件，展示剩余 ${remainingCatalogStock(row)} 件`,
+        `OMS 已恢复新客户申购；海外仓可用库存 ${warehouseAvailableQty} 件，展示剩余 ${remainingCatalogStock(bounded)} 件`,
       )
     }
 

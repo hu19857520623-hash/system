@@ -325,12 +325,12 @@ export type CatalogHoldingRowInput = {
 }
 
 export function buildCatalogHoldingInventoryRow(input: CatalogHoldingRowInput) {
-  const customer = resolveCustomerIdentity({
-    sku: input.sku,
-    customerCode: input.customerCode,
-    customerName: input.customerName,
+  // The SKU identifies the shared catalog product; ownership comes from the holding's customer.
+  const customer = {
+    customerCode: input.customerCode?.trim() || '',
+    customerName: readableDisplayText(input.customerName, input.customerCode?.trim() || '待核对客户'),
     customerSku: catalogBaseSkuFromInternal(input.sku),
-  })
+  }
   const qty = buildInventoryQuantityFields({ available: input.quantity, locked: input.lockedQty ?? 0 })
 
   return finalizeInventoryRow({

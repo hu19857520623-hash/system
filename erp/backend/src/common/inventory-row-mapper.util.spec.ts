@@ -1,4 +1,4 @@
-import { buildErpWarehouseInventoryRow, resolveCustomerIdentity } from './inventory-row-mapper.util'
+import { buildCatalogHoldingInventoryRow, buildErpWarehouseInventoryRow, resolveCustomerIdentity } from './inventory-row-mapper.util'
 
 describe('inventory customer identity', () => {
   it('does not treat an arbitrary SKU prefix as a customer code', () => {
@@ -58,5 +58,15 @@ describe('inventory customer identity', () => {
     expect(row.customerCode).toBe('')
     expect(row.customerName).toBe('')
     expect(row.supplierName).toBe('深圳优品电子')
+  })
+  it('catalog holdings retain the actual purchaser instead of the catalog pool customer',()=>{
+    const base={id:1,sku:'TKL-TK-99001',productName:'同一货盘商品',quantity:3,lockedQty:2}
+    const a=buildCatalogHoldingInventoryRow({...base,customerCode:'TKL9001',customerName:'客户一'})
+    const b=buildCatalogHoldingInventoryRow({...base,id:2,customerCode:'TKL9002',customerName:'客户二'})
+    expect(a).toMatchObject({customerCode:'TKL9001',customerName:'客户一',availableQty:3,lockedQty:2,customerSku:'TK-99001'})
+    expect(b).toMatchObject({customerCode:'TKL9002',customerName:'客户二'})
+  })
+  it('missing holding ownership is left for review rather than inventing platform ownership',()=>{
+    expect(buildCatalogHoldingInventoryRow({id:1,sku:'TKL-A',productName:'商品',quantity:1})).toMatchObject({customerCode:'',customerName:'待核对客户'})
   })
 })
