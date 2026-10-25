@@ -213,6 +213,8 @@ export function mapPrePurchaseOrder(row: any) {
     linkedPoNo: row.linkedPoNo || '',
     linkedPoStatus: row.linkedPoStatus || '',
     linkedPoAuditRemark: row.linkedPoAuditRemark || '',
+    assignedAt: row.assignedAt || '',
+    linkedPoAuditedAt: row.linkedPoAuditedAt || '',
     createdAtStr: row.createdAtStr || '',
     _raw: row,
   }

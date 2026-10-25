@@ -1137,6 +1137,17 @@ async function removeCancelledPrePo(row: any) {
   }
 }
 
+function prePoReassignedAfterReject(row?: { assignedAt?: string; linkedPoAuditedAt?: string } | null) {
+  const assignedAt = Date.parse(row?.assignedAt || '')
+  const auditedAt = Date.parse(row?.linkedPoAuditedAt || '')
+  return Number.isFinite(assignedAt) && Number.isFinite(auditedAt) && assignedAt > auditedAt
+}
+
+function prePoMustReturn(row?: { statusKey?: string; linkedPoStatus?: string; assignedAt?: string; linkedPoAuditedAt?: string } | null) {
+  if (row?.statusKey === 'returned') return true
+  return row?.statusKey === 'assigned' && row.linkedPoStatus === 'rejected' && !prePoReassignedAfterReject(row)
+}
+
 function canReviseRejected(row?: { statusKey?: string; prePoStatus?: string } | null) {
   if (row?.statusKey !== 'rejected') return false
   return row.prePoStatus !== 'pending_assign' && row.prePoStatus !== 'confirmed'
@@ -1434,7 +1445,7 @@ async function markPoUnpaid(po?: { id: number }) {
           <el-table-column prop="cancelReason" label="取消原因" min-width="150" show-overflow-tooltip />
           <el-table-column label="操作" width="200" fixed="right">
             <template #default="{ row }">
-              <template v-if="row.statusKey === 'returned' || (row.statusKey === 'assigned' && row.linkedPoStatus === 'rejected')">
+              <template v-if="prePoMustReturn(row)">
                 <el-button link type="warning" size="small" :disabled="prePoActionId !== null" @click="openRejectedRevision({ poId: row.convertedPoId, prePoId: row.id, poNo: row.linkedPoNo, poAuditRemark: row.linkedPoAuditRemark })">修改重提</el-button>
               </template>
               <template v-else-if="row.statusKey === 'assigned'">

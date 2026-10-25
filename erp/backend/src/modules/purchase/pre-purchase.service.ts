@@ -111,8 +111,8 @@ export class PrePurchaseService {
         ? this.prisma.sysUser.findMany({ where: { id: { in: userIds } }, select: { id: true, realName: true } })
         : Promise.resolve([] as { id: bigint; realName: string }[]),
       poIds.length
-        ? this.prisma.purchaseOrder.findMany({ where: { id: { in: poIds } }, select: { id: true, status: true, poNo: true, poAuditRemark: true } })
-        : Promise.resolve([] as { id: bigint; status: string; poNo: string; poAuditRemark: string | null }[]),
+        ? this.prisma.purchaseOrder.findMany({ where: { id: { in: poIds } }, select: { id: true, status: true, poNo: true, poAuditRemark: true, auditedAt: true } })
+        : Promise.resolve([] as { id: bigint; status: string; poNo: string; poAuditRemark: string | null; auditedAt: Date | null }[]),
     ])
     const supMap = new Map<number, string>()
     suppliers.forEach((s) => supMap.set(Number(s.id), s.supplierName))
@@ -122,7 +122,7 @@ export class PrePurchaseService {
     return rows.map((r) => this.serialize(r, supMap, userMap, poMap.get(Number(r.convertedPoId))))
   }
 
-  private serialize(row: any, supMap: Map<number, string>, userMap: Map<number, string>, linkedPo?: { status: string; poNo: string; poAuditRemark: string | null }) {
+  private serialize(row: any, supMap: Map<number, string>, userMap: Map<number, string>, linkedPo?: { status: string; poNo: string; poAuditRemark: string | null; auditedAt?: Date | null }) {
     return {
       id: Number(row.id),
       prePoNo: row.prePoNo,
@@ -178,6 +178,7 @@ export class PrePurchaseService {
       purchaserName: row.purchaserId ? userMap.get(Number(row.purchaserId)) || '—' : '—',
       assignerId: row.assignerId ? Number(row.assignerId) : null,
       assignerName: row.assignerId ? userMap.get(Number(row.assignerId)) || '—' : '—',
+      assignedAt: row.assignedAt ? new Date(row.assignedAt).toISOString() : '',
       assignedAtStr: fmtTime(row.assignedAt),
       status: row.status,
       cancelReason: row.cancelReason || '',
@@ -186,6 +187,7 @@ export class PrePurchaseService {
       linkedPoNo: linkedPo?.poNo || '',
       linkedPoStatus: linkedPo?.status || '',
       linkedPoAuditRemark: linkedPo?.poAuditRemark || '',
+      linkedPoAuditedAt: linkedPo?.auditedAt ? new Date(linkedPo.auditedAt).toISOString() : '',
       confirmedAtStr: fmtTime(row.confirmedAt),
       createdAtStr: fmtTime(row.createdAt),
     }
