@@ -1,3 +1,4 @@
+import { EXPORT_DEADLINE_MS, EXPORT_HEARTBEAT_MS, EXPORT_LEASE_MS, LEGACY_EXPORT_WAIT_MS, exportRecovery } from './async-io-lease.util'
 import { ForbiddenException, BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common'
 import { randomUUID } from 'node:crypto'
 import { PrismaService } from '../../common/prisma/prisma.service'
@@ -40,10 +41,17 @@ export class AsyncIoService {
 
   private publicJob(job: any, user?: AuthUser) {
     const receipt = job.jobType === 'export' ? exportReceipt(job.resultDetail) : null
-    const { fileUrl: _fileUrl, ...rest } = job
+    const recovery = exportRecovery(job)
+    const ownsJob = Number(job.operatorId) === user?.userId
+    const replacementJobId = Number.isSafeInteger(receipt?.replacementJobId) && Number(receipt?.replacementJobId) > 0 ? receipt!.replacementJobId : null
+    const { fileUrl: _fileUrl, executionToken: _executionToken, ...rest } = job
     return { ...rest, id: Number(job.id), errorMessage: job.errorMessage ? userFacingError(job.errorMessage) : null,
       retryAttempt: receipt?.attempt ?? null, exportParams: receipt?.params ?? null,
-      canRetry: job.jobType === 'export' && job.status === 'failed' && !!receipt && Number(job.operatorId) === user?.userId,
+      displayStatus: recovery.interrupted ? 'interrupted' : recovery.legacyRestart ? 'legacy_unconfirmed' : job.status,
+      canRetry: job.jobType === 'export' && (job.status === 'failed' || recovery.interrupted) && !!receipt && ownsJob && !replacementJobId,
+      canRestart: recovery.legacyRestart && !!receipt && ownsJob && !replacementJobId,
+      replacementJobId,
+
     }
   }
 
@@ -68,30 +76,62 @@ export class AsyncIoService {
     const module = String(data?.module || '').trim()
     await this.assertExportPerm(module, user)
     const { params } = exportScope(module, data.params)
-    const job = await this.prisma.asyncIoJob.create({ data: {
-      jobNo: 'EXP-' + randomUUID().replace(/-/g, '').slice(0, 24), jobType: 'export', module,
-      fileName: `${module}.csv`, status: 'processing', operatorId: BigInt(user!.userId), startedAt: new Date(),
-      resultDetail: JSON.stringify({ version: 1, kind: 'export', attempt: 1, params }),
-    } })
+    const job = await this.prisma.asyncIoJob.create({ data: this.exportJobData(module, params, user!) })
     return this.executeExport(job, params, user!)
   }
 
+  private exportJobData(module: string, params: Record<string, string>, user: AuthUser) {
+    return {
+      jobNo: 'EXP-' + randomUUID().replace(/-/g, '').slice(0, 24), jobType: 'export', module,
+      fileName: `${module}.csv`, status: 'processing', operatorId: BigInt(user.userId), startedAt: new Date(),
+      executionToken: randomUUID(), leaseUntil: new Date(Date.now() + EXPORT_LEASE_MS),
+      resultDetail: JSON.stringify({ version: 1, kind: 'export', attempt: 1, params }),
+    }
+  }
+
   private async executeExport(job: any, params: Record<string, string>, user: AuthUser) {
+    // Every completion, failure and heartbeat is fenced by this execution's token.
+    // A late worker can finish reading, but cannot publish over a reclaimed attempt.
+    const fence = () => ({ id: job.id, status: 'processing', executionToken: job.executionToken, leaseUntil: { gt: new Date() } })
+    let lostLease = false, renewing: Promise<void> | null = null
+    const heartbeat = setInterval(() => {
+      if (renewing || lostLease) return
+      renewing = this.prisma.asyncIoJob.updateMany({ where: fence(), data: { leaseUntil: new Date(Date.now() + EXPORT_LEASE_MS) } })
+        .then(result => { if (!result.count) lostLease = true })
+        .catch(() => { lostLease = true })
+        .finally(() => { renewing = null })
+    }, EXPORT_HEARTBEAT_MS)
+    heartbeat.unref()
+    let deadline: ReturnType<typeof setTimeout> | undefined
+    const stopHeartbeat = async () => { clearInterval(heartbeat); if (renewing) await renewing }
     try {
-      const result = await this.exporter.runExport(job.module, params, user)
-      const fileName = `${job.jobNo}_${result.fileName}`
+      const result = await Promise.race([
+        this.exporter.runExport(job.module, params, user),
+        new Promise<never>((_, reject) => {
+          deadline = setTimeout(() => reject(new BadRequestException('导出处理时间过长，已停止本次执行，请按原筛选重试或缩小范围')), EXPORT_DEADLINE_MS)
+          deadline.unref()
+        }),
+      ])
+      await stopHeartbeat()
+      if (lostLease) return this.detail(Number(job.id), user)
+      const fileName = `${job.jobNo}_第${exportReceipt(job.resultDetail)!.attempt}次_${result.fileName}`
       const { relativePath } = this.files.write('exports', fileName, result.content)
-      const updated = await this.prisma.asyncIoJob.update({ where: { id: job.id }, data: {
+      await this.prisma.asyncIoJob.updateMany({ where: fence(), data: {
         fileName, fileUrl: relativePath, totalRows: result.totalRows, processedRows: result.totalRows,
-        failedRows: 0, status: 'completed', errorMessage: null, finishedAt: new Date(),
+        failedRows: 0, status: 'completed', errorMessage: null, finishedAt: new Date(), executionToken: null, leaseUntil: null,
       } })
-      return this.publicJob(updated, user)
+      return this.detail(Number(job.id), user)
     } catch (error) {
+      await stopHeartbeat()
       this.logger.error(`导出任务 ${job.jobNo} 执行失败`, error instanceof Error ? error.stack : String(error))
-      const updated = await this.prisma.asyncIoJob.update({ where: { id: job.id }, data: {
-        status: 'failed', fileUrl: null, errorMessage: userFacingError(error, undefined, '导出失败，请稍后按原筛选重试；如持续失败，请联系管理员'), finishedAt: new Date(),
+      if (!lostLease) await this.prisma.asyncIoJob.updateMany({ where: fence(), data: {
+        status: 'failed', fileUrl: null, errorMessage: userFacingError(error, undefined, '导出失败，请稍后按原筛选重试；如持续失败，请联系管理员'),
+        finishedAt: new Date(), executionToken: null, leaseUntil: null,
       } })
-      return this.publicJob(updated, user)
+      return this.detail(Number(job.id), user)
+    } finally {
+      clearInterval(heartbeat)
+      if (deadline) clearTimeout(deadline)
     }
   }
 
@@ -102,16 +142,54 @@ export class AsyncIoService {
     await this.assertExportPerm(job.module, user)
     const receipt = exportReceipt(job.resultDetail)
     if (!receipt) throw new BadRequestException('旧任务未保存筛选条件，请返回原业务页面重新导出')
+    if (Number.isSafeInteger(receipt.replacementJobId) && Number(receipt.replacementJobId) > 0) return this.detail(receipt.replacementJobId!, user)
     if (!Number.isSafeInteger(expectedAttempt) || Number(expectedAttempt) < 1) throw new BadRequestException('请刷新任务后重试')
     if (Number(expectedAttempt) < receipt.attempt) return this.publicJob(job, user)
-    if (Number(expectedAttempt) !== receipt.attempt || job.status !== 'failed') throw new ConflictException('任务状态已变化，请刷新后核对')
+    const recovery = exportRecovery(job)
+    if (Number(expectedAttempt) !== receipt.attempt || (job.status !== 'failed' && !recovery.interrupted)) throw new ConflictException('任务仍在处理或状态已变化，请刷新后核对')
     const { params } = exportScope(job.module, receipt.params)
-    const claimed = await this.prisma.asyncIoJob.updateMany({ where: { id: job.id, status: 'failed', resultDetail: job.resultDetail }, data: {
+    const claim = {
       status: 'processing', errorMessage: null, fileUrl: null, totalRows: 0, processedRows: 0, failedRows: 0,
       startedAt: new Date(), finishedAt: null, resultDetail: JSON.stringify({ ...receipt, attempt: receipt.attempt + 1 }),
-    } })
+      executionToken: randomUUID(), leaseUntil: new Date(Date.now() + EXPORT_LEASE_MS),
+    }
+    const claimed = await this.prisma.asyncIoJob.updateMany({ where: {
+      id: job.id, status: job.status, resultDetail: job.resultDetail,
+      ...(recovery.interrupted ? { executionToken: job.executionToken, leaseUntil: { lte: new Date() } } : {}),
+    }, data: claim })
     if (!claimed.count) return this.detail(id, user)
-    return this.executeExport(job, params, user!)
+    return this.executeExport({ ...job, ...claim }, params, user!)
+  }
+
+  /** Unleased old workers cannot be fenced. Recover into a linked, unique new job. */
+  async restartLegacyExport(id: number, expectedAttempt: unknown, user?: AuthUser) {
+    const job = await this.findVisible(id, user)
+    if (job.jobType !== 'export') throw new BadRequestException('导入可能已部分写入，请到业务页面核对，不能整单恢复')
+    if (Number(job.operatorId) !== user?.userId) throw new ForbiddenException('只能恢复本人创建的导出任务')
+    await this.assertExportPerm(job.module, user)
+    const receipt = exportReceipt(job.resultDetail)
+    if (!receipt) throw new BadRequestException('旧任务未保存筛选条件，请返回原业务页面重新导出')
+    if (Number.isSafeInteger(receipt.replacementJobId) && Number(receipt.replacementJobId) > 0) return this.detail(receipt.replacementJobId!, user)
+    if (expectedAttempt !== receipt.attempt || !exportRecovery(job).legacyRestart) throw new ConflictException('原任务仍在处理或状态已变化，请刷新后核对')
+    const { params } = exportScope(job.module, receipt.params)
+    let replacement: any
+    try {
+      replacement = await this.prisma.$transaction(async tx => {
+        const created = await tx.asyncIoJob.create({ data: this.exportJobData(job.module, params, user!) })
+        const linked = await tx.asyncIoJob.updateMany({ where: {
+          id: job.id, status: 'processing', resultDetail: job.resultDetail, executionToken: null, leaseUntil: null,
+          OR: [{ startedAt: { lte: new Date(Date.now() - LEGACY_EXPORT_WAIT_MS) } }, { startedAt: null, createdAt: { lte: new Date(Date.now() - LEGACY_EXPORT_WAIT_MS) } }],
+        }, data: { resultDetail: JSON.stringify({ ...receipt, replacementJobId: Number(created.id) }) } })
+        if (!linked.count) throw new ConflictException('原任务已变化，请刷新后查看恢复任务')
+        return created
+      })
+    } catch (error) {
+      if (!(error instanceof ConflictException)) throw error
+      const latest = await this.findVisible(id, user), linkedId = exportReceipt(latest.resultDetail)?.replacementJobId
+      if (Number.isSafeInteger(linkedId) && Number(linkedId) > 0) return this.detail(linkedId!, user)
+      throw error
+    }
+    return this.executeExport(replacement, params, user!)
   }
 
   async create(data: any, user?: AuthUser) {

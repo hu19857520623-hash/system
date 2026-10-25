@@ -5,6 +5,7 @@
 import { PrismaClient } from '@prisma/client'
 
 const checks = [
+  { table: 'async_io_job', columns: ['result_detail', 'execution_token', 'lease_until'] },
   {
     table: 'outbound_order',
     columns: [

@@ -22,4 +22,14 @@ describe('异步任务中文结果及可恢复入口', () => {
     expect(asyncJobNextStep({ jobType: 'export', status: 'failed', canRetry: true })).toContain('当前最新数据')
     expect(asyncJobState('completed').tone).toBe('success')
   })
+  it('中断、旧任务恢复及未知状态均有中文下一步，不把导入误认为可自动恢复', () => {
+    expect(asyncJobState('interrupted').label).toBe('执行已中断')
+    expect(asyncJobState('legacy_unconfirmed').label).toBe('结果待核对')
+    expect(asyncJobNextStep({ jobType: 'export', status: 'processing', displayStatus: 'interrupted', canRetry: true })).toContain('按原筛选恢复')
+    expect(asyncJobNextStep({ jobType: 'export', status: 'processing', displayStatus: 'legacy_unconfirmed', canRestart: true })).toContain('新建恢复任务')
+    expect(asyncJobNextStep({ jobType: 'export', status: 'processing', replacementJobId: 9 })).toContain('查看恢复任务')
+    expect(asyncJobNextStep({ jobType: 'export', status: 'old-unknown' })).toContain('任务状态待核对')
+    expect(asyncJobNextStep({ jobType: 'import', status: 'processing', displayStatus: 'interrupted' })).toContain('勿重复上传')
+  })
+
 })

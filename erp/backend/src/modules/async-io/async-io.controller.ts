@@ -35,6 +35,11 @@ export class AsyncIoController {
     return this.service.retryExport(id, body?.expectedAttempt, user)
   }
 
+  @Post(':id/restart')
+  restart(@Param('id', ParseIntPipe) id: number, @Body() body: any, @CurrentUser() user: AuthUser) {
+    return this.service.restartLegacyExport(id, body?.expectedAttempt, user)
+  }
+
   @Get(':id/download')
   @Header('Content-Type', 'text/csv;charset=utf-8')
   async download(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: AuthUser, @Res() res: Response) {

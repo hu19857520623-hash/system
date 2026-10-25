@@ -4,6 +4,7 @@ const STATES: Record<string, { label: string; tone: 'success' | 'warning' | 'dan
   completed: { label: '已完成', tone: 'success' }, partial: { label: '部分成功', tone: 'warning' },
   failed: { label: '失败', tone: 'danger' }, pending: { label: '待处理', tone: 'info' },
   processing: { label: '处理中', tone: 'warning' },
+  interrupted: { label: '执行已中断', tone: 'danger' }, legacy_unconfirmed: { label: '结果待核对', tone: 'warning' },
 }
 export const asyncJobState = (status: unknown) => STATES[String(status)] || { label: '状态待核对', tone: 'info' }
 export function asyncJobNextStep(job: any) {
@@ -11,9 +12,13 @@ export function asyncJobNextStep(job: any) {
     if (job.status === 'partial' || job.status === 'failed') return '请查看失败原因，仅修正失败行后重新导入；成功行无需重复导入。'
     return job.status === 'completed' ? '导入已完成，可返回原业务页面核对记录。' : '请刷新状态核对结果，勿重复上传原文件。'
   }
+  if (job.replacementJobId) return '已创建恢复任务，请查看恢复任务的结果；原任务的迟到结果会单独保留。'
+  if (job.displayStatus === 'interrupted') return job.canRetry ? '导出长时间未响应，可按原筛选恢复；恢复会查询当前最新数据。' : '执行已中断，请由原操作人恢复，或联系管理员核对。'
+  if (job.displayStatus === 'legacy_unconfirmed') return job.canRestart ? '旧任务长时间未返回，可按原筛选新建恢复任务；原任务若随后完成，其结果单独保留。' : '旧任务长时间未返回，请核对原业务页面；未保存筛选条件时请重新选择条件导出。'
   if (job.status === 'completed') return '导出已完成，可下载文件。'
   if (job.status === 'failed') return job.canRetry ? '可按原筛选重试；重试会查询当前最新数据。' : '此任务无法直接重试，请返回原业务页面核对筛选条件后重新导出。'
-  return '请刷新状态核对结果；处理中请勿重复新建任务。'
+  if (!['pending', 'processing'].includes(job.status)) return '任务状态待核对，请刷新状态；如仍无法确认，请联系管理员。'
+  return '请刷新状态核对结果；执行中断后会显示恢复入口，请勿重复新建任务。'
 }
 export const asyncJobError = (value: unknown) => value ? userFacingError(value) : '—'
 export const ASYNC_FILTER_LABELS: Record<string, string> = {

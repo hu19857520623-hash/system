@@ -53,13 +53,13 @@ async function openDetail(id: number) {
   } catch (e) { if (version === detailVersion) detailError.value = userFacingError(e) }
   finally { if (version === detailVersion) detailLoading.value = false }
 }
-async function retryExport() {
-  if (retrying.value || !detail.value?.canRetry) return
+async function retryExport(restart = false) {
+  if (retrying.value || !(restart ? detail.value?.canRestart : detail.value?.canRetry)) return
   const id = detail.value.id, attempt = detail.value.retryAttempt
   retrying.value = true
   try {
-    const job = await asyncIoApi.retry(id, attempt)
-    if (detailId.value === id) detail.value = job
+    const job = await (restart ? asyncIoApi.restart(id, attempt) : asyncIoApi.retry(id, attempt))
+    if (detailId.value === id) { detail.value = job; detailId.value = job.id }
     if (job.status === 'completed') ElMessage.success('重试已完成，可以下载文件')
     else ElMessage.warning('任务尚未成功，请查看详情后核对')
   } catch (e) {
@@ -93,7 +93,7 @@ void load()
         <el-button size="small" :loading="loading" @click="load">刷新任务</el-button>
       </div></div>
     </template>
-    <el-alert :title="scope === 'all' ? '显示全部任务；重试仅限本人创建的失败导出。' : '显示本人有权限模块的任务。'" type="info" :closable="false" />
+    <el-alert :title="scope === 'all' ? '显示全部任务；重试或恢复仅限本人创建的导出。' : '显示本人有权限模块的任务。'" type="info" :closable="false" />
     <el-tabs v-model="tab" type="card">
       <el-tab-pane label="导入任务" name="import" /><el-tab-pane label="导出任务" name="export" />
     </el-tabs>
@@ -115,7 +115,7 @@ void load()
       <el-table-column prop="totalRows" label="行数" width="65" align="center" />
       <el-table-column v-if="tab === 'import'" prop="processedRows" label="成功" width="65" align="center" />
       <el-table-column v-if="tab === 'import'" prop="failedRows" label="失败" width="65" align="center" />
-      <el-table-column label="状态" width="95"><template #default="{ row }"><el-tag :type="asyncJobState(row.status).tone" size="small">{{ asyncJobState(row.status).label }}</el-tag></template></el-table-column>
+      <el-table-column label="状态" width="95"><template #default="{ row }"><el-tag :type="asyncJobState(row.displayStatus || row.status).tone" size="small">{{ asyncJobState(row.displayStatus || row.status).label }}</el-tag></template></el-table-column>
       <el-table-column label="时间" width="140"><template #default="{ row }">{{ fmtTime(row.createdAt) }}</template></el-table-column>
       <el-table-column label="操作" width="135" fixed="right"><template #default="{ row }">
         <el-button link type="primary" size="small" @click="openDetail(row.id)">详情</el-button>
@@ -131,7 +131,7 @@ void load()
             <el-descriptions-item label="任务编号">{{ detail.jobNo }}</el-descriptions-item>
             <el-descriptions-item label="类型">{{ asyncModuleLabel(detail.module) }}</el-descriptions-item>
             <el-descriptions-item label="文件名">{{ detail.fileName || '—' }}</el-descriptions-item>
-            <el-descriptions-item label="状态">{{ asyncJobState(detail.status).label }}</el-descriptions-item>
+            <el-descriptions-item label="状态">{{ asyncJobState(detail.displayStatus || detail.status).label }}</el-descriptions-item>
             <el-descriptions-item label="行数">共 {{ detail.totalRows || 0 }} 行；成功 {{ detail.processedRows || 0 }}，失败 {{ detail.failedRows || 0 }}</el-descriptions-item>
             <el-descriptions-item v-if="detail.jobType === 'export'" label="原筛选条件">{{ asyncFilterSummary(detail.exportParams) }}</el-descriptions-item>
             <el-descriptions-item label="失败原因">{{ asyncJobError(detail.errorMessage) }}</el-descriptions-item>
@@ -144,7 +144,9 @@ void load()
         <el-button @click="detailVisible = false">返回任务列表</el-button>
         <el-button v-if="detailId" :disabled="retrying" :loading="detailLoading" @click="openDetail(detailId)">刷新状态</el-button>
         <el-button v-if="failures.length" @click="downloadImportFailuresCsv('导入失败明细', failures)">下载失败明细</el-button>
-        <el-button v-if="detail?.canRetry" type="primary" :loading="retrying" @click="retryExport">按原筛选重试</el-button>
+        <el-button v-if="detail?.replacementJobId" type="primary" @click="openDetail(detail.replacementJobId)">查看恢复任务</el-button>
+        <el-button v-if="detail?.canRestart" type="primary" :loading="retrying" @click="retryExport(true)">按原筛选新建恢复任务</el-button>
+        <el-button v-if="detail?.canRetry" type="primary" :loading="retrying" @click="retryExport(false)">{{ detail?.displayStatus === 'interrupted' ? '按原筛选恢复' : '按原筛选重试' }}</el-button>
         <el-button v-if="detail?.jobType === 'export' && detail.status === 'completed'" type="primary" @click="downloadJob(detail.id, detail.fileName)">下载文件</el-button>
       </template>
     </el-dialog>

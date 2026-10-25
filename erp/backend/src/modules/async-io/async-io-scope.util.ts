@@ -38,7 +38,7 @@ export function exportScope(module: string, input: unknown = {}) {
   return { key, params }
 }
 
-export interface ExportReceipt { version: 1; kind: 'export'; attempt: number; params: Record<string, string> }
+export interface ExportReceipt { version: 1; kind: 'export'; attempt: number; params: Record<string, string>; replacementJobId?: number }
 export function exportReceipt(raw: string | null | undefined): ExportReceipt | null {
   try {
     const receipt = JSON.parse(raw || '')

@@ -2,36 +2,47 @@ import { ForbiddenException, Logger, NotFoundException } from '@nestjs/common'
 import { AsyncIoService } from './async-io.service'
 import { AsyncIoExportService } from './async-io-export.service'
 import { fetchOmsInventoryRows, fetchCatalogInventoryRows } from '../inventory/oms-data-bridge.util'
+import { EXPORT_LEASE_MS, EXPORT_HEARTBEAT_MS, EXPORT_DEADLINE_MS, LEGACY_EXPORT_WAIT_MS } from './async-io-lease.util'
 import { exportScope } from './async-io-scope.util'
 
 const actor = { userId: 7, roleCode: 'finance', username: 'fake-finance', realName: '虚构财务' }
 const admin = { ...actor, userId: 1, roleCode: 'admin' }
 function fixture() {
-  let current: any = null
+  const jobs = new Map<bigint, any>()
+  let nextId = 8n
+  const matches = (job: any, where: any) => Boolean(job
+    && (where.operatorId == null || where.operatorId === job.operatorId)
+    && (where.status == null || where.status === job.status)
+    && (where.resultDetail == null || where.resultDetail === job.resultDetail)
+    && (where.executionToken === undefined || where.executionToken === job.executionToken)
+    && (where.leaseUntil === undefined || (where.leaseUntil === null ? job.leaseUntil == null : job.leaseUntil && (
+      where.leaseUntil.gt ? job.leaseUntil > where.leaseUntil.gt : job.leaseUntil <= where.leaseUntil.lte)))
+  )
   const prisma: any = { asyncIoJob: {
-    create: jest.fn(async ({ data }) => current = { id: 8n, ...data }),
-    update: jest.fn(async ({ data }) => current = { ...current, ...data }),
+    create: jest.fn(async ({ data }) => { const job = { id: nextId++, ...data }; jobs.set(job.id, job); return job }),
+    update: jest.fn(async ({ where, data }) => { const job = { ...jobs.get(where.id), ...data }; jobs.set(where.id, job); return job }),
     updateMany: jest.fn(async ({ where, data }) => {
-      if (current.status !== where.status || current.resultDetail !== where.resultDetail) return { count: 0 }
-      current = { ...current, ...data }; return { count: 1 }
+      if (!matches(jobs.get(where.id), where)) return { count: 0 }
+      jobs.set(where.id, { ...jobs.get(where.id), ...data }); return { count: 1 }
     }),
-    findFirst: jest.fn(async ({ where }) => current && (where.operatorId == null || where.operatorId === current.operatorId) ? current : null),
+    findFirst: jest.fn(async ({ where }) => matches(jobs.get(where.id), where) ? jobs.get(where.id) : null),
     findMany: jest.fn().mockResolvedValue([]), count: jest.fn().mockResolvedValue(221),
   } }
+  prisma.$transaction = jest.fn(async fn => fn(prisma))
   const files: any = { write: jest.fn().mockReturnValue({ relativePath: 'exports/fake.csv' }), read: jest.fn().mockReturnValue(Buffer.from('fake')) }
   const exporter: any = { runExport: jest.fn().mockResolvedValue({ fileName: 'fake.csv', content: 'fake', totalRows: 2 }) }
   const imports: any = { importFromCsv: jest.fn().mockResolvedValue({ imported: 1, failed: 1, failures: [{ lineNo: 3, reason: '缺少商品编号' }] }) }
   let perms = ['cost.export']
   const permissions: any = { getUserPermissions: jest.fn(async () => perms), userHasPerm: jest.fn(async (_id, role, perm) => role === 'admin' || perms.includes(perm)) }
   const service = new AsyncIoService(prisma, files, exporter, imports, imports, imports, permissions)
-  return { service, prisma, files, exporter, imports, get: () => current, set: (job: any) => { current = job }, perms: (next: string[]) => { perms = next } }
+  return { service, prisma, files, exporter, imports, get: (id = 8n) => jobs.get(id), set: (job: any) => { jobs.set(job.id, job); if (job.id >= nextId) nextId = job.id + 1n }, perms: (next: string[]) => { perms = next } }
 }
 const receipt = (attempt = 1) => JSON.stringify({ version: 1, kind: 'export', attempt, params: { keyword: 'only-this', minAmount: '9' } })
 const failedJob = { id: 8n, jobNo: 'EXP-fake', module: '采购货款', operatorId: 7n, jobType: 'export', status: 'failed', resultDetail: receipt() }
 
 describe('异步任务范围、原条件重试和结果真实性', () => {
   beforeEach(() => jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined))
-  afterEach(() => jest.restoreAllMocks())
+  afterEach(() => { jest.useRealTimers(); jest.restoreAllMocks() })
   it('分页和统计在数据库使用相同权限与本人范围，通用导出权限不替代模块权限', async () => {
     const f = fixture(); f.perms(['cost.export', 'async_io.export'])
     const result = await f.service.list({ page: 2, pageSize: 20, jobType: 'export' }, actor)
@@ -118,6 +129,98 @@ describe('异步任务范围、原条件重试和结果真实性', () => {
     expect(leads.list).toHaveBeenCalledWith({ source: '官网', assigneeId: 7, status: 'deal' }, actor, true)
     expect((await exporter.runExport('获客报表', { range: 'month' }, actor)).totalRows).toBe(1)
     expect(leads.report).toHaveBeenCalledWith('month')
+  })
+  it('活跃执行持续续期，不能误接管；完成后清理租约和全部定时器', async () => {
+    jest.useFakeTimers()
+    const f = fixture(); let finish!: (value: any) => void
+    f.exporter.runExport.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const running = f.service.createExport({ module: '采购货款' }, actor)
+    await jest.advanceTimersByTimeAsync(0)
+    const initialLease = f.get().leaseUntil.getTime()
+    await jest.advanceTimersByTimeAsync(EXPORT_HEARTBEAT_MS)
+    expect(f.get().leaseUntil.getTime()).toBeGreaterThan(initialLease)
+    await expect(f.service.retryExport(8, 1, actor)).rejects.toThrow('仍在处理')
+    expect(f.exporter.runExport).toHaveBeenCalledTimes(1)
+    finish({ fileName: 'leased.csv', content: 'fake', totalRows: 1 })
+    const result = await running
+    expect(result).toMatchObject({ status: 'completed', leaseUntil: null, canRetry: false })
+    expect(result).not.toHaveProperty('executionToken')
+    expect(jest.getTimerCount()).toBe(0)
+  })
+  it.each(['success', 'failure'])('接管过期执行后旧执行迟到%s不能改写新任务状态或文件', async mode => {
+    const f = fixture(); let finish!: (value: any) => void, fail!: (reason: Error) => void
+    f.exporter.runExport.mockImplementationOnce(() => new Promise((resolve, reject) => { finish = resolve; fail = reject }))
+    const original = f.service.createExport({ module: '采购货款', params: { keyword: 'original-scope' } }, actor)
+    await new Promise(resolve => setImmediate(resolve))
+    f.set({ ...f.get(), leaseUntil: new Date(Date.now() - 1) })
+    expect(await f.service.detail(8, actor)).toMatchObject({ status: 'processing', displayStatus: 'interrupted', canRetry: true })
+    const replacement = await f.service.retryExport(8, 1, actor)
+    expect(replacement).toMatchObject({ status: 'completed', retryAttempt: 2 })
+    const state = { ...f.get() }
+    if (mode === 'success') finish({ fileName: 'late-original.csv', content: 'stale', totalRows: 900 })
+    else fail(new Error('late original failure'))
+    await original
+    expect(f.get()).toEqual(state)
+    expect((await f.service.retryExport(8, 1, actor)).retryAttempt).toBe(2)
+    expect(f.exporter.runExport).toHaveBeenCalledTimes(2)
+  })
+  it('执行超过总时限转为中文失败，迟到导出不再发布', async () => {
+    jest.useFakeTimers()
+    const f = fixture(); let finish!: (value: any) => void
+    f.exporter.runExport.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const running = f.service.createExport({ module: '采购货款' }, actor)
+    await jest.advanceTimersByTimeAsync(EXPORT_DEADLINE_MS)
+    const result = await running
+    expect(result.status).toBe('failed'); expect(result.errorMessage).toContain('处理时间过长')
+    expect(result.canRetry).toBe(true)
+    const state = { ...f.get() }
+    finish({ fileName: 'too-late.csv', content: 'late', totalRows: 999 })
+    await jest.advanceTimersByTimeAsync(0)
+    expect(f.get()).toEqual(state); expect(f.files.write).not.toHaveBeenCalled()
+    expect(jest.getTimerCount()).toBe(0)
+  })
+  it('心跳失败不冒充完成，租约到期才提供恢复，丢租约执行不写成功文件', async () => {
+    jest.useFakeTimers()
+    const f = fixture(); let finish!: (value: any) => void
+    f.exporter.runExport.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const running = f.service.createExport({ module: '采购货款' }, actor)
+    await jest.advanceTimersByTimeAsync(0)
+    f.prisma.asyncIoJob.updateMany.mockRejectedValueOnce(new Error('Synthetic heartbeat DB failure'))
+    await jest.advanceTimersByTimeAsync(EXPORT_HEARTBEAT_MS)
+    finish({ fileName: 'unconfirmed.csv', content: 'fake', totalRows: 1 })
+    expect((await running).canRetry).toBe(false)
+    expect(f.files.write).not.toHaveBeenCalled()
+    await jest.advanceTimersByTimeAsync(EXPORT_LEASE_MS)
+    expect(await f.service.detail(8, actor)).toMatchObject({ displayStatus: 'interrupted', canRetry: true })
+    expect(jest.getTimerCount()).toBe(0)
+  })
+  it('长时间未返回的旧任务恢复为唯一关联新任务，原任务迟到完成仍保留恢复链接', async () => {
+    const f = fixture(); const old = { ...failedJob, status: 'processing', executionToken: null, leaseUntil: null, startedAt: new Date(Date.now() - LEGACY_EXPORT_WAIT_MS - 1) }
+    f.set(old)
+    const before = await f.service.detail(8, actor)
+    expect(before).toMatchObject({ canRestart: true, canRetry: false, displayStatus: 'legacy_unconfirmed' })
+    const recovered = await f.service.restartLegacyExport(8, 1, actor)
+    expect(recovered).toMatchObject({ id: 9, status: 'completed', exportParams: { keyword: 'only-this', minAmount: '9' } })
+    f.set({ ...f.get(), status: 'completed', fileName: 'old-worker-late.csv' })
+    const replay = await f.service.restartLegacyExport(8, 1, actor)
+    expect(replay.id).toBe(9)
+    expect(f.prisma.asyncIoJob.create).toHaveBeenCalledTimes(1)
+    expect(f.exporter.runExport).toHaveBeenCalledTimes(1)
+    expect((await f.service.detail(8, actor)).replacementJobId).toBe(9)
+    f.set({ ...f.get(), status: 'failed' })
+    expect((await f.service.retryExport(8, 1, actor)).id).toBe(9)
+    expect(f.exporter.runExport).toHaveBeenCalledTimes(1)
+  })
+  it('未过等待期/非本人/缺筛选的旧任务和所有导入都不能整单恢复', async () => {
+    const f = fixture(); f.set({ ...failedJob, status: 'processing', startedAt: new Date() })
+    await expect(f.service.restartLegacyExport(8, 1, actor)).rejects.toThrow('仍在处理')
+    f.set({ ...failedJob, status: 'processing', startedAt: new Date(0), resultDetail: null })
+    await expect(f.service.restartLegacyExport(8, 1, actor)).rejects.toThrow('未保存筛选')
+    f.set({ ...failedJob, status: 'processing', startedAt: new Date(0), operatorId: 99n })
+    await expect(f.service.restartLegacyExport(8, 1, admin)).rejects.toBeInstanceOf(ForbiddenException)
+    f.set({ ...failedJob, jobType: 'import', status: 'processing' })
+    await expect(f.service.restartLegacyExport(8, 1, actor)).rejects.toThrow('导入可能已部分写入')
+    expect(f.exporter.runExport).not.toHaveBeenCalled()
   })
   it('导出不能把OMS读取失败当空数据，截断前达到上限也拒绝伪成功', async () => {
     const prisma: any = { $queryRawUnsafe: jest.fn().mockRejectedValue(new Error('Synthetic OMS failure')) }

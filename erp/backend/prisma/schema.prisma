@@ -1275,6 +1275,8 @@ model AsyncIoJob {
   errorMessage  String?   @map("error_message") @db.Text
   resultDetail  String?   @map("result_detail") @db.Text
   operatorId    BigInt?   @map("operator_id")
+  executionToken String? @map("execution_token") @db.VarChar(36)
+  leaseUntil DateTime? @map("lease_until") @db.DateTime(3)
   startedAt     DateTime? @map("started_at")
   finishedAt    DateTime? @map("finished_at")
   createdAt     DateTime  @default(now()) @map("created_at")
