@@ -217,7 +217,7 @@ onMounted(() => { readOriginalRecharge();void load() })
         <span class="page-title">客户充值</span>
         <div class="header-actions">
           <el-button type="primary" size="small" v-if="app.hasPerm('budget_credit.create')" @click="openRecharge()">充值</el-button>
-          <el-button v-if="app.hasPerm('budget_credit.export')" size="small" @click="exportTask('客户充值')">导出</el-button>
+          <el-button v-if="app.hasPerm('budget_credit.export')" size="small" @click="exportTask('客户充值', { keyword: keyword.trim() || undefined })">导出</el-button>
         </div>
       </div>
     </template>

@@ -1,17 +1,14 @@
 
 import { userFacingError } from '@erp/shared/user-facing-error'
-import { ElMessage } from 'element-plus'
-import { asyncIoApi } from '@/api/client.js'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { asyncIoApi, triggerBrowserDownload } from '@/api/client.js'
 import { normalizeImportFileText } from '@/utils/csv'
 import { showImportResultFeedback } from '@/utils/importResultFeedback.ts'
 
 export function triggerBlobDownload(blob: Blob, fileName: string) {
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = fileName
-  a.click()
-  URL.revokeObjectURL(url)
+  triggerBrowserDownload(blob, fileName)
 }
 
 export function pickFile(accept = '.csv,.xls'): Promise<File | null> {
@@ -20,20 +17,36 @@ export function pickFile(accept = '.csv,.xls'): Promise<File | null> {
     input.type = 'file'
     input.accept = accept
     input.onchange = () => resolve(input.files?.[0] ?? null)
+    input.oncancel = () => resolve(null)
     input.click()
   })
 }
 
 export function useAsyncIo() {
+  const route = useRoute()
+  const router = useRouter()
+  const exportBusy = ref(false)
   async function exportModule(module: string, params?: Record<string, unknown>) {
+    if (exportBusy.value) return null
+    exportBusy.value = true
+    const returnTo = route.fullPath
     try {
       const job = await asyncIoApi.export({ module, params })
-      ElMessage.success(`${module}导出已完成，可在「异步导出导入」中下载`)
+      const completed = job.status === 'completed'
+      if (route.path === '/async-io') {
+        if (completed) ElMessage.success('导出已完成，可下载文件')
+        else ElMessage.error(userFacingError(job.errorMessage || '导出失败，请查看任务详情'))
+      } else {
+        try {
+          await ElMessageBox.confirm(completed ? '导出已完成。可前往任务列表下载文件，或返回当前页面继续操作。' : '导出失败。可前往任务列表查看原因并按原筛选重试。', '导出结果', { confirmButtonText: '查看任务', cancelButtonText: '返回当前页面', type: completed ? 'success' : 'warning' })
+          await router.push({ path: '/async-io', query: { tab: 'export', returnTo, jobId: String(job.id) } })
+        } catch { /* 用户关闭结果提示，保留原页面。 */ }
+      }
       return job
     } catch (e: any) {
-      ElMessage.error(userFacingError(e.message || '导出失败'))
+      ElMessage.error(userFacingError(e.message || '导出失败') + '；请刷新任务列表核对结果后再试')
       return null
-    }
+    } finally { exportBusy.value = false }
   }
 
   async function importCsv(module: string, file?: File) {
@@ -60,5 +73,5 @@ export function useAsyncIo() {
     }
   }
 
-  return { exportModule, importCsv, downloadJob, pickFile, triggerBlobDownload }
+  return { exportModule, exportBusy, importCsv, downloadJob, pickFile, triggerBlobDownload }
 }

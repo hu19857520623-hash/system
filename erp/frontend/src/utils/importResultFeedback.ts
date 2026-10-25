@@ -1,3 +1,4 @@
+import { asyncJobState, asyncJobError, asyncModuleLabel } from './asyncIoFeedback'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { h } from 'vue'
 import {
@@ -170,15 +171,16 @@ export function formatImportDetailFields(job: Record<string, unknown>) {
   const failureText = failures.length
     ? failures.slice(0, 80).map(formatImportFailureLine).join('\n')
       + (failures.length > 80 ? `\n…另有 ${failures.length - 80} 条，可在详情中下载完整 CSV` : '')
-    : failed > 0 ? '（无行级明细，请查看服务端日志）' : '—'
+    : failed > 0 ? '未保存行级明细，请核对原文件并联系管理员，勿重复导入成功行' : '—'
 
   return [
     ['任务编号', job.jobNo],
-    ['导入类型', job.module],
+    ['导入类型', asyncModuleLabel(String(job.module || ''))],
     ['文件名', job.fileName],
     ['成功', imported],
     ['失败', failed],
-    ['状态', job.status],
+    ['状态', asyncJobState(job.status).label],
+    ['失败原因', asyncJobError(job.errorMessage)],
     ['时间', job.createdAt],
     ['失败明细', failureText],
   ] as [string, unknown][]

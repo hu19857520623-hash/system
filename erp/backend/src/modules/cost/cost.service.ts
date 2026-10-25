@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common'
+import { BadRequestException, Injectable } from '@nestjs/common'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
 
@@ -6,7 +6,7 @@ import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
 export class CostService {
   constructor(private prisma: PrismaService) {}
 
-  async list(q: PaginationDto & { costType?: string; startDate?: string; endDate?: string; minAmount?: string; maxAmount?: string }) {
+  async list(q: PaginationDto & { costType?: string; startDate?: string; endDate?: string; minAmount?: string; maxAmount?: string }, exportAll = false) {
     const { page, pageSize } = getPagination(q)
     const where: any = {}
     if (q.costType) where.costType = q.costType
@@ -25,9 +25,10 @@ export class CostService {
     if (minAmount != null && Number.isFinite(minAmount)) where.amountRmb = { ...(where.amountRmb || {}), gte: minAmount }
     if (maxAmount != null && Number.isFinite(maxAmount)) where.amountRmb = { ...(where.amountRmb || {}), lte: maxAmount }
     const [items, total] = await Promise.all([
-      this.prisma.costLedger.findMany({ where, skip: (page - 1) * pageSize, take: pageSize, orderBy: { id: 'desc' } }),
+      this.prisma.costLedger.findMany({ where, skip: exportAll ? 0 : (page - 1) * pageSize, take: exportAll ? 5001 : pageSize, orderBy: { id: 'desc' } }),
       this.prisma.costLedger.count({ where }),
     ])
+    if (exportAll && items.length > 5000) throw new BadRequestException('导出超过 5000 条，请缩小筛选范围')
     return { items, total, page, pageSize }
   }
 

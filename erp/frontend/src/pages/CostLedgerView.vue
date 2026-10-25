@@ -41,15 +41,19 @@ const filters = ref({
   maxAmount: null as number | null,
 })
 
-const { loading, items: bills, load } = useListLoader(async () => {
-  const res = await costApi.list({
-    pageSize: 100,
+function exportFilters() { return {
     keyword: filters.value.keyword.trim() || undefined,
     costType: filters.value.costType.trim() || undefined,
     startDate: filters.value.dateRange?.[0] || undefined,
     endDate: filters.value.dateRange?.[1] || undefined,
     minAmount: filters.value.minAmount ?? undefined,
     maxAmount: filters.value.maxAmount ?? undefined,
+} }
+
+const { loading, items: bills, load } = useListLoader(async () => {
+  const res = await costApi.list({
+    pageSize: 100,
+    ...exportFilters(),
   })
   return { items: (res.items || []).map(toBillRow), total: res.total }
 })
@@ -96,11 +100,11 @@ onMounted(load)
           <div class="page-title">采购货款</div>
           <p class="page-subtitle">按费用类型、业务单号和发生日期追踪采购货款与相关费用</p>
         </div>
-        <el-button v-if="app.hasPerm('cost.export')" size="small" @click="exportTask('采购货款')">导出</el-button>
+        <el-button v-if="app.hasPerm('cost.export')" size="small" @click="exportTask('采购货款', exportFilters())">导出</el-button>
       </div>
     </template>
     <div v-if="embedded" class="embedded-toolbar">
-      <el-button v-if="app.hasPerm('cost.export')" size="small" @click="exportTask('采购货款')">导出</el-button>
+      <el-button v-if="app.hasPerm('cost.export')" size="small" @click="exportTask('采购货款', exportFilters())">导出</el-button>
     </div>
     <div class="filters">
       <el-input v-model="filters.keyword" clearable placeholder="货款单号 / SKU / 关联单号" style="width:220px" @keyup.enter="applyFilters" />

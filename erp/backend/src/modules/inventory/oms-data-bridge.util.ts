@@ -1,3 +1,4 @@
+import { BadRequestException } from '@nestjs/common'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { CATALOG_CUSTOMER_CODE, catalogBaseSkuFromInternal, catalogSkuLookupKeys } from '../../common/catalog-customer.util'
 import { remainingCatalogStock } from '../pricing/catalog-stock.util'
@@ -310,7 +311,7 @@ function mapOmsProductRow(r: Record<string, unknown>) {
   })
 }
 
-export async function fetchOmsInventoryRows(prisma: PrismaService, filters: MergedInventoryFilters) {
+export async function fetchOmsInventoryRows(prisma: PrismaService, filters: MergedInventoryFilters, strict = false) {
   const conditions: string[] = ['1=1']
   const params: unknown[] = []
 
@@ -376,14 +377,16 @@ export async function fetchOmsInventoryRows(prisma: PrismaService, filters: Merg
   `
   try {
     const rows = await prisma.$queryRawUnsafe<Record<string, unknown>[]>(sql, ...params)
+    if (strict && rows.length >= 5000) throw new BadRequestException('导出达到 5000 条，请缩小筛选范围后重试，以免遗漏数据')
     return rows.map(mapOmsInventoryRow)
   } catch (err) {
+    if (strict) throw err
     console.warn('[inventory] OMS 库存读取失败，已跳过 OMS 数据源:', err)
     return []
   }
 }
 
-async function resolveErpCustomersByKeyword(prisma: PrismaService, keyword: string) {
+async function resolveErpCustomersByKeyword(prisma: PrismaService, keyword: string, strict = false) {
   const kw = keyword.trim()
   if (!kw) return []
   const erpCustomers = await prisma.customer.findMany({
@@ -415,20 +418,21 @@ async function resolveErpCustomersByKeyword(prisma: PrismaService, keyword: stri
         codes.add(matched.customerCode)
       }
     }
-  } catch {
+  } catch (error) {
+    if (strict) throw error
     // OMS 表不可用时仅使用 ERP 客户
   }
   return erpCustomers
 }
 
 /** 货盘客户持有量：不受海外仓仓库筛选影响，始终并入库存查询 */
-export async function fetchCatalogInventoryRows(prisma: PrismaService, filters: MergedInventoryFilters) {
+export async function fetchCatalogInventoryRows(prisma: PrismaService, filters: MergedInventoryFilters, strict = false) {
   const and: Record<string, unknown>[] = []
   const customerCode = filters.customerCode?.trim()
   let customerMap = new Map<number, { customerCode: string; customerName: string }>()
 
   if (customerCode) {
-    const customers = await resolveErpCustomersByKeyword(prisma, customerCode)
+    const customers = await resolveErpCustomersByKeyword(prisma, customerCode, strict)
     if (!customers.length) return []
     and.push({ customerId: { in: customers.map((c) => c.id) } })
     customerMap = new Map(customers.map((c) => [Number(c.id), c]))
@@ -466,6 +470,8 @@ export async function fetchCatalogInventoryRows(prisma: PrismaService, filters: 
     orderBy: { updatedAt: 'desc' },
     take: 5000,
   })
+
+  if (strict && rows.length >= 5000) throw new BadRequestException('导出达到 5000 条，请缩小筛选范围后重试，以免遗漏数据')
 
   if (!customerMap.size && rows.length) {
     const ids = [...new Set(rows.map((r) => r.customerId))]

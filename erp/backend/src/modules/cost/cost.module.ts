@@ -5,5 +5,6 @@ import { CostController } from './cost.controller'
 @Module({
   controllers: [CostController],
   providers: [CostService],
+  exports: [CostService],
 })
 export class CostModule {}

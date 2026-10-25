@@ -36,7 +36,7 @@ export function useRowActions() {
 
   const toast = (msg: string, type: 'success' | 'info' | 'warning' | 'error' = 'success') => ElMessage({ message: type === 'error' ? userFacingError(msg) : msg, type })
 
-  const exportTask = (what = '数据') => exportModule(what)
+  const exportTask = (what = '数据', params?: Record<string, unknown>) => exportModule(what, params)
 
   const importTask = (what = '数据') => importCsv(what === '线索' ? '线索' : what)
 

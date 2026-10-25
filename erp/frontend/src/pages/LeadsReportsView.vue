@@ -104,7 +104,7 @@ watch(range, loadReport)
               <el-radio-button value="quarter">本季度</el-radio-button>
               <el-radio-button value="month">本月</el-radio-button>
             </el-radio-group>
-            <el-button v-if="app.hasPerm('leads_reports.export')" size="small" @click="exportTask('获客报表')">导出报表</el-button>
+            <el-button v-if="app.hasPerm('leads_reports.export')" size="small" @click="exportTask('获客报表', { range })">导出报表</el-button>
           </div>
         </div>
       </template>

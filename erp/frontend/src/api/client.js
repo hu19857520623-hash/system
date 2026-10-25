@@ -600,6 +600,7 @@ export const asyncIoApi = {
   export: (data) => api.post('/async-io/export', data),
   import: (data) => api.post('/async-io/import', data),
   detail: (id) => api.get(`/async-io/${id}`),
+  retry: (id, expectedAttempt) => api.post(`/async-io/${id}/retry`, { expectedAttempt }),
   download: (id) => downloadRequest(`/async-io/${id}/download`),
 }
 

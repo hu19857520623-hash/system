@@ -88,6 +88,15 @@ async function loadWarehouses() {
   }
 }
 
+function exportFilters() {
+  const params: Record<string, unknown> = {}
+    if (warehouse.value !== 'all') params.warehouseCode = warehouse.value
+    if (onlyAvailable.value) params.onlyAvailable = 'true'
+    const kw = [skuQ.value.trim(), nameQ.value.trim()].filter(Boolean).join(' ')
+    if (kw) params.keyword = kw
+  return params
+}
+
 async function load() {
   loading.value = true
   try {
@@ -96,10 +105,7 @@ async function load() {
       pageSize: pageSize.value,
       warehouseType: 'logistics',
     }
-    if (warehouse.value !== 'all') params.warehouseCode = warehouse.value
-    if (onlyAvailable.value) params.onlyAvailable = 'true'
-    const kw = [skuQ.value.trim(), nameQ.value.trim()].filter(Boolean).join(' ')
-    if (kw) params.keyword = kw
+    Object.assign(params, exportFilters())
     const res = await inventoryApi.query(params)
     rows.value = (res.items || []).map(mapInventory)
     listTotal.value = res.total ?? rows.value.length
@@ -241,7 +247,7 @@ onMounted(async () => {
           <p class="page-desc">采购收货后的在库。可发数量可调到其他中转仓，或发往海外仓；发运和调拨都会从这里扣减。</p>
         </div>
         <div class="head-actions">
-          <el-button v-if="app.hasPerm('logistics_wh.export') && rows.length" size="small" @click="exportTask('中转仓库存')">导出</el-button>
+          <el-button v-if="app.hasPerm('logistics_wh.export') && rows.length" size="small" @click="exportTask('中转仓库存', exportFilters())">导出</el-button>
         </div>
       </div>
 

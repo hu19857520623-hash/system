@@ -85,12 +85,8 @@ const DEAL_FILE_ACCEPT = '.pdf,.jpg,.jpeg,.png,.webp,.doc,.docx,.xls,.xlsx,.zip'
 
 const { page, pageSize, total, resetPage } = useServerPagination()
 
-const { loading, items: deals, load } = useListLoader(async () => {
-  const params: Record<string, string | number> = {
-    status: 'deal',
-    page: page.value,
-    pageSize: pageSize.value,
-  }
+function exportFilters() {
+  const params: Record<string, string | number> = {}
   const keyword = searchQ.value.trim()
   if (keyword) params.keyword = keyword
   if (sourceFilter.value) params.source = sourceFilter.value
@@ -99,6 +95,17 @@ const { loading, items: deals, load } = useListLoader(async () => {
   if (dealStatusFilter.value) params.dealStatus = dealStatusFilter.value
   if (dateFrom.value) params.dealDateFrom = dateFrom.value
   if (dateTo.value) params.dealDateTo = dateTo.value
+
+  return params
+}
+
+const { loading, items: deals, load } = useListLoader(async () => {
+  const params: Record<string, string | number> = {
+    status: 'deal',
+    page: page.value,
+    pageSize: pageSize.value,
+  }
+  Object.assign(params, exportFilters())
 
   const res = await leadApi.list(params)
   total.value = res.total ?? 0
@@ -446,7 +453,7 @@ onMounted(async () => {
     <template #header>
       <div class="page-header">
         <span class="page-title">成交管理</span>
-        <el-button v-if="app.hasPerm('leads_deals.export')" size="small" @click="exportTask('成交客户')">导出</el-button>
+        <el-button v-if="app.hasPerm('leads_deals.export')" size="small" @click="exportTask('成交客户', exportFilters())">导出</el-button>
       </div>
     </template>
 

@@ -37,7 +37,7 @@ export class CustomersService {
     balanceMin?: string
     balanceMax?: string
     portalOnly?: string
-  }) {
+  }, exportAll = false) {
     const { page, pageSize } = getPagination(q)
     const [erpRows, omsRows] = await Promise.all([
       this.prisma.customer.findMany({ orderBy: { id: 'desc' } }),
@@ -125,7 +125,8 @@ export class CustomersService {
     })
 
     const total = merged.length
-    const items = merged.slice((page - 1) * pageSize, page * pageSize)
+    if (exportAll && total > 5000) throw new BadRequestException('导出超过 5000 条，请缩小筛选范围')
+    const items = exportAll ? merged : merged.slice((page - 1) * pageSize, page * pageSize)
     return { items, total, page, pageSize }
   }
 
