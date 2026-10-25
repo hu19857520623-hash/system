@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { userFacingError } from '@erp/shared/user-facing-error'
+import { internalRedirect } from '@/auth/internalRedirect'
 
 import { ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -39,8 +40,7 @@ async function handleSubmit() {
     await app.login(u, p)
     if (remember.value) localStorage.setItem('login_username', u)
     else localStorage.removeItem('login_username')
-    const redirect = (route.query.redirect as string) || '/dashboard'
-    router.replace(redirect)
+    await router.replace(internalRedirect(route.query.redirect))
     ElMessage.success(`欢迎回来，${app.currentAccount.name}`)
   } catch (e: any) {
     ElMessage.error(userFacingError(e.message || '登录失败，请检查账号密码'))

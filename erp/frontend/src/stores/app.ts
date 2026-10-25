@@ -360,7 +360,10 @@ export const useAppStore = defineStore('app', {
       this.authReady = true
     },
     async refreshProfile() {
+      const token = getAccessToken()
+      if (!token) throw new Error('登录已失效，请重新登录后继续')
       const profile = await authApi.profile()
+      if (getAccessToken() !== token) throw new Error('登录账号已变化，请使用当前账号继续')
       this.applyProfile(profile)
     },
     logout() {

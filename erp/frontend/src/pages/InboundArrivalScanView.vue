@@ -42,6 +42,10 @@ const app = useAppStore()
 const route = useRoute()
 const router = useRouter()
 
+function returnToReceipt() {
+  void router.push({ name: 'InboundReceipt', query: activeOrderId.value ? { inboundId: String(activeOrderId.value) } : {} })
+}
+
 type WorkStep = 'arrival' | 'receive' | 'qc' | 'putaway'
 
 const warehouseCode = ref('')
@@ -872,7 +876,7 @@ onMounted(async () => {
     <template #header>
       <div class="page-header">
         <span class="page-title">海外仓到仓扫描</span>
-        <el-button size="small" :disabled="pageBusy" @click="router.push({ name: 'InboundReceipt' })">返回入库单管理</el-button>
+        <el-button size="small" :disabled="pageBusy" @click="returnToReceipt">返回入库单管理</el-button>
         <el-select
           v-model="warehouseCode"
           placeholder="操作仓库"
@@ -908,7 +912,7 @@ onMounted(async () => {
     </el-alert>
     <el-alert v-if="warehouseOperationError" :title="warehouseOperationError" type="error" :closable="false" style="margin-bottom:10px" />
     <el-alert v-if="warehouseResult" :type="warehouseResult.feePending || warehouseResult.syncPending ? 'warning' : 'success'" :closable="false" style="margin-bottom:10px" :title="`${warehouseResult.inboundNo}：${warehouseResult.message || '作业已保存'}`">
-      <el-button :disabled="pageBusy" @click="router.push({ name: 'InboundReceipt', query: { inboundId: String(activeOrderId || '') } })">返回入库单管理</el-button>
+      <el-button :disabled="pageBusy" @click="returnToReceipt">返回入库单管理</el-button>
     </el-alert>
     <el-alert v-if="orderReadError" :title="orderReadError" type="error" :closable="false"><el-button :disabled="pageBusy || !activeOrderId" @click="loadActiveOrder(Number(activeOrderId), workStep)">重新读取最新单据</el-button></el-alert>
     <el-alert v-if="activeOrder?.status === 'pending_putaway' && orderNeedsMeasure(activeOrder)" title="该单已完成清点，请先确认并保存实测尺寸，再继续上架" type="info" :closable="false" />
