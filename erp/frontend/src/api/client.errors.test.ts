@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { subscribePermissionFailures } from '../auth/permissionEvents'
 import { beginSessionRecoveryTarget } from '../auth/sessionRecoveryTarget'
-import { api, inboundApi } from './client.js'
+import { api, inboundApi, managementLoopApi } from './client.js'
 
 describe('ERP request, download and print Chinese error feedback', () => {
   beforeEach(() => {
@@ -10,6 +10,18 @@ describe('ERP request, download and print Chinese error feedback', () => {
     vi.stubGlobal('window', { location: { pathname: '/login', href: '' } })
   })
   afterEach(() => vi.unstubAllGlobals())
+
+  it.each(['create', 'count', 'approve'] as const)('新版盘点%s接口缺失时保留失败，不回退可能重复写入的旧路径', async action => {
+    const fetcher = vi.fn().mockResolvedValue({ ok: false, status: 404, json: async () => ({ message: 'Not Found' }) })
+    vi.stubGlobal('fetch', fetcher)
+    const payload = { clientRequestId: 'stable-stocktake-request', lineId: 4, qty: 5, expectedStage: 'pending' }
+    const pending = action === 'create' ? managementLoopApi.createStocktake(payload) : action === 'count' ? managementLoopApi.countStocktake(3, payload) : managementLoopApi.approveStocktake(3, payload)
+    await expect(pending).rejects.toMatchObject({ status: 404 })
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    const [url, options] = fetcher.mock.calls[0]!
+    expect(url).toBe('/api/management-loop/stocktake-workflows' + (action === 'create' ? '' : `/3/${action}`))
+    expect(JSON.parse(options.body)).toEqual(payload)
+  })
 
   it.each([
     [api.get, '/test', 403, 'Forbidden', '没有权限'],

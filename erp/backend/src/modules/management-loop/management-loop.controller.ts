@@ -33,22 +33,28 @@ export class ManagementLoopController {
   @Get('stocktakes/:id')
   stocktake(@Param('id', ParseIntPipe) id: number) { return this.service.stocktakeDetail(id) }
 
+  @RequireAnyPerm('stocktake.view', 'stocktake.count', 'stocktake.create', 'stocktake.approve')
+  @Get('stocktake-requests/:requestId')
+  stocktakeRequest(@Param('requestId') requestId: string, @CurrentUser('userId') userId: number) {
+    return this.service.stocktakeRequest(requestId, userId)
+  }
+
   @RequirePerms('stocktake.create')
-  @Post('stocktakes')
+  @Post(['stocktakes', 'stocktake-workflows'])
   createStocktake(@Body() body: any, @CurrentUser('userId') userId: number) {
     return this.service.createStocktake(body, userId)
   }
 
   @RequirePerms('stocktake.count')
-  @Post('stocktakes/:id/count')
+  @Post(['stocktakes/:id/count', 'stocktake-workflows/:id/count'])
   count(@Param('id', ParseIntPipe) id: number, @Body() body: any, @CurrentUser('userId') userId: number) {
     return this.service.submitCount(id, body, userId)
   }
 
   @RequirePerms('stocktake.approve')
-  @Post('stocktakes/:id/approve')
-  approve(@Param('id', ParseIntPipe) id: number, @CurrentUser('userId') userId: number) {
-    return this.service.approveStocktake(id, userId)
+  @Post(['stocktakes/:id/approve', 'stocktake-workflows/:id/approve'])
+  approve(@Param('id', ParseIntPipe) id: number, @CurrentUser('userId') userId: number, @Body() body: any) {
+    return this.service.approveStocktake(id, userId, body)
   }
 
   @RequirePerms('capacity.view')

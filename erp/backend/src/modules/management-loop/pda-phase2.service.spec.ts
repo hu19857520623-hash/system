@@ -96,15 +96,19 @@ describe('PDA phase 2 warehouse exception flows', () => {
   it('rejects a recount performed by the first counter', async () => {
     const prisma: any = {
       stocktakePlan: { findUnique: jest.fn().mockResolvedValue({ id: 3n, stocktakeNo: 'PD-3', status: 'counting' }) },
-      stocktakeLine: { findFirst: jest.fn().mockResolvedValue({ id: 4n, firstQty: 9, firstCountedBy: 31n, bookQty: 10 }) },
+      stocktakeLine: { findFirst: jest.fn().mockResolvedValue({ id: 4n, firstQty: 9, firstCountedBy: 31n, bookQty: 10, status: 'recount' }) },
       operationLog: { findFirst: jest.fn().mockResolvedValue(null) },
       $transaction: jest.fn(),
     }
     const service = new ManagementLoopService(prisma, { hasClientRequest: jest.fn().mockResolvedValue(false) } as any, {} as any)
 
-    await expect(service.submitCount(3, { lineId: 4, qty: 10 }, 31)).rejects.toThrow(
+    prisma.$queryRaw = jest.fn().mockResolvedValue([{ id: 31n }])
+    prisma.$transaction.mockImplementation((work: any) => work(prisma))
+    prisma.stocktakeLine.update = jest.fn()
+    await expect(service.submitCount(3, { lineId: 4, qty: 10, expectedStage: 'recount', clientRequestId: 'phase35-recount' }, 31)).rejects.toThrow(
       new BadRequestException('复盘必须由另一名作业员完成，请交接给其他账号'),
     )
-    expect(prisma.$transaction).not.toHaveBeenCalled()
+    expect(prisma.$transaction).toHaveBeenCalled()
+    expect(prisma.stocktakeLine.update).not.toHaveBeenCalled()
   })
 })

@@ -27,8 +27,8 @@ export function parseStocktakeScope(body: Record<string, unknown> = {}): Stockta
   return {
     warehouseCode: text(body.warehouseCode),
     mode: STOCKTAKE_MODES.has(mode) ? mode : 'location',
-    locationIds,
-    skus,
+    locationIds: mode === 'location' ? locationIds : [],
+    skus: mode === 'sku' ? skus : [],
     sampleSize: Math.max(1, Math.min(500, Number(body.sampleSize) || 20)),
     customerCode: text(body.customerCode),
     inboundNo: text(body.inboundNo),

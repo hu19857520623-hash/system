@@ -565,9 +565,10 @@ export const managementLoopApi = {
   stocktakes: (params) => api.get('/management-loop/stocktakes', params),
   stocktake: (id) => api.get(`/management-loop/stocktakes/${id}`),
   stocktakeOptions: (params) => api.get('/management-loop/stocktake-options', params),
-  createStocktake: (data) => api.post('/management-loop/stocktakes', data),
-  countStocktake: (id, data) => api.post(`/management-loop/stocktakes/${id}/count`, data),
-  approveStocktake: (id) => api.post(`/management-loop/stocktakes/${id}/approve`, {}),
+  createStocktake: (data) => api.post('/management-loop/stocktake-workflows', data),
+  countStocktake: (id, data) => api.post(`/management-loop/stocktake-workflows/${id}/count`, data),
+  approveStocktake: (id, data) => api.post(`/management-loop/stocktake-workflows/${id}/approve`, data),
+  stocktakeRequest: (requestId) => api.get(`/management-loop/stocktake-requests/${encodeURIComponent(requestId)}`),
   capacity: (params) => api.get('/management-loop/capacity', params),
   refreshCapacityAlerts: (data) => api.post('/management-loop/capacity/refresh-alerts', data),
 }

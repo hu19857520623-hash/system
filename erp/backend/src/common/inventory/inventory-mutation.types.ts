@@ -50,6 +50,8 @@ export type StocktakeAdjustParams = {
   locationId: bigint
   locationCode: string
   targetQty: number
+  expectedQty?: number
+  inboundNos?: string[]
   operatorId?: number
   referenceNo: string
 }

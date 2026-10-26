@@ -21,6 +21,8 @@ import {
 const app = useAppStore()
 const router = useRouter()
 const loading = ref(false)
+const dashboardError = ref(''), lastDashboardRead = ref('')
+let dashboardReadVersion = 0
 const trendLoading = ref(false)
 const trendSeries = ref<{ date: string; receipts: number; receivedQty: number; damagedQty: number }[]>([])
 
@@ -183,16 +185,19 @@ async function loadTrends() {
 }
 
 async function loadDashboard() {
-  loading.value = true
+  if (loading.value) return
+  const version = ++dashboardReadVersion, owner = app.authenticatedUser?.id
+  loading.value = true; dashboardError.value = ''
   try {
     const [stats, anns, scheduledRes, notif] = await Promise.all([
       dashboardApi.stats(),
       dashboardApi.announcements(),
       app.hasPerm('announcement.manage')
-        ? announcementApi.list({ status: 'scheduled', targetChannel: 'erp', pageSize: 20 }).catch(() => ({ items: [] }))
+        ? announcementApi.list({ status: 'scheduled', targetChannel: 'erp', pageSize: 20 })
         : Promise.resolve({ items: [] }),
-      dashboardApi.notifications().catch(() => ({ items: [], badges: {} })),
+      dashboardApi.notifications(),
     ])
+    if (version !== dashboardReadVersion || owner !== app.authenticatedUser?.id) return
     const statsKeys = Object.keys(DASHBOARD_KPI_PERM_MAP) as DashboardKpiKey[]
     kpis.value = statsKeys
       .filter((key) => stats[key] != null && app.hasPerm(DASHBOARD_KPI_PERM_MAP[key]))
@@ -242,8 +247,9 @@ async function loadDashboard() {
     const activeRows = (anns || []).map((a: any) => mapAnnouncementRow(a, 'active'))
     const scheduledRows = (scheduledRes?.items || []).map((a: any) => mapAnnouncementRow(a, 'scheduled'))
     announcements.value = [...scheduledRows, ...activeRows]
+    lastDashboardRead.value = new Date().toLocaleString('zh-CN', { hour12: false })
   } catch (e: any) {
-    ElMessage.error(userFacingError(e?.message || '加载工作台数据失败'))
+    if (owner === app.authenticatedUser?.id && version === dashboardReadVersion) dashboardError.value = `${userFacingError(e)} ${lastDashboardRead.value ? '当前保留上次读取的数据。' : '尚未读取工作台数据。'}`
   } finally {
     loading.value = false
   }
@@ -364,10 +370,11 @@ onMounted(() => {
       </div>
       <div class="hero-status">
         <span class="hero-status-dot"></span>
-        <span>系统运行正常</span>
+        <span>{{ loading ? '正在读取工作台数据' : dashboardError ? '数据读取未完成' : lastDashboardRead ? `最近读取 ${lastDashboardRead}` : '尚未读取工作台数据' }}</span>
       </div>
     </div>
 
+    <el-alert v-if="dashboardError" :title="dashboardError" type="warning" :closable="false"><el-button :loading="loading" @click="loadDashboard">重新读取工作台</el-button></el-alert>
     <div v-if="visibleKpis.length" class="kpi-strip">
       <MetricCard
         v-for="(kpi, index) in visibleKpis"

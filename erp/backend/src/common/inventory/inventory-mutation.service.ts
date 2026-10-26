@@ -211,8 +211,10 @@ export class InventoryMutationService {
 
   /** 盘点审批：将库位库存调整到目标数量并同步仓级 */
   async adjustLocationToTarget(tx: InventoryTx, params: StocktakeAdjustParams) {
+    await tx.$queryRaw`SELECT id FROM inventory WHERE product_id = ${params.productId} AND warehouse_code = ${params.warehouseCode} FOR UPDATE`
     const currentRows = await tx.inventoryLocation.findMany({
-      where: { productId: params.productId, locationId: params.locationId },
+      where: { productId: params.productId, warehouseCode: params.warehouseCode, locationId: params.locationId,
+        ...(params.inboundNos ? { inboundNo: { in: params.inboundNos } } : {}) },
       orderBy: { id: 'asc' },
     })
     if (!currentRows.length) {
@@ -220,6 +222,9 @@ export class InventoryMutationService {
     }
 
     const currentQty = currentRows.reduce((sum, row) => sum + row.qty, 0)
+    if (params.expectedQty != null && currentQty !== params.expectedQty) {
+      throw new BadRequestException(`${params.locationCode}/${params.sku} 库存已在盘点期间变化，请重新盘点后审批`)
+    }
     const delta = params.targetQty - currentQty
     if (!delta) return
 
