@@ -13,6 +13,7 @@ import {
   PoRejectDto,
   SetActualQtyDto,
   UpdatePrePurchaseDto,
+  UpdatePurchasePackageDto,
 } from './dto/purchase.dto'
 
 @Controller('purchase-orders')
@@ -148,6 +149,12 @@ export class PurchaseController {
   @Post(':id/reopen-audit')
   reopenAudit(@Param('id', ParseIntPipe) id: number, @Body() body: PoAuditDto, @CurrentUser('userId') userId: number) {
     return this.service.reopenAudit(id, userId, body.remark)
+  }
+
+  @RequireAnyPerm('purchase.create', 'purchase.po_audit')
+  @Put(':id/package-dimensions')
+  updatePackageDimensions(@Param('id', ParseIntPipe) id: number, @Body() body: UpdatePurchasePackageDto, @CurrentUser() user: AuthUser) {
+    return this.service.updatePackageDimensions(id, body, user)
   }
 
   @RequireAnyPerm('purchase.create', 'purchase.po_audit')

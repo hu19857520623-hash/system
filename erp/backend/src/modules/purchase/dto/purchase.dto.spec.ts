@@ -1,7 +1,7 @@
 import 'reflect-metadata'
 import { plainToInstance } from 'class-transformer'
 import { validate } from 'class-validator'
-import { CreatePurchaseOrderDto, PoRejectDto, UpdatePrePurchaseDto } from './purchase.dto'
+import { CreatePurchaseOrderDto, PoRejectDto, UpdatePrePurchaseDto, UpdatePurchasePackageDto } from './purchase.dto'
 
 describe('CreatePurchaseOrderDto', () => {
   const valid = {
@@ -24,6 +24,23 @@ describe('PoRejectDto', () => {
   it('requires a remark', async () => {
     const errors = await validate(plainToInstance(PoRejectDto, {}))
     expect(errors.some((error) => error.property === 'remark')).toBe(true)
+  })
+})
+
+describe('审核后箱子尺寸维护', () => {
+  const valid = { packageLengthCm: 40, packageWidthCm: 30, packageHeightCm: 20, expectedUpdatedAt: '2026-10-26T06:00:00.000Z', reason: '供应商确认尺寸' }
+  it('校验三项尺寸及修改依据，并剥离价格、数量和状态字段', async () => {
+    const dto = plainToInstance(UpdatePurchasePackageDto, { ...valid, quantity: 99, unitPrice: 1, status: 'pending_po_audit' })
+    expect(await validate(dto, { whitelist: true })).toHaveLength(0)
+    expect(dto).not.toHaveProperty('quantity'); expect(dto).not.toHaveProperty('unitPrice'); expect(dto).not.toHaveProperty('status')
+  })
+  it.each([0, -1, null, undefined, Infinity, 1.234, 1000000])('拒绝无效尺寸 %s', async value => {
+    const errors = await validate(plainToInstance(UpdatePurchasePackageDto, { ...valid, packageLengthCm: value }))
+    expect(errors.some(error => error.property === 'packageLengthCm')).toBe(true)
+  })
+  it('缺少原版本或修改原因时不允许提交', async () => {
+    const errors = await validate(plainToInstance(UpdatePurchasePackageDto, { ...valid, expectedUpdatedAt: '', reason: ' ' }))
+    expect(errors.map(error => error.property)).toEqual(expect.arrayContaining(['expectedUpdatedAt', 'reason']))
   })
 })
 

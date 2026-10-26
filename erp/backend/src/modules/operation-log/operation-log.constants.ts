@@ -23,6 +23,7 @@ export const OPERATION_ACTION_LABELS: Record<string, string> = {
   po_approve: '采购审核通过',
   po_reopen_audit: '撤回采购审核',
   po_revise: '修改待审核采购单',
+  po_package_dimensions: '修改采购单箱子尺寸',
   po_reject: '采购审核驳回',
   void: '标为废订单',
   resubmit_pre_po: '驳回后重新提交分配',

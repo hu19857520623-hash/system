@@ -301,6 +301,7 @@ export const purchaseApi = {
   approve: (id, data) => api.post(`/purchase-orders/${id}/approve`, data || {}),
   reopenAudit: (id, data) => api.post(`/purchase-orders/${id}/reopen-audit`, data || {}),
   revisePending: (id, data) => api.put(`/purchase-orders/${id}/pending-audit`, data),
+  updatePackageDimensions: (id, data) => api.put(`/purchase-orders/${id}/package-dimensions`, data),
   rejectPoAudit: (id, data) => api.post(`/purchase-orders/${id}/reject-po-audit`, data),
   markPaid: (id, data) => api.post(`/purchase-orders/${id}/mark-paid`, data || {}),
   markUnpaid: (id, data) => api.post(`/purchase-orders/${id}/mark-unpaid`, data || {}),

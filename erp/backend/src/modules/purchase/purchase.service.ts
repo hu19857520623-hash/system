@@ -1,6 +1,8 @@
 import { assertGlobalSkuAvailable } from '../../common/global-sku.util'
 import { randomUUID } from 'crypto'
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common'
+import { AuthUser } from '../../common/decorators/current-user.decorator'
+import { UpdatePurchasePackageDto } from './dto/purchase.dto'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
 import { OperationLogService } from '../operation-log/operation-log.service'
@@ -170,6 +172,7 @@ export class PurchaseService {
     const number = (value: any) => value != null ? Number(value) : null
     return {
       prePoNo: row.prePoNo,
+      updatedAt: row.updatedAt,
       applyNo: row.applyNo,
       spec: row.spec || '',
       supplierContactName: row.supplierContactName || '',
@@ -1360,6 +1363,62 @@ export class PurchaseService {
       detail: { remark: reason, statusAfter: 'pending_po_audit' },
     })
     return item
+  }
+
+  /** 审核后只维护包装尺寸，保留审核、采购金额和付款记录。 */
+  async updatePackageDimensions(id: number, body: UpdatePurchasePackageDto, user: AuthUser) {
+    const dimensions = [body.packageLengthCm, body.packageWidthCm, body.packageHeightCm]
+    if (dimensions.some(value => typeof value !== 'number' || !Number.isFinite(value) || value < 0.01 || value > 999999.99 || Math.abs(value * 100 - Math.round(value * 100)) > 1e-6)) {
+      throw new BadRequestException('箱子长、宽、高须为大于零、最多两位小数的厘米数')
+    }
+    const volume = Math.round(dimensions.reduce((product, value) => product * value, 1)) / 1_000_000
+    if (volume <= 0 || volume > 9999.999999) throw new BadRequestException('箱子体积超出支持范围，请核对长、宽、高及单位')
+    const reason = String(body.reason || '').trim()
+    if (reason.length < 2 || reason.length > 500) throw new BadRequestException('请填写 2 至 500 字的修改原因')
+    const expectedTime = new Date(body.expectedUpdatedAt).getTime()
+    if (!Number.isFinite(expectedTime)) throw new BadRequestException('请重新读取采购单后修改尺寸')
+    await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM purchase_order WHERE id = ${BigInt(id)} FOR UPDATE`
+      const order = await tx.purchaseOrder.findUnique({ where: { id: BigInt(id) }, include: { items: true } })
+      if (!order) throw new NotFoundException('采购单不存在')
+      if (!['finance_approved', 'approved', 'at_logistics_wh', 'received'].includes(order.status)) {
+        throw new BadRequestException('仅采购主管审核通过后的采购单可以直接修改箱子尺寸')
+      }
+      if (!order.prePoId) throw new BadRequestException('该采购单缺少采购确认信息，请联系管理员核对')
+      await tx.$queryRaw`SELECT id FROM pre_purchase_order WHERE id = ${order.prePoId} FOR UPDATE`
+      const confirmation = await tx.prePurchaseOrder.findUnique({ where: { id: order.prePoId } })
+      if (!confirmation || confirmation.convertedPoId !== order.id || confirmation.status !== 'confirmed' || order.items.length !== 1 || order.items[0].sku !== confirmation.sku) {
+        throw new BadRequestException('采购确认信息与订单不一致，请重新读取后核对')
+      }
+      if (confirmation.updatedAt.getTime() !== expectedTime) {
+        throw new ConflictException('采购确认信息已被修改，请重新读取采购单后核对尺寸')
+      }
+      const patch = {
+        packageLengthCm: body.packageLengthCm,
+        packageWidthCm: body.packageWidthCm,
+        packageHeightCm: body.packageHeightCm,
+        packageVolumeCbm: volume,
+        volumetricWeightKg: Math.round(volume * 167 * 1000) / 1000,
+      }
+      const before = this.serializePurchaseConfirmation(confirmation)!
+      await tx.prePurchaseOrder.update({ where: { id: confirmation.id }, data: patch })
+      await tx.productDev.update({ where: { id: confirmation.devId }, data: {
+        packageLengthCm: patch.packageLengthCm, packageWidthCm: patch.packageWidthCm, packageHeightCm: patch.packageHeightCm,
+        cbm: patch.packageVolumeCbm, volumetricWeightKg: patch.volumetricWeightKg,
+      } })
+      // 只更新申报尺寸；仓库实测尺寸和已生成的发运、计费快照保留原值。
+      await tx.product.update({ where: { sku: confirmation.sku }, data: {
+        lengthCm: patch.packageLengthCm, widthCm: patch.packageWidthCm, heightCm: patch.packageHeightCm, syncStatus: 'pending',
+      } })
+      await tx.operationLog.create({ data: {
+        operatorId: BigInt(user.userId), operatorName: user.realName || user.username,
+        module: 'purchase', action: 'po_package_dimensions', targetType: 'purchase_order', targetId: order.poNo,
+        detail: { reason, sku: confirmation.sku, status: order.status,
+          before: { packageLengthCm: before.packageLengthCm, packageWidthCm: before.packageWidthCm, packageHeightCm: before.packageHeightCm,
+            packageVolumeCbm: before.packageVolumeCbm, volumetricWeightKg: before.volumetricWeightKg }, after: patch },
+      } })
+    })
+    return this.detail(id)
   }
 
   /** 待审核采购单可改供应商、仓库、数量和单价，保存后仍停留在待审核。 */

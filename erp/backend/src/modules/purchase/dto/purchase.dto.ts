@@ -170,6 +170,36 @@ export class PoRejectDto {
   remark!: string
 }
 
+/** 审核后的尺寸维护不接受采购价格、数量或付款字段。 */
+export class UpdatePurchasePackageDto {
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0.01)
+  @Max(999999.99)
+  packageLengthCm!: number
+
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0.01)
+  @Max(999999.99)
+  packageWidthCm!: number
+
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0.01)
+  @Max(999999.99)
+  packageHeightCm!: number
+
+  @IsDateString()
+  expectedUpdatedAt!: string
+
+  @Transform(trim)
+  @IsString()
+  @MinLength(2, { message: '请填写至少两个字的修改原因' })
+  @MaxLength(500)
+  reason!: string
+}
+
 export class PaymentRemarkDto {
   @IsOptional()
   @Transform(trimOptional)

@@ -958,6 +958,61 @@ function canEditPendingAudit(row?: { statusKey?: string } | null) {
   return (canCreate.value || canPoAudit.value) && row?.statusKey === 'pending_po_audit'
 }
 
+function canEditPackageDimensions(row?: { statusKey?: string; prePoId?: number | null } | null) {
+  return (canCreate.value || canPoAudit.value) && Boolean(row?.prePoId)
+    && ['finance_approved', 'approved', 'at_logistics_wh', 'received'].includes(String(row?.statusKey || ''))
+}
+
+const packageEditVisible = ref(false)
+const packageEditForm = ref<any>(null)
+const packageEditVolume = computed(() => {
+  const form = packageEditForm.value
+  const values = [form?.packageLengthCm, form?.packageWidthCm, form?.packageHeightCm]
+  return values.every(value => Number.isFinite(value) && value > 0)
+    ? Math.round(values.reduce((product, value) => product * value, 1)) / 1_000_000 : null
+})
+
+async function openPackageDimensions(po?: { id: number }) {
+  const target = po || selectedPo.value
+  if (!target) return
+  if (po) await openDetail(po)
+  if (!canOperatePo.value || selectedPo.value?.id !== target.id || !canEditPackageDimensions(selectedPo.value)) return
+  const confirmation = selectedPo.value.purchaseConfirmation
+  if (!confirmation?.updatedAt) { ElMessage.warning('请重新读取采购单，核对采购确认信息后再修改'); return }
+  packageEditForm.value = {
+    id: target.id, poNo: selectedPo.value.poNo, expectedUpdatedAt: confirmation.updatedAt,
+    packageLengthCm: confirmation.packageLengthCm ?? undefined,
+    packageWidthCm: confirmation.packageWidthCm ?? undefined,
+    packageHeightCm: confirmation.packageHeightCm ?? undefined,
+    reason: '',
+  }
+  packageEditVisible.value = true
+}
+
+async function savePackageDimensions() {
+  const form = packageEditForm.value
+  if (!form || !canOperatePo.value || selectedPo.value?.id !== form.id || !canEditPackageDimensions(selectedPo.value)) return
+  const values = [form.packageLengthCm, form.packageWidthCm, form.packageHeightCm]
+  if (values.some(value => !Number.isFinite(value) || value < 0.01 || value > 999999.99)) {
+    ElMessage.warning('请填写完整且大于零的箱子长、宽、高（cm）'); return
+  }
+  if (!packageEditVolume.value || packageEditVolume.value > 9999.999999) {
+    ElMessage.warning('箱子体积超出支持范围，请核对尺寸和单位'); return
+  }
+  if (form.reason.trim().length < 2) { ElMessage.warning('请填写至少两个字的修改原因'); return }
+  if (await runPoAction(() => purchaseApi.updatePackageDimensions(form.id, {
+    packageLengthCm: form.packageLengthCm, packageWidthCm: form.packageWidthCm, packageHeightCm: form.packageHeightCm,
+    expectedUpdatedAt: form.expectedUpdatedAt, reason: form.reason.trim(),
+  }), '箱子尺寸已保存，审核和付款状态保持不变')) packageEditVisible.value = false
+}
+
+async function reloadPackageOrder() {
+  if (poActionBusy.value || !packageEditForm.value) return
+  const id = packageEditForm.value.id
+  packageEditVisible.value = false
+  await openDetail({ id })
+}
+
 const reviseVisible = ref(false)
 const reviseSaving = ref(false)
 const reviseForm = ref<any>(null)
@@ -1507,12 +1562,13 @@ async function markPoUnpaid(po?: { id: number }) {
           </template>
         </el-table-column>
         <el-table-column prop="createdAtStr" label="创建时间" width="110" />
-        <el-table-column label="操作" :width="mainTab === 'payment' ? 140 : 320" fixed="right">
+        <el-table-column label="操作" :width="mainTab === 'payment' ? 260 : 380" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="openDetail(row)">
               {{ (canSetActualQty && row.statusKey === 'pending_actual_qty') ? '核定数量' : (canPoAudit && row.statusKey === 'pending_po_audit') ? '去审核' : '详情' }}
             </el-button>
             <el-button v-if="canEditPendingAudit(row)" link type="primary" size="small" @click="openRevisePending(row as any)">修改订单</el-button>
+            <el-button v-if="canEditPackageDimensions(row)" link type="primary" size="small" @click="openPackageDimensions(row as any)">修改箱子尺寸</el-button>
             <el-button v-if="canReopenAudit(row)" link type="warning" size="small" @click="reopenPoAudit(row as any)">撤回到待审核</el-button>
             <el-button v-if="canCreate && row.statusKey === 'rejected' && canReviseRejected(row)" link type="warning" size="small" @click="reviseRejectedPo(row)">修改重提</el-button>
             <span v-else-if="row.statusKey === 'rejected' && row.prePoStatus === 'pending_assign'">待分配</span>
@@ -1882,6 +1938,7 @@ async function markPoUnpaid(po?: { id: number }) {
           <el-button type="primary" :loading="poActionBusy" :disabled="!canOperatePo" @click="passPoAudit">审核通过</el-button>
         </template>
         <el-button v-else-if="canEditPendingAudit(selectedPo)" :disabled="!canOperatePo" @click="openRevisePending()">修改订单</el-button>
+        <el-button v-if="canEditPackageDimensions(selectedPo)" :disabled="!canOperatePo" @click="openPackageDimensions()">修改箱子尺寸</el-button>
         <el-button v-if="canReopenAudit(selectedPo)" type="warning" plain :disabled="!canOperatePo" @click="reopenPoAudit()">撤回到待审核</el-button>
         <el-button v-if="canCreate && canReviseRejected(selectedPo)" type="primary" :disabled="!canOperatePo" @click="reviseRejectedPo()">修改并重新提交</el-button>
         <el-button v-if="canCreate && canVoidPo(selectedPo)" type="danger" plain :disabled="!canOperatePo || voidingPoId === selectedPo?.id" @click="voidPurchaseOrder(selectedPo)">标为废订单</el-button>
@@ -1893,6 +1950,25 @@ async function markPoUnpaid(po?: { id: number }) {
       </div>
     </template>
   </el-drawer>
+
+  <el-dialog v-model="packageEditVisible" :title="`修改箱子尺寸 · ${packageEditForm?.poNo || ''}`" width="560px" :close-on-click-modal="!poActionBusy" :close-on-press-escape="!poActionBusy" :show-close="!poActionBusy">
+    <p class="form-tip">修改采购确认中的包装长、宽、高，保存后无需重新审核，审核与付款状态保持不变。</p>
+    <p class="form-tip">体积和体积重自动更新。已生成的发运单及费用记录保留原值，需要调整时请到对应单据核对。</p>
+    <el-alert v-if="detailFeedback" :title="detailFeedback" type="warning" :closable="false" style="margin-bottom:12px" />
+    <el-button v-if="detailFeedback" :disabled="poActionBusy" @click="reloadPackageOrder">重新读取采购单核对尺寸</el-button>
+    <el-form v-if="packageEditForm" label-width="110px" :disabled="poActionBusy || poActionUncertain">
+      <el-form-item label="箱子长 (cm)" required><el-input-number v-model="packageEditForm.packageLengthCm" :min="0.01" :max="999999.99" :precision="2" controls-position="right" style="width:100%" /></el-form-item>
+      <el-form-item label="箱子宽 (cm)" required><el-input-number v-model="packageEditForm.packageWidthCm" :min="0.01" :max="999999.99" :precision="2" controls-position="right" style="width:100%" /></el-form-item>
+      <el-form-item label="箱子高 (cm)" required><el-input-number v-model="packageEditForm.packageHeightCm" :min="0.01" :max="999999.99" :precision="2" controls-position="right" style="width:100%" /></el-form-item>
+      <el-form-item label="箱子体积">{{ packageEditVolume != null ? `${packageEditVolume.toFixed(6)} m³` : '—' }}</el-form-item>
+      <el-form-item label="体积重">{{ packageEditVolume != null ? `${(Math.round(packageEditVolume * 167 * 1000) / 1000).toFixed(3)} kg` : '—' }}</el-form-item>
+      <el-form-item label="修改原因" required><el-input v-model="packageEditForm.reason" type="textarea" :rows="2" maxlength="500" show-word-limit placeholder="填写实际测量或供应商确认的修改依据" /></el-form-item>
+    </el-form>
+    <template #footer>
+      <el-button :disabled="poActionBusy" @click="packageEditVisible = false">取消</el-button>
+      <el-button type="primary" :loading="poActionBusy" :disabled="!canOperatePo || !canEditPackageDimensions(selectedPo)" @click="savePackageDimensions">保存尺寸</el-button>
+    </template>
+  </el-dialog>
 
   <el-dialog v-model="reviseVisible" :title="`修改采购单 · ${reviseForm?.poNo || ''}`" width="720px" :close-on-click-modal="!reviseSaving" :close-on-press-escape="!reviseSaving" :show-close="!reviseSaving">
     <p class="form-tip">保存后仍停留在待审核。审核通过后才会按新的数量和单价重新写入成本。</p>
