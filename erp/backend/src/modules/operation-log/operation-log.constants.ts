@@ -9,6 +9,7 @@ export const OPERATION_MODULE_LABELS: Record<string, string> = {
   product: '商品主数据',
   warehouse_location: '库位管理',
   stocktake: '库存盘点',
+  capacity: '容量预警',
 }
 
 export const OPERATION_ACTION_LABELS: Record<string, string> = {
@@ -19,6 +20,7 @@ export const OPERATION_ACTION_LABELS: Record<string, string> = {
   count: '提交实盘数量',
   cancel: '取消',
   replan: '复制原明细重新盘点',
+  refresh_alerts: '刷新容量预警',
   update: '修改',
   delete: '删除',
   submit: '提交审核',

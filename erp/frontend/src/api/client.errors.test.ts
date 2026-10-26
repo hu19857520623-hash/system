@@ -11,6 +11,12 @@ describe('ERP request, download and print Chinese error feedback', () => {
   })
   afterEach(() => vi.unstubAllGlobals())
 
+  it('新版容量刷新缺失时不回退到事务外旧接口',async()=>{
+    const fetcher=vi.fn().mockResolvedValue({ok:false,status:404,json:async()=>({message:'Not Found'})});vi.stubGlobal('fetch',fetcher)
+    await expect(managementLoopApi.refreshCapacityAlerts({clientRequestId:'capacity-refresh-37',warehouseCode:'A'})).rejects.toMatchObject({status:404})
+    expect(fetcher).toHaveBeenCalledTimes(1);expect(fetcher.mock.calls[0][0]).toBe('/api/management-loop/capacity-workflows/refresh-alerts')
+  })
+
   it.each(['create', 'count', 'approve', 'cancel', 'replan'] as const)('新版盘点%s接口缺失时保留失败，不回退可能重复写入的旧路径', async action => {
     const fetcher = vi.fn().mockResolvedValue({ ok: false, status: 404, json: async () => ({ message: 'Not Found' }) })
     vi.stubGlobal('fetch', fetcher)

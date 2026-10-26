@@ -8,6 +8,7 @@ import { useAppStore } from '@/stores/app'
 import { userFacingError } from '@erp/shared/user-facing-error'
 import { inboundStatus, outboundStatus, planStatus, lineStatus, stocktakeMode, alertLevel, exceptionType, collectReport } from '@/features/management/presentation'
 import { createStocktakeAction } from '@/features/management/stocktakeAction'
+import { createCapacityRefresh } from '@/features/management/capacityRefresh'
 import { downloadCsv } from '@/utils/csv.ts'
 
 const route = useRoute()
@@ -276,7 +277,15 @@ function openWarehouseCap(row?: any) {
   if (!capForm.id) return ElMessage.warning('找不到仓库记录')
   capDialog.value = true
 }
-const savingCapacity = ref(false), refreshingAlerts = ref(false), capacityFeedback = ref('')
+const savingCapacity = ref(false), capacityFeedback = ref('')
+const capacityRefresh = createCapacityRefresh({
+  owner: () => String(app.authenticatedUser?.id || ''), storage: sessionStorage,
+  send: attempt => managementLoopApi.refreshCapacityAlerts({ clientRequestId: attempt.requestId, warehouseCode: attempt.warehouseCode }),
+  lookup: requestId => managementLoopApi.capacityRequest(requestId),
+  applied: () => { void loadCapacity() },
+})
+const { pending: pendingCapacityRefresh, busy: refreshingAlerts, feedback: refreshFeedback } = capacityRefresh
+onBeforeUnmount(capacityRefresh.stop)
 async function saveWarehouseCap() {
   if (savingCapacity.value) return
   savingCapacity.value = true; capacityFeedback.value = ''
@@ -288,13 +297,7 @@ async function saveWarehouseCap() {
   finally { savingCapacity.value = false }
 }
 async function refreshAlerts() {
-  if (refreshingAlerts.value) return
-  refreshingAlerts.value = true
-  try {
-    const result = await managementLoopApi.refreshCapacityAlerts({ warehouseCode: warehouseCode.value || undefined })
-    ElMessage.success(`预警已刷新，共 ${result.refreshed} 条`); await loadCapacity()
-  } catch (error) { ElMessage.error(`${userFacingError(error)} 请重新查询预警结果后再试。`) }
-  finally { refreshingAlerts.value = false }
+  await capacityRefresh.start(warehouseCode.value || undefined)
 }
 
 async function loadCurrent() {
@@ -314,6 +317,7 @@ watch(warehouseCode, loadCurrent)
 
 <template>
   <div class="management-loop-page">
+    <el-alert v-if="activeTab !== 'capacity' && pendingCapacityRefresh" title="有一次容量刷新结果尚待核对" type="info" :closable="false"><el-button @click="router.push('/wms/capacity')">继续核对容量刷新</el-button></el-alert>
     <el-alert v-if="readErrors.warehouses || readErrors[activeTab]" type="warning" :closable="false" :title="readErrors.warehouses || readErrors[activeTab]">
       <el-button size="small" :loading="loading" @click="reloadCurrent">重新查询</el-button><el-button size="small" @click="router.push('/dashboard')">返回工作台</el-button>
     </el-alert>
@@ -422,17 +426,21 @@ watch(warehouseCode, loadCurrent)
     </el-card>
 
     <el-card v-else-if="activeTab === 'capacity'" v-loading="loading">
+      <el-alert v-if="refreshFeedback" :title="refreshFeedback" type="info" :closable="false">
+        <template v-if="pendingCapacityRefresh"><p>原刷新范围：{{ pendingCapacityRefresh.warehouseCode || '全部海外仓' }}</p><el-button :loading="refreshingAlerts" @click="capacityRefresh.reconcile">核对刷新结果</el-button><el-button :loading="refreshingAlerts" @click="capacityRefresh.retry">重试原刷新</el-button></template>
+        <el-button :disabled="refreshingAlerts" @click="loadCapacity">查询当前容量</el-button>
+      </el-alert>
       <div class="toolbar">
         <div class="hint">仓级预警按仓库总库容，不再用库位上限加总。库位行仍按各自上限。未设置仓级上限时不预警仓容。</div>
         <div>
           <el-button v-if="canEditCapacity" :disabled="loading || !readLoaded.capacity || !!readErrors.capacity" @click="openWarehouseCap()">设置仓级上限</el-button>
-          <el-button v-if="app.hasPerm('capacity.manage')" :loading="refreshingAlerts" type="primary" @click="refreshAlerts">刷新预警</el-button>
+          <el-button v-if="app.hasPerm('capacity.manage')" :loading="refreshingAlerts" :disabled="!!pendingCapacityRefresh || savingCapacity" type="primary" @click="refreshAlerts">刷新预警</el-button>
         </div>
       </div>
       <div v-if="readLoaded[activeTab]" class="metrics">
-        <div class="metric"><span>仓级上限</span><strong>{{ capacity.summary?.capacitySet ? `${capacity.summary.maxVolumeCbm} m³` : '未设置' }}</strong><small>库位合计 {{ capacity.summary?.locationMaxVolumeCbm || 0 }} m³（仅参考）</small></div>
-        <div class="metric"><span>已用体积</span><strong>{{ capacity.summary?.usedVolumeCbm || 0 }} m³</strong><small>使用率 {{ capacity.summary?.usageRate || 0 }}%</small></div>
-        <div class="metric"><span>预计仓级容量</span><strong>{{ capacity.summary?.projectedRate || 0 }}%</strong><small>待入库 {{ capacity.summary?.pendingVolumeCbm || 0 }} m³</small></div>
+        <div class="metric"><span>仓级上限</span><strong>{{ capacity.summary?.capacitySet ? `${capacity.summary.maxVolumeCbm} m³` : capacity.summary?.partiallyConfigured ? '部分未设置' : '未设置' }}</strong><small v-if="capacity.summary?.unsetWarehouseCount">{{ capacity.summary.unsetWarehouseCount }}个仓库未设置上限；请分别核对仓库行。</small><small>库位合计 {{ capacity.summary?.locationMaxVolumeCbm || 0 }} m³（仅参考）</small></div>
+        <div class="metric"><span>已用体积</span><strong>{{ capacity.summary?.usedVolumeCbm || 0 }} m³</strong><small>{{ capacity.summary?.capacitySet ? `使用率 ${capacity.summary?.usageRate || 0}%` : '上限未齐，暂不汇总使用率' }}</small></div>
+        <div class="metric"><span>预计仓级容量</span><strong>{{ capacity.summary?.capacitySet ? `${capacity.summary?.projectedRate || 0}%` : '待设置上限' }}</strong><small>待入库 {{ capacity.summary?.pendingVolumeCbm || 0 }} m³</small></div>
         <div class="metric"><span>尺寸缺失数量</span><strong>{{ capacity.summary?.unknownDimensionQty || 0 }}</strong><small>待入库 {{ capacity.summary?.pendingInboundQty || 0 }} 件 · 库位 {{ capacity.summary?.locationCount || 0 }}</small></div>
       </div>
       <el-table :data="capacity.warehouses || []" :empty-text="readErrors.capacity ? '未能读取仓库容量，请重新查询' : '暂无仓库记录'" stripe style="margin-bottom: 16px">
@@ -441,9 +449,9 @@ watch(warehouseCode, loadCurrent)
         <el-table-column prop="usedVolumeCbm" label="已用 m³" width="110" />
         <el-table-column prop="pendingVolumeCbm" label="待入库 m³" width="120" />
         <el-table-column label="仓级使用率" width="160"><template #default="s"><el-progress v-if="s.row.capacitySet" :percentage="Math.min(100, s.row.usageRate)" :status="s.row.usageRate >= 95 ? 'exception' : s.row.usageRate >= 80 ? 'warning' : 'success'" /><span v-else class="hint">未设置上限</span></template></el-table-column>
-        <el-table-column prop="projectedRate" label="预计 %" width="90" />
+        <el-table-column label="预计 %" width="110"><template #default="s">{{ s.row.capacitySet ? s.row.projectedRate : '未设置上限' }}</template></el-table-column>
         <el-table-column prop="locationMaxVolumeCbm" label="库位合计 m³" width="120" />
-        <el-table-column prop="alertLevel" label="仓级预警" width="110"><template #default="s"><el-tag :type="s.row.alertLevel === 'critical' ? 'danger' : s.row.alertLevel === 'normal' ? 'success' : 'warning'">{{ alertLevel(s.row.alertLevel) }}</el-tag></template></el-table-column>
+        <el-table-column prop="alertLevel" label="仓级预警" width="110"><template #default="s"><el-tag :type="!s.row.capacitySet ? 'info' : s.row.alertLevel === 'critical' ? 'danger' : s.row.alertLevel === 'normal' ? 'success' : 'warning'">{{ s.row.capacitySet ? alertLevel(s.row.alertLevel) : '未设置上限' }}</el-tag></template></el-table-column>
         <el-table-column v-if="canEditCapacity" label="操作" width="90"><template #default="s"><el-button link type="primary" :disabled="loading || !!readErrors.capacity" @click="openWarehouseCap(s.row)">设置</el-button></template></el-table-column>
       </el-table>
       <el-table :data="capacity.items" :empty-text="readErrors.capacity ? '未能读取库位容量，请重新查询' : '暂无库位记录'" stripe height="420">

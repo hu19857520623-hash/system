@@ -1,5 +1,6 @@
 import {
   capacityAlertLevel,
+  capacityStoredRate,
   parseVolumeCbm,
   summarizeWarehouseCapacity,
   warehouseCapacityCap,
@@ -60,5 +61,18 @@ describe('warehouse capacity cap', () => {
     expect(capacityAlertLevel(0.8)).toBe('warning')
     expect(capacityAlertLevel(0.9)).toBe('high')
     expect(capacityAlertLevel(0.95)).toBe('critical')
+  })
+  it('does not round an occupancy below the warning threshold into an alert', () => {
+    const row = summarizeWarehouseCapacity({ warehouseCode: 'A', totalVolumeCbm: 1, usedVolumeCbm: 0.7999, pendingVolumeCbm: 0, locationCount: 1, locationMaxVolumeCbm: 1, unknownDimensionQty: 0 })
+    expect(row.usageRate).toBe(80)
+    expect(row.usageAlertLevel).toBe('normal')
+    expect(row.projectedAlertLevel).toBe('normal')
+  })
+  it('retains exact readable occupancy but caps only the persisted numeric ratio', () => {
+    expect(capacityStoredRate(10000)).toBe(9999.9999)
+    expect(capacityStoredRate(1.5)).toBe(1.5)
+    const row = summarizeWarehouseCapacity({ warehouseCode: 'A', totalVolumeCbm: 0.0001, usedVolumeCbm: 1, pendingVolumeCbm: 0, locationCount: 1, locationMaxVolumeCbm: 1, unknownDimensionQty: 0 })
+    expect(row.usageRate).toBe(1000000)
+    expect(row.usageAlertLevel).toBe('critical')
   })
 })

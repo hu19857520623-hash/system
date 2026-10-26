@@ -20,7 +20,9 @@ import {
   stocktakeScopeLabel,
   stocktakeScopeSnapshot,
 } from './management-loop-stocktake.util'
-import { capacityAlertLevel, summarizeWarehouseCapacity } from './management-loop-capacity.util'
+import { capacityStoredRate, summarizeWarehouseCapacity } from './management-loop-capacity.util'
+import { capacityPendingQty, capacityRequestId, capacityWarehouseCode } from './capacity-request.util'
+import { INBOUND_PIPELINE_STATUSES } from '../../common/inbound-pipeline.util'
 
 const toNumber = (value: unknown) => Number(value ?? 0)
 const round = (value: number, digits = 2) => Number(value.toFixed(digits))
@@ -405,7 +407,7 @@ export class ManagementLoopService {
     }
   }
 
-  private async lockStocktakeActor(tx: Prisma.TransactionClient, userId?: number) {
+  private async lockWorkflowActor(tx: Prisma.TransactionClient, userId?: number) {
     if (!Number.isSafeInteger(userId) || !userId || userId <= 0) throw new BadRequestException('无法确认作业账号，请重新登录')
     const rows = await tx.$queryRaw<{ id: bigint }[]>`SELECT id FROM sys_user WHERE id = ${BigInt(userId)} FOR UPDATE`
     if (!rows.length) throw new BadRequestException('作业账号不存在，请重新登录')
@@ -455,7 +457,7 @@ export class ManagementLoopService {
     if (remark.length > 500) throw new BadRequestException('备注最多500字')
     const fingerprint = stocktakeFingerprint({ scope, blindCount, remark })
     const planId = await this.prisma.$transaction(async tx => {
-      await this.lockStocktakeActor(tx, userId)
+      await this.lockWorkflowActor(tx, userId)
       const previous = await this.stocktakeReceipt(tx, userId!, requestId, 'create', fingerprint)
       if (previous) return previous
       const warehouse = await tx.warehouse.findFirst({ where: { warehouseCode: scope.warehouseCode } })
@@ -503,7 +505,7 @@ export class ManagementLoopService {
     const requestId = stocktakeRequestId(body?.clientRequestId), input = stocktakeCountInput(body)
     const fingerprint = stocktakeFingerprint({ planId, ...input })
     await this.prisma.$transaction(async tx => {
-      await this.lockStocktakeActor(tx, userId)
+      await this.lockWorkflowActor(tx, userId)
       await tx.$queryRaw`SELECT id FROM stocktake_plan WHERE id = ${BigInt(planId)} FOR UPDATE`
       if (await this.stocktakeReceipt(tx, userId!, requestId, 'count', fingerprint)) return
       const plan = await tx.stocktakePlan.findUnique({ where: { id: BigInt(planId) } })
@@ -532,7 +534,7 @@ export class ManagementLoopService {
   async approveStocktake(id: number, userId?: number, body: any = {}) {
     const requestId = stocktakeRequestId(body?.clientRequestId), fingerprint = stocktakeFingerprint({ id })
     await this.prisma.$transaction(async tx => {
-      await this.lockStocktakeActor(tx, userId)
+      await this.lockWorkflowActor(tx, userId)
       await tx.$queryRaw`SELECT id FROM stocktake_plan WHERE id = ${BigInt(id)} FOR UPDATE`
       if (await this.stocktakeReceipt(tx, userId!, requestId, 'approve', fingerprint)) return
       const plan = await tx.stocktakePlan.findUnique({ where: { id: BigInt(id) }, include: { lines: { orderBy: [{ productId: 'asc' }, { locationId: 'asc' }] } } })
@@ -560,7 +562,7 @@ export class ManagementLoopService {
     const requestId = stocktakeRequestId(body?.clientRequestId), input = stocktakeTransitionInput(body)
     const fingerprint = stocktakeFingerprint({ id, ...input })
     const resultId = await this.prisma.$transaction(async tx => {
-      await this.lockStocktakeActor(tx, userId)
+      await this.lockWorkflowActor(tx, userId)
       await tx.$queryRaw`SELECT id FROM stocktake_plan WHERE id = ${BigInt(id)} FOR UPDATE`
       const previous = await this.stocktakeReceipt(tx, userId, requestId, action, fingerprint)
       if (previous) return previous
@@ -622,14 +624,18 @@ export class ManagementLoopService {
     return this.stocktakeDetail(resultId)
   }
 
-  async capacityOverview(warehouseCode?: string) {
-    const where: any = warehouseCode ? { warehouseCode } : {}
-    const locations = await this.prisma.warehouseLocation.findMany({
+  async capacityOverview(code?: string, db: Prisma.TransactionClient = this.prisma) {
+    const warehouseCode = capacityWarehouseCode(code)
+    const warehouseRows = await db.warehouse.findMany({ where: { warehouseType: 'wms', ...(warehouseCode ? { warehouseCode } : {}) }, orderBy: { id: 'asc' } })
+    if (warehouseCode && !warehouseRows.length) throw new BadRequestException('所选海外仓不存在，请重新选择')
+    const codes = warehouseRows.map(row => row.warehouseCode)
+    const where = { warehouseCode: { in: codes } }
+    const locations = await db.warehouseLocation.findMany({
       where, include: { zone: { select: { zoneCode: true, zoneName: true } }, inventoryItems: { where: { qty: { gt: 0 } } } },
       orderBy: [{ warehouseCode: 'asc' }, { locationCode: 'asc' }],
     })
     const productIds = [...new Set(locations.flatMap((loc) => loc.inventoryItems.map((item) => item.productId)))]
-    const products = productIds.length ? await this.prisma.product.findMany({ where: { id: { in: productIds } }, select: { id: true, sku: true, lengthCm: true, widthCm: true, heightCm: true, measuredLengthCm: true, measuredWidthCm: true, measuredHeightCm: true, weightKg: true } }) : []
+    const products = productIds.length ? await db.product.findMany({ where: { id: { in: productIds } }, select: { id: true, sku: true, lengthCm: true, widthCm: true, heightCm: true, measuredLengthCm: true, measuredWidthCm: true, measuredHeightCm: true, weightKg: true } }) : []
     const productMap = new Map(products.map((product) => [String(product.id), product]))
     const items = locations.map((loc) => {
       let usedVolumeCbm = 0
@@ -657,11 +663,10 @@ export class ManagementLoopService {
         alertLevel: usageRate >= 0.95 ? 'critical' : usageRate >= 0.9 ? 'high' : usageRate >= 0.8 ? 'warning' : 'normal',
       }
     })
-    const pendingWhere: any = { status: { notIn: ['completed', 'confirmed', 'cancelled'] } }
-    if (warehouseCode) pendingWhere.warehouseCode = warehouseCode
-    const pending = await this.prisma.inboundOrder.findMany({ where: pendingWhere, include: { items: true } })
+    const pendingWhere: Prisma.InboundOrderWhereInput = { warehouseCode: { in: codes }, status: { in: INBOUND_PIPELINE_STATUSES } }
+    const pending = await db.inboundOrder.findMany({ where: pendingWhere, include: { items: true } })
     const pendingProductIds = [...new Set(pending.flatMap((order) => order.items.map((item) => item.productId)))]
-    const pendingProducts = pendingProductIds.length ? await this.prisma.product.findMany({
+    const pendingProducts = pendingProductIds.length ? await db.product.findMany({
       where: { id: { in: pendingProductIds } },
       select: { id: true, lengthCm: true, widthCm: true, heightCm: true, measuredLengthCm: true, measuredWidthCm: true, measuredHeightCm: true },
     }) : []
@@ -670,7 +675,7 @@ export class ManagementLoopService {
     for (const order of pending) {
       const bucket = pendingByWarehouse.get(order.warehouseCode) || { qty: 0, volumeCbm: 0 }
       for (const item of order.items) {
-        const qty = Math.max(0, item.expectedQty - (item.putawayQty ?? 0))
+        const qty = capacityPendingQty(order.status, item)
         bucket.qty += qty
         const product = pendingProductMap.get(String(item.productId))
         const length = toNumber(product?.measuredLengthCm ?? product?.lengthCm)
@@ -680,11 +685,6 @@ export class ManagementLoopService {
       }
       pendingByWarehouse.set(order.warehouseCode, bucket)
     }
-    const locationCodes = [...new Set(items.map((item) => item.warehouseCode))]
-    const warehouseWhere: Prisma.WarehouseWhereInput = warehouseCode
-      ? { warehouseCode }
-      : locationCodes.length ? { warehouseCode: { in: locationCodes } } : { warehouseType: 'wms' }
-    const warehouseRows = await this.prisma.warehouse.findMany({ where: warehouseWhere, orderBy: { id: 'asc' } })
     const warehouses = warehouseRows.map((warehouse) => {
       const locItems = items.filter((item) => item.warehouseCode === warehouse.warehouseCode)
       const pendingBucket = pendingByWarehouse.get(warehouse.warehouseCode) || { qty: 0, volumeCbm: 0 }
@@ -717,6 +717,7 @@ export class ManagementLoopService {
       locationMaxVolumeCbm: locationMaxVolume,
       unknownDimensionQty: items.reduce((sum, item) => sum + item.unknownDimensionQty, 0),
     })
+    const allCapsSet = warehouses.length > 0 && warehouses.every(row => row.capacitySet)
     return {
       items,
       warehouses,
@@ -728,51 +729,75 @@ export class ManagementLoopService {
         pendingInboundQty: pendingQty,
         pendingVolumeCbm: round(pendingVolumeCbm, 4),
         projectedVolumeCbm: summarySource.projectedVolumeCbm,
-        projectedRate: summarySource.projectedRate,
-        usageRate: summarySource.usageRate,
+        projectedRate: allCapsSet ? summarySource.projectedRate : null,
+        usageRate: allCapsSet ? summarySource.usageRate : null,
         maxVolumeCbm: summarySource.totalVolumeCbm,
         usedVolumeCbm: round(totalUsedVolume, 4),
         locationMaxVolumeCbm: round(locationMaxVolume, 4),
-        capacitySet: summarySource.capacitySet,
-        capacitySource: summarySource.capacitySet ? 'warehouse' : 'unset',
-        alertLevel: summarySource.alertLevel,
+        capacitySet: allCapsSet,
+        partiallyConfigured: warehouses.some(row => row.capacitySet) && warehouses.some(row => !row.capacitySet),
+        unsetWarehouseCount: warehouses.filter(row => !row.capacitySet).length,
+        capacitySource: allCapsSet ? 'warehouse' : 'unset',
+        alertLevel: warehouses.reduce((max, row) => ['normal', 'warning', 'high', 'critical'].indexOf(row.alertLevel) > ['normal', 'warning', 'high', 'critical'].indexOf(max) ? row.alertLevel : max, 'normal'),
       },
     }
   }
 
-  async refreshCapacityAlerts(warehouseCode?: string) {
-    const overview = await this.capacityOverview(warehouseCode)
-    const codes = [...new Set([
-      ...overview.warehouses.map((row) => row.warehouseCode),
-      ...overview.items.map((item) => item.warehouseCode),
-    ])].filter((code) => code && code !== 'ALL')
-    if (codes.length) await this.prisma.capacityAlert.updateMany({ where: { warehouseCode: { in: codes }, status: 'open' }, data: { status: 'resolved', resolvedAt: new Date() } })
-    const alerts = overview.items.filter((item) => item.alertLevel !== 'normal' || item.unknownDimensionQty > 0)
-    const alertRows: any[] = alerts.map((item) => ({
-      warehouseCode: item.warehouseCode, locationId: BigInt(item.id), locationCode: item.locationCode,
-      alertType: item.unknownDimensionQty > 0 ? 'missing_dimensions' : 'capacity', alertLevel: item.unknownDimensionQty > 0 ? 'warning' : item.alertLevel,
-      usageRate: item.usageRate / 100, message: item.unknownDimensionQty > 0 ? `${item.locationCode} 有 ${item.unknownDimensionQty} 件商品缺少尺寸` : `${item.locationCode} 容量使用率 ${item.usageRate}%`,
-    }))
-    for (const warehouse of overview.warehouses) {
-      if (!warehouse.capacitySet) continue
-      if (warehouse.usageRate >= 80) {
-        alertRows.push({
-          warehouseCode: warehouse.warehouseCode, locationId: null, locationCode: null, alertType: 'capacity',
-          alertLevel: capacityAlertLevel(warehouse.usageRate / 100),
-          usageRate: warehouse.usageRate / 100,
-          message: `${warehouse.warehouseName} 仓级容量使用率 ${warehouse.usageRate}%（上限 ${warehouse.totalVolumeCbm} m³）`,
-        })
+  async capacityRequest(requestId: string, userId: number) {
+    const row = await this.prisma.operationLog.findFirst({ where: { module: 'capacity', operatorId: BigInt(userId), detail: { path: '$.clientRequestId', equals: capacityRequestId(requestId) } } })
+    return row ? { found: true, result: (row.detail as Record<string, any>).result } : { found: false }
+  }
+
+  async refreshCapacityAlerts(body: any, userId: number) {
+    const requestId = capacityRequestId(body?.clientRequestId), warehouseCode = capacityWarehouseCode(body?.warehouseCode)
+    const fingerprint = stocktakeFingerprint({ warehouseCode: warehouseCode || null })
+    return this.prisma.$transaction(async tx => {
+      await this.lockWorkflowActor(tx, userId)
+      // Keep all consistent reads after these current locks; a receipt query also establishes an RR snapshot.
+      const locked = await tx.$queryRaw<{ id: number }[]>`SELECT id FROM warehouse WHERE warehouse_type = 'wms' ${warehouseCode ? Prisma.sql`AND warehouse_code = ${warehouseCode}` : Prisma.empty} ORDER BY id FOR UPDATE`
+      const receipt = await tx.operationLog.findFirst({ where: { module: 'capacity', operatorId: BigInt(userId), detail: { path: '$.clientRequestId', equals: requestId } } })
+      if (receipt) {
+        const detail = receipt.detail as Record<string, any>
+        if (receipt.action !== 'refresh_alerts' || detail.fingerprint !== fingerprint) throw new ConflictException('同一容量刷新请求不能更改仓库，请先核对原结果')
+        return detail.result
       }
-      if (warehouse.projectedRate >= 80 && warehouse.pendingVolumeCbm > 0) {
-        alertRows.push({
-          warehouseCode: warehouse.warehouseCode, locationId: null, locationCode: null, alertType: 'projected_capacity',
-          alertLevel: capacityAlertLevel(warehouse.projectedRate / 100),
-          usageRate: warehouse.projectedRate / 100,
-          message: `计入待入库后，${warehouse.warehouseName} 预计仓级容量使用率 ${warehouse.projectedRate}%（上限 ${warehouse.totalVolumeCbm} m³）`,
-        })
+      if (warehouseCode && !locked.length) throw new BadRequestException('所选海外仓不存在，请重新选择')
+      const overview = await this.capacityOverview(warehouseCode, tx)
+      const codes = [...new Set([
+        ...overview.warehouses.map((row) => row.warehouseCode),
+        ...overview.items.map((item) => item.warehouseCode),
+      ])].filter((code) => code && code !== 'ALL')
+      const alertRows: Prisma.CapacityAlertCreateManyInput[] = overview.items.flatMap(item => {
+        const location = { warehouseCode: item.warehouseCode, locationId: BigInt(item.id), locationCode: item.locationCode, usageRate: capacityStoredRate(item.usageRate / 100) }
+        return [
+          ...(item.alertLevel !== 'normal' ? [{ ...location, alertType: 'capacity', alertLevel: item.alertLevel, message: `${item.locationCode} 容量使用率 ${item.usageRate}%` }] : []),
+          ...(item.unknownDimensionQty > 0 ? [{ ...location, alertType: 'missing_dimensions', alertLevel: 'warning', message: `${item.locationCode} 有 ${item.unknownDimensionQty} 件商品缺少尺寸` }] : []),
+        ]
+      })
+      for (const warehouse of overview.warehouses) {
+        if (!warehouse.capacitySet) continue
+        if (warehouse.usageAlertLevel !== 'normal') {
+          alertRows.push({
+            warehouseCode: warehouse.warehouseCode, locationId: null, locationCode: null, alertType: 'capacity',
+            alertLevel: warehouse.usageAlertLevel,
+            usageRate: capacityStoredRate(warehouse.usageRate / 100),
+            message: `${warehouse.warehouseName} 仓级容量使用率 ${warehouse.usageRate}%（上限 ${warehouse.totalVolumeCbm} m³）`,
+          })
+        }
+        if (warehouse.projectedAlertLevel !== 'normal' && warehouse.pendingVolumeCbm > 0) {
+          alertRows.push({
+            warehouseCode: warehouse.warehouseCode, locationId: null, locationCode: null, alertType: 'projected_capacity',
+            alertLevel: warehouse.projectedAlertLevel,
+            usageRate: capacityStoredRate(warehouse.projectedRate / 100),
+            message: `计入待入库后，${warehouse.warehouseName} 预计仓级容量使用率 ${warehouse.projectedRate}%（上限 ${warehouse.totalVolumeCbm} m³）`,
+          })
+        }
       }
-    }
-    if (alertRows.length) await this.prisma.capacityAlert.createMany({ data: alertRows })
-    return { refreshed: alertRows.length, alerts: alertRows }
+      if (codes.length) await tx.capacityAlert.updateMany({ where: { warehouseCode: { in: codes }, status: 'open', alertType: { in: ['capacity', 'projected_capacity', 'missing_dimensions'] } }, data: { status: 'resolved', resolvedAt: new Date() } })
+      if (alertRows.length) await tx.capacityAlert.createMany({ data: alertRows })
+      const result = { refreshed: alertRows.length, warehouseCodes: codes, scopeLabel: warehouseCode ? overview.warehouses[0].warehouseName : `全部海外仓（${codes.length}个）`, checkedAt: new Date().toISOString() }
+      await tx.operationLog.create({ data: { operatorId: BigInt(userId), module: 'capacity', action: 'refresh_alerts', targetType: 'warehouse', targetId: warehouseCode || 'ALL', detail: { clientRequestId: requestId, fingerprint, result } } })
+      return result
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead, maxWait: 10000, timeout: 60000 })
   }
 }

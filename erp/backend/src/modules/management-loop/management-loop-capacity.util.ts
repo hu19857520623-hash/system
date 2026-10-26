@@ -24,6 +24,11 @@ export function capacityRate(used: number, cap: number) {
   return used / cap
 }
 
+/** The persisted ratio has four integral digits; keep extreme over-capacity alerts writable. */
+export function capacityStoredRate(rate: number) {
+  return Math.min(9999.9999, Math.max(0, rate))
+}
+
 function roundCbm(value: number) {
   return Math.round((Number(value) || 0) * 10000) / 10000
 }
@@ -61,6 +66,8 @@ export function summarizeWarehouseCapacity(input: {
     unknownDimensionQty: Number(input.unknownDimensionQty) || 0,
     usageRate: roundPct(usageRate),
     projectedRate: roundPct(projectedRate),
+    usageAlertLevel: cap > 0 ? capacityAlertLevel(usageRate) : 'normal' as CapacityAlertLevel,
+    projectedAlertLevel: cap > 0 ? capacityAlertLevel(projectedRate) : 'normal' as CapacityAlertLevel,
     alertLevel: cap > 0 ? capacityAlertLevel(Math.max(usageRate, projectedRate)) : 'normal' as CapacityAlertLevel,
   }
 }

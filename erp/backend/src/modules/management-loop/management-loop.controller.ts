@@ -76,8 +76,14 @@ export class ManagementLoopController {
   }
 
   @RequirePerms('capacity.manage')
-  @Post('capacity/refresh-alerts')
-  refreshAlerts(@Body() body: { warehouseCode?: string }) {
-    return this.service.refreshCapacityAlerts(body?.warehouseCode)
+  @Post(['capacity/refresh-alerts', 'capacity-workflows/refresh-alerts'])
+  refreshAlerts(@Body() body: any, @CurrentUser('userId') userId: number) {
+    return this.service.refreshCapacityAlerts(body, userId)
+  }
+
+  @RequireAnyPerm('capacity.view', 'capacity.manage')
+  @Get('capacity-requests/:requestId')
+  capacityRequest(@Param('requestId') requestId: string, @CurrentUser('userId') userId: number) {
+    return this.service.capacityRequest(requestId, userId)
   }
 }

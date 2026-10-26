@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { CacheService } from '../../common/cache/cache.service'
+import { warehouseCapacityInput } from './warehouse-capacity-input.util'
 
 @Injectable()
 export class WarehouseService {
@@ -68,7 +69,7 @@ export class WarehouseService {
         contactName: data.contactName,
         contactPhone: data.contactPhone,
         requiredOutboundFiles: this.serializeRequiredFiles(data.requiredOutboundFiles),
-        totalVolumeCbm: this.parseVolumeCbm(data.totalVolumeCbm),
+        totalVolumeCbm: data.totalVolumeCbm === undefined ? null : warehouseCapacityInput(data.totalVolumeCbm),
       },
     })
     await this.cache.invalidate('warehouses')
@@ -90,7 +91,7 @@ export class WarehouseService {
         ...(data.requiredOutboundFiles !== undefined
           ? { requiredOutboundFiles: this.serializeRequiredFiles(data.requiredOutboundFiles) }
           : {}),
-        ...(data.totalVolumeCbm !== undefined ? { totalVolumeCbm: this.parseVolumeCbm(data.totalVolumeCbm) } : {}),
+        ...(data.totalVolumeCbm !== undefined ? { totalVolumeCbm: warehouseCapacityInput(data.totalVolumeCbm) } : {}),
       },
     })
     await this.cache.invalidate('warehouses')
@@ -98,6 +99,6 @@ export class WarehouseService {
   }
 
   async updateCapacity(id: number, totalVolumeCbm: unknown) {
-    return this.update(id, { totalVolumeCbm })
+    return this.update(id, { totalVolumeCbm: warehouseCapacityInput(totalVolumeCbm) })
   }
 }

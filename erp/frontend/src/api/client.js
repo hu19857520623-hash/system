@@ -573,7 +573,8 @@ export const managementLoopApi = {
   replanStocktake: (id, data) => api.post(`/management-loop/stocktake-workflows/${id}/replan`, data),
   stocktakeRequest: (requestId) => api.get(`/management-loop/stocktake-requests/${encodeURIComponent(requestId)}`),
   capacity: (params) => api.get('/management-loop/capacity', params),
-  refreshCapacityAlerts: (data) => api.post('/management-loop/capacity/refresh-alerts', data),
+  refreshCapacityAlerts: (data) => api.post('/management-loop/capacity-workflows/refresh-alerts', data),
+  capacityRequest: (requestId) => api.get(`/management-loop/capacity-requests/${encodeURIComponent(requestId)}`),
 }
 
 export const inboundFeeApi = {
