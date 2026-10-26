@@ -141,6 +141,10 @@ async function exportReports(kind: 'inbound' | 'outbound') {
 const stocktakes = ref<any[]>([])
 const stocktakeDialog = ref(false)
 const countDialog = ref(false)
+const transitionDialog = ref(false)
+const transitionForm = reactive({ action: 'cancel' as 'cancel' | 'replan', id: 0, stocktakeNo: '', expectedVersion: '', reason: '' })
+const transitionTitle = computed(() => transitionForm.action === 'replan' ? '复制原明细重新盘点' : '取消盘点')
+const planIsActive = computed(() => ['counting', 'pending_approval'].includes(currentPlan.value?.status))
 const locations = ref<any[]>([])
 const stocktakeCustomers = ref<{ customerCode: string }[]>([])
 const currentPlan = ref<any>(null)
@@ -161,11 +165,13 @@ const stocktakeOperation = createStocktakeAction({
     const payload = { ...attempt.payload, clientRequestId: attempt.requestId }
     if (attempt.action === 'create') return managementLoopApi.createStocktake(payload)
     if (attempt.action === 'count') return managementLoopApi.countStocktake(attempt.planId, payload)
+    if (attempt.action === 'cancel') return managementLoopApi.cancelStocktake(attempt.planId, payload)
+    if (attempt.action === 'replan') return managementLoopApi.replanStocktake(attempt.planId, payload)
     return managementLoopApi.approveStocktake(attempt.planId, payload)
   },
   lookup: key => managementLoopApi.stocktakeRequest(key),
   applied: (_action, plan) => {
-    applyPlan(plan); stocktakeDialog.value = false; countDialog.value = true
+    applyPlan(plan); transitionDialog.value = false; stocktakeDialog.value = false; countDialog.value = true
     void loadStocktakes()
   },
 })
@@ -212,6 +218,7 @@ async function openPlan(id: number) {
   if (stocktakeBusy.value) return
   const version = ++planVersion
   openingPlan.value = true; planError.value = ''
+  stocktakeOperation.clearFeedback()
   try {
     const plan = await managementLoopApi.stocktake(id)
     if (version !== planVersion) return
@@ -231,6 +238,17 @@ async function submitLine(line: any) {
 async function approvePlan() {
   if (currentPlan.value?.status !== 'pending_approval' || !app.hasPerm('stocktake.approve')) return
   await stocktakeOperation.start('approve', {}, currentPlan.value.id)
+}
+function openTransition(action: 'cancel' | 'replan') {
+  if (!planIsActive.value || !app.hasPerm('stocktake.approve') || (action === 'replan' && !app.hasPerm('stocktake.create')) || stocktakeBusy.value || pendingStocktake.value) return
+  if (!currentPlan.value?.version) { ElMessage.warning('请先刷新盘点结果后继续'); return }
+  stocktakeOperation.clearFeedback()
+  Object.assign(transitionForm, { action, id: currentPlan.value.id, stocktakeNo: currentPlan.value.stocktakeNo, expectedVersion: currentPlan.value.version, reason: '' })
+  transitionDialog.value = true
+}
+async function submitTransition() {
+  if (!transitionForm.reason.trim()) { ElMessage.warning('请填写操作原因'); return }
+  await stocktakeOperation.start(transitionForm.action, { expectedVersion: transitionForm.expectedVersion, reason: transitionForm.reason.trim() }, transitionForm.id)
 }
 
 const capacity = ref<any>({ items: [], warehouses: [], summary: {} })
@@ -442,7 +460,7 @@ watch(warehouseCode, loadCurrent)
     </el-card>
 
     <el-dialog :close-on-click-modal="false" :close-on-press-escape="!stocktakeBusy" :show-close="!stocktakeBusy" v-model="stocktakeDialog" title="创建盘点计划" width="760px">
-      <el-alert v-if="stocktakeFeedback" :title="stocktakeFeedback" type="info" :closable="false"><template v-if="pendingStocktake"><el-button :loading="stocktakeBusy" @click="stocktakeOperation.reconcile">核对提交结果</el-button><el-button :loading="stocktakeBusy" @click="stocktakeOperation.retry">重试原提交</el-button></template></el-alert>
+      <el-alert v-if="stocktakeFeedback && !transitionDialog" :title="stocktakeFeedback" type="info" :closable="false"><template v-if="pendingStocktake"><el-button :loading="stocktakeBusy" @click="stocktakeOperation.reconcile">核对提交结果</el-button><el-button :loading="stocktakeBusy" @click="stocktakeOperation.retry">重试原提交</el-button></template></el-alert>
       <el-alert v-if="stocktakeOptionsError" :title="stocktakeOptionsError" type="warning" :closable="false"><el-button @click="onStocktakeWarehouseChange(stocktakeForm.warehouseCode)">重读库位和客户</el-button></el-alert>
       <el-form :disabled="stocktakeBusy || !!pendingStocktake" :model="stocktakeForm" label-width="110px">
         <el-form-item label="仓库"><el-select v-model="stocktakeForm.warehouseCode" style="width:100%" @change="onStocktakeWarehouseChange"><el-option v-for="wh in warehouses" :key="wh.warehouseCode || wh.code" :label="wh.warehouseName || wh.name" :value="wh.warehouseCode || wh.code" /></el-select></el-form-item>
@@ -460,12 +478,14 @@ watch(warehouseCode, loadCurrent)
     </el-dialog>
 
     <el-dialog top="5vh" @close="planVersion++" :close-on-click-modal="false" :close-on-press-escape="!stocktakeBusy" :show-close="!stocktakeBusy" v-model="countDialog" :title="`盘点单 ${currentPlan?.stocktakeNo || ''}`" width="1000px">
-      <el-alert v-if="stocktakeFeedback" :title="stocktakeFeedback" type="info" :closable="false"><template v-if="pendingStocktake"><el-button :loading="stocktakeBusy" @click="stocktakeOperation.reconcile">核对提交结果</el-button><el-button :loading="stocktakeBusy" @click="stocktakeOperation.retry">重试原提交</el-button></template></el-alert>
+      <el-alert v-if="stocktakeFeedback && !transitionDialog" :title="stocktakeFeedback" type="info" :closable="false"><template v-if="pendingStocktake"><el-button :loading="stocktakeBusy" @click="stocktakeOperation.reconcile">核对提交结果</el-button><el-button :loading="stocktakeBusy" @click="stocktakeOperation.retry">重试原提交</el-button></template></el-alert>
       <el-alert v-if="planError" :title="planError" type="warning" :closable="false" />
       <el-alert v-if="currentPlan?.bookQtyHidden" title="盲盘模式：录入期间隐藏账面数量，待审批时显示供核对" type="info" :closable="false" />
       <el-alert v-if="currentPlan?.status === 'counting' && !app.hasPerm('stocktake.count')" title="当前账号可查看盘点，请交由有盘点权限的作业员录入数量" type="info" :closable="false" />
       <el-alert v-if="currentPlan?.status === 'pending_approval'" :title="app.hasPerm('stocktake.approve') ? '盘点已录入完成，请核对账面、实盘和差异后审批' : '盘点已录入完成，请交由有审批权限的账号核对并审批'" type="info" :closable="false" />
       <p v-if="currentPlan?.scopeLabel" class="hint" style="margin: 10px 0">范围 {{ currentPlan.scopeLabel }}</p>
+      <p v-if="currentPlan?.scope?.replannedFromId" class="hint">本任务仅复制原商品、库位和批次明细，账面数量已重新读取；新增商品或库位请另建盘点。<el-button link type="primary" :disabled="stocktakeBusy || !!pendingStocktake" @click="openPlan(currentPlan.scope.replannedFromId)">查看原盘点 {{ currentPlan.scope.replannedFromNo }}</el-button></p>
+      <p v-if="currentPlan?.status === 'cancelled'" class="hint">已取消，原计数保留且未调整库存。原因：{{ currentPlan.scope?.cancelReason || '未记录' }}<el-button v-if="currentPlan.scope?.replacementPlanId" link type="primary" :disabled="stocktakeBusy || !!pendingStocktake" @click="openPlan(currentPlan.scope.replacementPlanId)">继续新盘点 {{ currentPlan.scope.replacementPlanNo }}</el-button></p>
       <el-table :data="currentPlan?.lines || []" height="min(48vh, 520px)" stripe>
         <el-table-column prop="locationCode" label="库位" width="150" />
         <el-table-column prop="sku" label="SKU" min-width="160" />
@@ -476,7 +496,21 @@ watch(warehouseCode, loadCurrent)
         <el-table-column label="状态" width="110"><template #default="s">{{ lineStatus(s.row.status) }}</template></el-table-column>
         <el-table-column v-if="currentPlan?.status === 'counting' && app.hasPerm('stocktake.count')" label="实盘数量" width="240" fixed="right"><template #default="s"><div v-if="canCount(s.row)" class="count-cell"><el-input-number :disabled="stocktakeBusy || !!pendingStocktake" v-model="s.row.inputQty" :min="0" size="small" /><el-button size="small" type="primary" :loading="stocktakeBusy" :disabled="!!pendingStocktake" @click="submitLine(s.row)">{{ s.row.status === 'recount' ? '提交复盘' : '提交初盘' }}</el-button></div><span v-else>{{ s.row.status === 'recount' ? '请交接其他作业员复盘' : '已提交' }}</span></template></el-table-column>
       </el-table>
-      <template #footer><el-button :disabled="stocktakeBusy" @click="countDialog = false">返回盘点列表</el-button><el-button :loading="openingPlan" :disabled="stocktakeBusy" @click="openPlan(currentPlan.id)">刷新核对结果</el-button><el-button v-if="currentPlan?.status === 'pending_approval' && app.hasPerm('stocktake.approve')" type="danger" :loading="stocktakeBusy" :disabled="!!pendingStocktake" @click="approvePlan">审批并调整库存</el-button></template>
+      <template #footer>
+        <el-button :disabled="stocktakeBusy" @click="countDialog = false">返回盘点列表</el-button>
+        <el-button :loading="openingPlan" :disabled="stocktakeBusy" @click="openPlan(currentPlan.id)">刷新核对结果</el-button>
+        <el-button v-if="planIsActive && app.hasPerm('stocktake.approve')" :disabled="stocktakeBusy || openingPlan || !!pendingStocktake" @click="openTransition('cancel')">取消盘点</el-button>
+        <el-button v-if="planIsActive && app.hasPerm('stocktake.approve') && app.hasPerm('stocktake.create')" :disabled="stocktakeBusy || openingPlan || !!pendingStocktake" @click="openTransition('replan')">复制原明细重新盘点</el-button>
+        <el-button v-if="currentPlan?.status === 'pending_approval' && app.hasPerm('stocktake.approve')" type="danger" :loading="stocktakeBusy" :disabled="!!pendingStocktake" @click="approvePlan">审批并调整库存</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="transitionDialog" :title="transitionTitle" width="600px" append-to-body :close-on-click-modal="false" :close-on-press-escape="!stocktakeBusy" :show-close="!stocktakeBusy">
+      <el-alert v-if="stocktakeFeedback" :title="stocktakeFeedback" type="info" :closable="false"><template v-if="pendingStocktake"><el-button :loading="stocktakeBusy" @click="stocktakeOperation.reconcile">核对提交结果</el-button><el-button :loading="stocktakeBusy" @click="stocktakeOperation.retry">重试原提交</el-button></template></el-alert>
+      <p>{{ transitionForm.stocktakeNo }}</p>
+      <p>{{ transitionForm.action === 'replan' ? '旧盘点将取消并保留计数；新任务沿用原商品、库位及批次范围，重新读取账面数量，不包含后来新增的明细。请重新清点，新任务审批前不调整库存。' : '取消后保留原计数和审计记录，不调整库存。已完成的盘点不能取消。' }}</p>
+      <el-form :disabled="stocktakeBusy || !!pendingStocktake" label-width="80px"><el-form-item label="操作原因" required><el-input v-model="transitionForm.reason" aria-label="操作原因" type="textarea" :rows="3" maxlength="500" show-word-limit /></el-form-item></el-form>
+      <template #footer><el-button :disabled="stocktakeBusy" @click="transitionDialog = false">返回盘点单</el-button><el-button type="primary" :loading="stocktakeBusy" :disabled="!!pendingStocktake" @click="submitTransition">{{ transitionForm.action === 'replan' ? '确认并继续新盘点' : '确认取消盘点' }}</el-button></template>
     </el-dialog>
 
     <el-dialog :close-on-click-modal="false" :close-on-press-escape="!savingCapacity" :show-close="!savingCapacity" v-model="capDialog" :title="`仓级上限 · ${capForm.warehouseName || capForm.warehouseCode}`" width="480px">

@@ -14,7 +14,7 @@ export const outboundStatus = (value: unknown) => label(value, {
 export const planStatus = (value: unknown) => label(value, { draft: '草稿', counting: '盘点中', pending_approval: '待审批', completed: '已完成', cancelled: '已取消' })
 export const lineStatus = (value: unknown) => label(value, { pending: '待初盘', recount: '待交接复盘', matched: '数量一致', variance: '已确认差异' })
 export const alertLevel = (value: unknown) => label(value, { normal: '正常', warning: '预警', high: '高风险预警', critical: '严重预警', unset: '未设置上限', unknown: '待核对' })
-export const stocktakeMode = (value: unknown) => label(value, { full: '全仓', location: '库位', sku: '指定SKU', spot: '抽盘' })
+export const stocktakeMode = (value: unknown) => label(value, { full: '全仓', location: '库位', sku: '指定SKU', spot: '抽盘', recount: '原明细重盘' })
 export const exceptionType = (value: unknown) => label(value, { shortage: '缺货', damaged: '破损', damage: '破损', missing_label: '缺少标签', label_error: '标签异常', other: '其他异常' }, '无')
 
 /** Read every page before creating a file; never silently truncate an export. */

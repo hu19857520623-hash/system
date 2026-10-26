@@ -14,6 +14,17 @@ function fixture(values = new Map<string, string>()) {
 }
 
 describe('盘点提交恢复', () => {
+  it.each(['cancel', 'replan'] as const)('%s结果未知时重开页面仍保留版本、原因，查回原结果不再发请求', async action => {
+    const first = fixture(); first.send.mockRejectedValue(new TypeError('Failed to fetch'))
+    await first.controller.start(action, { expectedVersion: 'st1-snapshot', reason: '库存变化' }, 3)
+    first.controller.stop()
+    const next = fixture(first.values)
+    expect(next.controller.pending.value).toMatchObject({ action, planId: 3, payload: { expectedVersion: 'st1-snapshot', reason: '库存变化' } })
+    next.lookup.mockResolvedValue({ found: true, action, plan: { id: action === 'replan' ? 5 : 3, status: action === 'replan' ? 'counting' : 'cancelled' } })
+    await next.controller.reconcile()
+    expect(next.send).not.toHaveBeenCalled(); expect(next.controller.pending.value).toBeNull()
+    expect(next.applied).toHaveBeenCalledWith(action, expect.objectContaining({ id: action === 'replan' ? 5 : 3 }))
+  })
   it('重复点击只发送一次，不把第一次数量自动作为复盘', async () => {
     const { controller, send, applied } = fixture()
     let resolve!: (value: unknown) => void

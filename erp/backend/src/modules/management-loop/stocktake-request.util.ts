@@ -12,6 +12,37 @@ export function stocktakeFingerprint(payload: unknown) {
   return createHash('sha256').update(JSON.stringify(payload)).digest('hex')
 }
 
+/** Includes every mutable count, so a dialog opened before a colleague's submission is stale. */
+export function stocktakePlanVersion(plan: any) {
+  const canonical = (value: any): any => {
+    if (typeof value === 'bigint') return String(value)
+    if (value instanceof Date) return value.toISOString()
+    if (Array.isArray(value)) return value.map(canonical)
+    if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])]))
+    return value ?? null
+  }
+  return `st1-${stocktakeFingerprint(canonical({
+    id: plan.id, status: plan.status, warehouseCode: plan.warehouseCode, mode: plan.mode,
+    blindCount: plan.blindCount, scope: plan.scopeJson, remark: plan.remark,
+    lines: [...plan.lines].sort((a, b) => Number(a.id) - Number(b.id)).map(line => ({
+      id: line.id, productId: line.productId, locationId: line.locationId, sku: line.sku,
+      locationCode: line.locationCode, bookQty: line.bookQty, status: line.status,
+      firstQty: line.firstQty, secondQty: line.secondQty, finalQty: line.finalQty, varianceQty: line.varianceQty,
+      firstCountedBy: line.firstCountedBy, secondCountedBy: line.secondCountedBy,
+    })),
+  }))}`
+}
+
+export function stocktakeTransitionInput(body: any) {
+  if (typeof body?.expectedVersion !== 'string' || !/^st1-[a-f0-9]{64}$/.test(body.expectedVersion)) {
+    throw new BadRequestException('盘点版本缺失或无效，请刷新盘点结果后继续')
+  }
+  if (typeof body.reason !== 'string' || !body.reason.trim() || body.reason.trim().length > 500) {
+    throw new BadRequestException('请填写操作原因，最多500字')
+  }
+  return { expectedVersion: body.expectedVersion as string, reason: body.reason.trim() as string }
+}
+
 export function stocktakeCountInput(body: any) {
   if (typeof body?.qty !== 'number' || !Number.isSafeInteger(body.qty) || body.qty < 0 || body.qty > 2147483647) {
     throw new BadRequestException('实盘数量必须为非负整数且不能超过系统上限')

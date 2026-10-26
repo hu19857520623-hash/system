@@ -8,6 +8,7 @@ export const OPERATION_MODULE_LABELS: Record<string, string> = {
   inventory: '库存',
   product: '商品主数据',
   warehouse_location: '库位管理',
+  stocktake: '库存盘点',
 }
 
 export const OPERATION_ACTION_LABELS: Record<string, string> = {
@@ -15,6 +16,9 @@ export const OPERATION_ACTION_LABELS: Record<string, string> = {
   reopen_count: '更正清点', close_zero_receipt: '零收货结束', reduce_qc: '减少实收件数', reduce_carton: '减少实收箱数', reduce_putaway: '撤回最近上架',
   repair_damage_received: '核对破损已收数量',
   create: '创建',
+  count: '提交实盘数量',
+  cancel: '取消',
+  replan: '复制原明细重新盘点',
   update: '修改',
   delete: '删除',
   submit: '提交审核',

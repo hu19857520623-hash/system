@@ -1,7 +1,7 @@
 import { ref, watch } from 'vue'
 import { userFacingError } from '@erp/shared/user-facing-error'
 
-export type StocktakeAction = 'create' | 'count' | 'approve'
+export type StocktakeAction = 'create' | 'count' | 'approve' | 'cancel' | 'replan'
 type Attempt = { action: StocktakeAction; requestId: string; payload: Record<string, unknown>; planId?: number; uncertain?: boolean }
 type Options = {
   owner: () => string
@@ -21,7 +21,7 @@ export function createStocktakeAction(options: Options) {
     pending.value = null
     try {
       const value = JSON.parse(options.storage.getItem(key()) || 'null')
-      if (value && ['create', 'count', 'approve'].includes(value.action) && /^[A-Za-z0-9_-]{8,100}$/.test(value.requestId) && value.payload && typeof value.payload === 'object') {
+      if (value && ['create', 'count', 'approve', 'cancel', 'replan'].includes(value.action) && /^[A-Za-z0-9_-]{8,100}$/.test(value.requestId) && value.payload && typeof value.payload === 'object') {
         pending.value = { ...value, uncertain: true }
         feedback.value = '上次盘点提交的结果尚待核对，请核对后继续。'
       }
@@ -32,7 +32,7 @@ export function createStocktakeAction(options: Options) {
   function complete(attempt: Attempt, plan: any) {
     pending.value = null
     try { options.storage.removeItem(key()) } catch { /* Recovered receipts remain safe to query again. */ }
-    feedback.value = { create: '盘点任务已创建，已读取最新结果。', count: '本次实盘数量已提交，已读取最新结果。', approve: '盘点审批已完成，已读取最新结果。' }[attempt.action]
+    feedback.value = { create: '盘点任务已创建，已读取最新结果。', count: '本次实盘数量已提交，已读取最新结果。', approve: '盘点审批已完成，已读取最新结果。', cancel: '盘点已取消，原计数记录已保留。', replan: '已按原明细创建新的盘点任务，请重新清点。' }[attempt.action]
     try { options.applied(attempt.action, plan) }
     catch { feedback.value = '本次提交已完成，但页面未能显示最新结果。请刷新盘点列表核对，请勿重复提交。' }
   }

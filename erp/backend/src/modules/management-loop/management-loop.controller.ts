@@ -57,6 +57,18 @@ export class ManagementLoopController {
     return this.service.approveStocktake(id, userId, body)
   }
 
+  @RequirePerms('stocktake.approve')
+  @Post('stocktake-workflows/:id/cancel')
+  cancel(@Param('id', ParseIntPipe) id: number, @Body() body: any, @CurrentUser('userId') userId: number) {
+    return this.service.transitionStocktake(id, 'cancel', body, userId)
+  }
+
+  @RequirePerms('stocktake.create', 'stocktake.approve')
+  @Post('stocktake-workflows/:id/replan')
+  replan(@Param('id', ParseIntPipe) id: number, @Body() body: any, @CurrentUser('userId') userId: number) {
+    return this.service.transitionStocktake(id, 'replan', body, userId)
+  }
+
   @RequirePerms('capacity.view')
   @Get('capacity')
   capacity(@Query('warehouseCode') warehouseCode?: string) {

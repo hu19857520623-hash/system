@@ -218,6 +218,7 @@ export class InventoryMutationService {
       orderBy: { id: 'asc' },
     })
     if (!currentRows.length) {
+      if (params.expectedQty === 0 && params.targetQty === 0) return
       throw new BadRequestException(`库位库存 ${params.locationCode}/${params.sku} 已不存在`)
     }
 

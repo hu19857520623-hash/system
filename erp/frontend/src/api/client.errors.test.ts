@@ -11,11 +11,12 @@ describe('ERP request, download and print Chinese error feedback', () => {
   })
   afterEach(() => vi.unstubAllGlobals())
 
-  it.each(['create', 'count', 'approve'] as const)('新版盘点%s接口缺失时保留失败，不回退可能重复写入的旧路径', async action => {
+  it.each(['create', 'count', 'approve', 'cancel', 'replan'] as const)('新版盘点%s接口缺失时保留失败，不回退可能重复写入的旧路径', async action => {
     const fetcher = vi.fn().mockResolvedValue({ ok: false, status: 404, json: async () => ({ message: 'Not Found' }) })
     vi.stubGlobal('fetch', fetcher)
     const payload = { clientRequestId: 'stable-stocktake-request', lineId: 4, qty: 5, expectedStage: 'pending' }
-    const pending = action === 'create' ? managementLoopApi.createStocktake(payload) : action === 'count' ? managementLoopApi.countStocktake(3, payload) : managementLoopApi.approveStocktake(3, payload)
+    const calls = { create: () => managementLoopApi.createStocktake(payload), count: () => managementLoopApi.countStocktake(3, payload), approve: () => managementLoopApi.approveStocktake(3, payload), cancel: () => managementLoopApi.cancelStocktake(3, payload), replan: () => managementLoopApi.replanStocktake(3, payload) }
+    const pending = calls[action]()
     await expect(pending).rejects.toMatchObject({ status: 404 })
     expect(fetcher).toHaveBeenCalledTimes(1)
     const [url, options] = fetcher.mock.calls[0]!

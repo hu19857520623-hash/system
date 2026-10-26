@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { stocktakeCountInput, stocktakeFingerprint, stocktakeRequestId } from './stocktake-request.util'
+import { stocktakeCountInput, stocktakeFingerprint, stocktakePlanVersion, stocktakeRequestId, stocktakeTransitionInput } from './stocktake-request.util'
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common'
 import { Prisma } from '@prisma/client'
 import { PrismaService } from '../../common/prisma/prisma.service'
@@ -390,6 +390,7 @@ export class ManagementLoopService {
       ...plan,
       id: Number(plan.id),
       bookQtyHidden: hideBookQty,
+      version: stocktakePlanVersion(plan),
       scope,
       scopeLabel: stocktakeScopeLabel(scope as any),
       lines: plan.lines.map((line) => ({
@@ -420,10 +421,10 @@ export class ManagementLoopService {
     return Number(detail.planId)
   }
 
-  private async recordStocktake(tx: Prisma.TransactionClient, userId: number, requestId: string, action: string, fingerprint: string, plan: { id: bigint; stocktakeNo: string }, detail: Record<string, unknown>) {
+  private async recordStocktake(tx: Prisma.TransactionClient, userId: number, requestId: string, action: string, fingerprint: string, plan: { id: bigint; stocktakeNo: string }, detail: Record<string, unknown>, resultPlanId = Number(plan.id)) {
     await tx.operationLog.create({ data: {
       operatorId: BigInt(userId), module: 'stocktake', action, targetType: 'stocktake_plan', targetId: plan.stocktakeNo,
-      detail: { ...detail, planId: Number(plan.id), clientRequestId: requestId, fingerprint } as Prisma.InputJsonValue,
+      detail: { ...detail, planId: resultPlanId, clientRequestId: requestId, fingerprint } as Prisma.InputJsonValue,
     } })
   }
 
@@ -553,6 +554,72 @@ export class ManagementLoopService {
       await this.recordStocktake(tx, userId!, requestId, 'approve', fingerprint, plan, { lineCount: plan.lines.length })
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable })
     return this.stocktakeDetail(id)
+  }
+
+  async transitionStocktake(id: number, action: 'cancel' | 'replan', body: any, userId: number) {
+    const requestId = stocktakeRequestId(body?.clientRequestId), input = stocktakeTransitionInput(body)
+    const fingerprint = stocktakeFingerprint({ id, ...input })
+    const resultId = await this.prisma.$transaction(async tx => {
+      await this.lockStocktakeActor(tx, userId)
+      await tx.$queryRaw`SELECT id FROM stocktake_plan WHERE id = ${BigInt(id)} FOR UPDATE`
+      const previous = await this.stocktakeReceipt(tx, userId, requestId, action, fingerprint)
+      if (previous) return previous
+      const plan = await tx.stocktakePlan.findUnique({ where: { id: BigInt(id) }, include: { lines: true } })
+      if (!plan) throw new NotFoundException('盘点单不存在')
+      if (!['counting', 'pending_approval'].includes(plan.status)) throw new ConflictException('盘点已完成或已取消，请刷新核对结果')
+      if (input.expectedVersion !== stocktakePlanVersion(plan)) throw new ConflictException('盘点结果已变化，请刷新核对后重新操作')
+      const scope = (plan.scopeJson || {}) as Record<string, any>
+      const cancelledScope = { ...scope, cancelReason: input.reason, cancelledBy: userId, cancelledAt: new Date().toISOString() }
+      let replacement: { id: bigint; stocktakeNo: string } | undefined
+      if (action === 'replan') {
+        if (!plan.lines.length) throw new BadRequestException('原盘点没有明细，请返回列表新建盘点')
+        const warehouse = await tx.warehouse.findFirst({ where: { warehouseCode: plan.warehouseCode } })
+        if (!warehouse) throw new BadRequestException('原仓库已不存在，请返回列表新建盘点')
+        const productIds = [...new Set(plan.lines.map(line => line.productId))]
+        const locationIds = [...new Set(plan.lines.map(line => line.locationId))]
+        const [products, locations] = await Promise.all([
+          tx.product.count({ where: { id: { in: productIds } } }),
+          tx.warehouseLocation.count({ where: { id: { in: locationIds }, warehouseCode: plan.warehouseCode } }),
+        ])
+        if (products !== productIds.length || locations !== locationIds.length) throw new BadRequestException('原商品或库位已不存在，请取消旧盘点后重新选择范围')
+        // Preserve frozen customer/batch ownership; legacy tasks resolve only their original filters.
+        const scoped = hasInboundScopeFilter(scope as any)
+        const inboundNos = scoped
+          ? (Array.isArray(scope.resolvedInboundNos) && scope.resolvedInboundNos.length ? scope.resolvedInboundNos : await this.resolveStocktakeInboundNos({ ...scope, warehouseCode: plan.warehouseCode } as any, tx))
+          : null
+        if (scoped && !inboundNos?.length) throw new BadRequestException('原客户或入库范围已无批次，请取消旧盘点后重新选择范围')
+        const quantities = new Map<string, number>()
+        for (let offset = 0; offset < plan.lines.length; offset += 250) {
+          const rows = await tx.inventoryLocation.groupBy({
+            by: ['productId', 'locationId'], where: { warehouseCode: plan.warehouseCode,
+              OR: plan.lines.slice(offset, offset + 250).map(line => ({ productId: line.productId, locationId: line.locationId })),
+              ...(inboundNos ? { inboundNo: { in: inboundNos } } : {}),
+            }, _sum: { qty: true }, _min: { qty: true },
+          })
+          for (const row of rows) {
+            const qty = row._sum.qty ?? 0
+            if ((row._min.qty ?? 0) < 0 || !Number.isSafeInteger(qty) || qty < 0 || qty > 2147483647) throw new BadRequestException('原范围库存数量异常，请先核对库存')
+            quantities.set(`${row.productId}:${row.locationId}`, qty)
+          }
+        }
+        replacement = await tx.stocktakePlan.create({ data: {
+          stocktakeNo: `PD-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${randomUUID().replace(/-/g, '').slice(0, 16)}`,
+          warehouseCode: plan.warehouseCode, mode: 'recount', status: 'counting', blindCount: plan.blindCount,
+          scopeJson: { ...scope, mode: 'recount', originalMode: scope.originalMode || plan.mode, resolvedInboundNos: inboundNos,
+            replannedFromId: id, replannedFromNo: plan.stocktakeNo, replanReason: input.reason,
+            cancelReason: null, cancelledBy: null, cancelledAt: null, replacementPlanId: null, replacementPlanNo: null },
+          createdBy: BigInt(userId), startedAt: new Date(), remark: plan.remark,
+          lines: { createMany: { data: plan.lines.map(line => ({ productId: line.productId, sku: line.sku,
+            locationId: line.locationId, locationCode: line.locationCode, bookQty: quantities.get(`${line.productId}:${line.locationId}`) ?? 0 })) } },
+        } })
+      }
+      await tx.stocktakePlan.update({ where: { id: plan.id }, data: { status: 'cancelled', scopeJson: {
+        ...cancelledScope, ...(replacement ? { replacementPlanId: Number(replacement.id), replacementPlanNo: replacement.stocktakeNo } : {}),
+      } } })
+      await this.recordStocktake(tx, userId, requestId, action, fingerprint, plan, { ...input, sourcePlanId: id }, replacement ? Number(replacement.id) : id)
+      return replacement ? Number(replacement.id) : id
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted, maxWait: 10000, timeout: 60000 })
+    return this.stocktakeDetail(resultId)
   }
 
   async capacityOverview(warehouseCode?: string) {
