@@ -46,6 +46,7 @@ import {
   type TakealotParsedDoc,
 } from '../data/takealotDocParser'
 import { extractPdfTextFromFile } from '../data/takealotPdfText'
+import { RETURN_DEPARTMENTS, CATALOG_RETURN_FILE_KINDS, usesCatalogReturnTemplate, attachmentsForReturnDepartment } from '../data/returnFormTemplate'
 
 interface LineItem {
   id: string
@@ -57,9 +58,9 @@ interface LineItem {
 type ReturnPlatform = 'takealot' | 'other'
 
 const TAKEALOT_RETURN_FILE_KIND = 'takealot_return_booking'
-const TAKEALOT_REASON_SCREENSHOT_KIND = 'takealot_return_reason_screenshot'
-const TAKEALOT_SALES_30D_KIND = 'takealot_return_sales_30d'
-const TAKEALOT_RETURNS_30D_KIND = 'takealot_return_returns_30d'
+const TAKEALOT_REASON_SCREENSHOT_KIND = CATALOG_RETURN_FILE_KINDS.reasonScreenshot
+const TAKEALOT_SALES_30D_KIND = CATALOG_RETURN_FILE_KINDS.sales30d
+const TAKEALOT_RETURNS_30D_KIND = CATALOG_RETURN_FILE_KINDS.returns30d
 const OTHER_RETURN_FILE_KIND = 'other_platform_return_doc'
 
 const RETURN_REASONS = [
@@ -101,6 +102,8 @@ function buildReturnOrder(
   asDraft: boolean,
 ): ReturnOrder {
   const totalQty = fields.lines.reduce((s, l) => s + l.qty, 0)
+  const applicableAttachments = fields.returnPlatform === 'takealot'
+    ? attachmentsForReturnDepartment(fields.attachments, fields.department) : fields.attachments
   return {
     id: fields.editingId || `rt-${Date.now()}`,
     customerId: fields.customerId,
@@ -111,7 +114,7 @@ function buildReturnOrder(
       selfRecall: fields.selfRecall,
       inboundPoNumber: fields.inboundPoNumber.trim() || undefined,
       purchasePrice: fields.purchasePrice ? Number(fields.purchasePrice) : undefined,
-      userType: fields.userType.trim() || undefined,
+      userType: usesCatalogReturnTemplate(fields.department) ? fields.userType.trim() || undefined : undefined,
     } : undefined,
     returnNo: fields.returnNo,
     orderNo: fields.orderNo.trim(),
@@ -128,7 +131,7 @@ function buildReturnOrder(
     statusLabel: asDraft ? '草稿' : '待到货',
     createdAt: fields.createdAt,
     lineItems: fields.lines,
-    attachments: fields.attachments.length ? fields.attachments : undefined,
+    attachments: applicableAttachments.length ? applicableAttachments : undefined,
     totalQty,
     remark: fields.remark.trim() || undefined,
   }
@@ -162,6 +165,7 @@ export default function ReturnApply() {
   const [returnPlatform, setReturnPlatform] = useState<ReturnPlatform>('takealot')
   const [filledBy, setFilledBy] = useState('')
   const [department, setDepartment] = useState('')
+  const usesCatalogTemplate = usesCatalogReturnTemplate(department)
   const [selfRecall, setSelfRecall] = useState<'yes' | 'no'>('yes')
   const [inboundPoNumber, setInboundPoNumber] = useState('')
   const [purchasePrice, setPurchasePrice] = useState('')
@@ -389,14 +393,14 @@ export default function ReturnApply() {
     || attachment.kind === '预约单'
     || /^TAL[A-Z0-9]+\.pdf$/i.test(attachment.fileName),
   )
-  const reasonScreenshotAttachments = attachments.filter(attachment => attachment.kind === TAKEALOT_REASON_SCREENSHOT_KIND)
-  const sales30dAttachments = attachments.filter(attachment => attachment.kind === TAKEALOT_SALES_30D_KIND)
-  const returns30dAttachments = attachments.filter(attachment => attachment.kind === TAKEALOT_RETURNS_30D_KIND)
+  const reasonScreenshotAttachments = attachments.filter(attachment => attachment.kind === TAKEALOT_REASON_SCREENSHOT_KIND || attachment.fileType === TAKEALOT_REASON_SCREENSHOT_KIND)
+  const sales30dAttachments = attachments.filter(attachment => attachment.kind === TAKEALOT_SALES_30D_KIND || attachment.fileType === TAKEALOT_SALES_30D_KIND)
+  const returns30dAttachments = attachments.filter(attachment => attachment.kind === TAKEALOT_RETURNS_30D_KIND || attachment.fileType === TAKEALOT_RETURNS_30D_KIND)
   const isTakealotAttachment = (attachment: FileAttachment) => (
     takealotAttachments.includes(attachment)
-    || attachment.kind === TAKEALOT_REASON_SCREENSHOT_KIND
-    || attachment.kind === TAKEALOT_SALES_30D_KIND
-    || attachment.kind === TAKEALOT_RETURNS_30D_KIND
+    || reasonScreenshotAttachments.includes(attachment)
+    || sales30dAttachments.includes(attachment)
+    || returns30dAttachments.includes(attachment)
   )
   const otherPlatformAttachments = attachments.filter(attachment =>
     !isTakealotAttachment(attachment),
@@ -491,11 +495,11 @@ export default function ReturnApply() {
       setFeedback('当时采购价须为不小于零的有效金额')
       return
     }
-    if (returnPlatform === 'takealot' && reasonScreenshotAttachments.length === 0) {
+    if (returnPlatform === 'takealot' && usesCatalogTemplate && reasonScreenshotAttachments.length === 0) {
       setFeedback('请上传退货理由截图')
       return
     }
-    if (returnPlatform === 'takealot' && (sales30dAttachments.length === 0 || returns30dAttachments.length === 0)) {
+    if (returnPlatform === 'takealot' && usesCatalogTemplate && (sales30dAttachments.length === 0 || returns30dAttachments.length === 0)) {
       setFeedback('请上传近 30 天销售数据表和近 30 天退货数据')
       return
     }
@@ -681,15 +685,19 @@ export default function ReturnApply() {
           {returnPlatform === 'takealot' && (
             <div className="mb-5 rounded-xl border border-blue-100 bg-white p-4 ring-1 ring-blue-50">
               <div className="mb-4">
-                <p className="text-sm font-semibold text-text-primary">Takealot 退货资料</p>
-                <p className="mt-1 text-xs text-text-muted">字段与《货盘退货收集表》一致；带 * 的内容提交前必须填写或上传。</p>
+                <p className="text-sm font-semibold text-text-primary">{department === '其他退货' ? '其他退货资料' : department ? `${department}退货资料` : 'Takealot 退货资料'}</p>
+                <p className="mt-1 text-xs text-text-muted">{usesCatalogTemplate ? '沿用《货盘退货收集表》；带 * 的内容提交前必须填写或上传。' : '电商和其他退货共用本表单，无需上传退货理由截图和近 30 天销售、退货数据。'}</p>
               </div>
               <FormGrid cols={3}>
                 <FormField label="填写人" required>
                   <input className={formInput()} value={filledBy} onChange={e => setFilledBy(e.target.value)} />
                 </FormField>
                 <FormField label="所在部门" required>
-                  <input className={formInput()} value={department} onChange={e => setDepartment(e.target.value)} />
+                  <select className={formSelect()} value={department} onChange={e => setDepartment(e.target.value)}>
+                    <option value="">请选择所在部门</option>
+                    {RETURN_DEPARTMENTS.map(value => <option key={value} value={value}>{value}</option>)}
+                    {department && !RETURN_DEPARTMENTS.some(value => value === department) && <option value={department}>{department}（原记录）</option>}
+                  </select>
                 </FormField>
                 <FormField label="填写时间">
                   <input type="date" className={formInput()} value={createdAt} onChange={e => setCreatedAt(e.target.value)} />
@@ -706,18 +714,18 @@ export default function ReturnApply() {
                 <FormField label="当时采购价" required>
                   <input type="number" min="0" step="0.01" className={formInput()} value={purchasePrice} onChange={e => setPurchasePrice(e.target.value)} />
                 </FormField>
-                <FormField label="用户类型" required>
+                {usesCatalogTemplate && <FormField label="用户类型" required>
                   <select className={formSelect()} value={userType} onChange={e => setUserType(e.target.value)}>
                     <option value="微信用户">微信用户</option>
                     <option value="电商客户">电商客户</option>
                     <option value="其他">其他</option>
                   </select>
-                </FormField>
+                </FormField>}
                 <FormField label="对应的客户代码">
                   <input className={formInput()} value={customerCode || ''} readOnly placeholder="选择客户端后自动带出" />
                 </FormField>
               </FormGrid>
-              <div className="mt-4 grid gap-3 md:grid-cols-3">
+              {usesCatalogTemplate && <div className="mt-4 grid gap-3 md:grid-cols-3">
                 {[
                   { label: '退货理由截图', required: true, files: reasonScreenshotAttachments, ref: reasonScreenshotInputRef, kind: TAKEALOT_REASON_SCREENSHOT_KIND, accept: 'image/*' },
                   { label: '近 30 天销售数据表', required: true, files: sales30dAttachments, ref: sales30dInputRef, kind: TAKEALOT_SALES_30D_KIND, accept: '.xlsx,.xls,.csv' },
@@ -732,7 +740,7 @@ export default function ReturnApply() {
                     {renderAttachmentList(item.files)}
                   </div>
                 ))}
-              </div>
+              </div>}
             </div>
           )}
 
