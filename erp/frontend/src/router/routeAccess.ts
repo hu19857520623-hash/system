@@ -1,3 +1,6 @@
+import { beginSessionRecoveryTarget } from '../auth/sessionRecoveryTarget'
+import { getAccessToken } from '../auth/tokenStore'
+import type { AccessCheckResult } from '../auth/liveAccess'
 import type { NavigationGuard } from 'vue-router'
 import { internalRedirect } from '../auth/internalRedirect'
 
@@ -11,7 +14,7 @@ export const ROUTE_SCREENS: Record<string, string | readonly string[]> = {
 }
 export const ACCOUNT_ROUTES = new Set(['Login', 'Dashboard', 'ProfileSettings', 'AccessDenied', 'NotFound'])
 export type RouteAccess = { authenticatedUser: { roleCode: string } | null; canViewScreen: (screen: string) => boolean }
-type GuardApp = RouteAccess & { authReady: boolean; isAuthenticated: boolean; initAuth: () => Promise<unknown> }
+type GuardApp = RouteAccess & { authReady: boolean; authReadError?: string; isAuthenticated: boolean; initAuth: () => Promise<unknown> }
 
 export function isRouteAllowed(route: { name?: string | symbol | null }, app: RouteAccess): boolean {
   const name = typeof route.name === 'string' ? route.name : ''
@@ -22,12 +25,25 @@ export function isRouteAllowed(route: { name?: string | symbol | null }, app: Ro
   return (typeof screens === 'string' ? [screens] : screens).some(screen => app.canViewScreen(screen))
 }
 
-export function createErpRouteGuard(getApp: () => GuardApp): NavigationGuard {
+export function createErpRouteGuard(getApp: () => GuardApp, refreshAccess?: () => Promise<AccessCheckResult>): NavigationGuard {
   return async to => {
-    const app = getApp()
-    if (!app.authReady) await app.initAuth()
-    if (!app.isAuthenticated && to.meta.public !== true) return { path: '/login', query: { redirect: internalRedirect(to.fullPath) } }
-    if (app.isAuthenticated && to.name === 'Login') return { path: '/dashboard' }
-    if (app.isAuthenticated && !isRouteAllowed(to, app)) return { name: 'AccessDenied', query: { redirect: internalRedirect(to.fullPath) }, replace: true }
+    const releaseTarget = beginSessionRecoveryTarget(to.fullPath, getAccessToken())
+    try {
+      const app = getApp()
+      if (!app.authReady) await app.initAuth()
+      if (!app.isAuthenticated && app.authReadError && to.name !== 'Login') {
+        if (to.name === 'AccessDenied') return
+        return { name: 'AccessDenied', query: { redirect: internalRedirect(to.fullPath), reason: 'permission-read-failed' }, replace: true }
+      }
+      if (!app.isAuthenticated && to.meta.public !== true) return { path: '/login', query: { redirect: internalRedirect(to.fullPath) } }
+      if (app.isAuthenticated && to.name === 'Login') return { path: '/dashboard' }
+      if (app.isAuthenticated && !['Login', 'Dashboard', 'AccessDenied', 'NotFound'].includes(String(to.name)) && refreshAccess) {
+        const result = await refreshAccess()
+        if (result === 'changed') return false
+        if (result === 'anonymous') return { path: '/login', query: { reason: 'session-expired', redirect: internalRedirect(to.fullPath) } }
+        if (result === 'failed') return { name: 'AccessDenied', query: { redirect: internalRedirect(to.fullPath), reason: 'permission-read-failed' }, replace: true }
+      }
+      if (app.isAuthenticated && !isRouteAllowed(to, app)) return { name: 'AccessDenied', query: { redirect: internalRedirect(to.fullPath) }, replace: true }
+    } finally { releaseTarget() }
   }
 }

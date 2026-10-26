@@ -1,8 +1,10 @@
+import { userFacingError } from '@erp/shared/user-facing-error'
 import { defineStore } from 'pinia'
 import { authApi } from '@/api/client'
 import { clearAccessToken, getAccessToken, setAccessToken } from '@/auth/tokenStore'
 import {
   EXPORT_PERM_ROLES,
+  isKnownRoleCode,
   ROLE_PERM_TEMPLATES,
   templatePermsForRoleName,
 } from '@erp/shared/permissions.catalog'
@@ -30,7 +32,7 @@ function mapRoleCodeToFrontendRole(roleCode: string, roleName?: string): string 
     warehouse_reviewer: '复核员',
     dev_manager: '产品开发主管',
   }
-  return map[roleCode] || roleName || '系统管理员'
+  return map[roleCode] || roleName || '未知岗位'
 }
 
 export interface AuthUser {
@@ -217,10 +219,13 @@ const NAV_ROUTE_MAP: Record<string, string> = {
 const ROLE_TEMPLATES = ROLE_PERM_TEMPLATES
 
 let initAuthPromise: Promise<boolean> | null = null
+let profileRequestSequence = 0
 
 export const useAppStore = defineStore('app', {
   state: () => ({
     authReady: false,
+    authReadError: '',
+    profileRevision: 0,
     isAuthenticated: false,
     authenticatedUser: null as AuthUser | null,
     currentAccountId: '',
@@ -270,14 +275,12 @@ export const useAppStore = defineStore('app', {
     currentPermSet(state): Set<string> {
       const auth = state.authenticatedUser
       if (auth) {
-        if (auth.permissions?.length) return new Set(auth.permissions)
+        if (Array.isArray(auth.permissions)) return new Set(auth.permissions)
+        if (!isKnownRoleCode(auth.roleCode)) return new Set<string>()
         const role = mapRoleCodeToFrontendRole(auth.roleCode, auth.roleName)
         return new Set((this as any).templatePermsForRole(role))
       }
-      const acct = state.accounts.find(a => a.id === state.currentAccountId)
-      const override = state.permOverrides[state.currentAccountId]
-      if (override?.length) return new Set(override)
-      return new Set(state.roleTemplates[acct?.role || '系统管理员'] || [])
+      return new Set<string>()
     },
     /** 按岗位权限过滤后的侧栏菜单（空分组自动隐藏） */
     visibleNav(): NavGroup[] {
@@ -291,6 +294,9 @@ export const useAppStore = defineStore('app', {
   },
   actions: {
     applyAuthUser(user: AuthUser) {
+      ++profileRequestSequence
+      ++this.profileRevision
+      this.authReadError = ''
       this.authenticatedUser = user
       this.isAuthenticated = true
       const matched = this.accounts.find((a) => a.login === user.username)
@@ -326,18 +332,20 @@ export const useAppStore = defineStore('app', {
       if (!initAuthPromise) {
         initAuthPromise = (async () => {
           const tokenAtStart = getAccessToken()
+          const sequence = ++profileRequestSequence
           if (!tokenAtStart) {
             this.authReady = true
             return false
           }
           try {
             const profile = await authApi.profile()
-            if (getAccessToken() !== tokenAtStart) return this.isAuthenticated
+            if (getAccessToken() !== tokenAtStart || sequence !== profileRequestSequence) return this.isAuthenticated
             this.applyProfile(profile)
-          } catch {
+          } catch (error) {
             // 过期 token 的 profile 可能晚于新登录返回；勿清掉刚写入的新会话。
-            if (getAccessToken() === tokenAtStart) {
-              clearAccessToken()
+            if (getAccessToken() === tokenAtStart && sequence === profileRequestSequence) {
+              this.authReadError = userFacingError(error)
+              if ((error as { status?: number })?.status === 401) { clearAccessToken(); this.authReadError = '' }
               this.authenticatedUser = null
               this.isAuthenticated = false
             }
@@ -360,13 +368,18 @@ export const useAppStore = defineStore('app', {
       this.authReady = true
     },
     async refreshProfile() {
+      const sequence = ++profileRequestSequence
       const token = getAccessToken()
       if (!token) throw new Error('登录已失效，请重新登录后继续')
       const profile = await authApi.profile()
       if (getAccessToken() !== token) throw new Error('登录账号已变化，请使用当前账号继续')
+      if (sequence !== profileRequestSequence) return false
       this.applyProfile(profile)
+      return true
     },
     logout() {
+      ++profileRequestSequence
+      this.authReadError = ''
       clearAccessToken()
       this.authenticatedUser = null
       this.isAuthenticated = false

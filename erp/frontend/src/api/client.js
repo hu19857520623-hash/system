@@ -4,6 +4,8 @@
  */
 import { clearAccessToken, getAccessToken } from '@/auth/tokenStore'
 import { sessionReturnPath } from '@/auth/internalRedirect'
+import { notifyPermissionFailure } from '@/auth/permissionEvents'
+import { sessionRecoveryTarget } from '@/auth/sessionRecoveryTarget'
 import { userFacingError } from '@erp/shared/user-facing-error'
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
@@ -34,9 +36,10 @@ function shouldClearErpSession(url, status) {
 function responseFailure(url, status, payload, requestToken) {
   const sessionFailure = shouldClearErpSession(url, status)
   const changed = requestToken !== getAccessToken()
+  notifyPermissionFailure(url, status, !changed)
   const message = sessionFailure && changed ? '原登录请求已失效，请使用当前账号继续' : userFacingError(payload, status)
   if (sessionFailure && !changed) {
-    const target = sessionReturnPath(window.location)
+    const target = sessionRecoveryTarget(requestToken) || sessionReturnPath(window.location)
     clearAccessToken()
     if (!/^\/login(?:\/|$)/i.test(window.location.pathname)) window.location.href = `/login?reason=session-expired&redirect=${encodeURIComponent(target)}`
   }

@@ -70,6 +70,7 @@ declare module 'vue' {
     ElTooltip: typeof import('element-plus/es')['ElTooltip']
     ElUpload: typeof import('element-plus/es')['ElUpload']
     ListPagination: typeof import('./components/ListPagination.vue')['default']
+    LiveAccessGate: typeof import('./components/ui/LiveAccessGate.vue')['default']
     MetricCard: typeof import('./components/ui/MetricCard.vue')['default']
     MingruiTrackingPanel: typeof import('./components/mingrui/MingruiTrackingPanel.vue')['default']
     OutboundLabelPanel: typeof import('./components/outbound/OutboundLabelPanel.vue')['default']
