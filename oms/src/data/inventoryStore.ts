@@ -48,6 +48,7 @@ function emit() {
 
 function sessionOwner() { return getStoredAuthSession()?.token || '' }
 let hydrationVersion = 0, inventoryRefreshVersion = 0
+const productDeleteVersions = new Map<string, number>()
 function mayRestore(owner: string, generation: number) { return owner === sessionOwner() && generation === hydrationVersion }
 
 async function persistLocalOrThrow() {
@@ -56,12 +57,14 @@ async function persistLocalOrThrow() {
 
 async function persistProductsOrThrow(products: Product[]) {
   const owner = sessionOwner(), generation = hydrationVersion
+  const deleteVersions = products.map(product => productDeleteVersions.get(product.id) || 0)
   const payload = products.map(product => {
     const { availableQty: _available, lockedQty: _locked, inCatalog: _catalog, ...metadata } = product
     return metadata
   })
   const result = await apiPut<{ ok: boolean; products: Product[] }>('/inventory-products', { products: payload })
   if (!mayRestore(owner, generation)) throw new Error('登录身份或商品页面已变化，请重新打开商品核对保存结果')
+  if (products.some((product, index) => (productDeleteVersions.get(product.id) || 0) !== deleteVersions[index])) throw new Error('商品已删除，旧保存结果已忽略，请刷新商品列表核对')
   if (!result.ok || !Array.isArray(result.products) || result.products.length !== products.length) throw new Error('商品可能已保存，但返回记录不完整，请刷新商品列表核对后继续')
   const saved = new Map(result.products.map(product => [product.id, product]))
   if (saved.size !== products.length || products.some(product => !saved.has(product.id) || saved.get(product.id)?.customerId !== product.customerId)) throw new Error('商品返回内容与所选记录不同，请刷新后核对')
@@ -650,6 +653,7 @@ export async function restoreLocalProduct(productId: string): Promise<boolean> {
 export function hasLocalProductStock(productId: string): boolean {
   const product = state.products.find(item => item.id === productId)
   if (!product) return false
+  if (product.availableQty > 0 || product.lockedQty > 0) return true
   return state.inventory.some(item => (
     item.sku === product.internalSku
     && (item.customerId ?? null) === (product.customerId ?? null)
@@ -673,11 +677,17 @@ export async function permanentlyDeleteLocalProduct(productId: string): Promise<
   }
 
   const owner = sessionOwner(), generation = hydrationVersion
-  await apiDelete(`/inventory-state/products/${encodeURIComponent(productId)}`)
+  try {
+    await apiDelete(`/inventory-state/products/${encodeURIComponent(productId)}`)
+  } catch (error) {
+    // A retry after a lost successful response may find the card already gone.
+    if ((error as { status?: number }).status !== 404 || !(error instanceof Error) || error.message !== '商品已删除或不存在，请刷新商品列表核对') throw error
+  }
   if (!mayRestore(owner, generation)) throw new Error('商品已删除，但登录身份或页面已变化，请重新查询当前商品列表')
+  productDeleteVersions.set(productId, (productDeleteVersions.get(productId) || 0) + 1)
   state.products = state.products.filter(item => item.id !== productId)
   state.inventory = state.inventory.filter(item => (
-    item.sku !== product.internalSku || (item.customerId ?? null) !== (product.customerId ?? null)
+    item.stockSource !== 'owned' || item.sku !== product.internalSku || (item.customerId ?? null) !== (product.customerId ?? null)
   ))
   emit()
   return true

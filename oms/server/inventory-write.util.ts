@@ -37,6 +37,11 @@ export async function saveInventoryProducts(
       const locked = await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM oms_customeraccount WHERE id = ${owner} FOR UPDATE`
       if (!locked.length) throw new InventoryWriteError('所选客户不存在，请刷新后重新选择')
     }
+    const deleted = await tx.$queryRaw<Array<{ entity_id: string }>>(Prisma.sql`
+      SELECT entity_id FROM oms_snapshot_tombstone
+      WHERE entity_type = 'product' AND entity_id IN (${Prisma.join(rows.map(row => row.id))})
+    `)
+    if (deleted.length) throw new InventoryWriteError('所选商品已删除，请刷新商品列表后重新选择', 409)
     const saved = []
     for (const row of rows) {
       const owner = scope || String(row.customerId || '').trim()
@@ -51,6 +56,47 @@ export async function saveInventoryProducts(
       saved.push(await tx.product.upsert({ where: { id: row.id }, create: { id: row.id, ...productWriteFields(data) } as any, update: productWriteFields(data, previous) }))
     }
     return saved
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted, maxWait: 10000, timeout: 60000 })
+}
+
+/** Serialize permanent deletion with metadata saves and canonical inventory refreshes. */
+export async function deleteInventoryProduct(db: { product: any; $transaction: any }, id: string, scope: string | null) {
+  const identity = await db.product.findUnique({ where: { id }, select: { customerId: true } })
+  if (!identity) throw new InventoryWriteError('商品已删除或不存在，请刷新商品列表核对', 404)
+  if (scope && identity.customerId !== scope) throw new InventoryWriteError('不能删除其他客户的商品', 403)
+  const owner = identity.customerId
+  if (!owner || isCatalogPoolScope(owner)) throw new InventoryWriteError('共享货盘请在ERP维护，不能在此删除', 403)
+  return db.$transaction(async (tx: Prisma.TransactionClient) => {
+    const locked = await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM oms_customeraccount WHERE id = ${owner} FOR UPDATE`
+    if (!locked.length) throw new InventoryWriteError('所选客户不存在，请刷新后核对', 404)
+    const product = await tx.product.findUnique({ where: { id } })
+    if (!product) throw new InventoryWriteError('商品已删除或不存在，请刷新商品列表核对', 404)
+    if (product.customerId !== owner) throw new InventoryWriteError('商品归属已变化，请刷新后核对', 409)
+    if (product.inCatalog) throw new InventoryWriteError('货盘商品请在ERP维护，不能在此删除', 403)
+    if (product.productStatus !== 'discarded') throw new InventoryWriteError('仅废弃商品可永久删除')
+    const stockFields = ['available', 'locked', 'inTransit', 'pendingShelving', 'pendingOutbound', 'defective'] as const
+    const stock = await tx.inventoryItem.findFirst({ where: { sku: product.internalSku, customerId: owner,
+      OR: stockFields.map(field => ({ [field]: { gt: 0 } })),
+    }, select: { id: true } })
+    if (product.availableQty > 0 || product.lockedQty > 0 || stock) throw new InventoryWriteError('该 SKU 仍有库存，不能永久删除；请先同步ERP核对库存')
+    const inbounds = await tx.inboundOrder.findMany({ where: { customerId: owner }, select: { inboundNo: true, skuHint: true, lineItems: true } })
+    for (const inbound of inbounds) {
+      let lines: Array<{ sku?: unknown }> = []
+      try {
+        const value = JSON.parse(inbound.lineItems || '[]')
+        if (!Array.isArray(value)) throw new Error('invalid lines')
+        lines = value
+      } catch { throw new InventoryWriteError('历史入库明细无法核对，请联系管理员处理后再删除', 409) }
+      if (String(inbound.skuHint || '').split(/[\s,，、]+/).includes(product.internalSku)
+        || lines.some(line => line && String(line.sku || '').trim() === product.internalSku)) throw new InventoryWriteError(`该 SKU 已关联入库单 ${inbound.inboundNo}，不能永久删除`)
+    }
+    await tx.$executeRaw`INSERT INTO oms_snapshot_tombstone (entity_type, entity_id) VALUES ('product', ${id}) ON DUPLICATE KEY UPDATE entity_id = entity_id`
+    await tx.product.delete({ where: { id } })
+    // A zero mirror may still belong to another historical card of the same SKU.
+    const sibling = await tx.product.findFirst({ where: { customerId: owner, internalSku: product.internalSku }, select: { id: true } })
+    if (!sibling) await tx.inventoryItem.deleteMany({ where: { customerId: owner, sku: product.internalSku, stockSource: 'owned',
+      AND: stockFields.map(field => ({ [field]: { lte: 0 } })),
+    } })
   }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted, maxWait: 10000, timeout: 60000 })
 }
 

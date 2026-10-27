@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { applyErpInventoryView, inventoryProductsInput, productWriteFields, saveInventoryProducts } from './inventory-write.util.js'
+import { applyErpInventoryView, deleteInventoryProduct, inventoryProductsInput, productWriteFields, saveInventoryProducts } from './inventory-write.util.js'
 
 test('metadata cannot update stock, catalog membership or catalog commercial data; new stock is zero',()=>{
   const data={customerId:'c1',name:'商品',availableQty:999,lockedQty:999,inCatalog:true,price:7,cost:3}
@@ -16,7 +16,7 @@ function productsFixture() {
   const rows=new Map<string,any>([['own',{id:'own',customerId:'c1',internalSku:'TKL1-A',customerSku:'A',name:'原名称',availableQty:5,lockedQty:2,inCatalog:false,productStatus:'available'}],['other',{id:'other',customerId:'c2'}]])
   const calls:any[]=[]
   const tx:any={
-    $queryRaw:async()=>{calls.push('account-lock');return [{id:'c1'}]},
+    $queryRaw:async(query:any)=>{if(String(query?.sql||query?.[0]).includes('snapshot_tombstone')){calls.push('deleted-check');return []}calls.push('account-lock');return [{id:'c1'}]},
     product:{findUnique:async({where}:any)=>{calls.push('read-product');return rows.get(where.id)||null},upsert:async({where,create,update}:any)=>{const next=rows.has(where.id)?{...rows.get(where.id),...update}:create;rows.set(where.id,next);return next}},
   }
   const db:any={$transaction:async(fn:any)=>fn(tx)},skuCalls:any[]=[]
@@ -69,4 +69,49 @@ test('new mirrors use stable bounded scoped IDs; explicit zero values update the
 test('invalid ERP quantities or duplicate scope rows reject rather than coercing quantities',async()=>{
   for(const value of ['5',-1,1.5,NaN,2147483648]){const f=mirrorFixture();await assert.rejects(applyErpInventoryView(f.tx,'c1','WMS-JHB-01',[{...f.item,warehouseAvailable:value}]),/数量无效/)}
   const f=mirrorFixture();await assert.rejects(applyErpInventoryView(f.tx,'c1','WMS-JHB-01',[f.item,f.item]),/范围返回异常/)
+})
+
+function deleteFixture() {
+  let product:any={id:'gone',customerId:'c1',internalSku:'TKL1-G',productStatus:'discarded',inCatalog:false,availableQty:0,lockedQty:0}
+  const calls:string[]=[], tombstones=new Set<string>(), inventory:any[]=[]
+  const inbounds:any[]=[]
+  const tx:any={
+    $queryRaw:async()=>{calls.push('account-lock');return [{id:'c1'}]},
+    $executeRaw:async()=>{calls.push('tombstone');tombstones.add('gone')},
+    product:{findUnique:async()=>{calls.push('current-card');return product},delete:async()=>{calls.push('delete-card');product=null},findFirst:async()=>null},
+    inventoryItem:{findFirst:async()=>inventory[0]||null,deleteMany:async(args:any)=>{calls.push('delete-mirror');assert.equal(args.where.stockSource,'owned');assert.equal(args.where.AND.length,6)}},
+    inboundOrder:{findMany:async()=>inbounds},
+  }
+  const db:any={product:{findUnique:async()=>product},$transaction:async(fn:any)=>fn(tx)}
+  return {db,tx,calls,tombstones,inventory,inbounds,product,remove:(scope:string|null='c1')=>deleteInventoryProduct(db,'gone',scope)}
+}
+
+test('deletion rechecks the current card under its customer lock and records deletion atomically',async()=>{
+  const f=deleteFixture();await f.remove()
+  assert.deepEqual(f.calls,['account-lock','current-card','tombstone','delete-card','delete-mirror']);assert.ok(f.tombstones.has('gone'))
+})
+test('deletion rejects other customers, shared/catalog cards and current stock before writing',async()=>{
+  for(const change of [{customerId:'c2'},{customerId:'tkl'},{inCatalog:true},{productStatus:'available'},{availableQty:1},{lockedQty:1}]){
+    const f=deleteFixture();Object.assign(f.product,change);await assert.rejects(f.remove(),/[\u4e00-\u9fff]/);assert.equal(f.tombstones.size,0)
+  }
+  const f=deleteFixture();f.inventory.push({id:'stock'});await assert.rejects(f.remove(),/仍有库存/);assert.equal(f.tombstones.size,0)
+})
+test('deletion preserves inbound-linked cards, including JSON-only historical references',async()=>{
+  for(const row of [{inboundNo:'RV1',skuHint:'OTHER,TKL1-G'}, {inboundNo:'RV2',lineItems:JSON.stringify([{sku:'TKL1-G'}])}]) {
+    const f=deleteFixture();f.inbounds.push(row);await assert.rejects(f.remove(),/已关联入库单/);assert.equal(f.tombstones.size,0)
+  }
+})
+test('unreadable historical inbound data cannot silently authorize irreversible deletion',async()=>{
+  for(const lineItems of ['{broken','{"sku":"TKL1-G"}']) {
+    const f=deleteFixture();f.inbounds.push({inboundNo:'RV-BAD',lineItems})
+    await assert.rejects(f.remove(),/历史入库明细无法核对/);assert.equal(f.tombstones.size,0)
+  }
+})
+test('the save transaction checks tombstones after locking; old single or batch saves cannot recreate deleted IDs',async()=>{
+  const f=productsFixture();f.tx.$queryRaw=async(query:any)=>{
+    const tombstone=String(query?.sql||query?.[0]).includes('snapshot_tombstone');f.calls.push(tombstone?'deleted-check':'account-lock')
+    return tombstone?[{entity_id:'gone'}]:[{id:'c1'}]
+  }
+  await assert.rejects(f.save([{id:'gone',customerId:'c1',productStatus:'discarded'}]),/已删除/)
+  assert.deepEqual(f.calls,['account-lock','deleted-check']);assert.equal(f.rows.has('gone'),false)
 })

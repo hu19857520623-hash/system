@@ -268,7 +268,11 @@ export default function Products() {
         return next
       })
     } catch (error) {
-      window.alert(userFacingError(`永久删除商品失败：${error instanceof Error ? error.message : String(error)}`))
+      const status = (error as { status?: number }).status
+      const message = userFacingError(error)
+      window.alert(status && [400, 403, 409].includes(status)
+        ? `永久删除未完成：${message}。请按提示处理后重新操作。`
+        : `删除结果暂未核对：${message}。请保留当前列表，关闭提示后可再次点击“永久删除”核对结果。`)
     }
   }
 

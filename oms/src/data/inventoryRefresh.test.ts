@@ -43,11 +43,32 @@ test('legacy local stock mutation helpers reject without changing display or sen
   assert.equal(getInventorySnapshot()[0].available,5);assert.equal(getInventorySnapshot()[0].locked,2)
 })
 test('failed deletion or a late deletion result cannot roll back another hydrated customer',async t=>{
-  environment(t);hydrateInventory({inventory:[],products:[{...product,productStatus:'discarded'}],purchases:[]})
+  environment(t);hydrateInventory({inventory:[],products:[{...product,productStatus:'discarded',availableQty:0,lockedQty:0}],purchases:[]})
   let release!:(r:Response)=>void;globalThis.fetch=async()=>new Promise(r=>release=r)
   const pending=permanentlyDeleteLocalProduct('p1');assert.equal(getProductsSnapshot().length,1)
   hydrateInventory({inventory:[{...row,customerId:'c2'}],products:[{...product,id:'p2',customerId:'c2'}],purchases:[]})
   release(new Response(null,{status:204}));await assert.rejects(pending,/页面已变化/);assert.equal(getProductsSnapshot()[0].id,'p2');assert.equal(getInventorySnapshot()[0].customerId,'c2')
+})
+
+test('late metadata success cannot recreate a card deleted by another action in this page',async t=>{
+  environment(t);const discarded={...product,productStatus:'discarded' as const,availableQty:0,lockedQty:0}
+  hydrateInventory({inventory:[],products:[discarded],purchases:[]})
+  let release!:(r:Response)=>void
+  globalThis.fetch=async(_input,init)=>init?.method==='DELETE'?new Response(null,{status:204}):new Promise(r=>release=r)
+  const pending=updateLocalProducts(['p1'],{name:'迟到名称'})
+  assert.equal(await permanentlyDeleteLocalProduct('p1'),true);assert.equal(getProductsSnapshot().length,0)
+  release(Response.json({ok:true,products:[{...discarded,name:'迟到名称'}]}))
+  await assert.rejects(pending,/旧保存结果已忽略/);assert.equal(getProductsSnapshot().length,0)
+})
+
+test('delete response loss preserves the card and explicit retry reconciles the server-confirmed missing card',async t=>{
+  environment(t);hydrateInventory({inventory:[],products:[{...product,productStatus:'discarded',availableQty:0,lockedQty:0}],purchases:[]})
+  globalThis.fetch=async()=>{throw new Error('NetworkError')}
+  await assert.rejects(permanentlyDeleteLocalProduct('p1'));assert.equal(getProductsSnapshot().length,1)
+  globalThis.fetch=async()=>Response.json({error:'Unknown resource'},{status:404})
+  await assert.rejects(permanentlyDeleteLocalProduct('p1'));assert.equal(getProductsSnapshot().length,1)
+  globalThis.fetch=async()=>Response.json({error:'商品已删除或不存在，请刷新商品列表核对'},{status:404})
+  assert.equal(await permanentlyDeleteLocalProduct('p1'),true);assert.equal(getProductsSnapshot().length,0)
 })
 test('bulk metadata save sends selected cards once, omits stock and applies canonical records only after success',async t=>{
   environment(t);hydrateInventory({inventory:[row],products:[product,{...product,id:'p2',customerSku:'B',internalSku:'TKL9001-B'}],purchases:[]})

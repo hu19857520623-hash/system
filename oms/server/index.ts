@@ -1,5 +1,5 @@
 import { applyCatalogReclaimSnapshot } from './catalog-reclaim-snapshot.util.js'
-import { applyErpInventoryView, inventoryProductsInput, InventoryWriteError, saveInventoryProducts } from './inventory-write.util.js'
+import { applyErpInventoryView, inventoryProductsInput, InventoryWriteError, saveInventoryProducts, deleteInventoryProduct } from './inventory-write.util.js'
 import { assertOwnedBindingMutation, OwnedBindingLockedError } from './owned-binding-lock.util.js'
 import { localizedErrorResponse } from './error-response.util.js'
 import { missingRequiredAccountMessage } from './account-validation.util.js'
@@ -2833,8 +2833,6 @@ app.put('/api/inventory-state', (_req, res) => {
 async function writeProductCards(req: AuthenticatedRequest, res: express.Response, value: unknown) {
   try {
     const products = inventoryProductsInput(value)
-    const filtered = await filterDeletedSnapshotRows('product', products)
-    if (filtered.length !== products.length) throw new InventoryWriteError('所选商品已删除，请刷新商品列表后重新选择', 409)
     const saved = await saveInventoryProducts(prisma, products, customerScope(req), inventoryProductStateData,
       row => validateInventoryProductState(row, { allowLegacyCustomerSku: row.productStatus === 'discarded' }), assertInventorySkuAvailable)
     res.json({ ok: true, products: saved })
@@ -2861,67 +2859,11 @@ app.put('/api/inventory-state/products/:id', (req, res) => {
 
 app.delete('/api/inventory-state/products/:id', async (req, res) => {
   try {
-    const id = String(req.params.id || '').trim()
-    const scope = customerScope(req as AuthenticatedRequest)
-    const product = await prisma.product.findUnique({ where: { id } })
-    if (!product) return res.status(404).json({ error: '商品卡不存在' })
-    if (scope && product.customerId !== scope) {
-      return res.status(403).json({ error: 'Cross-customer mutation denied' })
-    }
-    if (product.productStatus !== 'discarded') {
-      return res.status(400).json({ error: '仅废弃商品可永久删除' })
-    }
-    // 已出库数量是历史累计值，不属于现存库存；其余正数库存都会阻止删除。
-    const stockExists = await prisma.inventoryItem.findFirst({
-      where: {
-        sku: product.internalSku,
-        customerId: product.customerId,
-        OR: [
-          { available: { gt: 0 } },
-          { locked: { gt: 0 } },
-          { inTransit: { gt: 0 } },
-          { pendingShelving: { gt: 0 } },
-          { pendingOutbound: { gt: 0 } },
-          { defective: { gt: 0 } },
-        ],
-      },
-      select: { id: true },
-    })
-    if (stockExists) {
-      return res.status(400).json({ error: '该 SKU 仍有库存，不能永久删除；请先清空库存' })
-    }
-
-    // lineItems is stored as JSON; skuHint covers historical inbound records
-    // that were created before line items were persisted.
-    const inboundOrders = await prisma.inboundOrder.findMany({
-      where: { customerId: product.customerId },
-      select: { inboundNo: true, skuHint: true, lineItems: true },
-    })
-    const usedInbound = inboundOrders.find((order) => {
-      const hintSkus = String(order.skuHint || '')
-        .split(/[\s,，、]+/)
-        .map(item => item.trim())
-        .filter(Boolean)
-      if (hintSkus.includes(product.internalSku)) return true
-      const lines = parseJson<Array<{ sku?: unknown }>>(String(order.lineItems || ''), [])
-      return lines.some(line => String(line.sku || '').trim() === product.internalSku)
-    })
-    if (usedInbound) {
-      return res.status(400).json({ error: `该 SKU 已关联入库单 ${usedInbound.inboundNo}，不能永久删除` })
-    }
-    await prisma.$transaction([
-      prisma.product.delete({ where: { id } }),
-      prisma.inventoryItem.deleteMany({
-        where: {
-          sku: product.internalSku,
-          customerId: product.customerId,
-        },
-      }),
-    ])
+    await deleteInventoryProduct(prisma, String(req.params.id || '').trim(), customerScope(req as AuthenticatedRequest))
     res.status(204).end()
-  } catch (e) {
-    console.error(e)
-    res.status(500).json({ error: String(e) })
+  } catch (error) {
+    if (error instanceof InventoryWriteError) return res.status(error.status).json({ error: error.message })
+    sendErpError(res, error)
   }
 })
 
