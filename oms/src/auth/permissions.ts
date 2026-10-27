@@ -180,16 +180,17 @@ export function can(role: OmsRole, permission: Permission, customPermissions?: P
 }
 
 export function resolveRoutePermission(pathname: string): Permission | null {
+  pathname = pathname.split(/[?#]/)[0]
   const exact = ROUTE_PERMISSIONS[pathname]
   if (exact) return exact
+  if (/^\/products\/[^/]+\/edit\/?$/.test(pathname)) return 'product:write'
+  if (/^\/products\/[^/]+\/?$/.test(pathname)) return 'product:read'
   const sorted = Object.keys(ROUTE_PERMISSIONS)
     .filter(p => p !== '/')
     .sort((a, b) => b.length - a.length)
   for (const path of sorted) {
     if (pathname.startsWith(path + '/')) return ROUTE_PERMISSIONS[path]
   }
-  if (/^\/products\/[^/]+\/edit$/.test(pathname)) return 'product:write'
-  if (/^\/products\/[^/]+$/.test(pathname)) return 'product:read'
   return null
 }
 

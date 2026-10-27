@@ -42,7 +42,7 @@ test('读取期间切换客户，旧响应不能覆盖新会话',async t=>{
   globalThis.fetch=async()=>new Promise(resolve=>{finish=resolve})
   const read=refreshBillingFromErp('TKL9001');while(!finish)await new Promise(resolve=>setImmediate(resolve))
   s.setItem('oms-auth-session',JSON.stringify({token:'new-virtual-token',user:{...user,id:'u2',customerId:'c2',customerCode:'TKL9002'}}));finish(Response.json(snapshot()))
-  await assert.rejects(read,/登录身份已变化/);assert.equal(getCreditBalance(),100)
+  await assert.rejects(read,/登录身份(?:或权限)?已变化/);assert.equal(getCreditBalance(),100)
 })
 test('并发读取旧响应晚到，不能把最新余额回退',async t=>{
   environment(t);const releases:((response:Response)=>void)[]=[];globalThis.fetch=async()=>new Promise(resolve=>{releases.push(resolve)})

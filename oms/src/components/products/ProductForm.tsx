@@ -13,6 +13,7 @@ import { getCustomerSkuDisplay } from '../../data/skuCode'
 import { validateCustomerSku } from '../../data/skuCode'
 import { readFileAsDataUrl } from '../../data/fileUtils'
 import { notifySuccess } from '../../utils/userNotify'
+import { currentProductWriteScope } from '../../auth/productAccess'
 
 interface ProductFormProps {
   product?: Product
@@ -35,7 +36,7 @@ function ProductEditBlocked({ product }: { product: Product }) {
 
 function ProductEditorForm({ product, mode = 'create' }: ProductFormProps) {
   const navigate = useNavigate()
-  const { role } = useRole()
+  const { role, can } = useRole()
 
   const [sku, setSku] = useState(
     product ? getCustomerSkuDisplay(product, getCustomerCode(product.customerId)) : '',
@@ -59,6 +60,8 @@ function ProductEditorForm({ product, mode = 'create' }: ProductFormProps) {
   const submittedProduct = Boolean(mode === 'edit' && product && product.productStatus !== 'draft')
 
   const handleImageUpload = async (file?: File) => {
+    const owner = currentProductWriteScope()
+    if (!owner) { setError('当前账号没有商品维护权限，请返回商品列表查看'); return }
     if (!file) return
     if (!['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(file.type) || file.size > 5 * 1024 * 1024) {
       setError('仅支持不超过 5MB 的 JPG、PNG、GIF 或 WebP 商品图片')
@@ -68,10 +71,12 @@ function ProductEditorForm({ product, mode = 'create' }: ProductFormProps) {
     setImageUploading(true)
     try {
       const contentBase64 = await readFileAsDataUrl(file)
+      if (owner !== currentProductWriteScope()) return
       const uploaded = await uploadErpProductDraftImage(file.name, contentBase64)
+      if (owner !== currentProductWriteScope()) return
       setImage(uploaded.imageUrl)
     } catch (error) {
-      setError(userFacingError(`商品图片上传失败：${error instanceof Error ? error.message : String(error)}`))
+      if (owner === currentProductWriteScope()) setError(userFacingError(`商品图片上传失败：${error instanceof Error ? error.message : String(error)}`))
     } finally {
       setImageUploading(false)
     }
@@ -79,6 +84,8 @@ function ProductEditorForm({ product, mode = 'create' }: ProductFormProps) {
 
   const handleSave = async (action: 'draft' | 'submit' | 'update') => {
     setError('')
+    const owner = currentProductWriteScope()
+    if (!owner) { setError('当前账号没有商品维护权限，请返回商品列表查看'); return }
     if (imageUploading) {
       setError('请等待商品图片上传完成')
       return
@@ -149,6 +156,7 @@ function ProductEditorForm({ product, mode = 'create' }: ProductFormProps) {
         unit,
       }
       const saved = await upsertLocalProduct(local)
+      if (owner !== currentProductWriteScope()) return
       if (!saved.ok) {
         setError(userFacingError(saved.error))
         return
@@ -161,6 +169,7 @@ function ProductEditorForm({ product, mode = 'create' }: ProductFormProps) {
       }
       navigate(action === 'update' ? `/products/${productId}` : `/products/${productId}/edit`)
     } catch (e) {
+      if (owner !== currentProductWriteScope()) return
       const msg = e instanceof Error ? e.message : String(e)
       if (/重复\s*SKU|SKU.*已存在|已被使用/i.test(msg)) {
         setError(userFacingError(msg.includes('重复 SKU') ? msg : `重复 SKU：${internalSku}`))
@@ -172,6 +181,11 @@ function ProductEditorForm({ product, mode = 'create' }: ProductFormProps) {
     }
   }
 
+  if (!can('product:write')) return <div role="alert" className="rounded-xl border border-border bg-white p-5">
+    <p>当前账号没有商品维护权限，不能保存或上传商品资料。</p>
+    <Link to="/products" className="mt-3 inline-block text-primary-600">返回我的商品</Link>
+    {product && <Link to={`/products/${product.id}`} className="ml-4 text-primary-600">查看产品详情</Link>}
+  </div>
   return (
     <div className="space-y-4 pb-24">
       <p className="text-xs text-text-muted">
@@ -282,6 +296,11 @@ export default function ProductForm({ product, mode = 'create' }: ProductFormPro
       <Link to="/products" className="mt-3 inline-block text-primary-600">返回我的商品</Link>
     </div>
   }
+  if (mode === 'edit' && product?.inCatalog) return <div role="alert" className="rounded-xl border border-border bg-white p-5">
+    <p>货盘商品由ERP维护，请在ERP修改后同步；当前页面可查看商品资料。</p>
+    <Link to={`/products/${product.id}`} className="mt-3 inline-block text-primary-600">返回产品详情</Link>
+    <Link to="/products" className="ml-4 text-primary-600">返回我的商品</Link>
+  </div>
   if (mode === 'edit' && product?.productStatus === 'discarded') {
     return <ProductEditBlocked product={product} />
   }

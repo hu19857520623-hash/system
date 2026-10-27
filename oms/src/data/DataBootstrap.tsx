@@ -1,7 +1,7 @@
 
 import { userFacingError } from '../utils/userFacingError'
 import { useEffect, useState, type ReactNode } from 'react'
-import { apiGet, type BootstrapData } from '../api/client'
+import { apiGet, authSessionScope, type BootstrapData } from '../api/client'
 import { hydrateEntities, setEntityError } from './entityStore'
 import { hydrateInventory } from './inventoryStore'
 import { hydrateOutbound } from './outboundStore'
@@ -28,7 +28,7 @@ export async function bootstrapFromApi(sessionKey: string, force = false) {
     const generation = ++bootGeneration
     bootPromise = (async () => {
       const data = await apiGet<BootstrapData>('/bootstrap')
-      if (generation !== bootGeneration) return
+      if (generation !== bootGeneration || sessionKey !== authSessionScope()) return
       hydrateEntities(data)
       hydrateInventory({
         inventory: data.inventory,
@@ -59,25 +59,26 @@ export async function bootstrapFromApi(sessionKey: string, force = false) {
 }
 
 export function DataBootstrap({ children }: { children: ReactNode }) {
-  const { isLoggedIn, authReady, authToken, mustChangePassword, logout } = useRole()
+  const { isLoggedIn, authReady, authToken, user, mustChangePassword, logout } = useRole()
+  const sessionKey = user && authToken ? authSessionScope({ token: authToken, user }) : ''
   const navigate = useNavigate()
   const [bootedSessionKey, setBootedSessionKey] = useState('')
   const [bootingSessionKey, setBootingSessionKey] = useState('')
   const [bootError, setBootError] = useState('')
 
   useEffect(() => {
-    if (!authReady || !isLoggedIn || !authToken || mustChangePassword) {
+    if (!authReady || !isLoggedIn || !sessionKey || mustChangePassword) {
       setBootedSessionKey('')
       setBootingSessionKey('')
       setBootError('')
       return
     }
     let cancelled = false
-    setBootingSessionKey(authToken)
+    setBootingSessionKey(sessionKey)
     setBootError('')
-    bootstrapFromApi(authToken)
+    bootstrapFromApi(sessionKey)
       .then(() => {
-        if (!cancelled) setBootedSessionKey(authToken)
+        if (!cancelled) setBootedSessionKey(sessionKey)
       })
       .catch(error => {
         if (!cancelled) setBootError(userFacingError(error instanceof Error ? error.message : String(error)))
@@ -86,7 +87,7 @@ export function DataBootstrap({ children }: { children: ReactNode }) {
         if (!cancelled) setBootingSessionKey('')
       })
     return () => { cancelled = true }
-  }, [authReady, authToken, isLoggedIn, mustChangePassword])
+  }, [authReady, sessionKey, isLoggedIn, mustChangePassword])
 
   if (!authReady) {
     return <div className="min-h-screen bg-slate-50" />
@@ -94,7 +95,7 @@ export function DataBootstrap({ children }: { children: ReactNode }) {
 
   if (!isLoggedIn || !authToken || mustChangePassword) return <>{children}</>
 
-  if (bootError && bootingSessionKey !== authToken) {
+  if (bootError && bootingSessionKey !== sessionKey) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50 px-6">
         <div className="max-w-md text-center space-y-3">
@@ -115,7 +116,7 @@ export function DataBootstrap({ children }: { children: ReactNode }) {
     )
   }
 
-  if (bootedSessionKey !== authToken) {
+  if (bootedSessionKey !== sessionKey) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50 text-slate-600">
         <div className="text-center space-y-2">

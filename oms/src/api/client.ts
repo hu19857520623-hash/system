@@ -25,6 +25,13 @@ export type AuthSession = {
   user: SessionUser
 }
 
+/** Data and late results belong to the login identity and effective permissions. */
+export function authSessionScope(session = getStoredAuthSession()): string {
+  return session ? JSON.stringify([session.token, session.user.id, session.user.role,
+    session.user.customerId, session.user.customerCode, session.user.warehouse, session.user.status,
+    session.user.mustChangePassword, [...session.user.permissions].sort()]) : ''
+}
+
 export type AuthLoginRequest = {
   username: string
   password: string
@@ -201,6 +208,7 @@ export function getAdminReturnSession(): AuthSession | null {
 export async function fetchWithAuth(url: string, init?: RequestInit) {
   const headers = new Headers(init?.headers)
   const token = getStoredAuthSession()?.token
+  const scope = authSessionScope()
   if (token) headers.set('Authorization', `Bearer ${token}`)
   let response: Response
   try {
@@ -208,15 +216,18 @@ export async function fetchWithAuth(url: string, init?: RequestInit) {
   } catch (err) {
     throw describeOmsNetworkError(err)
   }
-  if (response.status === 401) {
+  if (token && token === getStoredAuthSession()?.token && response.status === 401) {
     storeAuthSession(null)
     window.dispatchEvent(new Event('oms:unauthorized'))
   }
+  if (token && token === getStoredAuthSession()?.token && response.status === 403) window.dispatchEvent(new Event('oms:access-stale'))
+  if (response.ok && scope !== authSessionScope()) throw new Error('登录身份或权限已变化，请重新查询核对结果')
   return response
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getStoredAuthSession()?.token
+  const scope = authSessionScope()
   const headers = new Headers(init?.headers)
   if (!headers.has('Content-Type') && init?.body && !(init.body instanceof FormData)) {
     headers.set('Content-Type', 'application/json')
@@ -241,18 +252,21 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       /* keep raw text */
     }
-    if (res.status === 401 && path !== '/auth/login') {
+    if (token && token === getStoredAuthSession()?.token && res.status === 401 && path !== '/auth/login') {
       storeAuthSession(null)
       window.dispatchEvent(new Event('oms:unauthorized'))
     }
+    if (token && token === getStoredAuthSession()?.token && res.status === 403) window.dispatchEvent(new Event('oms:access-stale'))
     const error = new Error(userFacingError(message, res.status)) as Error & {
       status?: number
     }
     error.status = res.status
     throw error
   }
+  if (scope !== authSessionScope()) throw new Error('登录身份或权限已变化，请重新查询核对结果')
   if (res.status === 204) return undefined as T
   const text = await res.text()
+  if (scope !== authSessionScope()) throw new Error('登录身份或权限已变化，请重新查询核对结果')
   try {
     return (text ? JSON.parse(text) : undefined) as T
   } catch (err) {

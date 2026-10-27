@@ -1,6 +1,6 @@
 
 import { userFacingError } from '../utils/userFacingError'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Plus, Printer, Copy, Pencil, Ban, RotateCcw, Trash2, CheckCircle } from 'lucide-react'
 import {
@@ -33,6 +33,7 @@ import { reportLineImportResult } from '../utils/lineImportResult'
 import { notifyIfUserError, notifySuccess, notifyError } from '../utils/userNotify'
 import { approveProductDrafts } from '../data/productDraftApproval'
 import { useRole } from '../auth/RoleContext'
+import { currentProductWriteScope, requireProductWriteScope } from '../auth/productAccess'
 
 const statusTabs = [
   { id: 'all', label: '全部' },
@@ -98,7 +99,8 @@ function applyProductFilters(list: Product[], f: ProductFilters, tab: string, cu
 
 export default function Products() {
   const [printInputs, setPrintInputs] = useState<BarcodeLabelInput[] | null>(null)
-  const { can } = useRole()
+  const { can, authToken, customerId } = useRole()
+  const canWrite = can('product:write')
   const dataScope = useDataScope()
   const barcodeCustomerId = dataScope.bindingCustomerId
   const products = useProducts()
@@ -111,6 +113,7 @@ export default function Products() {
   const [applied, setApplied] = useState<ProductFilters>(defaultFilters)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
+  useEffect(() => { setSelected(new Set()); setPrintInputs(null); setApproving(false) }, [authToken, customerId, canWrite])
   const myProducts = useMemo(
     () => dataScope.scopeProducts(products),
     [dataScope, products],
@@ -129,13 +132,19 @@ export default function Products() {
 
   const handleApprove = async (items: Product[]) => {
     if (approving || !can('product:write')) return
+    const owner = currentProductWriteScope()
+    if (!owner) { notifyError('当前账号没有商品维护权限，请联系管理员核对'); return }
     if (!items.length) { notifyError('请先勾选需要审核的草稿商品'); return }
     setApproving(true)
     try {
       const result = await approveProductDrafts(items, {
         customerCodeFor: dataScope.getCustomerCode,
-        markAvailable: approveProducts,
+        markAvailable: ids => {
+          if (owner !== requireProductWriteScope()) throw new Error('登录权限已变化，请重新核对商品审核结果')
+          return approveProducts(ids)
+        },
       })
+      if (owner !== currentProductWriteScope()) return
       if (result.approvedIds.length) {
         setSelected(previous => new Set([...previous].filter(id => !result.approvedIds.includes(id))))
         setPage(1)
@@ -143,8 +152,8 @@ export default function Products() {
       }
       if (result.failures.length) notifyError(`审核失败 ${result.failures.length} 个：${result.failures.slice(0, 5).map(item => `${item.sku}：${item.error}`).join('；')}`)
     } catch (error) {
-      notifyIfUserError(error, '商品审核失败，草稿已保留，请重试')
-    } finally { setApproving(false) }
+      if (owner === currentProductWriteScope()) notifyIfUserError(error, '商品审核失败，草稿已保留，请重试')
+    } finally { if (owner === currentProductWriteScope()) setApproving(false) }
   }
 
   const paged = useMemo(() => {
@@ -173,6 +182,8 @@ export default function Products() {
 
   const handleExportAll = () => exportProducts(filtered, dataScope.getCustomerCode)
   const handleImportDrafts = async () => {
+    const owner = currentProductWriteScope()
+    if (!owner) { notifyError('当前账号没有商品维护权限，请联系管理员核对'); return }
     const customerId = dataScope.activeCustomerId
     const customerCode = dataScope.activeCustomerCode
     if (!customerId || !customerCode || customerCode === '—') {
@@ -181,7 +192,9 @@ export default function Products() {
     }
     try {
       const result = await importCsvFile(PRODUCT_COLUMNS, rows => parseProducts(rows, customerId))
+      if (owner !== currentProductWriteScope()) { notifyError('登录身份或商品维护权限已变化，请重新选择文件'); return }
       await reportLineImportResult(result, async () => {
+        if (owner !== requireProductWriteScope()) throw new Error('登录权限已变化，请重新选择文件后导入')
         const saved = await importProducts(
           result.data.map(product => ({ ...product, productStatus: 'draft' as const })),
           { customerId, customerCode },
@@ -232,28 +245,35 @@ export default function Products() {
   }
 
   const handleDiscard = async (product: Product) => {
+    const owner = currentProductWriteScope()
+    if (!owner) { notifyError('当前账号没有商品维护权限，请联系管理员核对'); return }
     if (!window.confirm(`确认废弃商品「${displaySku(product)}」？可在“废弃”页恢复。`)) return
     try {
       await discardLocalProduct(product.id)
+      if (owner !== currentProductWriteScope()) return
       setSelected(previous => {
         const next = new Set(previous)
         next.delete(product.id)
         return next
       })
     } catch (error) {
-      window.alert(userFacingError(`废弃商品失败：${error instanceof Error ? error.message : String(error)}`))
+      if (owner === currentProductWriteScope()) window.alert(userFacingError(`废弃商品失败：${error instanceof Error ? error.message : String(error)}`))
     }
   }
 
   const handleRestore = async (product: Product) => {
+    const owner = currentProductWriteScope()
+    if (!owner) { notifyError('当前账号没有商品维护权限，请联系管理员核对'); return }
     try {
       await restoreLocalProduct(product.id)
     } catch (error) {
-      window.alert(userFacingError(`恢复商品失败：${error instanceof Error ? error.message : String(error)}`))
+      if (owner === currentProductWriteScope()) window.alert(userFacingError(`恢复商品失败：${error instanceof Error ? error.message : String(error)}`))
     }
   }
 
   const handlePermanentDelete = async (product: Product) => {
+    const owner = currentProductWriteScope()
+    if (!owner) { notifyError('当前账号没有商品维护权限，请联系管理员核对'); return }
     const blockReason = permanentDeleteBlockReason(product)
     if (blockReason) {
       window.alert(blockReason)
@@ -262,12 +282,14 @@ export default function Products() {
     if (!window.confirm(`确认永久删除商品「${displaySku(product)}」？关联的本地库存展示记录将一并删除，且无法恢复。`)) return
     try {
       await permanentlyDeleteLocalProduct(product.id)
+      if (owner !== currentProductWriteScope()) return
       setSelected(previous => {
         const next = new Set(previous)
         next.delete(product.id)
         return next
       })
     } catch (error) {
+      if (owner !== currentProductWriteScope()) return
       const status = (error as { status?: number }).status
       const message = userFacingError(error)
       window.alert(status && [400, 403, 409].includes(status)
@@ -341,11 +363,12 @@ export default function Products() {
         </div>
         <div className="flex flex-wrap gap-2">
           {can('product:write') && (tab === 'draft' || reviewableSelected.length > 0) && <Button variant="toolbar" size="sm" disabled={approving || reviewableSelected.length === 0} onClick={() => void handleApprove(reviewableSelected)}><CheckCircle className="h-3.5 w-3.5" /> {approving ? '审核中…' : '批量审核'}</Button>}
-          <Link to="/products/new"><Button variant="toolbar" size="sm"><Plus className="h-3.5 w-3.5" /> 创建产品</Button></Link>
-          {!dataScope.isAdmin && <DropdownBtn variant="toolbar" label="导入商品" items={[
+          {canWrite && <Link to="/products/new"><Button variant="toolbar" size="sm"><Plus className="h-3.5 w-3.5" /> 创建产品</Button></Link>}
+          {canWrite && !dataScope.isAdmin && <DropdownBtn variant="toolbar" label="导入商品" items={[
             { label: '批量导入草稿', onClick: () => void handleImportDrafts() },
             { label: '下载导入模板', onClick: downloadProductTemplate },
           ]} />}
+          {!canWrite && !dataScope.isAdmin && <Button variant="toolbar" size="sm" onClick={downloadProductTemplate}>下载导入模板</Button>}
           <Button variant="toolbar" size="sm" onClick={() => void printBarcodes()}><Printer className="h-3.5 w-3.5" /> 打印条码</Button>
           <DropdownBtn variant="toolbar" label="导出" items={[
             { label: '导出全部', onClick: handleExportAll },
@@ -420,20 +443,20 @@ export default function Products() {
                 </td>
                 <td className="table-cell">
                   <div className="flex flex-wrap items-center gap-1 text-xs">
-                    {!p.inCatalog && p.productStatus !== 'discarded' && (
+                    {canWrite && !p.inCatalog && p.productStatus !== 'discarded' && (
                       <>
                         {p.productStatus === 'draft' && can('product:write') && <button type="button" disabled={approving} onClick={() => void handleApprove([p])} className="inline-flex items-center gap-0.5 font-medium text-emerald-700 hover:underline disabled:opacity-40"><CheckCircle className="h-3 w-3" /> {approving ? '审核中…' : '审核'}</button>}
                         <Link to={`/products/${p.id}/edit`} className="inline-flex items-center gap-0.5 font-medium text-primary-600 hover:underline"><Pencil className="h-3 w-3" /> {p.productStatus === 'draft' ? '编辑草稿' : '编辑商品'}</Link>
                         <button type="button" onClick={() => void handleDiscard(p)} className="inline-flex items-center gap-0.5 font-medium text-amber-700 hover:underline"><Ban className="h-3 w-3" /> 废弃商品</button>
                       </>
                     )}
-                    {!p.inCatalog && p.productStatus === 'discarded' && (
+                    {canWrite && !p.inCatalog && p.productStatus === 'discarded' && (
                       <>
                         <button type="button" onClick={() => void handleRestore(p)} className="inline-flex items-center gap-0.5 font-medium text-emerald-700 hover:underline"><RotateCcw className="h-3 w-3" /> 恢复</button>
                         <button type="button" disabled={Boolean(permanentDeleteBlockReason(p))} title={permanentDeleteBlockReason(p)} onClick={() => void handlePermanentDelete(p)} className="inline-flex items-center gap-0.5 font-medium text-red-700 hover:underline disabled:cursor-not-allowed disabled:opacity-40"><Trash2 className="h-3 w-3" /> 永久删除</button>
                       </>
                     )}
-                    <Link to={`/products/new?copy=${encodeURIComponent(p.id)}`} className="inline-flex items-center gap-0.5 font-medium text-primary-600 hover:underline"><Copy className="h-3 w-3" /> 复制新建</Link>
+                    {canWrite && <Link to={`/products/new?copy=${encodeURIComponent(p.id)}`} className="inline-flex items-center gap-0.5 font-medium text-primary-600 hover:underline"><Copy className="h-3 w-3" /> 复制新建</Link>}
                   </div>
                 </td>
               </tr>

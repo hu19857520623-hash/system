@@ -6,6 +6,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
 } from 'react'
@@ -35,6 +36,7 @@ import {
   type AuthSession,
   type SessionUser,
 } from '../api/client'
+import { createSessionAccessRead } from './sessionAccessRead'
 
 interface RoleContextValue {
   role: OmsRole
@@ -52,6 +54,8 @@ interface RoleContextValue {
   mustChangePassword: boolean
   authReady: boolean
   authToken: string
+  accessError: string
+  refreshAccess: () => Promise<void>
   login: (username: string, password: string, remember?: boolean) => Promise<SessionUser>
   impersonateAs: (accountId: string) => Promise<SessionUser>
   restoreAdminSession: () => Promise<void>
@@ -70,6 +74,9 @@ const RoleContext = createContext<RoleContextValue | null>(null)
 export function RoleProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<AuthSession | null>(getStoredAuthSession)
   const [authReady, setAuthReady] = useState(!session)
+  const [accessError, setAccessError] = useState('')
+  const accessReader = useRef<{ refresh: () => Promise<void> } | null>(null)
+  const refreshAccess = useCallback(() => accessReader.current?.refresh() ?? Promise.resolve(), [])
   const [hasAdminReturnSession, setHasAdminReturnSession] = useState(() => Boolean(getAdminReturnSession()))
   const accounts = useSyncExternalStore(subscribeAccounts, getAccountsSnapshot, getAccountsSnapshot)
   const role: OmsRole = session?.user.role ?? 'ecommerce'
@@ -96,28 +103,46 @@ export function RoleProvider({ children }: { children: React.ReactNode }) {
   }, [clearSession])
 
   useEffect(() => {
-    if (!session) return
-    let cancelled = false
-    apiGet<unknown>('/auth/me')
-      .then(response => {
-        if (cancelled) return
+    const token = session?.token
+    if (!token) { setAccessError(''); return }
+    const reader = createSessionAccessRead({
+      isCurrent: () => getStoredAuthSession()?.token === token,
+      read: async () => {
+        const response = await apiGet<unknown>('/auth/me')
         const record = response && typeof response === 'object'
           ? response as Record<string, unknown>
           : null
-        const user = normalizeSessionUser(record?.user ?? response)
-        const next = { token: session.token, user }
+        return normalizeSessionUser(record?.user ?? response)
+      },
+      apply: user => {
+        const next = { token, user }
         storeAuthSession(next, isPersistentAuthSession())
         setSession(next)
-      })
-      .catch((error) => {
+        setAccessError('')
+      },
+      error: error => {
         const status = (error as { status?: number } | null)?.status
-        if (!cancelled && status === 401) clearSession()
-      })
-      .finally(() => {
-        if (!cancelled) setAuthReady(true)
-      })
-    return () => { cancelled = true }
-  }, [])
+        if (status === 401) clearSession()
+        else setAccessError(`登录权限暂未核对。${userFacingError(error)} 可重新核对登录权限后继续。`)
+      },
+      settled: () => setAuthReady(true),
+    })
+    accessReader.current = reader
+    const refresh = () => { if (document.visibilityState !== 'hidden') void reader.refresh() }
+    void reader.refresh()
+    window.addEventListener('focus', refresh)
+    window.addEventListener('oms:access-stale', refresh)
+    document.addEventListener('visibilitychange', refresh)
+    const timer = window.setInterval(refresh, 30000)
+    return () => {
+      reader.dispose()
+      if (accessReader.current === reader) accessReader.current = null
+      window.clearInterval(timer)
+      window.removeEventListener('focus', refresh)
+      window.removeEventListener('oms:access-stale', refresh)
+      document.removeEventListener('visibilitychange', refresh)
+    }
+  }, [session?.token, clearSession])
 
   const login = useCallback(async (username: string, password: string, remember = true) => {
     const response = await apiPost<unknown>('/auth/login', { username, password, remember })
@@ -212,6 +237,8 @@ export function RoleProvider({ children }: { children: React.ReactNode }) {
     mustChangePassword: Boolean(session?.user.mustChangePassword),
     authReady,
     authToken: session?.token ?? '',
+    accessError,
+    refreshAccess,
     login,
     impersonateAs,
     restoreAdminSession,
@@ -228,6 +255,8 @@ export function RoleProvider({ children }: { children: React.ReactNode }) {
     permissions,
     session,
     authReady,
+    accessError,
+    refreshAccess,
     login,
     impersonateAs,
     restoreAdminSession,

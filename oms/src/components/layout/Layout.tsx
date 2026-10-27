@@ -140,6 +140,9 @@ export default function Layout() {
   const navigate = useNavigate()
   const {
     canAccessRoute,
+    can,
+    accessError,
+    refreshAccess,
     roleLabel,
     role,
     accounts,
@@ -155,6 +158,7 @@ export default function Layout() {
   const dataScope = useDataScope()
   const admin = isSysAdmin(role)
   const pageTitle = findPageTitle(pathname)
+  const allowedReturn = allNavItems.find(item => canAccessRoute(item.to))
   const [menuSearch, setMenuSearch] = useState('')
   const orders = useOrders()
   const customer = useCustomerProfile()
@@ -216,8 +220,7 @@ export default function Layout() {
       navigate('/login', { replace: true })
       return
     }
-    if (!canAccessRoute(pathname)) navigate('/', { replace: true })
-  }, [pathname, canAccessRoute, navigate, isLoggedIn])
+  }, [navigate, isLoggedIn])
 
   useEffect(() => {
     setExpanded(prev => {
@@ -347,7 +350,7 @@ export default function Layout() {
           })}
         </nav>
 
-        <div className="border-t border-border-light p-3">
+        {(admin || can('billing:read')) && <div className="border-t border-border-light p-3">
           <div className="rounded-lg bg-surface-muted/80 px-3 py-2.5">
             {roleLabel === '系统管理员' ? (
               <p className="text-[11px] text-text-muted">管理 {accounts.length} 个客户账号</p>
@@ -355,7 +358,7 @@ export default function Layout() {
               <p className="text-xs font-semibold text-primary-700">{formatCurrency(creditBalance)}{readWarning && <span className="ml-1 text-[10px] text-amber-700">缓存余额，请刷新核对</span>}</p>
             )}
           </div>
-        </div>
+        </div>}
       </aside>
 
       <div className="flex flex-1 flex-col overflow-hidden">
@@ -408,7 +411,15 @@ export default function Layout() {
         )}
 
         <main className="content-bg flex-1 overflow-y-auto scrollbar-thin p-6 lg:p-8">
-          <Outlet />
+          {accessError && <div role="alert" className="mb-4 rounded-lg bg-amber-50 p-4 text-sm text-amber-900">
+            <p>{accessError}</p>
+            <button type="button" className="mt-2 font-medium underline" onClick={() => void refreshAccess()}>重新核对登录权限</button>
+          </div>}
+          {canAccessRoute(pathname) ? <Outlet /> : <div role="alert" className="rounded-xl border border-border bg-white p-5">
+            <p>当前账号无权查看此页面，权限可能已更新。</p>
+            {allowedReturn ? <Link to={allowedReturn.to} className="mt-3 inline-block text-primary-600">返回{allowedReturn.label}</Link>
+              : <button type="button" className="mt-3 text-primary-600" onClick={() => void logout().then(() => navigate('/login', { replace: true }))}>返回登录</button>}
+          </div>}
         </main>
       </div>
       <ToastHost />

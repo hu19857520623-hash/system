@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react'
-import { apiDelete, apiPut, getStoredAuthSession } from '../api/client'
+import { apiDelete, apiPut, authSessionScope, getStoredAuthSession } from '../api/client'
 import { userFacingError } from '../utils/userFacingError'
 import { purchaseErpCatalog, type ErpCatalogItem, type ErpPurchaseResult } from '../api/erp'
 import type { InventoryItem, Product } from './mockData'
@@ -46,7 +46,7 @@ function emit() {
   listeners.forEach(fn => fn())
 }
 
-function sessionOwner() { return getStoredAuthSession()?.token || '' }
+function sessionOwner() { return authSessionScope() }
 let hydrationVersion = 0, inventoryRefreshVersion = 0
 const productDeleteVersions = new Map<string, number>()
 function mayRestore(owner: string, generation: number) { return owner === sessionOwner() && generation === hydrationVersion }

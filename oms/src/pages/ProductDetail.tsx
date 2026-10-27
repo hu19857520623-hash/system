@@ -9,6 +9,7 @@ import { getCustomerSkuDisplay } from '../data/skuCode'
 import { useProducts } from '../data/inventoryStore'
 import { useProductById } from '../components/products/ProductForm'
 import { useDataScope } from '../auth/useDataScope'
+import { useRole } from '../auth/RoleContext'
 
 function DetailField({ label, value }: { label: string; value: React.ReactNode }) {
   return (
@@ -22,6 +23,7 @@ function DetailField({ label, value }: { label: string; value: React.ReactNode }
 export default function ProductDetail() {
   const { id } = useParams()
   const dataScope = useDataScope()
+  const { can } = useRole()
   const product = useProductById(id)
   const allProducts = useProducts()
 
@@ -51,7 +53,7 @@ export default function ProductDetail() {
               产品：<MonoCode>{skuLabel}</MonoCode>
             </h1>
             <Badge status={product.productStatus} label={statusLabels[product.productStatus]} />
-            {!product.inCatalog && product.productStatus !== 'discarded' && (
+            {can('product:write') && !product.inCatalog && product.productStatus !== 'discarded' && (
               <Link to={`/products/${product.id}/edit`} className="text-sm font-medium text-primary-600 hover:underline">
                 {product.productStatus === 'draft' ? '编辑草稿' : '编辑商品'}
               </Link>

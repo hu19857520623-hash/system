@@ -20,7 +20,7 @@ import {
   DEFAULT_SHIPPING_REGION_CODES,
 } from '../data/feeTemplates'
 import type { CustomerAccount } from '../data/mockData'
-import { apiPost } from '../api/client'
+import { apiPost, authSessionScope } from '../api/client'
 import { bootstrapFromApi } from '../data/DataBootstrap'
 
 type CreateAccountDraft = {
@@ -86,7 +86,7 @@ function templateName(priceTemplates: { id: string; name: string }[], id: string
 
 export default function Accounts() {
   const navigate = useNavigate()
-  const { accounts, updateAccount, toggleAccountStatus, can, authToken, impersonateAs, role } = useRole()
+  const { accounts, updateAccount, toggleAccountStatus, can, impersonateAs, role } = useRole()
   const { priceTemplates, regionDispatchRules } = useFeeTemplates()
   const dispatchRules = enabledDispatchRules(regionDispatchRules)
   const [editing, setEditing] = useState<CustomerAccount | null>(null)
@@ -145,7 +145,7 @@ export default function Accounts() {
   const disabledCount = accounts.filter(a => a.status === 'disabled').length
 
   const refreshAccountList = async () => {
-    await bootstrapFromApi(authToken, true)
+    await bootstrapFromApi(authSessionScope(), true)
   }
 
   const createAccount = async () => {
