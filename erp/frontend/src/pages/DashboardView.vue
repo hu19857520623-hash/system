@@ -3,7 +3,9 @@ import { userFacingError } from '@erp/shared/user-facing-error'
 
 import { useAppStore } from '@/stores/app'
 import { useRouter } from 'vue-router'
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch } from 'vue'
+import { getAccessToken } from '@/auth/tokenStore'
+import { useScopedDashboardRead } from '@/features/dashboard/scopedRead'
 import { ElMessage } from 'element-plus'
 import { dashboardApi, announcementApi } from '@/api/client.js'
 import { fmtTime } from '@/api/mappers.ts'
@@ -20,23 +22,11 @@ import {
 
 const app = useAppStore()
 const router = useRouter()
-const loading = ref(false)
-const dashboardError = ref(''), lastDashboardRead = ref('')
-let dashboardReadVersion = 0
-const trendLoading = ref(false)
-const trendSeries = ref<{ date: string; receipts: number; receivedQty: number; damagedQty: number }[]>([])
-
 const greetName = computed(() => {
   const h = new Date().getHours()
   const time = h < 12 ? '上午好' : h < 18 ? '下午好' : '晚上好'
   return `${time}，${app.currentAccount.name}`
 })
-
-const kpis = ref<{ value: string; label: string; tone: string; key: DashboardKpiKey }[]>([])
-
-const visibleKpis = computed(() =>
-  kpis.value.filter((kpi) => app.hasPerm(DASHBOARD_KPI_PERM_MAP[kpi.key])),
-)
 
 const showTrendChart = computed(() => app.hasPerm(DASHBOARD_TRENDS_PERM))
 const showPipelineDomestic = computed(() => app.hasPerm(DASHBOARD_PIPELINE_DOMESTIC_PERM))
@@ -56,35 +46,6 @@ const quickEntries = ref([
   { id: 'outbound', icon: 'outbound', label: '出库作业' },
   { id: 'billing', icon: 'billing', label: '客户结算' },
 ])
-
-const pipelineDomestic = ref([
-  { label: '选品审核', count: '—', cls: '' },
-  { label: '采购/财务', count: '—', cls: '' },
-  { label: '中转仓收货', count: '—', cls: '' },
-])
-
-const pipelineOverseas = ref([
-  { label: '在途待扫描', count: '—', cls: '' },
-  { label: '已到仓待收', count: '—', cls: '' },
-  { label: '待上架', count: '—', cls: '' },
-  { label: '待出库', count: '—', cls: '' },
-])
-
-const todos = ref<{ title: string; desc: string; screen: string }[]>([])
-
-const announcements = ref<{
-  id: string
-  title: string
-  category: string
-  targetChannel: 'erp' | 'oms'
-  status: string
-  time: string
-  text: string
-  scheduledAt?: string | null
-  expiresAt?: string | null
-  publishedAt?: string | null
-  displayPhase: 'active' | 'scheduled' | 'expired'
-}[]>([])
 
 const publishDialogVisible = ref(false)
 const publishSaving = ref(false)
@@ -168,94 +129,75 @@ function announcementScheduleHint(ann: { displayPhase: string; scheduledAt?: str
   return parts.join(' · ')
 }
 
-async function loadTrends() {
-  if (!showTrendChart.value) {
-    trendSeries.value = []
-    return
-  }
-  trendLoading.value = true
-  try {
-    const res = await dashboardApi.trends(7)
-    trendSeries.value = res?.series ?? []
-  } catch {
-    trendSeries.value = []
-  } finally {
-    trendLoading.value = false
-  }
+function readScope(permission = 'dashboard.view') {
+  const user = app.authenticatedUser, token = getAccessToken()
+  if (!user || !token || !app.hasPerm(permission)) return null
+  return JSON.stringify([token, user.id, user.roleCode, user.workstation, [...app.currentPermSet].sort()])
 }
 
-async function loadDashboard() {
-  if (loading.value) return
-  const version = ++dashboardReadVersion, owner = app.authenticatedUser?.id
-  loading.value = true; dashboardError.value = ''
-  try {
-    const [stats, anns, scheduledRes, notif] = await Promise.all([
-      dashboardApi.stats(),
-      dashboardApi.announcements(),
-      app.hasPerm('announcement.manage')
-        ? announcementApi.list({ status: 'scheduled', targetChannel: 'erp', pageSize: 20 })
-        : Promise.resolve({ items: [] }),
-      dashboardApi.notifications(),
-    ])
-    if (version !== dashboardReadVersion || owner !== app.authenticatedUser?.id) return
-    const statsKeys = Object.keys(DASHBOARD_KPI_PERM_MAP) as DashboardKpiKey[]
-    kpis.value = statsKeys
-      .filter((key) => stats[key] != null && app.hasPerm(DASHBOARD_KPI_PERM_MAP[key]))
-      .map((key) => ({
-        key,
-        value: String(stats[key] ?? 0),
-        label: DASHBOARD_KPI_LABELS[key],
-        tone: key === 'syncFailed' && stats[key] ? 'warn' : key === 'pendingPo' || key === 'pendingAudit' ? (stats[key] ? 'warn' : '') : '',
-      }))
-
-    const badge = notif.badges || {}
-    if (showPipelineDomestic.value) {
-      pipelineDomestic.value = [
-        { label: '选品审核', count: `${stats.pendingAudit ?? 0} 待审`, cls: stats.pendingAudit ? 'warn' : '' },
-        { label: '采购审核', count: `${stats.pendingPo ?? 0} PO`, cls: stats.pendingPo ? 'warn' : '' },
-        { label: '中转仓收货', count: `${badge.logistics_wh ?? 0} PO`, cls: badge.logistics_wh ? 'warn' : '' },
-      ]
-    } else {
-      pipelineDomestic.value = []
-    }
-    if (showPipelineOverseas.value) {
-      pipelineOverseas.value = [
-        { label: '在途待扫描', count: `${badge.inbound_in_transit ?? 0} 单`, cls: badge.inbound_in_transit ? 'warn' : '' },
-        { label: '已到仓待收', count: `${badge.inbound_arrived ?? 0} 单`, cls: badge.inbound_arrived ? 'warn' : '' },
-        { label: '待上架', count: `${badge.inbound_putaway ?? 0} 单`, cls: badge.inbound_putaway ? 'warn' : '' },
-        { label: '待出库', count: `${badge.outbound ?? 0} 单`, cls: badge.outbound ? 'warn' : '' },
-      ]
-    } else {
-      pipelineOverseas.value = []
-    }
-
-    todos.value = (notif.items || [])
-      .filter((item: any) => item.count > 0 && app.canViewScreen(item.screenId))
-      .slice(0, 6)
-      .map((item: any) => ({
-        title: item.title,
-        desc: `${item.count} 项待处理`,
-        screen: item.screenId,
-      }))
-
-    if (!todos.value.length) {
-      todos.value = [
-        { title: '暂无待办', desc: '当前没有需要处理的事项', screen: 'dashboard' },
-      ]
-    }
-
-    const activeRows = (anns || []).map((a: any) => mapAnnouncementRow(a, 'active'))
-    const scheduledRows = (scheduledRes?.items || []).map((a: any) => mapAnnouncementRow(a, 'scheduled'))
-    announcements.value = [...scheduledRows, ...activeRows]
-    lastDashboardRead.value = new Date().toLocaleString('zh-CN', { hour12: false })
-  } catch (e: any) {
-    if (owner === app.authenticatedUser?.id && version === dashboardReadVersion) dashboardError.value = `${userFacingError(e)} ${lastDashboardRead.value ? '当前保留上次读取的数据。' : '尚未读取工作台数据。'}`
-  } finally {
-    loading.value = false
-  }
-}
+const dashboardRead = useScopedDashboardRead(readScope, async () => {
+  const [stats, anns, scheduledRes, notif] = await Promise.all([
+    dashboardApi.stats(), dashboardApi.announcements(),
+    app.hasPerm('announcement.manage')
+      ? announcementApi.list({ status: 'scheduled', targetChannel: 'erp', pageSize: 20 })
+      : Promise.resolve({ items: [] }),
+    dashboardApi.notifications(),
+  ])
+  return { stats, anns, scheduledRes, notif }
+}, '工作台')
+const trendRead = useScopedDashboardRead(() => readScope(DASHBOARD_TRENDS_PERM), () => dashboardApi.trends(7), '收货趋势')
+const { loading, error: dashboardError, lastRead: lastDashboardRead, refresh: loadDashboard } = dashboardRead
+const { loading: trendLoading, error: trendError, refresh: loadTrends } = trendRead
+const trendSeries = computed(() => trendRead.data.value?.series ?? [])
+const kpis = computed(() => {
+  const stats = dashboardRead.data.value?.stats
+  return stats ? (Object.keys(DASHBOARD_KPI_PERM_MAP) as DashboardKpiKey[])
+    .filter(key => stats[key] != null && app.hasPerm(DASHBOARD_KPI_PERM_MAP[key]))
+    .map(key => ({ key, value: String(stats[key]), label: DASHBOARD_KPI_LABELS[key],
+      tone: key === 'syncFailed' && stats[key] ? 'warn' : ['pendingPo', 'pendingAudit'].includes(key) && stats[key] ? 'warn' : '',
+    })) : []
+})
+const visibleKpis = kpis
+const pipelineDomestic = computed(() => {
+  const snapshot = dashboardRead.data.value
+  if (!snapshot || !showPipelineDomestic.value) return []
+  const { stats, notif } = snapshot, badge = notif.badges || {}
+  return [
+    { label: '选品审核', count: `${stats.pendingAudit ?? 0} 待审`, cls: stats.pendingAudit ? 'warn' : '' },
+    { label: '采购审核', count: `${stats.pendingPo ?? 0} PO`, cls: stats.pendingPo ? 'warn' : '' },
+    { label: '中转仓收货', count: `${badge.logistics_wh ?? 0} PO`, cls: badge.logistics_wh ? 'warn' : '' },
+  ]
+})
+const pipelineOverseas = computed(() => {
+  const snapshot = dashboardRead.data.value
+  if (!snapshot || !showPipelineOverseas.value) return []
+  const badge = snapshot.notif.badges || {}
+  return [
+    { label: '在途待扫描', count: `${badge.inbound_in_transit ?? 0} 单`, cls: badge.inbound_in_transit ? 'warn' : '' },
+    { label: '已到仓待收', count: `${badge.inbound_arrived ?? 0} 单`, cls: badge.inbound_arrived ? 'warn' : '' },
+    { label: '待上架', count: `${badge.inbound_putaway ?? 0} 单`, cls: badge.inbound_putaway ? 'warn' : '' },
+    { label: '待出库', count: `${badge.outbound ?? 0} 单`, cls: badge.outbound ? 'warn' : '' },
+  ]
+})
+const todos = computed(() => {
+  const snapshot = dashboardRead.data.value
+  if (!snapshot) return []
+  const rows = (snapshot.notif.items || [])
+    .filter((item: any) => item.count > 0 && app.canViewScreen(item.screenId)).slice(0, 6)
+    .map((item: any) => ({ title: item.title, desc: `${item.count} 项待处理`, screen: item.screenId }))
+  return rows.length ? rows : [{ title: '暂无待办', desc: '当前没有需要处理的事项', screen: 'dashboard' }]
+})
+const announcements = computed(() => {
+  const snapshot = dashboardRead.data.value
+  if (!snapshot) return []
+  const active = (snapshot.anns || []).map((a: any) => mapAnnouncementRow(a, 'active'))
+  const scheduled = app.hasPerm('announcement.manage')
+    ? (snapshot.scheduledRes?.items || []).map((a: any) => mapAnnouncementRow(a, 'scheduled')) : []
+  return [...scheduled, ...active]
+})
 
 function openPublishDialog() {
+  if (!readScope('announcement.manage')) { ElMessage.warning('公告管理权限已更新，请重新核对权限'); return }
   newAnnouncement.value = {
     title: '',
     category: '系统',
@@ -270,6 +212,8 @@ function openPublishDialog() {
 }
 
 async function publishAnnouncement() {
+  const owner = readScope('announcement.manage')
+  if (!owner) { ElMessage.warning('公告管理权限已更新，请重新核对权限'); return }
   if (!newAnnouncement.value.title || !newAnnouncement.value.text) {
     ElMessage.warning('请填写公告标题和正文')
     return
@@ -278,6 +222,7 @@ async function publishAnnouncement() {
   try {
     const payload = buildAnnouncementPayload(newAnnouncement.value)
     const res = await announcementApi.create(payload)
+    if (owner !== readScope('announcement.manage')) return
     publishDialogVisible.value = false
     if (res?.scheduled) {
       ElMessage.success(`公告已保存，将于 ${fmtTime(res.scheduledAt)} 自动发布`)
@@ -288,9 +233,9 @@ async function publishAnnouncement() {
     }
     await loadDashboard()
   } catch (e: any) {
-    ElMessage.error(userFacingError(e?.message || '发布失败'))
+    if (owner === readScope('announcement.manage')) ElMessage.error(userFacingError(e?.message || '发布失败'))
   } finally {
-    publishSaving.value = false
+    if (owner === readScope('announcement.manage')) publishSaving.value = false
   }
 }
 
@@ -299,6 +244,7 @@ const editSaving = ref(false)
 const editingAnnouncement = ref<any>(null)
 
 function editAnnouncement(ann: any) {
+  if (!readScope('announcement.manage')) { ElMessage.warning('公告管理权限已更新，请重新核对权限'); return }
   editingAnnouncement.value = {
     ...ann,
     publishMode: ann.displayPhase === 'scheduled' || ann.status === 'scheduled' ? 'scheduled' : 'immediate',
@@ -310,28 +256,34 @@ function editAnnouncement(ann: any) {
 }
 
 async function saveAnnouncement() {
+  const owner = readScope('announcement.manage')
+  if (!owner) { ElMessage.warning('公告管理权限已更新，请重新核对权限'); return }
   if (!editingAnnouncement.value) return
   editSaving.value = true
   try {
     const payload = buildAnnouncementPayload(editingAnnouncement.value)
     await announcementApi.update(editingAnnouncement.value.id, payload)
+    if (owner !== readScope('announcement.manage')) return
     editDialogVisible.value = false
     ElMessage.success('公告已更新')
     await loadDashboard()
   } catch (e: any) {
-    ElMessage.error(userFacingError(e?.message || '保存失败'))
+    if (owner === readScope('announcement.manage')) ElMessage.error(userFacingError(e?.message || '保存失败'))
   } finally {
-    editSaving.value = false
+    if (owner === readScope('announcement.manage')) editSaving.value = false
   }
 }
 
 async function deleteAnnouncement(ann: { id: string }) {
+  const owner = readScope('announcement.manage')
+  if (!owner) { ElMessage.warning('公告管理权限已更新，请重新核对权限'); return }
   try {
     await announcementApi.remove(ann.id)
+    if (owner !== readScope('announcement.manage')) return
     ElMessage.success('公告已删除')
     await loadDashboard()
   } catch (e: any) {
-    ElMessage.error(userFacingError(e?.message || '删除失败'))
+    if (owner === readScope('announcement.manage')) ElMessage.error(userFacingError(e?.message || '删除失败'))
   }
 }
 
@@ -350,14 +302,17 @@ const ICONS: Record<string, string> = {
 }
 
 function navigateTo(id: string) {
+  if (!app.canViewScreen(id)) { ElMessage.warning('该入口权限已更新，请选择当前可用的功能'); return }
   const path = app.navRouteMap[id]
-  if (path) router.push(path)
+  if (path) void router.push(path).catch(e => ElMessage.error(userFacingError(e)))
 }
 
-onMounted(() => {
-  loadDashboard()
-  loadTrends()
-})
+watch(readScope, () => {
+  publishDialogVisible.value = false; editDialogVisible.value = false
+  editingAnnouncement.value = null
+  newAnnouncement.value = { title: '', category: '系统', text: '', targetChannel: 'erp', publishMode: 'immediate', scheduledAt: '', durationMode: 'forever', expiresAt: '' }
+  publishSaving.value = false; editSaving.value = false
+}, { flush: 'sync' })
 </script>
 
 <template>
@@ -386,6 +341,7 @@ onMounted(() => {
       />
     </div>
 
+    <el-alert v-if="showTrendChart && trendError" :title="trendError" type="warning" :closable="false"><el-button :loading="trendLoading" @click="loadTrends">重新读取收货趋势</el-button></el-alert>
     <DashboardTrendChart v-if="showTrendChart" :series="trendSeries" :loading="trendLoading" />
 
     <div class="section-title">快捷入口</div>

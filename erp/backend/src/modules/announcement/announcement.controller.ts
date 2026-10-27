@@ -17,11 +17,13 @@ export class AnnouncementController {
     return this.service.listForOms()
   }
 
+  @RequirePerms('announcement.manage')
   @Get()
   list(@Query() q: PaginationDto & { status?: string }) {
     return this.service.list(q)
   }
 
+  @RequirePerms('announcement.manage')
   @Get(':id')
   detail(@Param('id', ParseIntPipe) id: number) {
     return this.service.detail(id)

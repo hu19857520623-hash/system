@@ -9,12 +9,12 @@ export default defineConfig({
   plugins: [
     vue(),
     AutoImport({
-      resolvers: [ElementPlusResolver()],
+      resolvers: [ElementPlusResolver({ importStyle: process.env.VITEST ? false : 'css' })],
       imports: ['vue', 'vue-router', 'pinia'],
       dts: 'src/auto-imports.d.ts',
     }),
     Components({
-      resolvers: [ElementPlusResolver()],
+      resolvers: process.env.VITEST ? [] : [ElementPlusResolver()],
       dts: 'src/components.d.ts',
     }),
   ],
@@ -22,6 +22,10 @@ export default defineConfig({
     // shared/ 下同时有 tsc 产物的 .js 与源码 .ts；默认会先命中 CJS .js，导致命名 export 白屏。
     extensions: ['.ts', '.tsx', '.mts', '.mjs', '.js', '.jsx', '.json'],
     alias: [
+      {
+        find: 'vitest-environment-client-render',
+        replacement: fileURLToPath(new URL('./src/test/client-render-environment.ts', import.meta.url)),
+      },
       {
         find: '@erp/shared/permissions.catalog',
         replacement: fileURLToPath(new URL('../shared/permissions.catalog.ts', import.meta.url)),
