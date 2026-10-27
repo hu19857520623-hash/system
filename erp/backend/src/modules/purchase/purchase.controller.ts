@@ -36,6 +36,18 @@ export class PurchaseController {
   }
 
   @RequirePerms('purchase.view')
+  @Get('pre-purchase/export-info')
+  exportPrePoInfo(@Query() q: { keyword?: string; status?: string }, @CurrentUser() user: AuthUser) {
+    return this.prePurchase.exportInfo(q, user)
+  }
+
+  @RequirePerms('purchase.create')
+  @Post('pre-purchase/import-info')
+  importPrePoInfo(@Body() body: { content?: string }, @CurrentUser() user: AuthUser) {
+    return this.prePurchase.importInfo(body?.content ?? '', user)
+  }
+
+  @RequirePerms('purchase.view')
   @Get('pre-purchase/:id')
   prePoDetail(@Param('id', ParseIntPipe) id: number) {
     return this.prePurchase.detail(id)

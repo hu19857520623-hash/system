@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
 import { OperationLogService } from '../operation-log/operation-log.service'
+import { exportPrePurchaseInfo, parsePrePurchaseInfo, PRE_PURCHASE_INFO_MAX_ROWS } from './pre-purchase-info.util'
 
 function fmtTime(d: Date | null | undefined): string {
   if (!d) return ''
@@ -220,6 +221,16 @@ export class PrePurchaseService {
 
   async listMy(q: PaginationDto & { keyword?: string; status?: string }, viewer?: { userId: number; roleCode: string }) {
     const { page, pageSize } = getPagination(q)
+    const where = this.myOrdersWhere(q, viewer)
+    const [rows, total] = await Promise.all([
+      this.prisma.prePurchaseOrder.findMany({ where, orderBy: { id: 'desc' }, skip: (page - 1) * pageSize, take: pageSize }),
+      this.prisma.prePurchaseOrder.count({ where }),
+    ])
+    const items = await this.enrich(rows)
+    return { items, total, page, pageSize }
+  }
+
+  private myOrdersWhere(q: { keyword?: string; status?: string }, viewer?: { userId: number; roleCode: string }) {
     const keyword = q.keyword?.trim()
     const status = q.status || 'assigned'
     if (!['assigned', 'cancelled', 'confirmed', 'all'].includes(status)) throw new BadRequestException('请选择有效的预采购处理状态')
@@ -240,17 +251,36 @@ export class PrePurchaseService {
         { prePoNo: { contains: keyword } },
       ]
     }
-    const [rows, total] = await Promise.all([
-      this.prisma.prePurchaseOrder.findMany({
-        where,
-        orderBy: { id: 'desc' },
-        skip: (page - 1) * pageSize,
-        take: pageSize,
-      }),
-      this.prisma.prePurchaseOrder.count({ where }),
-    ])
-    const items = await this.enrich(rows)
-    return { items, total, page, pageSize }
+    return where
+  }
+
+  async exportInfo(q: { keyword?: string; status?: string }, viewer: { userId: number; roleCode: string }) {
+    const rows = await this.prisma.prePurchaseOrder.findMany({
+      where: this.myOrdersWhere(q, viewer), orderBy: { id: 'desc' }, take: PRE_PURCHASE_INFO_MAX_ROWS + 1,
+    })
+    if (rows.length > PRE_PURCHASE_INFO_MAX_ROWS) throw new BadRequestException(`每次最多导出 ${PRE_PURCHASE_INFO_MAX_ROWS} 张预采购单，请缩小筛选范围`)
+    return exportPrePurchaseInfo(await this.enrich(rows))
+  }
+
+  async importInfo(content: string, viewer: { userId: number; roleCode: string }) {
+    const lines = parsePrePurchaseInfo(content)
+    // Lock in a stable order; reuse the same edit rules and transaction for every row.
+    await this.prisma.$transaction(async tx => {
+      for (const line of [...lines].sort((a, b) => a.prePoNo.localeCompare(b.prePoNo))) {
+        try {
+          await tx.$queryRaw`SELECT id FROM pre_purchase_order WHERE pre_po_no = ${line.prePoNo} FOR UPDATE`
+          const row = await tx.prePurchaseOrder.findUnique({ where: { prePoNo: line.prePoNo } })
+          if (!row) throw new BadRequestException('预采购单不存在，请核对单号')
+          await this.updateInTransaction(tx, Number(row.id), line.data, viewer)
+        } catch (error) {
+          if (error instanceof BadRequestException || error instanceof ForbiddenException || error instanceof NotFoundException) {
+            throw new BadRequestException(`第 ${line.lineNo} 行（${line.prePoNo}）：${error.message}；整批未更新`)
+          }
+          throw error
+        }
+      }
+    }, { timeout: 60_000 })
+    return { updated: lines.length }
   }
 
   async detail(id: number) {
@@ -294,94 +324,96 @@ export class PrePurchaseService {
   }
 
   async update(id: number, data: any, viewer?: { userId: number; roleCode: string }) {
-    const updated = await this.prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT id FROM pre_purchase_order WHERE id = ${BigInt(id)} FOR UPDATE`
-      const row = await tx.prePurchaseOrder.findUnique({ where: { id: BigInt(id) } })
-      if (!row) throw new NotFoundException('预采购单不存在')
-      if (row.status !== 'assigned' && row.status !== 'returned') throw new BadRequestException('仅进行中或退回修改的预采购单可编辑')
-      if (viewer?.roleCode === 'purchaser' && Number(row.purchaserId) !== viewer.userId) {
-        throw new ForbiddenException('无权编辑未分配给您的预采购单')
-      }
-
-      const patch: any = {}
-      if (data.sku != null) {
-        const sku = String(data.sku).trim()
-        if (!sku) throw new BadRequestException('SKU 不能为空')
-        const [dupProduct, dupDev] = await Promise.all([
-          tx.product.findFirst({ where: { sku, NOT: { sku: row.sku } } }),
-          tx.productDev.findFirst({ where: { sku, NOT: { id: row.devId } } }),
-        ])
-        if (dupProduct || dupDev) throw new BadRequestException(`SKU ${sku} 已被使用`)
-        patch.sku = sku
-      }
-      if (data.productName != null) {
-        if (!String(data.productName).trim()) throw new BadRequestException('请填写商品名称')
-        patch.productName = String(data.productName).trim()
-      }
-      if (data.spec != null) patch.spec = String(data.spec).trim() || null
-      if (data.plannedQty != null) patch.plannedQty = Number(data.plannedQty)
-      if (data.unitPrice != null && data.unitPrice !== '') patch.unitPrice = Number(data.unitPrice)
-      if (data.domesticFreight != null && data.domesticFreight !== '') patch.domesticFreight = Number(data.domesticFreight)
-      if (data.warehouseCode != null) {
-        if (data.warehouseCode) {
-          const warehouse = await tx.warehouse.findUnique({ where: { warehouseCode: data.warehouseCode } })
-          if (!warehouse || warehouse.status !== 1 || warehouse.warehouseType !== 'logistics') throw new BadRequestException('请选择有效的国内中转收货仓库')
-        }
-        patch.warehouseCode = data.warehouseCode || null
-      }
-      if (data.currency != null) patch.currency = data.currency
-      if (data.expectedArrival != null) patch.expectedArrival = data.expectedArrival ? new Date(data.expectedArrival) : null
-      if (data.remark != null) patch.remark = data.remark
-
-      const textFields = [
-        'supplierContactName', 'supplierContactPhone', 'supplierAddress', 'productLink', 'accessories', 'productImageUrl', 'manualUrl',
-        'sampleStatus', 'samplePackageInfo', 'sampleImageUrl', 'notPurchaseReason',
-      ]
-      for (const field of textFields) if (data[field] != null) patch[field] = String(data[field]).trim() || null
-      const integerFields = ['moq', 'leadTimeDays', 'spareCartonQty', 'piecesPerCarton']
-      for (const field of integerFields) if (data[field] != null && data[field] !== '') patch[field] = Math.max(0, Math.trunc(Number(data[field])))
-      const decimalFields = ['taxRate', 'invoiceTaxRate', 'unitTax', 'unitFreight', 'packageWeightKg', 'logoUnitFee', 'logoTotalFee', 'cartonTotalPrice', 'spareCartonUnitPrice']
-      for (const field of decimalFields) if (data[field] != null && data[field] !== '') patch[field] = Number(data[field])
-      if (data.doubleLayerCarton != null) patch.doubleLayerCarton = Boolean(data.doubleLayerCarton)
-
-      const productLengthCm = data.productLengthCm !== undefined ? data.productLengthCm : row.productLengthCm
-      const productWidthCm = data.productWidthCm !== undefined ? data.productWidthCm : row.productWidthCm
-      const productHeightCm = data.productHeightCm !== undefined ? data.productHeightCm : row.productHeightCm
-      const packageLengthCm = data.packageLengthCm !== undefined ? data.packageLengthCm : row.packageLengthCm
-      const packageWidthCm = data.packageWidthCm !== undefined ? data.packageWidthCm : row.packageWidthCm
-      const packageHeightCm = data.packageHeightCm !== undefined ? data.packageHeightCm : row.packageHeightCm
-      const productVolumeCbm = PrePurchaseService.calculateCbm(productLengthCm, productWidthCm, productHeightCm)
-      const packageVolumeCbm = PrePurchaseService.calculateCbm(packageLengthCm, packageWidthCm, packageHeightCm)
-      if ([data.productLengthCm, data.productWidthCm, data.productHeightCm].some((value) => value !== undefined)) {
-        patch.productLengthCm = PrePurchaseService.numberOrNull(productLengthCm)
-        patch.productWidthCm = PrePurchaseService.numberOrNull(productWidthCm)
-        patch.productHeightCm = PrePurchaseService.numberOrNull(productHeightCm)
-        patch.productVolumeCbm = productVolumeCbm
-      }
-      if ([data.packageLengthCm, data.packageWidthCm, data.packageHeightCm].some((value) => value !== undefined)) {
-        patch.packageLengthCm = PrePurchaseService.numberOrNull(packageLengthCm)
-        patch.packageWidthCm = PrePurchaseService.numberOrNull(packageWidthCm)
-        patch.packageHeightCm = PrePurchaseService.numberOrNull(packageHeightCm)
-        patch.packageVolumeCbm = packageVolumeCbm
-        patch.volumetricWeightKg = packageVolumeCbm == null ? null : Math.round(packageVolumeCbm * 167 * 1000) / 1000
-      }
-
-      // Supplier changes belong to the same transaction as the purchase form.
-      const supplierId = await this.resolveSupplier(data, row.supplierId, tx)
-      if (data.supplierName != null || data.supplierId != null) patch.supplierId = supplierId
-      const saved = await tx.prePurchaseOrder.update({ where: { id: BigInt(id) }, data: patch })
-      if (patch.sku && patch.sku !== row.sku) {
-        await tx.productDev.update({ where: { id: row.devId }, data: { sku: patch.sku } })
-      }
-      const devPatch: Record<string, unknown> = {}
-      for (const field of ['spec', 'productLengthCm', 'productWidthCm', 'productHeightCm', 'packageLengthCm', 'packageWidthCm', 'packageHeightCm', 'packageVolumeCbm', 'volumetricWeightKg']) {
-        if (patch[field] !== undefined) devPatch[field === 'packageVolumeCbm' ? 'cbm' : field] = patch[field]
-      }
-      if (Object.keys(devPatch).length) await tx.productDev.update({ where: { id: row.devId }, data: devPatch })
-      return saved
-    })
+    const updated = await this.prisma.$transaction(tx => this.updateInTransaction(tx, id, data, viewer))
     const [item] = await this.enrich([updated])
     return item
+  }
+
+  private async updateInTransaction(tx: Prisma.TransactionClient, id: number, data: any, viewer?: { userId: number; roleCode: string }) {
+    await tx.$queryRaw`SELECT id FROM pre_purchase_order WHERE id = ${BigInt(id)} FOR UPDATE`
+    const row = await tx.prePurchaseOrder.findUnique({ where: { id: BigInt(id) } })
+    if (!row) throw new NotFoundException('预采购单不存在')
+    if (row.status !== 'assigned' && row.status !== 'returned') throw new BadRequestException('仅进行中或退回修改的预采购单可编辑')
+    if (viewer?.roleCode === 'purchaser' && Number(row.purchaserId) !== viewer.userId) {
+      throw new ForbiddenException('无权编辑未分配给您的预采购单')
+    }
+
+    const patch: any = {}
+    if (data.sku != null) {
+      const sku = String(data.sku).trim()
+      if (!sku) throw new BadRequestException('SKU 不能为空')
+      const [dupProduct, dupDev] = await Promise.all([
+        tx.product.findFirst({ where: { sku, NOT: { sku: row.sku } } }),
+        tx.productDev.findFirst({ where: { sku, NOT: { id: row.devId } } }),
+      ])
+      if (dupProduct || dupDev) throw new BadRequestException(`SKU ${sku} 已被使用`)
+      patch.sku = sku
+    }
+    if (data.productName != null) {
+      if (!String(data.productName).trim()) throw new BadRequestException('请填写商品名称')
+      patch.productName = String(data.productName).trim()
+    }
+    if (data.spec != null) patch.spec = String(data.spec).trim() || null
+    if (data.plannedQty != null) patch.plannedQty = Number(data.plannedQty)
+    if (data.unitPrice != null && data.unitPrice !== '') patch.unitPrice = Number(data.unitPrice)
+    if (data.domesticFreight != null && data.domesticFreight !== '') patch.domesticFreight = Number(data.domesticFreight)
+    if (data.warehouseCode != null) {
+      if (data.warehouseCode) {
+        const warehouse = await tx.warehouse.findUnique({ where: { warehouseCode: data.warehouseCode } })
+        if (!warehouse || warehouse.status !== 1 || warehouse.warehouseType !== 'logistics') throw new BadRequestException('请选择有效的国内中转收货仓库')
+      }
+      patch.warehouseCode = data.warehouseCode || null
+    }
+    if (data.currency != null) patch.currency = data.currency
+    if (data.expectedArrival != null) patch.expectedArrival = data.expectedArrival ? new Date(data.expectedArrival) : null
+    if (data.remark != null) patch.remark = data.remark
+
+    const textFields = [
+      'supplierContactName', 'supplierContactPhone', 'supplierAddress', 'productLink', 'accessories', 'productImageUrl', 'manualUrl',
+      'sampleStatus', 'samplePackageInfo', 'sampleImageUrl', 'notPurchaseReason',
+    ]
+    for (const field of textFields) if (data[field] != null) patch[field] = String(data[field]).trim() || null
+    const integerFields = ['moq', 'leadTimeDays', 'spareCartonQty', 'piecesPerCarton']
+    for (const field of integerFields) if (data[field] != null && data[field] !== '') patch[field] = Math.max(0, Math.trunc(Number(data[field])))
+    const decimalFields = ['taxRate', 'invoiceTaxRate', 'unitTax', 'unitFreight', 'packageWeightKg', 'logoUnitFee', 'logoTotalFee', 'cartonTotalPrice', 'spareCartonUnitPrice']
+    for (const field of decimalFields) if (data[field] != null && data[field] !== '') patch[field] = Number(data[field])
+    if (data.doubleLayerCarton != null) patch.doubleLayerCarton = Boolean(data.doubleLayerCarton)
+
+    const productLengthCm = data.productLengthCm !== undefined ? data.productLengthCm : row.productLengthCm
+    const productWidthCm = data.productWidthCm !== undefined ? data.productWidthCm : row.productWidthCm
+    const productHeightCm = data.productHeightCm !== undefined ? data.productHeightCm : row.productHeightCm
+    const packageLengthCm = data.packageLengthCm !== undefined ? data.packageLengthCm : row.packageLengthCm
+    const packageWidthCm = data.packageWidthCm !== undefined ? data.packageWidthCm : row.packageWidthCm
+    const packageHeightCm = data.packageHeightCm !== undefined ? data.packageHeightCm : row.packageHeightCm
+    const productVolumeCbm = PrePurchaseService.calculateCbm(productLengthCm, productWidthCm, productHeightCm)
+    const packageVolumeCbm = PrePurchaseService.calculateCbm(packageLengthCm, packageWidthCm, packageHeightCm)
+    if ([data.productLengthCm, data.productWidthCm, data.productHeightCm].some((value) => value !== undefined)) {
+      patch.productLengthCm = PrePurchaseService.numberOrNull(productLengthCm)
+      patch.productWidthCm = PrePurchaseService.numberOrNull(productWidthCm)
+      patch.productHeightCm = PrePurchaseService.numberOrNull(productHeightCm)
+      patch.productVolumeCbm = productVolumeCbm
+    }
+    if ([data.packageLengthCm, data.packageWidthCm, data.packageHeightCm].some((value) => value !== undefined)) {
+      patch.packageLengthCm = PrePurchaseService.numberOrNull(packageLengthCm)
+      patch.packageWidthCm = PrePurchaseService.numberOrNull(packageWidthCm)
+      patch.packageHeightCm = PrePurchaseService.numberOrNull(packageHeightCm)
+      patch.packageVolumeCbm = packageVolumeCbm
+      patch.volumetricWeightKg = packageVolumeCbm == null ? null : Math.round(packageVolumeCbm * 167 * 1000) / 1000
+    }
+
+    // Supplier changes belong to the same transaction as the purchase form.
+    const supplierId = await this.resolveSupplier(data, row.supplierId, tx)
+    if (data.supplierName != null || data.supplierId != null) patch.supplierId = supplierId
+    const saved = await tx.prePurchaseOrder.update({ where: { id: BigInt(id) }, data: patch })
+    if (patch.sku && patch.sku !== row.sku) {
+      await tx.productDev.update({ where: { id: row.devId }, data: { sku: patch.sku } })
+    }
+    const devPatch: Record<string, unknown> = {}
+    for (const field of ['spec', 'productLengthCm', 'productWidthCm', 'productHeightCm', 'packageLengthCm', 'packageWidthCm', 'packageHeightCm', 'packageVolumeCbm', 'volumetricWeightKg']) {
+      if (patch[field] !== undefined) devPatch[field === 'packageVolumeCbm' ? 'cbm' : field] = patch[field]
+    }
+    if (Object.keys(devPatch).length) await tx.productDev.update({ where: { id: row.devId }, data: devPatch })
+    return saved
   }
 
   async cancel(id: number, reason: string, viewer?: { userId: number; roleCode: string }) {
