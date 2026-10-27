@@ -65,3 +65,13 @@ test('identity can change while the response body is read; old body is not retur
   storeAuthSession({token:'replacement',user});resolve('{"private":"old"}')
   await assert.rejects(pending,/身份或权限已变化/)
 })
+test('missing cached login can clear stale UI, while a guest request cannot clear a later login',async t=>{
+  const events=setup(t);let unauthorized=0
+  events.addEventListener('oms:unauthorized',()=>unauthorized++)
+  storeAuthSession(null);globalThis.fetch=async()=>Response.json({error:'未登录'},{status:401})
+  await assert.rejects(apiGet('/bootstrap'));assert.equal(unauthorized,1)
+  let resolve!:(value:Response)=>void;globalThis.fetch=async()=>new Promise(r=>resolve=r)
+  const oldGuest=apiGet('/bootstrap');storeAuthSession({token:'new-login',user})
+  resolve(Response.json({error:'未登录'},{status:401}));await assert.rejects(oldGuest)
+  assert.equal(unauthorized,1);assert.equal(getStoredAuthSession()?.token,'new-login')
+})

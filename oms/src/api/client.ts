@@ -205,6 +205,10 @@ export function getAdminReturnSession(): AuthSession | null {
   }
 }
 
+function notifySessionEvent(name: string) {
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event(name))
+}
+
 export async function fetchWithAuth(url: string, init?: RequestInit) {
   const headers = new Headers(init?.headers)
   const token = getStoredAuthSession()?.token
@@ -216,11 +220,11 @@ export async function fetchWithAuth(url: string, init?: RequestInit) {
   } catch (err) {
     throw describeOmsNetworkError(err)
   }
-  if (token && token === getStoredAuthSession()?.token && response.status === 401) {
+  if (token === getStoredAuthSession()?.token && response.status === 401) {
     storeAuthSession(null)
-    window.dispatchEvent(new Event('oms:unauthorized'))
+    notifySessionEvent('oms:unauthorized')
   }
-  if (token && token === getStoredAuthSession()?.token && response.status === 403) window.dispatchEvent(new Event('oms:access-stale'))
+  if (token && token === getStoredAuthSession()?.token && response.status === 403) notifySessionEvent('oms:access-stale')
   if (response.ok && scope !== authSessionScope()) throw new Error('登录身份或权限已变化，请重新查询核对结果')
   return response
 }
@@ -252,11 +256,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       /* keep raw text */
     }
-    if (token && token === getStoredAuthSession()?.token && res.status === 401 && path !== '/auth/login') {
+    if (token === getStoredAuthSession()?.token && res.status === 401 && path !== '/auth/login') {
       storeAuthSession(null)
-      window.dispatchEvent(new Event('oms:unauthorized'))
+      notifySessionEvent('oms:unauthorized')
     }
-    if (token && token === getStoredAuthSession()?.token && res.status === 403) window.dispatchEvent(new Event('oms:access-stale'))
+    if (token && token === getStoredAuthSession()?.token && res.status === 403) notifySessionEvent('oms:access-stale')
     const error = new Error(userFacingError(message, res.status)) as Error & {
       status?: number
     }

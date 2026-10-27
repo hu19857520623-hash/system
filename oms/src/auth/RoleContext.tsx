@@ -128,19 +128,30 @@ export function RoleProvider({ children }: { children: React.ReactNode }) {
       settled: () => setAuthReady(true),
     })
     accessReader.current = reader
-    const refresh = () => { if (document.visibilityState !== 'hidden') void reader.refresh() }
-    void reader.refresh()
-    window.addEventListener('focus', refresh)
-    window.addEventListener('oms:access-stale', refresh)
-    document.addEventListener('visibilitychange', refresh)
-    const timer = window.setInterval(refresh, 30000)
+    const refresh = (allowHidden = false) => {
+      const stored = getStoredAuthSession()
+      if (stored?.token !== token) {
+        if (!stored) clearSession()
+        else { setAuthReady(false); setSession(stored) }
+        return
+      }
+      if (allowHidden || document.visibilityState !== 'hidden') void reader.refresh()
+    }
+    const onWake = () => refresh()
+    refresh(true)
+    window.addEventListener('focus', onWake)
+    window.addEventListener('oms:access-stale', onWake)
+    window.addEventListener('storage', onWake)
+    document.addEventListener('visibilitychange', onWake)
+    const timer = window.setInterval(onWake, 30000)
     return () => {
       reader.dispose()
       if (accessReader.current === reader) accessReader.current = null
       window.clearInterval(timer)
-      window.removeEventListener('focus', refresh)
-      window.removeEventListener('oms:access-stale', refresh)
-      document.removeEventListener('visibilitychange', refresh)
+      window.removeEventListener('focus', onWake)
+      window.removeEventListener('oms:access-stale', onWake)
+      window.removeEventListener('storage', onWake)
+      document.removeEventListener('visibilitychange', onWake)
     }
   }, [session?.token, clearSession])
 
