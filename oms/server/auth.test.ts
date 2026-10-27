@@ -137,6 +137,10 @@ test('accepts a valid bearer JWT', () => {
 })
 
 test('maps mutating OMS API paths to write permissions', () => {
+  assert.equal(requiredWritePermission('PUT', '/inventory-products'), 'product:write')
+  assert.equal(requiredWritePermission('PUT', '/inventory-state/products/p1'), 'product:write')
+  assert.equal(requiredWritePermission('DELETE', '/inventory-state/products/p1'), 'product:write')
+  assert.equal(requiredWritePermission('POST', '/erp/customers/TKL0001/inventory-sync'), 'inventory:read')
   assert.equal(requiredWritePermission('GET', '/outbound-orders'), null)
   assert.equal(requiredWritePermission('POST', '/auth/change-password'), null)
   assert.equal(requiredWritePermission('POST', '/erp/outbound'), 'outbound:write')
@@ -152,6 +156,17 @@ test('maps mutating OMS API paths to write permissions', () => {
   assert.equal(requiredWritePermission('PUT', '/platform-sku'), 'platform:write')
   assert.equal(requiredWritePermission('POST', '/erp/returns'), 'returns:write')
   assert.equal(requiredWritePermission('POST', '/accounts'), 'account:manage')
+})
+
+test('inventory read permission permits canonical refresh but cannot save or delete product cards', () => {
+  let status = 0, message = ''
+  const response = { status(n:number) { status=n;return this }, json(body:{error:string}) { message=body.error;return this } } as unknown as Response
+  const req = {auth:{...claims,permissions:['inventory:read']},method:'POST',path:'/erp/customers/TKL0001/inventory-sync'} as AuthenticatedRequest
+  assert.equal(assertApiWritePermission(req,response),true)
+  for (const [method,path] of [['PUT','/inventory-products'],['PUT','/inventory-state/products/p1'],['DELETE','/inventory-state/products/p1']]) {
+    assert.equal(assertApiWritePermission({...req,method,path} as AuthenticatedRequest,response),false)
+    assert.equal(status,403);assert.equal(message,'没有此项操作权限')
+  }
 })
 
 test('impersonated sessions keep mustChangePassword disabled after refresh merge', () => {

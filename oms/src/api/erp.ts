@@ -481,13 +481,15 @@ export function getOutboundPodFileUrl(outboundNo: string, inline = false) {
 }
 
 export function syncErpInventoryView(customerCode: string) {
-  return apiGet<{
+  return apiPost<{
     customerCode: string
     customerName: string
     warehouseCode: string
     items: ErpInventoryViewItem[]
     total: number
-  }>(`/erp/customers/${encodeURIComponent(customerCode)}/inventory-view`)
+    inventory: import('../data/mockData').InventoryItem[]
+    products: import('../data/mockData').Product[]
+  }>(`/erp/customers/${encodeURIComponent(customerCode)}/inventory-sync`, {})
 }
 
 /** ─── P2 ─── */

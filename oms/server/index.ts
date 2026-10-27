@@ -1,4 +1,5 @@
 import { applyCatalogReclaimSnapshot } from './catalog-reclaim-snapshot.util.js'
+import { applyErpInventoryView, inventoryProductsInput, InventoryWriteError, saveInventoryProducts } from './inventory-write.util.js'
 import { assertOwnedBindingMutation, OwnedBindingLockedError } from './owned-binding-lock.util.js'
 import { localizedErrorResponse } from './error-response.util.js'
 import { missingRequiredAccountMessage } from './account-validation.util.js'
@@ -18,7 +19,6 @@ import { PrismaClient } from '@prisma/client'
 import bcrypt from 'bcryptjs'
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto'
 import { resolveOmsCorsOrigins } from './cors.js'
-import { mayUseLegacyCustomerSku, selectCustomerInventoryState } from './customer-scope.util.js'
 import { holdingEanFromCatalogPool } from '../src/data/platformBarcodeScope.js'
 import {
   assertCustomerCode,
@@ -1228,6 +1228,26 @@ app.get('/api/erp/customers/:customerCode/inventory-view', async (req, res) => {
     res.json(await fetchErpInventoryView(req.params.customerCode, warehouseCode))
   } catch (e) {
     sendErpError(res, e)
+  }
+})
+
+/** Fetch authoritative ERP stock on the server, then atomically refresh this customer's display mirror. */
+app.post('/api/erp/customers/:customerCode/inventory-sync', async (req: AuthenticatedRequest, res) => {
+  try {
+    const code = authenticatedCustomerCode(req, req.params.customerCode)
+    const account = await prisma.customerAccount.findUnique({ where: { code } })
+    if (!account) throw new InventoryWriteError('客户账号不存在，请刷新后核对', 404)
+    const result = await prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM oms_customeraccount WHERE id = ${account.id} FOR UPDATE`
+      const view = await fetchErpInventoryView(code)
+      if (view.customerCode !== code || !Array.isArray(view.items) || typeof view.warehouseCode !== 'string' || view.items.length !== view.total) throw new InventoryWriteError('ERP库存返回不完整，请稍后重试同步', 502)
+      const mirror = await applyErpInventoryView(tx, account.id, view.warehouseCode, view.items)
+      return { ...view, ...mirror }
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted, maxWait: 10000, timeout: 60000 })
+    res.json(result)
+  } catch (error) {
+    if (error instanceof InventoryWriteError) return res.status(error.status).json({ error: error.message })
+    sendErpError(res, error)
   }
 })
 
@@ -2805,133 +2825,27 @@ async function filterDeletedSnapshotRows<T extends Record<string, unknown>>(
   return rows.filter(row => !ids.has(String(row.id)))
 }
 
-app.put('/api/inventory-state', async (req, res) => {
-  try {
-    const body = req.body as {
-      inventory: Record<string, unknown>[]
-      products: Record<string, unknown>[]
-      purchases: Record<string, unknown>[]
-    }
-    const scope = customerScope(req as AuthenticatedRequest)
-    let inventory = body.inventory || []
-    let products = body.products || []
-    let purchases = body.purchases || []
-    if (scope) {
-      const selected = selectCustomerInventoryState(body, scope)
-      if (!selected.ok) return res.status(403).json({ error: selected.error })
-      inventory = selected.inventory
-      products = selected.products
-      purchases = selected.purchases
-      const [existingProducts, existingInventory, existingPurchases] = await Promise.all([
-        prisma.product.findMany({
-          where: { id: { in: products.map(item => String(item.id)) } },
-          select: { customerId: true },
-        }),
-        prisma.inventoryItem.findMany({
-          where: { id: { in: inventory.map(item => String(item.id)) } },
-          select: { customerId: true },
-        }),
-        prisma.catalogPurchase.findMany({
-          where: { id: { in: purchases.map(item => String(item.id)) } },
-          select: { customerId: true },
-        }),
-      ])
-      if (
-        [...existingProducts, ...existingInventory, ...existingPurchases]
-          .some(item => item.customerId !== scope)
-      ) return res.status(403).json({ error: 'Cross-customer mutation denied' })
-    }
-
-    ;[inventory, products, purchases] = await Promise.all([
-      filterDeletedSnapshotRows('inventory', inventory),
-      filterDeletedSnapshotRows('product', products),
-      filterDeletedSnapshotRows('purchase', purchases),
-    ])
-
-    // This endpoint persists a complete OMS client snapshot.  Older data can
-    // legitimately contain duplicate SKU cards, and rejecting that snapshot
-    // would prevent users from discarding or correcting those legacy cards.
-    // New product creation and editing still enforce SKU uniqueness in the
-    // dedicated OMS/ERP product endpoints and client form validation.
-    for (const p of products) {
-      const invalid = validateInventoryProductState(p, {
-        // ERP catalog mirrors use ERP-controlled SKUs and are not customer SKU
-        // creation. They may legitimately exceed the 11-character rule.
-        allowLegacyCustomerSku: mayUseLegacyCustomerSku(p),
-      })
-      if (invalid) return res.status(400).json({ error: invalid })
-    }
-
-    await prisma.$transaction(async tx => {
-      for (const p of products) {
-        const id = String(p.id)
-        const data = inventoryProductStateData(p, scope)
-        const previous = await tx.product.findUnique({ where: { id }, select: { internalSku: true, customerSku: true } })
-        if (!previous || previous.internalSku !== data.internalSku || previous.customerSku !== data.customerSku) await assertInventorySkuAvailable(tx, data, id)
-        await tx.product.upsert({
-          where: { id },
-          create: { id, ...data },
-          update: data,
-        })
-      }
-
-      for (const i of inventory) {
-        const id = String(i.id)
-        const data = {
-          customerId: scope ?? (i.customerId as string | null | undefined) ?? null,
-          sku: String(i.sku),
-          name: String(i.name),
-          image: String(i.image),
-          available: Number(i.available),
-          locked: Number(i.locked),
-          inTransit: Number(i.inTransit),
-          safetyStock: Number(i.safetyStock),
-          spec: String(i.spec),
-          customCode: (i.customCode as string | null | undefined) ?? null,
-          ean: (i.ean as string | null | undefined) ?? null,
-          warehouse: String(i.warehouse),
-          pendingShelving: Number(i.pendingShelving),
-          pendingOutbound: Number(i.pendingOutbound),
-          defective: Number(i.defective),
-          shipped: Number(i.shipped),
-          warningQty: Number(i.warningQty),
-          price: Number(i.price),
-          declaredNameEn: (i.declaredNameEn as string | null | undefined) ?? null,
-          categoryPath: (i.categoryPath as string | null | undefined) ?? null,
-          stockSource: String(i.stockSource),
-        }
-        await tx.inventoryItem.upsert({
-          where: { id },
-          create: { id, ...data },
-          update: data,
-        })
-      }
-
-      for (const p of purchases ?? []) {
-        const id = String(p.id)
-        const data = {
-          purchaseNo: String(p.purchaseNo),
-          customerId: scope ?? String(p.customerId),
-          sku: String(p.sku),
-          productName: String(p.productName),
-          qty: Number(p.qty),
-          createdAt: String(p.createdAt),
-        }
-        await tx.catalogPurchase.upsert({
-          where: { id },
-          create: { id, ...data },
-          update: data,
-        })
-      }
-    }, { isolationLevel: "Serializable" })
-
-    res.json({ ok: true })
-  } catch (e) {
-    console.error(e)
-    if (e instanceof GlobalSkuConflict) return res.status(400).json({ error: e.message })
-    res.status(500).json({ error: String(e) })
-  }
+// Older full snapshots must not overwrite server-owned stock or purchase records.
+app.put('/api/inventory-state', (_req, res) => {
+  res.status(409).json({ error: '旧版库存快照不能保存库存或采购数量，请刷新页面；商品请在商品管理保存，库存请使用同步ERP' })
 })
+
+async function writeProductCards(req: AuthenticatedRequest, res: express.Response, value: unknown) {
+  try {
+    const products = inventoryProductsInput(value)
+    const filtered = await filterDeletedSnapshotRows('product', products)
+    if (filtered.length !== products.length) throw new InventoryWriteError('所选商品已删除，请刷新商品列表后重新选择', 409)
+    const saved = await saveInventoryProducts(prisma, products, customerScope(req), inventoryProductStateData,
+      row => validateInventoryProductState(row, { allowLegacyCustomerSku: row.productStatus === 'discarded' }), assertInventorySkuAvailable)
+    res.json({ ok: true, products: saved })
+  } catch (error) {
+    if (error instanceof InventoryWriteError) return res.status(error.status).json({ error: error.message })
+    if (error instanceof GlobalSkuConflict) return res.status(400).json({ error: error.message })
+    sendErpError(res, error)
+  }
+}
+
+app.put('/api/inventory-products', (req, res) => writeProductCards(req as AuthenticatedRequest, res, req.body?.products))
 
 async function assertInventorySkuAvailable(db: any, data: any, id: string) {
   const account = data.customerId ? await db.customerAccount.findUnique({ where: { id: data.customerId }, select: { code: true } }) : null
@@ -2940,48 +2854,9 @@ async function assertInventorySkuAvailable(db: any, data: any, id: string) {
 }
 
 /** Persist one product card without making unchanged legacy duplicate cards block the operation. */
-app.put('/api/inventory-state/products/:id', async (req, res) => {
-  try {
-    const product = (req.body as { product?: Record<string, unknown> })?.product
-    const id = String(req.params.id || '').trim()
-    if (!id || !product || String(product.id || '') !== id) {
-      return res.status(400).json({ error: '商品卡 ID 无效' })
-    }
-    const isDiscarding = String(product.productStatus || '') === 'discarded'
-    const invalid = validateInventoryProductState(product, {
-      allowLegacyCustomerSku: isDiscarding,
-    })
-    if (invalid) return res.status(400).json({ error: invalid })
-
-    const scope = customerScope(req as AuthenticatedRequest)
-    const existing = await prisma.product.findUnique({
-      where: { id },
-      select: { customerId: true, internalSku: true, customerSku: true, productStatus: true },
-    })
-    const requestedCustomerId = String(product.customerId || '').trim() || null
-    if (scope && (
-      (requestedCustomerId && requestedCustomerId !== scope)
-      || (existing?.customerId && existing.customerId !== scope)
-    )) {
-      return res.status(403).json({ error: 'Cross-customer mutation denied' })
-    }
-
-    const data = inventoryProductStateData(product, scope)
-    await prisma.$transaction(async tx => {
-    if (!isDiscarding && (!existing || existing.internalSku !== data.internalSku || existing.customerSku !== data.customerSku || existing.productStatus === 'discarded')) await assertInventorySkuAvailable(tx, data, id)
-
-    await tx.product.upsert({
-      where: { id },
-      create: { id, ...data },
-      update: data,
-    })
-    }, { isolationLevel: "Serializable" })
-    res.json({ ok: true })
-  } catch (e) {
-    console.error(e)
-    if (e instanceof GlobalSkuConflict) return res.status(400).json({ error: e.message })
-    res.status(500).json({ error: String(e) })
-  }
+app.put('/api/inventory-state/products/:id', (req, res) => {
+  if (!req.body?.product || req.body.product.id !== req.params.id) return res.status(400).json({ error: '商品卡ID无效，请刷新后重新打开' })
+  return writeProductCards(req as AuthenticatedRequest, res, [req.body.product])
 })
 
 app.delete('/api/inventory-state/products/:id', async (req, res) => {
@@ -3054,29 +2929,9 @@ app.delete('/api/inventory-state/products/:id', async (req, res) => {
  * Remove only obsolete ERP catalog mirrors created before stock source was
  * synchronized. Normal inventory rows cannot be deleted through this route.
  */
-app.delete('/api/inventory-state/inventory/:id', async (req, res) => {
-  try {
-    const id = String(req.params.id || '').trim()
-    if (!id.startsWith('erp-inv-')) {
-      return res.status(400).json({ error: '仅可清理旧 ERP 库存镜像' })
-    }
-    const inventory = await prisma.inventoryItem.findUnique({ where: { id } })
-    if (!inventory) return res.json({ ok: true })
-    const scope = customerScope(req as AuthenticatedRequest)
-    if (scope && inventory.customerId !== scope) {
-      return res.status(403).json({ error: 'Cross-customer mutation denied' })
-    }
-    if (inventory.stockSource !== 'catalog') {
-      return res.status(400).json({ error: '仅可清理旧货盘库存镜像' })
-    }
-    await prisma.inventoryItem.delete({ where: { id } })
-    res.json({ ok: true })
-  } catch (e) {
-    console.error(e)
-    res.status(500).json({ error: String(e) })
-  }
+app.delete('/api/inventory-state/inventory/:id', (_req, res) => {
+  res.status(409).json({ error: '库存镜像由ERP维护，请刷新页面后使用同步ERP核对，不能直接删除库存记录' })
 })
-
 app.put('/api/outbound-orders', async (req, res) => {
   try {
     let orders = req.body as Record<string, unknown>[]

@@ -1,6 +1,5 @@
 import { useSyncExternalStore } from 'react'
 import { apiDelete, apiPut, getStoredAuthSession } from '../api/client'
-import { notifyPersistFailed } from '../utils/userNotify'
 import { userFacingError } from '../utils/userFacingError'
 import { purchaseErpCatalog, type ErpCatalogItem, type ErpPurchaseResult } from '../api/erp'
 import type { InventoryItem, Product } from './mockData'
@@ -47,37 +46,32 @@ function emit() {
   listeners.forEach(fn => fn())
 }
 
-function persistPayload(): InventoryState {
-  const user = getStoredAuthSession()?.user
-  if (!user || user.role === 'sys_admin' || !user.customerId) return state
-  const customerId = user.customerId
-  return {
-    products: state.products
-      .filter(product => product.customerId === customerId || (!product.customerId && !product.inCatalog))
-      .map(product => ({ ...product, customerId })),
-    inventory: state.inventory
-      .filter(item => item.customerId === customerId || (!item.customerId && item.stockSource !== 'catalog'))
-      .map(item => ({ ...item, customerId })),
-    purchases: state.purchases
-      .filter(purchase => purchase.customerId === customerId)
-      .map(purchase => ({ ...purchase, customerId })),
-  }
-}
-
-function persistLocal() {
-  emit()
-  void apiPut('/inventory-state', persistPayload()).catch(err => notifyPersistFailed('库存', err))
-}
+function sessionOwner() { return getStoredAuthSession()?.token || '' }
+let hydrationVersion = 0, inventoryRefreshVersion = 0
+function mayRestore(owner: string, generation: number) { return owner === sessionOwner() && generation === hydrationVersion }
 
 async function persistLocalOrThrow() {
-  emit()
-  await apiPut('/inventory-state', persistPayload())
+  throw new Error('库存由ERP维护，请通过出库单作业或同步ERP继续，不能直接修改库存数量')
 }
 
-async function persistProductOrThrow(product: Product) {
+async function persistProductsOrThrow(products: Product[]) {
+  const owner = sessionOwner(), generation = hydrationVersion
+  const payload = products.map(product => {
+    const { availableQty: _available, lockedQty: _locked, inCatalog: _catalog, ...metadata } = product
+    return metadata
+  })
+  const result = await apiPut<{ ok: boolean; products: Product[] }>('/inventory-products', { products: payload })
+  if (!mayRestore(owner, generation)) throw new Error('登录身份或商品页面已变化，请重新打开商品核对保存结果')
+  if (!result.ok || !Array.isArray(result.products) || result.products.length !== products.length) throw new Error('商品可能已保存，但返回记录不完整，请刷新商品列表核对后继续')
+  const saved = new Map(result.products.map(product => [product.id, product]))
+  if (saved.size !== products.length || products.some(product => !saved.has(product.id) || saved.get(product.id)?.customerId !== product.customerId)) throw new Error('商品返回内容与所选记录不同，请刷新后核对')
+  const existingIds = new Set(state.products.map(product => product.id))
+  state.products = state.products.map(product => saved.has(product.id) ? { ...product, ...saved.get(product.id) } : product)
+  state.products.push(...result.products.filter(product => !existingIds.has(product.id)))
   emit()
-  await apiPut(`/inventory-state/products/${encodeURIComponent(product.id)}`, { product })
 }
+
+async function persistProductOrThrow(product: Product) { await persistProductsOrThrow([product]) }
 
 function subscribe(listener: () => void) {
   listeners.add(listener)
@@ -89,6 +83,7 @@ function getSnapshot() {
 }
 
 export function hydrateInventory(next: HydrateInventoryInput) {
+  ++hydrationVersion; ++inventoryRefreshVersion
   const codeById = new Map((next.accounts || []).map(a => [a.id, a.code]))
   const oldProducts = structuredClone(next.products).map(product => ({
     ...product,
@@ -124,69 +119,9 @@ export function useCatalogPurchases(): CatalogPurchase[] {
 
 export type LockStockResult = { ok: true; purchase: CatalogPurchase } | { ok: false; error: string; uncertain?: boolean }
 
-function nextPurchaseNo(): string {
-  const d = new Date()
-  const date = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`
-  const seq = String(state.purchases.length + 1).padStart(3, '0')
-  return `CAT-${date}${seq}`
-}
-
-/** 客户申购货盘商品：无 ERP 时的本地回退 */
-export function purchaseCatalogProduct(
-  internalSku: string,
-  qty: number,
-  customerId: string,
-): LockStockResult {
-  if (qty <= 0) return { ok: false, error: '申购数量须大于 0' }
-
-  const product = state.products.find(p => p.internalSku === internalSku && p.inCatalog)
-  if (!product) return { ok: false, error: '商品不在货盘或不存在' }
-  if (product.productStatus !== 'available') return { ok: false, error: '商品当前不可申购' }
-
-  const poolIdx = state.inventory.findIndex(
-    i => i.sku === internalSku && i.stockSource === 'catalog' && isCatalogPoolCustomerId(i.customerId),
-  )
-  if (poolIdx < 0) return { ok: false, error: '未找到货盘共享库存' }
-
-  const pool = state.inventory[poolIdx]
-  if (pool.available < qty) {
-    return { ok: false, error: `可售库存不足，当前可售 ${pool.available.toLocaleString()} 件` }
-  }
-
-  pool.available -= qty
-  product.availableQty -= qty
-  product.lockedQty += qty
-
-  const custIdx = state.inventory.findIndex(
-    i => i.sku === internalSku && i.stockSource === 'catalog' && i.customerId === customerId,
-  )
-  if (custIdx >= 0) {
-    state.inventory[custIdx].locked += qty
-  } else {
-    state.inventory.push({
-      ...pool,
-      id: String(Date.now()),
-      customerId,
-      available: 0,
-      locked: qty,
-      inTransit: 0,
-      pendingShelving: 0,
-      pendingOutbound: 0,
-    })
-  }
-
-  const purchase: CatalogPurchase = {
-    id: String(Date.now()),
-    purchaseNo: nextPurchaseNo(),
-    customerId,
-    sku: internalSku,
-    productName: product.name,
-    qty,
-    createdAt: new Date().toISOString().slice(0, 19).replace('T', ' '),
-  }
-  state.purchases.unshift(purchase)
-  persistLocal()
-  return { ok: true, purchase }
+/** Local-only purchases cannot reserve stock or bypass the ERP payment workflow. */
+export function purchaseCatalogProduct(_internalSku: string, _qty: number, _customerId: string): LockStockResult {
+  return { ok: false, error: '请连接ERP后在货盘选品中申购，不能离线修改持有库存' }
 }
 
 function applyErpPurchaseLocally(
@@ -499,92 +434,20 @@ export function listShippableOutboundItems(
   return rows
 }
 
-/** 出库提交时锁定库存（货盘扣减客户锁定量，自有扣减可售并转锁定） */
+/** Legacy callers must use the ERP outbound workflow; browser snapshots cannot reserve stock. */
 export async function lockStockForOutbound(
-  lines: { sku: string; qty: number }[],
-  stockSource: 'owned' | 'catalog',
-  customerId?: string,
+  _lines: { sku: string; qty: number }[],
+  _stockSource: 'owned' | 'catalog',
+  _customerId?: string,
 ): Promise<LockStockResult | { ok: true }> {
-  const before = structuredClone(state)
-
-  // 先完整校验，避免多 SKU 中途失败后只锁定前半部分。
-  for (const line of lines) {
-    const qty = line.qty
-    if (qty <= 0) continue
-    if (stockSource === 'catalog') {
-      if (!customerId) return { ok: false, error: '货盘出库需关联客户账号' }
-      const item = findCustomerInventory(line.sku, 'catalog', customerId)
-      if (!item) {
-        return { ok: false, error: `${line.sku} 尚未申购，请先在货盘选品申购并锁定库存` }
-      }
-      if (item.locked < qty) {
-        return { ok: false, error: `${line.sku} 锁定库存不足（需 ${qty}，已锁定 ${item.locked}）` }
-      }
-      continue
-    }
-    const item = findCustomerInventory(line.sku, 'owned', customerId)
-    if (!item) return { ok: false, error: `未找到 SKU ${line.sku} 的自有库存` }
-    if (item.available < qty) {
-      return { ok: false, error: `${line.sku} 可售库存不足（需 ${qty}，可售 ${item.available}）` }
-    }
-  }
-
-  for (const line of lines) {
-    const qty = line.qty
-    if (qty <= 0) continue
-    const item = findCustomerInventory(line.sku, stockSource, customerId)!
-    const product = findProductForSku(item.sku)
-    if (stockSource === 'catalog') {
-      item.locked -= qty
-      item.pendingOutbound += qty
-      if (product) product.lockedQty = Math.max(0, product.lockedQty - qty)
-    } else {
-      item.available -= qty
-      item.locked += qty
-      if (product) {
-        product.availableQty -= qty
-        product.lockedQty += qty
-      }
-    }
-  }
-  try {
-    await persistLocalOrThrow()
-    return { ok: true }
-  } catch (error) {
-    state = before
-    emit()
-    return {
-      ok: false,
-      error: `库存锁定保存失败：${error instanceof Error ? error.message : String(error)}`,
-    }
-  }
+  return { ok: false, error: '请在出库单中提交发货，库存锁定由ERP处理；请刷新库存后继续' }
 }
 
-/** ERP 出库创建失败时撤销前端已做的库存锁定。 */
 export async function rollbackStockForOutbound(
-  lines: { sku: string; qty: number }[],
-  stockSource: 'owned' | 'catalog',
-  customerId?: string,
+  _lines: { sku: string; qty: number }[],
+  _stockSource: 'owned' | 'catalog',
+  _customerId?: string,
 ) {
-  for (const line of lines) {
-    const qty = Math.max(0, Number(line.qty) || 0)
-    if (!qty) continue
-    const item = findCustomerInventory(line.sku, stockSource, customerId)
-    if (!item) continue
-    const product = findProductForSku(item.sku)
-    if (stockSource === 'catalog') {
-      item.locked += qty
-      item.pendingOutbound = Math.max(0, item.pendingOutbound - qty)
-      if (product) product.lockedQty += qty
-      continue
-    }
-    item.available += qty
-    item.locked = Math.max(0, item.locked - qty)
-    if (product) {
-      product.availableQty += qty
-      product.lockedQty = Math.max(0, product.lockedQty - qty)
-    }
-  }
   await persistLocalOrThrow()
 }
 
@@ -625,96 +488,21 @@ export function getInventorySnapshot(): InventoryItem[] {
 
 /** 用 ERP 客户库存视图刷新货盘持有与自有仓存展示。 */
 export async function refreshInventoryFromErp(customerId: string, customerCode: string): Promise<number> {
+  const owner = sessionOwner(), generation = hydrationVersion, version = ++inventoryRefreshVersion
   const { syncErpInventoryView } = await import('../api/erp')
-  const data = await syncErpInventoryView(customerCode)
-
-  // Before ERP returned an explicit stock source, OMS stored every ERP mirror
-  // as a catalog row (`erp-inv-*`). Keep real catalog holdings, but remove an
-  // old mirror once ERP confirms the SKU is owned stock only.
-  const ownedSkus = new Set(
-    (data.items || [])
-      .filter(item => item.stockSource === 'owned')
-      .map(item => item.sku),
-  )
-  const catalogSkus = new Set(
-    (data.items || [])
-      .filter(item => item.stockSource !== 'owned')
-      .map(item => item.sku),
-  )
-  const staleLegacyCatalogMirrors = state.inventory.filter(item => (
-    item.customerId === customerId
-    && item.stockSource === 'catalog'
-    && item.id.startsWith('erp-inv-')
-    && ownedSkus.has(item.sku)
-    && !catalogSkus.has(item.sku)
-  ))
-  if (staleLegacyCatalogMirrors.length) {
-    await Promise.all(staleLegacyCatalogMirrors.map(item => (
-      apiDelete(`/inventory-state/inventory/${encodeURIComponent(item.id)}`)
-    )))
-    const staleIds = new Set(staleLegacyCatalogMirrors.map(item => item.id))
-    state.inventory = state.inventory.filter(item => !staleIds.has(item.id))
-  }
-
-  for (const item of data.items || []) {
-    const stockSource = item.stockSource === 'owned' ? 'owned' : 'catalog'
-    const available = Math.max(0, Number(item.warehouseAvailable) || 0)
-    const locked = stockSource === 'catalog'
-      ? Math.max(0, Number(item.quantity) || 0)
-      : Math.max(0, Number(item.warehouseLocked) || 0)
-    const inTransit = stockSource === 'owned' && item.inTransitQty != null
-      ? Math.max(0, Number(item.inTransitQty) || 0) : undefined
-    const pendingShelving = stockSource === 'owned' && item.pendingShelvingQty != null
-      ? Math.max(0, Number(item.pendingShelvingQty) || 0) : undefined
-    const idx = state.inventory.findIndex(
-      i => i.sku === item.sku && i.stockSource === stockSource && i.customerId === customerId,
-    )
-    if (idx >= 0) {
-      state.inventory[idx].locked = locked
-      state.inventory[idx].available = available
-      state.inventory[idx].name = item.productName
-      state.inventory[idx].price = item.unitPrice ?? state.inventory[idx].price
-      state.inventory[idx].warehouse = item.warehouseCode
-      if (inTransit !== undefined) state.inventory[idx].inTransit = inTransit
-      if (pendingShelving !== undefined) state.inventory[idx].pendingShelving = pendingShelving
-    } else {
-      state.inventory.unshift({
-        // ERP item ids are globally unique per stock source; never append the
-        // SKU here because oms_inventoryitem.id is limited to 50 characters.
-        id: `erp-${stockSource[0]}-${item.id}`,
-        customerId,
-        sku: item.sku,
-        name: item.productName,
-        image: '',
-        available,
-        locked,
-        inTransit: inTransit ?? 0,
-        safetyStock: 0,
-        spec: '',
-        warehouse: item.warehouseCode,
-        pendingShelving: pendingShelving ?? 0,
-        pendingOutbound: 0,
-        defective: 0,
-        shipped: 0,
-        warningQty: 0,
-        price: item.unitPrice ?? 0,
-        stockSource,
-      })
-    }
-    if (stockSource === 'owned') {
-      const product = state.products.find(p => p.customerId === customerId && p.internalSku === item.sku)
-      if (product) {
-        product.availableQty = available
-        product.lockedQty = locked
-      }
-    }
-  }
   try {
-    await persistLocalOrThrow()
-  } catch (error) {
-    throw new Error(`ERP 库存已读取，但 OMS 保存失败，请刷新核对。${userFacingError(error)}`)
-  }
-  return data.total
+    const result = await syncErpInventoryView(customerCode)
+    if (!mayRestore(owner, generation) || version !== inventoryRefreshVersion) throw new Error('登录身份或库存页面已变化，请重新查询当前客户库存')
+    if (!Array.isArray(result.inventory) || !Array.isArray(result.products) || result.inventory.some(row => row.customerId !== customerId) || result.products.some(row => row.customerId !== customerId)) throw new Error('库存同步返回范围不完整，请重新查询核对')
+    state.inventory = [...state.inventory.filter(row => row.customerId !== customerId), ...result.inventory]
+    const products = new Map(result.products.map(product => [product.id, product]))
+    state.products = state.products.map(product => {
+      const canonical = products.get(product.id)
+      return canonical ? { ...product, availableQty: canonical.availableQty, lockedQty: canonical.lockedQty } : product
+    })
+    emit()
+    return result.total
+  } catch (error) { throw new Error(`同步ERP未完成，请保留当前库存后重试。${userFacingError(error)}`) }
 }
 
 export async function importProducts(
@@ -748,13 +536,9 @@ export async function importProducts(
       return { ok: false, error: e instanceof Error ? e.message : String(e) }
     }
   }
-  const before = structuredClone(state)
-  state.products = [...state.products, ...prepared]
   try {
-    await persistLocalOrThrow()
+    await persistProductsOrThrow(prepared)
   } catch (error) {
-    state = before
-    emit()
     return { ok: false, error: `导入保存失败：${error instanceof Error ? error.message : String(error)}` }
   }
   return { ok: true, count: prepared.length }
@@ -805,25 +589,14 @@ export async function upsertLocalProduct(product: Product): Promise<{ ok: true }
     return { ok: false, error: duplicateSkuMessage(customerSku) }
   }
 
-  const before = structuredClone(state)
-  const idx = state.products.findIndex((p) => p.id === product.id)
   const payload: Product = {
     ...product,
     internalSku,
     customerSku,
   }
-  if (idx >= 0) {
-    const next = [...state.products]
-    next[idx] = { ...next[idx], ...payload }
-    state.products = next
-  } else {
-    state.products = [payload, ...state.products]
-  }
   try {
     await persistProductOrThrow(payload)
   } catch (error) {
-    state = before
-    emit()
     return { ok: false, error: `商品保存失败：${error instanceof Error ? error.message : String(error)}` }
   }
   return { ok: true }
@@ -836,25 +609,17 @@ export async function updateLocalProducts(
 ): Promise<number> {
   const ids = new Set(productIds)
   if (ids.size === 0) return 0
-  const before = structuredClone(state)
   let count = 0
   const updated: Product[] = []
-  state.products = state.products.map(product => {
-    if (!ids.has(product.id)) return product
+  state.products.forEach(product => {
+    if (!ids.has(product.id)) return
     count += 1
     const patch = typeof buildPatch === 'function' ? buildPatch(product) : buildPatch
     const next = { ...product, ...patch, id: product.id, internalSku: product.internalSku }
     updated.push(next)
-    return next
   })
   if (count > 0) {
-    try {
-      await Promise.all(updated.map(product => persistProductOrThrow(product)))
-    } catch (error) {
-      state = before
-      emit()
-      throw error
-    }
+    await persistProductsOrThrow(updated)
   }
   return count
 }
@@ -907,19 +672,14 @@ export async function permanentlyDeleteLocalProduct(productId: string): Promise<
     throw new Error('该 SKU 仍有库存，不能永久删除；请先清空库存')
   }
 
-  const before = structuredClone(state)
+  const owner = sessionOwner(), generation = hydrationVersion
+  await apiDelete(`/inventory-state/products/${encodeURIComponent(productId)}`)
+  if (!mayRestore(owner, generation)) throw new Error('商品已删除，但登录身份或页面已变化，请重新查询当前商品列表')
   state.products = state.products.filter(item => item.id !== productId)
-  state.inventory = state.inventory.filter(item => {
-    if (item.sku !== product.internalSku) return true
-    return (item.customerId ?? null) !== (product.customerId ?? null)
-  })
-  try {
-    await apiDelete(`/inventory-state/products/${encodeURIComponent(productId)}`)
-  } catch (error) {
-    state = before
-    emit()
-    throw error
-  }
+  state.inventory = state.inventory.filter(item => (
+    item.sku !== product.internalSku || (item.customerId ?? null) !== (product.customerId ?? null)
+  ))
+  emit()
   return true
 }
 
@@ -927,26 +687,9 @@ export async function permanentlyDeleteLocalProduct(productId: string): Promise<
 export async function approveProducts(productIds: Iterable<string>): Promise<number> {
   const ids = new Set(productIds)
   if (ids.size === 0) return 0
-  const before = structuredClone(state)
-  let count = 0
-  state.products = state.products.map(product => {
-    if (!ids.has(product.id)) return product
-    if (product.productStatus !== 'draft' && product.productStatus !== 'reviewing') {
-      return product
-    }
-    count += 1
-    return { ...product, productStatus: 'available' }
-  })
-  if (count > 0) {
-    try {
-      await persistLocalOrThrow()
-    } catch (error) {
-      state = before
-      emit()
-      throw error
-    }
-  }
-  return count
+  const selected = state.products.filter(product => ids.has(product.id) && ['draft', 'reviewing'].includes(product.productStatus))
+  if (selected.length) await persistProductsOrThrow(selected.map(product => ({ ...product, productStatus: 'available' })))
+  return selected.length
 }
 
 /** 新建产品时生成带客户代码前缀的内部 SKU */
