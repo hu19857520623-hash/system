@@ -4,7 +4,7 @@ import { randomUUID } from 'crypto'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
 import { OperationLogService } from '../operation-log/operation-log.service'
-import { exportPrePurchaseInfo, parsePrePurchaseInfo, PRE_PURCHASE_INFO_MAX_ROWS } from './pre-purchase-info.util'
+import { exportPrePurchaseInfo, parsePrePurchaseInfo, PRE_PURCHASE_INFO_MAX_ROWS, PrePurchaseInfoValidationException, type PrePurchaseInfoFailure } from './pre-purchase-info.util'
 
 function fmtTime(d: Date | null | undefined): string {
   if (!d) return ''
@@ -254,33 +254,61 @@ export class PrePurchaseService {
     return where
   }
 
-  async exportInfo(q: { keyword?: string; status?: string }, viewer: { userId: number; roleCode: string }) {
+  async exportInfo(ids: number[], viewer: { userId: number; roleCode: string }) {
+    if (!Array.isArray(ids) || !ids.length) throw new BadRequestException('请先勾选需要导出的预采购单')
+    if (ids.length > PRE_PURCHASE_INFO_MAX_ROWS) throw new BadRequestException(`每次最多导出 ${PRE_PURCHASE_INFO_MAX_ROWS} 张预采购单`)
+    if (ids.some(id => !Number.isSafeInteger(id) || id < 1) || new Set(ids).size !== ids.length) throw new BadRequestException('所选单据无效，请刷新后重新勾选')
     const rows = await this.prisma.prePurchaseOrder.findMany({
-      where: this.myOrdersWhere(q, viewer), orderBy: { id: 'desc' }, take: PRE_PURCHASE_INFO_MAX_ROWS + 1,
+      where: { ...this.myOrdersWhere({ status: 'all' }, viewer), id: { in: ids.map(id => BigInt(id)) } }, orderBy: { id: 'desc' },
     })
-    if (rows.length > PRE_PURCHASE_INFO_MAX_ROWS) throw new BadRequestException(`每次最多导出 ${PRE_PURCHASE_INFO_MAX_ROWS} 张预采购单，请缩小筛选范围`)
+    if (rows.length !== ids.length) throw new BadRequestException('部分所选单据不存在或无权导出，请刷新后重新勾选')
     return exportPrePurchaseInfo(await this.enrich(rows))
   }
 
   async importInfo(content: string, viewer: { userId: number; roleCode: string }) {
-    const lines = parsePrePurchaseInfo(content)
-    // Lock in a stable order; reuse the same edit rules and transaction for every row.
-    await this.prisma.$transaction(async tx => {
-      for (const line of [...lines].sort((a, b) => a.prePoNo.localeCompare(b.prePoNo))) {
-        try {
+    try {
+      const lines = parsePrePurchaseInfo(content)
+      await this.prisma.$transaction(async tx => {
+        const failures: PrePurchaseInfoFailure[] = []
+        const ready: { line: typeof lines[number]; id: number }[] = []
+        // Audit all rows before writing; locks also protect the audit-to-update interval.
+        for (const line of [...lines].sort((a, b) => a.prePoNo.localeCompare(b.prePoNo))) {
+          const fail = (field: string, value: unknown, reason: string) => failures.push({ lineNo: line.lineNo, prePoNo: line.prePoNo, field, value: String(value ?? ''), reason })
           await tx.$queryRaw`SELECT id FROM pre_purchase_order WHERE pre_po_no = ${line.prePoNo} FOR UPDATE`
           const row = await tx.prePurchaseOrder.findUnique({ where: { prePoNo: line.prePoNo } })
-          if (!row) throw new BadRequestException('预采购单不存在，请核对单号')
-          await this.updateInTransaction(tx, Number(row.id), line.data, viewer)
-        } catch (error) {
-          if (error instanceof BadRequestException || error instanceof ForbiddenException || error instanceof NotFoundException) {
-            throw new BadRequestException(`第 ${line.lineNo} 行（${line.prePoNo}）：${error.message}；整批未更新`)
+          if (!row) { fail('预采购单号', line.prePoNo, '预采购单不存在，请核对单号'); continue }
+          if (viewer.roleCode === 'purchaser' && Number(row.purchaserId) !== viewer.userId) { fail('预采购单号', line.prePoNo, '无权编辑未分配给您的预采购单'); continue }
+          if (!['assigned', 'returned'].includes(row.status)) fail('状态', row.status, '仅进行中或退回修改的预采购单可编辑')
+          const [supplier, dupProduct, dupDev] = await Promise.all([
+            tx.supplier.findFirst({ where: { supplierName: line.data.supplierName }, orderBy: { id: 'asc' } }),
+            tx.product.findFirst({ where: { sku: line.data.sku, NOT: { sku: row.sku } } }),
+            tx.productDev.findFirst({ where: { sku: line.data.sku, NOT: { id: row.devId } } }),
+          ])
+          if (supplier && supplier.status !== 1) fail('供应商', line.data.supplierName, '供应商已停用，请选择有效供应商')
+          if (dupProduct || dupDev) fail('SKU', line.data.sku, 'SKU 已被使用，请核对后修改')
+          if (line.data.warehouseCode) {
+            const warehouse = await tx.warehouse.findUnique({ where: { warehouseCode: line.data.warehouseCode } })
+            if (!warehouse || warehouse.status !== 1 || warehouse.warehouseType !== 'logistics') fail('目标中转仓编码', line.data.warehouseCode, '仓库不存在、已停用或不是国内中转收货仓库')
           }
-          throw error
+          ready.push({ line, id: Number(row.id) })
         }
+        if (failures.length) throw new PrePurchaseInfoValidationException(failures.sort((a, b) => a.lineNo - b.lineNo))
+        for (const { line, id } of ready) {
+          try { await this.updateInTransaction(tx, id, line.data, viewer) } catch (error) {
+            if (error instanceof BadRequestException || error instanceof ForbiddenException || error instanceof NotFoundException) {
+              throw new PrePurchaseInfoValidationException([{ lineNo: line.lineNo, prePoNo: line.prePoNo, field: '单据资料', value: '', reason: error.message }])
+            }
+            throw error
+          }
+        }
+      }, { timeout: 60_000 })
+      return { updated: lines.length, failed: 0, failures: [] as PrePurchaseInfoFailure[] }
+    } catch (error) {
+      if (error instanceof PrePurchaseInfoValidationException) {
+        return { updated: 0, failed: new Set(error.failures.map(item => item.lineNo)).size, failures: error.failures }
       }
-    }, { timeout: 60_000 })
-    return { updated: lines.length }
+      throw error
+    }
   }
 
   async detail(id: number) {

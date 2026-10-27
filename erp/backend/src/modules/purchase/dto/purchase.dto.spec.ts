@@ -1,7 +1,22 @@
 import 'reflect-metadata'
 import { plainToInstance } from 'class-transformer'
 import { validate } from 'class-validator'
-import { CreatePurchaseOrderDto, PoRejectDto, UpdatePrePurchaseDto, UpdatePurchasePackageDto } from './purchase.dto'
+import { CreatePurchaseOrderDto, ExportPrePurchaseInfoDto, ImportPrePurchaseInfoDto, PoRejectDto, UpdatePrePurchaseDto, UpdatePurchasePackageDto } from './purchase.dto'
+
+describe('预采购信息导入导出请求', () => {
+  it('只接收明确勾选的有效单据 ID', async () => {
+    expect(await validate(plainToInstance(ExportPrePurchaseInfoDto, { ids: [1, 3] }))).toHaveLength(0)
+    for (const ids of [undefined, [], [1, 1], [0], [-1], [1.5], ['1'], Array.from({ length: 501 }, (_, index) => index + 1)]) {
+      expect((await validate(plainToInstance(ExportPrePurchaseInfoDto, { ids }))).length).toBeGreaterThan(0)
+    }
+  })
+  it('只接收非空 CSV 文本', async () => {
+    expect(await validate(plainToInstance(ImportPrePurchaseInfoDto, { content: 'CSV内容' }))).toHaveLength(0)
+    for (const content of [undefined, null, '', 42, {}]) {
+      expect((await validate(plainToInstance(ImportPrePurchaseInfoDto, { content }))).length).toBeGreaterThan(0)
+    }
+  })
+})
 
 describe('CreatePurchaseOrderDto', () => {
   const valid = {

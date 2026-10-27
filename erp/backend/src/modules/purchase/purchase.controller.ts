@@ -8,6 +8,8 @@ import {
   AssignPurchaserDto,
   CancelPrePurchaseDto,
   CreatePurchaseOrderDto,
+  ExportPrePurchaseInfoDto,
+  ImportPrePurchaseInfoDto,
   PaymentRemarkDto,
   PoAuditDto,
   PoRejectDto,
@@ -36,15 +38,15 @@ export class PurchaseController {
   }
 
   @RequirePerms('purchase.view')
-  @Get('pre-purchase/export-info')
-  exportPrePoInfo(@Query() q: { keyword?: string; status?: string }, @CurrentUser() user: AuthUser) {
-    return this.prePurchase.exportInfo(q, user)
+  @Post('pre-purchase/export-info')
+  exportPrePoInfo(@Body() body: ExportPrePurchaseInfoDto, @CurrentUser() user: AuthUser) {
+    return this.prePurchase.exportInfo(body.ids, user)
   }
 
   @RequirePerms('purchase.create')
   @Post('pre-purchase/import-info')
-  importPrePoInfo(@Body() body: { content?: string }, @CurrentUser() user: AuthUser) {
-    return this.prePurchase.importInfo(body?.content ?? '', user)
+  importPrePoInfo(@Body() body: ImportPrePurchaseInfoDto, @CurrentUser() user: AuthUser) {
+    return this.prePurchase.importInfo(body.content, user)
   }
 
   @RequirePerms('purchase.view')

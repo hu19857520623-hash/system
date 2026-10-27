@@ -1,6 +1,8 @@
 import { Transform, Type } from 'class-transformer'
 import {
   ArrayMinSize,
+  ArrayMaxSize,
+  ArrayUnique,
   IsArray,
   IsBoolean,
   IsDateString,
@@ -24,6 +26,24 @@ const trimOptional = ({ value }: { value: unknown }) => {
   if (typeof value !== 'string') return value
   const normalized = value.trim()
   return normalized || undefined
+}
+
+export class ExportPrePurchaseInfoDto {
+  @IsArray()
+  @ArrayMinSize(1, { message: '请先勾选需要导出的预采购单' })
+  @ArrayMaxSize(500, { message: '每次最多导出 500 张预采购单' })
+  @ArrayUnique()
+  @IsInt({ each: true })
+  @Min(1, { each: true })
+  @Max(Number.MAX_SAFE_INTEGER, { each: true })
+  ids!: number[]
+}
+
+export class ImportPrePurchaseInfoDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(10_000_000)
+  content!: string
 }
 
 export class PurchaseOrderItemDto {

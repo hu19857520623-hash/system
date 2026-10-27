@@ -20,8 +20,9 @@ import {
 } from '@/constants/productPipeline.ts'
 import { productDevImageSrc } from '@/utils/productDevImage.ts'
 import { downloadPurchaseOrderImportTemplate } from '@/constants/importTemplates.ts'
-import { downloadCsv, normalizeImportFileText } from '@/utils/csv'
+import { normalizeImportFileText } from '@/utils/csv'
 import { showImportResultFeedback } from '@/utils/importResultFeedback.ts'
+import { usePrePurchaseInfo } from '@/features/purchase/usePrePurchaseInfo'
 
 const app = useAppStore()
 const router = useRouter()
@@ -52,7 +53,17 @@ const prePoStatusFilter = ref('assigned')
 const assignError = ref('')
 const prePoError = ref('')
 const prePoActionId = ref<number | null>(null)
-const prePoInfoBusy = ref(false)
+const prePoTable = ref<{ clearSelection: () => void } | null>(null)
+const {
+  busy: prePoInfoBusy, selected: prePoSelected, failures: prePoImportFailures,
+  failedRows: prePoImportFailedRows, failureVisible: prePoImportFailureVisible,
+  exportInfo: exportPrePoInfo, importInfo: importPrePoInfo, downloadFailures: downloadPrePoImportFailures,
+} = usePrePurchaseInfo(loadMyPrePo)
+
+function clearPrePoSelection() {
+  prePoSelected.value = []
+  prePoTable.value?.clearSelection()
+}
 let assignLoadVersion = 0
 let prePoLoadVersion = 0
 
@@ -73,6 +84,7 @@ async function loadPrePoPendingAssign() {
 }
 
 async function loadMyPrePo() {
+  clearPrePoSelection()
   const version = ++prePoLoadVersion
   prePoLoading.value = true
   prePoError.value = ''
@@ -217,6 +229,7 @@ const {
 } = useTablePagination(prePoFiltered)
 
 watch([mainTab, prePoMySearchQ, prePoStatusFilter], () => {
+  clearPrePoSelection()
   if (mainTab.value === 'pre_po') resetPrePoPage()
 })
 watch(prePoStatusFilter, () => { if (mainTab.value === 'pre_po') void loadMyPrePo() })
@@ -319,39 +332,6 @@ async function loadCreatePoResources() {
       createPoWarehouses.value = []
     }
   }
-}
-
-async function exportPrePoInfo() {
-  if (prePoInfoBusy.value) return
-  prePoInfoBusy.value = true
-  try {
-    const result = await purchaseApi.exportPrePoInfo({ status: prePoStatusFilter.value, keyword: prePoMySearchQ.value.trim() || undefined })
-    if (!result.total) { ElMessage.warning('当前筛选下没有可导出的预采购单'); return }
-    downloadCsv(`预采购单信息_${new Date().toISOString().slice(0, 10)}.csv`, result.headers, result.rows)
-    ElMessage.success(`已导出 ${result.total} 张预采购单的现有资料`)
-  } catch (error) {
-    ElMessage.error(`导出信息失败。${userFacingError(error)}`)
-  } finally { prePoInfoBusy.value = false }
-}
-
-async function importPrePoInfo() {
-  if (prePoInfoBusy.value) return
-  prePoInfoBusy.value = true
-  let submitted = false
-  try {
-    const file = await pickFile('.csv')
-    if (!file) return
-    const content = await file.text()
-    submitted = true
-    const result = await purchaseApi.importPrePoInfo(content)
-    ElMessage.success(`导入信息完成：已更新 ${result.updated} 张预采购单`)
-    await loadMyPrePo()
-  } catch (error) {
-    const status = Number((error as { status?: unknown })?.status)
-    const uncertain = submitted && (!Number.isFinite(status) || status >= 500 || status === 408 || status === 409)
-    const message = uncertain ? '导入结果暂无法确认，请刷新列表或重新导出核对后再操作。' : '导入信息失败。'
-    ElMessage.error(message + userFacingError(error))
-  } finally { prePoInfoBusy.value = false }
 }
 
 async function importPurchaseOrders() {
@@ -1480,7 +1460,7 @@ async function markPoUnpaid(po?: { id: number }) {
             </template>
             <el-button v-if="mainTab === 'pre_assign'" size="small" :loading="assignLoading" @click="loadPrePoPendingAssign">刷新列表</el-button>
             <template v-if="mainTab === 'pre_po'">
-              <el-button size="small" :loading="prePoInfoBusy" :disabled="prePoLoading || prePoActionId !== null || prePoInfoBusy" @click="exportPrePoInfo">导出信息</el-button>
+              <el-button size="small" :loading="prePoInfoBusy" :disabled="!prePoSelected.length || prePoLoading || prePoActionId !== null || prePoInfoBusy" @click="exportPrePoInfo">导出信息（{{ prePoSelected.length }}）</el-button>
               <el-button v-if="canCreate" type="primary" size="small" :loading="prePoInfoBusy" :disabled="prePoLoading || prePoActionId !== null || prePoInfoBusy" @click="importPrePoInfo">导入信息</el-button>
               <el-button size="small" :loading="prePoLoading" :disabled="prePoInfoBusy" @click="loadMyPrePo">刷新列表</el-button>
             </template>
@@ -1525,10 +1505,15 @@ async function markPoUnpaid(po?: { id: number }) {
         <div class="callout info">
           <div class="callout-title">我的预采购单</div>
           <div class="callout-body">{{ PIPELINE_PRE_PO }}</div>
-          <div class="callout-body">导出信息会带出当前筛选下的全部单据（最多 500 单，含其他分页）。在 CSV 中修改后，通过导入信息按预采购单号批量更新；单号请勿修改，空白单元格保留原值。仅进行中或退回待修改的单据可更新，状态、采购员、关联单号和计算体积仅供查看。</div>
+          <div class="callout-body">先勾选要处理的预采购单，再导出信息（最多 500 单，可跨页勾选）。文件中标有“必填”的字段必须填写，第二行是填写说明；请保留原单号，选填项空白保留原值。上传后会审核必填、数字、日期、链接、供应商和仓库等资料，有错误会列出行号、字段和原因，整批不更新。</div>
+        </div>
+        <div v-if="prePoSelected.length" style="margin:12px 0">
+          已勾选 {{ prePoSelected.length }} 张预采购单
+          <el-button link type="primary" size="small" :disabled="prePoInfoBusy" @click="clearPrePoSelection">清空勾选</el-button>
         </div>
         <el-alert v-if="prePoError" :title="prePoError" type="warning" :closable="false" role="alert" show-icon style="margin-bottom:12px" />
-        <el-table v-loading="prePoLoading" :data="prePoPagedItems" :empty-text="prePoError ? '加载未完成，请刷新重试' : '暂无数据'" stripe border size="small">
+        <el-table ref="prePoTable" v-loading="prePoLoading" :data="prePoPagedItems" row-key="id" :empty-text="prePoError ? '加载未完成，请刷新重试' : '暂无数据'" stripe border size="small" @selection-change="prePoSelected = $event">
+          <el-table-column type="selection" width="48" reserve-selection :selectable="() => !prePoInfoBusy" />
           <el-table-column prop="prePoNo" label="预采购单号" width="130"><template #default="{ row }"><span class="mono">{{ row.prePoNo }}</span></template></el-table-column>
           <el-table-column prop="sku" label="SKU" width="110"><template #default="{ row }"><span class="mono">{{ displaySku(row) }}</span></template></el-table-column>
           <el-table-column prop="productName" label="商品名称" min-width="130" show-overflow-tooltip />
@@ -2071,6 +2056,21 @@ async function markPoUnpaid(po?: { id: number }) {
     <template #footer>
       <el-button :disabled="poActionBusy" @click="actualQtyVisible = false">返回采购单</el-button>
       <el-button type="primary" :loading="poActionBusy" :disabled="!canOperatePo" @click="saveActualQty">提交数量</el-button>
+    </template>
+  </el-dialog>
+
+  <el-dialog v-model="prePoImportFailureVisible" title="预采购单信息校验未通过" width="1000px" top="8vh">
+    <el-alert :title="`发现 ${prePoImportFailedRows} 行、${prePoImportFailures.length} 处错误，整批未更新。请按下表修改原文件后重新上传。`" type="error" :closable="false" show-icon style="margin-bottom:16px" />
+    <el-table :data="prePoImportFailures" border stripe max-height="420">
+      <el-table-column prop="lineNo" label="文件行号" width="85" />
+      <el-table-column prop="prePoNo" label="预采购单号" width="180" show-overflow-tooltip />
+      <el-table-column prop="field" label="错误字段" width="135" />
+      <el-table-column prop="value" label="填写值" width="150" show-overflow-tooltip />
+      <el-table-column prop="reason" label="错误原因 / 修改要求" min-width="250" />
+    </el-table>
+    <template #footer>
+      <el-button @click="downloadPrePoImportFailures">下载错误明细</el-button>
+      <el-button type="primary" @click="prePoImportFailureVisible = false">返回修改</el-button>
     </template>
   </el-dialog>
 
