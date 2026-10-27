@@ -29,6 +29,21 @@ function escapeHtml(value: unknown) {
     .replace(/"/g, '&quot;')
 }
 
+/** Export every selected record, with required columns colored in Excel. No hint or sample rows. */
+export function downloadRequiredFieldsExcel(filename: string, headers: string[], rows: unknown[][]) {
+  const cellStyle = (header: string) => `border:1px solid #94a3b8;padding:8px 12px;white-space:pre-wrap;mso-number-format:'\\@';background-color:${header.endsWith('（必填）') ? '#ffc7ce' : '#ffffff'};color:${header.endsWith('（必填）') ? '#9c0006' : '#0f172a'}`
+  const heading = headers.map(header => `<th style="${cellStyle(header)}">${escapeHtml(header)}</th>`).join('')
+  const body = rows.map(row => `<tr>${headers.map((header, index) => `<td style="${cellStyle(header)}">${escapeHtml(row[index])}</td>`).join('')}</tr>`).join('')
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8" /></head><body><table style="border-collapse:collapse"><thead><tr>${heading}</tr></thead><tbody>${body}</tbody></table></body></html>`
+  const blob = new Blob(['\uFEFF', html], { type: 'application/vnd.ms-excel;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = `${filename.replace(/\.(csv|xls|xlsx)$/i, '')}.xls`
+  anchor.click()
+  URL.revokeObjectURL(url)
+}
+
 function templateColumnWidth(column: ImportTemplateColumn, rows: unknown[][], index: number) {
   const contentLength = Math.max(
     column.label.length,

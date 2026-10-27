@@ -3,7 +3,7 @@ import { ElMessage } from 'element-plus'
 import { userFacingError } from '@erp/shared/user-facing-error'
 import { purchaseApi } from '@/api/client.js'
 import { pickFile } from '@/composables/useAsyncIo'
-import { downloadCsv } from '@/utils/csv'
+import { downloadCsv, downloadRequiredFieldsExcel, normalizeImportFileText } from '@/utils/csv'
 
 export interface PrePurchaseInfoFailure {
   lineNo: number
@@ -27,8 +27,8 @@ export function usePrePurchaseInfo(reload: () => Promise<void>) {
     busy.value = true
     try {
       const result = await purchaseApi.exportPrePoInfo(ids)
-      downloadCsv(`预采购单信息_${new Date().toLocaleDateString('sv-SE')}.csv`, result.headers, result.rows)
-      ElMessage.success(`已导出选中的 ${result.total} 张预采购单，请按文件中的必填标记和填写说明补充资料`)
+      downloadRequiredFieldsExcel(`预采购单信息_${new Date().toLocaleDateString('sv-SE')}.xls`, result.headers, result.rows)
+      ElMessage.success(`已导出选中的 ${result.total} 张预采购单，红色单元格为必填项`)
     } catch (error) { ElMessage.error(`导出信息失败。${userFacingError(error)}`) }
     finally { busy.value = false }
   }
@@ -38,9 +38,9 @@ export function usePrePurchaseInfo(reload: () => Promise<void>) {
     busy.value = true
     let submitted = false
     try {
-      const file = await pickFile('.csv')
+      const file = await pickFile('.csv,.xls')
       if (!file) return
-      const content = await file.text()
+      const content = normalizeImportFileText(await file.text())
       failures.value = []
       failedRows.value = 0
       failureVisible.value = false

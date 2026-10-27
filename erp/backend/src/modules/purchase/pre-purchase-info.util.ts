@@ -77,20 +77,6 @@ export class PrePurchaseInfoValidationException extends BadRequestException {
   }
 }
 
-function columnHint(column: Column) {
-  const prefix = column.required ? '必填；' : column.readonly ? '只读；' : '选填；空白保留原值；'
-  if (column.key === 'prePoNo') return PRE_PURCHASE_INFO_HINT_MARKER
-  if (column.readonly) return prefix + '仅供查看，导入不修改'
-  if (column.kind === 'date') return prefix + '有效日期 YYYY-MM-DD'
-  if (column.kind === 'boolean') return prefix + '填写是或否'
-  if (column.kind === 'integer' || column.kind === 'number') {
-    const scale = column.kind === 'integer' ? 0 : column.scale ?? 2
-    const max = column.max ?? (scale === 0 ? 2147483647 : 9999999999.99)
-    return prefix + `${column.positive ? '大于 0' : '不小于 0'}，最大 ${max}，${scale ? `最多 ${scale} 位小数` : '整数'}`
-  }
-  return prefix + (column.length ? `最多 ${column.length} 字` : '填写文字') + (column.key.endsWith('Url') || column.key === 'productLink' ? '；链接以 http:// 或 https:// 开头' : '')
-}
-
 // Parse the whole document so quoted notes containing newlines survive export/import.
 function parseInfoCsv(content: string): string[][] {
   const rows: string[][] = []
@@ -121,14 +107,14 @@ export function exportPrePurchaseInfo(items: Record<string, any>[]) {
   const statuses: Record<string, string> = { assigned: '进行中', returned: '退回待修改', confirmed: '已生成采购单', cancelled: '已取消' }
   return {
     headers: PRE_PURCHASE_INFO_COLUMNS.map(column => column.label + (column.required ? '（必填）' : column.readonly ? '（只读）' : '')),
-    rows: [PRE_PURCHASE_INFO_COLUMNS.map(columnHint), ...items.map(item => PRE_PURCHASE_INFO_COLUMNS.map(column => {
+    rows: items.map(item => PRE_PURCHASE_INFO_COLUMNS.map(column => {
       const value = item[column.key]
       if (value == null || (column.key === 'supplierName' && value === '—')) return ''
       if (column.kind === 'date') return new Date(value).toISOString().slice(0, 10)
       if (column.kind === 'boolean') return value ? '是' : '否'
       if (column.key === 'status') return statuses[value] || value
       return value
-    }))],
+    })),
     total: items.length,
   }
 }

@@ -2,13 +2,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ElMessage } from 'element-plus'
 import { purchaseApi } from '@/api/client.js'
 import { pickFile } from '@/composables/useAsyncIo'
-import { downloadCsv } from '@/utils/csv'
+import { downloadCsv, downloadRequiredFieldsExcel } from '@/utils/csv'
 import { usePrePurchaseInfo } from './usePrePurchaseInfo'
 
 vi.mock('element-plus', () => ({ ElMessage: { warning: vi.fn(), error: vi.fn(), success: vi.fn() } }))
 vi.mock('@/api/client.js', () => ({ purchaseApi: { exportPrePoInfo: vi.fn(), importPrePoInfo: vi.fn() } }))
 vi.mock('@/composables/useAsyncIo', () => ({ pickFile: vi.fn() }))
-vi.mock('@/utils/csv', () => ({ downloadCsv: vi.fn() }))
+vi.mock('@/utils/csv', () => ({ downloadCsv: vi.fn(), downloadRequiredFieldsExcel: vi.fn(), normalizeImportFileText: vi.fn(text => text) }))
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -23,14 +23,14 @@ describe('预采购勾选导出和错误明细交互', () => {
     expect(ElMessage.warning).toHaveBeenCalledWith(expect.stringContaining('先勾选'))
   })
 
-  it('仅发送选中的单据 ID，并保留必填说明行下载', async () => {
+  it('仅发送选中的单据 ID，下载必填单元格标红的 Excel 文件，无说明行', async () => {
     const state = usePrePurchaseInfo(vi.fn())
     state.selected.value = [{ id: 1 }, { id: 3 }]
-    const result = { total: 2, headers: ['预采购单号（必填）'], rows: [['填写说明'], ['PRE-1'], ['PRE-3']] }
+    const result = { total: 2, headers: ['预采购单号（必填）'], rows: [['PRE-1'], ['PRE-3']] }
     vi.mocked(purchaseApi.exportPrePoInfo).mockResolvedValue(result)
     await state.exportInfo()
     expect(purchaseApi.exportPrePoInfo).toHaveBeenCalledWith([1, 3])
-    expect(downloadCsv).toHaveBeenCalledWith(expect.stringContaining('预采购单信息_'), result.headers, result.rows)
+    expect(downloadRequiredFieldsExcel).toHaveBeenCalledWith(expect.stringMatching(/预采购单信息_.*\.xls$/), result.headers, result.rows)
     expect(state.busy.value).toBe(false)
   })
 

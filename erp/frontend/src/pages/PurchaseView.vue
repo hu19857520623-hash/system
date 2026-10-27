@@ -1505,7 +1505,7 @@ async function markPoUnpaid(po?: { id: number }) {
         <div class="callout info">
           <div class="callout-title">我的预采购单</div>
           <div class="callout-body">{{ PIPELINE_PRE_PO }}</div>
-          <div class="callout-body">先勾选要处理的预采购单，再导出信息（最多 500 单，可跨页勾选）。文件中标有“必填”的字段必须填写，第二行是填写说明；请保留原单号，选填项空白保留原值。上传后会审核必填、数字、日期、链接、供应商和仓库等资料，有错误会列出行号、字段和原因，整批不更新。</div>
+          <div class="callout-body">先勾选要处理的预采购单，再导出信息（最多 500 单，可跨页勾选）。导出文件中红色单元格为必填项，请保留原单号，选填项空白保留原值。上传后会审核必填、数字、日期、链接、供应商和仓库等资料，有错误会列出行号、字段和原因，整批不更新。</div>
         </div>
         <div v-if="prePoSelected.length" style="margin:12px 0">
           已勾选 {{ prePoSelected.length }} 张预采购单

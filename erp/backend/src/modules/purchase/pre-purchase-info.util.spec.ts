@@ -11,13 +11,13 @@ function failures(content: string) {
 }
 
 describe('预采购信息文件必填和字段审核', () => {
-  it('导出三张单及必填标记、只读标记、填写说明；说明行不当作采购单', () => {
+  it('导出三张单及必填、只读标记，第二行直接是第一张单，无填写说明', () => {
     const exported = exportPrePurchaseInfo([1, 2, 3].map(index => validInfoRow(index)))
     expect(exported.headers).toContain('预采购单号（必填）')
     expect(exported.headers).toContain('供应商（必填）')
     expect(exported.headers).toContain('状态（只读）')
-    expect(exported.rows).toHaveLength(4)
-    expect(exported.rows[0][exported.headers.indexOf('单价（必填）')]).toContain('大于 0')
+    expect(exported.rows).toHaveLength(3)
+    expect(exported.rows[0][0]).toBe('PRE-1')
     expect(exported.total).toBe(3)
     expect(parsePrePurchaseInfo(toCsv(exported.headers, exported.rows)).map(line => line.prePoNo)).toEqual(['PRE-1', 'PRE-2', 'PRE-3'])
   })
@@ -35,7 +35,7 @@ describe('预采购信息文件必填和字段审核', () => {
     expect(parsed.data).toEqual(data)
   })
 
-  it('一次返回多行多个字段的错误和填写值，按含说明行的实际表格行号展示', () => {
+  it('一次返回多行多个字段的错误和填写值，数据从第二行开始', () => {
     const exported = exportPrePurchaseInfo([
       { ...validInfoRow(1), supplierName: '', unitPrice: -2, plannedQty: 1.5 },
       { ...validInfoRow(2), productName: '', packageLengthCm: 0 },
@@ -43,11 +43,11 @@ describe('预采购信息文件必填和字段审核', () => {
     const errors = failures(toCsv(exported.headers, exported.rows))
     expect(errors).toHaveLength(5)
     expect(errors).toEqual(expect.arrayContaining([
-      expect.objectContaining({ lineNo: 3, prePoNo: 'PRE-1', field: '供应商', value: '', reason: '必填，不能为空' }),
-      expect.objectContaining({ lineNo: 3, field: '单价', value: '-2' }),
-      expect.objectContaining({ lineNo: 3, field: '计划数量', value: '1.5' }),
-      expect.objectContaining({ lineNo: 4, field: '商品名称', value: '' }),
-      expect.objectContaining({ lineNo: 4, field: '包装长(cm)', value: '0' }),
+      expect.objectContaining({ lineNo: 2, prePoNo: 'PRE-1', field: '供应商', value: '', reason: '必填，不能为空' }),
+      expect.objectContaining({ lineNo: 2, field: '单价', value: '-2' }),
+      expect.objectContaining({ lineNo: 2, field: '计划数量', value: '1.5' }),
+      expect.objectContaining({ lineNo: 3, field: '商品名称', value: '' }),
+      expect.objectContaining({ lineNo: 3, field: '包装长(cm)', value: '0' }),
     ]))
   })
 
@@ -101,7 +101,7 @@ describe('预采购信息文件必填和字段审核', () => {
 
   it('无供应商不导出占位符，日期采用日期值', () => {
     const result = exportPrePurchaseInfo([{ ...validInfoRow(), supplierName: '—', expectedArrival: new Date('2026-10-27T00:00:00Z') }])
-    expect(result.rows[1][result.headers.indexOf('供应商（必填）')]).toBe('')
-    expect(result.rows[1][result.headers.indexOf('预计到货')]).toBe('2026-10-27')
+    expect(result.rows[0][result.headers.indexOf('供应商（必填）')]).toBe('')
+    expect(result.rows[0][result.headers.indexOf('预计到货')]).toBe('2026-10-27')
   })
 })

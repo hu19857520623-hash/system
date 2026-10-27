@@ -39,7 +39,7 @@ describe('预采购勾选导出和上传审核', () => {
     const { service, tx } = setup()
     const result = await service.exportInfo([1, 3], viewer)
     expect(result.total).toBe(2)
-    expect(result.rows.slice(1).map(row => row[0])).toEqual(['PRE-1', 'PRE-3'])
+    expect(result.rows.map(row => row[0])).toEqual(['PRE-1', 'PRE-3'])
     expect(tx.prePurchaseOrder.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ id: { in: [1n, 3n] }, purchaserId: 7n }) }))
   })
 
