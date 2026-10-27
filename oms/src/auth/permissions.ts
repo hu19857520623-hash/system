@@ -180,7 +180,7 @@ export function can(role: OmsRole, permission: Permission, customPermissions?: P
 }
 
 export function resolveRoutePermission(pathname: string): Permission | null {
-  pathname = pathname.split(/[?#]/)[0]
+  pathname = pathname.split(/[?#]/)[0].replace(/\/+$/, '') || '/'
   const exact = ROUTE_PERMISSIONS[pathname]
   if (exact) return exact
   if (/^\/products\/[^/]+\/edit\/?$/.test(pathname)) return 'product:write'

@@ -53,8 +53,8 @@ test('administrator retains own-product maintenance while catalog editing points
   const blocked=render(<ProductForm product={{...product,inCatalog:true}} mode="edit" />)
   assert.ok(blocked.includes('由ERP维护'));assert.ok(blocked.includes('返回产品详情'));assert.ok(!blocked.includes('<input'))
 })
-test('dynamic edit routes require write permission before generic product prefixes, including old query URLs',()=>{
-  for(const path of ['/products/p/edit','/products/p/edit/','/products/p/edit?from=list','/products/p/edit#section']) {
+test('create and dynamic edit routes require write before generic product prefixes, including old query URLs',()=>{
+  for(const path of ['/products/new','/products/new/','/products/new/?copy=p','/products/p/edit','/products/p/edit/','/products/p/edit?from=list','/products/p/edit#section']) {
     assert.equal(canAccessRoute('hybrid',path,['product:read']),false,path)
     assert.equal(canAccessRoute('hybrid',path,['product:read','product:write']),true,path)
   }
