@@ -1,3 +1,5 @@
+import { canReadData } from '../src/data/readAccess.js'
+import { assertApiReadAccess, filterBootstrapReads } from './read-access.util.js'
 import { applyCatalogReclaimSnapshot } from './catalog-reclaim-snapshot.util.js'
 import { applyErpInventoryView, inventoryProductsInput, InventoryWriteError, saveInventoryProducts, deleteInventoryProduct } from './inventory-write.util.js'
 import { assertOwnedBindingMutation, OwnedBindingLockedError } from './owned-binding-lock.util.js'
@@ -468,10 +470,10 @@ async function buildBootstrap(auth: AuthClaims) {
   let readWarning = '', sourceBalance: number | undefined
   try {
     if (auth.permissions.includes('billing:read')) { sourceBilling = await fetchErpBillingSnapshot(customerCode);sourceBalance = sourceBilling.creditBalance }
-    else sourceBalance = (await fetchErpCustomerByCode(customerCode)).balance
+    else if (canReadData(auth, 'balance')) sourceBalance = (await fetchErpCustomerByCode(customerCode)).balance
   } catch { readWarning = '最新账务暂未读取，当前为缓存余额；请刷新账务后核对，勿重复提交扣费或充值' }
 
-  return {
+  return filterBootstrapReads({
     ...all,
     accounts: account ? [account] : [],
     billing: billing
@@ -502,7 +504,7 @@ async function buildBootstrap(auth: AuthClaims) {
       item => item.customerId === null || item.customerId === customerId,
     ),
     purchases: all.purchases.filter(item => item.customerId === customerId),
-  }
+  }, auth)
 }
 
 function publicSession(
@@ -874,6 +876,7 @@ app.use('/api', (req: AuthenticatedRequest, res, next) => {
     try {
       if (!(await refreshAuthenticatedIdentity(req, res))) return
       if (!assertApiWritePermission(req, res)) return
+      if (!assertApiReadAccess(req.auth!, req.method, req.path)) return res.status(403).json({ error: '没有读取此项业务的权限，请返回有权访问的页面或联系管理员核对' })
       if (req.auth?.role !== 'sys_admin') {
         // 货盘共享池会混在客户本地 inventory-state 里，由 PUT 处理函数剥离，不走整包扫 customerId。
         const skipBodyCustomerSweep = req.method === 'PUT' && req.path === '/inventory-state'
@@ -1242,7 +1245,7 @@ app.post('/api/erp/customers/:customerCode/inventory-sync', async (req: Authenti
       const view = await fetchErpInventoryView(code)
       if (view.customerCode !== code || !Array.isArray(view.items) || typeof view.warehouseCode !== 'string' || view.items.length !== view.total) throw new InventoryWriteError('ERP库存返回不完整，请稍后重试同步', 502)
       const mirror = await applyErpInventoryView(tx, account.id, view.warehouseCode, view.items)
-      return { ...view, ...mirror }
+      return { ...view, ...mirror, products: canReadData(req.auth!, 'products') ? mirror.products : [] }
     }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted, maxWait: 10000, timeout: 60000 })
     res.json(result)
   } catch (error) {

@@ -305,10 +305,6 @@ export async function refreshOutboundsFromErp(customerId: string): Promise<numbe
   const customerCode = getCustomerCode(customerId)
   if (!customerCode || customerCode === '—') return 0
   const data = await syncErpOutbounds(customerCode)
-  const refreshed = (data.items || []).map(item => applyErpOutboundToLocal(item, { customerId }, { persist: false }))
-  if (refreshed.length) {
-    try { await apiPut('/outbound-orders', refreshed) }
-    catch (error) { throw new Error(`ERP 出库记录已读取，但 OMS 保存失败，请刷新核对。${userFacingError(error)}`) }
-  }
+  for (const item of data.items || []) applyErpOutboundToLocal(item, { customerId }, { persist: false })
   return data.total
 }

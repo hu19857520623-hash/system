@@ -116,15 +116,16 @@ export function getLogisticsRecordsSnapshot(): LogisticsRecord[] {
   return records
 }
 
-export function upsertLogisticsRecord(record: LogisticsRecord) {
+export function upsertLogisticsRecord(record: LogisticsRecord, options: { persist?: boolean } = {}) {
+  const apply = (next: LogisticsRecord[]) => { if (options.persist === false) { records = next; emit() } else persist(next) }
   const idx = records.findIndex(r => r.id === record.id || r.outboundNo === record.outboundNo)
   if (idx >= 0) {
     const next = [...records]
     next[idx] = mergeLogisticsRecord(next[idx], record)
-    persist(next)
+    apply(next)
     return
   }
-  persist([record, ...records])
+  apply([record, ...records])
 }
 
 export async function refreshLogisticsFromErp(customerCode: string): Promise<number> {
@@ -144,7 +145,7 @@ export async function refreshLogisticsFromErp(customerCode: string): Promise<num
       podCode: item.podCode ?? null,
       podFileName: item.podFileName ?? undefined,
       podUploadedAt: item.podUploadedAt ?? undefined,
-    })
+    }, { persist: false })
   }
   return data.total
 }

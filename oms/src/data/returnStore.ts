@@ -6,7 +6,6 @@ import {
   upsertReturnOrder,
   upsertReturnOrderOrThrow,
   cacheReturnOrder,
-  addReturnOrdersOrThrow,
 } from './entityStore'
 import type { FileAttachment } from './mockData'
 import { createErpReturn, cancelErpReturn, decideErpReturn, syncErpReturns, type ErpReturnOrder } from '../api/erp'
@@ -313,9 +312,7 @@ export async function refreshReturnsFromErp(customerId: string): Promise<number>
   const customerCode = getCustomerCode(customerId)
   if (!customerCode || customerCode === '—') return 0
   const data = await syncErpReturns(customerCode)
-  const confirmed = (data.items || []).map(item => applyErpReturnToLocal(item, customerId, { persist: false }))
-  try { await addReturnOrdersOrThrow(confirmed) }
-  catch (error) { throw new Error(`ERP 退件记录已读取，但 OMS 保存失败，请刷新核对。${userFacingError(error)}`) }
+  for (const item of data.items || []) applyErpReturnToLocal(item, customerId, { persist: false })
   return data.total
 }
 

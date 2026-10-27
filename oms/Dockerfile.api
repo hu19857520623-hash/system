@@ -62,6 +62,7 @@ COPY --from=builder --chown=oms:oms /app/prisma ./prisma
 COPY --chown=oms:oms server ./server
 COPY --chown=oms:oms src/data/chargeType.ts ./src/data/chargeType.ts
 COPY --chown=oms:oms src/data/platformBarcodeScope.ts ./src/data/platformBarcodeScope.ts
+COPY --chown=oms:oms src/data/readAccess.ts ./src/data/readAccess.ts
 COPY --chown=oms:oms src/utils/userFacingError.ts ./src/utils/userFacingError.ts
 
 USER oms

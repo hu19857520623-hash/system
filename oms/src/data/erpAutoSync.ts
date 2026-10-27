@@ -1,3 +1,5 @@
+import { canReadData } from '../data/readAccess'
+import { authSessionScope, getStoredAuthSession } from '../api/client'
 import { getCustomerCode, getCustomerIdForRole, isSysAdmin } from './dataScope'
 import type { OmsRole } from '../auth/permissions'
 import { refreshInboundsFromErp } from './inboundStore'
@@ -12,26 +14,29 @@ import { setAnnouncementsFromErp, refreshSystemMessagesFromServer } from './enti
 const DEFAULT_INTERVAL_MS = 15_000
 
 let timer: ReturnType<typeof setInterval> | null = null
-let running = false
+let flight: { scope: string } | null = null
 let lastRole: OmsRole | null = null
 
 /** 静默拉取 ERP 最新履约/库存/余额/费用/公告到本地 store */
 export async function syncErpNow(role: OmsRole): Promise<void> {
-  if (isSysAdmin(role)) return
+  const session = getStoredAuthSession()
+  if (!session || session.user.role !== role || isSysAdmin(role)) return
   const customerId = getCustomerIdForRole(role)
   const customerCode = getCustomerCode(customerId ?? undefined)
   if (!customerId || !customerCode || customerCode === '—') return
-  if (running) return
-  running = true
+  const scope = authSessionScope(session)
+  if (flight?.scope === scope) return
+  const request = { scope }; flight = request
+  const allowed = (resource: Parameters<typeof canReadData>[1]) => canReadData(session.user, resource)
   try {
     await Promise.allSettled([
-      refreshInboundsFromErp(customerId),
-      refreshReturnsFromErp(customerId),
-      refreshOutboundsFromErp(customerId),
-      refreshLogisticsFromErp(customerCode),
-      refreshInventoryFromErp(customerId, customerCode),
-      refreshBillingFromErp(customerCode),
-      getErpAnnouncements().then(r =>
+      allowed('inboundOrders') ? refreshInboundsFromErp(customerId) : undefined,
+      allowed('returnOrders') ? refreshReturnsFromErp(customerId) : undefined,
+      allowed('outboundOrders') ? refreshOutboundsFromErp(customerId) : undefined,
+      allowed('logistics') ? refreshLogisticsFromErp(customerCode) : undefined,
+      allowed('inventory') ? refreshInventoryFromErp(customerId, customerCode) : undefined,
+      allowed('billing') ? refreshBillingFromErp(customerCode) : undefined,
+      allowed('messages') ? getErpAnnouncements().then(r =>
         setAnnouncementsFromErp(
           r.items.map(a => ({
             id: a.id,
@@ -41,11 +46,11 @@ export async function syncErpNow(role: OmsRole): Promise<void> {
             category: a.category,
           })),
         ),
-      ),
-      refreshSystemMessagesFromServer(),
+      ) : undefined,
+      allowed('messages') ? refreshSystemMessagesFromServer() : undefined,
     ])
   } finally {
-    running = false
+    if (flight === request) flight = null
   }
 }
 

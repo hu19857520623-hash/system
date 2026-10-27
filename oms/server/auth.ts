@@ -2,6 +2,7 @@ import type { NextFunction, Request, Response } from 'express'
 import jwt from 'jsonwebtoken'
 import { timingSafeEqual } from 'node:crypto'
 import { normalizePortalLoginIdentifier } from './portal-login.util.js'
+import { canReadData } from '../src/data/readAccess.js'
 
 export const OMS_ROLES = ['sys_admin', 'ecommerce', 'catalog', 'hybrid'] as const
 export type OmsRole = typeof OMS_ROLES[number]
@@ -226,6 +227,8 @@ export function assertApiWritePermission(req: AuthenticatedRequest, res: Respons
     return false
   }
   if (req.auth?.role === 'sys_admin') return true
+  if (required === 'inventory:read' && /^\/erp\/customers\/[^/]+\/inventory-sync$/.test(req.path)
+    && req.auth && canReadData(req.auth, 'inventory')) return true
   if (required !== '__unknown_write__' && req.auth?.permissions?.includes(required)) return true
   res.status(403).json({ error: '没有此项操作权限' })
   return false

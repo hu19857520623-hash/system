@@ -347,9 +347,9 @@ export type BootstrapData = {
   billing: {
     readWarning?: string
     creditBalance: number
-    monthlySpent: number
-    pendingBill: number
-    budgetUsed: number
+    monthlySpent?: number
+    pendingBill?: number
+    budgetUsed?: number
     name: string
     code: string
     contact: string

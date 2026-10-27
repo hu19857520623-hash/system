@@ -92,11 +92,14 @@ export function hydrateEntities(data: BootstrapData) {
           contact: data.billing.contact,
           warehouse: data.billing.warehouse,
           creditBalance: data.billing.creditBalance,
-          monthlySpent: data.billing.monthlySpent,
-          pendingBill: data.billing.pendingBill,
-          budgetUsed: data.billing.budgetUsed,
+          monthlySpent: data.billing.monthlySpent ?? 0,
+          pendingBill: data.billing.pendingBill ?? 0,
+          budgetUsed: data.billing.budgetUsed ?? 0,
         }
-      : null,
+      : data.accounts?.length === 1 ? {
+          name: data.accounts[0].name, code: data.accounts[0].code, contact: data.accounts[0].contact,
+          warehouse: data.accounts[0].warehouse, creditBalance: 0, monthlySpent: 0, pendingBill: 0, budgetUsed: 0,
+        } : null,
   }
   emit()
 }

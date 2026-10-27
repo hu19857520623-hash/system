@@ -65,13 +65,16 @@ for(const action of ['withdraw','decide'] as const)test(`${action}等待OMS回�
  assert.equal(result.ok,true);if(result.ok)assert.match(result.warning||'',/OMS 回写失败/)
  assert.equal(getReturnOrdersSnapshot()[0].status,action==='withdraw'?'cancelled':'accepted_pending')
 })
-test('ERP刷新批量保存一次，等待失败并保留已读取的状态',async t=>{
- environment(t);let release!:(value:Response)=>void,settled=false
- globalThis.fetch=async input=>String(input).includes('/erp/returns/by-customer/')?Response.json({items:[confirmed],total:1}):new Promise(resolve=>{release=resolve})
- const refresh=refreshReturnsFromErp('c1').then(()=>{settled=true});await new Promise(resolve=>setImmediate(resolve));assert.equal(settled,false)
- release(Response.json({error:'Storage unavailable'},{status:503}));await assert.rejects(refresh,/ERP 退件记录已读取，但 OMS 保存失败/)
+test('ERP刷新仅更新读取到的退件状态，不要求写入权限或发送快照',async t=>{
+ environment(t);let calls=0
+ globalThis.fetch=async(input,init)=>{
+  calls++;assert.ok(String(input).includes('/erp/returns/by-customer/'));assert.ok(!init?.method||init.method==='GET')
+  return Response.json({items:[confirmed],total:1})
+ }
+ assert.equal(await refreshReturnsFromErp('c1'),1);assert.equal(calls,1)
  assert.equal(getReturnOrdersSnapshot()[0].status,'pending_arrival')
 })
+
 test('删除等待服务器确认，失败后恢复记录且保留并发刷新',async t=>{
  environment(t);let release!:(value:Response)=>void;globalThis.fetch=async()=>new Promise(resolve=>{release=resolve})
  const deleting=removeReturnOrder(draft);cacheReturnOrder({...draft,id:'other',returnNo:'OTHER',status:'completed'})

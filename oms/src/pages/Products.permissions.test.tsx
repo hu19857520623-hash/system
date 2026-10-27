@@ -16,6 +16,9 @@ import ProductDetail from './ProductDetail'
 import ProductForm from '../components/products/ProductForm'
 import Layout from '../components/layout/Layout'
 import { hydrateBilling } from '../data/billingStore'
+import InventoryPage from './Inventory'
+import Dashboard from './Dashboard'
+import { hydrateEntities } from '../data/entityStore'
 
 const product = { id:'permission-card',customerId:'permission-customer',internalSku:'TKL9001-PERM41',customerSku:'PERM41',
   name:'隔离只读商品',spec:'',image:'',price:1,cost:1,availableQty:0,lockedQty:0,category:'',categoryPath:'',weight:'1 kg',
@@ -78,4 +81,22 @@ test('an unauthorized old route cannot render its outlet and returns to an allow
   const html=render(<Routes><Route element={<Layout />}><Route path="/products/:id/edit" element={<p>PRIVATE_EDITOR</p>} /></Route></Routes>,'/products/permission-card/edit')
   assert.ok(html.includes('当前账号无权查看'));assert.ok(html.includes('返回我的商品'));assert.ok(!html.includes('PRIVATE_EDITOR'))
   assert.ok(!html.includes('1,234'));assert.ok(!html.includes('1234'))
+})
+test('inventory-only page keeps stock but does not offer unavailable outbound history actions',t=>{
+  environment(t,['inventory:read','product:read'])
+  hydrateInventory({products:[product],purchases:[],inventory:[{id:'i1',customerId:product.customerId,sku:product.internalSku,name:product.name,
+    image:'',available:5,locked:0,inTransit:0,pendingShelving:0,pendingOutbound:0,defective:0,shipped:0,safetyStock:0,warningQty:0,
+    warehouse:'jhb1',price:1,spec:'',stockSource:'owned'}]})
+  const html=render(<InventoryPage />,'/inventory')
+  assert.ok(html.includes('仅库存查看'));assert.ok(!html.includes('前往出库记录'));assert.ok(!html.includes('>出库记录<'))
+})
+test('dashboard permission alone does not display unavailable balances or order counts',t=>{
+  environment(t,['dashboard:read']);hydrateBilling({creditBalance:9876,feeRecords:[]})
+  hydrateEntities({orders:[],inboundOrders:[],returnOrders:[],stores:[],platformSkuMappings:[],systemMessages:[],announcements:[],billing:null,
+    accounts:[{id:product.customerId,name:'隔离客户',code:'TKL9001',contact:'只读联系人',warehouse:'jhb1'}]} as any)
+  t.after(()=>hydrateBilling({creditBalance:0,feeRecords:[]}))
+  const html=render(<Dashboard />,'/')
+  assert.ok(!html.includes('账户余额'));assert.ok(!html.includes('今日订单'));assert.ok(!html.includes('待处理异常'))
+  assert.ok(html.includes('待办事项'))
+  assert.ok(html.includes('TKL9001'));assert.ok(html.includes('只读联系人'))
 })

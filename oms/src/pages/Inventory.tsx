@@ -1,7 +1,7 @@
 
 import { userFacingError } from '../utils/userFacingError'
 import { displaySku } from '../data/skuDisplay'
-import { useState, useMemo } from 'react'
+import { useEffect, useRef, useState, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { Download, RefreshCw, ListOrdered } from 'lucide-react'
 import {
@@ -24,6 +24,9 @@ import { AdminCustomerFilter } from '../components/admin/AdminCustomerFilter'
 import { exportInventoryCsv } from '../data/listExport'
 import { findProductByCode } from '../data/platformBindingUtils'
 import { calcSkuVolumeM3 } from '../data/feeTemplates'
+import { useRole } from '../auth/RoleContext'
+import { canReadData } from '../data/readAccess'
+import { authSessionScope, getStoredAuthSession } from '../api/client'
 
 interface InvFilters {
   sku: string
@@ -88,7 +91,12 @@ function applyInvFilters(list: ReturnType<typeof useInventoryItems>, f: InvFilte
 }
 
 export default function InventoryPage() {
+  const identity = useRole()
+  const canReadOutbounds = canReadData(identity, 'outboundOrders')
+  const scope = identity.user ? authSessionScope({ token: identity.authToken, user: identity.user }) : ''
   const dataScope = useDataScope()
+  const drawerScope = useRef('')
+  drawerScope.current = JSON.stringify([scope, dataScope.bindingCustomerId])
   const allInventory = useInventoryItems()
   const allOutbound = useOutboundOrders()
   const scopedInventory = useMemo(() => dataScope.scope(allInventory), [dataScope, allInventory])
@@ -104,6 +112,7 @@ export default function InventoryPage() {
   const [outboundDrawerLoading, setOutboundDrawerLoading] = useState(false)
   const [outboundDrawerRows, setOutboundDrawerRows] = useState<SkuOutboundLogRow[]>([])
   const [outboundDrawerHint, setOutboundDrawerHint] = useState('')
+  useEffect(() => { setOutboundDrawerOpen(false); setOutboundDrawerRows([]); setOutboundDrawerHint('') }, [scope, dataScope.bindingCustomerId])
 
   const resolveCustomerCode = () => {
     if (dataScope.isAdmin) {
@@ -114,6 +123,11 @@ export default function InventoryPage() {
   }
 
   const openSkuOutboundLogs = async (sku: string) => {
+    const current = getStoredAuthSession()
+    if (!current || !canReadData(current.user, 'outboundOrders')) { notifyError('当前账号没有读取出库记录的权限，请联系管理员核对'); return }
+    const owner = authSessionScope(current)
+    const readScope = drawerScope.current
+    const isCurrent = () => owner === authSessionScope() && readScope === drawerScope.current
     setOutboundDrawerSku(sku)
     setOutboundDrawerOpen(true)
     setOutboundDrawerLoading(true)
@@ -121,6 +135,7 @@ export default function InventoryPage() {
     setOutboundDrawerHint('')
     try {
       const result = await loadSkuOutboundLogs(resolveCustomerCode(), sku, scopedOutbound)
+      if (!isCurrent()) return
       setOutboundDrawerRows(result.items)
       if (result.needCustomer) {
         setOutboundDrawerHint('管理员请先选择客户，以查询 ERP 同步的出库单；当前仅显示 OMS 本地记录。')
@@ -130,9 +145,10 @@ export default function InventoryPage() {
         setOutboundDrawerHint('该 SKU 暂无出库记录。')
       }
     } catch (err) {
+      if (!isCurrent()) return
       setOutboundDrawerHint(userFacingError(err instanceof Error ? err.message : '加载出库记录失败'))
     } finally {
-      setOutboundDrawerLoading(false)
+      if (isCurrent()) setOutboundDrawerLoading(false)
     }
   }
 
@@ -350,10 +366,10 @@ export default function InventoryPage() {
                   <td className="table-cell text-right text-xs text-text-secondary">{item.shipped > 0 ? item.shipped : '—'}</td>
                   <td className="table-cell"><Badge status={st} label={statusLabels[st]} /></td>
                   <td className="table-cell text-right">
-                    <Button variant="ghost" size="sm" className="!px-2 !py-1" onClick={() => void openSkuOutboundLogs(item.sku)}>
+                    {canReadOutbounds ? <Button variant="ghost" size="sm" className="!px-2 !py-1" onClick={() => void openSkuOutboundLogs(item.sku)}>
                       <ListOrdered className="h-3.5 w-3.5" />
                       出库记录
-                    </Button>
+                    </Button> : <span className="text-xs text-text-muted">仅库存查看</span>}
                   </td>
                 </tr>
               )
@@ -363,7 +379,7 @@ export default function InventoryPage() {
         <TableFooter total={filtered.length} />
       </Card>
 
-      <Drawer
+      {canReadOutbounds && <Drawer
         open={outboundDrawerOpen}
         onClose={() => setOutboundDrawerOpen(false)}
         title={`出库记录 · ${displaySku(outboundDrawerSku)}`}
@@ -419,7 +435,7 @@ export default function InventoryPage() {
             <Button variant="secondary" size="sm">前往出库记录</Button>
           </Link>
         </div>
-      </Drawer>
+      </Drawer>}
     </div>
   )
 }

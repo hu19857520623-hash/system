@@ -11,6 +11,7 @@ import { useBilling } from '../data/billingStore'
 import { useRole } from '../auth/RoleContext'
 import { useDataScope } from '../auth/useDataScope'
 import { ROLE_LABELS } from '../auth/permissions'
+import { canReadData } from '../data/readAccess'
 
 const OUTBOUND_PENDING = new Set(['draft', 'pending', 'locked', 'picking', 'pending_ship', 'processing', 'pending_payment', 'pending_review'])
 
@@ -24,7 +25,8 @@ const quickActionDefs = [
 ]
 
 export default function Dashboard() {
-  const { can, role } = useRole()
+  const identity = useRole()
+  const { can, role } = identity
   const dataScope = useDataScope()
   const orders = useOrders()
   const inboundOrders = useInboundOrders()
@@ -67,11 +69,11 @@ export default function Dashboard() {
             </p>
           </div>
           <div className="flex gap-4 rounded-xl bg-white/10 px-5 py-3 backdrop-blur-sm">
-            <div className="text-center">
+            {canReadData(identity, 'balance') && <div className="text-center">
               <p className="text-2xl font-bold">{role === 'sys_admin' ? '分户账务' : formatCurrency(creditBalance)}</p>
               <p className="text-[11px] text-white/70">{role === 'sys_admin' ? '在费用账单中选择客户查看' : readWarning ? '缓存余额，请刷新核对' : '账户余额'}</p>
-            </div>
-            <div className="w-px bg-white/20" />
+            </div>}
+            {canReadData(identity, 'orders') && <><div className="w-px bg-white/20" />
             <div className="text-center">
               <p className="text-2xl font-bold">{todayOrders}</p>
               <p className="text-[11px] text-white/70">今日订单</p>
@@ -80,7 +82,7 @@ export default function Dashboard() {
             <div className="text-center">
               <p className="text-2xl font-bold text-amber-200">{todayExceptions}</p>
               <p className="text-[11px] text-white/70">待处理异常</p>
-            </div>
+            </div></>}
           </div>
         </div>
       </div>

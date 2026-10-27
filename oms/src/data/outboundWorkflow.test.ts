@@ -132,23 +132,16 @@ test('草稿保存失败不会撤销等待期间ERP刷新的同单据状态', as
   assert.equal(getOutboundOrders()[0].status, 'picking')
 })
 
-test('ERP记录刷新只批量保存本次返回记录，等待回写确认并保留其他草稿', async t => {
+test('ERP记录刷新只更新本次返回的显示记录，不发送写入并保留其他草稿', async t => {
   environment(t)
   hydrateOutbound([draft, { ...draft, id: 'unrelated', outboundNo: 'UNRELATED', status: 'draft' }])
-  let release!: (response: Response) => void, settled = false
+  let calls = 0
   globalThis.fetch = async (input, init) => {
-    const path = String(input)
-    if (path === '/api/erp/outbound/by-customer/TKL9001') return Response.json({ items: [confirmed, { ...confirmed, id: 22, outboundNo: 'SECOND' }], total: 2 })
-    assert.equal(path, '/api/outbound-orders')
-    assert.deepEqual(JSON.parse(String(init?.body)).map((row: OutboundOrder) => row.outboundNo), [draft.outboundNo, 'SECOND'])
-    return new Promise(resolve => { release = resolve })
+    calls++; assert.equal(String(input), '/api/erp/outbound/by-customer/TKL9001')
+    assert.ok(!init?.method || init.method === 'GET')
+    return Response.json({ items: [confirmed, { ...confirmed, id: 22, outboundNo: 'SECOND' }], total: 2 })
   }
-  const refresh = refreshOutboundsFromErp('c1').then(() => { settled = true })
-  await new Promise(resolve => setImmediate(resolve))
-  assert.equal(settled, false)
-  assert.equal(typeof release, 'function')
-  release(Response.json({ error: 'Storage unavailable' }, { status: 503 }))
-  await assert.rejects(refresh, /ERP 出库记录已读取，但 OMS 保存失败/)
+  assert.equal(await refreshOutboundsFromErp('c1'), 2); assert.equal(calls, 1)
   assert.equal(getOutboundOrders().find(row => row.outboundNo === 'UNRELATED')?.status, 'draft')
   assert.equal(getOutboundOrders().find(row => row.id === draft.id)?.status, 'locked')
 })

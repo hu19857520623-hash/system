@@ -60,7 +60,7 @@ function lineTotal(line: { price: number; qty: number }) {
 }
 
 export default function Catalog() {
-  const { role, accounts } = useRole()
+  const { role, accounts, can } = useRole()
   const showCatalogMeta = role === 'catalog' || role === 'hybrid' || role === 'sys_admin'
   const showAllCustomers = role === 'sys_admin' && !getCustomerIdForRole(role)
   const customerId = getCustomerIdForRole(role)
@@ -141,7 +141,7 @@ export default function Catalog() {
       const catalog = await getErpCatalog()
       await mergeErpCatalogIntoState(catalog.items || [])
       setSyncedAt(catalog.syncedAt)
-      if (customerCode && customerCode !== '—') {
+      if (can('catalog:write') && customerCode && customerCode !== '—') {
         const bal = await getErpBalance(customerCode)
         await setCreditBalanceFromErp(bal.balance, customerCode)
       }
@@ -340,9 +340,9 @@ export default function Catalog() {
           (syncedAt ? ` · 同步 ${new Date(syncedAt).toLocaleString()}` : '')}
         action={
           <div className="flex items-center gap-2">
-            <span className="hidden text-xs text-text-muted sm:inline">
+            {(can('catalog:write') || can('billing:read')) && <span className="hidden text-xs text-text-muted sm:inline">
               ERP 余额 {formatCurrency(billing.creditBalance)}
-            </span>
+            </span>}
             <Button size="sm" variant="secondary" className="relative" onClick={() => setOrdersOpen(true)}>
               <ClipboardList className="h-3.5 w-3.5" />
               订单管理
