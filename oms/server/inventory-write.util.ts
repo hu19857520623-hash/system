@@ -2,13 +2,14 @@ import { Prisma } from '@prisma/client'
 import { createHash } from 'node:crypto'
 import { isCatalogPoolScope } from './customer-scope.util.js'
 import type { ErpInventoryViewItem } from './erpClient.js'
+import { PRODUCT_IMPORT_LIMIT } from '../src/data/productImportContract.js'
 
 export class InventoryWriteError extends Error {
   constructor(message: string, public status = 400) { super(message) }
 }
 
 export function inventoryProductsInput(value: unknown) {
-  if (!Array.isArray(value) || !value.length || value.length > 500) throw new InventoryWriteError('每次请选择1至500个商品保存')
+  if (!Array.isArray(value) || !value.length || value.length > PRODUCT_IMPORT_LIMIT) throw new InventoryWriteError(`每次请选择1至${PRODUCT_IMPORT_LIMIT}个商品保存`)
   const ids = new Set<string>()
   for (const row of value) {
     if (!row || typeof row !== 'object' || Array.isArray(row) || typeof row.id !== 'string' || !row.id.trim() || row.id.length > 50 || ids.has(row.id)) throw new InventoryWriteError('商品记录无效或重复，请刷新商品列表后重新选择')
@@ -30,7 +31,17 @@ export async function saveInventoryProducts(
   validate: (row: Record<string, any>) => string | undefined,
   assertSku: (tx: Prisma.TransactionClient, data: any, id: string) => Promise<void>,
 ) {
-  return db.$transaction(async (tx: Prisma.TransactionClient) => {
+  return db.$transaction((tx: Prisma.TransactionClient) => saveInventoryProductsInTransaction(tx, rows, scope, dataFor, validate, assertSku),
+    { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted, maxWait: 10000, timeout: 60000 })
+}
+
+export async function saveInventoryProductsInTransaction(
+  tx: Prisma.TransactionClient, rows: Record<string, any>[], scope: string | null,
+  dataFor: (row: Record<string, any>, owner: string) => Record<string, any>,
+  validate: (row: Record<string, any>) => string | undefined,
+  assertSku: (tx: Prisma.TransactionClient, data: any, id: string) => Promise<void>,
+  createOnly = false,
+) {
     const owners = [...new Set(rows.map(row => scope || String(row.customerId || '').trim()))].sort()
     for (const owner of owners) {
       if (!owner || isCatalogPoolScope(owner)) throw new InventoryWriteError('请选择客户商品；共享货盘请在ERP维护', 403)
@@ -47,6 +58,7 @@ export async function saveInventoryProducts(
       const owner = scope || String(row.customerId || '').trim()
       if (scope && row.customerId && row.customerId !== scope) throw new InventoryWriteError('不能修改其他客户的商品', 403)
       const previous = await tx.product.findUnique({ where: { id: row.id } })
+      if (createOnly && previous) throw new InventoryWriteError('导入记录已存在，请核对原批次，不能覆盖现有商品', 409)
       if (previous && previous.customerId !== owner) throw new InventoryWriteError('不能修改其他客户或共享货盘的商品', 403)
       const invalid = validate(row)
       if (invalid) throw new InventoryWriteError(invalid)
@@ -56,7 +68,6 @@ export async function saveInventoryProducts(
       saved.push(await tx.product.upsert({ where: { id: row.id }, create: { id: row.id, ...productWriteFields(data) } as any, update: productWriteFields(data, previous) }))
     }
     return saved
-  }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted, maxWait: 10000, timeout: 60000 })
 }
 
 /** Serialize permanent deletion with metadata saves and canonical inventory refreshes. */

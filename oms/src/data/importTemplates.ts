@@ -399,8 +399,9 @@ export function downloadProductTemplate() {
   ])
 }
 
-export function parseProducts(records: Record<string, string>[], customerId?: string): ParseResult<Product> {
-  const data: Product[] = []
+export type ParsedProductImport = Product & { sourceLineNo: number }
+export function parseProducts(records: Record<string, string>[], customerId?: string): ParseResult<ParsedProductImport> {
+  const data: ParsedProductImport[] = []
   const errors: string[] = []
   const failures: ImportRowFailure[] = []
 
@@ -428,7 +429,8 @@ export function parseProducts(records: Record<string, string>[], customerId?: st
     }
 
     data.push({
-      id: `prod-import-${Date.now()}-${idx}`,
+      id: `prod-import-${crypto.randomUUID()}`,
+      sourceLineNo: lineNo,
       customerId,
       customerSku,
       internalSku: customerSku,

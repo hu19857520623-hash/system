@@ -1,4 +1,5 @@
 import { canReadData } from '../src/data/readAccess.js'
+import { importProductBatch, readProductImport, cancelProductImport } from './product-import.util.js'
 import { assertApiReadAccess, filterBootstrapReads } from './read-access.util.js'
 import { applyCatalogReclaimSnapshot } from './catalog-reclaim-snapshot.util.js'
 import { applyErpInventoryView, inventoryProductsInput, InventoryWriteError, saveInventoryProducts, deleteInventoryProduct } from './inventory-write.util.js'
@@ -2847,6 +2848,25 @@ async function writeProductCards(req: AuthenticatedRequest, res: express.Respons
 }
 
 app.put('/api/inventory-products', (req, res) => writeProductCards(req as AuthenticatedRequest, res, req.body?.products))
+
+for (const [method, suffix] of [['get', ''], ['post', ''], ['post', '/cancel']] as const) {
+  app[method](`/api/inventory-products/imports/:requestId${suffix}`, async (req, res) => {
+    const auth = (req as AuthenticatedRequest).auth
+    if (!auth?.customerId || !auth.permissions.includes('product:write')) return res.status(403).json({ error: '请使用有商品维护权限的原客户账号核对导入批次' })
+    try {
+      const result = method === 'get'
+        ? await readProductImport(prisma, req.params.requestId, auth.userId, auth.customerId)
+        : suffix === '/cancel'
+          ? await cancelProductImport(prisma, req.params.requestId, auth.userId, auth.customerId)
+          : await importProductBatch(prisma, req.params.requestId, req.body?.products, auth.userId, auth.customerId, inventoryProductStateData, assertInventorySkuAvailable)
+      return res.json(result)
+    } catch (error) {
+      if (error instanceof InventoryWriteError) return res.status(error.status).json({ error: error.message })
+      if (error instanceof GlobalSkuConflict) return res.status(400).json({ error: error.message })
+      sendErpError(res, error)
+    }
+  })
+}
 
 async function assertInventorySkuAvailable(db: any, data: any, id: string) {
   const account = data.customerId ? await db.customerAccount.findUnique({ where: { id: data.customerId }, select: { code: true } }) : null

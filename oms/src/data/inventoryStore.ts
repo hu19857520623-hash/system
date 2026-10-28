@@ -18,6 +18,7 @@ import {
   validateCustomerSku,
 } from './skuCode'
 import { holdingEanFromCatalogPool } from './platformBarcodeScope'
+import { PRODUCT_IMPORT_LIMIT } from './productImportContract'
 
 export interface CatalogPurchase {
   id: string
@@ -512,6 +513,7 @@ export async function importProducts(
   items: Product[],
   opts?: { customerCode?: string; customerId?: string },
 ): Promise<{ ok: true; count: number } | { ok: false; error: string }> {
+  if (!items.length || items.length > PRODUCT_IMPORT_LIMIT) return { ok: false, error: `每次请选择1至${PRODUCT_IMPORT_LIMIT}个商品导入，请拆分文件后重试` }
   const prepared: Product[] = []
   const existing = [...state.products.map(p => p.internalSku)]
   const importedCustomerSkus = new Set<string>()

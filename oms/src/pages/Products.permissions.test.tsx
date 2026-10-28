@@ -19,12 +19,29 @@ import { hydrateBilling } from '../data/billingStore'
 import InventoryPage from './Inventory'
 import Dashboard from './Dashboard'
 import { hydrateEntities } from '../data/entityStore'
+import ProductImportPanel from '../components/products/ProductImportPanel'
+import { saveProductImportAttempt } from '../data/productImportWorkflow'
 
 const product = { id:'permission-card',customerId:'permission-customer',internalSku:'TKL9001-PERM41',customerSku:'PERM41',
   name:'隔离只读商品',spec:'',image:'',price:1,cost:1,availableQty:0,lockedQty:0,category:'',categoryPath:'',weight:'1 kg',
   weightKg:1,lengthCm:10,widthCm:10,heightCm:10,inCatalog:false,productStatus:'draft',hasBattery:false,certUploaded:false,
   hasBoxSpec:true,declaredNameEn:'Fixture',declaredNameCn:'隔离只读商品',declaredValue:1,unit:'pcs' } as Product
 const storage = () => { const rows=new Map<string,string>();return {getItem:(key:string)=>rows.get(key)||null,setItem:(key:string,value:string)=>rows.set(key,value),removeItem:(key:string)=>rows.delete(key)} }
+
+test('unresolved import renders Chinese result/continue/cancel/return controls and preserves failure detail after reload', t=>{
+  environment(t,['product:read','product:write'])
+  saveProductImportAttempt(localStorage,{requestId:crypto.randomUUID(),userId:'readonly',customerId:product.customerId!,products:[product],rowCount:2,failures:[{lineNo:8,sku:'BAD43',reason:'重量须大于0'}]})
+  const html=render(<ProductImportPanel open onOpen={()=>{}} onClose={()=>{}} />)
+  for(const text of ['核对结果','继续原批次','取消原批次','返回商品列表','下载失败明细CSV','BAD43','重量须大于0'])assert.ok(html.includes(text),text)
+  assert.ok(!html.includes('选择导入文件'))
+  const list=render(<Products />);assert.ok(list.includes('核对原导入批次'))
+})
+test('unreadable batch has a Chinese return path and cannot silently enable a replacement import', t=>{
+  environment(t,['product:read','product:write'])
+  localStorage.setItem('oms:product-import:'+JSON.stringify(['readonly',product.customerId]),'{')
+  const html=render(<ProductImportPanel open onOpen={()=>{}} onClose={()=>{}} />)
+  assert.ok(html.includes('原导入批次无法读取'));assert.ok(html.includes('返回商品列表'));assert.ok(!html.includes('选择导入文件'))
+})
 
 function environment(t: TestContext, permissions: Permission[], role: OmsRole='hybrid') {
   const descriptors=['localStorage','sessionStorage'].map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)] as const)

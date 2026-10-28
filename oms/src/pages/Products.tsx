@@ -14,7 +14,6 @@ import { Product, type InboundOrder, statusLabels, formatCurrency } from '../dat
 import {
   discardLocalProduct,
   hasLocalProductStock,
-  importProducts,
   permanentlyDeleteLocalProduct,
   restoreLocalProduct,
   useProducts,
@@ -27,9 +26,8 @@ import { PrintCodeTypeDialog } from '../components/PrintCodeTypeDialog'
 import { getCustomerSkuDisplay } from '../data/skuCode'
 import { useDataScope } from '../auth/useDataScope'
 import { AdminCustomerFilter, AdminCustomerCell } from '../components/admin/AdminCustomerFilter'
-import { downloadProductTemplate, exportProducts, parseProducts, PRODUCT_COLUMNS } from '../data/importTemplates'
-import { importCsvFile } from '../data/csvImportExport'
-import { reportLineImportResult } from '../utils/lineImportResult'
+import { downloadProductTemplate, exportProducts } from '../data/importTemplates'
+import ProductImportPanel from '../components/products/ProductImportPanel'
 import { notifyIfUserError, notifySuccess, notifyError } from '../utils/userNotify'
 import { approveProductDrafts } from '../data/productDraftApproval'
 import { useRole } from '../auth/RoleContext'
@@ -99,6 +97,7 @@ function applyProductFilters(list: Product[], f: ProductFilters, tab: string, cu
 
 export default function Products() {
   const [printInputs, setPrintInputs] = useState<BarcodeLabelInput[] | null>(null)
+  const [importOpen, setImportOpen] = useState(false)
   const { can, authToken, customerId } = useRole()
   const canWrite = can('product:write')
   const dataScope = useDataScope()
@@ -182,31 +181,8 @@ export default function Products() {
 
   const handleExportAll = () => exportProducts(filtered, dataScope.getCustomerCode)
   const handleImportDrafts = async () => {
-    const owner = currentProductWriteScope()
-    if (!owner) { notifyError('当前账号没有商品维护权限，请联系管理员核对'); return }
-    const customerId = dataScope.activeCustomerId
-    const customerCode = dataScope.activeCustomerCode
-    if (!customerId || !customerCode || customerCode === '—') {
-      window.alert('请先使用已绑定客户编码的客户账号导入商品')
-      return
-    }
-    try {
-      const result = await importCsvFile(PRODUCT_COLUMNS, rows => parseProducts(rows, customerId))
-      if (owner !== currentProductWriteScope()) { notifyError('登录身份或商品维护权限已变化，请重新选择文件'); return }
-      await reportLineImportResult(result, async () => {
-        if (owner !== requireProductWriteScope()) throw new Error('登录权限已变化，请重新选择文件后导入')
-        const saved = await importProducts(
-          result.data.map(product => ({ ...product, productStatus: 'draft' as const })),
-          { customerId, customerCode },
-        )
-        if (!saved.ok) throw new Error(saved.error)
-      }, {
-        successMessage: count => `已将 ${count} 个商品保存为草稿，请在草稿列表点击「审核」或勾选后「批量审核」`,
-        csvFilename: 'OMS-商品导入失败明细',
-      })
-    } catch (error) {
-      notifyIfUserError(error, '商品导入失败')
-    }
+    if (!currentProductWriteScope()) { notifyError('当前账号没有商品维护权限，请联系管理员核对'); return }
+    setImportOpen(true)
   }
   const handleExportSelected = () => {
     const picked = filtered.filter(p => selected.has(p.id))
@@ -377,6 +353,7 @@ export default function Products() {
         </div>
       </div>
 
+      {canWrite && !dataScope.isAdmin && <ProductImportPanel key={currentProductWriteScope()} open={importOpen} onOpen={() => setImportOpen(true)} onClose={() => setImportOpen(false)} />}
       <Card className="overflow-hidden">
         <Table>
           <thead className="table-head">
