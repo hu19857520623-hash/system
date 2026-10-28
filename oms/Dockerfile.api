@@ -65,6 +65,7 @@ COPY --chown=oms:oms src/data/platformBarcodeScope.ts ./src/data/platformBarcode
 COPY --chown=oms:oms src/data/readAccess.ts ./src/data/readAccess.ts
 COPY --chown=oms:oms src/data/productImportContract.ts ./src/data/productImportContract.ts
 COPY --chown=oms:oms src/data/productSaveContract.ts ./src/data/productSaveContract.ts
+COPY --chown=oms:oms src/data/productActionContract.ts ./src/data/productActionContract.ts
 COPY --chown=oms:oms src/utils/userFacingError.ts ./src/utils/userFacingError.ts
 
 USER oms

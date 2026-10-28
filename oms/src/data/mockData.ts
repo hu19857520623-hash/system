@@ -711,7 +711,7 @@ export interface Product {
   catalogShareStatus?: 'enabled' | 'stopped'
   catalogSyncedAt?: string
   productStatus: ProductStatus
-  /** 废弃前的状态，用于从回收站恢复。 */
+  /** 兼容旧页面；当前废弃前状态由服务端保存，浏览器不决定恢复状态。 */
   discardedFrom?: Exclude<ProductStatus, 'discarded'>
   /** 手动创建或模板导入，决定保存并审核是否自动通过 */
   productSource?: ProductSource

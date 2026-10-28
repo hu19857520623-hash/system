@@ -22,12 +22,38 @@ import { hydrateEntities } from '../data/entityStore'
 import ProductImportPanel from '../components/products/ProductImportPanel'
 import { saveProductImportAttempt } from '../data/productImportWorkflow'
 import { storeProductSaveAttempt } from '../data/productSaveWorkflow'
+import { buildProductAction, storeProductAction, productActionScope } from '../data/productActionWorkflow'
 
 const product = { id:'permission-card',customerId:'permission-customer',internalSku:'TKL9001-PERM41',customerSku:'PERM41',
   name:'隔离只读商品',spec:'',image:'',price:1,cost:1,availableQty:0,lockedQty:0,category:'',categoryPath:'',weight:'1 kg',
   weightKg:1,lengthCm:10,widthCm:10,heightCm:10,inCatalog:false,productStatus:'draft',hasBattery:false,certUploaded:false,
   hasBoxSpec:true,declaredNameEn:'Fixture',declaredNameCn:'隔离只读商品',declaredValue:1,unit:'pcs' } as Product
 const storage = () => { const rows=new Map<string,string>();return {getItem:(key:string)=>rows.get(key)||null,setItem:(key:string,value:string)=>rows.set(key,value),removeItem:(key:string)=>rows.delete(key)} }
+
+test('pending lifecycle action survives reload with original labels, partial failures and Chinese recovery choices',t=>{
+  environment(t,['product:read','product:write'])
+  const actor={id:'readonly',role:'hybrid',customerId:product.customerId!}
+  storeProductAction(localStorage,actor,buildProductAction({action:'approve',products:[product],failures:[{sku:'BAD46',error:'请填写英文申报品名'}]},actor))
+  const html=render(<Products />)
+  for(const label of ['继续原商品操作','核对商品操作结果','取消原商品操作','返回商品列表','BAD46','请填写英文申报品名','下载审核失败明细'])assert.ok(html.includes(label),label)
+})
+
+test('unreadable lifecycle action shows Chinese recovery error and return without confirming a replacement',t=>{
+  environment(t,['product:read','product:write'])
+  const actor={id:'readonly',role:'hybrid',customerId:product.customerId!}
+  localStorage.setItem('oms:product-action:'+JSON.stringify([actor.id,productActionScope(actor)]),'{')
+  const html=render(<Products />)
+  assert.ok(html.includes('原商品操作信息无法读取'));assert.ok(html.includes('返回商品列表'));assert.ok(!html.includes('确认废弃'))
+})
+
+test('reviewing product retains an approval entry and is included in the draft count',t=>{
+  environment(t,['product:read','product:write'])
+  hydrateInventory({inventory:[],products:[{...product,productStatus:'reviewing'}],purchases:[]})
+  const html=render(<Products />)
+  assert.ok(html.includes('审核中'))
+  assert.ok((html.match(/<button\b[^>]*>[\s\S]*?<\/button>/g)||[]).some(button=>button.replace(/<[^>]*>/g,'').trim()==='审核'))
+  assert.ok(/草稿.*?\(1\)/.test(html))
+})
 
 test('unresolved manual save has Chinese check/continue/cancel/return on the form and list',t=>{
   environment(t,['product:read','product:write'])

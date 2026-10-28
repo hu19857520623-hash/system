@@ -1,9 +1,10 @@
 import { canReadData } from '../src/data/readAccess.js'
 import { importProductBatch, readProductImport, cancelProductImport } from './product-import.util.js'
 import { saveProductWithReceipt, readProductSave, cancelProductSave } from './product-save.util.js'
+import { applyProductAction, readProductAction } from './product-action.util.js'
 import { assertApiReadAccess, filterBootstrapReads } from './read-access.util.js'
 import { applyCatalogReclaimSnapshot } from './catalog-reclaim-snapshot.util.js'
-import { applyErpInventoryView, inventoryProductsInput, InventoryWriteError, saveInventoryProducts, deleteInventoryProduct } from './inventory-write.util.js'
+import { applyErpInventoryView, InventoryWriteError, deleteInventoryProduct } from './inventory-write.util.js'
 import { assertOwnedBindingMutation, OwnedBindingLockedError } from './owned-binding-lock.util.js'
 import { localizedErrorResponse } from './error-response.util.js'
 import { missingRequiredAccountMessage } from './account-validation.util.js'
@@ -2800,19 +2801,6 @@ function inventoryProductStateData(product: Record<string, unknown>, scopedCusto
   }
 }
 
-function validateInventoryProductState(
-  product: Record<string, unknown>,
-  options?: { allowLegacyCustomerSku?: boolean },
-) {
-  const internalSku = String(product.internalSku || '').trim()
-  if (!internalSku) return '产品缺少 SKU'
-  const customerSku = String(product.customerSku || '').trim()
-  if (options?.allowLegacyCustomerSku) return undefined
-  if (!customerSku) return '产品缺少客户 SKU'
-  if (customerSku.length >= 12) return `客户 SKU 须少于 12 位：${customerSku}`
-  return undefined
-}
-
 async function filterDeletedSnapshotRows<T extends Record<string, unknown>>(
   entityType: string,
   rows: T[],
@@ -2835,20 +2823,23 @@ app.put('/api/inventory-state', (_req, res) => {
   res.status(409).json({ error: '旧版库存快照不能保存库存或采购数量，请刷新页面；商品请在商品管理保存，库存请使用同步ERP' })
 })
 
-async function writeProductCards(req: AuthenticatedRequest, res: express.Response, value: unknown) {
-  try {
-    const products = inventoryProductsInput(value)
-    const saved = await saveInventoryProducts(prisma, products, customerScope(req), inventoryProductStateData,
-      row => validateInventoryProductState(row, { allowLegacyCustomerSku: row.productStatus === 'discarded' }), assertInventorySkuAvailable)
-    res.json({ ok: true, products: saved })
-  } catch (error) {
-    if (error instanceof InventoryWriteError) return res.status(error.status).json({ error: error.message })
-    if (error instanceof GlobalSkuConflict) return res.status(400).json({ error: error.message })
-    sendErpError(res, error)
-  }
-}
+const oldProductWriteMessage = '旧版商品快照不能直接保存资料或状态，请刷新页面；资料请在商品表单保存，审核、废弃和恢复请使用当前列表操作'
+app.put('/api/inventory-products', (_req, res) => res.status(409).json({ error: oldProductWriteMessage }))
 
-app.put('/api/inventory-products', (req, res) => writeProductCards(req as AuthenticatedRequest, res, req.body?.products))
+for (const [method, suffix] of [['get', ''], ['post', ''], ['post', '/cancel']] as const) {
+  app[method](`/api/inventory-products/actions/:requestId${suffix}`, async (req, res) => {
+    const auth = (req as AuthenticatedRequest).auth
+    if (!auth || !(auth.role === 'sys_admin' || auth.permissions.includes('product:write'))) return res.status(403).json({ error: '请使用有商品维护权限的原账号核对商品操作' })
+    try {
+      return res.json(method === 'get' ? await readProductAction(prisma, req.params.requestId, auth)
+        : await applyProductAction(prisma, req.params.requestId, req.body, auth, assertInventorySkuAvailable, suffix === '/cancel'))
+    } catch (error) {
+      if (error instanceof InventoryWriteError) return res.status(error.status).json({ error: error.message })
+      if (error instanceof GlobalSkuConflict) return res.status(400).json({ error: error.message })
+      sendErpError(res, error)
+    }
+  })
+}
 
 for (const [method, suffix] of [['get', ''], ['post', ''], ['post', '/cancel']] as const) {
   app[method](`/api/inventory-products/saves/:customerId/:requestId${suffix}`, async (req, res) => {
@@ -2894,7 +2885,7 @@ async function assertInventorySkuAvailable(db: any, data: any, id: string) {
 /** Persist one product card without making unchanged legacy duplicate cards block the operation. */
 app.put('/api/inventory-state/products/:id', (req, res) => {
   if (!req.body?.product || req.body.product.id !== req.params.id) return res.status(400).json({ error: '商品卡ID无效，请刷新后重新打开' })
-  return writeProductCards(req as AuthenticatedRequest, res, [req.body.product])
+  return res.status(409).json({ error: oldProductWriteMessage })
 })
 
 app.delete('/api/inventory-state/products/:id', async (req, res) => {

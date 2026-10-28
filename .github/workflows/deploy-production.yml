@@ -308,6 +308,9 @@ jobs:
           product_save_sql="${PWD}/backend/prisma/scripts/migrate_oms_product_save.sql"
           test -f "$product_save_sql" || { echo "Missing $product_save_sql"; exit 1; }
           cat "$product_save_sql" | docker compose exec -T mysql mysql -uroot -p"$mysql_pw" --default-character-set=utf8mb4 --batch takealot_erp
+          product_action_sql="${PWD}/backend/prisma/scripts/migrate_oms_product_action.sql"
+          test -f "$product_action_sql" || { echo "Missing $product_action_sql"; exit 1; }
+          cat "$product_action_sql" | docker compose exec -T mysql mysql -uroot -p"$mysql_pw" --default-character-set=utf8mb4 --batch takealot_erp
 
           echo '=== Build store-monitor ==='
           cd /opt/system/store-monitor

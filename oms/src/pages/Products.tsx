@@ -12,12 +12,9 @@ import {
 } from '../components/ui/filters'
 import { Product, type InboundOrder, statusLabels, formatCurrency } from '../data/mockData'
 import {
-  discardLocalProduct,
   hasLocalProductStock,
   permanentlyDeleteLocalProduct,
-  restoreLocalProduct,
   useProducts,
-  approveProducts,
 } from '../data/inventoryStore'
 import { useInboundOrders } from '../data/entityStore'
 import { getPlatformBarcodeAliases } from '../data/platformBindingUtils'
@@ -29,10 +26,12 @@ import { AdminCustomerFilter, AdminCustomerCell } from '../components/admin/Admi
 import { downloadProductTemplate, exportProducts } from '../data/importTemplates'
 import ProductImportPanel from '../components/products/ProductImportPanel'
 import { ProductSaveBanner } from '../components/products/ProductSaveRecovery'
-import { notifyIfUserError, notifySuccess, notifyError } from '../utils/userNotify'
-import { approveProductDrafts } from '../data/productDraftApproval'
+import ProductActionPanel from '../components/products/ProductActionPanel'
+import type { ProductActionIntent } from '../data/productActionWorkflow'
+import { notifyIfUserError, notifyError } from '../utils/userNotify'
+import { validateProductDrafts } from '../data/productDraftApproval'
 import { useRole } from '../auth/RoleContext'
-import { currentProductWriteScope, requireProductWriteScope } from '../auth/productAccess'
+import { currentProductWriteScope } from '../auth/productAccess'
 
 const statusTabs = [
   { id: 'all', label: '全部' },
@@ -80,7 +79,7 @@ function inboundOrderUsesSku(order: InboundOrder, product: Product) {
 
 function applyProductFilters(list: Product[], f: ProductFilters, tab: string, customerId?: string | null) {
   return list.filter(p => {
-    if (tab !== 'all' && p.productStatus !== tab) return false
+    if (tab === 'draft' ? !['draft', 'reviewing'].includes(p.productStatus) : tab !== 'all' && p.productStatus !== tab) return false
     if (!matchTriState(p.hasBattery, f.battery)) return false
     if (!matchTriState(p.hasBoxSpec, f.boxSpec)) return false
     const skuValues = [displaySku(p), p.internalSku, ...getPlatformBarcodeAliases(p.internalSku, customerId ?? p.customerId)]
@@ -99,6 +98,7 @@ function applyProductFilters(list: Product[], f: ProductFilters, tab: string, cu
 export default function Products() {
   const [printInputs, setPrintInputs] = useState<BarcodeLabelInput[] | null>(null)
   const [importOpen, setImportOpen] = useState(false)
+  const [actionIntent, setActionIntent] = useState<ProductActionIntent | null>(null)
   const { can, authToken, customerId, user } = useRole()
   const canWrite = can('product:write')
   const dataScope = useDataScope()
@@ -113,7 +113,7 @@ export default function Products() {
   const [applied, setApplied] = useState<ProductFilters>(defaultFilters)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
-  useEffect(() => { setSelected(new Set()); setPrintInputs(null); setApproving(false) }, [authToken, customerId, canWrite])
+  useEffect(() => { setSelected(new Set()); setPrintInputs(null); setApproving(false); setActionIntent(null) }, [authToken, customerId, canWrite])
   const myProducts = useMemo(
     () => dataScope.scopeProducts(products),
     [dataScope, products],
@@ -128,7 +128,7 @@ export default function Products() {
     [myProducts, selected],
   )
 
-  const reviewableSelected = selectedProducts.filter(p => p.productStatus === 'draft' && !p.inCatalog)
+  const reviewableSelected = selectedProducts.filter(p => ['draft', 'reviewing'].includes(p.productStatus) && !p.inCatalog)
 
   const handleApprove = async (items: Product[]) => {
     if (approving || !can('product:write')) return
@@ -137,20 +137,9 @@ export default function Products() {
     if (!items.length) { notifyError('请先勾选需要审核的草稿商品'); return }
     setApproving(true)
     try {
-      const result = await approveProductDrafts(items, {
-        customerCodeFor: dataScope.getCustomerCode,
-        markAvailable: ids => {
-          if (owner !== requireProductWriteScope()) throw new Error('登录权限已变化，请重新核对商品审核结果')
-          return approveProducts(ids)
-        },
-      })
+      const result = validateProductDrafts(items, { customerCodeFor: dataScope.getCustomerCode })
       if (owner !== currentProductWriteScope()) return
-      if (result.approvedIds.length) {
-        setSelected(previous => new Set([...previous].filter(id => !result.approvedIds.includes(id))))
-        setPage(1)
-        notifySuccess(`已审核 ${result.approvedIds.length} 个商品，状态已变为可用`)
-      }
-      if (result.failures.length) notifyError(`审核失败 ${result.failures.length} 个：${result.failures.slice(0, 5).map(item => `${item.sku}：${item.error}`).join('；')}`)
+      setActionIntent({ action: 'approve', products: items.filter(row => result.approvedIds.includes(row.id)), failures: result.failures })
     } catch (error) {
       if (owner === currentProductWriteScope()) notifyIfUserError(error, '商品审核失败，草稿已保留，请重试')
     } finally { if (owner === currentProductWriteScope()) setApproving(false) }
@@ -166,7 +155,7 @@ export default function Products() {
     return {
       all: base.length,
       available: base.filter(p => p.productStatus === 'available').length,
-      draft: base.filter(p => p.productStatus === 'draft').length,
+      draft: base.filter(p => ['draft', 'reviewing'].includes(p.productStatus)).length,
       discarded: base.filter(p => p.productStatus === 'discarded').length,
     }
   }, [myProducts, applied, barcodeCustomerId])
@@ -224,28 +213,13 @@ export default function Products() {
   const handleDiscard = async (product: Product) => {
     const owner = currentProductWriteScope()
     if (!owner) { notifyError('当前账号没有商品维护权限，请联系管理员核对'); return }
-    if (!window.confirm(`确认废弃商品「${displaySku(product)}」？可在“废弃”页恢复。`)) return
-    try {
-      await discardLocalProduct(product.id)
-      if (owner !== currentProductWriteScope()) return
-      setSelected(previous => {
-        const next = new Set(previous)
-        next.delete(product.id)
-        return next
-      })
-    } catch (error) {
-      if (owner === currentProductWriteScope()) window.alert(userFacingError(`废弃商品失败：${error instanceof Error ? error.message : String(error)}`))
-    }
+    setActionIntent({ action: 'discard', products: [product] })
   }
 
   const handleRestore = async (product: Product) => {
     const owner = currentProductWriteScope()
     if (!owner) { notifyError('当前账号没有商品维护权限，请联系管理员核对'); return }
-    try {
-      await restoreLocalProduct(product.id)
-    } catch (error) {
-      if (owner === currentProductWriteScope()) window.alert(userFacingError(`恢复商品失败：${error instanceof Error ? error.message : String(error)}`))
-    }
+    setActionIntent({ action: 'restore', products: [product] })
   }
 
   const handlePermanentDelete = async (product: Product) => {
@@ -356,6 +330,7 @@ export default function Products() {
 
       {canWrite && !dataScope.isAdmin && <ProductImportPanel key={currentProductWriteScope()} open={importOpen} onOpen={() => setImportOpen(true)} onClose={() => setImportOpen(false)} />}
       {canWrite && user?.id && dataScope.activeCustomerId && <ProductSaveBanner key={`${currentProductWriteScope()}:${dataScope.activeCustomerId}`} userId={user.id} customerId={dataScope.activeCustomerId} />}
+      {canWrite && user?.id && <ProductActionPanel key={currentProductWriteScope()} actor={user} intent={actionIntent} onConsumed={() => setActionIntent(null)} onApplied={ids => { setSelected(previous => new Set([...previous].filter(id => !ids.includes(id)))); setPage(1) }} />}
       <Card className="overflow-hidden">
         <Table>
           <thead className="table-head">
@@ -424,7 +399,7 @@ export default function Products() {
                   <div className="flex flex-wrap items-center gap-1 text-xs">
                     {canWrite && !p.inCatalog && p.productStatus !== 'discarded' && (
                       <>
-                        {p.productStatus === 'draft' && can('product:write') && <button type="button" disabled={approving} onClick={() => void handleApprove([p])} className="inline-flex items-center gap-0.5 font-medium text-emerald-700 hover:underline disabled:opacity-40"><CheckCircle className="h-3 w-3" /> {approving ? '审核中…' : '审核'}</button>}
+                        {['draft', 'reviewing'].includes(p.productStatus) && can('product:write') && <button type="button" disabled={approving} onClick={() => void handleApprove([p])} className="inline-flex items-center gap-0.5 font-medium text-emerald-700 hover:underline disabled:opacity-40"><CheckCircle className="h-3 w-3" /> {approving ? '审核中…' : '审核'}</button>}
                         <Link to={`/products/${p.id}/edit`} className="inline-flex items-center gap-0.5 font-medium text-primary-600 hover:underline"><Pencil className="h-3 w-3" /> {p.productStatus === 'draft' ? '编辑草稿' : '编辑商品'}</Link>
                         <button type="button" onClick={() => void handleDiscard(p)} className="inline-flex items-center gap-0.5 font-medium text-amber-700 hover:underline"><Ban className="h-3 w-3" /> 废弃商品</button>
                       </>

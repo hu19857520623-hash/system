@@ -104,6 +104,7 @@ export async function deleteInventoryProduct(db: { product: any; $transaction: a
         || lines.some(line => line && String(line.sku || '').trim() === product.internalSku)) throw new InventoryWriteError(`该 SKU 已关联入库单 ${inbound.inboundNo}，不能永久删除`)
     }
     await tx.$executeRaw`INSERT INTO oms_snapshot_tombstone (entity_type, entity_id) VALUES ('product', ${id}) ON DUPLICATE KEY UPDATE entity_id = entity_id`
+    await tx.$executeRaw`DELETE FROM oms_product_discard_origin WHERE product_id=${id} AND customer_id=${owner}`
     await tx.product.delete({ where: { id } })
     // A zero mirror may still belong to another historical card of the same SKU.
     const sibling = await tx.product.findFirst({ where: { customerId: owner, internalSku: product.internalSku }, select: { id: true } })

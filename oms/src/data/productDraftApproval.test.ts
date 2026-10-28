@@ -1,11 +1,16 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import type { Product } from './mockData'
-import { approveProductDrafts } from './productDraftApproval.ts'
+import { approveProductDrafts, validateProductDrafts } from './productDraftApproval.ts'
 
 const product = { id: 'p1', customerId: 'c1', customerSku: 'A', internalSku: 'TKL005-A', name: '产品 A',
   productStatus: 'draft', inCatalog: false, lengthCm: 10, widthCm: 20, heightCm: 30,
-  weightKg: 1, declaredValue: 20, image: '', hasBattery: false } as Product
+  weightKg: 1, declaredValue: 20, declaredNameEn: 'Fixture', declaredNameCn: '产品 A', unit: 'PCS', image: '', hasBattery: false } as Product
+
+test('historical reviewing products have the same continuation and validation as drafts',()=>{
+ const r=validateProductDrafts([{...product,productStatus:'reviewing'},{...product,id:'missing',declaredNameEn:''}],{customerCodeFor:()=> 'TKL005'})
+ assert.deepEqual(r.approvedIds,['p1']);assert.equal(r.failures[0].sku,'A');assert.match(r.failures[0].error,/英文申报品名/)
+})
 
 test('review marks a valid OMS draft available without creating ERP master data', async () => {
   const calls: string[] = []

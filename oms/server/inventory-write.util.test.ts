@@ -77,7 +77,7 @@ function deleteFixture() {
   const inbounds:any[]=[]
   const tx:any={
     $queryRaw:async()=>{calls.push('account-lock');return [{id:'c1'}]},
-    $executeRaw:async()=>{calls.push('tombstone');tombstones.add('gone')},
+    $executeRaw:async(query:any)=>{if(String(query?.sql||query?.[0]).includes('oms_product_discard_origin')){calls.push('discard-origin-clean');return}calls.push('tombstone');tombstones.add('gone')},
     product:{findUnique:async()=>{calls.push('current-card');return product},delete:async()=>{calls.push('delete-card');product=null},findFirst:async()=>null},
     inventoryItem:{findFirst:async()=>inventory[0]||null,deleteMany:async(args:any)=>{calls.push('delete-mirror');assert.equal(args.where.stockSource,'owned');assert.equal(args.where.AND.length,6)}},
     inboundOrder:{findMany:async()=>inbounds},
@@ -88,7 +88,7 @@ function deleteFixture() {
 
 test('deletion rechecks the current card under its customer lock and records deletion atomically',async()=>{
   const f=deleteFixture();await f.remove()
-  assert.deepEqual(f.calls,['account-lock','current-card','tombstone','delete-card','delete-mirror']);assert.ok(f.tombstones.has('gone'))
+  assert.deepEqual(f.calls,['account-lock','current-card','tombstone','discard-origin-clean','delete-card','delete-mirror']);assert.ok(f.tombstones.has('gone'))
 })
 test('deletion rejects other customers, shared/catalog cards and current stock before writing',async()=>{
   for(const change of [{customerId:'c2'},{customerId:'tkl'},{inCatalog:true},{productStatus:'available'},{availableQty:1},{lockedQty:1}]){
