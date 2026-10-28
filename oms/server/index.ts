@@ -1,5 +1,6 @@
 import { canReadData } from '../src/data/readAccess.js'
 import { importProductBatch, readProductImport, cancelProductImport } from './product-import.util.js'
+import { saveProductWithReceipt, readProductSave, cancelProductSave } from './product-save.util.js'
 import { assertApiReadAccess, filterBootstrapReads } from './read-access.util.js'
 import { applyCatalogReclaimSnapshot } from './catalog-reclaim-snapshot.util.js'
 import { applyErpInventoryView, inventoryProductsInput, InventoryWriteError, saveInventoryProducts, deleteInventoryProduct } from './inventory-write.util.js'
@@ -2848,6 +2849,22 @@ async function writeProductCards(req: AuthenticatedRequest, res: express.Respons
 }
 
 app.put('/api/inventory-products', (req, res) => writeProductCards(req as AuthenticatedRequest, res, req.body?.products))
+
+for (const [method, suffix] of [['get', ''], ['post', ''], ['post', '/cancel']] as const) {
+  app[method](`/api/inventory-products/saves/:customerId/:requestId${suffix}`, async (req, res) => {
+    const auth = (req as AuthenticatedRequest).auth, customer = String(req.params.customerId || '')
+    if (!auth || !(auth.role === 'sys_admin' || auth.permissions.includes('product:write')) || (auth.role !== 'sys_admin' && auth.customerId !== customer)) return res.status(403).json({ error: '请使用有商品维护权限的原账号核对保存结果' })
+    try {
+      return res.json(method === 'get' ? await readProductSave(prisma, req.params.requestId, auth.userId, customer)
+        : suffix === '/cancel' ? await cancelProductSave(prisma, req.params.requestId, auth.userId, customer)
+          : await saveProductWithReceipt(prisma, req.params.requestId, req.body, auth.userId, customer, inventoryProductStateData, assertInventorySkuAvailable))
+    } catch (error) {
+      if (error instanceof InventoryWriteError) return res.status(error.status).json({ error: error.message })
+      if (error instanceof GlobalSkuConflict) return res.status(400).json({ error: error.message })
+      sendErpError(res, error)
+    }
+  })
+}
 
 for (const [method, suffix] of [['get', ''], ['post', ''], ['post', '/cancel']] as const) {
   app[method](`/api/inventory-products/imports/:requestId${suffix}`, async (req, res) => {

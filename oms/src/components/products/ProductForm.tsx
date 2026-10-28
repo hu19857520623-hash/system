@@ -1,11 +1,15 @@
 
 import { userFacingError } from '../../utils/userFacingError'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { Button } from '../ui'
 import { FormSection, FormGrid, FormField, formInput, formSelect } from '../ui/form'
 import { Product } from '../../data/mockData'
-import { upsertLocalProduct, prepareNewProductSkus, useProducts } from '../../data/inventoryStore'
+import { prepareNewProductSkus, useProducts, getProductsSnapshot } from '../../data/inventoryStore'
+import { comparableProductMetadata, type ProductSaveReceipt } from '../../data/productSaveContract'
+import { validateImportedProduct } from '../../data/productImportContract'
+import { readProductSaveAttempt, storeProductSaveAttempt, requestProductSave, runProductSaveAttempt, type ProductSaveAttempt } from '../../data/productSaveWorkflow'
+import ProductSaveRecovery, { finishProductSave } from './ProductSaveRecovery'
 import { uploadErpProductDraftImage } from '../../api/erp'
 import { useRole } from '../../auth/RoleContext'
 import { getCustomerCode, getCustomerIdForRole } from '../../data/dataScope'
@@ -36,28 +40,54 @@ function ProductEditBlocked({ product }: { product: Product }) {
 
 function ProductEditorForm({ product, mode = 'create' }: ProductFormProps) {
   const navigate = useNavigate()
-  const { role, can } = useRole()
+  const { role, can, user } = useRole()
+  const customerForSave = getCustomerIdForRole(role) || product?.customerId
+  const [initialRecovery] = useState(() => {
+    try { return { attempt: user?.id && customerForSave ? readProductSaveAttempt(localStorage, user.id, customerForSave) : null, error: '' } }
+    catch (cause) { return { attempt: null, error: userFacingError(cause) } }
+  })
+  const [attempt, setAttempt] = useState<ProductSaveAttempt | null>(initialRecovery.attempt)
+  const [baseMetadata, setBaseMetadata] = useState(mode === 'edit' && product ? comparableProductMetadata(product) : null)
+  const [createdId] = useState(() => initialRecovery.attempt?.mode === 'create' ? initialRecovery.attempt.product.id : `prod-${crypto.randomUUID()}`)
+  const active = useRef(true), submitting = useRef(false)
+  useEffect(() => { active.current = true; return () => { active.current = false } }, [])
+  const source = initialRecovery.attempt && (mode === 'create' && initialRecovery.attempt.mode === 'create' || initialRecovery.attempt.product.id === product?.id) ? initialRecovery.attempt.product : product
 
   const [sku, setSku] = useState(
-    product ? getCustomerSkuDisplay(product, getCustomerCode(product.customerId)) : '',
+    source ? getCustomerSkuDisplay(source, getCustomerCode(source.customerId)) : '',
   )
-  const [name, setName] = useState(product?.name || '')
-  const [nameEn, setNameEn] = useState(product?.declaredNameEn || '')
-  const [customCode, setCustomCode] = useState(product?.customCode || '')
-  const [declaredValue, setDeclaredValue] = useState(product?.declaredValue ?? 0)
-  const [declaredCn, setDeclaredCn] = useState(product?.declaredNameCn || '')
-  const [unit, setUnit] = useState(product?.unit ?? 'PCS')
-  const [weightKg, setWeightKg] = useState(product?.weightKg ?? 0)
-  const [lengthCm, setLengthCm] = useState(product?.lengthCm ?? 0)
-  const [widthCm, setWidthCm] = useState(product?.widthCm ?? 0)
-  const [heightCm, setHeightCm] = useState(product?.heightCm ?? 0)
-  const [hasBattery, setHasBattery] = useState(product?.hasBattery ? 'yes' : 'no')
-  const [image, setImage] = useState(product?.image || '')
+  const [name, setName] = useState(source?.name || '')
+  const [nameEn, setNameEn] = useState(source?.declaredNameEn || '')
+  const [customCode, setCustomCode] = useState(source?.customCode || '')
+  const [declaredValue, setDeclaredValue] = useState(source?.declaredValue ?? 0)
+  const [declaredCn, setDeclaredCn] = useState(source?.declaredNameCn || '')
+  const [unit, setUnit] = useState(source?.unit ?? 'PCS')
+  const [weightKg, setWeightKg] = useState(source?.weightKg ?? 0)
+  const [lengthCm, setLengthCm] = useState(source?.lengthCm ?? 0)
+  const [widthCm, setWidthCm] = useState(source?.widthCm ?? 0)
+  const [heightCm, setHeightCm] = useState(source?.heightCm ?? 0)
+  const [hasBattery, setHasBattery] = useState(source?.hasBattery ? 'yes' : 'no')
+  const [image, setImage] = useState(source?.image || '')
   const [imageUploading, setImageUploading] = useState(false)
   const [savingAction, setSavingAction] = useState<'draft' | 'submit' | 'update' | null>(null)
   const saving = savingAction !== null
   const [error, setError] = useState('')
   const submittedProduct = Boolean(mode === 'edit' && product && product.productStatus !== 'draft')
+  function onResolved(result: ProductSaveReceipt, original = attempt) {
+    if (!original || !active.current) return
+    setAttempt(null)
+    if (result.status === 'cancelled') {
+      if (original.mode === 'update' && original.product.id === product?.id) {
+        notifySuccess('原保存请求已取消，已重新载入最新商品资料，请核对后继续编辑')
+        navigate(`/products/${original.product.id}/edit`)
+      } else setError('原保存请求已取消，当前表单尚未提交；请核对资料后继续编辑，或返回商品列表重新打开')
+      return
+    }
+    const canonical = getProductsSnapshot().find(row => row.id === original.product.id)
+    if (canonical) setBaseMetadata(comparableProductMetadata(canonical))
+    notifySuccess('商品保存已确认，请继续查看或编辑')
+    navigate(original.action === 'submit' ? '/products' : original.action === 'update' ? `/products/${original.product.id}` : `/products/${original.product.id}/edit`)
+  }
 
   const handleImageUpload = async (file?: File) => {
     const owner = currentProductWriteScope()
@@ -83,6 +113,7 @@ function ProductEditorForm({ product, mode = 'create' }: ProductFormProps) {
   }
 
   const handleSave = async (action: 'draft' | 'submit' | 'update') => {
+    if (submitting.current || attempt || initialRecovery.error) return
     setError('')
     const owner = currentProductWriteScope()
     if (!owner) { setError('当前账号没有商品维护权限，请返回商品列表查看'); return }
@@ -120,8 +151,9 @@ function ProductEditorForm({ product, mode = 'create' }: ProductFormProps) {
     const internalSku = isCreate || isDraft
       ? (prepared as { customerSku: string; internalSku: string }).internalSku
       : product!.internalSku
-    const productId = isCreate ? `p-${internalSku}` : product!.id
+    const productId = isCreate ? createdId : product!.id
 
+    submitting.current = true
     setSavingAction(action)
     try {
       const local: Product = {
@@ -137,8 +169,8 @@ function ProductEditorForm({ product, mode = 'create' }: ProductFormProps) {
         availableQty: product?.availableQty ?? 0,
         lockedQty: product?.lockedQty ?? 0,
         customCode: customCode || undefined,
-        category: '',
-        categoryPath: '',
+        category: product?.category || '',
+        categoryPath: product?.categoryPath || '',
         weight: `${weightKg || 0} kg`,
         weightKg: weightKg || 0,
         lengthCm: lengthCm || 0,
@@ -150,26 +182,24 @@ function ProductEditorForm({ product, mode = 'create' }: ProductFormProps) {
         hasBattery: hasBattery === 'yes',
         certUploaded: product?.certUploaded ?? false,
         hasBoxSpec: lengthCm > 0 && widthCm > 0 && heightCm > 0,
-        declaredNameEn: nameEn || declaredCn,
-        declaredNameCn: declaredCn || name,
+        outerBoxBarcode: product?.outerBoxBarcode,
+        declaredNameEn: nameEn,
+        declaredNameCn: declaredCn,
         declaredValue: declaredValue || 0,
         unit,
       }
-      const saved = await upsertLocalProduct(local)
-      if (owner !== currentProductWriteScope()) return
-      if (!saved.ok) {
-        setError(userFacingError(saved.error))
-        return
+      if (local.productStatus === 'available') {
+        const invalid = validateImportedProduct(local as unknown as Record<string, unknown>)
+        if (invalid) throw new Error(invalid)
       }
-      notifySuccess(action === 'submit' ? '商品已提交，可在商品列表查看'
-        : action === 'update' ? '商品修改已保存' : '商品草稿已保存，可继续编辑或提交')
-      if (action === 'submit') {
-        navigate('/products')
-        return
-      }
-      navigate(action === 'update' ? `/products/${productId}` : `/products/${productId}/edit`)
+      if (!user?.id || !local.customerId) throw new Error('请使用已绑定客户的原账号保存商品')
+      const original: ProductSaveAttempt = { requestId: crypto.randomUUID(), userId: user.id, customerId: local.customerId, mode: isCreate ? 'create' : 'update', action, expected: isCreate ? null : baseMetadata, product: local }
+      storeProductSaveAttempt(localStorage, original); setAttempt(original)
+      const result = await runProductSaveAttempt(() => requestProductSave('submit', original), original, owner, currentProductWriteScope)
+      if (!active.current || owner !== currentProductWriteScope()) return
+      if (await finishProductSave(original, result, owner, () => active.current)) onResolved(result, original)
     } catch (e) {
-      if (owner !== currentProductWriteScope()) return
+      if (!active.current || owner !== currentProductWriteScope()) return
       const msg = e instanceof Error ? e.message : String(e)
       if (/重复\s*SKU|SKU.*已存在|已被使用/i.test(msg)) {
         setError(userFacingError(msg.includes('重复 SKU') ? msg : `重复 SKU：${internalSku}`))
@@ -177,6 +207,7 @@ function ProductEditorForm({ product, mode = 'create' }: ProductFormProps) {
         setError(userFacingError(msg))
       }
     } finally {
+      submitting.current = false
       setSavingAction(null)
     }
   }
@@ -186,6 +217,8 @@ function ProductEditorForm({ product, mode = 'create' }: ProductFormProps) {
     <Link to="/products" className="mt-3 inline-block text-primary-600">返回我的商品</Link>
     {product && <Link to={`/products/${product.id}`} className="ml-4 text-primary-600">查看产品详情</Link>}
   </div>
+  if (initialRecovery.error) return <div role="alert"><p>{initialRecovery.error}</p><Link to="/products">返回商品列表</Link></div>
+  if (attempt) return <>{error && <p role="alert" className="text-red-600">{error}</p>}<ProductSaveRecovery attempt={attempt} disabled={saving} onResolved={result => onResolved(result)} /></>
   return (
     <div className="space-y-4 pb-24">
       <p className="text-xs text-text-muted">
@@ -304,7 +337,7 @@ export default function ProductForm({ product, mode = 'create' }: ProductFormPro
   if (mode === 'edit' && product?.productStatus === 'discarded') {
     return <ProductEditBlocked product={product} />
   }
-  return <ProductEditorForm product={product} mode={mode} />
+  return <ProductEditorForm key={currentProductWriteScope()} product={product} mode={mode} />
 }
 
 export function useProductById(id?: string) {

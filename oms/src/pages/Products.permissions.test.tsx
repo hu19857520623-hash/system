@@ -21,12 +21,27 @@ import Dashboard from './Dashboard'
 import { hydrateEntities } from '../data/entityStore'
 import ProductImportPanel from '../components/products/ProductImportPanel'
 import { saveProductImportAttempt } from '../data/productImportWorkflow'
+import { storeProductSaveAttempt } from '../data/productSaveWorkflow'
 
 const product = { id:'permission-card',customerId:'permission-customer',internalSku:'TKL9001-PERM41',customerSku:'PERM41',
   name:'隔离只读商品',spec:'',image:'',price:1,cost:1,availableQty:0,lockedQty:0,category:'',categoryPath:'',weight:'1 kg',
   weightKg:1,lengthCm:10,widthCm:10,heightCm:10,inCatalog:false,productStatus:'draft',hasBattery:false,certUploaded:false,
   hasBoxSpec:true,declaredNameEn:'Fixture',declaredNameCn:'隔离只读商品',declaredValue:1,unit:'pcs' } as Product
 const storage = () => { const rows=new Map<string,string>();return {getItem:(key:string)=>rows.get(key)||null,setItem:(key:string,value:string)=>rows.set(key,value),removeItem:(key:string)=>rows.delete(key)} }
+
+test('unresolved manual save has Chinese check/continue/cancel/return on the form and list',t=>{
+  environment(t,['product:read','product:write'])
+  storeProductSaveAttempt(localStorage,{requestId:crypto.randomUUID(),userId:'readonly',customerId:product.customerId!,mode:'create',action:'draft',expected:null,product})
+  const form=render(<ProductForm mode="create" />),list=render(<Products />)
+  for(const label of ['核对原保存结果','继续原保存','取消原保存请求','返回商品列表']) {assert.ok(form.includes(label),label);assert.ok(list.includes(label),label)}
+  assert.ok(!form.includes('<input'));assert.ok(!form.includes('保存并提交'))
+})
+test('unreadable manual save gives a Chinese return path and does not allow a replacement create',t=>{
+  environment(t,['product:read','product:write'])
+  localStorage.setItem('oms:product-save:'+JSON.stringify(['readonly',product.customerId]),'{')
+  const form=render(<ProductForm mode="create" />)
+  assert.ok(form.includes('原商品保存信息无法读取'));assert.ok(form.includes('返回商品列表'));assert.ok(!form.includes('<input'))
+})
 
 test('unresolved import renders Chinese result/continue/cancel/return controls and preserves failure detail after reload', t=>{
   environment(t,['product:read','product:write'])

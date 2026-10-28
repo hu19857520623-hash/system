@@ -1,4 +1,4 @@
-import { Link, useParams, useSearchParams } from 'react-router-dom'
+import { Link, useLocation, useParams, useSearchParams } from 'react-router-dom'
 import { ChevronLeft } from 'lucide-react'
 import ProductForm, { useProductById } from '../components/products/ProductForm'
 import { getCustomerSkuDisplay } from '../data/skuCode'
@@ -7,6 +7,7 @@ import { productCopyTemplate } from '../data/productCopy'
 
 export default function ProductCreate() {
   const { id } = useParams()
+  const location = useLocation()
   const dataScope = useDataScope()
   const [searchParams] = useSearchParams()
   const copyId = searchParams.get('copy') || undefined
@@ -40,7 +41,7 @@ export default function ProductCreate() {
             : '可先保存为草稿，确认资料后再提交为 OMS 可用商品'}
         </p>
       </div>
-      <ProductForm key={`${isEdit ? 'edit' : isCopy ? 'copy' : 'create'}:${id || copyId || 'new'}`}
+      <ProductForm key={`${location.key}:${isEdit ? 'edit' : isCopy ? 'copy' : 'create'}:${id || copyId || 'new'}`}
         product={isCopy && product ? productCopyTemplate(product) : product} mode={isEdit ? 'edit' : 'create'} />
     </div>
   )

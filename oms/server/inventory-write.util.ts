@@ -65,7 +65,9 @@ export async function saveInventoryProductsInTransaction(
       const data: Record<string, any> = { ...dataFor(row, owner), inCatalog: previous?.inCatalog ?? false }
       if (previous && previous.productStatus !== 'draft' && previous.productStatus !== 'discarded' && (previous.internalSku !== data.internalSku || previous.customerSku !== data.customerSku)) throw new InventoryWriteError('已提交商品的SKU不能更改，请刷新商品后核对')
       if (row.productStatus !== 'discarded' && (!previous || previous.internalSku !== data.internalSku || previous.customerSku !== data.customerSku || previous.productStatus === 'discarded')) await assertSku(tx, data, row.id)
-      saved.push(await tx.product.upsert({ where: { id: row.id }, create: { id: row.id, ...productWriteFields(data) } as any, update: productWriteFields(data, previous) }))
+      saved.push(createOnly
+        ? await tx.product.create({ data: { id: row.id, ...productWriteFields(data) } as any })
+        : await tx.product.upsert({ where: { id: row.id }, create: { id: row.id, ...productWriteFields(data) } as any, update: productWriteFields(data, previous) }))
     }
     return saved
 }

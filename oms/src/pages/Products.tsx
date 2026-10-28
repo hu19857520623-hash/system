@@ -28,6 +28,7 @@ import { useDataScope } from '../auth/useDataScope'
 import { AdminCustomerFilter, AdminCustomerCell } from '../components/admin/AdminCustomerFilter'
 import { downloadProductTemplate, exportProducts } from '../data/importTemplates'
 import ProductImportPanel from '../components/products/ProductImportPanel'
+import { ProductSaveBanner } from '../components/products/ProductSaveRecovery'
 import { notifyIfUserError, notifySuccess, notifyError } from '../utils/userNotify'
 import { approveProductDrafts } from '../data/productDraftApproval'
 import { useRole } from '../auth/RoleContext'
@@ -98,7 +99,7 @@ function applyProductFilters(list: Product[], f: ProductFilters, tab: string, cu
 export default function Products() {
   const [printInputs, setPrintInputs] = useState<BarcodeLabelInput[] | null>(null)
   const [importOpen, setImportOpen] = useState(false)
-  const { can, authToken, customerId } = useRole()
+  const { can, authToken, customerId, user } = useRole()
   const canWrite = can('product:write')
   const dataScope = useDataScope()
   const barcodeCustomerId = dataScope.bindingCustomerId
@@ -354,6 +355,7 @@ export default function Products() {
       </div>
 
       {canWrite && !dataScope.isAdmin && <ProductImportPanel key={currentProductWriteScope()} open={importOpen} onOpen={() => setImportOpen(true)} onClose={() => setImportOpen(false)} />}
+      {canWrite && user?.id && dataScope.activeCustomerId && <ProductSaveBanner key={`${currentProductWriteScope()}:${dataScope.activeCustomerId}`} userId={user.id} customerId={dataScope.activeCustomerId} />}
       <Card className="overflow-hidden">
         <Table>
           <thead className="table-head">

@@ -69,7 +69,7 @@ export default function ProductImportPanel({ open, onOpen, onClose }: { open: bo
       } else setMessage('已取消原批次，本批有效行也未保存。请修正后重新选择完整文件')
       clearProductImportAttempt(localStorage, original); setPending(false); setCompleted(receipt.status)
     } catch (cause) {
-      if (owner === currentProductWriteScope()) setError(`${userFacingError(cause)}。请保留原批次，核对结果后继续；已导入的商品不会因取消而删除`)
+      if (owner === currentProductWriteScope()) { setMessage('原导入结果尚未核实，请选择下方操作继续'); setError(`${userFacingError(cause)}。请保留原批次，核对结果后继续；已导入的商品不会因取消而删除`) }
     } finally { inFlight.current = false; setBusy(false) }
   }
 

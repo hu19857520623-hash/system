@@ -78,6 +78,7 @@ export const MIGRATION_ORDER = [
   'migrate_lead_correction.sql',
   'migrate_lead_contact_type.sql',
   'migrate_oms_product_import.sql',
+  'migrate_oms_product_save.sql',
 ] as const
 
 /**
