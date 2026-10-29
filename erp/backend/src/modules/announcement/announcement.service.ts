@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common'
 import { Prisma } from '@prisma/client'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
@@ -47,8 +47,8 @@ export class AnnouncementService {
     const wantsDraft = data.status === 'draft'
     const wantsSchedule =
       data.publishMode === 'scheduled' ||
-      data.status === 'scheduled' ||
-      Boolean(scheduledAt && scheduledAt.getTime() > now.getTime())
+      (data.publishMode !== 'immediate' && (data.status === 'scheduled' ||
+      Boolean(scheduledAt && scheduledAt.getTime() > now.getTime())))
 
     if (expiresAt && scheduledAt && expiresAt.getTime() <= scheduledAt.getTime()) {
       throw new BadRequestException('结束时间必须晚于计划发布时间')
@@ -65,14 +65,14 @@ export class AnnouncementService {
       }
     }
 
-    const publishedAt = scheduledAt && scheduledAt.getTime() <= now.getTime() ? scheduledAt : now
+    const publishedAt = data.publishMode !== 'immediate' && scheduledAt && scheduledAt.getTime() <= now.getTime() ? scheduledAt : now
     if (expiresAt && expiresAt.getTime() <= publishedAt.getTime()) {
       throw new BadRequestException('结束时间必须晚于发布时间')
     }
 
     return {
       status: 'published' as const,
-      scheduledAt: scheduledAt || publishedAt,
+      scheduledAt: data.publishMode === 'immediate' ? publishedAt : scheduledAt || publishedAt,
       expiresAt,
       publishedAt,
     }
@@ -222,7 +222,12 @@ export class AnnouncementService {
 
   async update(id: number, data: any) {
     const existing = await this.detail(id)
+    const expected = this.parseDate(data.expectedUpdatedAt, '原公告版本')
+    if (!expected || expected.getTime() !== existing.updatedAt.getTime()) {
+      throw new ConflictException('公告内容或发布状态已变化，旧页面不能覆盖；请重新加载最新公告后核对')
+    }
     const payload: any = { ...data }
+    delete payload.expectedUpdatedAt
     if (payload.targetChannel != null) {
       payload.targetChannel = this.normalizeTarget(payload.targetChannel)
     }
@@ -272,15 +277,20 @@ export class AnnouncementService {
     delete payload.expiresAt
     delete payload.status
 
-    const updated = await this.prisma.announcement.update({
-      where: { id: BigInt(id) },
+    const updated = await this.prisma.$transaction(async tx => {
+      const changed = await tx.announcement.updateMany({
+      where: { id: BigInt(id), updatedAt: expected },
       data: {
         ...payload,
         status: nextStatus,
-        publishedAt: nextPublishedAt,
-        scheduledAt: nextScheduledAt,
+        publishedAt: nextPublishedAt ?? null,
+        scheduledAt: nextScheduledAt ?? null,
         expiresAt: nextExpiresAt,
+        updatedAt: new Date(Math.max(Date.now(), expected.getTime() + 1)),
       },
+      })
+      if (changed.count !== 1) throw new ConflictException('公告内容或发布状态已变化，旧页面不能覆盖；请重新加载最新公告后核对')
+      return tx.announcement.findUniqueOrThrow({ where: { id: BigInt(id) } })
     })
     await this.cache.invalidate('announcements')
 

@@ -7,7 +7,7 @@ import { useAppStore } from '../stores/app'
 import { dashboardApi, announcementApi } from '../api/client'
 import { setAccessToken } from '../auth/tokenStore'
 
-vi.mock('../api/client', () => ({ dashboardApi: { stats: vi.fn(), announcements: vi.fn(), notifications: vi.fn(), trends: vi.fn() }, announcementApi: { list: vi.fn(), create: vi.fn(), update: vi.fn(), remove: vi.fn() }, authApi: {} }))
+vi.mock('../api/client', () => ({ dashboardApi: { stats: vi.fn(), announcements: vi.fn(), notifications: vi.fn(), trends: vi.fn() }, announcementApi: { list: vi.fn(), detail: vi.fn(), create: vi.fn(), update: vi.fn(), remove: vi.fn() }, authApi: {} }))
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }) }))
 vi.mock('element-plus', () => ({ ElMessage: { warning: vi.fn(), error: vi.fn(), success: vi.fn() } }))
 
@@ -39,7 +39,7 @@ beforeEach(() => {
   vi.mocked(dashboardApi.announcements).mockResolvedValue([{ id: 1, title: '当前公开公告', content: '公开正文' }])
   vi.mocked(dashboardApi.notifications).mockResolvedValue({ items: [{ screenId: 'leads_pool', title: '私有线索待办', count: 1 }], badges: {} })
   vi.mocked(dashboardApi.trends).mockResolvedValue({ series: [] })
-  vi.mocked(announcementApi.list).mockResolvedValue({ items: [{ id: 2, title: '管理计划公告', content: '计划私有正文' }] })
+  vi.mocked(announcementApi.list).mockResolvedValue({ items: [{ id: 2, title: '管理计划公告', content: '计划私有正文', scheduledAt:'2077-01-01T00:00:00.000Z', updatedAt: '2026-10-01T00:00:00.000Z' }] })
 })
 afterEach(() => { cleanups.splice(0).forEach(fn => fn()); vi.unstubAllGlobals() })
 const manager = { id: 51, username: 'audit_admin', realName: '隔离管理员', roleCode: 'admin', permissions: ['dashboard.view', 'announcement.manage', 'dashboard.trends_logistics'] }
@@ -53,6 +53,22 @@ function mount() {
 }
 async function settle() { for (let i = 0; i < 6; i++) { await Promise.resolve(); await nextTick() } }
 describe('工作台真实页面权限变化', () => {
+  it('编辑保存携带原版本，重复点击合并；冲突保留输入并可重新读取后继续', async () => {
+    let reject!: (cause: Error) => void
+    vi.mocked(announcementApi.update).mockReturnValueOnce(new Promise((_resolve,no)=>{reject=no}))
+    const { root } = mount(); await settle(); control(root, '编辑')!.props.onClick(); await settle()
+    const save = control(root, '保存修改')!.props.onClick(); await control(root, '保存修改')!.props.onClick()
+    expect(announcementApi.update).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(announcementApi.update).mock.calls[0][1]).toMatchObject({expectedUpdatedAt:'2026-10-01T00:00:00.000Z'})
+    reject(new Error('公告内容或发布状态已变化，旧页面不能覆盖')); await save; await settle()
+    expect(text(root)).toContain('输入已保留');expect(text(root)).toContain('重新加载最新公告')
+    vi.mocked(announcementApi.detail).mockResolvedValue({id:2,title:'最新公告',content:'后续新正文',updatedAt:'2026-10-02T00:00:00.000Z'})
+    await control(root,'重新加载最新公告')!.props.onClick(); await settle()
+    expect(text(root)).toContain('已加载最新公告')
+    vi.mocked(announcementApi.update).mockResolvedValue({})
+    await control(root,'保存修改')!.props.onClick(); await settle()
+    expect(vi.mocked(announcementApi.update).mock.calls[1][1]).toMatchObject({title:'最新公告',content:'后续新正文',expectedUpdatedAt:'2026-10-02T00:00:00.000Z'})
+  })
   it('首次读取失败后可点中文重试，恢复后稳定权限刷新不会重复读取', async () => {
     vi.mocked(dashboardApi.stats).mockRejectedValueOnce(new Error('NetworkError'))
     const { app, root } = mount(); await settle()

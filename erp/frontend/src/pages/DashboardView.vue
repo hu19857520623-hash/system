@@ -81,6 +81,7 @@ function mapAnnouncementRow(a: any, phase: 'active' | 'scheduled' | 'expired' = 
     scheduledAt,
     expiresAt,
     publishedAt,
+    updatedAt: a.updatedAt,
     displayPhase: phase,
   } as const
 }
@@ -212,6 +213,7 @@ function openPublishDialog() {
 }
 
 async function publishAnnouncement() {
+  if (publishSaving.value) return
   const owner = readScope('announcement.manage')
   if (!owner) { ElMessage.warning('公告管理权限已更新，请重新核对权限'); return }
   if (!newAnnouncement.value.title || !newAnnouncement.value.text) {
@@ -242,9 +244,12 @@ async function publishAnnouncement() {
 const editDialogVisible = ref(false)
 const editSaving = ref(false)
 const editingAnnouncement = ref<any>(null)
+const editFeedback = ref('')
+const editReloading = ref(false)
 
 function editAnnouncement(ann: any) {
   if (!readScope('announcement.manage')) { ElMessage.warning('公告管理权限已更新，请重新核对权限'); return }
+  editFeedback.value = ''
   editingAnnouncement.value = {
     ...ann,
     publishMode: ann.displayPhase === 'scheduled' || ann.status === 'scheduled' ? 'scheduled' : 'immediate',
@@ -256,22 +261,39 @@ function editAnnouncement(ann: any) {
 }
 
 async function saveAnnouncement() {
+  if (editSaving.value || editReloading.value) return
   const owner = readScope('announcement.manage')
   if (!owner) { ElMessage.warning('公告管理权限已更新，请重新核对权限'); return }
   if (!editingAnnouncement.value) return
-  editSaving.value = true
+  editSaving.value = true; editFeedback.value = ''
   try {
     const payload = buildAnnouncementPayload(editingAnnouncement.value)
-    await announcementApi.update(editingAnnouncement.value.id, payload)
+    await announcementApi.update(editingAnnouncement.value.id, { ...payload, expectedUpdatedAt: editingAnnouncement.value.updatedAt })
     if (owner !== readScope('announcement.manage')) return
     editDialogVisible.value = false
     ElMessage.success('公告已更新')
     await loadDashboard()
   } catch (e: any) {
-    if (owner === readScope('announcement.manage')) ElMessage.error(userFacingError(e?.message || '保存失败'))
+    if (owner === readScope('announcement.manage')) {
+      editFeedback.value = `${userFacingError(e?.message || '保存失败')} 输入已保留；结果尚未核实时请重新加载最新公告后核对，或取消返回工作台。`
+    }
   } finally {
     if (owner === readScope('announcement.manage')) editSaving.value = false
   }
+}
+
+async function reloadEditingAnnouncement() {
+  const owner = readScope('announcement.manage'), id = editingAnnouncement.value?.id
+  if (!owner || !id || editSaving.value || editReloading.value) return
+  editReloading.value = true
+  try {
+    const row = await announcementApi.detail(id)
+    if (owner !== readScope('announcement.manage') || id !== editingAnnouncement.value?.id) return
+    editAnnouncement(mapAnnouncementRow(row, row.status === 'scheduled' ? 'scheduled' : 'active'))
+    editFeedback.value = '已加载最新公告，请重新核对内容和发布方式后继续保存。'
+  } catch (e) {
+    if (owner === readScope('announcement.manage')) editFeedback.value = `最新公告读取失败。${userFacingError(e)} 原输入已保留，请重试或取消返回。`
+  } finally { if (owner === readScope('announcement.manage')) editReloading.value = false }
 }
 
 async function deleteAnnouncement(ann: { id: string }) {
@@ -312,6 +334,7 @@ watch(readScope, () => {
   editingAnnouncement.value = null
   newAnnouncement.value = { title: '', category: '系统', text: '', targetChannel: 'erp', publishMode: 'immediate', scheduledAt: '', durationMode: 'forever', expiresAt: '' }
   publishSaving.value = false; editSaving.value = false
+  editReloading.value = false; editFeedback.value = ''
 }, { flush: 'sync' })
 </script>
 
@@ -500,8 +523,9 @@ watch(readScope, () => {
     </template>
   </el-dialog>
 
-  <el-dialog v-model="editDialogVisible" title="编辑系统公告" width="520px">
-    <el-form v-if="editingAnnouncement" label-width="88px">
+  <el-dialog v-model="editDialogVisible" title="编辑系统公告" width="520px" :close-on-click-modal="!editSaving && !editReloading" :close-on-press-escape="!editSaving && !editReloading" :show-close="!editSaving && !editReloading">
+    <el-alert v-if="editFeedback" :title="editFeedback" type="warning" :closable="false" />
+    <el-form v-if="editingAnnouncement" label-width="88px" :disabled="editSaving || editReloading">
       <el-form-item label="公告标题">
         <el-input v-model="editingAnnouncement.title" maxlength="30" />
       </el-form-item>
@@ -548,8 +572,9 @@ watch(readScope, () => {
       </el-form-item>
     </el-form>
     <template #footer>
-      <el-button @click="editDialogVisible = false">取消</el-button>
-      <el-button type="primary" :loading="editSaving" @click="saveAnnouncement">保存修改</el-button>
+      <el-button :disabled="editSaving || editReloading" @click="editDialogVisible = false">取消</el-button>
+      <el-button :disabled="editSaving" :loading="editReloading" @click="reloadEditingAnnouncement">重新加载最新公告</el-button>
+      <el-button type="primary" :disabled="editReloading" :loading="editSaving" @click="saveAnnouncement">保存修改</el-button>
     </template>
   </el-dialog>
 </template>

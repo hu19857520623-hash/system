@@ -5,6 +5,10 @@ const trim = ({ value }: { value: unknown }) =>
   typeof value === 'string' ? value.trim() : value
 
 export class UpsertAnnouncementDto {
+  @IsOptional()
+  @IsString()
+  expectedUpdatedAt?: string
+
   @Transform(trim)
   @IsString()
   @MinLength(1, { message: '请填写公告标题' })
