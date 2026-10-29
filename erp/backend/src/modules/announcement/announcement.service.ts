@@ -99,22 +99,32 @@ export class AnnouncementService {
       take: 50,
     })
 
-    for (const row of dueRows) {
-      const publishedAt = row.scheduledAt || now
-      const updated = await this.prisma.announcement.update({
-        where: { id: row.id },
-        data: {
-          status: 'published',
-          publishedAt,
-        },
-      })
-      await this.cache.invalidate('announcements')
-      if (updated.targetChannel === 'oms') {
-        await this.pushToOms(updated).catch(() => undefined)
-      }
+    let activated = 0
+    for (const selected of dueRows) {
+      const result = await this.prisma.$transaction(async tx => {
+        await tx.$queryRaw`SELECT id FROM announcement WHERE id=${selected.id} FOR UPDATE`
+        const current = await tx.announcement.findUnique({ where: { id: selected.id } })
+        if (!current || current.status !== 'scheduled' || !current.scheduledAt || current.scheduledAt > now
+          || current.updatedAt.getTime() !== selected.updatedAt.getTime()) return null
+        const expired = !!current.expiresAt && current.expiresAt <= now
+        const status = expired ? 'expired' : 'published'
+        const changed = await tx.announcement.updateMany({
+          where: { id: current.id, status: 'scheduled', updatedAt: current.updatedAt, scheduledAt: { lte: now } },
+          data: { status, publishedAt: expired ? null : current.scheduledAt,
+            updatedAt: new Date(Math.max(Date.now(), current.updatedAt.getTime() + 1)) },
+        })
+        if (changed.count !== 1) return null
+        if (!expired && current.targetChannel === 'oms') {
+          const updated = await tx.announcement.findUniqueOrThrow({ where: { id: current.id } })
+          await this.pushToOms(updated).catch(() => undefined)
+        }
+        return status
+      }, { maxWait: 10000, timeout: 60000 })
+      if (result) await this.cache.invalidate('announcements')
+      if (result === 'published') activated++
     }
 
-    return dueRows.length
+    return activated
   }
 
   private toPublic(row: AnnouncementRow) {
