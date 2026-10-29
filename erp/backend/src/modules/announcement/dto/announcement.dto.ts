@@ -1,10 +1,14 @@
 import { Transform } from 'class-transformer'
-import { IsBoolean, IsIn, IsOptional, IsString, MaxLength, MinLength } from 'class-validator'
+import { IsBoolean, IsIn, IsOptional, IsString, IsUUID, MaxLength, MinLength } from 'class-validator'
 
 const trim = ({ value }: { value: unknown }) =>
   typeof value === 'string' ? value.trim() : value
 
 export class UpsertAnnouncementDto {
+  @IsOptional()
+  @IsUUID('4', { message: '原公告发布请求编号无效，请返回工作台核对' })
+  clientRequestId?: string
+
   @IsOptional()
   @IsString()
   expectedUpdatedAt?: string

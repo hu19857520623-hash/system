@@ -4,6 +4,7 @@ import { PrismaService } from '../../common/prisma/prisma.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
 import { notifyOms } from '../../common/oms-notify.util'
 import { CacheService } from '../../common/cache/cache.service'
+import { createHash } from 'node:crypto'
 
 type AnnouncementRow = {
   id: bigint
@@ -190,10 +191,82 @@ export class AnnouncementService {
     return items.filter(row => !row.expiresAt || new Date(row.expiresAt).getTime() > now)
   }
 
+  private requestId(value: unknown) {
+    if (typeof value !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) throw new BadRequestException('原公告发布请求编号无效，请返回工作台核对')
+    return value.toLowerCase()
+  }
+
+  private async lockPublisher(tx: Prisma.TransactionClient, userId: number) {
+    if (!Number.isSafeInteger(userId) || userId <= 0) throw new BadRequestException('无法确认原发布账号，请重新登录')
+    const rows = await tx.$queryRaw<Array<{ id: bigint }>>`SELECT id FROM sys_user WHERE id=${BigInt(userId)} FOR UPDATE`
+    if (!rows.length) throw new BadRequestException('原发布账号不存在，请重新登录')
+  }
+
+  private findCreateRequest(db: Pick<Prisma.TransactionClient, 'operationLog'>, id: string, userId: number) {
+    return db.operationLog.findFirst({ where: { module: 'announcement_publish', operatorId: BigInt(userId), detail: { path: '$.clientRequestId', equals: id } } })
+  }
+
+  async createRequest(value: string, userId: number) {
+    const requestId = this.requestId(value), row = await this.findCreateRequest(this.prisma, requestId, userId)
+    return row ? { requestId, ...(row.detail as any).result } : { requestId, status: 'unknown' }
+  }
+
+  async cancelCreateRequest(value: string, userId: number) {
+    const requestId = this.requestId(value)
+    return this.prisma.$transaction(async tx => {
+      await this.lockPublisher(tx, userId)
+      const previous = await this.findCreateRequest(tx, requestId, userId)
+      if (previous) return { requestId, ...(previous.detail as any).result }
+      const result = { status: 'cancelled' }
+      await tx.operationLog.create({ data: { module: 'announcement_publish', action: 'create', operatorId: BigInt(userId), detail: { clientRequestId: requestId, fingerprint: '', result } } })
+      return { requestId, ...result }
+    })
+  }
+
   async create(data: any, publishedBy?: number) {
+    const requestId = this.requestId(data.clientRequestId), userId = publishedBy || 0
+    // Store only publication inputs: arbitrary extra fields cannot change the original request.
+    const input = { title: data.title, content: data.content, category: data.category || '系统', targetChannel: this.normalizeTarget(data.targetChannel), isPinned: !!data.isPinned, status: data.status || 'published', publishMode: data.publishMode || null, scheduledAt: data.scheduledAt || null, expiresAt: data.expiresAt || null }
+    const fingerprint = createHash('sha256').update(JSON.stringify(input)).digest('hex')
+    const saved = await this.prisma.$transaction(async tx => {
+      await this.lockPublisher(tx, userId)
+      const previous = await this.findCreateRequest(tx, requestId, userId)
+      if (previous) {
+        const detail = previous.detail as any
+        if (detail.result.status !== 'cancelled' && detail.fingerprint !== fingerprint) throw new ConflictException('原公告发布内容不能更改，请先核对或取消原请求')
+        return { result: detail.result, created: false }
+      }
+      const row = await this.createRow(tx, input, userId)
+      const result = { status: 'confirmed', announcementId: Number(row.id), scheduled: row.status === 'scheduled', scheduledAt: row.scheduledAt?.toISOString() || null, syncPending: row.targetChannel === 'oms' && row.status === 'published' }
+      await tx.operationLog.create({ data: { module: 'announcement_publish', action: 'create', operatorId: BigInt(userId), targetType: 'announcement', targetId: String(row.id), detail: { clientRequestId: requestId, fingerprint, result } } })
+      return { result, created: true }
+    })
+    if (saved.result.status === 'confirmed') {
+      await this.cache.invalidate('announcements')
+      if (saved.result.syncPending) {
+        saved.result = await this.prisma.$transaction(async tx => {
+          await this.lockPublisher(tx, userId)
+          const receipt = await this.findCreateRequest(tx, requestId, userId)
+          const detail = receipt!.detail as any, result = detail.result
+          if (!result.syncPending) return result
+          await tx.$queryRaw`SELECT id FROM announcement WHERE id=${BigInt(result.announcementId)} FOR UPDATE`
+          const row = await tx.announcement.findUnique({ where: { id: BigInt(result.announcementId) } })
+          // Retry current contents only. Removed, rescheduled or expired announcements are never republished.
+          const shouldSend = row?.targetChannel === 'oms' && row.status === 'published' && (!row.expiresAt || row.expiresAt.getTime() > Date.now())
+          const sent = shouldSend ? await this.pushToOms(row!) : false
+          const next = { ...result, syncPending: shouldSend && !sent, omsSynced: sent, deliverySkipped: !shouldSend }
+          await tx.operationLog.update({ where: { id: receipt!.id }, data: { detail: { ...detail, result: next } } })
+          return next
+        }, { maxWait: 10000, timeout: 60000 })
+      }
+    }
+    return { requestId, ...saved.result }
+  }
+
+  private async createRow(tx: Prisma.TransactionClient, data: any, publishedBy: number) {
     const targetChannel = this.normalizeTarget(data.targetChannel)
     const plan = this.resolvePublishPlan(data)
-    const row = await this.prisma.announcement.create({
+    return tx.announcement.create({
       data: {
         title: data.title,
         category: data.category || '系统',
@@ -207,17 +280,6 @@ export class AnnouncementService {
         expiresAt: plan.expiresAt,
       },
     })
-    await this.cache.invalidate('announcements')
-
-    if (plan.status === 'published' && targetChannel === 'oms') {
-      await this.pushToOms(row)
-    }
-
-    return {
-      ...this.toPublic(row),
-      omsSynced: targetChannel === 'oms' && plan.status === 'published',
-      scheduled: plan.status === 'scheduled',
-    }
   }
 
   async update(id: number, data: any) {
@@ -228,6 +290,7 @@ export class AnnouncementService {
     }
     const payload: any = { ...data }
     delete payload.expectedUpdatedAt
+    delete payload.clientRequestId
     if (payload.targetChannel != null) {
       payload.targetChannel = this.normalizeTarget(payload.targetChannel)
     }
@@ -315,18 +378,19 @@ export class AnnouncementService {
   /** 真实推送 OMS webhook，并写同步日志（失败不影响发布） */
   private async pushToOms(row: AnnouncementRow) {
     const payload = this.toPublic(row)
-    await notifyOms('announcement.publish', null, payload as unknown as Record<string, unknown>)
+    const sent = await notifyOms('announcement.publish', null, payload as unknown as Record<string, unknown>)
     await this.prisma.syncLog
       .create({
         data: {
           syncType: 'announcement_push',
           targetSystem: 'OMS',
           referenceNo: `ANN-${row.id}`,
-          status: 'success',
+          status: sent ? 'success' : 'failed',
           requestBody: payload as object,
-          responseBody: { ok: true, message: '公告已推送至 OMS webhook' },
+          responseBody: { ok: sent, message: sent ? '公告已推送至 OMS webhook' : '公告已保存，OMS推送尚未完成，请核对同步日志后重试原发布' },
         },
       })
       .catch(() => undefined)
+    return sent
   }
 }

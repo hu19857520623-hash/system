@@ -24,6 +24,18 @@ export class AnnouncementController {
   }
 
   @RequirePerms('announcement.manage')
+  @Get('requests/:requestId')
+  request(@Param('requestId') id: string, @CurrentUser('userId') userId: number) {
+    return this.service.createRequest(id, userId)
+  }
+
+  @RequirePerms('announcement.manage')
+  @Post('requests/:requestId/cancel')
+  cancelRequest(@Param('requestId') id: string, @CurrentUser('userId') userId: number) {
+    return this.service.cancelCreateRequest(id, userId)
+  }
+
+  @RequirePerms('announcement.manage')
   @Get(':id')
   detail(@Param('id', ParseIntPipe) id: number) {
     return this.service.detail(id)

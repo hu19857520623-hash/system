@@ -7,7 +7,7 @@ import { useAppStore } from '../stores/app'
 import { dashboardApi, announcementApi } from '../api/client'
 import { setAccessToken } from '../auth/tokenStore'
 
-vi.mock('../api/client', () => ({ dashboardApi: { stats: vi.fn(), announcements: vi.fn(), notifications: vi.fn(), trends: vi.fn() }, announcementApi: { list: vi.fn(), detail: vi.fn(), create: vi.fn(), update: vi.fn(), remove: vi.fn() }, authApi: {} }))
+vi.mock('../api/client', () => ({ dashboardApi: { stats: vi.fn(), announcements: vi.fn(), notifications: vi.fn(), trends: vi.fn() }, announcementApi: { request: vi.fn(), cancelRequest: vi.fn(), list: vi.fn(), detail: vi.fn(), create: vi.fn(), update: vi.fn(), remove: vi.fn() }, authApi: {} }))
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }) }))
 vi.mock('element-plus', () => ({ ElMessage: { warning: vi.fn(), error: vi.fn(), success: vi.fn() } }))
 
@@ -53,6 +53,17 @@ function mount() {
 }
 async function settle() { for (let i = 0; i < 6; i++) { await Promise.resolve(); await nextTick() } }
 describe('工作台真实页面权限变化', () => {
+  it('重载后的原发布展示核对继续取消和返回入口，确认回执后刷新并清除原请求', async () => {
+    const requestId=crypto.randomUUID()
+    localStorage.setItem('erp.announcement.publish.51',JSON.stringify({requestId,actor:'51',payload:{title:'原发布公告',content:'原正文'}}))
+    const { root }=mount();await settle()
+    for(const label of ['核对原发布结果','继续原公告发布','取消原发布请求','原发布公告'])expect(text(root)).toContain(label)
+    control(root,'发布公告')!.props.onClick();await settle();expect(text(root)).toContain('返回工作台')
+    vi.mocked(announcementApi.request).mockResolvedValue({requestId,status:'confirmed',announcementId:71})
+    await control(root,'核对原发布结果')!.props.onClick();await settle()
+    expect(localStorage.getItem('erp.announcement.publish.51')).toBeNull()
+    expect(text(root)).toContain('公告编号71');expect(text(root)).not.toContain('继续原公告发布')
+  })
   it('编辑保存携带原版本，重复点击合并；冲突保留输入并可重新读取后继续', async () => {
     let reject!: (cause: Error) => void
     vi.mocked(announcementApi.update).mockReturnValueOnce(new Promise((_resolve,no)=>{reject=no}))

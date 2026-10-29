@@ -597,6 +597,8 @@ export const operatingLedgerApi = {
 // ── 公告 ──
 
 export const announcementApi = {
+  request: (id) => api.get(`/announcements/requests/${id}`),
+  cancelRequest: (id) => api.post(`/announcements/requests/${id}/cancel`, {}),
   list: (params) => api.get('/announcements', params),
   detail: (id) => api.get(`/announcements/${id}`),
   create: (data) => api.post('/announcements', data),

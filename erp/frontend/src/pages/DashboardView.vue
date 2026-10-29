@@ -6,6 +6,7 @@ import { useRouter } from 'vue-router'
 import { ref, computed, watch } from 'vue'
 import { getAccessToken } from '@/auth/tokenStore'
 import { useScopedDashboardRead } from '@/features/dashboard/scopedRead'
+import { useAnnouncementPublish } from '@/features/dashboard/announcementPublish'
 import { ElMessage } from 'element-plus'
 import { dashboardApi, announcementApi } from '@/api/client.js'
 import { fmtTime } from '@/api/mappers.ts'
@@ -197,8 +198,18 @@ const announcements = computed(() => {
   return [...scheduled, ...active]
 })
 
+const publication = useAnnouncementPublish({
+  actor: () => String(app.authenticatedUser?.id || ''), scope: () => readScope('announcement.manage'), storage: localStorage,
+  request: (mode, attempt) => mode === 'check' ? announcementApi.request(attempt.requestId)
+    : mode === 'cancel' ? announcementApi.cancelRequest(attempt.requestId)
+      : announcementApi.create({ ...attempt.payload, clientRequestId: attempt.requestId }),
+  applied: async () => { publishDialogVisible.value = false; await loadDashboard() },
+})
+const { pending: pendingPublication, busy: publicationBusy, feedback: publicationFeedback, blocked: publicationBlocked } = publication
+
 function openPublishDialog() {
   if (!readScope('announcement.manage')) { ElMessage.warning('公告管理权限已更新，请重新核对权限'); return }
+  if (pendingPublication.value || publicationBlocked.value) { publishDialogVisible.value = true; return }
   newAnnouncement.value = {
     title: '',
     category: '系统',
@@ -223,17 +234,7 @@ async function publishAnnouncement() {
   publishSaving.value = true
   try {
     const payload = buildAnnouncementPayload(newAnnouncement.value)
-    const res = await announcementApi.create(payload)
-    if (owner !== readScope('announcement.manage')) return
-    publishDialogVisible.value = false
-    if (res?.scheduled) {
-      ElMessage.success(`公告已保存，将于 ${fmtTime(res.scheduledAt)} 自动发布`)
-    } else if (newAnnouncement.value.targetChannel === 'oms' || res?.omsSynced) {
-      ElMessage.success('公告已推送至 OMS（可在同步日志查看）')
-    } else {
-      ElMessage.success('公告已发布至内部 ERP')
-    }
-    await loadDashboard()
+    await publication.start(payload)
   } catch (e: any) {
     if (owner === readScope('announcement.manage')) ElMessage.error(userFacingError(e?.message || '发布失败'))
   } finally {
@@ -353,6 +354,14 @@ watch(readScope, () => {
     </div>
 
     <el-alert v-if="dashboardError" :title="dashboardError" type="warning" :closable="false"><el-button :loading="loading" @click="loadDashboard">重新读取工作台</el-button></el-alert>
+    <el-alert v-if="publicationFeedback && app.hasPerm('announcement.manage')" :title="publicationFeedback" type="info" :closable="false">
+      <template v-if="pendingPublication">
+        <p>原公告：{{ pendingPublication.payload.title }}</p>
+        <el-button :disabled="publicationBusy" @click="publication.run('check')">核对原发布结果</el-button>
+        <el-button :disabled="publicationBusy" @click="publication.run('submit')">继续原公告发布</el-button>
+        <el-button :disabled="publicationBusy" @click="publication.run('cancel')">取消原发布请求</el-button>
+      </template>
+    </el-alert>
     <div v-if="visibleKpis.length" class="kpi-strip">
       <MetricCard
         v-for="(kpi, index) in visibleKpis"
@@ -458,7 +467,8 @@ watch(readScope, () => {
   </div>
 
   <el-dialog v-model="publishDialogVisible" title="发布系统公告" width="520px">
-    <el-form label-width="88px">
+    <p v-if="pendingPublication || publicationBlocked">{{ publicationFeedback }} 可返回工作台使用原发布核对入口。</p>
+    <el-form v-else label-width="88px" :disabled="publicationBusy">
       <el-form-item label="发布至" required>
         <el-radio-group v-model="newAnnouncement.targetChannel">
           <el-radio value="erp">内部 ERP</el-radio>
@@ -516,8 +526,8 @@ watch(readScope, () => {
       </el-form-item>
     </el-form>
     <template #footer>
-      <el-button @click="publishDialogVisible = false">取消</el-button>
-      <el-button type="primary" :loading="publishSaving" @click="publishAnnouncement">
+      <el-button @click="publishDialogVisible = false">返回工作台</el-button>
+      <el-button v-if="!pendingPublication && !publicationBlocked" type="primary" :loading="publishSaving" @click="publishAnnouncement">
         {{ newAnnouncement.targetChannel === 'oms' ? '推送至 OMS' : '发布至 ERP' }}
       </el-button>
     </template>
