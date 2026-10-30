@@ -14,7 +14,7 @@ describe('发运维护未知结果核对', () => {
   })
   it('删除核对信息保留原单快照，按用户隔离', () => {
     const port = storage(); saveShipmentMaintenance(port, 1, { ...attempt(), kind: 'delete', payload: undefined }); saveShipmentMaintenance(port, 2, attempt())
-    expect(readShipmentMaintenance(port, 1)?.inboundNo).toBe('RV-TEST'); clearShipmentMaintenance(port, 1)
+    expect(readShipmentMaintenance(port, 1)?.inboundNo).toBe('RV-TEST'); clearShipmentMaintenance(port, 1, readShipmentMaintenance(port, 1)!)
     expect(readShipmentMaintenance(port, 1)).toBeNull(); expect(readShipmentMaintenance(port, 2)).not.toBeNull()
   })
   it('存储不可写先阻止提交，损坏的核对信息不能静默清除', () => {
@@ -24,4 +24,12 @@ describe('发运维护未知结果核对', () => {
     port.setItem = () => { throw new Error('QuotaExceededError') }
     expect(() => saveShipmentMaintenance(port, 2, attempt())).toThrow('本次尚未提交')
   })
+  it('同编号不能替换原内容，变化后的原记录不能被旧回调清除',()=>{
+    const port=storage(),original=attempt();saveShipmentMaintenance(port,1,original)
+    const changed={...original,form:{lines:[]},snapshot:{changed:true}}
+    expect(()=>saveShipmentMaintenance(port,1,changed)).toThrow()
+    port.setItem(`erp:shipment-maintenance:1`,JSON.stringify(changed))
+    expect(()=>clearShipmentMaintenance(port,1,original)).toThrow('记录已变化');expect(readShipmentMaintenance(port,1)).not.toBeNull()
+  })
+
 })

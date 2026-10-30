@@ -1,8 +1,10 @@
 <script setup lang="ts">
+import { useShipmentRequestScope } from '@/features/inbound/shipmentRequestScope'
+import { getAccessToken } from '@/auth/tokenStore'
 import { userFacingError } from '@erp/shared/user-facing-error'
 
 import { displaySku, displaySkuText, formatSku } from '@erp/shared/sku-display'
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onScopeDispose, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { warehouseApi, inboundApi, inventoryApi, productApi } from '@/api/client.js'
@@ -35,6 +37,8 @@ import { clearShipmentMaintenance, readShipmentMaintenance, saveShipmentMaintena
 const app = useAppStore()
 const route = useRoute()
 const router = useRouter()
+const shipmentScope=computed(()=>app.authenticatedUser && getAccessToken()?JSON.stringify([getAccessToken(),app.authenticatedUser.id,app.authenticatedUser.roleCode,app.authenticatedUser.workstation,[...app.currentPermSet].sort()]):null)
+const shipmentRequests=useShipmentRequestScope({actor:()=>Number(app.authenticatedUser?.id),scope:()=>shipmentScope.value,allowed:()=>app.hasPerm('create_inbound.create')})
 const { confirmAction, toast } = useRowActions()
 
 const tab = ref<'form' | 'drafts' | 'list'>('list')
@@ -411,7 +415,7 @@ async function loadDrafts() {
 
 function refreshShipmentAttempt() {
   try {
-    shipmentAttempt.value = readShipmentAttempt(localStorage, app.authenticatedUser!.id)
+    shipmentAttempt.value = app.authenticatedUser?readShipmentAttempt(localStorage,app.authenticatedUser.id):null
     shipmentAttemptError.value = ''
   } catch (error) { shipmentAttemptError.value = userFacingError(error) }
 }
@@ -426,26 +430,29 @@ function recoverShipment() {
 
 async function postShipment(attempt: ShipmentAttempt) {
   if (formBusy.value) return
+  const frame=shipmentRequests.capture()
+  if(!frame.active()){shipmentError.value='请使用原账号恢复发运权限后核对原提交';return}
   shipmentBusy.value = true
   shipmentError.value = ''
   try {
-    const result = await inboundApi.create(attempt.payload)
-    shipmentResult.value = result
-    shipmentAttempt.value = null
-    try { clearShipmentAttempt(localStorage, app.authenticatedUser!.id) }
-    catch { ElMessage.warning('发运已完成，但本机核对信息未能清除；刷新后可核对原单，请勿重复新建') }
-    productDimMapLoaded.value = false
-    warehouseSkus.value = []
-    toast(`入库单 ${result.inboundNo} 已创建，库存和费用已同步`)
-    // Refresh failures must never turn a committed shipment into a failed submission.
-    await Promise.allSettled([load(), loadDrafts()])
+    await frame.run(attempt,owner=>readShipmentAttempt(localStorage,owner),original=>inboundApi.create(original.payload),async result=>{
+      shipmentResult.value = result
+      try { clearShipmentAttempt(localStorage,frame.owner,attempt);shipmentAttempt.value=null }
+      catch { ElMessage.warning('发运已完成，但本机核对信息未能清除；刷新后可核对原单，请勿重复新建') }
+      productDimMapLoaded.value = false
+      warehouseSkus.value = []
+      toast(`入库单 ${result.inboundNo} 已创建，库存和费用已同步`)
+      // Refresh failures must never turn a committed shipment into a failed submission.
+      await Promise.allSettled([load(), loadDrafts()])
+    })
   } catch (error: any) {
+    if(!frame.active())return
     shipmentError.value = userFacingError(error)
-    if ([400, 403, 404, 422].includes(error.status)) {
-      try { clearShipmentAttempt(localStorage, app.authenticatedUser!.id); shipmentAttempt.value = null }
+    if ([400, 404, 422].includes(error.status)) {
+      try { clearShipmentAttempt(localStorage,frame.owner,attempt); shipmentAttempt.value = null }
       catch { shipmentError.value += '；本机核对信息未能清除，请先核对原操作后重试' }
     } else shipmentError.value = `发运结果待核对，请保持本次内容并点击「核对并重试原提交」。${shipmentError.value}`
-  } finally { shipmentBusy.value = false }
+  } finally { if(frame.active())shipmentBusy.value = false }
 }
 
 function retryShipment() {
@@ -807,17 +814,18 @@ async function copyDeletedInbound(snapshot: any) {
 }
 
 function refreshMaintenanceAttempt() {
-  try { maintenanceAttempt.value = readShipmentMaintenance(localStorage, app.authenticatedUser!.id); maintenanceStorageError.value = '' }
+  try { maintenanceAttempt.value = app.authenticatedUser?readShipmentMaintenance(localStorage,app.authenticatedUser.id):null; maintenanceStorageError.value = '' }
   catch (error) { maintenanceStorageError.value = userFacingError(error) }
 }
 
 function canBeginMaintenance() {
   refreshMaintenanceAttempt()
   refreshShipmentAttempt()
-  return !formBusy.value && !maintenanceAttempt.value && !maintenanceStorageError.value && !shipmentAttempt.value && !shipmentAttemptError.value
+  return canCreateInbound.value && !formBusy.value && !maintenanceAttempt.value && !maintenanceStorageError.value && !shipmentAttempt.value && !shipmentAttemptError.value
 }
 
 async function startMaintenance(attempt: ShipmentMaintenanceAttempt) {
+  if(!shipmentRequests.capture().active())return
   try {
     saveShipmentMaintenance(localStorage, app.authenticatedUser!.id, attempt)
     maintenanceAttempt.value = readShipmentMaintenance(localStorage, app.authenticatedUser!.id)
@@ -827,35 +835,37 @@ async function startMaintenance(attempt: ShipmentMaintenanceAttempt) {
 
 async function postMaintenance(attempt: ShipmentMaintenanceAttempt) {
   if (formBusy.value) return
+  const frame=shipmentRequests.capture()
+  if(!frame.active()){maintenanceError.value='请使用原账号恢复发运权限后核对原操作';return}
   maintenanceBusy.value = true
   freightSubmitting.value = attempt.kind === 'freight'
   maintenanceError.value = ''
   maintenanceResult.value = null
   try {
-    const result = attempt.kind === 'delete' ? await inboundApi.remove(attempt.inboundId)
-      : attempt.clear ? await inboundApi.clearSeaFreight(attempt.inboundId, attempt.payload) : await inboundApi.applySeaFreight(attempt.inboundId, attempt.payload)
-    maintenanceAttempt.value = null
-    try { clearShipmentMaintenance(localStorage, app.authenticatedUser!.id) }
-    catch { ElMessage.warning('操作已完成，但本机核对信息未能清除；刷新后请核对原操作') }
-    maintenanceResult.value = { ...result, kind: attempt.kind, inboundNo: attempt.inboundNo, clear: attempt.clear }
-    freightVisible.value = false
-    if (attempt.kind === 'delete') {
-      detailVisible.value = false
-      detailOrder.value = null
-      toast(`已删除 ${attempt.inboundNo}，原中转仓库存已返还`)
-    } else {
-      detailMutationWarning.value = result.refreshRequired ? result.warning : ''
-      detailOrder.value = result.refreshRequired ? attempt.snapshot : result
-      toast(result.refreshRequired ? '本次海运费操作已完成，请重新读取详情核对当前状态' : result.duplicate ? '原海运费操作已处理，已核对最新结果' : attempt.clear ? '海运费已清除并同步货盘与批次成本' : '海运费已保存并同步货盘与批次成本')
-    }
-    await Promise.allSettled([load(), loadDrafts()])
+    await frame.run(attempt,owner=>readShipmentMaintenance(localStorage,owner),original=>original.kind==='delete'?inboundApi.remove(original.inboundId):original.clear?inboundApi.clearSeaFreight(original.inboundId,original.payload):inboundApi.applySeaFreight(original.inboundId,original.payload),async result=>{
+      try { clearShipmentMaintenance(localStorage,frame.owner,attempt);maintenanceAttempt.value=null }
+      catch { ElMessage.warning('操作已完成，但本机核对信息未能清除；刷新后请核对原操作') }
+      maintenanceResult.value = { ...result, kind: attempt.kind, inboundNo: attempt.inboundNo, clear: attempt.clear }
+      freightVisible.value = false
+      if (attempt.kind === 'delete') {
+        detailVisible.value = false
+        detailOrder.value = null
+        toast(`已删除 ${attempt.inboundNo}，原中转仓库存已返还`)
+      } else {
+        detailMutationWarning.value = result.refreshRequired ? result.warning : ''
+        detailOrder.value = result.refreshRequired ? attempt.snapshot : result
+        toast(result.refreshRequired ? '本次海运费操作已完成，请重新读取详情核对当前状态' : result.duplicate ? '原海运费操作已处理，已核对最新结果' : attempt.clear ? '海运费已清除并同步货盘与批次成本' : '海运费已保存并同步货盘与批次成本')
+      }
+      await Promise.allSettled([load(), loadDrafts()])
+    })
   } catch (error: any) {
+    if(!frame.active())return
     maintenanceError.value = userFacingError(error)
-    if ([400, 403, 404, 409, 422].includes(error.status)) {
-      try { clearShipmentMaintenance(localStorage, app.authenticatedUser!.id); maintenanceAttempt.value = null }
+    if ([400, 404, 409, 422].includes(error.status)) {
+      try { clearShipmentMaintenance(localStorage,frame.owner,attempt); maintenanceAttempt.value = null }
       catch { maintenanceError.value += '；本机核对信息未能清除，请先核对原操作' }
     } else maintenanceError.value = `操作结果待核对，请点击「核对并重试原操作」，不要重新建立操作。${maintenanceError.value}`
-  } finally { maintenanceBusy.value = false; freightSubmitting.value = false }
+  } finally { if(frame.active()){maintenanceBusy.value = false; freightSubmitting.value = false} }
 }
 
 function retryMaintenance() { if (maintenanceAttempt.value) postMaintenance(maintenanceAttempt.value) }
@@ -881,17 +891,19 @@ async function copyMaintenanceDeleted() {
 
 async function removeInbound(row?: any) {
   if (!canBeginMaintenance()) return
+  const frame=shipmentRequests.capture()
   const source = row || detailOrder.value
   const id = inboundNumericId(source)
   if (!id) return
   let snapshot: any
   maintenanceBusy.value = true
   try { snapshot = await inboundApi.detail(id) }
-  catch (error) { maintenanceError.value = `未能核对最新单据，本次尚未删除。${userFacingError(error)}`; return }
-  finally { maintenanceBusy.value = false }
+  catch (error) { if(!frame.active())return;maintenanceError.value = `未能核对最新单据，本次尚未删除。${userFacingError(error)}`; return }
+  finally {if(frame.active())maintenanceBusy.value = false}
+  if(!frame.active())return
   if (!inboundCanDelete(snapshot)) { maintenanceError.value = '此单不是可删除的未收货 ERP 发运单，请查看最新仓库作业进度'; return }
   const ok = await confirmAction(`确认删除入库单 ${snapshot.inboundNo}？未开始收货的良品库存将返还原中转仓；海外仓作业中的该单也会删除。`, '删除入库单')
-  if (!ok) return
+  if (!ok || !frame.active()) return
   await startMaintenance({ kind: 'delete', inboundId: id, inboundNo: snapshot.inboundNo, snapshot })
 }
 
@@ -1272,7 +1284,7 @@ async function submitCreate() {
   const attempt: ShipmentAttempt = { payload, form: JSON.parse(JSON.stringify(createForm.value)), draftNo: editingDraftId.value }
   try {
     saveShipmentAttempt(localStorage, app.authenticatedUser!.id, attempt)
-    shipmentAttempt.value = readShipmentAttempt(localStorage, app.authenticatedUser!.id)
+    shipmentAttempt.value = app.authenticatedUser?readShipmentAttempt(localStorage,app.authenticatedUser.id):null
   } catch (error) { ElMessage.error(userFacingError(error)); return }
   await postShipment(shipmentAttempt.value!)
 }
@@ -1316,10 +1328,12 @@ async function submitFreight() {
 }
 
 async function clearFreight() {
+  const frame=shipmentRequests.capture()
   if (!canBeginMaintenance() || !detailCanEditFreight.value) return
   const id = inboundNumericId(detailOrder.value)
   if (!id) return
   if (!await confirmAction('确认清除本单海运费？本单批次成本的海运费将清零，关联本单的货盘费用一并更新；入库单仍保留。', '清除海运费')) return
+  if(!frame.active())return
   await startMaintenance({ kind: 'freight', inboundId: id, inboundNo: detailOrder.value.inboundNo, clear: true,
     payload: { clientRequestId: crypto.randomUUID(), expectedVersion: detailOrder.value.seaFreightVersion }, snapshot: detailOrder.value })
 }
@@ -1425,6 +1439,22 @@ async function handleAttachmentFile(e: Event) {
     ElMessage.error(userFacingError(displaySkuText(err.message || '附件上传失败')))
   } finally { attachmentBusy.value = false }
 }
+function resetShipmentSession(){
+  shipmentBusy.value=false;maintenanceBusy.value=false;freightSubmitting.value=false
+  shipmentResult.value=null;maintenanceResult.value=null;shipmentError.value='';maintenanceError.value=''
+  detailVisible.value=false;freightVisible.value=false;detailOrder.value=null
+  createForm.value=emptyForm();editingDraftId.value=null;warehouseSkus.value=[];drafts.value=[]
+  ++stockLoadVersion;++draftLoadVersion;tab.value='list'
+  refreshShipmentAttempt();refreshMaintenanceAttempt()
+}
+watch(shipmentScope,resetShipmentSession,{flush:'sync'})
+const onShipmentStorage=(event:StorageEvent)=>{
+ const owner=app.authenticatedUser?.id
+ if(event.key===null || event.key===`erp:shipment-attempt:${owner}` || event.key===`erp:shipment-maintenance:${owner}`){shipmentRequests.invalidate();resetShipmentSession()}
+}
+window.addEventListener('storage',onShipmentStorage)
+onScopeDispose(()=>window.removeEventListener('storage',onShipmentStorage))
+
 </script>
 
 <template>
@@ -1450,7 +1480,7 @@ async function handleAttachmentFile(e: Event) {
     <el-alert v-if="draftsError" :title="draftsError" type="error" :closable="false"><el-button @click="loadDrafts">重新读取草稿箱</el-button></el-alert>
     <el-alert v-if="maintenanceAttempt || maintenanceStorageError" type="warning" :closable="false" style="margin:12px 0">
       <template #title>{{ maintenanceStorageError || `上次${maintenanceAttempt?.kind === 'delete' ? '删除发运单' : maintenanceAttempt?.clear ? '清除海运费' : '补录海运费'}结果待核对：${maintenanceAttempt?.inboundNo}` }}</template>
-      <el-button v-if="maintenanceAttempt" :loading="maintenanceBusy" @click="retryMaintenance">核对并重试原操作</el-button>
+      <el-button v-if="maintenanceAttempt" :disabled="!canCreateInbound" :loading="maintenanceBusy" @click="retryMaintenance">核对并重试原操作</el-button>
     </el-alert>
     <el-alert v-if="maintenanceError" :title="maintenanceError" type="error" :closable="false" style="margin:12px 0" />
     <el-alert v-if="maintenanceResult?.refreshRequired" :title="maintenanceResult.warning" type="warning" :closable="false"><el-button :loading="detailLoading" @click="refreshMutationDetail">重新读取最新详情</el-button></el-alert>
@@ -1472,7 +1502,7 @@ async function handleAttachmentFile(e: Event) {
       <el-alert v-if="shipmentError" :title="shipmentError" type="error" :closable="false" style="margin:12px 0" />
       <el-alert v-if="shipmentResult" type="success" :closable="false" style="margin:12px 0" :title="`发运成功：${shipmentResult.inboundNo}。库存、外箱与费用已同步，勿重复新建。`" />
       <div v-if="shipmentAttempt || shipmentResult" style="display:flex;gap:12px;margin:12px 0">
-        <el-button v-if="shipmentAttempt" type="primary" :loading="shipmentBusy" @click="retryShipment">核对并重试原提交</el-button>
+        <el-button v-if="shipmentAttempt" type="primary" :disabled="!canCreateInbound" :loading="shipmentBusy" @click="retryShipment">核对并重试原提交</el-button>
         <el-button :disabled="formBusy" @click="returnShipmentList">返回入库单管理</el-button>
         <el-button v-if="app.hasPerm('logistics_wh.view')" :disabled="formBusy" @click="returnSourceStock">查看中转仓库存</el-button>
         <el-button v-if="shipmentResult && app.hasPerm('inbound.arrival_scan')" @click="continueArrivalScan">继续到仓扫描</el-button>
@@ -2055,7 +2085,7 @@ async function handleAttachmentFile(e: Event) {
     </div>
     <el-alert v-if="detailMutationWarning" :title="detailMutationWarning" type="warning" :closable="false"><el-button :loading="detailLoading" @click="refreshMutationDetail">重新读取最新详情</el-button></el-alert>
     <el-alert v-if="maintenanceError" :title="maintenanceError" type="error" :closable="false">
-      <el-button v-if="maintenanceAttempt" :loading="maintenanceBusy" @click="retryMaintenance">核对并重试原操作</el-button>
+      <el-button v-if="maintenanceAttempt" :disabled="!canCreateInbound" :loading="maintenanceBusy" @click="retryMaintenance">核对并重试原操作</el-button>
       <el-button :disabled="maintenanceBusy || !!maintenanceAttempt" @click="refreshMutationDetail">重新读取最新详情</el-button>
     </el-alert>
     <template #footer>
@@ -2093,7 +2123,7 @@ async function handleAttachmentFile(e: Event) {
   >
     <el-alert v-if="maintenanceError" :title="maintenanceError" type="error" :closable="false" />
     <el-alert v-if="maintenanceAttempt" type="warning" :closable="false" title="原操作结果待核对，请保持原内容并重试">
-      <el-button :loading="maintenanceBusy" @click="retryMaintenance">核对并重试原操作</el-button>
+      <el-button :disabled="!canCreateInbound" :loading="maintenanceBusy" @click="retryMaintenance">核对并重试原操作</el-button>
     </el-alert>
     <el-form :disabled="maintenanceBusy || !!maintenanceAttempt" @submit.prevent>
     <p class="section-desc">选择运输方式并填写本票海运费总额，系统按各 SKU 体积占比分摊到单件，并同步货盘库存。</p>
