@@ -641,39 +641,38 @@ export class PricingService {
   }
 
   async reprice(id: number, data: any, role: string) {
-    const row = await this.prisma.productPricing.findUnique({ where: { id: BigInt(id) } })
-    if (!row) throw new NotFoundException('货盘库存记录不存在，请返回列表重新选择')
-    if (row.pricingStatus !== 'synced') throw new BadRequestException('请先完成货盘同步，再继续调整售价')
-
     const nextPrice = data.price ?? data.finalPrice
     if (typeof nextPrice !== 'number' || billingCents(nextPrice) <= 0 || billingCents(nextPrice) > 999999999999) throw new BadRequestException('请填写大于零、最多两位小数的有效售价')
-    const oldPrice = num(row.finalPrice)
-    await this.prisma.productPricing.update({
-      where: { id: BigInt(id) },
-      data: {
-        marketPrice: data.marketPrice,
-        finalPrice: data.price ?? data.finalPrice,
-        overseasDeliveryFee: data.overseasDeliveryFee ?? row.overseasDeliveryFee ?? 0,
-        platformCommissionRate: data.platformCommission ?? row.platformCommissionRate ?? 0,
-        platformDeliveryFee: data.platformDeliveryFee ?? row.platformDeliveryFee ?? 0,
-        omsSyncAt: new Date(),
-      },
+    const row = await this.prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM product_pricing WHERE id = ${BigInt(id)} FOR UPDATE`
+      const row = await tx.productPricing.findUnique({ where: { id: BigInt(id) } })
+      if (!row) throw new NotFoundException('货盘库存记录不存在，请返回列表重新选择')
+      if (row.pricingStatus !== 'synced') throw new BadRequestException('请先完成货盘同步，再继续调整售价')
+
+      const oldPrice = num(row.finalPrice)
+      await tx.productPricing.update({
+        where: { id: BigInt(id) },
+        data: {
+          marketPrice: data.marketPrice,
+          finalPrice: data.price ?? data.finalPrice,
+          overseasDeliveryFee: data.overseasDeliveryFee ?? row.overseasDeliveryFee ?? 0,
+          platformCommissionRate: data.platformCommission ?? row.platformCommissionRate ?? 0,
+          platformDeliveryFee: data.platformDeliveryFee ?? row.platformDeliveryFee ?? 0,
+          omsSyncAt: new Date(),
+        },
+      })
+      await tx.productPriceRecord.create({
+        data: {
+          pricingId: BigInt(id),
+          marketPrice: data.marketPrice,
+          price: data.price ?? data.finalPrice,
+          operator: role,
+          note: data.note || '手动调价',
+        },
+      })
+      await tx.productPricingHistory.create({ data: { pricingId: BigInt(id), operatorRole: role, action: '调价同步', detail: `市场参考 R${data.marketPrice}，售价 ¥${oldPrice} → ¥${data.price ?? data.finalPrice}` } })
+      return row
     })
-    await this.prisma.productPriceRecord.create({
-      data: {
-        pricingId: BigInt(id),
-        marketPrice: data.marketPrice,
-        price: data.price ?? data.finalPrice,
-        operator: role,
-        note: data.note || '手动调价',
-      },
-    })
-    await this.addHistory(
-      BigInt(id),
-      role,
-      '调价同步',
-      `市场参考 R${data.marketPrice}，售价 ¥${oldPrice} → ¥${data.price ?? data.finalPrice}`,
-    )
     await pushCatalogStockToOms(this.prisma, row.sku)
     return this.detail(id)
   }
