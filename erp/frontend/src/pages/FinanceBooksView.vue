@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, watch } from 'vue'
+import { computed, defineAsyncComponent, ref } from 'vue'
+import { userFacingError } from '@erp/shared/user-facing-error'
 import { useRoute, useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 
@@ -37,23 +38,29 @@ const activeTab = computed(() => {
 
 const activeView = computed(() => visibleTabs.value.find((tab) => tab.key === activeTab.value)?.view || CostLedgerView)
 
-function switchTab(key: string | number) {
-  const tab = visibleTabs.value.find((item) => item.key === String(key))
-  if (tab) router.push(`/finance-books/${tab.key}`)
-}
+const switching = ref(false)
+const switchError = ref('')
 
-watch(
-  [() => route.params.tab, visibleTabs],
-  () => {
-    const key = String(route.params.tab || '')
-    const first = visibleTabs.value[0]
-    if (!first) return
-    if (!visibleTabs.value.some((tab) => tab.key === key)) {
-      router.replace(`/finance-books/${first.key}`)
-    }
-  },
-  { immediate: true },
-)
+async function switchTab(key: string | number) {
+  const tab = visibleTabs.value.find((item) => item.key === String(key))
+  if (!tab) return false
+  if (route.params.tab === tab.key) return true
+  if (switching.value) return false
+  switching.value = true
+  switchError.value = ''
+  try {
+    await router.push(`/finance-books/${tab.key}`)
+    const arrived = route.params.tab === tab.key
+    if (!arrived) switchError.value = '页面未能切换，请重新点击页签；如提示权限失效，请先重新核对权限。'
+    return arrived
+  } catch (error) {
+    switchError.value = `页面切换失败。${userFacingError(error)}`
+    return false
+  } finally { switching.value = false }
+}
+// Permission refreshes recreate visibleTabs during route guards. Do not redirect
+// from a watcher: it cancels the user's in-flight navigation from /finance-books.
+// activeTab already provides a permitted fallback for missing/invalid route keys.
 </script>
 
 <template>
@@ -65,10 +72,11 @@ watch(
           <p>采购货款、海运账单、经营收支与利润分析放在同一入口，按权限显示页签</p>
         </div>
       </div>
-      <el-tabs :model-value="activeTab" @tab-change="switchTab">
+      <el-tabs :model-value="activeTab" :before-leave="switchTab" :aria-busy="switching">
         <el-tab-pane v-for="tab in visibleTabs" :key="tab.key" :name="tab.key" :label="tab.label" />
       </el-tabs>
     </el-card>
+    <el-alert v-if="switchError" :title="switchError" type="error" :closable="false" show-icon />
 
     <el-empty v-if="!visibleTabs.length" description="当前账号没有账本分析权限" />
     <KeepAlive v-else>
