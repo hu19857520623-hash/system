@@ -1,7 +1,7 @@
 import { readRecharge, runRecharge, newRechargeNo, type RechargeAttempt } from './rechargeWorkflow'
 import { userFacingError } from '../utils/userFacingError'
 import { useSyncExternalStore } from 'react'
-import { getStoredAuthSession } from '../api/client'
+import { authSessionScope, getStoredAuthSession } from '../api/client'
 import { createErpRecharge, getErpBillingSnapshot, type ErpBillingSnapshot } from '../api/erp'
 import type { FeeRecord } from './mockData'
 import type { OutboundFeeLine } from './feeTemplates'
@@ -68,17 +68,18 @@ export async function refreshBillingFromServer(): Promise<ErpBillingSnapshot> {
 /** One read-only ERP snapshot, with no browser-generated financial rows or fallback success. */
 export async function refreshBillingFromErp(customerCode: string): Promise<ErpBillingSnapshot> {
   const user = getStoredAuthSession()?.user, code = customerCode.trim().toUpperCase(), generation = ++readGeneration
+  const scope = authSessionScope()
   if (!user || (user.role !== 'sys_admin' && user.customerCode !== code)) throw new Error('请使用当前客户身份读取账务，不能跨客户读取')
   let snapshot: ErpBillingSnapshot
   try { snapshot = await getErpBillingSnapshot(code) }
   catch (error) {
-    if (user.role !== 'sys_admin' && getStoredAuthSession()?.user.id === user.id && getStoredAuthSession()?.user.customerId === user.customerId) {
+    if (user.role !== 'sys_admin' && scope === authSessionScope() && generation === readGeneration) {
       state = { ...state, readWarning: '最新账务读取失败，当前保留上次结果，请重新读取后核对' };emit()
     }
     throw error
   }
   if (snapshot.customerCode !== code || !Array.isArray(snapshot.feeRecords) || !Array.isArray(snapshot.bills) || !Number.isFinite(snapshot.creditBalance) || !Number.isFinite(snapshot.monthlySpent) || !Number.isFinite(snapshot.pendingBill)) throw new Error('账务读取结果不完整，请重新读取后继续')
-  if (getStoredAuthSession()?.user.id !== user.id || getStoredAuthSession()?.user.customerId !== user.customerId) throw new Error('登录身份已变化，请使用原账号重新读取账务')
+  if (scope !== authSessionScope()) throw new Error('登录身份或权限已变化，请使用原账号重新读取账务')
   if (generation !== readGeneration) throw new Error('已有更新的账务读取请求，请核对最新读取结果')
   if (user.role !== 'sys_admin') hydrateBilling({ creditBalance: snapshot.creditBalance, feeRecords: snapshot.feeRecords, snapshot })
   return snapshot

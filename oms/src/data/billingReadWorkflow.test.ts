@@ -3,6 +3,10 @@ import test, { type TestContext } from 'node:test'
 import { getCreditBalance, getFeeRecords, hydrateBilling, refreshBillingFromErp, refreshBillingFromServer, setCreditBalanceFromErp, preDeductOutboundFees, rollbackPreDeductOutboundFees, rechargeViaErp, pendingRecharge } from './billingStore'
 import { groupFeeRecordsByOutbound } from './outboundFeeUtils'
 import type { FeeRecord } from './mockData'
+import { useBilling } from './billingStore'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+const billingWarning = () => renderToStaticMarkup(createElement(() => createElement('p',null,useBilling().readWarning || '')))
 function environment(t: TestContext, admin=false) {
   const old=globalThis.fetch, values=new Map<string,string>(), s={getItem:(key:string)=>values.get(key)||null,setItem:(key:string,value:string)=>{values.set(key,value)},removeItem:(key:string)=>{values.delete(key)}}
   const user={id:'u1',username:'audit-user',role:admin?'sys_admin':'catalog',customerId:admin?null:'c1',customerCode:admin?'':'TKL9001',permissions:['billing:read']}
@@ -43,6 +47,33 @@ test('读取期间切换客户，旧响应不能覆盖新会话',async t=>{
   const read=refreshBillingFromErp('TKL9001');while(!finish)await new Promise(resolve=>setImmediate(resolve))
   s.setItem('oms-auth-session',JSON.stringify({token:'new-virtual-token',user:{...user,id:'u2',customerId:'c2',customerCode:'TKL9002'}}));finish(Response.json(snapshot()))
   await assert.rejects(read,/登录身份(?:或权限)?已变化/);assert.equal(getCreditBalance(),100)
+})
+
+for(const change of ['token','permissions','role','warehouse','customerCode','status'])test(`同账号${change}变化后迟到财务响应不能写回`,async t=>{
+  const {s,user}=environment(t);let finish!:(response:Response)=>void
+  globalThis.fetch=async()=>new Promise(resolve=>{finish=resolve})
+  const read=refreshBillingFromErp('TKL9001');while(!finish)await new Promise(resolve=>setImmediate(resolve))
+  const changed={...user,...(change==='permissions'?{permissions:[]}:change==='role'?{role:'ecommerce'}:change==='warehouse'?{warehouse:'cpt1'}:change==='customerCode'?{customerCode:'TKL9002'}:change==='status'?{status:'disabled'}:{})}
+  s.setItem('oms-auth-session',JSON.stringify({token:change==='token'?'new-token':'virtual-token',user:changed}));finish(Response.json(snapshot(999)))
+  await assert.rejects(read,/登录身份或权限已变化/);assert.equal(getCreditBalance(),100);assert.deepEqual(getFeeRecords(),[])
+})
+
+test('同账号撤权后旧请求失败不能覆盖新范围的财务提示',async t=>{
+  const {s,user}=environment(t);let reject!:(cause:Error)=>void
+  globalThis.fetch=async()=>new Promise((_resolve,no)=>{reject=no})
+  const read=refreshBillingFromErp('TKL9001');while(!reject)await new Promise(resolve=>setImmediate(resolve))
+  s.setItem('oms-auth-session',JSON.stringify({token:'virtual-token',user:{...user,permissions:[]}}))
+  hydrateBilling({creditBalance:0,feeRecords:[],readWarning:'当前账号已无账务权限'})
+  reject(Error('NetworkError'));await assert.rejects(read)
+  assert.match(billingWarning(),/当前账号已无账务权限/);assert.doesNotMatch(billingWarning(),/保留上次结果/)
+})
+
+test('旧读取失败晚于新读取成功时不能重新显示过期失败提示',async t=>{
+  environment(t);let reject!:(cause:Error)=>void;let calls=0
+  globalThis.fetch=async()=>++calls===1?new Promise((_resolve,no)=>{reject=no}):Response.json(snapshot(20))
+  const old=refreshBillingFromErp('TKL9001');while(!reject)await new Promise(resolve=>setImmediate(resolve))
+  await refreshBillingFromErp('TKL9001');reject(Error('NetworkError'));await assert.rejects(old)
+  assert.equal(getCreditBalance(),20);assert.equal(billingWarning(),'<p></p>')
 })
 test('并发读取旧响应晚到，不能把最新余额回退',async t=>{
   environment(t);const releases:((response:Response)=>void)[]=[];globalThis.fetch=async()=>new Promise(resolve=>{releases.push(resolve)})
