@@ -420,7 +420,8 @@ export class PricingService {
     }, { maxWait: 10000, timeout: 30000 })
   }
 
-  async confirmPrice(id: number, data: any, role: string) {
+  async confirmPrice(id: number, data: any, role: string, actor?: number) {
+    if(data?.clientRequestId != null)return this.runCatalogAction(id,'confirm',data,role,actor)
     return this.pricingTransaction(id, service => service.applyConfirmPrice(id, data, role))
   }
 
@@ -472,7 +473,8 @@ export class PricingService {
     return this.detail(id)
   }
 
-  async syncOms(id: number, role: string) {
+  async syncOms(id: number, role: string, data?: any, actor?: number) {
+    if(data?.clientRequestId != null)return this.runCatalogAction(id,'sync',data,role,actor)
     return this.pricingTransaction(id, service => service.applySyncOms(id, role))
   }
 
@@ -525,7 +527,8 @@ export class PricingService {
    * 切换货盘共享状态。停止只关掉新的 OMS 申购，不触碰客户已购买持仓，
    * 因此既有出库单和后续基于持仓的出库仍可正常完成。
    */
-  async setShareStatus(id: number, status: unknown, role: string) {
+  async setShareStatus(id: number, status: unknown, role: string, data?: any, actor?: number) {
+    if(data?.clientRequestId != null)return this.runCatalogAction(id,'share',{...data,status},role,actor)
     return this.pricingTransaction(id, service => service.applySetShareStatus(id, status, role))
   }
 
@@ -608,8 +611,61 @@ export class PricingService {
     return item
   }
 
-  private repriceRequestId(value: unknown) {
-    if (typeof value !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) throw new BadRequestException('原调价请求编号无效，请返回列表核对')
+  private findCatalogAction(db: any, requestId: string, actor: number) {
+    return db.operationLog.findFirst({where:{module:'pricing_action',operatorId:BigInt(actor),detail:{path:'$.clientRequestId',equals:requestId}}})
+  }
+  private catalogActionReceipt(row: any, id: number, action: string, requestId: string) {
+    if(row.targetId!==String(id)||row.detail.action!==action)throw new ConflictException('原货盘操作属于其它商品或步骤，请返回原操作核对')
+    return {requestId,...row.detail.result}
+  }
+  async readCatalogAction(id: number, action: string, value: string, actor: number) {
+    const requestId=this.repriceRequestId(value,'原货盘操作'),row=await this.findCatalogAction(this.prisma,requestId,actor)
+    return row?this.catalogActionReceipt(row,id,action,requestId):{requestId,status:'unknown',pricingId:id,action}
+  }
+  async cancelCatalogAction(id: number, action: string, value: string, actor: number) {
+    const requestId=this.repriceRequestId(value,'原货盘操作')
+    return this.prisma.$transaction(async tx=>{
+      await tx.$queryRaw`SELECT id FROM sys_user WHERE id=${BigInt(actor)} FOR UPDATE`
+      const old=await this.findCatalogAction(tx,requestId,actor)
+      if(old)return this.catalogActionReceipt(old,id,action,requestId)
+      const result={status:'cancelled',pricingId:id,action}
+      await tx.operationLog.create({data:{module:'pricing_action',action,operatorId:BigInt(actor),targetType:'product_pricing',targetId:String(id),detail:{clientRequestId:requestId,action,fingerprint:'',result}}})
+      return {requestId,...result}
+    })
+  }
+  private async runCatalogAction(id: number, action: 'confirm'|'sync'|'share', data: any, role: string, actor?: number) {
+    const requestId=this.repriceRequestId(data.clientRequestId,'原货盘操作')
+    if(!actor||actor<=0||!Number.isSafeInteger(actor))throw new BadRequestException('请使用原账号核对货盘操作')
+    const inputs=action==='confirm'?[data.marketPrice,data.pricingLogic?.trim?.()||null,data.finalPrice,data.targetProfitRate??null,data.visibleStockQty??null,data.overseasDeliveryFee??null,data.platformCommission??null,data.platformDeliveryFee??null]:action==='share'?[data.status]:[]
+    const fingerprint=createHash('sha256').update(JSON.stringify([id,action,data.expectedUpdatedAt,...inputs])).digest('hex')
+    return this.prisma.$transaction(async tx=>{
+      await tx.$queryRaw`SELECT id FROM sys_user WHERE id=${BigInt(actor)} FOR UPDATE`
+      const previous=await this.findCatalogAction(tx,requestId,actor)
+      if(previous){
+        const receipt=this.catalogActionReceipt(previous,id,action,requestId)
+        if(receipt.status!=='cancelled'&&previous.detail.fingerprint!==fingerprint)throw new ConflictException('原货盘操作内容不能更改，请先核对或取消原请求')
+        return receipt
+      }
+      await tx.$queryRaw`SELECT id FROM product_pricing WHERE id=${BigInt(id)} FOR UPDATE`
+      const row=await tx.productPricing.findUnique({where:{id:BigInt(id)}})
+      if(!row)throw new NotFoundException('货盘商品不存在，请返回列表重新核对')
+      const expected=typeof data.expectedUpdatedAt==='string'?Date.parse(data.expectedUpdatedAt):NaN
+      if(!Number.isFinite(expected)||expected!==row.updatedAt.getTime())throw new ConflictException('货盘资料已变化，旧页面不能覆盖；请读取最新资料后核对再继续')
+      const database=tx as unknown as PrismaService,scoped=new PricingService(database,new OperationLogService(database),this.cosUrls)
+      if(action==='confirm')await scoped.applyConfirmPrice(id,data,role)
+      else if(action==='sync')await scoped.applySyncOms(id,role)
+      else await scoped.applySetShareStatus(id,data.status,role)
+      const current=await tx.productPricing.findUniqueOrThrow({where:{id:BigInt(id)}})
+      const version=new Date(Math.max(Date.now(),current.updatedAt.getTime()+1))
+      await tx.productPricing.update({where:{id:current.id},data:{updatedAt:version}})
+      const result={status:'confirmed',pricingId:id,action,version:version.toISOString(),pricingStatus:current.pricingStatus,shareStatus:current.shareStatus,price:Number(current.finalPrice??0)}
+      await tx.operationLog.create({data:{module:'pricing_action',action,operatorId:BigInt(actor),targetType:'product_pricing',targetId:String(id),detail:{clientRequestId:requestId,action,fingerprint,result}}})
+      return {requestId,...result}
+    },{maxWait:10000,timeout:30000})
+  }
+
+  private repriceRequestId(value: unknown, label='原调价') {
+    if (typeof value !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) throw new BadRequestException(`${label}请求编号无效，请返回列表核对`)
     return value.toLowerCase()
   }
   private findRepriceRequest(db: any, requestId: string, actor: number) {

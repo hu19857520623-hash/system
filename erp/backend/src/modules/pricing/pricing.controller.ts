@@ -71,24 +71,26 @@ export class PricingController {
     @Param('id', ParseIntPipe) id: number,
     @Body() body: any,
     @CurrentUser('realName') role: string,
+    @CurrentUser('userId') actor: number,
   ) {
-    return this.service.confirmPrice(id, body, role)
+    return this.service.confirmPrice(id, body, role, actor)
   }
 
   @RequirePerms('pricing.sync_oms')
   @Post(':id/sync-oms')
-  syncOms(@Param('id', ParseIntPipe) id: number, @CurrentUser('realName') role: string) {
-    return this.service.syncOms(id, role)
+  syncOms(@Param('id', ParseIntPipe) id: number, @CurrentUser('realName') role: string, @Body() body:any, @CurrentUser('userId') actor:number) {
+    return this.service.syncOms(id, role, body, actor)
   }
 
   @RequirePerms('pricing.sync_oms')
   @Post(':id/share-status')
   setShareStatus(
     @Param('id', ParseIntPipe) id: number,
-    @Body('status') status: unknown,
+    @Body() body: any,
     @CurrentUser('realName') role: string,
+    @CurrentUser('userId') actor: number,
   ) {
-    return this.service.setShareStatus(id, status, role)
+    return this.service.setShareStatus(id, body?.status, role, body, actor)
   }
 
   @RequirePerms('pricing.set')
@@ -112,8 +114,32 @@ export class PricingController {
   cancelRepriceRequest(@Param('id',ParseIntPipe) id:number,@Param('requestId') requestId:string,@CurrentUser('userId') actor:number){return this.service.cancelRepriceRequest(id,requestId,actor)}
 
   @RequirePerms('pricing.set')
+  @Get(':id/confirm-requests/:requestId')
+  readConfirmRequest(@Param('id',ParseIntPipe) id:number,@Param('requestId') requestId:string,@CurrentUser('userId') actor:number){return this.service.readCatalogAction(id,'confirm',requestId,actor)}
+
+  @RequirePerms('pricing.set')
+  @Post(':id/confirm-requests/:requestId/cancel')
+  cancelConfirmRequest(@Param('id',ParseIntPipe) id:number,@Param('requestId') requestId:string,@CurrentUser('userId') actor:number){return this.service.cancelCatalogAction(id,'confirm',requestId,actor)}
+
+  @RequirePerms('pricing.sync_oms')
+  @Get(':id/sync-requests/:requestId')
+  readSyncRequest(@Param('id',ParseIntPipe) id:number,@Param('requestId') requestId:string,@CurrentUser('userId') actor:number){return this.service.readCatalogAction(id,'sync',requestId,actor)}
+
+  @RequirePerms('pricing.sync_oms')
+  @Post(':id/sync-requests/:requestId/cancel')
+  cancelSyncRequest(@Param('id',ParseIntPipe) id:number,@Param('requestId') requestId:string,@CurrentUser('userId') actor:number){return this.service.cancelCatalogAction(id,'sync',requestId,actor)}
+
+  @RequirePerms('pricing.sync_oms')
+  @Get(':id/share-requests/:requestId')
+  readShareRequest(@Param('id',ParseIntPipe) id:number,@Param('requestId') requestId:string,@CurrentUser('userId') actor:number){return this.service.readCatalogAction(id,'share',requestId,actor)}
+
+  @RequirePerms('pricing.sync_oms')
+  @Post(':id/share-requests/:requestId/cancel')
+  cancelShareRequest(@Param('id',ParseIntPipe) id:number,@Param('requestId') requestId:string,@CurrentUser('userId') actor:number){return this.service.cancelCatalogAction(id,'share',requestId,actor)}
+
+  @RequirePerms('pricing.set')
   @Put(':id')
-  update(@Param('id', ParseIntPipe) id: number, @Body() body: any) {
-    return this.service.confirmPrice(id, body, '系统')
+  update(@Param('id', ParseIntPipe) id: number, @Body() body: any, @CurrentUser('userId') actor:number) {
+    return this.service.confirmPrice(id, body, '系统',actor)
   }
 }
