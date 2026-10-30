@@ -1,3 +1,4 @@
+import { readErpShipmentOutcome } from './erp-shipment-outcome.util'
 import { assertGlobalSkuAvailable } from '../../common/global-sku.util'
 import { isCatalogPurchaseInbound } from './catalog-inbound.util'
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
@@ -369,6 +370,8 @@ export class InboundService {
     if (!row) throw new NotFoundException('入库单不存在')
     return { ...row, id: Number(row.id) }
   }
+
+  readShipmentOutcome(requestId:string,actor:number){return readErpShipmentOutcome(this.prisma,requestId,actor)}
 
   async create(data: CreateErpShipmentDto, operatorId?: number) {
     if (!Number.isSafeInteger(operatorId) || !operatorId || operatorId <= 0) throw new ForbiddenException('请重新登录后创建发运单')

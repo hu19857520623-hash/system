@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useShipmentRequestScope } from '@/features/inbound/shipmentRequestScope'
 import { getAccessToken } from '@/auth/tokenStore'
+import {validateShipmentOutcome,copyDeletedShipmentForm} from '@/features/inbound/shipmentOutcome'
 import { userFacingError } from '@erp/shared/user-facing-error'
 
 import { displaySku, displaySkuText, formatSku } from '@erp/shared/sku-display'
@@ -158,6 +159,7 @@ const shipmentAttempt = ref<ShipmentAttempt | null>(null)
 const shipmentAttemptError = ref('')
 const shipmentError = ref('')
 const shipmentResult = ref<any>(null)
+const deletedShipment = ref<{attempt:ShipmentAttempt;inboundNo:string}|null>(null)
 const formBusy = computed(() => shipmentBusy.value || draftBusy.value || attachmentBusy.value || importBusy.value || maintenanceBusy.value)
 const formLocked = computed(() => formBusy.value || !!shipmentAttempt.value || !!shipmentResult.value || !!shipmentAttemptError.value || !!maintenanceAttempt.value || !!maintenanceStorageError.value)
 let stockLoadVersion = 0
@@ -470,8 +472,41 @@ async function postShipment(attempt: ShipmentAttempt) {
   } finally { if(frame.active())shipmentBusy.value = false }
 }
 
+async function checkShipmentOutcome(){
+ const attempt=shipmentAttempt.value,frame=shipmentRequests.capture()
+ if(!attempt || formBusy.value || !frame.active())return
+ shipmentBusy.value=true;shipmentError.value=''
+ try{
+  await frame.run(attempt,owner=>readShipmentAttempt(localStorage,owner),original=>inboundApi.shipmentOutcome(original.payload.clientRequestId),async raw=>{
+   const result=validateShipmentOutcome(attempt.payload.clientRequestId,raw)
+   if(result.status==='unknown'){shipmentError.value='尚未查到原发运结果，请继续原提交，勿重新创建。';return}
+   if(result.status==='deleted'){deletedShipment.value={attempt:JSON.parse(JSON.stringify(attempt)),inboundNo:result.inboundNo!};return}
+   const order=await frame.step(()=>inboundApi.detail(result.inboundId))
+   if(!frame.active())return
+   if(order.id!==result.inboundId || order.inboundNo!==result.inboundNo)throw Error('当前单据身份未能核对，请保留原请求')
+   clearShipmentAttempt(localStorage,frame.owner,attempt);shipmentAttempt.value=null;shipmentResult.value=order;deletedShipment.value=null
+   await Promise.allSettled([load(),loadDrafts()])
+  })
+ }catch(error){if(frame.active())shipmentError.value=`原请求已保留。${userFacingError(error)}`}
+ finally{if(frame.active())shipmentBusy.value=false}
+}
+async function finishDeletedShipment(copy:boolean){
+ const resolved=deletedShipment.value,frame=shipmentRequests.capture()
+ if(!resolved || formBusy.value || !frame.active())return
+ try{
+  const copied=copy?copyDeletedShipmentForm(resolved.attempt.form):null
+  clearShipmentAttempt(localStorage,frame.owner,resolved.attempt)
+  shipmentAttempt.value=null;deletedShipment.value=null;shipmentResult.value=null;editingDraftId.value=null;shipmentError.value=''
+  if(copy){
+   createForm.value={...emptyForm(),...copied};warehouseSkus.value=[];tab.value='form'
+   await frame.step(()=>loadLogisticsStock(createForm.value.logisticsWhCode))
+   if(frame.active())toast('原内容已复制，请核对当前可发库存；旧附件需重新上传，将生成新入库单号')
+  }else{createForm.value=emptyForm();warehouseSkus.value=[];tab.value='list'}
+ }catch(error){if(frame.active())shipmentError.value=userFacingError(error)}
+}
+
 function retryShipment() {
-  if (shipmentAttempt.value) postShipment(shipmentAttempt.value)
+  if (shipmentAttempt.value && !deletedShipment.value) postShipment(shipmentAttempt.value)
 }
 
 function returnShipmentList() {
@@ -1458,7 +1493,7 @@ async function handleAttachmentFile(e: Event) {
 }
 function resetShipmentSession(){
   shipmentBusy.value=false;maintenanceBusy.value=false;freightSubmitting.value=false
-  shipmentResult.value=null;maintenanceResult.value=null;shipmentError.value='';maintenanceError.value=''
+  shipmentResult.value=null;deletedShipment.value=null;maintenanceResult.value=null;shipmentError.value='';maintenanceError.value=''
   detailVisible.value=false;freightVisible.value=false;detailOrder.value=null
   createForm.value=emptyForm();editingDraftId.value=null;warehouseSkus.value=[];drafts.value=[]
   ++stockLoadVersion;++draftLoadVersion;++detailReadVersion;detailLoading.value=false
@@ -1495,9 +1530,15 @@ onScopeDispose(()=>window.removeEventListener('storage',onShipmentStorage))
     </div>
 
     <el-alert v-if="shipmentAttempt || shipmentAttemptError" type="warning" :closable="false" style="margin:12px 0">
-      <template #title>{{ shipmentAttemptError || '上次发运结果待核对，请使用原操作重试，避免重复扣减中转仓库存。' }}</template>
+      <template #title>{{ shipmentAttemptError || (deletedShipment ? '原发运已删除，请选择下方复制新建或放弃原内容。' : '上次发运结果待核对，请核对原结果或继续原提交，避免重复扣减中转仓库存。') }}</template>
       <el-button v-if="shipmentAttempt" :disabled="formBusy" @click="recoverShipment">恢复待核对发运</el-button>
+      <el-button v-if="shipmentAttempt" :disabled="formBusy || !canCreateInbound" @click="checkShipmentOutcome">核对原发运结果</el-button>
     </el-alert>
+    <el-alert v-if="deletedShipment" type="warning" :closable="false" :title="`原发运单 ${deletedShipment.inboundNo} 已删除，原请求不会重新发运。请选择复制新建或放弃原内容。`">
+      <el-button :disabled="formBusy || !canCreateInbound" @click="finishDeletedShipment(true)">按原内容复制新建</el-button>
+      <el-button :disabled="formBusy || !canCreateInbound" @click="finishDeletedShipment(false)">放弃原内容并返回列表</el-button>
+    </el-alert>
+    <el-alert v-if="shipmentError && tab !== 'form'" :title="shipmentError" type="error" :closable="false" />
     <el-alert v-if="refsError" :title="refsError" type="error" :closable="false"><el-button :loading="createLoading" @click="loadRefs">重新读取资料</el-button></el-alert>
     <el-alert v-if="draftsError" :title="draftsError" type="error" :closable="false"><el-button @click="loadDrafts">重新读取草稿箱</el-button></el-alert>
     <el-alert v-if="maintenanceAttempt || maintenanceStorageError" type="warning" :closable="false" style="margin:12px 0">
@@ -1524,10 +1565,10 @@ onScopeDispose(()=>window.removeEventListener('storage',onShipmentStorage))
       <el-alert v-if="shipmentError" :title="shipmentError" type="error" :closable="false" style="margin:12px 0" />
       <el-alert v-if="shipmentResult" type="success" :closable="false" style="margin:12px 0" :title="`发运成功：${shipmentResult.inboundNo}。库存、外箱与费用已同步，勿重复新建。`" />
       <div v-if="shipmentAttempt || shipmentResult" style="display:flex;gap:12px;margin:12px 0">
-        <el-button v-if="shipmentAttempt" type="primary" :disabled="!canCreateInbound" :loading="shipmentBusy" @click="retryShipment">核对并重试原提交</el-button>
+        <el-button v-if="shipmentAttempt && !deletedShipment" type="primary" :disabled="!canCreateInbound" :loading="shipmentBusy" @click="retryShipment">核对并重试原提交</el-button>
         <el-button :disabled="formBusy" @click="returnShipmentList">返回入库单管理</el-button>
         <el-button v-if="app.hasPerm('logistics_wh.view')" :disabled="formBusy" @click="returnSourceStock">查看中转仓库存</el-button>
-        <el-button v-if="shipmentResult && app.hasPerm('inbound.arrival_scan')" @click="continueArrivalScan">继续到仓扫描</el-button>
+        <el-button v-if="shipmentResult && !['completed','cancelled'].includes(shipmentResult.status) && app.hasPerm('inbound.arrival_scan')" @click="continueArrivalScan">继续到仓扫描</el-button>
       </div>
       <el-form :disabled="formLocked || !canCreateInbound" class="form-card" @submit.prevent>
         <div class="form-card-header">

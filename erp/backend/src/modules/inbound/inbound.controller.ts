@@ -201,6 +201,10 @@ export class InboundController {
   }
 
   @RequirePerms('create_inbound.create')
+  @Get('shipment-requests/:requestId')
+  readShipmentOutcome(@Param('requestId') requestId:string,@CurrentUser('userId') userId:number){return this.service.readShipmentOutcome(requestId,userId)}
+
+  @RequirePerms('create_inbound.create')
   @Post()
   create(@Body() body: CreateErpShipmentDto, @CurrentUser('userId') userId: number) {
     return this.service.create(body, userId)

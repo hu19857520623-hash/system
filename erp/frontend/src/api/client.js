@@ -315,6 +315,7 @@ export const purchaseApi = {
 // ── 入库 ──
 
 export const inboundApi = {
+  shipmentOutcome: (requestId) => api.get(`/inbound/shipment-requests/${requestId}`),
   list: (params) => api.get('/inbound', params),
   detail: (id) => api.get(`/inbound/${id}`),
   create: (data) => api.post('/inbound', data),
