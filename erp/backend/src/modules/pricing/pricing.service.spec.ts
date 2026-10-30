@@ -1,4 +1,29 @@
 import { PricingService } from './pricing.service'
+jest.mock('./oms-catalog-sync.util', () => ({ pushCatalogStockToOms: jest.fn().mockResolvedValue(undefined) }))
+
+describe('repricing original version', () => {
+  const version='2026-10-30T00:00:00.000Z'
+  function setup() {
+    const row={id:1n,sku:'AUDIT',pricingStatus:'synced',updatedAt:new Date(version),finalPrice:10}
+    const tx:any={$queryRaw:jest.fn(),productPricing:{findUnique:jest.fn().mockResolvedValue(row),update:jest.fn()},productPriceRecord:{create:jest.fn()},productPricingHistory:{create:jest.fn()}}
+    const db:any={$transaction:jest.fn((fn:any)=>fn(tx))},service=new PricingService(db,{} as any,{} as any)
+    jest.spyOn(service,'detail').mockResolvedValue({id:1} as any)
+    return {tx,service}
+  }
+  it.each([undefined,'bad-date','2026-10-29T00:00:00.000Z'])('rejects missing or obsolete version %s without changing pricing/history',async expectedUpdatedAt=>{
+    const {tx,service}=setup()
+    await expect(service.reprice(1,{price:20,marketPrice:30,expectedUpdatedAt},'验收')).rejects.toThrow('旧页面不能覆盖')
+    expect(tx.productPricing.update).not.toHaveBeenCalled();expect(tx.productPriceRecord.create).not.toHaveBeenCalled();expect(tx.productPricingHistory.create).not.toHaveBeenCalled()
+  })
+  it('accepts current version and always advances it even within the same millisecond',async()=>{
+    const {tx,service}=setup();jest.spyOn(Date,'now').mockReturnValue(new Date(version).getTime())
+    try {
+      await service.reprice(1,{price:20,marketPrice:30,expectedUpdatedAt:version},'验收')
+      expect(tx.productPricing.update.mock.calls[0][0].data.updatedAt.getTime()).toBe(new Date(version).getTime()+1)
+      expect(tx.productPriceRecord.create).toHaveBeenCalledTimes(1);expect(tx.productPricingHistory.create).toHaveBeenCalledTimes(1)
+    } finally {jest.restoreAllMocks()}
+  })
+})
 
 describe('PricingService historical display fallbacks', () => {
   it.each([

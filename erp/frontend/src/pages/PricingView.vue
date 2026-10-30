@@ -3,6 +3,7 @@ import { readReclaimAttempt, runReclaimAttempt, reclaimRequestId, type ReclaimAt
 import { userFacingError } from '@erp/shared/user-facing-error'
 
 import { displaySku, displaySkuText } from '@erp/shared/sku-display'
+import { getAccessToken } from '@/auth/tokenStore'
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -34,6 +35,7 @@ interface PriceHistory { time: string; role: string; action: string; detail: str
 interface PriceRecord { date: string; marketPrice: number; price: number; operator: string; note: string }
 
 interface PriceItem {
+  updatedAt: string
   id: number
   sku: string
   customerCode: string
@@ -488,6 +490,10 @@ function trendOf(records: PriceRecord[], idx: number): 'down' | 'up' | 'flat' {
   return cur < prev ? 'down' : cur > prev ? 'up' : 'flat'
 }
 
+const repriceBusy = ref(false), repriceFeedback = ref('')
+const repriceScope = computed(() => app.authenticatedUser && getAccessToken() && canSetPrice.value ? JSON.stringify([getAccessToken(),app.authenticatedUser.id,app.authenticatedUser.roleCode,app.authenticatedUser.workstation,[...app.currentPermSet].sort()]) : null)
+let repriceRevision = 0
+watch(repriceScope, () => { ++repriceRevision;repriceVisible.value=false;repriceBusy.value=false;repriceFeedback.value='' })
 const repriceVisible = ref(false)
 const repricing = ref<PriceItem | null>(null)
 const repriceForm = ref({
@@ -500,6 +506,8 @@ const repriceForm = ref({
 })
 
 function openReprice(id: number) {
+  if (!repriceScope.value || repriceBusy.value) return
+  ++repriceRevision;repriceFeedback.value = ''
   const p = items.value.find(x => x.id === id)
   if (!p) return
   repricing.value = JSON.parse(JSON.stringify(p))
@@ -548,32 +556,40 @@ const lastPrice = computed(() => {
 })
 const priceDelta = computed(() => repriceForm.value.price - lastPrice.value)
 
-async function submitReprice() {
-  if (!repricing.value) return
-  if (!repriceForm.value.price) { ElMessage.warning('请填写新售价'); return }
-  if (repriceProfit.value < 0) {
-    try {
-      await erpConfirm(
-        `预估利润 ¥${repriceProfit.value.toFixed(2)} 为负，确认继续调价吗？`,
-        '亏损预警', { type: 'warning', confirmButtonText: '仍然调价', cancelButtonText: '返回修改' }
-      )
-    } catch { return }
-  }
-  const ok = await withAction(async () => {
-    await pricingApi.reprice(repricing.value!.id, {
-      marketPrice: repriceForm.value.marketPrice,
-      price: repriceForm.value.price,
-      note: repriceForm.value.note,
-      overseasDeliveryFee: repriceForm.value.overseasDeliveryFee,
-      platformCommission: repriceForm.value.platformCommission,
-      platformDeliveryFee: repriceForm.value.platformDeliveryFee,
-    })
-  }, '新售价已调整并同步至 OMS')
-  if (ok) {
-    repriceVisible.value = false
-    load()
-  }
+async function reloadReprice() {
+  const owner=repriceScope.value,id=repricing.value?.id,revision=repriceRevision
+  if(!owner || !id || repriceBusy.value)return
+  const active=()=>owner===repriceScope.value && id===repricing.value?.id && revision===repriceRevision
+  repriceBusy.value=true
+  try {
+    const row=mapPricing(await pricingApi.detail(id)) as PriceItem
+    if(!active())return
+    if(row.pricingStatus!=='synced')throw Error('当前商品已不能调价，请取消返回列表核对')
+    repriceBusy.value=false;openReprice(id)
+    repricing.value=row;ensureFeeDefaults(row)
+    repriceForm.value={marketPrice:row.marketPrice,price:row.finalPrice,note:'',overseasDeliveryFee:row.overseasDeliveryFee,platformCommission:row.platformCommission,platformDeliveryFee:row.platformDeliveryFee}
+    repriceFeedback.value='已读取最新定价，请核对内容后继续。'
+  } catch(error) {if(active())repriceFeedback.value=`最新定价读取失败。${userFacingError(error)} 原输入已保留，请重试或取消返回。`}
+  finally {if(active())repriceBusy.value=false}
 }
+async function submitReprice() {
+  const owner=repriceScope.value,id=repricing.value?.id,revision=repriceRevision
+  if(!owner || !id || repriceBusy.value)return
+  if (!repriceForm.value.price) { ElMessage.warning('请填写新售价'); return }
+  const active=()=>owner===repriceScope.value && id===repricing.value?.id && revision===repriceRevision
+  repriceBusy.value=true;repriceFeedback.value=''
+  try {
+    if (repriceProfit.value < 0) {
+      try { await erpConfirm(`预估利润 ¥${repriceProfit.value.toFixed(2)} 为负，确认继续调价吗？`, '亏损预警', { type: 'warning', confirmButtonText: '仍然调价', cancelButtonText: '返回修改' }) } catch { return }
+    }
+    if(!active())return
+    await pricingApi.reprice(id, {...repriceForm.value,expectedUpdatedAt:repricing.value!.updatedAt})
+    if(!active())return
+    repriceVisible.value=false;ElMessage.success('新售价已调整并同步至 OMS');void load()
+  } catch(error) {if(active())repriceFeedback.value=`${userFacingError(error)} 输入已保留；结果未核实时请先读取最新定价后核对，或取消返回。`}
+  finally {if(active())repriceBusy.value=false}
+}
+
 </script>
 
 <template>
@@ -970,12 +986,13 @@ async function submitReprice() {
     </template>
   </el-dialog>
 
-  <el-dialog v-model="repriceVisible" :title="'调价并同步 · ' + (repricing?.name || '')" width="600px">
+  <el-dialog :close-on-click-modal="!repriceBusy" :close-on-press-escape="!repriceBusy" :show-close="!repriceBusy" v-model="repriceVisible" :title="'调价并同步 · ' + (repricing?.name || '')" width="600px">
+    <el-alert v-if="repriceFeedback" :title="repriceFeedback" type="warning" :closable="false" />
     <template v-if="repricing">
       <el-alert type="info" :closable="false" show-icon style="margin-bottom:16px">
         当前售价 ¥{{ lastPrice }}。市场走低时可下调售价保持竞争力，调价后自动同步 OMS。
       </el-alert>
-      <el-form label-width="140px">
+      <el-form :disabled="repriceBusy" label-width="140px">
         <el-form-item label="市场参考价(R)">
           <span style="font-weight:600">R {{ repriceForm.marketPrice.toFixed(2) }}</span>
           <span class="form-tip">≈ ¥ {{ repriceMarketRmb.toFixed(2) }} · 来自产品开发</span>
@@ -1008,8 +1025,9 @@ async function submitReprice() {
       </el-form>
     </template>
     <template #footer>
-      <el-button @click="repriceVisible = false">取消</el-button>
-      <el-button type="primary" @click="submitReprice">调价并同步 OMS</el-button>
+      <el-button :disabled="repriceBusy" @click="repriceVisible = false">取消</el-button>
+      <el-button :disabled="repriceBusy" @click="reloadReprice">读取最新定价</el-button>
+      <el-button type="primary" :loading="repriceBusy" :disabled="repriceBusy" @click="submitReprice">调价并同步 OMS</el-button>
     </template>
   </el-dialog>
 

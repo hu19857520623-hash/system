@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { billingCents } from '../billing/billing-workflow.util'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
@@ -71,6 +71,7 @@ export class PricingService {
     })
     return {
       id: Number(row.id),
+      updatedAt: row.updatedAt,
       sku: row.sku,
       customerCode: CATALOG_CUSTOMER_CODE,
       customerSku: catalogBaseSkuFromInternal(row.sku),
@@ -648,6 +649,8 @@ export class PricingService {
       const row = await tx.productPricing.findUnique({ where: { id: BigInt(id) } })
       if (!row) throw new NotFoundException('货盘库存记录不存在，请返回列表重新选择')
       if (row.pricingStatus !== 'synced') throw new BadRequestException('请先完成货盘同步，再继续调整售价')
+      const expected = typeof data.expectedUpdatedAt === 'string' ? new Date(data.expectedUpdatedAt) : null
+      if (!expected || !Number.isFinite(expected.getTime()) || expected.getTime() !== row.updatedAt.getTime()) throw new ConflictException('定价资料已变化，旧页面不能覆盖；请读取最新定价后核对再继续')
 
       const oldPrice = num(row.finalPrice)
       await tx.productPricing.update({
@@ -659,6 +662,7 @@ export class PricingService {
           platformCommissionRate: data.platformCommission ?? row.platformCommissionRate ?? 0,
           platformDeliveryFee: data.platformDeliveryFee ?? row.platformDeliveryFee ?? 0,
           omsSyncAt: new Date(),
+          updatedAt: new Date(Math.max(Date.now(), row.updatedAt.getTime() + 1)),
         },
       })
       await tx.productPriceRecord.create({
