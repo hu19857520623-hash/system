@@ -1,17 +1,18 @@
 <script setup lang="ts">
+import { useCatalogAttempt, catalogActionLabel, type CatalogAction } from '@/features/pricing/catalogAttempt'
 import { useRepriceAttempt } from '@/features/pricing/repriceAttempt'
 import { readReclaimAttempt, runReclaimAttempt, reclaimRequestId, type ReclaimAttempt } from '@/utils/catalogReclaimWorkflow'
 import { userFacingError } from '@erp/shared/user-facing-error'
 
 import { displaySku, displaySkuText } from '@erp/shared/sku-display'
 import { getAccessToken } from '@/auth/tokenStore'
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onScopeDispose, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { erpConfirm } from '@/utils/messageBox'
 import { pricingApi, inventoryApi } from '@/api/client.js'
 import { mapPricing, fmtTime } from '@/api/mappers.ts'
-import { useListLoader, withAction } from '@/composables/useListLoader.ts'
+import { useListLoader } from '@/composables/useListLoader.ts'
 import { useTablePagination } from '@/composables/useTablePagination.ts'
 import { useAppStore } from '@/stores/app'
 import ListPagination from '@/components/ListPagination.vue'
@@ -126,7 +127,7 @@ const canSyncOms = computed(() => app.hasPerm('pricing.sync_oms'))
 const canReclaim = computed(() => ['admin', 'finance'].includes(app.authenticatedUser?.roleCode || '') && app.hasPerm('inventory_query.reclaim_refund'))
 const refundHistoryVisible = ref(false)
 const visibilityVisible=ref(false),visibilityId=ref<number|undefined>(),hasPendingVisibility=ref(false)
-function openVisibility(row:PriceItem){visibilityId.value=row.id;visibilityVisible.value=true}
+function openVisibility(row:PriceItem){if(catalogWriteLocked.value){ElMessage.warning('请先核对原货盘操作，再调整额度');return}visibilityId.value=row.id;visibilityVisible.value=true}
 
 interface HoldingRow {
   id: string
@@ -341,25 +342,27 @@ const filtered = computed(() => {
 const { page, pageSize, total, pagedItems, resetPage } = useTablePagination(filtered)
 watch([tab, searchQ], resetPage)
 
-async function openPricing(id: number) {
-  try {
-    const detail = await pricingApi.detail(id)
-    editing.value = mapPricing(detail) as PriceItem
-  } catch {
-    const p = items.value.find(x => x.id === id)
-    if (p) editing.value = JSON.parse(JSON.stringify(p))
-  }
-  if (editing.value) {
-    ensureFeeDefaults(editing.value)
-    if (editing.value.visibleStockQty == null && editing.value.pricingStatus === 'pending_pricing') {
-      editing.value.visibleStockQty = editing.value.receivedGoodQty
-    }
-  }
-  pricingVisible.value = true
-}
-
-const pricingVisible = ref(false)
+const pricingVisible = ref(false), pricingReading = ref(false), pricingFeedback = ref(''), catalogPromptBusy = ref(false)
 const editing = ref<PriceItem | null>(null)
+let pricingRequestedId = 0, catalogRevision = 0
+async function openPricing(id: number) {
+  if(catalogPromptBusy.value || catalogBusy.value)return
+  const owner=catalogScope.value, revision=++catalogRevision
+  if(!owner){pricingFeedback.value='登录信息尚未准备好，请重新登录后继续。';return}
+  pricingRequestedId=id;pricingVisible.value=true;pricingReading.value=true;pricingFeedback.value=''
+  if(editing.value?.id!==id)editing.value=null
+  try {
+    const row=mapPricing(await pricingApi.detail(id)) as PriceItem
+    if(owner!==catalogScope.value || revision!==catalogRevision)return
+    items.value=items.value.map(old=>old.id===id?row:old)
+    const draft=JSON.parse(JSON.stringify(row)) as PriceItem
+    ensureFeeDefaults(draft)
+    if(draft.visibleStockQty==null && draft.pricingStatus==='pending_pricing')draft.visibleStockQty=draft.receivedGoodQty
+    editing.value=draft
+  } catch(error) {
+    if(owner===catalogScope.value && revision===catalogRevision)pricingFeedback.value=`最新商品读取失败。${userFacingError(error)} 请重试读取或返回货盘列表。`
+  } finally {if(owner===catalogScope.value && revision===catalogRevision)pricingReading.value=false}
+}
 
 function pricingStepActive(status: string) {
   const map: Record<string, number> = {
@@ -410,79 +413,48 @@ function suggestPriceByRate() {
 }
 
 async function confirmPrice() {
-  if (!editing.value) return
-  if (!editing.value.marketPrice || editing.value.marketPrice <= 0) {
-    ElMessage.warning('请填写市场参考价（兰特）')
-    return
-  }
-  if (!editing.value.finalPrice) { ElMessage.warning('请填写最终售价'); return }
-  if (estProfit.value < 0) {
-    try {
-      await erpConfirm(
-        `预估利润 ¥${estProfit.value.toFixed(2)} 为负，确认继续定价吗？`,
-        '亏损预警', { type: 'warning', confirmButtonText: '仍然确认', cancelButtonText: '返回修改' }
-      )
-    } catch { return }
-  }
-  const ok = await withAction(async () => {
-    await pricingApi.confirm(editing.value!.id, {
-      marketPrice: editing.value!.marketPrice,
-      targetProfitRate: editing.value!.targetProfitRate,
-      finalPrice: editing.value!.finalPrice,
-      visibleStockQty: editing.value!.visibleStockQty,
-      overseasDeliveryFee: editing.value!.overseasDeliveryFee,
-      platformCommission: editing.value!.platformCommission,
-      platformDeliveryFee: editing.value!.platformDeliveryFee,
-    })
-  }, '定价已确认，等待陪跑同步至 OMS')
-  if (ok) {
-    pricingVisible.value = false
-    load()
-  }
-}
-
-async function syncToOms() {
-  if (!editing.value) return
-  const ok = await withAction(async () => {
-    await pricingApi.syncOms(editing.value!.id)
-  }, '售价已同步至 OMS')
-  if (ok) {
-    pricingVisible.value = false
-    load()
-  }
-}
-
-async function syncRow(id: number) {
-  const p = items.value.find(x => x.id === id)
-  const ok = await withAction(async () => {
-    await pricingApi.syncOms(id)
-  }, `${p?.sku || ''} 售价已同步至 OMS`)
-  if (ok) load()
-}
-
-async function setShareStatus(row: PriceItem, status: 'enabled' | 'stopped') {
-  const action = status === 'stopped' ? '停止共享' : '开启共享'
-  const message = status === 'stopped'
-    ? `停止 ${row.sku} 的新客户申购吗？已有客户持仓和已建出库单仍可正常出库。`
-    : `开启 ${row.sku} 的共享吗？有海外仓可用库存时，客户将可以继续申购。`
+  if (!editing.value || catalogWriteLocked.value || !canSetPrice.value) return
+  const row=JSON.parse(JSON.stringify(editing.value)) as PriceItem,owner=catalogScope.value,revision=catalogRevision
+  if (!row.marketPrice || row.marketPrice <= 0) { ElMessage.warning('请填写市场参考价（兰特）'); return }
+  if (!row.finalPrice || row.finalPrice <= 0) { ElMessage.warning('请填写最终售价'); return }
+  catalogPromptBusy.value=true
   try {
-    await erpConfirm(message, action, {
-      type: status === 'stopped' ? 'warning' : 'info',
-      confirmButtonText: action,
-      cancelButtonText: '取消',
-    })
-  } catch {
-    return
-  }
-  const ok = await withAction(async () => {
-    await pricingApi.setShareStatus(row.id, status)
-  }, `${row.sku} 已${action}`)
-  if (ok) {
-    if (editing.value?.id === row.id) {
-      editing.value = mapPricing(await pricingApi.detail(row.id)) as PriceItem
+    if (estProfit.value < 0) {
+      try { await erpConfirm(`预估利润 ¥${estProfit.value.toFixed(2)} 为负，确认继续定价吗？`, '亏损预警', {type:'warning',confirmButtonText:'仍然确认',cancelButtonText:'返回修改'}) } catch {return}
     }
-    load()
-  }
+    if(!owner || owner!==catalogScope.value || revision!==catalogRevision)return
+    await originalCatalog.start('confirm',row.id,row.name,{
+      expectedUpdatedAt:row.updatedAt,marketPrice:row.marketPrice,targetProfitRate:row.targetProfitRate,finalPrice:row.finalPrice,
+      visibleStockQty:row.visibleStockQty,overseasDeliveryFee:row.overseasDeliveryFee,platformCommission:row.platformCommission,platformDeliveryFee:row.platformDeliveryFee,
+    })
+  } finally {if(owner===catalogScope.value && revision===catalogRevision)catalogPromptBusy.value=false}
+}
+async function syncToOms() {
+  if(!editing.value || catalogWriteLocked.value || !canSyncOms.value)return
+  await originalCatalog.start('sync',editing.value.id,editing.value.name,{expectedUpdatedAt:editing.value.updatedAt})
+}
+async function syncRow(id: number) {
+  if(catalogWriteLocked.value || !canSyncOms.value)return
+  const owner=catalogScope.value,revision=catalogRevision
+  pricingReading.value=true;pricingFeedback.value=''
+  try {
+    const row=mapPricing(await pricingApi.detail(id)) as PriceItem
+    if(!owner || owner!==catalogScope.value || revision!==catalogRevision)return
+    pricingReading.value=false
+    await originalCatalog.start('sync',row.id,row.name,{expectedUpdatedAt:row.updatedAt})
+  } catch(error){if(owner===catalogScope.value && revision===catalogRevision)pricingFeedback.value=`商品读取失败。${userFacingError(error)} 本次尚未提交，请重新读取或返回。`}
+  finally{if(owner===catalogScope.value && revision===catalogRevision)pricingReading.value=false}
+}
+async function setShareStatus(row: PriceItem, status: 'enabled' | 'stopped') {
+  if(catalogWriteLocked.value || !canSyncOms.value)return
+  const owner=catalogScope.value,revision=catalogRevision,original=JSON.parse(JSON.stringify(row)) as PriceItem
+  const action=status==='stopped'?'停止共享':'开启共享'
+  catalogPromptBusy.value=true
+  try {
+    try { await erpConfirm(status==='stopped'?`停止 ${row.sku} 的新客户申购吗？已有客户持仓和已建出库单仍可正常出库。`:`开启 ${row.sku} 的共享吗？有海外仓可用库存时，客户将可以继续申购。`,action,{type:status==='stopped'?'warning':'info',confirmButtonText:action,cancelButtonText:'返回修改'}) } catch {return}
+    if(!owner || owner!==catalogScope.value || revision!==catalogRevision)return
+    await originalCatalog.start('share',original.id,original.name,{status,expectedUpdatedAt:original.updatedAt})
+  } finally{if(owner===catalogScope.value && revision===catalogRevision)catalogPromptBusy.value=false}
 }
 
 function trendOf(records: PriceRecord[], idx: number): 'down' | 'up' | 'flat' {
@@ -491,20 +463,45 @@ function trendOf(records: PriceRecord[], idx: number): 'down' | 'up' | 'flat' {
   return cur < prev ? 'down' : cur > prev ? 'up' : 'flat'
 }
 
+const catalogScope=computed(()=>app.authenticatedUser && getAccessToken()?JSON.stringify([getAccessToken(),app.authenticatedUser.id,app.authenticatedUser.roleCode,app.authenticatedUser.workstation,[...app.currentPermSet].sort()]):null)
+const catalogAllowed=(action:CatalogAction)=>action==='confirm'?canSetPrice.value:canSyncOms.value
+const originalCatalog=useCatalogAttempt({
+ actor:()=>String(app.authenticatedUser?.id||''),scope:()=>catalogScope.value,allowed:catalogAllowed,storage:localStorage,
+ conflict:()=>!!pendingReprice.value || repriceBlocked.value || repriceBusy.value || originalRepriceBusy.value || hasPendingVisibility.value || !!localStorage.getItem(`erp.pricing.reprice.${app.authenticatedUser?.id}`),
+ request:(mode,a)=>{
+  if(mode==='check')return pricingApi.catalogRequest(a.pricingId,a.action,a.requestId)
+  if(mode==='cancel')return pricingApi.cancelCatalogRequest(a.pricingId,a.action,a.requestId)
+  const payload={...a.payload,clientRequestId:a.requestId}
+  return a.action==='confirm'?pricingApi.confirm(a.pricingId,payload):a.action==='sync'?pricingApi.syncOms(a.pricingId,payload):pricingApi.setShareStatus(a.pricingId,a.payload.status,payload)
+ },
+ applied:async(a,_receipt,active)=>{
+  const row=mapPricing(await pricingApi.detail(a.pricingId)) as PriceItem
+  if(!active())return
+  items.value=items.value.map(old=>old.id===a.pricingId?row:old)
+ }
+})
+const {pending:pendingCatalog,busy:catalogBusy,feedback:catalogFeedback,blocked:catalogBlocked}=originalCatalog
+watch(pendingCatalog,(value,old)=>{if(!value && old){pricingVisible.value=false;editing.value=null}})
+watch(catalogScope,()=>{++catalogRevision;pricingVisible.value=false;editing.value=null;pricingReading.value=false;catalogPromptBusy.value=false;pricingFeedback.value=''},{flush:'sync'})
+const catalogWriteLocked=computed(()=>!!pendingCatalog.value || catalogBlocked.value || catalogBusy.value || pricingReading.value || catalogPromptBusy.value || !!pendingReprice.value || repriceBlocked.value || repriceBusy.value || originalRepriceBusy.value || hasPendingVisibility.value)
+const canEditPricing=computed(()=>canSetPrice.value && editing.value?.pricingStatus==='pending_pricing' && !catalogWriteLocked.value)
+function catalogConflict(){try{return hasPendingVisibility.value || !!pendingCatalog.value || catalogBlocked.value || catalogBusy.value || catalogPromptBusy.value || pricingReading.value || !!localStorage.getItem(`erp.pricing.action.${app.authenticatedUser?.id}`)}catch{return true}}
+
 const repriceBusy = ref(false), repriceFeedback = ref('')
 const repriceScope = computed(() => app.authenticatedUser && getAccessToken() && canSetPrice.value ? JSON.stringify([getAccessToken(),app.authenticatedUser.id,app.authenticatedUser.roleCode,app.authenticatedUser.workstation,[...app.currentPermSet].sort()]) : null)
 const originalReprice=useRepriceAttempt({
- actor:()=>String(app.authenticatedUser?.id||''),scope:()=>repriceScope.value,storage:localStorage,
+ actor:()=>String(app.authenticatedUser?.id||''),scope:()=>repriceScope.value,storage:localStorage,conflict:catalogConflict,
  request:(mode,a)=>mode==='submit'?pricingApi.reprice(a.pricingId,{...a.payload,clientRequestId:a.requestId}):mode==='check'?pricingApi.repriceRequest(a.pricingId,a.requestId):pricingApi.cancelRepriceRequest(a.pricingId,a.requestId),
- applied:async(a,receipt)=>{
+ applied:async(a,receipt,active)=>{
   if(receipt.status==='cancelled')return
   const owner=repriceScope.value,row=mapPricing(await pricingApi.detail(a.pricingId)) as PriceItem
-  if(!owner||owner!==repriceScope.value)throw Error('登录身份或权限已变化，请使用原账号重新核对')
+  if(!active()||!owner||owner!==repriceScope.value)throw Error('登录身份或权限已变化，请使用原账号重新核对')
   items.value=items.value.map(old=>old.id===a.pricingId?row:old)
  }
 })
 const {pending:pendingReprice,busy:originalRepriceBusy,feedback:originalRepriceFeedback,blocked:repriceBlocked}=originalReprice
 let repriceRevision = 0
+onScopeDispose(()=>{++catalogRevision;++repriceRevision})
 watch(repriceScope, () => { ++repriceRevision;repriceVisible.value=false;repriceBusy.value=false;repriceFeedback.value='' })
 const repriceVisible = ref(false)
 const repricing = ref<PriceItem | null>(null)
@@ -519,6 +516,7 @@ const repriceForm = ref({
 
 function openReprice(id: number) {
   if (!repriceScope.value || repriceBusy.value || originalRepriceBusy.value) return
+  if(catalogConflict()){ElMessage.warning('请先核对原货盘操作，再调整定价');return}
   if(pendingReprice.value||repriceBlocked.value){ElMessage.warning('请先核对原调价请求，再调整其它定价');return}
   originalReprice.clearFeedback()
   ++repriceRevision;repriceFeedback.value = ''
@@ -572,7 +570,7 @@ const priceDelta = computed(() => repriceForm.value.price - lastPrice.value)
 
 async function reloadReprice() {
   const owner=repriceScope.value,id=repricing.value?.id,revision=repriceRevision
-  if(!owner || !id || repriceBusy.value || originalRepriceBusy.value || pendingReprice.value || repriceBlocked.value)return
+  if(!owner || !id || repriceBusy.value || originalRepriceBusy.value || pendingReprice.value || repriceBlocked.value || catalogConflict())return
   const active=()=>owner===repriceScope.value && id===repricing.value?.id && revision===repriceRevision
   repriceBusy.value=true
   try {
@@ -588,7 +586,7 @@ async function reloadReprice() {
 }
 async function submitReprice() {
   const owner=repriceScope.value,id=repricing.value?.id,revision=repriceRevision
-  if(!owner || !id || repriceBusy.value || originalRepriceBusy.value || pendingReprice.value || repriceBlocked.value)return
+  if(!owner || !id || repriceBusy.value || originalRepriceBusy.value || pendingReprice.value || repriceBlocked.value || catalogConflict())return
   if (!repriceForm.value.price) { ElMessage.warning('请填写新售价'); return }
   const active=()=>owner===repriceScope.value && id===repricing.value?.id && revision===repriceRevision
   repriceBusy.value=true;repriceFeedback.value=''
@@ -608,6 +606,16 @@ async function submitReprice() {
 
 <template>
   <el-card>
+    <el-alert v-if="catalogFeedback" :title="catalogFeedback" type="warning" :closable="false" style="margin-bottom:12px">
+      <p v-if="pendingCatalog">原商品：{{ pendingCatalog.name }} · 原操作：{{ catalogActionLabel[pendingCatalog.action] }}</p>
+      <template v-if="pendingCatalog">
+        <el-button :disabled="catalogBusy || !catalogAllowed(pendingCatalog.action)" @click="originalCatalog.run('check')">核对原货盘操作结果</el-button>
+        <el-button :disabled="catalogBusy || !catalogAllowed(pendingCatalog.action)" @click="originalCatalog.run('submit')">继续原货盘操作</el-button>
+        <el-button :disabled="catalogBusy || !catalogAllowed(pendingCatalog.action)" @click="originalCatalog.run('cancel')">取消原货盘操作请求</el-button>
+        <p v-if="!catalogAllowed(pendingCatalog.action)">当前权限不足，请使用原账号恢复相应权限后核对。</p>
+      </template>
+    </el-alert>
+    <el-alert v-if="pricingFeedback && !pricingVisible" :title="pricingFeedback" type="warning" :closable="false" />
     <el-alert v-if="originalRepriceFeedback" :title="originalRepriceFeedback" type="warning" :closable="false" style="margin-bottom:12px">
       <p v-if="pendingReprice">原商品：{{ pendingReprice.name }} · 原调价 ¥{{ pendingReprice.payload.price }}</p>
       <template v-if="pendingReprice">
@@ -742,15 +750,15 @@ async function submitReprice() {
       <el-table-column label="操作" width="290" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" size="small" @click="openPricing(row.id)">{{ needMyAction(row) ? '去处理' : '查看详情' }}</el-button>
-          <el-button v-if="canSetPrice && ['priced','synced'].includes(row.pricingStatus)" link type="primary" size="small" @click="openVisibility(row as PriceItem)">调整额度</el-button>
-          <el-button v-if="row.pricingStatus === 'priced' && canSyncOms" link type="success" size="small" @click="syncRow(row.id)">同步OMS</el-button>
-          <el-button v-if="row.pricingStatus === 'synced' && canSyncOms" link type="warning" size="small" @click="openReprice(row.id)">调价</el-button>
+          <el-button v-if="canSetPrice && ['priced','synced'].includes(row.pricingStatus)" link type="primary" size="small" :disabled="catalogWriteLocked" @click="openVisibility(row as PriceItem)">调整额度</el-button>
+          <el-button v-if="row.pricingStatus === 'priced' && canSyncOms" link type="success" size="small" :disabled="catalogWriteLocked" @click="syncRow(row.id)">同步OMS</el-button>
+          <el-button v-if="row.pricingStatus === 'synced' && canSetPrice" link type="warning" size="small" @click="openReprice(row.id)">调价</el-button>
           <el-button
             v-if="row.pricingStatus === 'synced' && canSyncOms"
             link
             :type="row.shareStatus === 'stopped' ? 'success' : 'danger'"
             size="small"
-            @click="setShareStatus(row as PriceItem, row.shareStatus === 'stopped' ? 'enabled' : 'stopped')"
+            :disabled="catalogWriteLocked" @click="setShareStatus(row as PriceItem, row.shareStatus === 'stopped' ? 'enabled' : 'stopped')"
           >{{ row.shareStatus === 'stopped' ? '开启共享' : '停止共享' }}</el-button>
         </template>
       </el-table-column>
@@ -813,6 +821,8 @@ async function submitReprice() {
   </el-card>
 
   <el-dialog v-model="pricingVisible" :title="'货盘库存 · ' + (editing?.name || '')" width="760px" top="6vh" class="erp-detail">
+    <el-alert v-if="pricingFeedback" :title="pricingFeedback" type="warning" :closable="false" />
+    <el-alert v-if="pendingCatalog || catalogBlocked" :title="catalogFeedback + ' 可返回货盘列表核对原请求。'" type="warning" :closable="false" />
     <template v-if="editing">
       <DetailSheet :kicker="editing.customerCode || CATALOG_CUSTOMER_CODE" :title="editing.name" :subtitle="`${CATALOG_CUSTOMER_NAME} · 客户 SKU ${editing.customerSku || '—'} · SKU ${displaySku(editing)}`">
         <template #metrics>
@@ -875,7 +885,7 @@ async function submitReprice() {
       </el-descriptions>
 
       <el-divider content-position="left">定价（开发主管 / 陪跑填写）</el-divider>
-      <el-form label-width="150px">
+      <el-form :disabled="!canEditPricing" label-width="150px">
         <el-form-item label="市场参考价(R)">
           <template v-if="canSetPrice && editing.pricingStatus === 'pending_pricing'">
             <el-input-number v-model="editing.marketPrice" :min="0" :precision="2" style="width:180px" />
@@ -889,18 +899,18 @@ async function submitReprice() {
           </template>
         </el-form-item>
         <el-form-item label="目标利润率(%)">
-          <el-input-number v-model="editing.targetProfitRate" :min="0" :max="100" :precision="1" :disabled="!canSetPrice" style="width:180px" />
-          <el-button v-if="canSetPrice" link type="primary" size="small" style="margin-left:10px" @click="suggestPriceByRate">按利润率算价</el-button>
+          <el-input-number v-model="editing.targetProfitRate" :min="0" :max="100" :precision="1" :disabled="!canEditPricing" style="width:180px" />
+          <el-button v-if="canEditPricing" link type="primary" size="small" style="margin-left:10px" @click="suggestPriceByRate">按利润率算价</el-button>
         </el-form-item>
         <el-form-item label="海外仓派送费/件(¥)">
-          <el-input-number v-model="editing.overseasDeliveryFee" :min="0" :precision="2" :disabled="!canSetPrice" style="width:180px" />
+          <el-input-number v-model="editing.overseasDeliveryFee" :min="0" :precision="2" :disabled="!canEditPricing" style="width:180px" />
         </el-form-item>
         <el-form-item label="平台佣金/件(R)">
-          <el-input-number v-model="editing.platformCommission" :min="0" :precision="2" :disabled="!canSetPrice" style="width:180px" />
+          <el-input-number v-model="editing.platformCommission" :min="0" :precision="2" :disabled="!canEditPricing" style="width:180px" />
           <span class="form-tip">≈ ¥ {{ estCommissionRmb.toFixed(2) }}/件</span>
         </el-form-item>
         <el-form-item label="平台派送费/件(R)">
-          <el-input-number v-model="editing.platformDeliveryFee" :min="0" :precision="2" :disabled="!canSetPrice" style="width:180px" />
+          <el-input-number v-model="editing.platformDeliveryFee" :min="0" :precision="2" :disabled="!canEditPricing" style="width:180px" />
           <span class="form-tip">≈ ¥ {{ estDeliveryRmb.toFixed(2) }}/件</span>
         </el-form-item>
         <el-form-item v-if="editing.finalPrice" label="预估利润(¥)">
@@ -918,7 +928,7 @@ async function submitReprice() {
             v-model="editing.visibleStockQty"
             :min="0"
             :max="editing.receivedGoodQty"
-            :disabled="!canSetPrice"
+            :disabled="!canEditPricing"
             style="width:180px"
           />
           <span class="form-tip">
@@ -927,7 +937,7 @@ async function submitReprice() {
           </span>
         </el-form-item>
         <el-form-item label="最终售价(¥)">
-          <el-input-number v-model="editing.finalPrice" :min="0" :precision="2" :disabled="!canSetPrice" style="width:180px" />
+          <el-input-number v-model="editing.finalPrice" :min="0" :precision="2" :disabled="!canEditPricing" style="width:180px" />
         </el-form-item>
       </el-form>
 
@@ -952,7 +962,7 @@ async function submitReprice() {
               :type="editing.shareStatus === 'stopped' ? 'success' : 'danger'"
               size="small"
               style="margin-left:8px"
-              @click="setShareStatus(editing, editing.shareStatus === 'stopped' ? 'enabled' : 'stopped')"
+              :disabled="catalogWriteLocked" @click="setShareStatus(editing, editing.shareStatus === 'stopped' ? 'enabled' : 'stopped')"
             >{{ editing.shareStatus === 'stopped' ? '开启共享' : '停止共享' }}</el-button>
           </el-descriptions-item>
           <el-descriptions-item label="OMS 展示剩余">
@@ -996,14 +1006,15 @@ async function submitReprice() {
     </template>
 
     <template #footer>
-      <el-button @click="pricingVisible = false">关闭</el-button>
+      <el-button @click="pricingVisible = false">返回货盘列表</el-button>
+      <el-button :disabled="catalogWriteLocked" @click="openPricing(pricingRequestedId)">读取最新商品</el-button>
       <el-button
         v-if="editing && editing.pricingStatus === 'pending_pricing' && canSetPrice"
-        type="primary" @click="confirmPrice"
+        :disabled="catalogWriteLocked" :loading="catalogBusy || catalogPromptBusy" type="primary" @click="confirmPrice"
       >确认定价</el-button>
       <el-button
         v-if="editing && editing.pricingStatus === 'priced' && canSyncOms"
-        type="success" @click="syncToOms"
+        :disabled="catalogWriteLocked" :loading="catalogBusy" type="success" @click="syncToOms"
       >同步至 OMS</el-button>
     </template>
   </el-dialog>

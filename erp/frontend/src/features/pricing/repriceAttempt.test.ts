@@ -3,11 +3,11 @@ import {afterEach,describe,it,expect,vi} from 'vitest'
 import {useRepriceAttempt} from './repriceAttempt'
 const stops:(()=>void)[]=[]
 afterEach(()=>{stops.splice(0).forEach(fn=>fn());vi.restoreAllMocks()})
-function fixture(){
+function fixture(conflict=()=>false){
  const rows=new Map<string,string>(),storage={getItem:(k:string)=>rows.get(k)??null,setItem:(k:string,v:string)=>{rows.set(k,v)},removeItem:(k:string)=>{rows.delete(k)}}
  const owner=ref<string|null>('scope7'),actor=ref('7'),request=vi.fn(),applied=vi.fn(async()=>{}),scope=effectScope()
- const control=scope.run(()=>useRepriceAttempt({actor:()=>actor.value,scope:()=>owner.value,storage,request,applied}))!
- stops.push(()=>scope.stop());return {...control,rows,storage,owner,actor,request,applied}
+ const control=scope.run(()=>useRepriceAttempt({actor:()=>actor.value,scope:()=>owner.value,storage,request,applied,conflict}))!
+ stops.push(()=>scope.stop());return {...control,rows,storage,owner,actor,request,applied,stop:()=>scope.stop()}
 }
 const payload={price:20,marketPrice:30,expectedUpdatedAt:'2026-10-30T00:00:00.000Z'}
 const confirmed=(id:string)=>({requestId:id,status:'confirmed',pricingId:9,price:20,version:'2026-10-30T00:00:01.000Z',syncStatus:'recorded'})
@@ -54,4 +54,14 @@ describe('调价原请求恢复',()=>{
   const f=fixture();f.request.mockRejectedValueOnce(Error('fetch'));await f.start(9,'商品',payload);const a=f.pending.value!
   f.rows.set('erp.pricing.reprice.7',JSON.stringify({...a,payload:{...payload,price:99}}));await f.run('submit');expect(f.request).toHaveBeenCalledOnce();expect(f.pending.value).not.toBeNull();expect(f.feedback.value).toContain('记录已变化')
  })
+ it('离页后尚未确认的提示不能创建新调价请求',async()=>{
+  const f=fixture();f.stop();expect(await f.start(9,'商品',payload)).toBe(false);expect(f.rows.size).toBe(0);expect(f.request).not.toHaveBeenCalled()
+ })
+ it('待处理货盘操作阻断新调价和原调价重试，但保留取消入口',async()=>{
+  let conflict=true;const f=fixture(()=>conflict);await f.start(9,'商品',payload);expect(f.request).not.toHaveBeenCalled()
+  conflict=false;f.request.mockRejectedValueOnce(Error('fetch'));await f.start(9,'商品',payload);const id=f.pending.value!.requestId
+  conflict=true;await f.run('submit');expect(f.request).toHaveBeenCalledOnce()
+  f.request.mockResolvedValueOnce({requestId:id,status:'cancelled',pricingId:9});expect(await f.run('cancel')).toBe(true)
+ })
+
 })

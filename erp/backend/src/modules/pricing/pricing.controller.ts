@@ -73,12 +73,14 @@ export class PricingController {
     @CurrentUser('realName') role: string,
     @CurrentUser('userId') actor: number,
   ) {
+    if(!body?.clientRequestId)throw new ConflictException('页面版本已更新，请刷新后使用原货盘操作核对入口')
     return this.service.confirmPrice(id, body, role, actor)
   }
 
   @RequirePerms('pricing.sync_oms')
   @Post(':id/sync-oms')
   syncOms(@Param('id', ParseIntPipe) id: number, @CurrentUser('realName') role: string, @Body() body:any, @CurrentUser('userId') actor:number) {
+    if(!body?.clientRequestId)throw new ConflictException('页面版本已更新，请刷新后使用原货盘操作核对入口')
     return this.service.syncOms(id, role, body, actor)
   }
 
@@ -90,6 +92,7 @@ export class PricingController {
     @CurrentUser('realName') role: string,
     @CurrentUser('userId') actor: number,
   ) {
+    if(!body?.clientRequestId)throw new ConflictException('页面版本已更新，请刷新后使用原货盘操作核对入口')
     return this.service.setShareStatus(id, body?.status, role, body, actor)
   }
 
@@ -140,6 +143,7 @@ export class PricingController {
   @RequirePerms('pricing.set')
   @Put(':id')
   update(@Param('id', ParseIntPipe) id: number, @Body() body: any, @CurrentUser('userId') actor:number) {
+    if(!body?.clientRequestId)throw new ConflictException('页面版本已更新，请刷新后使用原货盘操作核对入口')
     return this.service.confirmPrice(id, body, '系统',actor)
   }
 }
