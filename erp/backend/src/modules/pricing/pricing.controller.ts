@@ -101,9 +101,18 @@ export class PricingController {
     @Param('id', ParseIntPipe) id: number,
     @Body() body: any,
     @CurrentUser('realName') role: string,
+    @CurrentUser('userId') actor: number,
   ) {
-    return this.service.reprice(id, body, role)
+    return this.service.reprice(id, body, role, actor)
   }
+
+  @RequirePerms('pricing.set')
+  @Get(':id/reprice-requests/:requestId')
+  readRepriceRequest(@Param('id',ParseIntPipe) id:number,@Param('requestId') requestId:string,@CurrentUser('userId') actor:number){return this.service.readRepriceRequest(id,requestId,actor)}
+
+  @RequirePerms('pricing.set')
+  @Post(':id/reprice-requests/:requestId/cancel')
+  cancelRepriceRequest(@Param('id',ParseIntPipe) id:number,@Param('requestId') requestId:string,@CurrentUser('userId') actor:number){return this.service.cancelRepriceRequest(id,requestId,actor)}
 
   @RequirePerms('pricing.set')
   @Put(':id')

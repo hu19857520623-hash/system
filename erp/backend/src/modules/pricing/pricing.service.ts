@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { billingCents } from '../billing/billing-workflow.util'
@@ -641,10 +642,48 @@ export class PricingService {
     return item
   }
 
-  async reprice(id: number, data: any, role: string) {
+  private repriceRequestId(value: unknown) {
+    if (typeof value !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) throw new BadRequestException('原调价请求编号无效，请返回列表核对')
+    return value.toLowerCase()
+  }
+  private findRepriceRequest(db: any, requestId: string, actor: number) {
+    return db.operationLog.findFirst({ where: { module: 'pricing_reprice', operatorId: BigInt(actor), detail: { path: '$.clientRequestId', equals: requestId } } })
+  }
+  private repriceReceipt(row: any, id: number, requestId: string) {
+    if (row.targetId !== String(id)) throw new ConflictException('原调价请求属于其它商品，请返回原商品核对')
+    return { requestId, ...row.detail.result }
+  }
+  async readRepriceRequest(id: number, value: string, actor: number) {
+    const requestId=this.repriceRequestId(value),row=await this.findRepriceRequest(this.prisma,requestId,actor)
+    return row ? this.repriceReceipt(row,id,requestId) : { requestId,status:'unknown',pricingId:id }
+  }
+  async cancelRepriceRequest(id: number, value: string, actor: number) {
+    const requestId=this.repriceRequestId(value)
+    return this.prisma.$transaction(async tx=>{
+      await tx.$queryRaw`SELECT id FROM sys_user WHERE id=${BigInt(actor)} FOR UPDATE`
+      const old=await this.findRepriceRequest(tx,requestId,actor)
+      if(old)return this.repriceReceipt(old,id,requestId)
+      const result={status:'cancelled',pricingId:id}
+      await tx.operationLog.create({data:{module:'pricing_reprice',action:'reprice',operatorId:BigInt(actor),targetType:'product_pricing',targetId:String(id),detail:{clientRequestId:requestId,fingerprint:'',result}}})
+      return {requestId,...result}
+    })
+  }
+  async reprice(id: number, data: any, role: string, actor?: number) {
     const nextPrice = data.price ?? data.finalPrice
     if (typeof nextPrice !== 'number' || billingCents(nextPrice) <= 0 || billingCents(nextPrice) > 999999999999) throw new BadRequestException('请填写大于零、最多两位小数的有效售价')
-    const row = await this.prisma.$transaction(async tx => {
+    const requestId=data.clientRequestId == null ? null : this.repriceRequestId(data.clientRequestId)
+    if(requestId && (!actor || !Number.isSafeInteger(actor)))throw new BadRequestException('请使用原账号核对调价请求')
+    const fingerprint=createHash('sha256').update(JSON.stringify([id,nextPrice,data.marketPrice,data.expectedUpdatedAt,data.note || '手动调价',data.overseasDeliveryFee ?? null,data.platformCommission ?? null,data.platformDeliveryFee ?? null])).digest('hex')
+    const saved = await this.prisma.$transaction(async tx => {
+      if(requestId){
+        await tx.$queryRaw`SELECT id FROM sys_user WHERE id=${BigInt(actor!)} FOR UPDATE`
+        const previous=await this.findRepriceRequest(tx,requestId,actor!)
+        if(previous){
+          const receipt=this.repriceReceipt(previous,id,requestId)
+          if(receipt.status!=='cancelled' && previous.detail.fingerprint!==fingerprint)throw new ConflictException('原调价内容不能更改，请先核对或取消原请求')
+          return {receipt}
+        }
+      }
       await tx.$queryRaw`SELECT id FROM product_pricing WHERE id = ${BigInt(id)} FOR UPDATE`
       const row = await tx.productPricing.findUnique({ where: { id: BigInt(id) } })
       if (!row) throw new NotFoundException('货盘库存记录不存在，请返回列表重新选择')
@@ -653,7 +692,7 @@ export class PricingService {
       if (!expected || !Number.isFinite(expected.getTime()) || expected.getTime() !== row.updatedAt.getTime()) throw new ConflictException('定价资料已变化，旧页面不能覆盖；请读取最新定价后核对再继续')
 
       const oldPrice = num(row.finalPrice)
-      await tx.productPricing.update({
+      const updated=await tx.productPricing.update({
         where: { id: BigInt(id) },
         data: {
           marketPrice: data.marketPrice,
@@ -675,9 +714,16 @@ export class PricingService {
         },
       })
       await tx.productPricingHistory.create({ data: { pricingId: BigInt(id), operatorRole: role, action: '调价同步', detail: `市场参考 R${data.marketPrice}，售价 ¥${oldPrice} → ¥${data.price ?? data.finalPrice}` } })
-      return row
-    })
-    await pushCatalogStockToOms(this.prisma, row.sku)
-    return this.detail(id)
+      // Catalog synchronization currently performs database reads and a local sync-log write only.
+      // Keep it in the same transaction so a failed sync log cannot leave an unreceipted price.
+      const synced=await pushCatalogStockToOms(tx as unknown as PrismaService,row.sku)
+      if(requestId){
+        const result={status:'confirmed',pricingId:id,price:nextPrice,version:updated.updatedAt.toISOString(),syncStatus:synced?'recorded':'not_required'}
+        await tx.operationLog.create({data:{module:'pricing_reprice',action:'reprice',operatorId:BigInt(actor!),targetType:'product_pricing',targetId:String(id),detail:{clientRequestId:requestId,fingerprint,result}}})
+        return {receipt:{requestId,...result}}
+      }
+      return {receipt:null}
+    },{maxWait:10000,timeout:30000})
+    return saved.receipt || this.detail(id)
   }
 }
