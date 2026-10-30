@@ -61,12 +61,8 @@ export class PricingController {
 
   @RequirePerms('pricing.set')
   @Post(':id/freight-callback')
-  freightCallback(
-    @Param('id', ParseIntPipe) id: number,
-    @Body() body: any,
-    @CurrentUser('realName') role: string,
-  ) {
-    return this.service.freightCallback(id, role, body)
+  freightCallback() {
+    throw new ConflictException('海运费请在「发运海外仓」对应入库单中填写或补录，系统会自动分摊同步；请返回发运页面继续')
   }
 
   @RequirePerms('pricing.set')

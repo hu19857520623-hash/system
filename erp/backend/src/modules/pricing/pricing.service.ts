@@ -420,65 +420,6 @@ export class PricingService {
     }, { maxWait: 10000, timeout: 30000 })
   }
 
-  async freightCallback(id: number, role: string, body?: any) {
-    return this.pricingTransaction(id, service => service.applyFreightCallback(id, role, body))
-  }
-
-  private async applyFreightCallback(id: number, role: string, body?: any) {
-    const row = await this.prisma.productPricing.findUnique({ where: { id: BigInt(id) } })
-    if (!row) throw new NotFoundException('货盘库存记录不存在，请返回列表重新选择')
-    if (row.pricingStatus !== 'waiting_freight') throw new BadRequestException('当前状态不能登记海运费，请核对费用进度后继续')
-
-    const seaFreight = body?.seaFreight ?? (num(row.seaFreight) || num(row.costRmb) * 0.1)
-    const domesticFee = body?.domesticFee ?? (num(row.domesticFee) || num(row.costRmb) * 0.04)
-    const inboundNo = body?.inboundNo || `WH-${Date.now().toString().slice(-8)}`
-    const marketFromDev = await this.resolveMarketFromDev(row.productName, row.sku)
-
-    await this.prisma.productPricing.update({
-      where: { id: BigInt(id) },
-      data: {
-        seaFreight,
-        domesticFee,
-        inboundNo,
-        freightCallbackAt: new Date(),
-        pricingStatus: 'pending_pricing',
-        ...(marketFromDev && !num(row.marketPrice) ? { marketPrice: marketFromDev } : {}),
-      },
-    })
-
-    const productKeys = catalogSkuLookupKeys(row.sku)
-    const product = await this.prisma.product.findFirst({ where: { sku: { in: productKeys } } })
-    if (product) {
-      await this.prisma.product.update({
-        where: { sku: product.sku },
-        data: {
-          seaFreightPerUnit: seaFreight,
-          domesticFeePerUnit: domesticFee,
-        },
-      })
-      await this.opLog.log({
-        module: 'product',
-        action: 'freight_sync',
-        targetType: 'product',
-        targetId: row.sku,
-        detail: {
-          message: `入库单 ${inboundNo} 海运费回传：海运 ¥${seaFreight}/件，国内 ¥${domesticFee}/件`,
-          inboundNo,
-          seaFreightPerUnit: seaFreight,
-          domesticFeePerUnit: domesticFee,
-        },
-      })
-    }
-
-    await this.addHistory(
-      BigInt(id),
-      role,
-      '海运费回传',
-      `入库单 ${inboundNo} 回传完成，海运费 ¥${seaFreight}/件，国内费用 ¥${domesticFee}/件`,
-    )
-    return this.detail(id)
-  }
-
   async confirmPrice(id: number, data: any, role: string) {
     return this.pricingTransaction(id, service => service.applyConfirmPrice(id, data, role))
   }
