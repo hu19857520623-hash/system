@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, ParseIntPipe, Post, Put, Query } from '@nestjs/common'
+import { ConflictException, Body, Controller, Get, Param, ParseIntPipe, Post, Put, Query } from '@nestjs/common'
 import { PricingService } from './pricing.service'
 import { OmsPurchaseService } from './oms-purchase.service'
 import { PaginationDto } from '../../common/dto/pagination.dto'
@@ -103,6 +103,7 @@ export class PricingController {
     @CurrentUser('realName') role: string,
     @CurrentUser('userId') actor: number,
   ) {
+    if(!body?.clientRequestId)throw new ConflictException('页面版本已更新，请刷新后使用原调价核对入口')
     return this.service.reprice(id, body, role, actor)
   }
 
