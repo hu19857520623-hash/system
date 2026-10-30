@@ -101,7 +101,9 @@ export async function runInboundReceiving(prisma: PrismaService, id: number, kin
     if (previous) {
       const detail = previous.detail as any
       if (detail.requestFingerprint !== fingerprint) throw new ConflictException('本次仓库操作已用于其他内容，请先核对原操作，不要修改原请求后重试')
-      return { ...detail.response, duplicate: true, increment: 0, message: '原仓库操作已处理，本次未重复执行，请按最新单据核对' }
+      // Older scan/count receipts kept identity only in response.order. The original
+      // request fingerprint binds id, and the committed log binds the document number.
+      return { ...detail.response, id, inboundNo: previous.targetId, duplicate: true, increment: 0, message: '原仓库操作已处理，本次未重复执行，请按最新单据核对' }
     }
     await tx.$queryRaw`SELECT id FROM inbound_order WHERE id = ${BigInt(id)} FOR UPDATE`
     const order = await tx.inboundOrder.findUnique({ where: { id: BigInt(id) }, include: { items: true, cartons: { include: { items: true }, orderBy: { boxSeq: 'asc' } } } })
@@ -226,6 +228,7 @@ export async function runInboundReceiving(prisma: PrismaService, id: number, kin
       response = { message: body.increment ? `清点 ${item.sku} 增加 ${body.increment} 件，累计 ${next}/${item.expectedQty}` : `测量 ${item.sku} 已保存`, sku: item.sku, increment: body.increment,
         itemId: Number(item.id), expectedQty: item.expectedQty, actualQty: next, remaining: Math.max(0, item.expectedQty - next), order: summary(order) }
     }
+    response = { ...response, id: Number(order.id), inboundNo: order.inboundNo }
     await tx.operationLog.create({ data: { operatorId: BigInt(operatorId), module: 'inbound', action, targetType: 'inbound_order', targetId: order.inboundNo,
       detail: JSON.parse(JSON.stringify({ clientRequestId: input.clientRequestId, requestFingerprint: fingerprint, request, response })) } })
     return { ...response, duplicate: false }

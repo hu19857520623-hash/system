@@ -405,7 +405,8 @@ async function loadActiveOrder(id: number, preferredStep?: WorkStep) {
     activeOrder.value = data
     if (warehouseCode.value !== data.warehouseCode) warehouseCode.value = data.warehouseCode
     buildQcLines(data)
-    workStep.value = preferredStep || deriveWorkStep(data)
+    const canonicalStep = deriveWorkStep(data)
+    workStep.value = ['completed', 'confirmed', 'cancelled'].includes(data.status) ? canonicalStep : preferredStep || canonicalStep
     if (workStep.value === 'putaway' && data.status === 'pending_putaway' && orderNeedsMeasure(data)) workStep.value = 'qc'
     if (workStep.value === 'qc' && ['arrived', 'receiving'].includes(data.status) && !data.cartonConfirmation?.ready) workStep.value = 'receive'
     buildPutawayDraft(data)
@@ -1125,7 +1126,7 @@ onMounted(async () => {
         </el-table>
 
         <div class="panel-actions">
-          <el-button v-if="canQc" type="primary" :disabled="receivingLocked || !cartonReady" @click="goToQcStep">箱数已确认，进入清点与测量</el-button>
+          <el-button v-if="canQc" type="primary" :disabled="receivingLocked || !cartonReady || !canShowQcStep(activeOrder)" @click="goToQcStep">箱数已确认，进入清点与测量</el-button>
           <span v-if="!cartonReady" class="footer-hint">{{ activeOrder.cartonConfirmation?.message || '请先确认实收箱数' }}</span>
         </div>
       </template>
