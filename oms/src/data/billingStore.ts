@@ -59,6 +59,11 @@ export function getFeeRecords(): FeeRecord[] { return state.feeRecords }
 
 
 let readGeneration = 0
+let activeRead: { generation: number; scope: string; code: string; result: Promise<ErpBillingSnapshot> } | undefined
+function newerBillingRead(code: string, scope: string, generation: number) {
+  return scope === authSessionScope() && activeRead && activeRead.generation > generation && activeRead.scope === scope && activeRead.code === code
+    ? activeRead.result : undefined
+}
 export async function refreshBillingFromServer(): Promise<ErpBillingSnapshot> {
   const code = getStoredAuthSession()?.user.customerCode
   if (!code) throw new Error('请先选择客户，再读取账务')
@@ -67,21 +72,34 @@ export async function refreshBillingFromServer(): Promise<ErpBillingSnapshot> {
 
 /** One read-only ERP snapshot, with no browser-generated financial rows or fallback success. */
 export async function refreshBillingFromErp(customerCode: string): Promise<ErpBillingSnapshot> {
-  const user = getStoredAuthSession()?.user, code = customerCode.trim().toUpperCase(), generation = ++readGeneration
+  const user = getStoredAuthSession()?.user, code = customerCode.trim().toUpperCase()
   const scope = authSessionScope()
   if (!user || (user.role !== 'sys_admin' && user.customerCode !== code)) throw new Error('请使用当前客户身份读取账务，不能跨客户读取')
+  const generation = ++readGeneration
+  const result = readErpBillingSnapshot(code, scope, generation, user.role !== 'sys_admin')
+  activeRead = { generation, scope, code, result }
+  return result
+}
+
+async function readErpBillingSnapshot(code: string, scope: string, generation: number, applyToWallet: boolean): Promise<ErpBillingSnapshot> {
   let snapshot: ErpBillingSnapshot
   try { snapshot = await getErpBillingSnapshot(code) }
   catch (error) {
-    if (user.role !== 'sys_admin' && scope === authSessionScope() && generation === readGeneration) {
+    const replacement = newerBillingRead(code, scope, generation)
+    if (replacement) return replacement
+    if (applyToWallet && scope === authSessionScope() && generation === readGeneration) {
       state = { ...state, readWarning: '最新账务读取失败，当前保留上次结果，请重新读取后核对' };emit()
     }
     throw error
   }
-  if (snapshot.customerCode !== code || !Array.isArray(snapshot.feeRecords) || !Array.isArray(snapshot.bills) || !Number.isFinite(snapshot.creditBalance) || !Number.isFinite(snapshot.monthlySpent) || !Number.isFinite(snapshot.pendingBill)) throw new Error('账务读取结果不完整，请重新读取后继续')
   if (scope !== authSessionScope()) throw new Error('登录身份或权限已变化，请使用原账号重新读取账务')
-  if (generation !== readGeneration) throw new Error('已有更新的账务读取请求，请核对最新读取结果')
-  if (user.role !== 'sys_admin') hydrateBilling({ creditBalance: snapshot.creditBalance, feeRecords: snapshot.feeRecords, snapshot })
+  if (generation !== readGeneration) {
+    const replacement = newerBillingRead(code, scope, generation)
+    if (replacement) return replacement
+    throw new Error('已有其它客户的账务读取请求，请核对当前客户后重新读取')
+  }
+  if (snapshot.customerCode !== code || !Array.isArray(snapshot.feeRecords) || !Array.isArray(snapshot.bills) || !Number.isFinite(snapshot.creditBalance) || !Number.isFinite(snapshot.monthlySpent) || !Number.isFinite(snapshot.pendingBill)) throw new Error('账务读取结果不完整，请重新读取后继续')
+  if (applyToWallet) hydrateBilling({ creditBalance: snapshot.creditBalance, feeRecords: snapshot.feeRecords, snapshot })
   return snapshot
 }
 

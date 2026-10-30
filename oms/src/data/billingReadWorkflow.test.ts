@@ -72,7 +72,7 @@ test('旧读取失败晚于新读取成功时不能重新显示过期失败提�
   environment(t);let reject!:(cause:Error)=>void;let calls=0
   globalThis.fetch=async()=>++calls===1?new Promise((_resolve,no)=>{reject=no}):Response.json(snapshot(20))
   const old=refreshBillingFromErp('TKL9001');while(!reject)await new Promise(resolve=>setImmediate(resolve))
-  await refreshBillingFromErp('TKL9001');reject(Error('NetworkError'));await assert.rejects(old)
+  await refreshBillingFromErp('TKL9001');reject(Error('NetworkError'));assert.equal((await old).creditBalance,20)
   assert.equal(getCreditBalance(),20);assert.equal(billingWarning(),'<p></p>')
 })
 test('并发读取旧响应晚到，不能把最新余额回退',async t=>{
@@ -80,7 +80,40 @@ test('并发读取旧响应晚到，不能把最新余额回退',async t=>{
   const old=refreshBillingFromErp('TKL9001'), latest=refreshBillingFromErp('TKL9001')
   while(releases.length<2)await new Promise(resolve=>setImmediate(resolve))
   releases[1](Response.json(snapshot(20)));await latest;releases[0](Response.json(snapshot(10)))
-  await assert.rejects(old,/已有更新/);assert.equal(getCreditBalance(),20)
+  assert.equal((await old).creditBalance,20);assert.equal(getCreditBalance(),20)
+})
+test('页面先返回时等待同客户较新的后台读取，不报失败也不返回旧余额',async t=>{
+  environment(t);const releases:((response:Response)=>void)[]=[];globalThis.fetch=async()=>new Promise(resolve=>{releases.push(resolve)})
+  const old=refreshBillingFromErp('TKL9001'),latest=refreshBillingFromErp('TKL9001'),outcomes=Promise.allSettled([old,latest]);let finished=false
+  void old.then(()=>{finished=true},()=>{finished=true})
+  releases[0](Response.json(snapshot(10)));await new Promise(resolve=>setImmediate(resolve));assert.equal(finished,false);assert.equal(getCreditBalance(),100)
+  releases[1](Response.json(snapshot(20)));const rows=await outcomes
+  for(const row of rows){assert.equal(row.status,'fulfilled');if(row.status==='fulfilled')assert.equal(row.value.creditBalance,20)}
+})
+test('较新账务读取失败时旧成功不得替代失败或启用过期导出',async t=>{
+  environment(t);const releases:((response:Response)=>void)[]=[];globalThis.fetch=async()=>new Promise(resolve=>{releases.push(resolve)})
+  const old=refreshBillingFromErp('TKL9001'),latest=refreshBillingFromErp('TKL9001'),outcomes=Promise.allSettled([old,latest])
+  releases[1](Response.json({error:'最新账务暂不可用'},{status:503}));await assert.rejects(latest,/最新账务暂不可用/);releases[0](Response.json(snapshot(10)))
+  const rows=await outcomes;for(const row of rows){assert.equal(row.status,'rejected');if(row.status==='rejected')assert.match(row.reason.message,/最新账务暂不可用/)}
+  assert.equal(getCreditBalance(),100);assert.match(billingWarning(),/保留上次结果/)
+})
+test('管理员切换客户时旧读取不能跟随另一客户结果',async t=>{
+  environment(t,true);const releases:((response:Response)=>void)[]=[];globalThis.fetch=async()=>new Promise(resolve=>{releases.push(resolve)})
+  const old=refreshBillingFromErp('TKL9001'),latest=refreshBillingFromErp('TKL9002'),outcomes=Promise.allSettled([old,latest])
+  releases[1](Response.json(snapshot(20,'TKL9002')));await latest;releases[0](Response.json(snapshot(10)));const rows=await outcomes
+  assert.equal(rows[0].status,'rejected');assert.equal(rows[1].status,'fulfilled');assert.equal(getCreditBalance(),100)
+})
+test('拒绝的跨客户请求不使原合法账务读取失效',async t=>{
+  environment(t);let finish!:(response:Response)=>void;globalThis.fetch=async()=>new Promise(resolve=>{finish=resolve})
+  const read=refreshBillingFromErp('TKL9001');await assert.rejects(refreshBillingFromErp('TKL9002'),/不能跨客户读取/)
+  finish(Response.json(snapshot(20)));assert.equal((await read).creditBalance,20);assert.equal(getCreditBalance(),20)
+})
+test('三笔重叠账务读取均跟随同范围的最终读取',async t=>{
+  environment(t);const releases:((response:Response)=>void)[]=[];globalThis.fetch=async()=>new Promise(resolve=>{releases.push(resolve)})
+  const reads=[refreshBillingFromErp('TKL9001'),refreshBillingFromErp('TKL9001'),refreshBillingFromErp('TKL9001')],outcomes=Promise.allSettled(reads)
+  releases[0](Response.json(snapshot(10)));await new Promise(resolve=>setImmediate(resolve));releases[1](Response.json(snapshot(20)));await new Promise(resolve=>setImmediate(resolve));releases[2](Response.json(snapshot(30)))
+  for(const row of await outcomes){assert.equal(row.status,'fulfilled');if(row.status==='fulfilled')assert.equal(row.value.creditBalance,30)}
+  assert.equal(getCreditBalance(),30)
 })
 for(const data of [{...snapshot(),customerCode:'OTHER'},{...snapshot(),bills:null}])test('账务返回客户或范围错误时不应用不完整结果',async t=>{
   environment(t);globalThis.fetch=async()=>Response.json(data)
