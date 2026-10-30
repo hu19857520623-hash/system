@@ -40,6 +40,7 @@ describe('PricingService historical display fallbacks', () => {
   })
   it.each([0, -1, 1.001, null, true, '10.00'])('无效售价%s不能写入并把商品推进不可恢复状态', async price => {
     const db: any = { productPricing: { findUnique: jest.fn().mockResolvedValue({ id: 1n, pricingStatus: 'pending_pricing' }), update: jest.fn() } }
+    db.$queryRaw=jest.fn();db.$transaction=jest.fn((fn:any)=>fn(db))
     const service = new PricingService(db, {} as any, {} as any)
     await expect(service.confirmPrice(1, { finalPrice: price, marketPrice: 100, visibleStockQty: 1 }, '验收')).rejects.toThrow()
     db.productPricing.findUnique.mockResolvedValue({ id: 1n, pricingStatus: 'synced' })

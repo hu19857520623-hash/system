@@ -411,7 +411,20 @@ export class PricingService {
     })
   }
 
+  private async pricingTransaction<T>(id: number, work: (service: PricingService) => Promise<T>): Promise<T> {
+    return this.prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM product_pricing WHERE id=${BigInt(id)} FOR UPDATE`
+      const database = tx as unknown as PrismaService
+      const scoped = new PricingService(database, new OperationLogService(database), this.cosUrls)
+      return work(scoped)
+    }, { maxWait: 10000, timeout: 30000 })
+  }
+
   async freightCallback(id: number, role: string, body?: any) {
+    return this.pricingTransaction(id, service => service.applyFreightCallback(id, role, body))
+  }
+
+  private async applyFreightCallback(id: number, role: string, body?: any) {
     const row = await this.prisma.productPricing.findUnique({ where: { id: BigInt(id) } })
     if (!row) throw new NotFoundException('货盘库存记录不存在，请返回列表重新选择')
     if (row.pricingStatus !== 'waiting_freight') throw new BadRequestException('当前状态不能登记海运费，请核对费用进度后继续')
@@ -467,6 +480,10 @@ export class PricingService {
   }
 
   async confirmPrice(id: number, data: any, role: string) {
+    return this.pricingTransaction(id, service => service.applyConfirmPrice(id, data, role))
+  }
+
+  private async applyConfirmPrice(id: number, data: any, role: string) {
     const row = await this.prisma.productPricing.findUnique({ where: { id: BigInt(id) } })
     if (!row) throw new NotFoundException('货盘库存记录不存在')
     if (row.pricingStatus !== 'pending_pricing') throw new BadRequestException('当前状态不可定价')
@@ -515,6 +532,10 @@ export class PricingService {
   }
 
   async syncOms(id: number, role: string) {
+    return this.pricingTransaction(id, service => service.applySyncOms(id, role))
+  }
+
+  private async applySyncOms(id: number, role: string) {
     const row = await this.prisma.productPricing.findUnique({ where: { id: BigInt(id) } })
     if (!row) throw new NotFoundException('货盘库存记录不存在，请返回列表重新选择')
     if (row.pricingStatus !== 'priced' && row.pricingStatus !== 'synced') {
@@ -564,6 +585,10 @@ export class PricingService {
    * 因此既有出库单和后续基于持仓的出库仍可正常完成。
    */
   async setShareStatus(id: number, status: unknown, role: string) {
+    return this.pricingTransaction(id, service => service.applySetShareStatus(id, status, role))
+  }
+
+  private async applySetShareStatus(id: number, status: unknown, role: string) {
     if (status !== 'enabled' && status !== 'stopped') {
       throw new BadRequestException('共享状态请选择开启或停止')
     }
