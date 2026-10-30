@@ -9,7 +9,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { warehouseApi, inboundApi, inventoryApi, productApi } from '@/api/client.js'
 import { mapInbound, fmtTime } from '@/api/mappers.ts'
-import { useListLoader } from '@/composables/useListLoader.ts'
+import { useScopedRead } from '@/composables/useScopedRead'
 import { useTablePagination } from '@/composables/useTablePagination.ts'
 import { useRowActions } from '@/composables/useRowActions'
 import { triggerBlobDownload } from '@/composables/useAsyncIo'
@@ -94,15 +94,16 @@ interface WhSku {
   weightKg: number
 }
 
-const { loading, items: inbounds, load } = useListLoader(async () => {
-  const res = await inboundApi.list({ page: 1, pageSize: 100, source: 'all' })
+const inboundRead = useScopedRead(()=>shipmentScope.value,async () => {
+  const frame=shipmentRequests.captureRead()
+  const res = await frame.step(()=>inboundApi.list({ page: 1, pageSize: 100, source: 'all' }))
   const rows = [...(res.items || [])]
   for (let page = 2; rows.length < res.total; page++) {
-    const next = await inboundApi.list({ page, pageSize: 100, source: 'all' })
+    const next = await frame.step(()=>inboundApi.list({ page, pageSize: 100, source: 'all' }))
     if (!next.items?.length) break
     rows.push(...next.items)
   }
-  const productMap = await loadProductDimMap()
+  const productMap = await frame.step(()=>loadProductDimMap())
   return {
     items: rows.map((r: any) => {
       const mapped = mapInbound(r)
@@ -130,7 +131,10 @@ const { loading, items: inbounds, load } = useListLoader(async () => {
     }),
     total: res.total,
   }
-})
+},'发运入库单')
+const {loading,refresh:load,error:listError}=inboundRead
+const inbounds=computed<any[]>(()=>inboundRead.data.value?.items||[])
+const listReady=computed(()=>inboundRead.data.value!==null)
 
 const logisticsWarehouses = ref<any[]>([])
 const overseasWarehouses = ref<any[]>([])
@@ -158,6 +162,7 @@ const formBusy = computed(() => shipmentBusy.value || draftBusy.value || attachm
 const formLocked = computed(() => formBusy.value || !!shipmentAttempt.value || !!shipmentResult.value || !!shipmentAttemptError.value || !!maintenanceAttempt.value || !!maintenanceStorageError.value)
 let stockLoadVersion = 0
 let draftLoadVersion = 0
+let detailReadVersion=0
 const skuLoading = ref(false)
 const editingDraftId = ref<string | null>(null)
 const skuFileInputRef = ref<HTMLInputElement | null>(null)
@@ -188,12 +193,14 @@ function extractProductDims(p: {
 }
 
 async function loadProductDimMap(force = false) {
+  const frame=shipmentRequests.captureRead()
   if (productDimMapLoaded.value && !force) return productDimMap.value
   const map = new Map(productDimMap.value)
   try {
     let page = 1
     while (true) {
-      const res = await productApi.list({ pageSize: 200, page })
+      const res = await frame.step(()=>productApi.list({ pageSize: 200, page }))
+      if(!frame.active())return productDimMap.value
       const items = res.items || res || []
       items.forEach((p: any) => {
         map.set(p.sku, extractProductDims(p))
@@ -216,11 +223,13 @@ function skuOptionLabel(s: WhSku) {
 }
 
 async function hydrateWarehouseSkuDims(rows: WhSku[]) {
+  const frame=shipmentRequests.captureRead()
   const missing = rows.filter((row) => row.productId && !row.lengthCm && !row.widthCm && !row.heightCm)
   if (!missing.length) return
   await Promise.all(missing.map(async (row) => {
     try {
-      const detail = await productApi.detail(row.productId)
+      const detail = await frame.step(()=>productApi.detail(row.productId))
+      if(!frame.active())return
       const dims = extractProductDims(detail)
       if (!dims.lengthCm && !dims.widthCm && !dims.heightCm && !dims.weightKg) return
       productDimMap.value.set(row.sku, dims)
@@ -254,28 +263,33 @@ function parseInboundMeta(remark?: string) {
 }
 
 async function loadRefs() {
+  const frame=shipmentRequests.captureRead()
   createLoading.value = true
   refsError.value = ''
   try {
-    const [logRes, ovsRes] = await Promise.all([
+    const [logRes, ovsRes] = await frame.step(()=>Promise.all([
       warehouseApi.list({ type: 'logistics' }),
       warehouseApi.list({ type: 'overseas' }),
-    ])
+    ]))
+    if(!frame.active())return
     logisticsWarehouses.value = (Array.isArray(logRes) ? logRes : (logRes.items || [])).filter((wh: any) => wh.status === 1)
     overseasWarehouses.value = (Array.isArray(ovsRes) ? ovsRes : (ovsRes.items || [])).filter((wh: any) => wh.status === 1)
     await loadProductDimMap()
   } catch (error) {
+    if(!frame.active())return
     refsError.value = `仓库或商品资料未能读取，请重新读取后提交。${userFacingError(error)}`
   } finally {
-    createLoading.value = false
+    if(frame.active())createLoading.value = false
   }
 }
 
 onMounted(async () => {
+  const frame=shipmentRequests.captureRead()
   refreshShipmentAttempt()
   refreshMaintenanceAttempt()
   load()
   await loadRefs()
+  if(!frame.active())return
   loadDrafts()
   if (shipmentAttempt.value || shipmentAttemptError.value || maintenanceAttempt.value || maintenanceStorageError.value) return
   const wh = String(route.query.wh || '')
@@ -403,13 +417,14 @@ function mapDraftRow(d: any): DraftRow {
 }
 
 async function loadDrafts() {
+  const frame=shipmentRequests.captureRead()
   const version = ++draftLoadVersion
   draftsError.value = ''
   try {
-    const rows = await inboundApi.listDrafts()
-    if (version === draftLoadVersion) drafts.value = (Array.isArray(rows) ? rows : []).map(mapDraftRow)
+    const rows = await frame.step(()=>inboundApi.listDrafts())
+    if (frame.active() && version === draftLoadVersion) drafts.value = (Array.isArray(rows) ? rows : []).map(mapDraftRow)
   } catch (error) {
-    if (version === draftLoadVersion) draftsError.value = `草稿箱未能读取，请重试。${userFacingError(error)}`
+    if (frame.active() && version === draftLoadVersion) draftsError.value = `草稿箱未能读取，请重试。${userFacingError(error)}`
   }
 }
 
@@ -533,6 +548,7 @@ function clampLinePack(line: InboundLine) {
 }
 
 async function loadLogisticsStock(code: string) {
+  const frame=shipmentRequests.captureRead()
   const version = ++stockLoadVersion
   stockError.value = ''
   if (shipmentAttempt.value || shipmentResult.value) { skuLoading.value = false; return false }
@@ -543,16 +559,16 @@ async function loadLogisticsStock(code: string) {
   }
   skuLoading.value = true
   try {
-    await loadProductDimMap()
+    await frame.step(()=>loadProductDimMap())
     const allItems: any[] = []
     let page = 1
     while (true) {
-      const invRes = await inventoryApi.query({
+      const invRes = await frame.step(()=>inventoryApi.query({
         warehouseCode: code,
         pageSize: 200,
         page,
         onlyAvailable: '1',
-      })
+      }))
       const batch = invRes.items || []
       allItems.push(...batch)
       const total = Number(invRes.total ?? batch.length)
@@ -560,7 +576,7 @@ async function loadLogisticsStock(code: string) {
       page += 1
     }
 
-    if (version !== stockLoadVersion || code !== createForm.value.logisticsWhCode) return false
+    if (!frame.active() || version !== stockLoadVersion || code !== createForm.value.logisticsWhCode) return false
     const rows = allItems
       .filter((r: any) => numDim(r.availableQty ?? r.available) > 0)
       .map((r: any) => {
@@ -583,19 +599,19 @@ async function loadLogisticsStock(code: string) {
         }
       })
 
-    await hydrateWarehouseSkuDims(rows)
-    if (version !== stockLoadVersion || code !== createForm.value.logisticsWhCode) return false
+    await frame.step(()=>hydrateWarehouseSkuDims(rows))
+    if (!frame.active() || version !== stockLoadVersion || code !== createForm.value.logisticsWhCode) return false
     warehouseSkus.value = rows
     for (const line of createForm.value.lines) line.maxAvailable = getSkuAvailable(line.sku)
     return true
   } catch (error) {
-    if (version === stockLoadVersion) {
+    if (frame.active() && version === stockLoadVersion) {
       warehouseSkus.value = []
       stockError.value = `中转仓可发库存未能读取，请重新读取后提交。${userFacingError(error)}`
     }
     return false
   } finally {
-    if (version === stockLoadVersion) skuLoading.value = false
+    if (frame.active() && version === stockLoadVersion) skuLoading.value = false
   }
 }
 
@@ -871,16 +887,17 @@ async function postMaintenance(attempt: ShipmentMaintenanceAttempt) {
 function retryMaintenance() { if (maintenanceAttempt.value) postMaintenance(maintenanceAttempt.value) }
 
 async function refreshMutationDetail() {
-  const id = inboundNumericId(detailOrder.value)
-  if (!id || maintenanceBusy.value || maintenanceAttempt.value) return
-  detailLoading.value = true
-  detailVisible.value = true
+  const id=inboundNumericId(detailOrder.value)
+  if(!id || maintenanceBusy.value || maintenanceAttempt.value)return
+  const frame=shipmentRequests.captureRead(),version=++detailReadVersion
+  detailLoading.value=true;detailVisible.value=true
   try {
-    detailOrder.value = await inboundApi.detail(id); detailMutationWarning.value = ''; maintenanceError.value = ''
-    if (maintenanceResult.value) maintenanceResult.value.refreshRequired = false
-  }
-  catch (error) { detailMutationWarning.value = `详情未能读取，请稍后重试。${userFacingError(error)}` }
-  finally { detailLoading.value = false }
+    const result=await frame.step(()=>inboundApi.detail(id))
+    if(!frame.active() || version!==detailReadVersion)return
+    detailOrder.value=result;detailMutationWarning.value='';maintenanceError.value=''
+    if(maintenanceResult.value)maintenanceResult.value.refreshRequired=false
+  } catch(error) {if(frame.active() && version===detailReadVersion)detailMutationWarning.value=`详情未能读取，请重试或返回列表。${userFacingError(error)}`}
+  finally {if(frame.active() && version===detailReadVersion)detailLoading.value=false}
 }
 
 async function copyMaintenanceDeleted() {
@@ -963,6 +980,7 @@ async function handleSkuImportFile(e: Event) {
   const file = input.files?.[0]
   input.value = ''
   if (!file || formLocked.value || !canCreateInbound.value) return
+  const frame=shipmentRequests.capture()
   importBusy.value = true
   try {
   if (!createForm.value.logisticsWhCode) {
@@ -970,13 +988,15 @@ async function handleSkuImportFile(e: Event) {
     return
   }
   if (!warehouseSkus.value.length && !skuLoading.value) {
-    await loadLogisticsStock(createForm.value.logisticsWhCode)
+    await frame.step(()=>loadLogisticsStock(createForm.value.logisticsWhCode))
   }
+  if(!frame.active())return
   if (!warehouseSkus.value.length) {
     ElMessage.warning('当前物流仓暂无可发 SKU，无法导入')
     return
   }
-  const text = normalizeImportFileText(await file.text())
+  const text = normalizeImportFileText(await frame.step(()=>file.text()))
+  if(!frame.active())return
   const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/).filter((l) => l.trim())
   if (lines.length < 2) {
     ElMessage.warning('文件为空或仅有表头')
@@ -1047,8 +1067,8 @@ async function handleSkuImportFile(e: Event) {
     moduleLabel: '明细导入',
     csvFilename: '入库明细导入失败明细',
   })
-  } catch (error) { ElMessage.error(`读取导入文件失败，请核对文件后重试。${userFacingError(error)}`) }
-  finally { importBusy.value = false }
+  } catch (error) { if(!frame.active())return;ElMessage.error(`读取导入文件失败，请核对文件后重试。${userFacingError(error)}`) }
+  finally {if(frame.active())importBusy.value = false}
 }
 
 async function onSourceWarehouseChange(code: string) {
@@ -1095,24 +1115,24 @@ function buildRemark() {
   return parts.join(' ')
 }
 
-async function persistDraft() {
-  const draftNo = editingDraftId.value || `DRF-${crypto.randomUUID().replace(/-/g, '').slice(0, 26)}`
-  editingDraftId.value = draftNo
-  await inboundApi.saveDraft({ draftNo, form: createForm.value })
+async function persistDraft(frame=shipmentRequests.capture()) {
+  if(!frame.active())return
+  const draftNo=editingDraftId.value || `DRF-${crypto.randomUUID().replace(/-/g,'').slice(0,26)}`
+  const form=JSON.parse(JSON.stringify(createForm.value))
+  editingDraftId.value=draftNo
+  await frame.step(()=>inboundApi.saveDraft({draftNo,form}))
   return draftNo
 }
-
 async function saveDraft() {
-  if (formLocked.value || !canCreateInbound.value) return
-  draftBusy.value = true
+  if(formLocked.value || !canCreateInbound.value)return
+  const frame=shipmentRequests.capture();draftBusy.value=true
   try {
-    await persistDraft()
-    await loadDrafts()
-    toast('草稿已保存')
-    tab.value = 'drafts'
-  } catch (e: any) {
-    ElMessage.error(userFacingError(displaySkuText(e.message || '保存草稿失败')))
-  } finally { draftBusy.value = false }
+    await persistDraft(frame)
+    await frame.step(()=>loadDrafts())
+    if(!frame.active())return
+    toast('草稿已保存');tab.value='drafts'
+  } catch(error) {if(frame.active())ElMessage.error(userFacingError(error))}
+  finally {if(frame.active())draftBusy.value=false}
 }
 
 function normalizeCarton(carton: CartonForm) {
@@ -1289,23 +1309,17 @@ async function submitCreate() {
   await postShipment(shipmentAttempt.value!)
 }
 
-async function openDetail(row: any) {
-  const id = inboundNumericId(row)
-  if (maintenanceBusy.value || maintenanceAttempt.value) return
-  detailMutationWarning.value = ''
-  detailVisible.value = true
-  detailLoading.value = true
-  detailOrder.value = row._raw || row
+async function openDetail(row:any) {
+  if(maintenanceBusy.value || maintenanceAttempt.value)return
+  const id=inboundNumericId(row),frame=shipmentRequests.captureRead(),version=++detailReadVersion
+  detailMutationWarning.value='';detailVisible.value=true;detailLoading.value=true;detailOrder.value=row._raw||row
   try {
-    if (id && !row._raw?.readOnly && !String(row._raw?.id || '').startsWith('oms-')) {
-      detailOrder.value = await inboundApi.detail(id)
+    if(id && !row._raw?.readOnly && !String(row._raw?.id||'').startsWith('oms-')){
+      const result=await frame.step(()=>inboundApi.detail(id))
+      if(frame.active() && version===detailReadVersion)detailOrder.value=result
     }
-  } catch (e: any) {
-    ElMessage.error(userFacingError(displaySkuText(e?.message || '加载详情失败')))
-    detailVisible.value = false
-  } finally {
-    detailLoading.value = false
-  }
+  } catch(error) {if(frame.active() && version===detailReadVersion)detailMutationWarning.value=`详情未能读取，请重新读取或返回列表。${userFacingError(error)}`}
+  finally {if(frame.active() && version===detailReadVersion)detailLoading.value=false}
 }
 
 function openFreightDialog() {
@@ -1395,17 +1409,15 @@ function editDraft(row: any) {
   if (createForm.value.logisticsWhCode) loadLogisticsStock(createForm.value.logisticsWhCode)
 }
 
-async function deleteDraft(row: any) {
-  if (formBusy.value || shipmentAttempt.value || shipmentAttemptError.value || maintenanceAttempt.value || maintenanceStorageError.value) return
-  if (await confirmAction(`确认删除草稿 ${row.id}？`, '删除草稿')) {
-    try {
-      await inboundApi.deleteDraft(row.id)
-      await loadDrafts()
-      toast('草稿已删除')
-    } catch (e: any) {
-      ElMessage.error(userFacingError(displaySkuText(e.message || '删除失败')))
-    }
-  }
+async function deleteDraft(row:any) {
+  if(formBusy.value || !canCreateInbound.value || shipmentAttempt.value || shipmentAttemptError.value || maintenanceAttempt.value || maintenanceStorageError.value)return
+  const frame=shipmentRequests.capture(),id=row.id
+  if(!await confirmAction(`确认删除草稿 ${id}？`,'删除草稿') || !frame.active())return
+  draftBusy.value=true
+  try {
+    await frame.step(()=>inboundApi.deleteDraft(id));await frame.step(()=>loadDrafts());if(frame.active())toast('草稿已删除')
+  } catch(error) {if(frame.active())ElMessage.error(userFacingError(error))}
+  finally {if(frame.active())draftBusy.value=false}
 }
 
 function onAttachmentPick() {
@@ -1418,34 +1430,43 @@ async function handleAttachmentFile(e: Event) {
   const file = input.files?.[0]
   input.value = ''
   if (!file || formLocked.value || !canCreateInbound.value) return
+  const frame=shipmentRequests.capture()
   attachmentBusy.value = true
   try {
     if (!file.size) throw new Error('附件不能为空，请重新选择文件')
-    const draftNo = await persistDraft()
-    const buf = await file.arrayBuffer()
+    const draftNo = await persistDraft(frame)
+    if(!draftNo || !frame.active())return
+    const buf = await frame.step(()=>file.arrayBuffer())
     const bytes = new Uint8Array(buf)
     let binary = ''
     bytes.forEach((b) => { binary += String.fromCharCode(b) })
     const contentBase64 = btoa(binary)
-    await inboundApi.uploadAttachment({
+    await frame.step(()=>inboundApi.uploadAttachment({
       draftNo,
       fileName: file.name,
       contentBase64,
-    })
+    }))
+    if(!frame.active())return
     createForm.value.attachments.push({ fileName: file.name })
-    await loadDrafts()
+    await frame.step(()=>loadDrafts())
+    if(!frame.active())return
     toast(`附件「${file.name}」已上传并关联本草稿`)
   } catch (err: any) {
+    if(!frame.active())return
     ElMessage.error(userFacingError(displaySkuText(err.message || '附件上传失败')))
-  } finally { attachmentBusy.value = false }
+  } finally {if(frame.active())attachmentBusy.value=false}
 }
 function resetShipmentSession(){
   shipmentBusy.value=false;maintenanceBusy.value=false;freightSubmitting.value=false
   shipmentResult.value=null;maintenanceResult.value=null;shipmentError.value='';maintenanceError.value=''
   detailVisible.value=false;freightVisible.value=false;detailOrder.value=null
   createForm.value=emptyForm();editingDraftId.value=null;warehouseSkus.value=[];drafts.value=[]
-  ++stockLoadVersion;++draftLoadVersion;tab.value='list'
+  ++stockLoadVersion;++draftLoadVersion;++detailReadVersion;detailLoading.value=false
+  draftBusy.value=false;attachmentBusy.value=false;importBusy.value=false;createLoading.value=false;skuLoading.value=false
+  productDimMap.value=new Map();productDimMapLoaded.value=false;logisticsWarehouses.value=[];overseasWarehouses.value=[]
+  refsError.value='';stockError.value='';draftsError.value='';detailMutationWarning.value='';tab.value='list'
   refreshShipmentAttempt();refreshMaintenanceAttempt()
+  if(shipmentScope.value && app.hasPerm('create_inbound.view')){void loadRefs();void loadDrafts()}
 }
 watch(shipmentScope,resetShipmentSession,{flush:'sync'})
 const onShipmentStorage=(event:StorageEvent)=>{
@@ -1466,6 +1487,7 @@ onScopeDispose(()=>window.removeEventListener('storage',onShipmentStorage))
       </div>
     </template>
 
+    <el-alert v-if="listError" :title="listError" type="warning" :closable="false"><el-button :loading="loading" @click="load">重新读取发运列表</el-button></el-alert>
     <div class="callout info">
       <div class="callout-title">国内中转仓 → 海外仓发货</div>
       <div class="callout-body">
@@ -1941,10 +1963,10 @@ onScopeDispose(()=>window.removeEventListener('storage',onShipmentStorage))
     <!-- 入库单管理 -->
     <template v-else>
       <div class="list-kpi-row">
-        <div class="kpi"><strong>{{ listStats.total }}</strong><span>有效入库单</span></div>
-        <div class="kpi warn"><strong>{{ listStats.pendingReceipt }}</strong><span>待收货</span></div>
-        <div class="kpi"><strong>{{ listStats.pendingPutaway }}</strong><span>待上架</span></div>
-        <div class="kpi ok"><strong>{{ listStats.completed }}</strong><span>已入库</span></div>
+        <div class="kpi"><strong>{{ listReady ? listStats.total : '—' }}</strong><span>有效入库单</span></div>
+        <div class="kpi warn"><strong>{{ listReady ? listStats.pendingReceipt : '—' }}</strong><span>待收货</span></div>
+        <div class="kpi"><strong>{{ listReady ? listStats.pendingPutaway : '—' }}</strong><span>待上架</span></div>
+        <div class="kpi ok"><strong>{{ listReady ? listStats.completed : '—' }}</strong><span>已入库</span></div>
         <div class="kpi"><strong>{{ listStats.cbm !== '—' ? `约 ${listStats.cbm}m³` : '—' }}</strong><span>在途总立方</span></div>
         <span class="spacer" />
         <el-select v-model="inboundSource" aria-label="入库单来源" style="width:180px">
@@ -1954,7 +1976,7 @@ onScopeDispose(()=>window.removeEventListener('storage',onShipmentStorage))
         </el-select>
         <el-input v-model="inboundSearchQ" placeholder="入库单 / SKU" clearable style="width:160px;margin-left:8px" />
       </div>
-      <el-table v-loading="loading" :data="inboundPagedItems" stripe border size="small">
+      <el-table v-loading="loading" :data="inboundPagedItems" :empty-text="listReady ? '暂无入库单' : '尚未读取入库单，请重新读取'" stripe border size="small">
         <el-table-column label="来源" width="145">
           <template #default="{ row }">{{ row._raw?.sourceKind === 'erp_shipment' ? 'ERP 中转仓发运' : row._raw?.sourceKind === 'oms_customer' ? 'OMS 客户预约' : 'ERP 历史入库' }}</template>
         </el-table-column>
@@ -2012,8 +2034,8 @@ onScopeDispose(()=>window.removeEventListener('storage',onShipmentStorage))
           </template>
         </el-table-column>
       </el-table>
-      <el-empty v-if="!loading && !filteredInbounds.length" description="暂无入库单，点击「新建入库单」开始创建" />
-      <ListPagination v-model:page="inboundPage" v-model:page-size="inboundPageSize" :total="inboundTotal" />
+      <el-empty v-if="listReady && !loading && !filteredInbounds.length" description="暂无入库单，点击「新建入库单」开始创建" />
+      <ListPagination v-if="listReady" v-model:page="inboundPage" v-model:page-size="inboundPageSize" :total="inboundTotal" />
       <p class="text-muted footer-note">入库单创建后进入待收货（在途）。未开始收货前可删除整张入库单，海外仓作业中会同步消失；已开始收货后不能删除。可下载入库清单供人工清点，仓库在「到仓扫描」完成收货、清点与上架。</p>
     </template>
   </el-card>

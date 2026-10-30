@@ -6,9 +6,15 @@ export function useShipmentRequestScope(options: { actor: () => number; scope: (
  const invalidate = () => { ++revision }
  const stopWatch = watch(options.scope, invalidate, { flush: 'sync' })
  onScopeDispose(() => { stopped = true; invalidate(); stopWatch() })
- function capture() {
+ function capture(allowed=options.allowed) {
   const owner = options.actor(), scope = options.scope(), version = revision
-  const active = () => !stopped && Number.isSafeInteger(owner) && owner > 0 && !!scope && scope === options.scope() && owner === options.actor() && version === revision && options.allowed()
+  const active = () => !stopped && Number.isSafeInteger(owner) && owner > 0 && !!scope && scope === options.scope() && owner === options.actor() && version === revision && allowed()
+  async function step<R>(request:()=>Promise<R>){
+   if(!active())throw Error('原操作已离开或登录权限已变化，请返回当前页面继续')
+   const result=await request()
+   if(!active())throw Error('原操作已离开或登录权限已变化，请返回当前页面继续')
+   return result
+  }
   async function run<A, R>(attempt: A, read: (owner: number) => A | null, request: (original: A) => Promise<R>, apply: (result: R) => Promise<void>) {
    if (!active()) return false
    const saved = JSON.stringify(attempt), original = JSON.parse(saved) as A
@@ -20,7 +26,7 @@ export function useShipmentRequestScope(options: { actor: () => number; scope: (
    await apply(result)
    return active()
   }
-  return { owner, active, run }
+  return { owner, active, step, run }
  }
- return { capture, invalidate }
+ return { capture, captureRead:()=>capture(()=>true), invalidate }
 }

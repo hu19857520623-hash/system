@@ -45,4 +45,38 @@ describe('发运结果的原账号和原记录边界',()=>{
  it('403和网络拒绝不会调用成功清除，恢复权限后仍可使用原单',async()=>{
   const f=fixture(),frame=f.guard.capture();f.request.mockRejectedValueOnce(Object.assign(Error('permission'),{status:403}));await expect(frame.run(f.original,f.read,f.request,f.apply)).rejects.toMatchObject({status:403});expect(f.rows.has(7)).toBe(true);expect(f.apply).not.toHaveBeenCalled()
  })
+ it('保存草稿等待期间切换身份，后续文件读取和上传都不再开始',async()=>{
+  const f=fixture(),frame=f.guard.capture();let release!:(v:any)=>void;const save=vi.fn(()=>new Promise(resolve=>{release=resolve})),upload=vi.fn(),readFile=vi.fn()
+  const pipeline=(async()=>{await frame.step(save);await frame.step(readFile);await frame.step(upload)})();f.owner.value=8;f.session.value='new';release({draftNo:'D7'})
+  await expect(pipeline).rejects.toThrow('登录权限已变化');expect(upload).not.toHaveBeenCalled();expect(readFile).not.toHaveBeenCalled()
+ })
+ it('读取文件期间离页，不能在新页面上下文上传旧文件',async()=>{
+  const f=fixture(),frame=f.guard.capture();let release!:(v:any)=>void;const readFile=vi.fn(()=>new Promise(resolve=>{release=resolve})),upload=vi.fn()
+  const pipeline=(async()=>{await frame.step(readFile);await frame.step(upload)})();f.stop();release('old bytes');await expect(pipeline).rejects.toThrow('原操作已离开');expect(upload).not.toHaveBeenCalled()
+ })
+ it('上传期间撤权，迟到结果不能追加附件或切换新页面页签',async()=>{
+  const f=fixture(),frame=f.guard.capture();let release!:(v:any)=>void;const apply=vi.fn();const pipeline=(async()=>{const result=await frame.step(()=>new Promise(resolve=>{release=resolve}));apply(result)})()
+  f.allowed.value=false;release({fileName:'old.txt'});await expect(pipeline).rejects.toThrow('权限已变化');expect(apply).not.toHaveBeenCalled()
+ })
+ it('只读岗位可读取，但不能借读取范围启动写请求',async()=>{
+  const f=fixture();f.allowed.value=false;const read=vi.fn(async()=>({id:81}));expect(await f.guard.captureRead().step(read)).toEqual({id:81});expect(f.guard.capture().active()).toBe(false)
+ })
+ it('只读请求也受会话和离页限制，旧错误不进入当前结果分支',async()=>{
+  const f=fixture(),frame=f.guard.captureRead();let release!:(v:any)=>void;const apply=vi.fn();const pipeline=(async()=>{apply(await frame.step(()=>new Promise(resolve=>{release=resolve})))})()
+  f.session.value='new session';release({id:81});await expect(pipeline).rejects.toThrow('权限已变化');expect(apply).not.toHaveBeenCalled()
+ })
+ it('合法多步骤保持原草稿编号，直到相同上下文才应用附件结果',async()=>{
+  const f=fixture(),frame=f.guard.capture(),upload=vi.fn(async(draftNo:string)=>({draftNo,fileName:'ok.txt'}))
+  const saved=await frame.step(async()=>({draftNo:'D7'}));const result=await frame.step(()=>upload(saved.draftNo));expect(result).toEqual({draftNo:'D7',fileName:'ok.txt'});expect(upload).toHaveBeenCalledWith('D7')
+ })
+
+ it('步骤返回后排队的身份更新也必须在回填前拦截',async()=>{
+  const f=fixture(),frame=f.guard.capture(),apply=vi.fn()
+  const result=frame.step(async()=>({fileName:'old.txt'}))
+  void result.then(()=>{f.session.value='new session'})
+  const value=await result
+  if(frame.active())apply(value)
+  expect(frame.active()).toBe(false);expect(apply).not.toHaveBeenCalled()
+ })
+
 })
