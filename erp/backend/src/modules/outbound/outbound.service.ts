@@ -1324,15 +1324,15 @@ th{background:#f5f5f5}
     },
     operatorId?: number,
   ) {
-    const clientRequestId = String(payload.clientRequestId || '').trim().slice(0, 100)
-    if (clientRequestId && await this.opLog.hasClientRequest('outbound', 'pick', clientRequestId)) {
-      return { ...(await this.detail(id)), duplicate: true }
-    }
+    const clientRequestId = String(payload.clientRequestId || '').trim()
+    if (clientRequestId && (clientRequestId.length > 100 || !operatorId || !Number.isSafeInteger(operatorId))) throw new BadRequestException('请使用原账号与有效操作标识核对拣货')
     const order = await this.prisma.outboundOrder.findUnique({
       where: { id: BigInt(id) },
       include: { items: true },
     })
     if (!order) throw new NotFoundException('出库单不存在')
+    const requestFingerprint = this.pickFingerprint(id, payload)
+    if (clientRequestId && await this.readPickReplay(this.prisma, order, payload, operatorId!, requestFingerprint)) return { ...(await this.detail(id)), duplicate: true }
     if (order.status === 'exception') throw new BadRequestException('异常单已暂停流程，请先解除异常')
     const blocked = outboundPickBlockedReason(order)
     if (blocked) throw new BadRequestException(blocked)
@@ -1392,7 +1392,14 @@ th{background:#f5f5f5}
       throw new BadRequestException(`拣货明细不完整，缺少：${missing.join('、')}`)
     }
 
-    await this.prisma.$transaction(async (tx) => {
+    const duplicate = await this.prisma.$transaction(async (tx) => {
+      if (clientRequestId) {
+        await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(operatorId!)} FOR UPDATE`
+        await tx.$queryRaw`SELECT id FROM outbound_order WHERE id = ${BigInt(id)} FOR UPDATE`
+        if (await this.readPickReplay(tx, order, payload, operatorId!, requestFingerprint)) return true
+        const current = await tx.outboundOrder.findUnique({ where: { id: order.id } })
+        if (!current || current.status !== 'picking' || current.pickerId !== order.pickerId) throw new ConflictException('拣货状态或分配人员已变化，请核对原操作，勿重复扣减库位库存')
+      }
       for (const line of resolvedLines) {
         for (const allocation of line.allocations) {
           const loc = await tx.warehouseLocation.findFirst({
@@ -1462,10 +1469,13 @@ th{background:#f5f5f5}
               line.allocations.map((allocation) => ({ sku: line.item.sku, ...allocation })),
             ),
             clientRequestId: clientRequestId || null,
+            requestFingerprint,
           },
         },
       })
+      return false
     })
+    if (duplicate) return { ...(await this.detail(id)), duplicate: true }
     if (!clientRequestId) await this.opLog.log({
       operatorId,
       module: 'outbound',
@@ -1485,6 +1495,24 @@ th{background:#f5f5f5}
       outboundNo: order.outboundNo,
       status: 'picked',
     }
+  }
+
+  private pickFingerprint(id: number, payload: { pickSource?: string; items: { id: number; locationCode?: string; pickedQty?: number; allocations?: { locationCode: string; qty: number }[] }[] }) {
+    const items = (payload.items || []).map(item => ({ id: Number(item.id),
+      allocations: (item.allocations || (item.locationCode ? [{locationCode:item.locationCode,qty:item.pickedQty}] : [])).map(line => ({locationCode:String(line.locationCode || '').trim().toUpperCase(),qty:Number(line.qty)})).sort((a,b)=>a.locationCode.localeCompare(b.locationCode)||a.qty-b.qty),
+    })).sort((a,b)=>a.id-b.id)
+    return createHash('sha256').update(JSON.stringify([id,payload.pickSource === 'pda' ? 'pda' : 'pick_list',items])).digest('hex')
+  }
+
+  private async readPickReplay(db: any, order: any, payload: any, actor: number, fingerprint: string) {
+    const previous = await db.operationLog.findFirst({ where: {module:'outbound',action:'pick',detail:{path:'$.clientRequestId',equals:String(payload.clientRequestId).trim()}} })
+    if (!previous) return false
+    if (previous.targetId !== order.outboundNo || Number(previous.operatorId) !== actor) throw new ConflictException('原拣货操作属于其它账号或出库单，请回原单核对')
+    const detail = previous.detail as any
+    // Legacy receipts store resolved allocations, sufficient to verify explicit original lines.
+    const original = detail?.requestFingerprint || this.pickFingerprint(Number(order.id), {pickSource:detail?.pickSource,items:order.items.map((item:any)=>({id:Number(item.id),allocations:(detail?.allocations || []).filter((line:any)=>line.sku===item.sku)}))})
+    if (original !== fingerprint) throw new ConflictException('原拣货明细、数量或库位不能更改，请核对原请求后重试')
+    return true
   }
 
   async startReview(id: number, operatorId?: number) {
