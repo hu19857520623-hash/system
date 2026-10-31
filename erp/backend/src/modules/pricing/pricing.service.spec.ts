@@ -4,7 +4,7 @@ jest.mock('./oms-catalog-sync.util', () => ({ pushCatalogStockToOms: jest.fn().m
 describe('repricing original version', () => {
   const version='2026-10-30T00:00:00.000Z'
   function setup() {
-    const row={id:1n,sku:'AUDIT',pricingStatus:'synced',updatedAt:new Date(version),finalPrice:10}
+    const row={id:1n,sku:'AUDIT',pricingStatus:'synced',updatedAt:new Date(version),finalPrice:10,marketPrice:30}
     const tx:any={$queryRaw:jest.fn(),productPricing:{findUnique:jest.fn().mockResolvedValue(row),update:jest.fn()},productPriceRecord:{create:jest.fn()},productPricingHistory:{create:jest.fn()}}
     const db:any={$transaction:jest.fn((fn:any)=>fn(tx))},service=new PricingService(db,{} as any,{} as any)
     jest.spyOn(service,'detail').mockResolvedValue({id:1} as any)
@@ -22,6 +22,20 @@ describe('repricing original version', () => {
       expect(tx.productPricing.update.mock.calls[0][0].data.updatedAt.getTime()).toBe(new Date(version).getTime()+1)
       expect(tx.productPriceRecord.create).toHaveBeenCalledTimes(1);expect(tx.productPricingHistory.create).toHaveBeenCalledTimes(1)
     } finally {jest.restoreAllMocks()}
+  })
+  it('retains the current reference price in both pricing and its required audit snapshot when only the sale price changes',async()=>{
+    const {tx,service}=setup()
+    await service.reprice(1,{price:20,expectedUpdatedAt:version},'验收')
+    expect(tx.productPricing.update).toHaveBeenCalledWith(expect.objectContaining({data:expect.objectContaining({marketPrice:30,finalPrice:20})}))
+    expect(tx.productPriceRecord.create).toHaveBeenCalledWith(expect.objectContaining({data:expect.objectContaining({marketPrice:30,price:20})}))
+    expect(tx.productPricingHistory.create.mock.calls[0][0].data.detail).toContain('市场参考 R30')
+  })
+  it.each([null,0,-1,1.001,NaN,Infinity,'bad'])('rejects invalid explicit reference price %s before any pricing/history write',async marketPrice=>{
+    const {tx,service}=setup()
+    await expect(service.reprice(1,{price:20,marketPrice,expectedUpdatedAt:version},'验收')).rejects.toThrow('市场参考价')
+    expect(tx.productPricing.update).not.toHaveBeenCalled()
+    expect(tx.productPriceRecord.create).not.toHaveBeenCalled()
+    expect(tx.productPricingHistory.create).not.toHaveBeenCalled()
   })
 })
 

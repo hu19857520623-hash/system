@@ -27,6 +27,8 @@ export interface CatalogPurchase {
   sku: string
   productName: string
   qty: number
+  unitPrice?: number | null
+  totalAmount?: number | null
   createdAt: string
 }
 
@@ -191,6 +193,8 @@ function applyErpPurchaseLocally(
     sku: result.sku,
     productName,
     qty: result.quantity,
+    unitPrice: result.unitPrice,
+    totalAmount: result.totalAmount,
     createdAt: typeof result.createdAt === 'string'
       ? result.createdAt.slice(0, 19).replace('T', ' ')
       : new Date().toISOString().slice(0, 19).replace('T', ' '),

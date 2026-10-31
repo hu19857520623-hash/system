@@ -129,9 +129,6 @@ export default function Catalog() {
     [allPurchases, customerId],
   )
 
-  const getPurchaseUnitPrice = (sku: string) =>
-    allProducts.find(p => p.internalSku === sku)?.price ?? 0
-
   const getCustomerLabel = (id: string) =>
     accounts.find(a => a.id === id)?.code || getCustomerCode(id) || id
 
@@ -521,8 +518,6 @@ export default function Catalog() {
               </thead>
               <tbody>
                 {purchaseRows.map(row => {
-                  const unitPrice = getPurchaseUnitPrice(row.sku)
-                  const amount = Math.round(unitPrice * row.qty * 100) / 100
                   return (
                     <tr key={`${row.purchaseNo}-${row.id}`} className="border-b border-border-light/80">
                       <td className="py-3 pr-3 align-top text-xs text-text-muted whitespace-nowrap">{row.createdAt}</td>
@@ -537,7 +532,7 @@ export default function Catalog() {
                         <MonoCode>{getCustomerSkuDisplay({ internalSku: row.sku, customerSku: undefined }, customerCode)}</MonoCode>
                       </td>
                       <td className="py-3 pr-3 align-top text-right">{row.qty.toLocaleString()}</td>
-                      <td className="py-3 align-top text-right font-medium">{formatCurrency(amount)}</td>
+                      <td className="py-3 align-top text-right font-medium">{row.totalAmount == null ? '待核对' : formatCurrency(row.totalAmount)}</td>
                     </tr>
                   )
                 })}

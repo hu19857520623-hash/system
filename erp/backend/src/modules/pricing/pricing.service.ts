@@ -713,11 +713,22 @@ export class PricingService {
       const expected = typeof data.expectedUpdatedAt === 'string' ? new Date(data.expectedUpdatedAt) : null
       if (!expected || !Number.isFinite(expected.getTime()) || expected.getTime() !== row.updatedAt.getTime()) throw new ConflictException('定价资料已变化，旧页面不能覆盖；请读取最新定价后核对再继续')
 
+      // A price-only request preserves the reference price under the same version lock.
+      // The required audit snapshot must use that resolved value as well.
+      if (data.marketPrice !== undefined) {
+        try {
+          const cents = billingCents(data.marketPrice)
+          if (cents <= 0 || cents > 999999999999) throw new Error('invalid reference price')
+        } catch {
+          throw new BadRequestException('市场参考价须大于零、最多两位小数且在有效范围内')
+        }
+      }
+      const marketPrice = data.marketPrice === undefined ? num(row.marketPrice) : num(data.marketPrice)
       const oldPrice = num(row.finalPrice)
       const updated=await tx.productPricing.update({
         where: { id: BigInt(id) },
         data: {
-          marketPrice: data.marketPrice,
+          marketPrice,
           finalPrice: data.price ?? data.finalPrice,
           overseasDeliveryFee: data.overseasDeliveryFee ?? row.overseasDeliveryFee ?? 0,
           platformCommissionRate: data.platformCommission ?? row.platformCommissionRate ?? 0,
@@ -729,13 +740,13 @@ export class PricingService {
       await tx.productPriceRecord.create({
         data: {
           pricingId: BigInt(id),
-          marketPrice: data.marketPrice,
+          marketPrice,
           price: data.price ?? data.finalPrice,
           operator: role,
           note: data.note || '手动调价',
         },
       })
-      await tx.productPricingHistory.create({ data: { pricingId: BigInt(id), operatorRole: role, action: '调价同步', detail: `市场参考 R${data.marketPrice}，售价 ¥${oldPrice} → ¥${data.price ?? data.finalPrice}` } })
+      await tx.productPricingHistory.create({ data: { pricingId: BigInt(id), operatorRole: role, action: '调价同步', detail: `市场参考 R${marketPrice}，售价 ¥${oldPrice} → ¥${data.price ?? data.finalPrice}` } })
       // Catalog synchronization currently performs database reads and a local sync-log write only.
       // Keep it in the same transaction so a failed sync log cannot leave an unreceipted price.
       const synced=await pushCatalogStockToOms(tx as unknown as PrismaService,row.sku)

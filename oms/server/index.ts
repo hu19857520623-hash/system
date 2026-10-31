@@ -1,4 +1,5 @@
 import { canReadData } from '../src/data/readAccess.js'
+import { readCatalogPurchaseHistory } from './catalog-purchase-history.util.js'
 import { importProductBatch, readProductImport, cancelProductImport } from './product-import.util.js'
 import { saveProductWithReceipt, readProductSave, cancelProductSave } from './product-save.util.js'
 import { applyProductAction, readProductAction } from './product-action.util.js'
@@ -424,7 +425,7 @@ async function buildUnscopedBootstrap(
       regionDispatchRules: regionRules,
     },
     paymentMethods,
-    purchases,
+    purchases: await readCatalogPurchaseHistory(prisma, purchases, customers),
     fulfillmentWarehouses,
   }
 }
