@@ -1,5 +1,6 @@
 import { canReadData } from '../src/data/readAccess.js'
 import { readCatalogPurchaseHistory } from './catalog-purchase-history.util.js'
+import { catalogBootstrapProducts, customerBootstrapProducts } from './catalog-bootstrap-products.util.js'
 import { importProductBatch, readProductImport, cancelProductImport } from './product-import.util.js'
 import { saveProductWithReceipt, readProductSave, cancelProductSave } from './product-save.util.js'
 import { applyProductAction, readProductAction } from './product-action.util.js'
@@ -329,6 +330,14 @@ async function buildUnscopedBootstrap(
     console.warn(`[bootstrap] ERP Takealot 目的仓未同步（${msg}），使用静态兜底`)
   }
 
+  const requiredCatalogSkus = [
+    ...purchases.map(row => row.sku),
+    ...inventory.filter(row => row.stockSource === 'catalog' && (scope ? row.customerId === scope.customerId : row.customerId !== 'tkl')).map(row => row.sku),
+  ]
+  const bootstrapProducts = requiredCatalogSkus.length
+    ? catalogBootstrapProducts(products, (await fetchErpCatalog()).items, requiredCatalogSkus)
+    : products
+
   return {
     accounts: customers.map(c => ({
       ...c,
@@ -351,7 +360,7 @@ async function buildUnscopedBootstrap(
       : null,
     feeRecords,
     stores,
-    products,
+    products: bootstrapProducts,
     inventory,
     orders: orders.map(o => ({
       ...o,
@@ -465,7 +474,10 @@ async function buildBootstrap(auth: AuthClaims) {
   const customerId = auth.customerId!
   const customerCode = auth.customerCode!
   const account = accountsWithReadiness.find(item => item.id === customerId)
-  const customerProducts = all.products.filter(item => item.customerId === customerId)
+  const customerProducts = customerBootstrapProducts(all.products, customerId, [
+    ...all.purchases.filter(item => item.customerId === customerId).map(item => item.sku),
+    ...all.inventory.filter(item => item.customerId === customerId && item.stockSource === 'catalog').map(item => item.sku),
+  ])
   const customerInbound = all.inboundOrders.filter(item => item.customerId === customerId)
   const customerOutbound = all.outboundOrders.filter(item => item.customerId === customerId)
   const outboundNos = new Set(customerOutbound.map(item => item.outboundNo))
