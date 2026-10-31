@@ -46,7 +46,7 @@ function mirrorFixture() {
     {id:'other-customer',customerId:'c2',sku:'TKL1-A',warehouse:'jhb1',stockSource:'owned',available:7}]
   const products:any[]=[{id:'p',customerId:'c1',internalSku:'TKL1-A',availableQty:900,lockedQty:901,inCatalog:false}]
   const tx:any={inventoryItem:{
-    findMany:async({where}:any)=>inventory.filter(i=>i.customerId===where.customerId&&(!where.warehouse||where.warehouse.in.includes(i.warehouse))),
+    findMany:async({where}:any)=>inventory.filter(i=>i.customerId===where.customerId&&(!where.OR||where.OR.some((clause:any)=>clause.warehouse?clause.warehouse.in.includes(i.warehouse):i.stockSource===clause.stockSource))),
     findUnique:async({where}:any)=>inventory.find(i=>i.id===where.id)||null,
     update:async({where,data}:any)=>Object.assign(inventory.find(i=>i.id===where.id),data),
     upsert:async({where,create,update}:any)=>{const current=inventory.find(i=>i.id===where.id);if(current)Object.assign(current,update);else inventory.push(create)},
@@ -65,6 +65,20 @@ test('new mirrors use stable bounded scoped IDs; explicit zero values update the
   const f=mirrorFixture();await applyErpInventoryView(f.tx,'c1','WMS-JHB-03',[f.item]);await applyErpInventoryView(f.tx,'c1','WMS-JHB-03',[{...f.item,warehouseAvailable:0,warehouseLocked:0}])
   const rows=f.inventory.filter(i=>i.warehouse==='jhb3');assert.equal(rows.length,1);assert.ok(rows[0].id.length<=50);assert.equal(rows[0].available,0)
   assert.equal(f.inventory.find(i=>i.id==='old').available,900)
+})
+
+test('global catalog holding reuses its existing JHB mirror across jhb1 aliases and clears duplicate free stock without erasing history',async()=>{
+  const f=mirrorFixture()
+  f.inventory.push({id:'csi',customerId:'c1',sku:'TKL-C',warehouse:'JHB',stockSource:'catalog',available:0,locked:1,pendingOutbound:2,shipped:3})
+  f.inventory.push({id:'erp-c',customerId:'c1',sku:'TKL-C',warehouse:'jhb1',stockSource:'catalog',available:0,locked:1,pendingOutbound:0,shipped:0})
+  const item={...f.item,sku:'TKL-C',stockSource:'catalog',quantity:1,warehouseAvailable:0,warehouseLocked:0}
+  await applyErpInventoryView(f.tx,'c1','WMS-JHB-01',[item])
+  const mirrors=f.inventory.filter(row=>row.sku==='TKL-C')
+  assert.equal(mirrors.length,2);assert.equal(mirrors.reduce((sum,row)=>sum+row.locked,0),1)
+  assert.equal(mirrors[0].pendingOutbound,2);assert.equal(mirrors[0].shipped,3)
+  await applyErpInventoryView(f.tx,'c1','WMS-JHB-01',[])
+  assert.equal(mirrors.reduce((sum,row)=>sum+row.locked,0),0)
+  assert.equal(f.inventory.find(row=>row.id==='other-warehouse').available,7)
 })
 test('invalid ERP quantities or duplicate scope rows reject rather than coercing quantities',async()=>{
   for(const value of ['5',-1,1.5,NaN,2147483648]){const f=mirrorFixture();await assert.rejects(applyErpInventoryView(f.tx,'c1','WMS-JHB-01',[{...f.item,warehouseAvailable:value}]),/数量无效/)}

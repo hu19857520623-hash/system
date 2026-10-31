@@ -121,7 +121,11 @@ function quantity(value: unknown) {
 
 /** Only a server-fetched ERP result reaches this function; never accept a browser inventory snapshot. */
 export async function applyErpInventoryView(tx: Prisma.TransactionClient, customerId: string, warehouse: string, items: ErpInventoryViewItem[]) {
-  const existing = await tx.inventoryItem.findMany({ where: { customerId, warehouse: { in: [warehouse, warehouseAlias(warehouse)] } }, orderBy: { id: 'asc' } })
+  const existing = await tx.inventoryItem.findMany({ where: { customerId, OR: [
+    { warehouse: { in: [warehouse, warehouseAlias(warehouse)] } },
+    // Catalog holding quantity belongs to the customer/SKU, not a warehouse alias.
+    { stockSource: 'catalog' },
+  ] }, orderBy: { id: 'asc' } })
   const products = await tx.product.findMany({ where: { customerId } })
   const keys = new Set<string>(), retained = new Set<string>()
   for (const item of items) {
