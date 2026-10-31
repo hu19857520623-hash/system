@@ -3,6 +3,7 @@ import { readShipAttempts, type ShipAttempt } from '@/utils/outboundShipping'
 import { readPickAttempts, type PickAttempt } from '@/utils/outboundPicking'
 import { userFacingError } from '@erp/shared/user-facing-error'
 import { getAccessToken } from '@/auth/tokenStore'
+import { readAssignment, saveAssignment, operateAssignment, withAssignmentLock, type AssignmentAttempt } from '@/utils/outboundAssignment'
 
 import { displaySku, displaySkuText, formatSku } from '@erp/shared/sku-display'
 import { downloadableOutboundSourceAttachments, isOutboundSourceAttachment } from '@/features/outbound/attachments'
@@ -75,6 +76,16 @@ const pickVisible = ref(false)
 const shipVisible = ref(false)
 const shipPending = ref<ShipAttempt[]>([]), shipStorageError = ref('')
 const pickPending = ref<PickAttempt[]>([]), pickStorageError = ref('')
+const assignmentPending = ref<AssignmentAttempt | null>(null), assignmentStorageError = ref(''), assignmentError = ref('')
+const assignmentOrders = ref<{ id: number; outboundNo: string; status: string; pickerId: number | null }[]>([])
+let assignmentGeneration = 0
+function loadAssignmentPending() {
+  assignmentPending.value = null
+  try { assignmentPending.value = readAssignment(localStorage, Number(app.authenticatedUser?.id));assignmentStorageError.value = '' }
+  catch (e) { assignmentStorageError.value = userFacingError(e) }
+}
+watch(() => app.authenticatedUser?.id, loadAssignmentPending)
+
 const packPending = ref<PackAttempt[]>([]), packStorageError = ref('')
 function loadPackPending() {
   packPending.value = []
@@ -92,6 +103,7 @@ watch(() => app.authenticatedUser?.id, loadPickPending)
 function onPickStorage(event: StorageEvent) {
   if (!event.key || event.key.startsWith('erp:outbound-picking:')) loadPickPending()
   if (!event.key || event.key.startsWith('erp:outbound-packing:')) loadPackPending()
+  if (!event.key || event.key.startsWith('erp:outbound-assignment:')) loadAssignmentPending()
 }
 onBeforeUnmount(() => window.removeEventListener('storage', onPickStorage))
 function loadShipPending() {
@@ -100,6 +112,7 @@ function loadShipPending() {
 }
 async function onShipPending() { loadShipPending();await reloadAll() }
 const assignVisible = ref(false)
+watch(assignVisible, () => { assignmentGeneration++ })
 const problemVisible = ref(false)
 const exceptionVisible = ref(false)
 const packVisible = ref(false)
@@ -151,8 +164,8 @@ const pickerLoading = ref(false), pickerError = ref(''), assigning = ref(false)
 let pickerGeneration = 0, pickerMounted = true
 onBeforeUnmount(() => { pickerMounted = false;pickerGeneration++ })
 watch(() => app.profileRevision, () => {
-  pickerGeneration++;pickerUsers.value = [];assignPickerId.value = null;pickerLoading.value = false
-  if (assignVisible.value && canPick.value) void loadPickerUsers()
+  pickerGeneration++;pickerUsers.value = [];assignPickerId.value = null;pickerLoading.value = false;assignmentGeneration++;assignVisible.value = false;assignmentOrders.value = [];loadAssignmentPending()
+  if (assignVisible.value && canPick.value && !assignmentPending.value) void loadPickerUsers()
 })
 async function loadPickerUsers() {
   if (!canPick.value) return
@@ -336,6 +349,7 @@ onMounted(async () => {
   loadShipPending()
   loadPickPending()
   loadPackPending()
+  loadAssignmentPending()
   window.addEventListener('storage', onPickStorage)
   await loadTakealotDestConfig()
   const q = String(route.query.q || '').trim()
@@ -844,7 +858,10 @@ function skipPodUpload() {
 }
 
 function openAssignPicker(row?: any) {
-  if (!canPick.value) return
+  if (!canPick.value || assigning.value) return
+  loadAssignmentPending();assignmentError.value = ''
+  if (assignmentStorageError.value) { ElMessage.error(assignmentStorageError.value);return }
+  if (assignmentPending.value) { assignVisible.value = true;return }
   const rows = row ? [row] : assignableSelected.value
   const reassigning = row?.status === 'picking'
   const ids = rows.filter((r) => r.status === (reassigning ? 'picking' : 'pending_pick')).map((r) => r.id)
@@ -852,6 +869,7 @@ function openAssignPicker(row?: any) {
     ElMessage.warning(row ? '仅待拣货或拣货中状态可分配拣货员' : '请勾选待拣货的出库单')
     return
   }
+  assignmentOrders.value = rows.filter(r => ids.includes(r.id)).map(r => ({ id: r.id, outboundNo: r.outboundNo, status: r.status, pickerId: r.pickerId || null }))
   assignTargetIds.value = ids
   reassigningPicker.value = reassigning
   assignPickerId.value = reassigning ? row.pickerId ?? null : null
@@ -859,40 +877,39 @@ function openAssignPicker(row?: any) {
   void loadPickerUsers()
 }
 
-async function submitAssignPicker() {
-  if (!canPick.value || assigning.value || pickerLoading.value || pickerError.value) return
-  if (!pickerUsers.value.some(u => u.id === assignPickerId.value)) { pickerError.value = '候选人员已变化，请刷新名单后重新选择';return }
-  if (!assignPickerId.value) {
-    ElMessage.warning('请选择拣货员')
-    return
-  }
-  if (!assignTargetIds.value.length) {
-    ElMessage.warning('请勾选待拣货的出库单')
-    return
-  }
-  const count = assignTargetIds.value.length
-  const reassigning = reassigningPicker.value
-  const actor = app.authenticatedUser?.id, revision = app.profileRevision
+async function submitAssignPicker(mode: 'retry' | 'check' | 'cancel' = 'retry') {
+  if (!canPick.value || assigning.value || assignmentStorageError.value || (!assignmentPending.value && (pickerLoading.value || pickerError.value))) return
+  const version = assignmentGeneration, expected = assignmentPending.value?.payload.clientRequestId
+  const actor = Number(app.authenticatedUser?.id), revision = app.profileRevision
   let token: string
-  try { token = getAccessToken() } catch { pickerError.value = '无法读取登录信息，请恢复浏览器存储后重试';return }
-  const ids = [...assignTargetIds.value], pickerId = assignPickerId.value!
-  const checkSession = () => {
-    if (!pickerMounted || !canPick.value || !token || token !== getAccessToken() || actor !== app.authenticatedUser?.id || revision !== app.profileRevision) throw new Error('账号或权限已变化，请返回原账号核对单据的分配结果')
+  try { token = getAccessToken() } catch { assignmentError.value = '无法读取登录信息，请恢复浏览器存储后重试';return }
+  const guard = () => {
+    if (!pickerMounted || !assignVisible.value || version !== assignmentGeneration || !canPick.value || !token || token !== getAccessToken() || actor !== Number(app.authenticatedUser?.id) || revision !== app.profileRevision) throw new Error('账号、权限或页面已变化，请返回原账号核对已保存的分配请求')
   }
-  assigning.value = true
-  try { await withAction(async () => {
-    checkSession()
-    await outboundApi.assignPicker({
-      ids,
-      pickerId,
+  assigning.value = true;assignmentError.value = ''
+  try {
+    await withAssignmentLock(actor, async () => {
+      guard();loadAssignmentPending()
+      if (assignmentStorageError.value) throw new Error(assignmentStorageError.value)
+      if (expected && assignmentPending.value?.payload.clientRequestId !== expected) throw new Error('原分配请求已由其它页面核对，请返回列表重新读取')
+      if (!assignmentPending.value) {
+        if (mode !== 'retry') throw new Error('本机原分配请求已变化，请返回列表重新读取')
+        const picker = pickerUsers.value.find(u => u.id === assignPickerId.value)
+        if (!picker || !assignmentOrders.value.length) throw new Error('请选择原批次和有效候选拣货员')
+        const attempt: AssignmentAttempt = { pickerName: picker.label, orderNos: assignmentOrders.value.map(r => r.outboundNo),
+          payload: { clientRequestId: crypto.randomUUID(), ids: assignmentOrders.value.map(r => r.id), pickerId: picker.id,
+            expectedOrders: assignmentOrders.value.map(r => ({ id: r.id, status: r.status, pickerId: r.pickerId })) } }
+        saveAssignment(localStorage, actor, attempt);loadAssignmentPending()
+      }
+      const original = assignmentPending.value!, result = await operateAssignment(outboundApi, localStorage, actor, original, mode, guard)
+      guard();loadAssignmentPending()
+      if (result.outcome === 'unknown') { assignmentError.value = '尚未查到原分配结果，可重试原批次或取消原请求。请勿另建分配操作。';return }
+      ElMessage.success(result.outcome === 'confirmed' ? '原分配已完成，请查看原单当前拣货员' : '原分配请求已取消，已完成的其它分配保持原结果')
+      assignVisible.value = false;selectedRows.value = [];assignTargetIds.value = [];assignmentOrders.value = []
+      clearFilterValues();filterStatus.value = 'all';searchQ.value = original.orderNos.length === 1 ? original.orderNos[0]! : '';await reloadAll()
     })
-    checkSession()
-    assignVisible.value = false
-    selectedRows.value = []
-    assignTargetIds.value = []
-    filterStatus.value = 'picking'
-    await reloadAll()
-  }, reassigning ? `已重新分配 ${count} 单` : `已分配 ${count} 单`)
+  } catch (e) {
+    if (pickerMounted && version === assignmentGeneration) { assignmentError.value = userFacingError(e);loadAssignmentPending() }
   } finally { assigning.value = false }
 }
 
@@ -1045,6 +1062,12 @@ function statusTag(status: string) {
       </template>
 
       <el-alert v-if="shipStorageError" :title="shipStorageError" type="error" :closable="false" />
+      <el-alert v-if="assignmentStorageError" :title="assignmentStorageError" type="error" :closable="false" />
+      <el-alert v-if="assignmentPending" type="warning" :closable="false" style="margin-bottom:8px">
+        <template #title>原分配批次 {{ assignmentPending.orderNos.join('、') }} 待核对，目标人员 {{ assignmentPending.pickerName }}。请勿另建分配操作。</template>
+        <el-button v-if="canPick" size="small" @click="openAssignPicker()">继续核对原分配</el-button>
+        <span v-else>请恢复原账号岗位权限后继续核对。</span>
+      </el-alert>
       <el-alert v-if="packStorageError" :title="packStorageError" type="error" :closable="false" />
       <el-alert v-for="attempt in packPending" :key="`pack-${attempt.outboundId}`" type="warning" :closable="false" style="margin-bottom:8px">
         <template #title>出库单 {{ attempt.outboundNo }} 还有原复核请求待核对，请勿更换尺寸和重量再次提交。</template>
@@ -1378,16 +1401,20 @@ function statusTag(status: string) {
 
     <!-- 分配拣货员 -->
     <el-dialog v-model="assignVisible" :title="reassigningPicker ? '重新分配拣货员' : '分配拣货员'" width="360px" :close-on-click-modal="false" :close-on-press-escape="!assigning" :show-close="!assigning">
-      <el-alert v-if="pickerError" :title="pickerError" type="error" :closable="false" />
-      <el-button :loading="pickerLoading" :disabled="assigning || !canPick" @click="loadPickerUsers">刷新候选名单</el-button>
-      <p class="dialog-hint" v-if="reassigningPicker">已选 {{ assignTargetIds.length }} 单（拣货中）。重新分配后，新拣货员可继续完成拣货。</p>
-      <p class="dialog-hint" v-else>已选 {{ assignTargetIds.length }} 单（仅待拣货）。须先分配拣货员，才能在 ERP 网页完成拣货确认。</p>
-      <el-select v-model="assignPickerId" placeholder="选择工位 / 拣货员" :loading="pickerLoading" :disabled="assigning || pickerLoading || !!pickerError || !canPick" filterable style="width:100%">
+      <el-alert v-if="assignmentError || assignmentStorageError" :title="assignmentError || assignmentStorageError" type="error" :closable="false" />
+      <el-alert v-if="assignmentPending" :title="`原批次：${assignmentPending.orderNos.join('、')}；原人员：${assignmentPending.pickerName}。重试将使用原资料，取消不撤回已完成分配。`" type="warning" :closable="false" />
+      <el-alert v-if="!assignmentPending && pickerError" :title="pickerError" type="error" :closable="false" />
+      <el-button v-if="!assignmentPending" :loading="pickerLoading" :disabled="assigning || !canPick" @click="loadPickerUsers">刷新候选名单</el-button>
+      <p class="dialog-hint" v-if="!assignmentPending && reassigningPicker">已选 {{ assignTargetIds.length }} 单（拣货中）。重新分配后，新拣货员可继续完成拣货。</p>
+      <p class="dialog-hint" v-else-if="!assignmentPending">已选 {{ assignTargetIds.length }} 单（仅待拣货）。须先分配拣货员，才能在 ERP 网页完成拣货确认。</p>
+      <el-select v-if="!assignmentPending" v-model="assignPickerId" placeholder="选择工位 / 拣货员" :loading="pickerLoading" :disabled="assigning || pickerLoading || !!pickerError || !canPick" filterable style="width:100%">
         <el-option v-for="u in pickerUsers" :key="u.id" :label="u.label" :value="u.id" />
       </el-select>
       <template #footer>
-        <el-button :disabled="assigning" @click="assignVisible = false">返回</el-button>
-        <el-button type="primary" :loading="assigning" :disabled="!canPick || pickerLoading || !!pickerError || !assignPickerId" @click="submitAssignPicker">{{ reassigningPicker ? '确认重新分配' : '确认分配' }}</el-button>
+        <el-button :disabled="assigning" @click="assignVisible = false">{{ assignmentPending ? '返回并保留原请求' : '返回' }}</el-button>
+        <el-button v-if="assignmentPending" :disabled="assigning || !canPick || !!assignmentStorageError" @click="submitAssignPicker('check')">查询原分配结果</el-button>
+        <el-button v-if="assignmentPending" :disabled="assigning || !canPick || !!assignmentStorageError" @click="submitAssignPicker('cancel')">取消原分配请求</el-button>
+        <el-button type="primary" :loading="assigning" :disabled="!canPick || !!assignmentStorageError || (!assignmentPending && (pickerLoading || !!pickerError || !assignPickerId))" @click="submitAssignPicker('retry')">{{ assignmentPending ? '核对并重试原分配' : reassigningPicker ? '确认重新分配' : '确认分配' }}</el-button>
       </template>
     </el-dialog>
 

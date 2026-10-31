@@ -15,6 +15,7 @@ export const OPERATION_MODULE_LABELS: Record<string, string> = {
 
 export const OPERATION_ACTION_LABELS: Record<string, string> = {
   pick: '完成拣货', pick_cancel: '取消原拣货请求',
+  assign_picker: '分配拣货员', assign_picker_cancel: '取消原分配请求',
   pack: '完成复核打包', pack_cancel: '取消原复核请求', start_review: '开始复核',
   billing_generate: '生成账单', billing_confirm: '确认账单扣未付费用', billing_manual_charge: '录入手工费用', outbound_payment: '确认发运支付凭据',
   reopen_count: '更正清点', close_zero_receipt: '零收货结束', reduce_qc: '减少实收件数', reduce_carton: '减少实收箱数', reduce_putaway: '撤回最近上架',

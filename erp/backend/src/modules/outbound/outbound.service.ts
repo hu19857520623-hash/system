@@ -1029,13 +1029,21 @@ export class OutboundService {
     return { items: eligible, total: eligible.length }
   }
 
-  async assignPicker(ids: number[], pickerId: number) {
+  async assignPicker(ids: number[], pickerId: number, original?: { clientRequestId: string; expectedOrders: { id: number; status: string; pickerId?: number | null }[] }, actor?: number) {
     if (!Number.isSafeInteger(pickerId) || pickerId <= 0) throw new BadRequestException('请选择有效拣货员')
     if (!ids?.length || ids.some(id => !Number.isSafeInteger(id) || id <= 0) || new Set(ids).size !== ids.length) throw new BadRequestException('请选择有效且不重复的出库单')
+    const fingerprint = original ? this.assignmentFingerprint(ids, pickerId, original, actor!) : ''
     return this.prisma.$transaction(async tx => {
-      await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(pickerId)} FOR UPDATE`
+      for (const user of [...new Set([pickerId, ...(original ? [actor!] : [])])].sort((a, b) => a - b)) await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(user)} FOR UPDATE`
       // Stable order also serializes overlapping batches and picking without a partial batch update.
       for (const id of [...ids].sort((a, b) => a - b)) await tx.$queryRaw`SELECT id FROM outbound_order WHERE id = ${BigInt(id)} FOR UPDATE`
+      if (original) {
+        const receipt = await this.readAssignmentReceipt(tx, original.clientRequestId, actor!, fingerprint)
+        if (receipt) {
+          if (receipt.action === 'assign_picker_cancel') throw new ConflictException('原分配请求已取消，请核对原操作结果')
+          return { ...(await this.assignmentOutcome(tx, original.clientRequestId, receipt)), duplicate: true }
+        }
+      }
       const picker = await tx.sysUser.findUnique({ where: { id: BigInt(pickerId) } })
       if (!picker || picker.status !== 1) throw new BadRequestException('拣货员不存在或已停用')
       if (!isWarehouseStaffRole(picker.roleCode)) {
@@ -1049,6 +1057,10 @@ export class OutboundService {
         where: { id: { in: ids.map((id) => BigInt(id)) } },
       })
       if (orders.length !== ids.length) throw new BadRequestException('部分出库单不存在')
+      if (original && orders.some(order => {
+        const expected = original.expectedOrders.find(row => row.id === Number(order.id))!
+        return expected.status !== order.status || Number(expected.pickerId || 0) !== Number(order.pickerId || 0)
+      })) throw new ConflictException('原单据状态或拣货员已变化，请查询或取消原请求后重新选择，勿覆盖后续分配')
       const invalid = orders.filter((o) => !['pending_pick', 'picking'].includes(o.status))
       if (invalid.length) {
         throw new BadRequestException(`仅待拣货或拣货中状态可分配拣货员：${invalid.map((o) => o.outboundNo).join('、')}`)
@@ -1070,12 +1082,61 @@ export class OutboundService {
       if (updated.count !== ids.length) {
         throw new BadRequestException('出库单状态已变化，请刷新后重试')
       }
+      if (original) {
+        const operator = await tx.sysUser.findUnique({ where: { id: BigInt(actor!) }, select: { realName: true, username: true } })
+        const receipt = await tx.operationLog.create({ data: { module: 'outbound', action: 'assign_picker', targetType: 'outbound_assignment', targetId: String(actor), operatorId: BigInt(actor!), operatorName: operator?.realName || operator?.username,
+          detail: { clientRequestId: original.clientRequestId, requestFingerprint: fingerprint, ids, pickerId, expectedOrders: original.expectedOrders } } })
+        return this.assignmentOutcome(tx, original.clientRequestId, receipt)
+      }
       return {
         updated: ids.length,
         pickerId,
         pickerName: picker.realName || picker.username,
         pickerWorkstation: picker.workstation || null,
       }
+    }, { timeout: 20000 })
+  }
+
+  private assignmentFingerprint(ids: number[], pickerId: number, original: { clientRequestId: string; expectedOrders: { id: number; status: string; pickerId?: number | null }[] }, actor: number) {
+    if (!Number.isSafeInteger(actor) || actor <= 0 || !Number.isSafeInteger(pickerId) || pickerId <= 0 || !/^\S(?:.{0,98}\S)?$/.test(original.clientRequestId || '')
+      || !ids?.length || ids.some(id => !Number.isSafeInteger(id) || id <= 0) || new Set(ids).size !== ids.length
+      || !Array.isArray(original.expectedOrders) || original.expectedOrders.length !== ids.length || new Set(original.expectedOrders.map(r => r.id)).size !== ids.length
+      || original.expectedOrders.some(r => !ids.includes(r.id) || !['pending_pick', 'picking'].includes(r.status) || (r.pickerId != null && (!Number.isSafeInteger(r.pickerId) || r.pickerId <= 0)))) throw new BadRequestException('原分配资料无效，请使用原账号重新核对批次和人员')
+    return createHash('sha256').update(JSON.stringify([pickerId, original.expectedOrders.map(r => [r.id, r.status, r.pickerId || null]).sort((a, b) => Number(a[0]) - Number(b[0]))])).digest('hex')
+  }
+
+  private async readAssignmentReceipt(db: any, requestId: string, actor: number, fingerprint?: string) {
+    if (!Number.isSafeInteger(actor) || actor <= 0 || !/^\S(?:.{0,98}\S)?$/.test(requestId || '')) throw new BadRequestException('请使用原账号和有效操作标识核对分配')
+    const receipt = await db.operationLog.findFirst({ where: { module: 'outbound', action: { in: ['assign_picker', 'assign_picker_cancel'] }, detail: { path: '$.clientRequestId', equals: requestId } } })
+    if (receipt && Number(receipt.operatorId) !== actor) throw new ConflictException('原分配请求属于其它账号，请使用原账号核对')
+    if (receipt && fingerprint && receipt.detail?.requestFingerprint !== fingerprint) throw new ConflictException('原分配批次、人员或单据状态不能更改，请核对原请求')
+    return receipt
+  }
+
+  private async assignmentOutcome(db: any, requestId: string, receipt: any) {
+    if (!receipt) return { requestId, outcome: 'unknown', ids: [], pickerId: null, orders: [] }
+    const detail = receipt.detail
+    const orders = await db.outboundOrder.findMany({ where: { id: { in: detail.ids.map(BigInt) } }, select: { id: true, outboundNo: true, status: true, pickerId: true }, orderBy: { id: 'asc' } })
+    return { requestId, outcome: receipt.action === 'assign_picker_cancel' ? 'cancelled' : 'confirmed', ids: detail.ids, pickerId: detail.pickerId,
+      orders: orders.map((row: any) => ({ id: Number(row.id), outboundNo: row.outboundNo, status: row.status, pickerId: row.pickerId ? Number(row.pickerId) : null })) }
+  }
+
+  async assignmentRequest(requestId: string, actor: number) {
+    return this.assignmentOutcome(this.prisma, requestId, await this.readAssignmentReceipt(this.prisma, requestId, actor))
+  }
+
+  async cancelAssignment(ids: number[], pickerId: number, original: { clientRequestId: string; expectedOrders: { id: number; status: string; pickerId?: number | null }[] }, actor: number) {
+    const fingerprint = this.assignmentFingerprint(ids, pickerId, original, actor)
+    return this.prisma.$transaction(async tx => {
+      for (const user of [...new Set([actor, pickerId])].sort((a, b) => a - b)) await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(user)} FOR UPDATE`
+      for (const id of [...ids].sort((a, b) => a - b)) await tx.$queryRaw`SELECT id FROM outbound_order WHERE id = ${BigInt(id)} FOR UPDATE`
+      let receipt = await this.readAssignmentReceipt(tx, original.clientRequestId, actor, fingerprint)
+      if (!receipt) {
+        const operator = await tx.sysUser.findUnique({ where: { id: BigInt(actor) }, select: { realName: true, username: true } })
+        receipt = await tx.operationLog.create({ data: { module: 'outbound', action: 'assign_picker_cancel', targetType: 'outbound_assignment', targetId: String(actor), operatorId: BigInt(actor), operatorName: operator?.realName || operator?.username,
+          detail: { clientRequestId: original.clientRequestId, requestFingerprint: fingerprint, ids, pickerId, expectedOrders: original.expectedOrders } } })
+      }
+      return this.assignmentOutcome(tx, original.clientRequestId, receipt)
     }, { timeout: 20000 })
   }
 

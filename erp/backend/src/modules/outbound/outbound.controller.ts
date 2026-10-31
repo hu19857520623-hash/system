@@ -111,8 +111,21 @@ export class OutboundController {
 
   @RequirePerms('outbound.pick')
   @Post('assign-picker')
-  assignPicker(@Body() body: AssignPickerDto) {
-    return this.service.assignPicker(body.ids || [], body.pickerId)
+  assignPicker(@Body() body: AssignPickerDto, @CurrentUser('userId') userId: number) {
+    return this.service.assignPicker(body.ids || [], body.pickerId, body, userId)
+  }
+
+  @RequirePerms('outbound.pick')
+  @Get('assignment-requests/:requestId')
+  assignmentRequest(@Param('requestId') requestId: string, @CurrentUser('userId') userId: number) {
+    return this.service.assignmentRequest(requestId, userId)
+  }
+
+  @RequirePerms('outbound.pick')
+  @Post('assignment-requests/:requestId/cancel')
+  cancelAssignment(@Param('requestId') requestId: string, @Body() body: AssignPickerDto, @CurrentUser('userId') userId: number) {
+    if (body.clientRequestId !== requestId) throw new BadRequestException('原分配操作标识不一致，请核对原请求')
+    return this.service.cancelAssignment(body.ids, body.pickerId, body, userId)
   }
 
   @RequirePerms('outbound.view')

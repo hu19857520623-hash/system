@@ -64,7 +64,7 @@ export async function operatePickAttempt(api: any, storage: StoragePort, actor: 
     }
     validate()
     if (receipt.outcome === 'unknown' && mode === 'retry') {
-      await api.pick(attempt.outboundId, structuredClone(attempt.payload))
+      await api.pick(attempt.outboundId, JSON.parse(JSON.stringify(attempt.payload)))
       assertCurrent()
       receipt = await api.pickRequest(attempt.outboundId, attempt.payload.clientRequestId)
       assertCurrent();validate()

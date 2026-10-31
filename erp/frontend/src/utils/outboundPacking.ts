@@ -65,7 +65,7 @@ export async function operatePackAttempt(api: any, storage: StoragePort, actor: 
     }
     validate()
     if (receipt.outcome === 'unknown' && mode === 'retry') {
-      await api.pack(attempt.outboundId, structuredClone(attempt.payload))
+      await api.pack(attempt.outboundId, JSON.parse(JSON.stringify(attempt.payload)))
       assertCurrent()
       receipt = await api.packRequest(attempt.outboundId, attempt.payload.clientRequestId)
       assertCurrent();validate()
