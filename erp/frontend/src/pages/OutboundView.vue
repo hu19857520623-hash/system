@@ -273,7 +273,7 @@ function handleRowCommand(command: string, row: any) {
   }
 }
 
-function resetFilters() {
+function clearFilterValues() {
   searchQ.value = ''
   filterCustomer.value = ''
   filterDest.value = 'all'
@@ -287,6 +287,10 @@ function resetFilters() {
   dateRange.value = null
   appointmentDateRange.value = null
   page.value = 1
+}
+
+function resetFilters() {
+  clearFilterValues()
   reloadAll()
 }
 
@@ -694,7 +698,12 @@ function openShip(row: any) {
 }
 
 async function onShipSuccess() {
+  const outboundNo = shipOrder.value?.outboundNo || ''
   loadShipPending()
+  clearFilterValues()
+  filterStatus.value = 'all'
+  searchQ.value = outboundNo
+  selectedRows.value = []
   await reloadAll()
 }
 
@@ -703,6 +712,8 @@ async function openPack(row: any) {
     try {
       await outboundApi.startReview(row.id)
       row.status = 'reviewing'
+      selectedRows.value = []
+      filterStatus.value = 'reviewing'
     } catch (err: any) {
       ElMessage.error(userFacingError(displaySkuText(err?.message || '无法开始复核')))
       return

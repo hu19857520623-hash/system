@@ -1,6 +1,31 @@
 import { PricingService } from './pricing.service'
 jest.mock('./oms-catalog-sync.util', () => ({ pushCatalogStockToOms: jest.fn().mockResolvedValue(undefined) }))
 
+describe('catalog damaged procurement pipeline', () => {
+  it('scopes damage to eligible purchase orders, keeps original purchase totals and leaves actual open shipments in transit', async () => {
+    const db:any={
+      purchaseOrderItem:{findMany:jest.fn().mockResolvedValue([{poId:301n,sku:'AUDIT-A',quantity:4},{poId:303n,sku:'AUDIT-A',quantity:1}])},
+      inboundOrderItem:{findMany:jest.fn().mockResolvedValue([{sku:'AUDIT-A',expectedQty:3,actualQty:3,order:{status:'completed'}},{sku:'AUDIT-A',expectedQty:1,actualQty:null,order:{status:'pending_receipt'}}])},
+      logisticsReceiptItem:{findMany:jest.fn().mockResolvedValue([{sku:'AUDIT-A',damagedQty:1}])},
+    }
+    const service=new PricingService(db,{} as any,{} as any)
+    const result=await (service as any).loadCatalogPipelineQtyBySku(['TKL-AUDIT-A'])
+    expect(result.get('TKL-AUDIT-A')).toEqual({purchaseQty:5,inboundExpectedTotal:4,openInboundRemaining:1,inTransitQty:1})
+    expect(db.purchaseOrderItem.findMany.mock.calls[0][0].where.order.status.notIn).toContain('cancelled')
+    expect(db.logisticsReceiptItem.findMany).toHaveBeenCalledWith(expect.objectContaining({where:expect.objectContaining({damagedQty:{gt:0},receipt:{poId:{in:[301n,303n]}}})}))
+    db.inboundOrderItem.findMany.mockResolvedValue([{sku:'AUDIT-A',expectedQty:4,actualQty:4,order:{status:'completed'}}])
+    const completed=(await (service as any).loadCatalogPipelineQtyBySku(['TKL-AUDIT-A'])).get('TKL-AUDIT-A')
+    expect(completed.inTransitQty).toBe(0)
+    expect((service as any).serialize({id:1n,sku:'TKL-AUDIT-A',purchaseQty:5},undefined,completed).inTransitQty).toBe(0)
+  })
+  it('does not read unrelated historical damage when there are no eligible purchases', async()=>{
+    const db:any={purchaseOrderItem:{findMany:async()=>[]},inboundOrderItem:{findMany:async()=>[]},logisticsReceiptItem:{findMany:jest.fn()}}
+    const service=new PricingService(db,{} as any,{} as any)
+    expect((await (service as any).loadCatalogPipelineQtyBySku(['TKL-A'])).get('TKL-A').inTransitQty).toBe(0)
+    expect(db.logisticsReceiptItem.findMany).not.toHaveBeenCalled()
+  })
+})
+
 describe('repricing original version', () => {
   const version='2026-10-30T00:00:00.000Z'
   function setup() {

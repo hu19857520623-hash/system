@@ -27,13 +27,15 @@ export function openInboundRemaining(
 /** 在途 = 已采购尚未做成入库单的数量 + 未完结入库单上还没收到的数量 */
 export function catalogInTransitQty(input: {
   purchaseTotal: number
+  damagedPurchaseQty?: number
   inboundExpectedTotal: number
   openInboundRemaining: number
 }): number {
   const purchase = Math.max(0, Math.floor(Number(input.purchaseTotal) || 0))
   const expected = Math.max(0, Math.floor(Number(input.inboundExpectedTotal) || 0))
+  const damaged = Math.max(0, Math.floor(Number(input.damagedPurchaseQty) || 0))
   const open = Math.max(0, Math.floor(Number(input.openInboundRemaining) || 0))
-  return Math.max(0, purchase - expected) + open
+  return Math.max(0, purchase - damaged - expected) + open
 }
 
 export type CatalogPipelineQty = {
@@ -78,6 +80,7 @@ export function finishCatalogPipelineQty(
   purchase: Map<string, number>,
   inboundExpected: Map<string, number>,
   openRemaining: Map<string, number>,
+  damagedPurchase: Map<string, number> = new Map(),
 ): CatalogPipelineQty {
   const purchaseQty = purchase.get(sku) || 0
   const inboundExpectedTotal = inboundExpected.get(sku) || 0
@@ -88,6 +91,7 @@ export function finishCatalogPipelineQty(
     openInboundRemaining: open,
     inTransitQty: catalogInTransitQty({
       purchaseTotal: purchaseQty,
+      damagedPurchaseQty: damagedPurchase.get(sku) || 0,
       inboundExpectedTotal,
       openInboundRemaining: open,
     }),

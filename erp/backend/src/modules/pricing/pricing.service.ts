@@ -65,7 +65,7 @@ export class PricingService {
     const catalogPool = catalogStockPool(row)
     const remainingStockQty = remainingCatalogStock(row)
     const purchaseQty = (pipeline?.purchaseQty || 0) > 0 ? pipeline!.purchaseQty : (row.purchaseQty || 0)
-    const inTransitQty = catalogInTransitQty({
+    const inTransitQty = pipeline?.inTransitQty ?? catalogInTransitQty({
       purchaseTotal: purchaseQty,
       inboundExpectedTotal: pipeline?.inboundExpectedTotal ?? 0,
       openInboundRemaining: pipeline?.openInboundRemaining ?? 0,
@@ -217,6 +217,7 @@ export class PricingService {
     const purchase = new Map<string, number>()
     const inboundExpected = new Map<string, number>()
     const openRemaining = new Map<string, number>()
+    const damagedPurchase = new Map<string, number>()
 
     const [poItems, inboundItems] = await Promise.all([
       this.prisma.purchaseOrderItem.findMany({
@@ -224,7 +225,7 @@ export class PricingService {
           sku: { in: lookup },
           order: { status: { notIn: CATALOG_PO_EXCLUDED_STATUSES } },
         },
-        select: { sku: true, quantity: true },
+        select: { poId: true, sku: true, quantity: true },
       }),
       this.prisma.inboundOrderItem.findMany({
         where: {
@@ -235,6 +236,16 @@ export class PricingService {
       }),
     ])
 
+    // Receipt damage completes purchasing but cannot become a future usable shipment.
+    // Only receipts for the same eligible purchase orders participate in this scope.
+    const poIds = [...new Set(poItems.map(item => item.poId))]
+    if (poIds.length) {
+      const damage = await this.prisma.logisticsReceiptItem.findMany({
+        where: { sku: { in: lookup }, damagedQty: { gt: 0 }, receipt: { poId: { in: poIds } } },
+        select: { sku: true, damagedQty: true },
+      })
+      for (const item of damage) addQtyForCatalogSku(index, damagedPurchase, item.sku, item.damagedQty)
+    }
     for (const item of poItems) addQtyForCatalogSku(index, purchase, item.sku, item.quantity)
     for (const item of inboundItems) {
       addQtyForCatalogSku(index, inboundExpected, item.sku, item.expectedQty)
@@ -247,7 +258,7 @@ export class PricingService {
     }
 
     for (const sku of skus) {
-      map.set(sku, finishCatalogPipelineQty(sku, purchase, inboundExpected, openRemaining))
+      map.set(sku, finishCatalogPipelineQty(sku, purchase, inboundExpected, openRemaining, damagedPurchase))
     }
     return map
   }

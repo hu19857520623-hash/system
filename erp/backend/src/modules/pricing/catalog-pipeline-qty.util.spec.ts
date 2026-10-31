@@ -16,6 +16,14 @@ describe('openInboundRemaining', () => {
 })
 
 describe('catalogInTransitQty', () => {
+  it.each([
+    { purchaseTotal:5, damagedPurchaseQty:1, inboundExpectedTotal:4, openInboundRemaining:0, expected:0 },
+    { purchaseTotal:5, damagedPurchaseQty:1, inboundExpectedTotal:4, openInboundRemaining:1, expected:1 },
+    { purchaseTotal:10, damagedPurchaseQty:2, inboundExpectedTotal:6, openInboundRemaining:0, expected:2 },
+    { purchaseTotal:10, damagedPurchaseQty:2, inboundExpectedTotal:10, openInboundRemaining:3, expected:3 },
+  ])('received damage never remains an unallocated future shipment %p', ({expected,...input}) => {
+    expect(catalogInTransitQty(input)).toBe(expected)
+  })
   it('treats uninbound purchase as in transit', () => {
     expect(catalogInTransitQty({ purchaseTotal: 198, inboundExpectedTotal: 0, openInboundRemaining: 0 })).toBe(198)
   })
