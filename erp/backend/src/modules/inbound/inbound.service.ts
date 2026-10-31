@@ -1222,6 +1222,7 @@ export class InboundService {
 
     const existing = await this.prisma.product.findUnique({ where: { sku: trimmed } })
     if (existing) {
+      this.assertOmsProductScope(existing, customerCode)
       return { id: existing.id, sku: existing.sku, productName: existing.productName }
     }
 
@@ -1230,6 +1231,7 @@ export class InboundService {
       const prefixedSku = buildInternalSku(code, trimmed, [])
       const byPrefixed = await this.prisma.product.findUnique({ where: { sku: prefixedSku } })
       if (byPrefixed) {
+        this.assertOmsProductScope(byPrefixed, customerCode)
         return { id: byPrefixed.id, sku: byPrefixed.sku, productName: byPrefixed.productName }
       }
 
@@ -1237,6 +1239,7 @@ export class InboundService {
         where: { customerSku: trimmed, sku: { startsWith: `${code}-` } },
       })
       if (byCustomerSku) {
+        this.assertOmsProductScope(byCustomerSku, customerCode)
         return { id: byCustomerSku.id, sku: byCustomerSku.sku, productName: byCustomerSku.productName }
       }
     } else {
@@ -1264,6 +1267,7 @@ export class InboundService {
     if (mappedSku) {
       const mapped = await this.prisma.product.findUnique({ where: { sku: mappedSku } })
       if (mapped) {
+        this.assertOmsProductScope(mapped, customerCode)
         return { id: mapped.id, sku: mapped.sku, productName: mapped.productName }
       }
     }
@@ -1330,6 +1334,13 @@ export class InboundService {
       })
     }
     return resolved
+  }
+
+  private assertOmsProductScope(product: { sku: string; remark?: string | null }, customerCode?: string) {
+    const code = String(customerCode || '').trim().toUpperCase(), remark = String(product.remark || '')
+    if (!code || (!remark.includes('OMS客户:') && !remark.includes('OMS 预约入库自动建档'))) return
+    const owner = remark.match(/OMS客户:([^\s·]+)/)?.[1]?.toUpperCase() || deriveCustomerCodeFromInternalSku(product.sku)?.toUpperCase()
+    if (!owner || owner !== code) throw new NotFoundException('当前客户的商品档案不存在，请核对 SKU')
   }
 
   /**
@@ -1440,10 +1451,28 @@ export class InboundService {
     const inboundNo = String(data.inboundNo || '').trim() || await this.allocateInboundNo(customerCode)
     const existing = await this.prisma.inboundOrder.findUnique({ where: { inboundNo } })
     if (existing) {
+      if (existing.omsCustomerCode !== customerCode) throw new NotFoundException('当前客户的入库单不存在，请核对单号')
       const detail = await this.prisma.inboundOrder.findUnique({
         where: { id: existing.id },
         include: { items: true, cartons: { include: { items: true }, orderBy: { boxSeq: 'asc' } } },
       })
+      if (!detail) throw new NotFoundException('当前客户的入库单不存在，请核对单号')
+      const products = await this.prisma.product.findMany({ where: { id: { in: detail.items.map(item => item.productId) } }, select: { sku: true, customerSku: true } })
+      const incoming = data.items.map((line, index) => {
+        const sku = String(line.sku || '').trim(), matches = products.filter(product => product.sku === sku || product.customerSku === sku)
+        return { boxNo: Number(line.boxNo) || index + 1, sku: matches.length === 1 ? matches[0].sku : sku, qty: Number(line.qty) }
+      })
+      const saved = detail.cartons.length ? detail.cartons.flatMap(carton => carton.items.map(item => ({ boxNo: carton.boxSeq, sku: item.sku, qty: item.qty })))
+        : detail.items.map((item, index) => ({ boxNo: index + 1, sku: item.sku, qty: item.expectedQty }))
+      const signature = (lines: { boxNo: number; sku: string; qty: number }[]) => {
+        const quantities = new Map<string, number>()
+        for (const line of lines) {
+          if (!line.sku || !Number.isSafeInteger(line.qty) || line.qty <= 0 || !Number.isSafeInteger(line.boxNo) || line.boxNo <= 0) throw new BadRequestException('入库箱号、SKU 或数量无效，请核对原单')
+          const key = JSON.stringify([line.boxNo, line.sku]);quantities.set(key, (quantities.get(key) || 0) + line.qty)
+        }
+        return JSON.stringify([...quantities].sort((a,b) => a[0].localeCompare(b[0])))
+      }
+      if (detail.warehouseCode !== warehouseCode || signature(incoming) !== signature(saved)) throw new ConflictException('入库单号已存在，但原商品、箱号、数量或仓库不一致，请查看原单后通过修改入口继续')
       return { ...this.mapInboundForOms(detail!), idempotent: true }
     }
 
