@@ -20,6 +20,23 @@ function setup() {
   return { tx, mutation, run: (order = row, input = body) => restockReturnToLocations(tx as any, order, input, mutation as any, 7) }
 }
 describe('return restock actual locations and quantities', () => {
+  it('resolves catalog holding SKU to the physical base product and counts its physical ledger on continued partial restock', async()=>{
+    const {tx,run,mutation}=setup()
+    tx.product.findMany.mockResolvedValue([{id:681n,sku:'A',productName:'货盘',remark:null}] as any)
+    tx.customerSkuInventory.findUnique.mockResolvedValue({id:1n,quantity:0} as any)
+    tx.inventoryLog.findMany.mockResolvedValue([{referenceNo:row.returnNo,sku:'A',changeQty:1}] as any)
+    expect(await run({...row,items:[{sku:'TKL-A',quantity:2}]},{...body,stockLines:[{sku:'TKL-A',qty:1,locationCode:'A-01'}]})).toMatchObject({restockedQty:2,remainingRestockQty:0})
+    expect(mutation.addLocationStock).toHaveBeenCalledWith(expect.anything(),expect.objectContaining({productId:681n,sku:'A',qty:1}),expect.anything())
+    expect(tx.customerSkuInventory.upsert).toHaveBeenCalledWith(expect.objectContaining({where:{customerId_sku:{customerId:260n,sku:'TKL-A'}}}))
+  })
+  it.each([
+    {products:[{id:1n,sku:'A',remark:null},{id:2n,sku:'TKL-A',remark:null}]},
+    {products:[{id:1n,sku:'A',remark:'[OMS:TKL9002]'}]},
+  ])('rejects ambiguous or private base aliases before any stock mutation %p', async ({products})=>{
+    const {tx,run,mutation}=setup();tx.product.findMany.mockResolvedValue(products as any)
+    await expect(run({...row,items:[{sku:'TKL-A',quantity:2}]},{...body,stockLines:[{sku:'TKL-A',qty:1,locationCode:'A-01'}]})).rejects.toThrow()
+    expect(mutation.addLocationStock).not.toHaveBeenCalled()
+  })
   it('adds a partial return to a location and warehouse together while preserving remaining work', async () => {
     const { run, mutation } = setup();expect(await run()).toMatchObject({ batchQty: 1, restockedQty: 1, remainingRestockQty: 1 })
     expect(mutation.addLocationStock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ productId: 681n, qty: 1, locationId: 42n, batchNo: 'RETURN-2', unitCostRmb: 8 }), expect.objectContaining({ changeType: 'return_restock', referenceNo: row.returnNo, operatorId: 7 }))
@@ -71,6 +88,7 @@ describe('return restock actual locations and quantities', () => {
     expect(mutation.addLocationStock).not.toHaveBeenCalled()
   })
   it('progress ignores other returns and fingerprint treats reorder as same request but changed quantity differently', () => {
+    expect(returnRestockProgress({...row,items:[{sku:'TKL-A',quantity:1},{sku:'TKL-A',quantity:1}]},[{referenceNo:row.returnNo,sku:'A',changeQty:1}])).toMatchObject({restockedQty:1,restockedBySku:{'TKL-A':1},remainingRestockQty:1})
     expect(returnRestockProgress(row, [{ referenceNo: 'OTHER', sku: 'TKL9001-A', changeQty: 100 }, { referenceNo: row.returnNo, sku: 'TKL9001-A', changeQty: 1 }])).toMatchObject({ restockedQty: 1, remainingRestockQty: 1 })
     const first = { ...body, stockLines: [body.stockLines[0], { sku: 'TKL9001-B', qty: 2, locationCode: 'B-01' }] }
     expect(returnProcessFingerprint(first, 'restock')).toBe(returnProcessFingerprint({ ...first, stockLines: [...first.stockLines].reverse() }, 'restock'))
