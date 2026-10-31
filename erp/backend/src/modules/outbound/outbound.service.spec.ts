@@ -438,8 +438,10 @@ describe('OutboundService.assignPicker', () => {
       sysUser: { findUnique: jest.fn() },
       sysUserPermission: { findMany: jest.fn().mockResolvedValue([]) },
       sysRolePermission: { findMany: jest.fn().mockResolvedValue([]) },
+      $queryRaw: jest.fn().mockResolvedValue([]),
       outboundOrder: { findMany: jest.fn(), updateMany: jest.fn() },
     }
+    prisma.$transaction = jest.fn((work: any) => work(prisma))
     const service = new OutboundService(prisma, {} as any, {} as any, {} as any, {} as any, {} as any)
     return { service, prisma }
   }

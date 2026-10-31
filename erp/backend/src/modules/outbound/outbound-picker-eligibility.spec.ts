@@ -7,11 +7,13 @@ function fixture() {
     { id: 62n, username: 'finance', roleCode: 'finance', status: 1 },
   ]
   const prisma: any = {
+    $queryRaw: jest.fn().mockResolvedValue([]),
     sysUser: { findMany: jest.fn(async () => users), findUnique: jest.fn(async ({ where }: any) => users.find(u => u.id === where.id)) },
     sysUserPermission: { findMany: jest.fn(async ({ where }: any) => where.userId === 59n ? [{ permCode: 'outbound.pick' }] : []) },
     sysRolePermission: { findMany: jest.fn(async ({ where }: any) => where.roleCode === 'warehouse_reviewer' ? [{ permCode: 'outbound.pack' }] : []) },
     outboundOrder: { findMany: jest.fn(async () => [{ id: 62n, status: 'pending_pick', outboundNo: 'OB-62' }]), updateMany: jest.fn(async () => ({ count: 1 })) },
   }
+  prisma.$transaction = jest.fn((work: any) => work(prisma))
   const service = new OutboundService(prisma, {} as any, {} as any, {} as any, {} as any, {} as any)
   return { service, prisma, users }
 }

@@ -1030,48 +1030,53 @@ export class OutboundService {
   }
 
   async assignPicker(ids: number[], pickerId: number) {
-    if (!pickerId) throw new BadRequestException('请选择拣货员')
-    if (!ids?.length) throw new BadRequestException('请选择出库单')
-    const picker = await this.prisma.sysUser.findUnique({ where: { id: BigInt(pickerId) } })
-    if (!picker || picker.status !== 1) throw new BadRequestException('拣货员不存在或已停用')
-    if (!isWarehouseStaffRole(picker.roleCode)) {
-      throw new BadRequestException('只能分配仓储职位的拣货员，运营/销售等办公职位不能作为仓内岗位')
-    }
-    if (!await this.permissions.userHasPerm(pickerId, picker.roleCode, 'outbound.pick')) {
-      throw new BadRequestException('该人员当前没有拣货权限，请刷新候选名单后重新选择')
-    }
+    if (!Number.isSafeInteger(pickerId) || pickerId <= 0) throw new BadRequestException('请选择有效拣货员')
+    if (!ids?.length || ids.some(id => !Number.isSafeInteger(id) || id <= 0) || new Set(ids).size !== ids.length) throw new BadRequestException('请选择有效且不重复的出库单')
+    return this.prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(pickerId)} FOR UPDATE`
+      // Stable order also serializes overlapping batches and picking without a partial batch update.
+      for (const id of [...ids].sort((a, b) => a - b)) await tx.$queryRaw`SELECT id FROM outbound_order WHERE id = ${BigInt(id)} FOR UPDATE`
+      const picker = await tx.sysUser.findUnique({ where: { id: BigInt(pickerId) } })
+      if (!picker || picker.status !== 1) throw new BadRequestException('拣货员不存在或已停用')
+      if (!isWarehouseStaffRole(picker.roleCode)) {
+        throw new BadRequestException('只能分配仓储职位的拣货员，运营/销售等办公职位不能作为仓内岗位')
+      }
+      if (!await new PermissionsService(tx as any).userHasPerm(pickerId, picker.roleCode, 'outbound.pick')) {
+        throw new BadRequestException('该人员当前没有拣货权限，请刷新候选名单后重新选择')
+      }
 
-    const orders = await this.prisma.outboundOrder.findMany({
-      where: { id: { in: ids.map((id) => BigInt(id)) } },
-    })
-    if (orders.length !== ids.length) throw new BadRequestException('部分出库单不存在')
-    const invalid = orders.filter((o) => !['pending_pick', 'picking'].includes(o.status))
-    if (invalid.length) {
-      throw new BadRequestException(`仅待拣货或拣货中状态可分配拣货员：${invalid.map((o) => o.outboundNo).join('、')}`)
-    }
-    const reassigning = orders.every((o) => o.status === 'picking')
-    if (!reassigning && orders.some((o) => o.status === 'picking')) {
-      throw new BadRequestException('请分别分配待拣货和拣货中的出库单')
-    }
+      const orders = await tx.outboundOrder.findMany({
+        where: { id: { in: ids.map((id) => BigInt(id)) } },
+      })
+      if (orders.length !== ids.length) throw new BadRequestException('部分出库单不存在')
+      const invalid = orders.filter((o) => !['pending_pick', 'picking'].includes(o.status))
+      if (invalid.length) {
+        throw new BadRequestException(`仅待拣货或拣货中状态可分配拣货员：${invalid.map((o) => o.outboundNo).join('、')}`)
+      }
+      const reassigning = orders.every((o) => o.status === 'picking')
+      if (!reassigning && orders.some((o) => o.status === 'picking')) {
+        throw new BadRequestException('请分别分配待拣货和拣货中的出库单')
+      }
 
-    const updated = await this.prisma.outboundOrder.updateMany({
-      where: {
-        id: { in: ids.map((id) => BigInt(id)) },
-        status: reassigning ? 'picking' : 'pending_pick',
-      },
-      data: reassigning
-        ? { pickerId: BigInt(pickerId) }
-        : { pickerId: BigInt(pickerId), status: 'picking', pickingStartedAt: new Date() },
-    })
-    if (updated.count !== ids.length) {
-      throw new BadRequestException('出库单状态已变化，请刷新后重试')
-    }
-    return {
-      updated: ids.length,
-      pickerId,
-      pickerName: picker.realName || picker.username,
-      pickerWorkstation: picker.workstation || null,
-    }
+      const updated = await tx.outboundOrder.updateMany({
+        where: {
+          id: { in: ids.map((id) => BigInt(id)) },
+          status: reassigning ? 'picking' : 'pending_pick',
+        },
+        data: reassigning
+          ? { pickerId: BigInt(pickerId) }
+          : { pickerId: BigInt(pickerId), status: 'picking', pickingStartedAt: new Date() },
+      })
+      if (updated.count !== ids.length) {
+        throw new BadRequestException('出库单状态已变化，请刷新后重试')
+      }
+      return {
+        updated: ids.length,
+        pickerId,
+        pickerName: picker.realName || picker.username,
+        pickerWorkstation: picker.workstation || null,
+      }
+    }, { timeout: 20000 })
   }
 
   async setProblem(
