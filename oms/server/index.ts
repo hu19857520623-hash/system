@@ -1794,7 +1794,7 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
         }
       }
       if (customerId && payload.stockSource === 'catalog' && payload.reason === 'return_restock') {
-        for (const line of payload.items || []) await applyCatalogReturnSnapshot(prisma, customerId, line, toOmsWarehouseCode(payload.warehouseCode, 'jhb1'))
+        for (const line of payload.items || []) await applyCatalogReturnSnapshot(prisma, customerId, line, () => fetchErpSkuInventoryByCode(customerCode))
       }
       if (customerId && payload.stockSource === 'owned') {
         const warehouse = toOmsWarehouseCode(payload.warehouseCode, 'jhb1')
