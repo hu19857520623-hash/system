@@ -22,6 +22,8 @@ import ListPagination from '@/components/ListPagination.vue'
 import DetailSheet from '@/components/ui/DetailSheet.vue'
 import OutboundLabelPanel from '@/components/outbound/OutboundLabelPanel.vue'
 import OutboundPickDialog from '@/components/outbound/OutboundPickDialog.vue'
+import OutboundPackDialog from '@/components/outbound/OutboundPackDialog.vue'
+import { readPackAttempts, type PackAttempt } from '@/utils/outboundPacking'
 import OutboundShipDialog from '@/components/outbound/OutboundShipDialog.vue'
 import {
   buildOutboundLabelSummary,
@@ -73,13 +75,24 @@ const pickVisible = ref(false)
 const shipVisible = ref(false)
 const shipPending = ref<ShipAttempt[]>([]), shipStorageError = ref('')
 const pickPending = ref<PickAttempt[]>([]), pickStorageError = ref('')
+const packPending = ref<PackAttempt[]>([]), packStorageError = ref('')
+function loadPackPending() {
+  packPending.value = []
+  try { packPending.value = readPackAttempts(localStorage, Number(app.authenticatedUser?.id));packStorageError.value = '' }
+  catch (e) { packStorageError.value = userFacingError(e) }
+}
+watch(() => app.authenticatedUser?.id, loadPackPending)
+
 function loadPickPending() {
   pickPending.value = []
   try { pickPending.value = readPickAttempts(localStorage, Number(app.authenticatedUser?.id));pickStorageError.value = '' }
   catch (e) { pickStorageError.value = userFacingError(e) }
 }
 watch(() => app.authenticatedUser?.id, loadPickPending)
-function onPickStorage(event: StorageEvent) { if (!event.key || event.key.startsWith('erp:outbound-picking:')) loadPickPending() }
+function onPickStorage(event: StorageEvent) {
+  if (!event.key || event.key.startsWith('erp:outbound-picking:')) loadPickPending()
+  if (!event.key || event.key.startsWith('erp:outbound-packing:')) loadPackPending()
+}
 onBeforeUnmount(() => window.removeEventListener('storage', onPickStorage))
 function loadShipPending() {
   try { shipPending.value = readShipAttempts(localStorage, Number(app.authenticatedUser?.id));shipStorageError.value = '' }
@@ -102,12 +115,6 @@ const deliverOrder = ref<any>(null)
 const shipOrder = ref<any>(null)
 const problemOrder = ref<any>(null)
 const exceptionOrder = ref<any>(null)
-const packIsPalletized = ref(false)
-const packPalletInfo = ref('')
-const packReviewSource = ref<'pda' | 'pick_list'>('pick_list')
-const packCartons = ref<{ lengthCm: string; widthCm: string; heightCm: string; grossWeightKg: string }[]>([
-  { lengthCm: '', widthCm: '', heightCm: '', grossWeightKg: '' },
-])
 const deliverPodFile = ref<File | null>(null)
 const podFileInputRef = ref<HTMLInputElement | null>(null)
 const assignPickerId = ref<number | null>(null)
@@ -135,7 +142,6 @@ const exceptionTypeOptions = [
   { value: 'other', label: '其他异常' },
 ]
 const labelActionLoading = reactive<Record<string, boolean>>({})
-const packDetailLoading = ref(false)
 const relabelLines = ref<{ id: number; sku: string; productName: string; scannedBarcode: string; newBarcode: string }[]>([])
 
 const customers = ref<{ id: number; code: string; name: string }[]>([])
@@ -307,6 +313,7 @@ function resetFilters() {
 onMounted(async () => {
   loadShipPending()
   loadPickPending()
+  loadPackPending()
   window.addEventListener('storage', onPickStorage)
   await loadTakealotDestConfig()
   const q = String(route.query.q || '').trim()
@@ -723,84 +730,11 @@ async function onShipSuccess() {
   await reloadAll()
 }
 
-async function openPack(row: any) {
-  if (row.status === 'picked' && canPack.value) {
-    try {
-      await outboundApi.startReview(row.id)
-      row.status = 'reviewing'
-      selectedRows.value = []
-      filterStatus.value = 'reviewing'
-    } catch (err: any) {
-      ElMessage.error(userFacingError(displaySkuText(err?.message || '无法开始复核')))
-      return
-    }
-  }
-  packOrder.value = row
-  packIsPalletized.value = !!row.isPalletized
-  packPalletInfo.value = row.palletInfo || ''
-  packReviewSource.value = 'pick_list'
-  packCartons.value = [{ lengthCm: '', widthCm: '', heightCm: '', grossWeightKg: '' }]
-  packVisible.value = true
-  packDetailLoading.value = true
-  try {
-    packOrder.value = await outboundApi.detail(row.id)
-  } catch (err: any) {
-    ElMessage.error(userFacingError(displaySkuText(err?.message || '加载复核明细失败')))
-  } finally {
-    packDetailLoading.value = false
-  }
-}
-
-function addPackCarton() {
-  packCartons.value.push({ lengthCm: '', widthCm: '', heightCm: '', grossWeightKg: '' })
-}
-
-function removePackCarton(index: number) {
-  if (packCartons.value.length <= 1) return
-  packCartons.value.splice(index, 1)
-}
-
-async function submitPack() {
-  if (!packOrder.value || !canPack.value) return
-  const needsMeasure = !!packOrder.value.omsPreDeduct
-  const hasMeasure = packCartons.value.some(c => Object.values(c).some(value => value.trim() !== ''))
-  const cartons = (needsMeasure || hasMeasure ? packCartons.value : [])
-    .map(c => ({
-      lengthCm: Number(c.lengthCm),
-      widthCm: Number(c.widthCm),
-      heightCm: Number(c.heightCm),
-      grossWeightKg: Number(c.grossWeightKg),
-    }))
-
-  if (needsMeasure && cartons.length === 0) {
-    ElMessage.warning('请填写外箱实测尺寸（长/宽/高 cm）')
-    return
-  }
-  for (const [index, carton] of cartons.entries()) {
-    if (![carton.lengthCm, carton.widthCm, carton.heightCm].every(value => Number.isFinite(value) && value > 0)) {
-      ElMessage.warning(`请填写第 ${index + 1} 箱大于零的长、宽、高；不需要的箱行请先删除`)
-      return
-    }
-    if (!Number.isFinite(carton.grossWeightKg) || carton.grossWeightKg < 0) {
-      ElMessage.warning(`第 ${index + 1} 箱毛重无效，请填写不小于零的重量`)
-      return
-    }
-  }
-
-  const needsRelabel = !!packOrder.value.needsRelabel
-  await withAction(async () => {
-    await outboundApi.pack(packOrder.value.id, {
-      isPalletized: packIsPalletized.value,
-      palletInfo: packPalletInfo.value.trim() || undefined,
-      reviewSource: packReviewSource.value,
-      cartons: cartons.length ? cartons : undefined,
-    })
-    packVisible.value = false
-    filterStatus.value = needsRelabel ? 'pending_relabel' : 'packed'
-    await reloadAll()
-  }, needsRelabel
-    ? `${packOrder.value.outboundNo} 复核完成，进入换标`
-    : `${packOrder.value.outboundNo} 复核打包完成`)
+function openPack(row: any) { packOrder.value = row;packVisible.value = true }
+async function onPackPending() {
+  loadPackPending()
+  clearFilterValues();filterStatus.value = 'all';searchQ.value = packOrder.value?.outboundNo || '';selectedRows.value = []
+  await reloadAll()
 }
 
 function rowHasPod(row: any) {
@@ -1086,6 +1020,12 @@ function statusTag(status: string) {
       </template>
 
       <el-alert v-if="shipStorageError" :title="shipStorageError" type="error" :closable="false" />
+      <el-alert v-if="packStorageError" :title="packStorageError" type="error" :closable="false" />
+      <el-alert v-for="attempt in packPending" :key="`pack-${attempt.outboundId}`" type="warning" :closable="false" style="margin-bottom:8px">
+        <template #title>出库单 {{ attempt.outboundNo }} 还有原复核请求待核对，请勿更换尺寸和重量再次提交。</template>
+        <el-button v-if="canPack" size="small" @click="openPack(attempt.order)">继续核对原复核</el-button>
+        <span v-else>请恢复原账号岗位权限后继续核对。</span>
+      </el-alert>
       <el-alert v-if="pickStorageError" :title="pickStorageError" type="error" :closable="false" />
       <el-alert v-for="attempt in pickPending" :key="`pick-${attempt.outboundId}`" type="warning" :closable="false" style="margin-bottom:8px">
         <template #title>出库单 {{ attempt.outboundNo }} 还有原拣货请求待核对，请勿重新拣货。</template>
@@ -1382,55 +1322,7 @@ function statusTag(status: string) {
       @pending="loadPickPending"
     />
 
-    <!-- 复核打包 -->
-    <el-dialog
-      v-model="packVisible"
-      :title="`复核打包 · ${packOrder?.outboundNo || ''}`"
-      width="min(980px, 94vw)"
-    >
-      <div v-if="packOrder?.needsRelabel" class="pick-hint" style="margin-bottom:12px">
-        本单需换标：复核完成后将进入「待换标」，换标确认后再发运。
-      </div>
-      <div v-if="packOrder?.omsPreDeduct" class="pick-hint" style="margin-bottom:12px">
-        OMS 预扣 ¥{{ packOrder.omsPreDeduct.preDeductTotal?.toFixed(2) }}
-        <template v-if="packOrder.omsPreDeduct.totalVolumeM3 != null">
-          · 试算 {{ packOrder.omsPreDeduct.totalVolumeM3?.toFixed(4) }} m³ / {{ packOrder.omsPreDeduct.totalWeightKg?.toFixed(2) }} kg
-        </template>
-        · 请录入实测外箱尺寸，系统将按模板实算费用
-      </div>
-      <div v-if="packOrder?.omsActualFees" class="pick-hint" style="margin-bottom:12px;color:var(--el-color-success)">
-        已实测实算合计 ¥{{ packOrder.omsActualFees.actualTotal?.toFixed(2) }}
-      </div>
-      <el-form label-width="80px">
-        <el-form-item v-if="packOrder?.omsPreDeduct" label="外箱实测" required>
-          <div class="pack-cartons">
-            <div v-for="(carton, idx) in packCartons" :key="idx" class="pack-carton-row">
-              <el-input v-model="carton.lengthCm" placeholder="长 cm" style="width:72px" />
-              <span class="pack-carton-x">×</span>
-              <el-input v-model="carton.widthCm" placeholder="宽 cm" style="width:72px" />
-              <span class="pack-carton-x">×</span>
-              <el-input v-model="carton.heightCm" placeholder="高 cm" style="width:72px" />
-              <el-input v-model="carton.grossWeightKg" placeholder="毛重 kg" style="width:80px;margin-left:8px" />
-              <el-button v-if="packCartons.length > 1" link type="danger" @click="removePackCarton(idx)">删</el-button>
-            </div>
-            <el-button link type="primary" @click="addPackCarton">+ 加一箱</el-button>
-          </div>
-        </el-form-item>
-        <p class="dialog-hint" style="margin:0 0 12px">复核在 ERP 网页确认；独立 PDA 复核端尚未提供。</p>
-        <el-form-item label="打托">
-          <el-checkbox v-model="packIsPalletized">已打托</el-checkbox>
-        </el-form-item>
-        <el-form-item label="打托信息">
-          <el-input v-model="packPalletInfo" placeholder="托数、尺寸等（可选）" clearable />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="packVisible = false">取消</el-button>
-        <el-button type="primary" @click="submitPack">
-          {{ packOrder?.needsRelabel ? '确认复核，去换标' : '确认复核打包' }}
-        </el-button>
-      </template>
-    </el-dialog>
+    <OutboundPackDialog v-model="packVisible" :order="packOrder" :can-pack="canPack" @success="onPackPending" @pending="onPackPending" @progress="onPackPending" />
 
     <!-- 上传 POD 签收单（确认送达后） -->
     <el-dialog v-model="podUploadVisible" :title="`上传POD签收单 · ${deliverOrder?.outboundNo || ''}`" width="440px">

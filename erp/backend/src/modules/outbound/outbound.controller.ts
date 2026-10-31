@@ -6,6 +6,7 @@ import { RequireAnyPerm, RequirePerms } from '../../common/decorators/require-pe
 import { OmsBridge } from '../../common/decorators/oms-bridge.decorator'
 import { CreateOmsOutboundDto } from './dto/oms-outbound.dto'
 import { AssignPickerDto, PickOutboundDto } from './dto/pick-outbound.dto'
+import { PackOutboundDto } from './dto/pack-outbound.dto'
 import { ShipOutboundDto } from './dto/ship-outbound.dto'
 
 function sendPdf(res: Response, file: { fileName: string; content: Buffer }) {
@@ -240,8 +241,20 @@ export class OutboundController {
   }
 
   @RequirePerms('outbound.pack')
+  @Get(':id/pack-requests/:requestId')
+  packRequest(@Param('id', ParseIntPipe) id: number, @Param('requestId') requestId: string, @CurrentUser('userId') userId: number) {
+    return this.service.packRequest(id, requestId, userId)
+  }
+
+  @RequirePerms('outbound.pack')
+  @Post(':id/pack-requests/:requestId/cancel')
+  cancelPackRequest(@Param('id', ParseIntPipe) id: number, @Param('requestId') requestId: string, @CurrentUser('userId') userId: number) {
+    return this.service.cancelPackRequest(id, requestId, userId)
+  }
+
+  @RequirePerms('outbound.pack')
   @Post(':id/pack')
-  pack(@Param('id', ParseIntPipe) id: number, @Body() body: any, @CurrentUser('userId') userId: number) {
+  pack(@Param('id', ParseIntPipe) id: number, @Body() body: PackOutboundDto, @CurrentUser('userId') userId: number) {
     return this.service.pack(id, body, userId)
   }
 

@@ -1552,24 +1552,30 @@ th{background:#f5f5f5}
   }
 
   async startReview(id: number, operatorId?: number) {
-    const order = await this.prisma.outboundOrder.findUnique({ where: { id: BigInt(id) } })
-    if (!order) throw new NotFoundException('出库单不存在')
-    if (order.status === 'exception') throw new BadRequestException('异常单已暂停流程，请先解除异常')
-    if (order.status === 'reviewing') return this.detail(id)
-    if (order.status !== 'picked') {
-      throw new BadRequestException('仅已拣货状态可开始复核')
-    }
-    await this.prisma.outboundOrder.update({
-      where: { id: BigInt(id) },
-      data: { status: 'reviewing' },
-    })
-    await this.opLog.log({
-      operatorId,
-      module: 'outbound',
-      action: 'start_review',
-      targetType: 'outbound_order',
-      targetId: order.outboundNo,
-      detail: { reviewSource: 'pda_or_web' },
+    await this.prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM outbound_order WHERE id = ${BigInt(id)} FOR UPDATE`
+      const order = await tx.outboundOrder.findUnique({ where: { id: BigInt(id) } })
+      if (!order) throw new NotFoundException('出库单不存在')
+      if (order.status === 'exception') throw new BadRequestException('异常单已暂停流程，请先解除异常')
+      if (order.status === 'reviewing') return
+      if (order.status !== 'picked') {
+        throw new BadRequestException('仅已拣货状态可开始复核')
+      }
+      const changed = await tx.outboundOrder.updateMany({
+        where: { id: BigInt(id), status: 'picked' },
+        data: { status: 'reviewing' },
+      })
+      if (changed.count !== 1) throw new ConflictException('出库单状态已变化，请重新核对复核进度')
+      const operator = operatorId ? await tx.sysUser.findUnique({ where: { id: BigInt(operatorId) }, select: { realName: true, username: true } }) : null
+      await tx.operationLog.create({ data: {
+        operatorId: operatorId ? BigInt(operatorId) : undefined,
+        operatorName: operator?.realName || operator?.username,
+        module: 'outbound',
+        action: 'start_review',
+        targetType: 'outbound_order',
+        targetId: order.outboundNo,
+        detail: { reviewSource: 'pda_or_web' },
+      } })
     })
     return this.detail(id)
   }
@@ -1585,103 +1591,148 @@ th{background:#f5f5f5}
     },
     operatorId?: number,
   ) {
-    const clientRequestId = String(payload?.clientRequestId || '').trim().slice(0, 100)
-    if (clientRequestId && await this.opLog.hasClientRequest('outbound', 'pack', clientRequestId)) {
-      return { ...(await this.detail(id)), duplicate: true }
-    }
-    const order = await this.prisma.outboundOrder.findUnique({
-      where: { id: BigInt(id) },
-      include: { items: true },
-    })
-    if (!order) throw new NotFoundException('出库单不存在')
-    if (order.status === 'exception') throw new BadRequestException('异常单已暂停流程，请先解除异常')
-    if (!['picked', 'reviewing'].includes(order.status)) {
-      throw new BadRequestException('当前状态不可复核（需先完成拣货）')
-    }
-    const reviewSource: ReviewSource = payload?.reviewSource === 'pda' ? 'pda' : 'pick_list'
-    const nextStatus = order.needsRelabel ? 'pending_relabel' : 'packed'
-
-    let remark = order.remark || ''
-    const preDeduct = parseOmsOutboundPreDeduct(remark)
-    const meta = parseOmsOutboundMeta(remark)
-    const cartonsInput = Array.isArray(payload?.cartons) ? payload!.cartons! : []
-
-    if (preDeduct && cartonsInput.length === 0) {
-      throw new BadRequestException('OMS 出库单请录入外箱实测尺寸与重量')
-    }
-
-    if (cartonsInput.length > 0) {
-      const computed = computeOutboundCartonMeasures(cartonsInput)
-      const totals = sumOutboundCartonTotals(computed)
-      const measuredAt = new Date().toISOString()
-      const measure: OmsOutboundMeasure = {
-        cartons: computed,
-        totalVolumeM3: totals.totalVolumeM3,
-        totalWeightKg: totals.totalWeightKg,
-        measuredAt,
-      }
-      const totalQty = order.items.reduce((s, i) => s + (i.pickedQty || i.qty), 0)
-      const snapshot = resolveFeeTemplateSnapshot(preDeduct?.templateSnapshot, {
-        shippingMethod: meta.shippingMethod || order.logisticsProduct || undefined,
-        destRegion: preDeduct?.destRegion || meta.destRegion,
-      })
-      const { lines, total } = calculateOutboundActualFees({
-        totalVolumeM3: totals.totalVolumeM3,
-        totalWeightKg: totals.totalWeightKg,
-        totalQty,
-        skuLineCount: order.items.length,
-        snapshot,
-      })
-      const actualFees: OmsOutboundActualFees = {
-        lines: lines.map(l => ({
-          type: l.type,
-          label: l.label,
-          amount: l.amount,
-          detail: l.detail,
-          chargeType: l.chargeType,
-        })),
-        actualTotal: total,
-        calculatedAt: measuredAt,
-      }
-      remark = upsertOutboundActualFeesInRemark(
-        upsertOutboundMeasureInRemark(remark, measure),
-        actualFees,
-      )
-    }
-
-    await this.prisma.$transaction(async (tx) => {
-      await tx.outboundOrder.update({
+    const clientRequestId = String(payload?.clientRequestId || '').trim()
+    if (clientRequestId && (clientRequestId.length > 100 || !Number.isSafeInteger(operatorId) || Number(operatorId) <= 0)) throw new BadRequestException('请使用原账号与有效操作标识核对复核打包')
+    const requestFingerprint = this.packFingerprint(id, payload)
+    const duplicate = await this.prisma.$transaction(async tx => {
+      if (clientRequestId) await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(operatorId!)} FOR UPDATE`
+      await tx.$queryRaw`SELECT id FROM outbound_order WHERE id = ${BigInt(id)} FOR UPDATE`
+      const order = await tx.outboundOrder.findUnique({
         where: { id: BigInt(id) },
+        include: { items: true },
+      })
+      if (!order) throw new NotFoundException('出库单不存在')
+      if (clientRequestId && await this.readPackReplay(tx, order, clientRequestId, operatorId!, requestFingerprint)) return true
+      if (order.status === 'exception') throw new BadRequestException('异常单已暂停流程，请先解除异常')
+      if (!['picked', 'reviewing'].includes(order.status)) {
+        throw new BadRequestException('当前状态不可复核（需先完成拣货）')
+      }
+      const reviewSource: ReviewSource = payload?.reviewSource === 'pda' ? 'pda' : 'pick_list'
+      const nextStatus = order.needsRelabel ? 'pending_relabel' : 'packed'
+
+      let remark = order.remark || ''
+      const preDeduct = parseOmsOutboundPreDeduct(remark)
+      const meta = parseOmsOutboundMeta(remark)
+      const cartonsInput = Array.isArray(payload?.cartons) ? payload!.cartons! : []
+
+      if (preDeduct && cartonsInput.length === 0) {
+        throw new BadRequestException('OMS 出库单请录入外箱实测尺寸与重量')
+      }
+
+      if (cartonsInput.length > 0) {
+        const computed = computeOutboundCartonMeasures(cartonsInput)
+        const totals = sumOutboundCartonTotals(computed)
+        const measuredAt = new Date().toISOString()
+        const measure: OmsOutboundMeasure = {
+          cartons: computed,
+          totalVolumeM3: totals.totalVolumeM3,
+          totalWeightKg: totals.totalWeightKg,
+          measuredAt,
+        }
+        const totalQty = order.items.reduce((s, i) => s + (i.pickedQty || i.qty), 0)
+        const snapshot = resolveFeeTemplateSnapshot(preDeduct?.templateSnapshot, {
+          shippingMethod: meta.shippingMethod || order.logisticsProduct || undefined,
+          destRegion: preDeduct?.destRegion || meta.destRegion,
+        })
+        const { lines, total } = calculateOutboundActualFees({
+          totalVolumeM3: totals.totalVolumeM3,
+          totalWeightKg: totals.totalWeightKg,
+          totalQty,
+          skuLineCount: order.items.length,
+          snapshot,
+        })
+        const actualFees: OmsOutboundActualFees = {
+          lines: lines.map(l => ({
+            type: l.type,
+            label: l.label,
+            amount: l.amount,
+            detail: l.detail,
+            chargeType: l.chargeType,
+          })),
+          actualTotal: total,
+          calculatedAt: measuredAt,
+        }
+        remark = upsertOutboundActualFeesInRemark(
+          upsertOutboundMeasureInRemark(remark, measure),
+          actualFees,
+        )
+      }
+
+      const changed = await tx.outboundOrder.updateMany({
+        where: { id: BigInt(id), status: order.status },
         data: {
           status: nextStatus,
           reviewerId: operatorId ? BigInt(operatorId) : order.reviewerId,
           reviewedAt: new Date(),
           reviewSource,
           isPalletized: payload?.isPalletized ?? order.isPalletized,
-          palletInfo: payload?.palletInfo?.trim() || order.palletInfo,
+          palletInfo: payload?.isPalletized === false ? null : payload?.palletInfo !== undefined ? String(payload.palletInfo || '').trim() || null : order.palletInfo,
           remark,
         },
       })
-      if (clientRequestId) await tx.operationLog.create({
+      if (changed.count !== 1) throw new ConflictException('出库单状态已变化，请核对原复核结果，勿重复提交')
+      const operator = operatorId ? await tx.sysUser.findUnique({ where: { id: BigInt(operatorId) }, select: { realName: true, username: true } }) : null
+      await tx.operationLog.create({
         data: {
           operatorId: operatorId ? BigInt(operatorId) : undefined,
+          operatorName: operator?.realName || operator?.username,
           module: 'outbound',
           action: 'pack',
           targetType: 'outbound_order',
           targetId: order.outboundNo,
-          detail: { reviewSource, cartonCount: cartonsInput.length, clientRequestId },
+          detail: { reviewSource, cartonCount: cartonsInput.length, clientRequestId, requestFingerprint },
         },
       })
+      return false
     })
-    if (!clientRequestId) await this.opLog.log({
-      operatorId,
-      module: 'outbound',
-      action: 'pack',
-      targetType: 'outbound_order',
-      targetId: order.outboundNo,
-      detail: { reviewSource, cartonCount: cartonsInput.length, clientRequestId: null },
-    })
+    if (duplicate) return { ...(await this.detail(id)), duplicate: true }
     return this.detail(id)
+  }
+
+  private packFingerprint(id: number, payload: any) {
+    return createHash('sha256').update(JSON.stringify([id, payload?.isPalletized ?? null, String(payload?.palletInfo || '').trim(),
+      payload?.reviewSource === 'pda' ? 'pda' : 'pick_list', (payload?.cartons || []).map((c: any) => [Number(c.lengthCm), Number(c.widthCm), Number(c.heightCm), Number(c.grossWeightKg)])])).digest('hex')
+  }
+
+  private async packReceipt(db: any, order: any, requestId: string, actor: number) {
+    if (!requestId || !requestId.trim() || requestId !== requestId.trim() || requestId.length > 100 || !Number.isSafeInteger(actor) || actor <= 0) throw new BadRequestException('请使用原账号与有效操作标识核对复核打包')
+    const receipt = await db.operationLog.findFirst({ where: { module: 'outbound', action: { in: ['pack', 'pack_cancel'] }, detail: { path: '$.clientRequestId', equals: requestId } } })
+    if (receipt && (receipt.targetId !== order.outboundNo || Number(receipt.operatorId) !== actor)) throw new ConflictException('原复核操作属于其它账号或出库单，请回原单核对')
+    return receipt
+  }
+
+  private async readPackReplay(db: any, order: any, requestId: string, actor: number, fingerprint: string) {
+    const receipt = await this.packReceipt(db, order, requestId, actor)
+    if (!receipt) return false
+    if (receipt.action === 'pack_cancel') throw new ConflictException('原复核请求已取消，请核对原操作结果')
+    if (!(receipt.detail as any)?.requestFingerprint) throw new ConflictException('历史复核记录缺少原明细，请返回原单核对尺寸、重量和费用')
+    if ((receipt.detail as any).requestFingerprint !== fingerprint) throw new ConflictException('原复核的尺寸、重量或打托资料不能更改，请核对原请求后重试')
+    return true
+  }
+
+  async packRequest(id: number, requestId: string, actor: number) {
+    const order = await this.prisma.outboundOrder.findUnique({ where: { id: BigInt(id) } })
+    if (!order) throw new NotFoundException('出库单不存在')
+    const receipt = await this.packReceipt(this.prisma, order, requestId, actor)
+    return { requestId, id, outboundNo: order.outboundNo, currentStatus: order.status,
+      outcome: receipt ? receipt.action === 'pack_cancel' ? 'cancelled' : 'confirmed' : 'unknown' }
+  }
+
+  async cancelPackRequest(id: number, requestId: string, actor: number) {
+    if (!Number.isSafeInteger(actor) || actor <= 0) throw new BadRequestException('请使用原账号核对复核打包')
+    return this.prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(actor)} FOR UPDATE`
+      await tx.$queryRaw`SELECT id FROM outbound_order WHERE id = ${BigInt(id)} FOR UPDATE`
+      const order = await tx.outboundOrder.findUnique({ where: { id: BigInt(id) } })
+      if (!order) throw new NotFoundException('出库单不存在')
+      const receipt = await this.packReceipt(tx, order, requestId, actor)
+      if (!receipt) {
+        const operator = await tx.sysUser.findUnique({ where: { id: BigInt(actor) }, select: { realName: true, username: true } })
+        await tx.operationLog.create({ data: { module: 'outbound', action: 'pack_cancel', targetType: 'outbound_order', targetId: order.outboundNo,
+          operatorId: BigInt(actor), operatorName: operator?.realName || operator?.username, detail: { clientRequestId: requestId, outboundId: id } } })
+      }
+      return { requestId, id, outboundNo: order.outboundNo, currentStatus: order.status, outcome: receipt?.action === 'pack' ? 'confirmed' : 'cancelled' }
+    })
   }
 
   async setAppointment(id: number, payload: { appointmentStatus?: string; appointmentDate?: string | null }) {
