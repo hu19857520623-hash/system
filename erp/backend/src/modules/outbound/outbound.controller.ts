@@ -104,6 +104,12 @@ export class OutboundController {
   }
 
   @RequirePerms('outbound.pick')
+  @Get('pickers')
+  pickers() {
+    return this.service.pickers()
+  }
+
+  @RequirePerms('outbound.pick')
   @Post('assign-picker')
   assignPicker(@Body() body: AssignPickerDto) {
     return this.service.assignPicker(body.ids || [], body.pickerId)

@@ -2,6 +2,7 @@
 import { readShipAttempts, type ShipAttempt } from '@/utils/outboundShipping'
 import { readPickAttempts, type PickAttempt } from '@/utils/outboundPicking'
 import { userFacingError } from '@erp/shared/user-facing-error'
+import { getAccessToken } from '@/auth/tokenStore'
 
 import { displaySku, displaySkuText, formatSku } from '@erp/shared/sku-display'
 import { downloadableOutboundSourceAttachments, isOutboundSourceAttachment } from '@/features/outbound/attachments'
@@ -12,7 +13,6 @@ import { erpConfirm } from '@/utils/messageBox'
 import {
   outboundApi,
   customerApi,
-  usersApi,
   triggerBrowserDownload,
 } from '@/api/client.js'
 import { withAction } from '@/composables/useListLoader.ts'
@@ -146,6 +146,28 @@ const relabelLines = ref<{ id: number; sku: string; productName: string; scanned
 
 const customers = ref<{ id: number; code: string; name: string }[]>([])
 const pickerUsers = ref<{ id: number; name: string; workstation: string; label: string }[]>([])
+
+const pickerLoading = ref(false), pickerError = ref(''), assigning = ref(false)
+let pickerGeneration = 0, pickerMounted = true
+onBeforeUnmount(() => { pickerMounted = false;pickerGeneration++ })
+watch(() => app.profileRevision, () => {
+  pickerGeneration++;pickerUsers.value = [];assignPickerId.value = null;pickerLoading.value = false
+  if (assignVisible.value && canPick.value) void loadPickerUsers()
+})
+async function loadPickerUsers() {
+  if (!canPick.value) return
+  const version = ++pickerGeneration, actor = app.authenticatedUser?.id, revision = app.profileRevision
+  pickerLoading.value = true;pickerError.value = '';pickerUsers.value = []
+  try {
+    const token = getAccessToken(), data = await outboundApi.pickers()
+    if (!pickerMounted || version !== pickerGeneration || actor !== app.authenticatedUser?.id || revision !== app.profileRevision || token !== getAccessToken() || !canPick.value) return
+    pickerUsers.value = data.items.map((u: any) => ({ id: u.id, name: u.name, workstation: u.workstation, label: formatPickerLabel(u.name, u.workstation) }))
+    if (!pickerUsers.value.some(u => u.id === assignPickerId.value)) assignPickerId.value = null
+    if (!pickerUsers.value.length) pickerError.value = '暂无启用且具有拣货权限的仓库人员，请联系管理员核对岗位权限'
+  } catch (e) {
+    if (pickerMounted && version === pickerGeneration) { pickerError.value = userFacingError(e);assignPickerId.value = null }
+  } finally { if (pickerMounted && version === pickerGeneration) pickerLoading.value = false }
+}
 
 function formatPickerLabel(name?: string | null, workstation?: string | null) {
   const display = String(name || '').trim()
@@ -328,18 +350,7 @@ onMounted(async () => {
   } catch {
     customers.value = []
   }
-  try {
-    const uRes = await usersApi.list({ pageSize: 100, status: 'active', roleSide: 'warehouse' })
-    pickerUsers.value = (uRes.items || [])
-      .filter((u: any) => u.status === 1)
-      .map((u: any) => {
-        const name = u.realName || u.username || ''
-        const workstation = u.workstation || ''
-        return { id: u.id, name, workstation, label: formatPickerLabel(name, workstation) }
-      })
-  } catch {
-    pickerUsers.value = []
-  }
+  if (canPick.value) await loadPickerUsers()
   await reloadAll()
 })
 
@@ -843,11 +854,14 @@ function openAssignPicker(row?: any) {
   }
   assignTargetIds.value = ids
   reassigningPicker.value = reassigning
-  assignPickerId.value = reassigning ? row.pickerId ?? null : pickerUsers.value[0]?.id ?? null
+  assignPickerId.value = reassigning ? row.pickerId ?? null : null
   assignVisible.value = true
+  void loadPickerUsers()
 }
 
 async function submitAssignPicker() {
+  if (!canPick.value || assigning.value || pickerLoading.value || pickerError.value) return
+  if (!pickerUsers.value.some(u => u.id === assignPickerId.value)) { pickerError.value = '候选人员已变化，请刷新名单后重新选择';return }
   if (!assignPickerId.value) {
     ElMessage.warning('请选择拣货员')
     return
@@ -858,17 +872,28 @@ async function submitAssignPicker() {
   }
   const count = assignTargetIds.value.length
   const reassigning = reassigningPicker.value
-  await withAction(async () => {
+  const actor = app.authenticatedUser?.id, revision = app.profileRevision
+  let token: string
+  try { token = getAccessToken() } catch { pickerError.value = '无法读取登录信息，请恢复浏览器存储后重试';return }
+  const ids = [...assignTargetIds.value], pickerId = assignPickerId.value!
+  const checkSession = () => {
+    if (!pickerMounted || !canPick.value || !token || token !== getAccessToken() || actor !== app.authenticatedUser?.id || revision !== app.profileRevision) throw new Error('账号或权限已变化，请返回原账号核对单据的分配结果')
+  }
+  assigning.value = true
+  try { await withAction(async () => {
+    checkSession()
     await outboundApi.assignPicker({
-      ids: assignTargetIds.value,
-      pickerId: assignPickerId.value!,
+      ids,
+      pickerId,
     })
+    checkSession()
     assignVisible.value = false
     selectedRows.value = []
     assignTargetIds.value = []
     filterStatus.value = 'picking'
     await reloadAll()
   }, reassigning ? `已重新分配 ${count} 单` : `已分配 ${count} 单`)
+  } finally { assigning.value = false }
 }
 
 function openProblem(row: any) {
@@ -1352,15 +1377,17 @@ function statusTag(status: string) {
     />
 
     <!-- 分配拣货员 -->
-    <el-dialog v-model="assignVisible" :title="reassigningPicker ? '重新分配拣货员' : '分配拣货员'" width="360px">
+    <el-dialog v-model="assignVisible" :title="reassigningPicker ? '重新分配拣货员' : '分配拣货员'" width="360px" :close-on-click-modal="false" :close-on-press-escape="!assigning" :show-close="!assigning">
+      <el-alert v-if="pickerError" :title="pickerError" type="error" :closable="false" />
+      <el-button :loading="pickerLoading" :disabled="assigning || !canPick" @click="loadPickerUsers">刷新候选名单</el-button>
       <p class="dialog-hint" v-if="reassigningPicker">已选 {{ assignTargetIds.length }} 单（拣货中）。重新分配后，新拣货员可继续完成拣货。</p>
       <p class="dialog-hint" v-else>已选 {{ assignTargetIds.length }} 单（仅待拣货）。须先分配拣货员，才能在 ERP 网页完成拣货确认。</p>
-      <el-select v-model="assignPickerId" placeholder="选择工位 / 拣货员" filterable style="width:100%">
+      <el-select v-model="assignPickerId" placeholder="选择工位 / 拣货员" :loading="pickerLoading" :disabled="assigning || pickerLoading || !!pickerError || !canPick" filterable style="width:100%">
         <el-option v-for="u in pickerUsers" :key="u.id" :label="u.label" :value="u.id" />
       </el-select>
       <template #footer>
-        <el-button @click="assignVisible = false">取消</el-button>
-        <el-button type="primary" @click="submitAssignPicker">{{ reassigningPicker ? '确认重新分配' : '确认分配' }}</el-button>
+        <el-button :disabled="assigning" @click="assignVisible = false">返回</el-button>
+        <el-button type="primary" :loading="assigning" :disabled="!canPick || pickerLoading || !!pickerError || !assignPickerId" @click="submitAssignPicker">{{ reassigningPicker ? '确认重新分配' : '确认分配' }}</el-button>
       </template>
     </el-dialog>
 

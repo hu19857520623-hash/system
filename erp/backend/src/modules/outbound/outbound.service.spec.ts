@@ -436,6 +436,8 @@ describe('OutboundService.assignPicker', () => {
   function serviceWithUsers() {
     const prisma: any = {
       sysUser: { findUnique: jest.fn() },
+      sysUserPermission: { findMany: jest.fn().mockResolvedValue([]) },
+      sysRolePermission: { findMany: jest.fn().mockResolvedValue([]) },
       outboundOrder: { findMany: jest.fn(), updateMany: jest.fn() },
     }
     const service = new OutboundService(prisma, {} as any, {} as any, {} as any, {} as any, {} as any)

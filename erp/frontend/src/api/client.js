@@ -424,6 +424,7 @@ export const outboundApi = {
   syncShipment: (id) => api.post(`/outbound/${id}/sync-shipment`, {}),
   cancel: (id) => api.post(`/outbound/${id}/cancel`),
   assignPicker: (data) => api.post('/outbound/assign-picker', data),
+  pickers: () => api.get('/outbound/pickers'),
   setProblem: (id, data) => api.post(`/outbound/${id}/problem`, data),
   exportCsv: (params) => {
     const qs = new URLSearchParams(

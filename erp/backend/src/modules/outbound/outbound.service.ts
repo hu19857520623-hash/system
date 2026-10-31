@@ -10,6 +10,7 @@ import {
 import { createHash, randomUUID } from 'crypto'
 import { Prisma } from '@prisma/client'
 import { PrismaService } from '../../common/prisma/prisma.service'
+import { PermissionsService } from '../../common/permissions/permissions.service'
 import { FileStoreService } from '../../common/file-store.service'
 import { OperationLogService } from '../operation-log/operation-log.service'
 import { BillingService } from '../billing/billing.service'
@@ -180,6 +181,7 @@ export class OutboundService {
     private inventoryMutation: InventoryMutationService,
     private files: FileStoreService,
     private opLog: OperationLogService,
+    private permissions: PermissionsService = new PermissionsService(prisma),
   ) {}
 
   private runInTx<T>(
@@ -1014,6 +1016,19 @@ export class OutboundService {
     }
   }
 
+  async pickers() {
+    const rows = await this.prisma.sysUser.findMany({ where: { status: 1 },
+      select: { id: true, username: true, realName: true, workstation: true, roleCode: true }, orderBy: { id: 'asc' } })
+    const eligible: { id: number; name: string; workstation: string }[] = []
+    // Reuse the same effective permission resolution as the API guard (custom > role > defaults).
+    for (const row of rows) {
+      if (isWarehouseStaffRole(row.roleCode) && await this.permissions.userHasPerm(Number(row.id), row.roleCode, 'outbound.pick')) {
+        eligible.push({ id: Number(row.id), name: row.realName || row.username, workstation: row.workstation || '' })
+      }
+    }
+    return { items: eligible, total: eligible.length }
+  }
+
   async assignPicker(ids: number[], pickerId: number) {
     if (!pickerId) throw new BadRequestException('请选择拣货员')
     if (!ids?.length) throw new BadRequestException('请选择出库单')
@@ -1021,6 +1036,9 @@ export class OutboundService {
     if (!picker || picker.status !== 1) throw new BadRequestException('拣货员不存在或已停用')
     if (!isWarehouseStaffRole(picker.roleCode)) {
       throw new BadRequestException('只能分配仓储职位的拣货员，运营/销售等办公职位不能作为仓内岗位')
+    }
+    if (!await this.permissions.userHasPerm(pickerId, picker.roleCode, 'outbound.pick')) {
+      throw new BadRequestException('该人员当前没有拣货权限，请刷新候选名单后重新选择')
     }
 
     const orders = await this.prisma.outboundOrder.findMany({
