@@ -1456,9 +1456,11 @@ th{background:#f5f5f5}
       if (transitioned.count !== 1) {
         throw new BadRequestException('出库单状态已变化，请刷新后重试')
       }
+      const operator = clientRequestId ? await tx.sysUser.findUnique({ where: { id: BigInt(operatorId!) }, select: { realName: true, username: true } }) : null
       if (clientRequestId) await tx.operationLog.create({
         data: {
           operatorId: operatorId ? BigInt(operatorId) : undefined,
+          operatorName: operator?.realName || operator?.username,
           module: 'outbound',
           action: 'pick',
           targetType: 'outbound_order',
@@ -1505,14 +1507,48 @@ th{background:#f5f5f5}
   }
 
   private async readPickReplay(db: any, order: any, payload: any, actor: number, fingerprint: string) {
-    const previous = await db.operationLog.findFirst({ where: {module:'outbound',action:'pick',detail:{path:'$.clientRequestId',equals:String(payload.clientRequestId).trim()}} })
+    const previous = await this.pickReceipt(db, order, String(payload.clientRequestId).trim(), actor)
     if (!previous) return false
-    if (previous.targetId !== order.outboundNo || Number(previous.operatorId) !== actor) throw new ConflictException('原拣货操作属于其它账号或出库单，请回原单核对')
+    if (previous.action === 'pick_cancel') throw new ConflictException('原拣货请求已取消，本次未扣减库存，请核对原操作结果')
     const detail = previous.detail as any
     // Legacy receipts store resolved allocations, sufficient to verify explicit original lines.
     const original = detail?.requestFingerprint || this.pickFingerprint(Number(order.id), {pickSource:detail?.pickSource,items:order.items.map((item:any)=>({id:Number(item.id),allocations:(detail?.allocations || []).filter((line:any)=>line.sku===item.sku)}))})
     if (original !== fingerprint) throw new ConflictException('原拣货明细、数量或库位不能更改，请核对原请求后重试')
     return true
+  }
+
+  private async pickReceipt(db: any, order: any, requestId: string, actor: number) {
+    if (!requestId || !requestId.trim() || requestId !== requestId.trim() || requestId.length > 100 || !Number.isSafeInteger(actor) || actor <= 0) throw new BadRequestException('请使用原账号与有效操作标识核对拣货')
+    const previous = await db.operationLog.findFirst({ where: { module: 'outbound', action: { in: ['pick', 'pick_cancel'] }, detail: { path: '$.clientRequestId', equals: requestId } } })
+    if (previous && (previous.targetId !== order.outboundNo || Number(previous.operatorId) !== actor)) throw new ConflictException('原拣货操作属于其它账号或出库单，请回原单核对')
+    return previous
+  }
+
+  async pickRequest(id: number, requestId: string, actor: number) {
+    const order = await this.prisma.outboundOrder.findUnique({ where: { id: BigInt(id) } })
+    if (!order) throw new NotFoundException('出库单不存在')
+    const receipt = await this.pickReceipt(this.prisma, order, requestId, actor)
+    return { requestId, id, outboundNo: order.outboundNo, currentStatus: order.status,
+      outcome: receipt ? receipt.action === 'pick_cancel' ? 'cancelled' : 'confirmed' : 'unknown' }
+  }
+
+  async cancelPickRequest(id: number, requestId: string, actor: number) {
+    if (!Number.isSafeInteger(actor) || actor <= 0) throw new BadRequestException('请使用原账号核对拣货')
+    // Use exactly the same locks as pick: whichever commits first determines the immutable outcome.
+    return this.prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(actor)} FOR UPDATE`
+      await tx.$queryRaw`SELECT id FROM outbound_order WHERE id = ${BigInt(id)} FOR UPDATE`
+      const order = await tx.outboundOrder.findUnique({ where: { id: BigInt(id) } })
+      if (!order) throw new NotFoundException('出库单不存在')
+      const receipt = await this.pickReceipt(tx, order, requestId, actor)
+      if (!receipt) {
+        const operator = await tx.sysUser.findUnique({ where: { id: BigInt(actor) }, select: { realName: true, username: true } })
+        await tx.operationLog.create({ data: { module: 'outbound', action: 'pick_cancel', targetType: 'outbound_order', targetId: order.outboundNo,
+          operatorId: BigInt(actor), operatorName: operator?.realName || operator?.username, detail: { clientRequestId: requestId, outboundId: id } } })
+      }
+      return { requestId, id, outboundNo: order.outboundNo, currentStatus: order.status,
+        outcome: receipt?.action === 'pick' ? 'confirmed' : 'cancelled' }
+    })
   }
 
   async startReview(id: number, operatorId?: number) {

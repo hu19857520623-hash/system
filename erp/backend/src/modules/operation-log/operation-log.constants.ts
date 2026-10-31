@@ -4,6 +4,7 @@ export const OPERATION_MODULE_LABELS: Record<string, string> = {
   product_audit: '产品审核',
   logistics_receipt: '物流收货',
   inbound: '入库',
+  outbound: '出库',
   returns: '退件',
   inventory: '库存',
   product: '商品主数据',
@@ -13,6 +14,7 @@ export const OPERATION_MODULE_LABELS: Record<string, string> = {
 }
 
 export const OPERATION_ACTION_LABELS: Record<string, string> = {
+  pick: '完成拣货', pick_cancel: '取消原拣货请求',
   billing_generate: '生成账单', billing_confirm: '确认账单扣未付费用', billing_manual_charge: '录入手工费用', outbound_payment: '确认发运支付凭据',
   reopen_count: '更正清点', close_zero_receipt: '零收货结束', reduce_qc: '减少实收件数', reduce_carton: '减少实收箱数', reduce_putaway: '撤回最近上架',
   repair_damage_received: '核对破损已收数量',

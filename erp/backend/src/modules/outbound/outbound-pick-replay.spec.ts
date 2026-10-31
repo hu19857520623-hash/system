@@ -5,6 +5,7 @@ function fixture() {
   let receipt:any=null,tail=Promise.resolve()
   const tx:any={
     $queryRaw:jest.fn().mockResolvedValue([]),
+    sysUser:{findUnique:jest.fn(async()=>({realName:'测试拣货员',username:'test_picker'}))},
     operationLog:{findFirst:jest.fn(async()=>receipt),create:jest.fn(async({data}:any)=>{receipt=data;return data})},
     outboundOrder:{findUnique:jest.fn(async()=>structuredClone(order)),updateMany:jest.fn(async()=>{order.status='picked';return {count:1}})},
     warehouseLocation:{findFirst:jest.fn(async()=>({id:1n}))},outboundPickAllocation:{create:jest.fn()},outboundOrderItem:{update:jest.fn()},
@@ -17,6 +18,41 @@ function fixture() {
   return {service,tx,mutation,order,payload,setReceipt:(r:any)=>{receipt=r}}
 }
 describe('pick original receipt binding and serialized replay',()=>{
+  it('read-only lookup does not claim success from the current order status',async()=>{
+    const f=fixture();f.order.status='shipped'
+    await expect(f.service.pickRequest(61,'unknown-original',59)).resolves.toMatchObject({outcome:'unknown',currentStatus:'shipped'})
+    expect(f.tx.operationLog.create).not.toHaveBeenCalled()
+  })
+  it('cancel wins before a delayed pick, remains readable, and cannot be reused by another actor',async()=>{
+    const f=fixture()
+    await expect(f.service.cancelPickRequest(61,f.payload.clientRequestId,59)).resolves.toMatchObject({outcome:'cancelled',currentStatus:'picking'})
+    await expect(f.service.pick(61,f.payload,59)).rejects.toThrow('已取消')
+    await expect(f.service.pickRequest(61,f.payload.clientRequestId,59)).resolves.toMatchObject({outcome:'cancelled'})
+    await expect(f.service.cancelPickRequest(61,f.payload.clientRequestId,51)).rejects.toThrow('其它账号或出库单')
+    expect(f.mutation.deductLocationQtyFifo).not.toHaveBeenCalled()
+    expect(f.tx.operationLog.create).toHaveBeenCalledTimes(1)
+  })
+  it('concurrent pick and cancellation resolve to the committed pick without reversing allocations',async()=>{
+    const f=fixture()
+    let entered!:()=>void,release!:()=>void
+    const inTransaction=new Promise<void>(resolve=>{entered=resolve}),continuePick=new Promise<void>(resolve=>{release=resolve})
+    f.mutation.deductLocationQtyFifo.mockImplementationOnce(async()=>{entered();await continuePick;return [{inventoryLocationId:1n,qty:1}]})
+    const picking=f.service.pick(61,f.payload,59)
+    await inTransaction
+    const cancelling=f.service.cancelPickRequest(61,f.payload.clientRequestId,59)
+    release();await Promise.all([picking,cancelling])
+    f.order.status='shipped'
+    await expect(f.service.cancelPickRequest(61,f.payload.clientRequestId,59)).resolves.toMatchObject({outcome:'confirmed',currentStatus:'shipped'})
+    await expect(f.service.pickRequest(61,f.payload.clientRequestId,59)).resolves.toMatchObject({outcome:'confirmed'})
+    expect(f.mutation.deductLocationQtyFifo).toHaveBeenCalledTimes(1)
+    expect(f.tx.operationLog.create).toHaveBeenCalledTimes(1)
+  })
+  it('a cancellation receipt cannot resolve another order or be overwritten by that order',async()=>{
+    const f=fixture();f.setReceipt({action:'pick_cancel',targetId:'OTHER',operatorId:59n,detail:{clientRequestId:f.payload.clientRequestId}})
+    await expect(f.service.pickRequest(61,f.payload.clientRequestId,59)).rejects.toThrow('其它账号或出库单')
+    await expect(f.service.cancelPickRequest(61,f.payload.clientRequestId,59)).rejects.toThrow('其它账号或出库单')
+    expect(f.tx.operationLog.create).not.toHaveBeenCalled()
+  })
   it('concurrent identical requests deduct a bin and save allocations once; replay remains valid after shipping',async()=>{
     const f=fixture();const results=await Promise.all([f.service.pick(61,f.payload,59),f.service.pick(61,f.payload,59)])
     expect(results.filter(r=>(r as any).duplicate)).toHaveLength(1)

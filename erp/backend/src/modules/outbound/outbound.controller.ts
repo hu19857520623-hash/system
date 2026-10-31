@@ -216,6 +216,18 @@ export class OutboundController {
   }
 
   @RequirePerms('outbound.pick')
+  @Get(':id/pick-requests/:requestId')
+  pickRequest(@Param('id', ParseIntPipe) id: number, @Param('requestId') requestId: string, @CurrentUser('userId') userId: number) {
+    return this.service.pickRequest(id, requestId, userId)
+  }
+
+  @RequirePerms('outbound.pick')
+  @Post(':id/pick-requests/:requestId/cancel')
+  cancelPickRequest(@Param('id', ParseIntPipe) id: number, @Param('requestId') requestId: string, @CurrentUser('userId') userId: number) {
+    return this.service.cancelPickRequest(id, requestId, userId)
+  }
+
+  @RequirePerms('outbound.pick')
   @Post(':id/pick')
   pick(@Param('id', ParseIntPipe) id: number, @Body() body: PickOutboundDto, @CurrentUser('userId') userId: number) {
     return this.service.pick(id, body, userId)

@@ -411,6 +411,8 @@ export const outboundApi = {
     downloadRequest(`/outbound/${id}/labels/sku/${encodeURIComponent(sku)}/unit/${encodeURIComponent(unitIndex)}`),
   confirmRelabel: (id, data) => api.post(`/outbound/${id}/confirm-relabel`, data || {}),
   pick: (id, data) => api.post(`/outbound/${id}/pick`, data),
+  pickRequest: (id, requestId) => api.get(`/outbound/${id}/pick-requests/${encodeURIComponent(requestId)}`),
+  cancelPickRequest: (id, requestId) => api.post(`/outbound/${id}/pick-requests/${encodeURIComponent(requestId)}/cancel`, {}),
   pickSuggestions: (id) => api.get(`/outbound/${id}/pick-suggestions`),
   startReview: (id) => api.post(`/outbound/${id}/start-review`, {}),
   downloadPickList: (id) => openHtmlPrint(`/outbound/${id}/pick-list`),

@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { readShipAttempts, type ShipAttempt } from '@/utils/outboundShipping'
+import { readPickAttempts, type PickAttempt } from '@/utils/outboundPicking'
 import { userFacingError } from '@erp/shared/user-facing-error'
 
 import { displaySku, displaySkuText, formatSku } from '@erp/shared/sku-display'
 import { downloadableOutboundSourceAttachments, isOutboundSourceAttachment } from '@/features/outbound/attachments'
-import { ref, computed, onMounted, reactive } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, reactive } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { erpConfirm } from '@/utils/messageBox'
@@ -71,6 +72,15 @@ const appointmentDateShortcuts = [
 const pickVisible = ref(false)
 const shipVisible = ref(false)
 const shipPending = ref<ShipAttempt[]>([]), shipStorageError = ref('')
+const pickPending = ref<PickAttempt[]>([]), pickStorageError = ref('')
+function loadPickPending() {
+  pickPending.value = []
+  try { pickPending.value = readPickAttempts(localStorage, Number(app.authenticatedUser?.id));pickStorageError.value = '' }
+  catch (e) { pickStorageError.value = userFacingError(e) }
+}
+watch(() => app.authenticatedUser?.id, loadPickPending)
+function onPickStorage(event: StorageEvent) { if (!event.key || event.key.startsWith('erp:outbound-picking:')) loadPickPending() }
+onBeforeUnmount(() => window.removeEventListener('storage', onPickStorage))
 function loadShipPending() {
   try { shipPending.value = readShipAttempts(localStorage, Number(app.authenticatedUser?.id));shipStorageError.value = '' }
   catch (e) { shipStorageError.value = userFacingError(e) }
@@ -296,6 +306,8 @@ function resetFilters() {
 
 onMounted(async () => {
   loadShipPending()
+  loadPickPending()
+  window.addEventListener('storage', onPickStorage)
   await loadTakealotDestConfig()
   const q = String(route.query.q || '').trim()
   if (q) searchQ.value = q
@@ -679,7 +691,11 @@ function openPick(row: any) {
 }
 
 async function onPickSuccess() {
-  filterStatus.value = 'picked'
+  loadPickPending()
+  clearFilterValues()
+  filterStatus.value = 'all'
+  searchQ.value = pickOrder.value?.outboundNo || ''
+  selectedRows.value = []
   await reloadAll()
 }
 
@@ -1070,6 +1086,12 @@ function statusTag(status: string) {
       </template>
 
       <el-alert v-if="shipStorageError" :title="shipStorageError" type="error" :closable="false" />
+      <el-alert v-if="pickStorageError" :title="pickStorageError" type="error" :closable="false" />
+      <el-alert v-for="attempt in pickPending" :key="`pick-${attempt.outboundId}`" type="warning" :closable="false" style="margin-bottom:8px">
+        <template #title>出库单 {{ attempt.outboundNo }} 还有原拣货请求待核对，请勿重新拣货。</template>
+        <el-button v-if="canPick" size="small" @click="openPick(attempt.order)">继续核对原拣货</el-button>
+        <span v-else>请恢复原账号岗位权限后继续核对。</span>
+      </el-alert>
       <el-alert v-for="attempt in shipPending" :key="attempt.outboundId" type="warning" :closable="false" style="margin-bottom:8px">
         <template #title>出库单 {{ attempt.outboundNo }} 还有原发运操作待核对，勿再次发运。</template>
         <el-button v-if="canShip" size="small" @click="openShip(attempt.order)">继续核对原发运</el-button>
@@ -1357,6 +1379,7 @@ function statusTag(status: string) {
       :order="pickOrder"
       :can-pick="canPick"
       @success="onPickSuccess"
+      @pending="loadPickPending"
     />
 
     <!-- 复核打包 -->

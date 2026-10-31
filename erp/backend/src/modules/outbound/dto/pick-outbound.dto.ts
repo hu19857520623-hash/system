@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer'
-import { ArrayMinSize, IsArray, IsIn, IsInt, IsOptional, IsString, Min, ValidateNested } from 'class-validator'
+import { ArrayMinSize, IsArray, IsIn, IsInt, IsOptional, IsString, Matches, Min, ValidateNested } from 'class-validator'
 
 export class PickAllocationDto {
   @IsString()
@@ -45,9 +45,8 @@ export class PickOutboundDto {
   @IsIn(['pda', 'pick_list'])
   pickSource?: 'pda' | 'pick_list'
 
-  @IsOptional()
-  @IsString()
-  clientRequestId?: string
+  @Matches(/^\S(?:.{0,98}\S)?$/, { message: '缺少或无效的原拣货操作标识，请刷新页面后重试' })
+  clientRequestId!: string
 }
 
 export class AssignPickerDto {

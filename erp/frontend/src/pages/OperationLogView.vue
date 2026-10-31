@@ -21,6 +21,7 @@ const MODULE_OPTIONS = [
   { value: 'product_audit', label: '产品审核' },
   { value: 'logistics_receipt', label: '物流收货' },
   { value: 'inbound', label: '入库' },
+  { value: 'outbound', label: '出库' },
   { value: 'inventory', label: '库存' },
   { value: 'product', label: '商品主数据' },
   { value: 'warehouse_location', label: '库位管理' },
