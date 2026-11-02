@@ -8,6 +8,12 @@ function fixture() {
 }
 
 describe('入库附件内容与失败清理', () => {
+  it('修改重复携带同名同内容附件时复用原文件和记录', async () => {
+    const f = fixture()
+    f.db.$queryRawUnsafe.mockResolvedValue([{ fileName: 'original.txt', filePath: 'saved.txt' }])
+    await f.service.saveOmsAsnAttachments(1n, [{ fileName: 'original.txt', contentBase64: Buffer.from('原附件').toString('base64') }], f.db, [], true)
+    expect(f.files.write).not.toHaveBeenCalled(); expect(f.db.$executeRawUnsafe).not.toHaveBeenCalled()
+  })
   it('附件同名且内容相同才能重放，文件缺失时给出中文恢复路径', async () => {
     const f = fixture()
     f.db.$queryRawUnsafe.mockResolvedValue([{ fileName: 'original.txt', filePath: 'saved.txt' }])
