@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test, { type TestContext } from 'node:test'
 import { getStoredAuthSession, storeAuthSession } from '../api/client'
+import { inboundPendingKey } from './inboundPending'
 import type { InboundOrder } from './mockData'
 import { hydrateAccounts } from '../auth/accountStore'
 import { getInboundOrdersSnapshot, setInboundOrders } from './entityStore'
@@ -285,4 +286,31 @@ test('已撤回草稿确认作废后采用 voided，而不被旧 draft 表示覆
   assert.equal(result.ok, true); if (result.ok) assert.equal(result.order.status, 'voided')
   assert.equal(getInboundOrdersSnapshot()[0].status, 'voided'); assert.equal(calls, 1)
   assert.equal(pendingInboundOperation(withdrawn).record, null)
+})
+
+test('重试入口遇到损坏原请求时不发请求、不清记录、不覆盖缓存；只读核对仍可用', async t => {
+  environment(t); setInboundOrders([draft])
+  globalThis.fetch = async () => { throw new TypeError('Failed to fetch') }
+  await submitInboundToErp(draft)
+  const original = pendingInboundOperation(draft).record!; assert.ok(original)
+  const key = inboundPendingKey('u-one', 'TKL9001', draft.inboundNo)
+  const changes = [
+    { body: { ...original.body, inboundNo: 'OTHER' } },
+    { body: { ...original.body, customerCode: 'OTHER' } },
+    { body: { ...original.body, clientRequestId: null } },
+    { localOrder: { ...original.localOrder, inboundNo: 'OTHER' } },
+    // Internally consistent body/localOrder, but it belongs to a different customer ID.
+    { localOrder: { ...original.localOrder, customerId: 'c2' }, body: { ...original.body, customerId: 'c2' } },
+  ]
+  for (const patch of changes) {
+    const raw = JSON.stringify({ ...original, ...patch }); localStorage.setItem(key, raw)
+    globalThis.fetch = async () => { assert.fail('损坏原请求不能发送') }
+    const result = await retryInboundOriginal(draft); assert.equal(result.ok, false)
+    if (!result.ok) { assert.equal(result.uncertain, false); assert.match(result.error, /原入库操作记录无法读取|当前客户或单据不符/) }
+    assert.equal(localStorage.getItem(key), raw); assert.deepEqual(getInboundOrdersSnapshot(), [draft])
+    assert.ok(pendingInboundOperation(draft).error)
+    globalThis.fetch = async (_input, init) => { assert.equal(init?.method, undefined); return Response.json(erp) }
+    assert.equal((await readInboundOriginal(draft)).ok, true); assert.equal(localStorage.getItem(key), raw)
+    setInboundOrders([draft])
+  }
 })

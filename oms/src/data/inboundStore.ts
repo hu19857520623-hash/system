@@ -202,7 +202,11 @@ function pendingChanged() {
 
 export function pendingInboundOperation(order: InboundOrder): { record: InboundPending | null; error?: string } {
   if (!order.customerId || getCustomerCode(order.customerId) === '—' || !getStoredAuthSession()) return { record: null }
-  try { return { record: readInboundPending(localStorage, pendingContext(order).key) } }
+  try {
+    const context = pendingContext(order), record = readInboundPending(localStorage, context.key)
+    if (record && (record.localOrder.customerId !== order.customerId || record.inboundNo !== order.inboundNo || record.customerCode !== context.customerCode)) throw knownFailure('原入库操作与当前客户或单据不符，请保留记录并返回原账号核对')
+    return { record }
+  }
   catch (error) { return { record: null, error: userFacingError(error) } }
 }
 
@@ -246,7 +250,7 @@ async function runOriginal(order: InboundOrder, kind: InboundOperationKind, retr
         record = saveInboundPending(localStorage, context.key, { version: 1, kind, customerCode: context.customerCode, inboundNo: order.inboundNo, body, localOrder: JSON.parse(JSON.stringify(order)), createdAt: new Date().toISOString() })
         pendingChanged()
       }
-      if (record.customerCode !== context.customerCode || record.inboundNo !== order.inboundNo) throw knownFailure('原请求与当前客户或单据不符，请返回原账号核对')
+      if (record.customerCode !== context.customerCode || record.inboundNo !== order.inboundNo || record.localOrder.customerId !== order.customerId) throw knownFailure('原请求与当前客户或单据不符，请返回原账号核对')
       let erp: ErpInboundOrder
       try { erp = await sendOriginal(record) }
       catch (error) {
