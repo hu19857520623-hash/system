@@ -20,7 +20,7 @@ import { downloadInboundReceivingList, printInboundReceivingList } from '../../d
 import { useProducts } from '../../data/inventoryStore'
 import { getInboundOrdersSnapshot, setInboundOrders } from '../../data/entityStore'
 import { apiDelete } from '../../api/client'
-import { canEditInboundOrder, canVoidInboundOrder, canReorderInboundOrder, voidInboundOrder, reorderInboundOnErp, withdrawInboundOrder } from '../../data/inboundStore'
+import { canEditInboundOrder, canVoidInboundOrder, canReorderInboundOrder, voidInboundOrder, reorderInboundOnErp, withdrawInboundOrder, captureInboundWriteAccess } from '../../data/inboundStore'
 
 interface InboundDetailDrawerProps {
   order: InboundOrder | null
@@ -41,7 +41,8 @@ const TIMELINE: Record<string, string[]> = {
 }
 
 export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mode = 'drawer' }: InboundDetailDrawerProps) {
-  const { role } = useRole()
+  const { role, can } = useRole()
+  const canWrite = can('inbound:write')
   const [printKind, setPrintKind] = useState<InboundLabelKind | null>(null)
   const dataScope = useDataScope()
   const customerView = !isSysAdmin(role)
@@ -100,17 +101,18 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mo
   }
 
   const handleCancel = async () => {
+    if (!canWrite) { showFeedback('err', '当前账号只有入库查看权限，不能修改单据'); return }
     if (order.status === 'draft') {
       if (!window.confirm(`确认删除草稿入库单 ${order.inboundNo}？此操作不可恢复。`)) return
-      const before = getInboundOrdersSnapshot()
-      setInboundOrders(before.filter(o => o.id !== order.id))
       try {
+        const assertWrite = captureInboundWriteAccess()
         await apiDelete(`/inbound-orders/${encodeURIComponent(order.id)}`)
+        assertWrite()
+        setInboundOrders(getInboundOrdersSnapshot().filter(o => o.id !== order.id))
         showFeedback('ok', '草稿已删除')
         onOrderChanged?.()
         window.setTimeout(onClose, 300)
       } catch (error) {
-        setInboundOrders(before)
         showFeedback('err', `删除失败：${error instanceof Error ? error.message : String(error)}`)
       }
       return
@@ -118,6 +120,7 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mo
   }
 
   const handleVoid = async () => {
+    if (!canWrite) { showFeedback('err', '当前账号只有入库查看权限，不能修改单据'); return }
     if (!canVoidInboundOrder(order.status)) return
     if (!window.confirm(`确认作废入库单 ${order.inboundNo}？作废后仓库不再收货，可在详情中确认后重新下单。`)) return
     setVoiding(true)
@@ -135,6 +138,7 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mo
   }
 
   const handleWithdraw = async () => {
+    if (!canWrite) { showFeedback('err', '当前账号只有入库查看权限，不能修改单据'); return }
     if (order.status !== 'on_the_way') return
     if (!window.confirm(`确认撤回入库单 ${order.inboundNo}？仓库将停止收货，入库单转为草稿后可修改并重新提交。`)) return
     setWithdrawing(true)
@@ -152,6 +156,7 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mo
   }
 
   const handleReorderSubmit = async () => {
+    if (!canWrite) { showFeedback('err', '当前账号只有入库查看权限，不能修改单据'); return }
     if (!canReorderInboundOrder(order.status)) return
     if (!confirmReorder) {
       showFeedback('err', '请先确认入库单内容后再提交')
@@ -287,7 +292,7 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mo
             </ul>
           </div>
 
-          {canReorderInboundOrder(order.status) && (
+          {canWrite && canReorderInboundOrder(order.status) && (
             <div className="rounded-xl bg-slate-50 p-4 ring-1 ring-border-light">
               <p className="text-xs font-semibold text-text-primary">重新下单</p>
               <p className="mt-1 text-[11px] text-text-secondary">请先核对上方入库信息与货品明细，确认无误后再提交，提交后进入在途。</p>
@@ -333,12 +338,12 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mo
 
         {printKind && <PrintCodeTypeDialog title={printKind} initialType={printKind === '箱唛' ? 'barcode' : 'qr'} onClose={() => setPrintKind(null)} onConfirm={type => handlePrint(printKind, type)} />}
         <div className="border-t border-border-light p-4 flex flex-wrap gap-2">
-          {order.status === 'on_the_way' && (
+          {canWrite && order.status === 'on_the_way' && (
             <Button variant="secondary" size="sm" disabled={withdrawing} onClick={() => void handleWithdraw()}>
               {withdrawing ? '撤回中…' : '撤回为草稿'}
             </Button>
           )}
-          {canEditInboundOrder(order.status) && (
+          {canWrite && canEditInboundOrder(order.status) && (
             <Link to={`/inbound?edit=${encodeURIComponent(order.id)}`}>
               <Button size="sm">{order.status === 'draft' ? '编辑' : '修改'}</Button>
             </Link>
@@ -353,17 +358,17 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mo
               <Download className="h-3 w-3" />{l}
             </Button>
           ))}
-          {canVoidInboundOrder(order.status) && (
+          {canWrite && canVoidInboundOrder(order.status) && (
             <Button variant="danger-outline" size="sm" disabled={voiding} onClick={() => void handleVoid()}>
               {voiding ? '作废中…' : '作废'}
             </Button>
           )}
-          {canReorderInboundOrder(order.status) && (
+          {canWrite && canReorderInboundOrder(order.status) && (
             <Button size="sm" disabled={!confirmReorder || reordering} onClick={() => void handleReorderSubmit()}>
               {reordering ? '提交中…' : '提交'}
             </Button>
           )}
-          {order.status === 'draft' && (
+          {canWrite && order.status === 'draft' && (
             <Button variant="danger-outline" size="sm" className="ml-auto" onClick={() => void handleCancel()}>
               删除草稿
             </Button>

@@ -30,7 +30,7 @@ function environment(t: TestContext) {
     if (held.has(key)) return fn(null)
     held.add(key); try { return await fn({ name: key }) } finally { held.delete(key) }
   } } } })
-  storeAuthSession({ token: 'test-one', user: { id: 'u-one', username: 'test-one', role: 'hybrid', customerId: 'c1', customerCode: 'TKL9001', warehouse: 'jhb1', permissions: [], status: 'active', mustChangePassword: false, name: '测试' } } as any)
+  storeAuthSession({ token: 'test-one', user: { id: 'u-one', username: 'test-one', role: 'hybrid', customerId: 'c1', customerCode: 'TKL9001', warehouse: 'jhb1', permissions: ['inbound:read', 'inbound:write'], status: 'active', mustChangePassword: false, name: '测试' } } as any)
   hydrateAccounts([{ id: 'c1', code: 'TKL9001', permissions: [] } as any])
   t.after(() => {
     globalThis.fetch = previousFetch
@@ -242,4 +242,22 @@ test('回写期间切换身份，旧失败不得恢复旧缓存或清除原请�
   release(); assert.equal((await pending).ok, false)
   assert.deepEqual(getInboundOrdersSnapshot(), [other])
   storeAuthSession(owner); assert.ok(pendingInboundOperation(draft).record)
+})
+
+for (const role of ['ecommerce', 'catalog', 'hybrid'] as const) test(`${role}: 撤销入库写权限后所有客户端写入口拒绝且保留原请求`, async t => {
+  environment(t); setInboundOrders([draft])
+  globalThis.fetch = async () => { throw new TypeError('Failed to fetch') }
+  await submitInboundToErp(draft)
+  const original = pendingInboundOperation(draft).record; assert.ok(original)
+  const session = getStoredAuthSession()!; storeAuthSession({ ...session, user: { ...session.user, role, permissions: ['inbound:read'] } })
+  globalThis.fetch = async () => { assert.fail('只读账号不得发起写请求') }
+  for (const action of [submitInboundToErp, updateInboundOnErp, withdrawInboundOrder, voidInboundOrder, reorderInboundOnErp, retryInboundOriginal]) {
+    const order = { ...draft, erpRevision: erp.revision, status: (action === reorderInboundOnErp ? 'voided' : 'on_the_way') as InboundOrder['status'] }
+    const result = await action(order); assert.equal(result.ok, false)
+    if (!result.ok) { assert.equal(result.uncertain, false); assert.match(result.error, /入库查看权限/) }
+  }
+  assert.deepEqual(pendingInboundOperation(draft).record, original)
+  globalThis.fetch = async () => Response.json(erp)
+  assert.equal((await readInboundOriginal(draft)).ok, true)
+  assert.deepEqual(pendingInboundOperation(draft).record, original)
 })

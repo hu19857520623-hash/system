@@ -22,7 +22,7 @@ import { useDataScope } from '../auth/useDataScope'
 import { AdminCustomerFilter, AdminCustomerCell } from '../components/admin/AdminCustomerFilter'
 import { useRole } from '../auth/RoleContext'
 import { getCustomerIdForRole } from '../data/dataScope'
-import { canEditInboundOrder, canVoidInboundOrder, canReorderInboundOrder, refreshInboundsFromErp, voidInboundOrder, withdrawInboundOrder, inboundMutationFailure } from '../data/inboundStore'
+import { canEditInboundOrder, canVoidInboundOrder, canReorderInboundOrder, refreshInboundsFromErp, voidInboundOrder, withdrawInboundOrder, inboundMutationFailure, captureInboundWriteAccess } from '../data/inboundStore'
 import { addInboundOrdersOrThrow, getInboundOrdersSnapshot } from '../data/entityStore'
 import { buildImportedInboundDrafts } from '../data/inboundDraftImport'
 import { importCsvFile } from '../data/csvImportExport'
@@ -93,7 +93,8 @@ function applyInboundFilters(list: InboundOrder[], f: InboundFilters, forCustome
 
 export default function InboundRecords() {
   const dataScope = useDataScope()
-  const { role } = useRole()
+  const { role, can } = useRole()
+  const canWrite = can('inbound:write')
   const inboundOrders = useInboundOrders()
   const scopedInbound = useMemo(() => dataScope.scopeInbound(inboundOrders), [dataScope, inboundOrders])
   const [searchParams] = useSearchParams()
@@ -111,6 +112,7 @@ export default function InboundRecords() {
   const [importFeedback, setImportFeedback] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
 
   const handleWithdraw = async (order: InboundOrder) => {
+    if (!canWrite) { notifyError('当前账号只有入库查看权限，不能修改单据'); return }
     if (!window.confirm(`确认撤回入库单 ${order.inboundNo}？仓库将停止收货，之后可在草稿中修改并重新提交。`)) return
     setWithdrawingId(order.id)
     try {
@@ -168,6 +170,7 @@ export default function InboundRecords() {
   }
 
   const handleBulkImport = async () => {
+    if (!canWrite) { notifyError('当前账号只有入库查看权限，不能导入预约单'); return }
     if (importing) return
     const customerId = dataScope.bindingCustomerId
     const customerCode = dataScope.getCustomerCode(customerId ?? undefined)
@@ -179,7 +182,9 @@ export default function InboundRecords() {
     setImportFeedback(null)
     let savingImported = false
     try {
+      const assertWrite = captureInboundWriteAccess()
       const { data, errors } = await importCsvFile(INBOUND_ORDER_COLUMNS, parseInboundOrders)
+      assertWrite()
       if (errors.length > 0) {
         setImportFeedback({ kind: 'err', text: `导入失败：\n${errors.slice(0, 8).join('\n')}${errors.length > 8 ? `\n…共 ${errors.length} 条` : ''}` })
         return
@@ -193,7 +198,7 @@ export default function InboundRecords() {
         customerId, customerCode, existingNos: getInboundOrdersSnapshot().map(order => order.inboundNo),
       })
       savingImported = true
-      await addInboundOrdersOrThrow(orders)
+      await addInboundOrdersOrThrow(orders, assertWrite)
       setImportFeedback({ kind: 'ok', text: `已保存 ${orders.length} 张入库预约单（草稿），可在草稿列表继续编辑并提交` })
       setTab('draft')
     } catch (err) {
@@ -240,6 +245,7 @@ export default function InboundRecords() {
   }
 
   const handleVoidOrders = async (orders: InboundOrder[]) => {
+    if (!canWrite) { notifyError('当前账号只有入库查看权限，不能修改单据'); return }
     const targets = orders.filter(o => canVoidInboundOrder(o.status))
     if (targets.length === 0) {
       window.alert('选中的入库单均不可作废（仅草稿或在途可作废）')
@@ -286,7 +292,7 @@ export default function InboundRecords() {
               {syncing ? '刷新中…' : '立即刷新'}
             </Button>
             <DropdownBtn label={importing ? '导入中…' : '导入/导出'} disabled={importing} items={[
-              { label: '批量导入预约单', onClick: () => void handleBulkImport() },
+              ...(canWrite ? [{ label: '批量导入预约单', onClick: () => void handleBulkImport() }] : []),
               { label: '导出列表', onClick: () => exportInboundOrders(filtered) },
               { label: '导出选中', onClick: handleExportSelected },
               { label: '下载导入模板', onClick: downloadInboundOrderTemplate },
@@ -300,7 +306,7 @@ export default function InboundRecords() {
         {importFeedback.text}
       </p>}
 
-      <ImportTemplateLegend columns={INBOUND_ORDER_COLUMNS} />
+      {canWrite && <ImportTemplateLegend columns={INBOUND_ORDER_COLUMNS} />}
 
       <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-5">
         <StatCard label="草稿" value={tabCounts.draft} sub="未提交的预约单" />
@@ -368,14 +374,14 @@ export default function InboundRecords() {
             <p className="text-xs text-text-secondary">已选 {selectedOrders.length} 张入库单</p>
             <div className="flex gap-2">
               <Button variant="secondary" size="sm" onClick={handleExportSelected}>导出选中</Button>
-              <Button
+              {canWrite && <Button
                 variant="danger-outline"
                 size="sm"
-                disabled={voiding || selectedOrders.every(o => !canVoidInboundOrder(o.status))}
+                disabled={!canWrite || voiding || selectedOrders.every(o => !canVoidInboundOrder(o.status))}
                 onClick={() => void handleVoidOrders(selectedOrders)}
               >
                 {voiding ? '作废中…' : '作废选中'}
-              </Button>
+              </Button>}
             </div>
           </div>
         )}
@@ -444,22 +450,22 @@ export default function InboundRecords() {
                   <div className="flex min-w-[72px] flex-col gap-0.5">
                     <Link to={`/inbound/records/${encodeURIComponent(o.id)}`} className={actionLinkClass()}>详情</Link>
                     <InboundPrintLabelMenu order={o} />
-                    {canEditInboundOrder(o.status) && (
+                    {canWrite && canEditInboundOrder(o.status) && (
                       <Link to={`/inbound?edit=${encodeURIComponent(o.id)}`} className={actionLinkClass()}>
                         编辑
                       </Link>
                     )}
-                    {o.status === 'on_the_way' && (
+                    {canWrite && o.status === 'on_the_way' && (
                       <TableActionLink onClick={() => void handleWithdraw(o)}>
                         {withdrawingId === o.id ? '撤回中…' : '撤回为草稿'}
                       </TableActionLink>
                     )}
-                    {canVoidInboundOrder(o.status) && (
+                    {canWrite && canVoidInboundOrder(o.status) && (
                       <TableActionLink onClick={() => void handleVoidOrders([o])}>
                         作废
                       </TableActionLink>
                     )}
-                    {canReorderInboundOrder(o.status) && (
+                    {canWrite && canReorderInboundOrder(o.status) && (
                       <TableActionLink onClick={() => setDetail(o)}>
                         重新下单
                       </TableActionLink>

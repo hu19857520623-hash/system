@@ -10,7 +10,7 @@ import { FormSection, FormGrid, FormField, formInput, formSelect, formTextarea }
 import { findProductByCode } from '../data/platformBindingUtils'
 import { useRole } from '../auth/RoleContext'
 import { getCustomerCode, getCustomerIdForRole } from '../data/dataScope'
-import { nextInboundNo, submitInboundToErp, updateInboundOnErp, reorderInboundOnErp, canEditInboundOrder, canReorderInboundOrder, inboundMutationFailure } from '../data/inboundStore'
+import { nextInboundNo, submitInboundToErp, updateInboundOnErp, reorderInboundOnErp, captureInboundWriteAccess, canEditInboundOrder, canReorderInboundOrder, inboundMutationFailure } from '../data/inboundStore'
 import { addInboundOrderOrThrow, updateInboundOrderOrThrow } from '../data/entityStore'
 import { notifyIfUserError, notifyError, notifySuccess, notifyInfo } from '../utils/userNotify'
 import { fileToAttachment, todayDateInput } from '../data/fileUtils'
@@ -43,7 +43,8 @@ export default function Inbound() {
   const reordering = Boolean(targetOrder && reorderId && canReorderInboundOrder(targetOrder.status))
   const editOrder = targetOrder && (reordering || canEditInboundOrder(targetOrder.status)) ? targetOrder : undefined
   const editingInTransit = editOrder?.status === 'on_the_way'
-  const { role } = useRole()
+  const { role, can } = useRole()
+  const canWrite = can('inbound:write')
   const [delivery, setDelivery] = useState<'self' | 'pickup'>('self')
   const [inboundType, setInboundType] = useState<InboundType>('自发头程')
   const [eta, setEta] = useState('')
@@ -166,6 +167,7 @@ export default function Inbound() {
   }
 
   const handleSubmit = async (asDraft = false) => {
+    if (!canWrite) { setFeedback('当前账号只有入库查看权限，不能保存或提交'); return }
     if (saving || submissionUncertain) return
     setFeedback(null)
     if (editingInTransit && asDraft) return
@@ -229,6 +231,7 @@ export default function Inbound() {
     setSavingAction(asDraft ? 'draft' : 'submit')
     let warning: string | undefined
     try {
+      const assertWrite = captureInboundWriteAccess()
       if (reordering) {
         const erpResult = await reorderInboundOnErp({ ...localOrder, status: 'voided' })
         if (!erpResult.ok) {
@@ -255,8 +258,8 @@ export default function Inbound() {
         return
       }
 
-      if (editOrder) await updateInboundOrderOrThrow(editOrder.id, localOrder)
-      else await addInboundOrderOrThrow(localOrder)
+      if (editOrder) await updateInboundOrderOrThrow(editOrder.id, localOrder, assertWrite)
+      else await addInboundOrderOrThrow(localOrder, assertWrite)
 
       if (!asDraft) {
         const erpResult = await submitInboundToErp(localOrder)
@@ -284,6 +287,8 @@ export default function Inbound() {
       setSavingAction(null)
     }
   }
+
+  if (!canWrite) return <div className="page-shell"><h1 className="text-xl font-semibold">入库查看</h1><p className="mt-3">当前账号只有入库查看权限，不能新建、编辑或提交预约单。</p><Link to="/inbound/records" className="mt-4 inline-block underline">返回入库记录</Link>{editOrder && <InboundRecovery orders={[editOrder]} />}</div>
 
   return (
     <div className="page-shell pb-24">

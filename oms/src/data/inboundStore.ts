@@ -1,4 +1,5 @@
 import { authSessionScope, getStoredAuthSession } from '../api/client'
+import { can } from '../auth/permissions'
 import { inboundPendingKey, readInboundPending, saveInboundPending, clearInboundPending, withInboundOperationLock, type InboundPending, type InboundOperationKind } from './inboundPending'
 import type { DeliveryMethod, InboundOrder, InboundStatus, InboundType } from './mockData'
 import { isErpPalletInbound, sanitizeCustomerInboundType } from './mockData'
@@ -179,14 +180,20 @@ function mergeLocalInboundAfterErp(erp: ErpInboundOrder, local: InboundOrder): I
 }
 
 const knownFailure = (message: string, status = 409) => Object.assign(new Error(message), { status })
-function pendingContext(order: InboundOrder) {
+export function captureInboundWriteAccess() {
+  const session = getStoredAuthSession(), scope = authSessionScope(session)
+  if (!session || !can(session.user.role, 'inbound:write', session.user.permissions)) throw knownFailure('当前账号只有入库查看权限，不能保存、提交或重试写入', 403)
+  return () => { if (authSessionScope() !== scope) throw knownFailure('登录或权限已变化，请重新打开原入库单后操作', 403) }
+}
+function pendingContext(order: InboundOrder, write = false) {
   const session = getStoredAuthSession(), customerCode = getCustomerCode(order.customerId)
   if (!customerCode || customerCode === '—') throw knownFailure('当前角色未绑定客户编码，无法同步 ERP', 403)
   if (!session?.user.id) throw knownFailure('登录已失效，请重新登录后核对原入库操作', 401)
   if (session.user.role !== 'sys_admin' && session.user.customerId !== order.customerId) throw knownFailure('本入库单不属于当前登录客户，请返回原账号核对', 403)
   const scope = authSessionScope(session)
+  const assertWrite = write ? captureInboundWriteAccess() : () => {}
   return { key: inboundPendingKey(session.user.id, customerCode, order.inboundNo), customerCode,
-    assertSession: () => { if (authSessionScope() !== scope) throw knownFailure('登录或权限已变化，原操作已保留，请回到原账号核对结果', 401) } }
+    assertSession: () => { assertWrite(); if (authSessionScope() !== scope) throw knownFailure('登录或权限已变化，原操作已保留，请回到原账号核对结果', 401) } }
 }
 
 function pendingChanged() {
@@ -222,7 +229,7 @@ async function finishOriginal(record: InboundPending, erp: ErpInboundOrder, asse
 
 async function runOriginal(order: InboundOrder, kind: InboundOperationKind, retry = false): Promise<InboundMutationResult> {
   try {
-    const context = pendingContext(order)
+    const context = pendingContext(order, true)
     return await withInboundOperationLock(context.key, async () => {
       context.assertSession()
       let record = readInboundPending(localStorage, context.key)
@@ -285,7 +292,7 @@ export async function voidInboundOrder(order: InboundOrder): Promise<InboundMuta
   if (!canVoidInboundOrder(order.status)) return { ok: false, error: '仅草稿或在途入库单可作废' }
   if (order.status === 'on_the_way' || order.erpRevision) return runOriginal(order, 'void')
   try {
-    const context = pendingContext(order)
+    const context = pendingContext(order, true)
     return await withInboundOperationLock(context.key, async () => {
       context.assertSession()
       if (readInboundPending(localStorage, context.key)) throw knownFailure('本单仍有待核对的原操作，请先处理原请求')

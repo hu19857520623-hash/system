@@ -8,7 +8,8 @@ import { userFacingError } from '../../utils/userFacingError'
 const labels = { create: '提交入库', update: '修改入库', reactivate: '重新下单', withdraw: '撤回为草稿', void: '作废' }
 
 export default function InboundRecovery({ orders, onCompleted }: { orders: InboundOrder[]; onCompleted?: () => void }) {
-  const { userId, authToken } = useRole()
+  const { userId, authToken, can } = useRole()
+  const canWrite = can('inbound:write')
   const currentOwner = useRef('')
   currentOwner.current = `${userId}:${authToken}`
   const [, setTick] = useState(0)
@@ -44,7 +45,7 @@ export default function InboundRecovery({ orders, onCompleted }: { orders: Inbou
       <p className="mt-1 text-xs">返回列表或读取原单不会取消已发送的操作，也不会清除待核对记录。</p>
       <div className="mt-3 flex flex-wrap gap-3">
         <button type="button" disabled={Boolean(busy)} className="font-medium underline disabled:opacity-50" onClick={() => void act(order, false)}>读取原单结果</button>
-        {state.record && <button type="button" disabled={Boolean(busy)} className="font-medium underline disabled:opacity-50" onClick={() => void act(order, true)}>{busy === order.inboundNo ? '处理中…' : '重试原请求'}</button>}
+        {state.record && canWrite && <button type="button" disabled={Boolean(busy)} className="font-medium underline disabled:opacity-50" onClick={() => void act(order, true)}>{busy === order.inboundNo ? '处理中…' : '重试原请求'}</button>}
         <Link to="/inbound/records" className="underline">返回入库记录</Link>
       </div>
       {feedback[order.inboundNo] && <p className="mt-2 text-xs" role="status">{feedback[order.inboundNo]}</p>}

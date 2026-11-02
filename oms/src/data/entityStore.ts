@@ -153,8 +153,8 @@ export function addInboundOrder(order: InboundOrder) {
   persistInboundOrders([order, ...state.inboundOrders])
 }
 
-export async function addInboundOrderOrThrow(order: InboundOrder) {
-  await addInboundOrdersOrThrow([order])
+export async function addInboundOrderOrThrow(order: InboundOrder, assertSession?: () => void) {
+  await addInboundOrdersOrThrow([order], assertSession)
 }
 
 /** 新导入的草稿在一次服务端事务中保存，不回写其他未修改单据的旧快照。 */
@@ -186,10 +186,10 @@ export function updateInboundOrder(id: string, patch: Partial<InboundOrder>) {
   persistInboundOrders(state.inboundOrders.map(o => (o.id === id ? { ...o, ...patch } : o)))
 }
 
-export async function updateInboundOrderOrThrow(id: string, patch: Partial<InboundOrder>) {
+export async function updateInboundOrderOrThrow(id: string, patch: Partial<InboundOrder>, assertSession?: () => void) {
   const order = state.inboundOrders.find(item => item.id === id)
   if (!order) throw new Error('未找到该入库单，请刷新后重试')
-  await addInboundOrdersOrThrow([{ ...order, ...patch }])
+  await addInboundOrdersOrThrow([{ ...order, ...patch }], assertSession)
 }
 
 export function upsertInboundOrder(order: InboundOrder) {
