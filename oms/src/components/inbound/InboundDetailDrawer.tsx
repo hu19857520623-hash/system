@@ -1,3 +1,4 @@
+import { useAsyncViewScope } from '../../utils/useAsyncViewScope'
 import { userFacingError } from '../../utils/userFacingError'
 import { displaySku, displaySkuText } from '../../data/skuDisplay'
 import { useEffect, useState } from 'react'
@@ -19,7 +20,7 @@ import { downloadInboundLabelHtml, printInboundLabels, type InboundLabelKind } f
 import { downloadInboundReceivingList, printInboundReceivingList } from '../../data/inboundReceivingListPrint'
 import { useProducts } from '../../data/inventoryStore'
 import { getInboundOrdersSnapshot, setInboundOrders } from '../../data/entityStore'
-import { apiDelete } from '../../api/client'
+import { apiDelete, authSessionScope } from '../../api/client'
 import { canEditInboundOrder, canVoidInboundOrder, canReorderInboundOrder, voidInboundOrder, reorderInboundOnErp, withdrawInboundOrder, captureInboundWriteAccess } from '../../data/inboundStore'
 
 interface InboundDetailDrawerProps {
@@ -52,12 +53,16 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mo
   const [reordering, setReordering] = useState(false)
   const [confirmReorder, setConfirmReorder] = useState(false)
   const products = useProducts()
+  const sessionScope = authSessionScope()
+  const view = useAsyncViewScope(JSON.stringify([sessionScope, order?.id, order?.inboundNo]))
+  const captureView = () => { const valid = view.capture(); return () => valid() && authSessionScope() === sessionScope }
 
   useEffect(() => {
     setConfirmReorder(false)
     setFeedback(null)
     setPrintKind(null)
-  }, [order?.id])
+    setVoiding(false); setWithdrawing(false); setReordering(false)
+  }, [order?.id, sessionScope])
 
   if (!order) return null
 
@@ -77,8 +82,9 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mo
   }
 
   const handlePrint = async (kind: InboundLabelKind, codeType: LabelCodeType) => {
+    const currentView = captureView()
     const ok = await printInboundLabels(kind === 'SKU 标签' ? skuLabelOrder : order, kind, undefined, codeType)
-    if (ok) {
+    if (ok && currentView()) {
       showFeedback('ok', `已打开${kind}打印预览`)
     }
     return ok
@@ -96,11 +102,14 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mo
   }
 
   const handleDownload = async (kind: InboundLabelKind) => {
+    const currentView = captureView()
     await downloadInboundLabelHtml(kind === 'SKU 标签' ? skuLabelOrder : order, kind)
+    if (!currentView()) return
     showFeedback('ok', kind === '箱唛' ? '已下载 100×100mm 箱唛 PDF' : `已下载${kind} HTML 文件`)
   }
 
   const handleCancel = async () => {
+    const currentView = captureView()
     if (!canWrite) { showFeedback('err', '当前账号只有入库查看权限，不能修改单据'); return }
     if (order.status === 'draft') {
       if (!window.confirm(`确认删除草稿入库单 ${order.inboundNo}？此操作不可恢复。`)) return
@@ -109,10 +118,12 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mo
         await apiDelete(`/inbound-orders/${encodeURIComponent(order.id)}`)
         assertWrite()
         setInboundOrders(getInboundOrdersSnapshot().filter(o => o.id !== order.id))
+        if (!currentView()) return
         showFeedback('ok', '草稿已删除')
         onOrderChanged?.()
-        window.setTimeout(onClose, 300)
+        onClose()
       } catch (error) {
+        if (!currentView()) return
         showFeedback('err', `删除失败：${error instanceof Error ? error.message : String(error)}`)
       }
       return
@@ -120,12 +131,14 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mo
   }
 
   const handleVoid = async () => {
+    const currentView = captureView()
     if (!canWrite) { showFeedback('err', '当前账号只有入库查看权限，不能修改单据'); return }
     if (!canVoidInboundOrder(order.status)) return
     if (!window.confirm(`确认作废入库单 ${order.inboundNo}？作废后仓库不再收货，可在详情中确认后重新下单。`)) return
     setVoiding(true)
     try {
       const result = await voidInboundOrder(order)
+      if (!currentView()) return
       if (!result.ok) {
         showFeedback('err', `作废失败：${result.error}`)
         return
@@ -133,17 +146,19 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mo
       showFeedback(result.warning ? 'info' : 'ok', result.warning || '入库单已作废，可确认内容后重新下单')
       onOrderChanged?.(result.order)
     } finally {
-      setVoiding(false)
+      if (currentView()) setVoiding(false)
     }
   }
 
   const handleWithdraw = async () => {
+    const currentView = captureView()
     if (!canWrite) { showFeedback('err', '当前账号只有入库查看权限，不能修改单据'); return }
     if (order.status !== 'on_the_way') return
     if (!window.confirm(`确认撤回入库单 ${order.inboundNo}？仓库将停止收货，入库单转为草稿后可修改并重新提交。`)) return
     setWithdrawing(true)
     try {
       const result = await withdrawInboundOrder(order)
+      if (!currentView()) return
       if (!result.ok) {
         showFeedback('err', `撤回失败：${result.error}`)
         return
@@ -151,11 +166,12 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mo
       showFeedback(result.warning ? 'info' : 'ok', result.warning || '已撤回为草稿，可修改后重新提交')
       onOrderChanged?.(result.order)
     } finally {
-      setWithdrawing(false)
+      if (currentView()) setWithdrawing(false)
     }
   }
 
   const handleReorderSubmit = async () => {
+    const currentView = captureView()
     if (!canWrite) { showFeedback('err', '当前账号只有入库查看权限，不能修改单据'); return }
     if (!canReorderInboundOrder(order.status)) return
     if (!confirmReorder) {
@@ -165,15 +181,16 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mo
     setReordering(true)
     try {
       const result = await reorderInboundOnErp(order)
+      if (!currentView()) return
       if (!result.ok) {
         showFeedback('err', `重新下单失败：${result.error}`)
         return
       }
       showFeedback(result.warning ? 'info' : 'ok', result.warning || '已重新下单，进入在途')
       onOrderChanged?.(result.order)
-      if (!result.warning) window.setTimeout(onClose, 400)
+      // Keep the confirmed result visible; the customer chooses when to return.
     } finally {
-      setReordering(false)
+      if (currentView()) setReordering(false)
     }
   }
 

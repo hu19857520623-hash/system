@@ -1,3 +1,5 @@
+import { useAsyncViewScope } from '../utils/useAsyncViewScope'
+import { authSessionScope } from '../api/client'
 
 import { userFacingError } from '../utils/userFacingError'
 import InboundRecovery from '../components/inbound/InboundRecovery'
@@ -68,6 +70,17 @@ export default function Inbound() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const hydratedEditId = useRef<string | null>(null)
   const redirectedEdit = useRef(false)
+  const sessionScope = authSessionScope()
+  const view = useAsyncViewScope(JSON.stringify([sessionScope, editId, reorderId]))
+
+  useEffect(() => {
+    setSavingAction(null); setSubmissionUncertain(false); setFeedback(null)
+    hydratedEditId.current = null; redirectedEdit.current = false
+    setFormErpRevision(undefined); setDelivery('self'); setInboundType('自发头程')
+    setEta(''); setTrackingNo(''); setReferenceNo(''); setPlatformRef(''); setRemark('')
+    setLines([]); setAttachments([]); setConfirmWarehouseData(false); setSkuPickerOpen(false)
+    setBoxCountInput(''); setQtyPerBoxInput(''); setPackTypeInput('自带包装'); setStockTypeInput('以仓库为准')
+  }, [editId, reorderId, sessionScope])
 
   useEffect(() => {
     if (!editOrder || hydratedEditId.current === editOrder.id) return
@@ -90,7 +103,7 @@ export default function Inbound() {
     })))
     setAttachments(editOrder.attachments || [])
     setConfirmWarehouseData(false)
-  }, [editOrder, role])
+  }, [editOrder, role, sessionScope])
 
   useEffect(() => {
     if (saving || (!editId && !reorderId) || redirectedEdit.current) return
@@ -167,6 +180,8 @@ export default function Inbound() {
   }
 
   const handleSubmit = async (asDraft = false) => {
+    const valid = view.capture()
+    const currentView = () => valid() && authSessionScope() === sessionScope
     if (!canWrite) { setFeedback('当前账号只有入库查看权限，不能保存或提交'); return }
     if (saving || submissionUncertain) return
     setFeedback(null)
@@ -234,6 +249,7 @@ export default function Inbound() {
       const assertWrite = captureInboundWriteAccess()
       if (reordering) {
         const erpResult = await reorderInboundOnErp({ ...localOrder, status: 'voided' })
+        if (!currentView()) return
         if (!erpResult.ok) {
           setSubmissionUncertain(Boolean(erpResult.uncertain))
           setFeedback(displaySkuText(erpResult.error))
@@ -247,6 +263,7 @@ export default function Inbound() {
 
       if (editingInTransit) {
         const erpResult = await updateInboundOnErp(localOrder)
+        if (!currentView()) return
         if (!erpResult.ok) {
           setSubmissionUncertain(Boolean(erpResult.uncertain))
           setFeedback(displaySkuText(erpResult.error))
@@ -261,8 +278,10 @@ export default function Inbound() {
       if (editOrder) await updateInboundOrderOrThrow(editOrder.id, localOrder, assertWrite)
       else await addInboundOrderOrThrow(localOrder, assertWrite)
 
+      if (!currentView()) return
       if (!asDraft) {
         const erpResult = await submitInboundToErp(localOrder)
+        if (!currentView()) return
         if (!erpResult.ok) {
           setSubmissionUncertain(Boolean(erpResult.uncertain))
           setFeedback(displaySkuText(erpResult.uncertain ? erpResult.error
@@ -280,11 +299,12 @@ export default function Inbound() {
       setConfirmWarehouseData(false)
       goRecords()
     } catch (err) {
+      if (!currentView()) return
       const result = inboundMutationFailure(err)
       setSubmissionUncertain(Boolean(result.uncertain))
       setFeedback(displaySkuText(result.error))
     } finally {
-      setSavingAction(null)
+      if (currentView()) setSavingAction(null)
     }
   }
 

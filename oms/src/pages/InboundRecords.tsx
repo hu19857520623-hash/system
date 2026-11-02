@@ -275,7 +275,7 @@ export default function InboundRecords() {
         for (const order of completed) next.delete(order.id)
         return next
       })
-      if (detail && completed.some(o => o.id === detail.id)) setDetail(null)
+      setDetail(current => current && completed.some(order => order.id === current.id) ? null : current)
       setVoiding(false)
     }
   }
