@@ -1764,7 +1764,15 @@ export class InboundService {
       if (!existing || existing.omsCustomerCode !== customerCode) throw new NotFoundException(`入库单 ${no} 不存在`)
       if (duplicate) return { ...this.mapInboundForOms(existing), idempotent: true }
       assertOmsAsnVersion(existing, request.expectedVersion)
-      if (existing.status === 'cancelled') throw new BadRequestException('入库单已作废，请核对原操作结果')
+      if (existing.status === 'cancelled') {
+        // A withdrawn OMS draft may now be explicitly voided. A fresh, current-version
+        // intent records that confirmation without repeating the warehouse mutation.
+        await tx.operationLog.create({ data: {
+          module: 'inbound', action: 'oms_asn_cancel', targetType: 'inbound_order', targetId: no,
+          detail: { customerCode, ...request, alreadyCancelled: true },
+        } })
+        return { ...this.mapInboundForOms(existing), idempotent: false }
+      }
       if (!PENDING_RECEIPT_STATUSES.has(existing.status)) throw new BadRequestException('仅在途状态的入库单可作废，请读取最新作业进度')
       if ((existing.receivedCartonCount ?? 0) > 0 || existing.cartons.some(box => box.status === 'received' || box.receivedAt) || existing.items.some(item => (item.actualQty ?? 0) > 0 || (item.putawayQty ?? 0) > 0)) {
         throw new BadRequestException('已开始收货的入库单不可作废，请返回原单继续作业')

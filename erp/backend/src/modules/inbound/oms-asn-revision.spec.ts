@@ -51,4 +51,15 @@ describe('客户修改、重新下单与作废的事务边界', () => {
     expect(f.tx.inboundOrder.update).not.toHaveBeenCalled(); expect(f.tx.operationLog.create).not.toHaveBeenCalled()
     expect(f.service.pushInboundStatusToOms).toHaveBeenCalledWith('TEST-ASN')
   })
+  it('最新版本的撤回草稿可确认作废并留下回执，不再次修改仓库单据', async () => {
+    const f = fixture('cancelled')
+    await expect(f.service.cancelAsnFromOms('TEST-ASN', f.body)).resolves.toMatchObject({ status: 'cancelled', idempotent: false })
+    expect(f.tx.inboundOrder.update).not.toHaveBeenCalled()
+    expect(f.tx.operationLog.create).toHaveBeenCalledWith({ data: expect.objectContaining({ action: 'oms_asn_cancel', detail: expect.objectContaining({ alreadyCancelled: true, clientRequestId: f.body.clientRequestId }) }) })
+  })
+  it('已取消状态也必须验证当前版本；旧页面不能确认新的作废意图', async () => {
+    const f = fixture('cancelled')
+    await expect(f.service.cancelAsnFromOms('TEST-ASN', { ...f.body, expectedVersion: '0'.repeat(64) })).rejects.toThrow('已被其他操作更新')
+    expect(f.tx.inboundOrder.update).not.toHaveBeenCalled(); expect(f.tx.operationLog.create).not.toHaveBeenCalled()
+  })
 })

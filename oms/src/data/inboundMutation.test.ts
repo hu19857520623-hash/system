@@ -271,3 +271,18 @@ test('列表刷新等待期间离页，旧读取不能覆盖当前入库缓存',
   const latest = { ...draft, totalQty: 3 }; setInboundOrders([latest]); current = false; release()
   assert.equal(await request, 0); assert.deepEqual(getInboundOrdersSnapshot(), [latest])
 })
+
+test('已撤回草稿确认作废后采用 voided，而不被旧 draft 表示覆盖', async t => {
+  environment(t)
+  const withdrawn = { ...draft, erpRevision: erp.revision }
+  setInboundOrders([withdrawn])
+  let calls = 0
+  globalThis.fetch = async input => {
+    if (String(input) === '/api/inbound-orders') return Response.json({ ok: true })
+    calls++; return Response.json({ ...erp, status: 'cancelled', omsStatus: 'voided' })
+  }
+  const result = await voidInboundOrder(withdrawn)
+  assert.equal(result.ok, true); if (result.ok) assert.equal(result.order.status, 'voided')
+  assert.equal(getInboundOrdersSnapshot()[0].status, 'voided'); assert.equal(calls, 1)
+  assert.equal(pendingInboundOperation(withdrawn).record, null)
+})

@@ -218,6 +218,7 @@ async function finishOriginal(record: InboundPending, erp: ErpInboundOrder, asse
   let order = mergeLocalInboundAfterErp(erp, record.localOrder)
   // An old receipt may now refer to an order already processed by another action.
   if (record.kind === 'withdraw' && (erp.status === 'cancelled' || ['cancelled', 'voided'].includes(erp.omsStatus))) order = { ...order, status: 'draft' }
+  if (record.kind === 'void' && (erp.status === 'cancelled' || ['cancelled', 'voided'].includes(erp.omsStatus))) order = { ...order, status: 'voided' }
   const result = await finishErpInboundMutation(order, `入库单 ${order.inboundNo} 的原操作已由 ERP 确认`, assertSession)
   const expected = record.kind === 'withdraw' ? 'draft' : record.kind === 'void' ? 'voided' : 'on_the_way'
   if (result.ok && order.status !== expected) {
