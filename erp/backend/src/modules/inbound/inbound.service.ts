@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { assertLegacyOmsAsnMetadata, omsAsnRequestIdentity } from './oms-asn-request-identity.util'
 import { readErpShipmentOutcome } from './erp-shipment-outcome.util'
 import { assertGlobalSkuAvailable } from '../../common/global-sku.util'
 import { isCatalogPurchaseInbound } from './catalog-inbound.util'
@@ -1493,6 +1494,13 @@ export class InboundService {
             return JSON.stringify([...quantities].sort((a,b) => a[0].localeCompare(b[0])))
           }
           if (detail.warehouseCode !== warehouseCode || signature(incoming) !== signature(saved)) throw new ConflictException('入库单号已存在，但原商品、箱号、数量或仓库不一致，请查看原单后通过修改入口继续')
+          const creation = await tx.operationLog.findFirst({ where: { module: 'inbound', action: 'oms_asn_create', targetType: 'inbound_order', targetId: inboundNo }, orderBy: { id: 'asc' }, select: { detail: true } })
+          const original = creation?.detail as { requestIdentity?: string; requestIdentityVersion?: number } | undefined
+          if (original?.requestIdentity) {
+            if (original.requestIdentityVersion !== 1 || original.requestIdentity !== omsAsnRequestIdentity(data, warehouseCode, incoming.map(line => line.sku))) {
+              throw new ConflictException('入库预报信息或客户尺寸与原请求不一致，请查看原单后通过修改入口继续')
+            }
+          } else assertLegacyOmsAsnMetadata(data, detail)
           await this.checkOmsAsnAttachments(tx, detail.id, data.attachments)
           return { ...this.mapInboundForOms(detail!), idempotent: true }
         }
@@ -1552,7 +1560,7 @@ export class InboundService {
           action: 'oms_asn_create',
           targetType: 'inbound_order',
           targetId: inboundNo,
-          detail: { customerCode, warehouseCode, itemCount: inboundItems.length },
+          detail: { customerCode, warehouseCode, itemCount: inboundItems.length, requestIdentityVersion: 1, requestIdentity: omsAsnRequestIdentity(data, warehouseCode, resolved.map(line => line.sku)) },
         } })
 
         const fresh = await tx.inboundOrder.findUnique({
