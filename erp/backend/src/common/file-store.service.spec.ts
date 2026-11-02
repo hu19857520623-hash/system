@@ -37,4 +37,15 @@ describe('FileStoreService', () => {
     expect(files.exists(`..${path.sep}secret.txt`)).toBe(false)
     expect(() => files.read(`..${path.sep}secret.txt`)).toThrow(/非法文件路径/)
   })
+
+  it('removes only the specified stored file and refuses directories or outside paths', () => {
+    const first = files.write('inbound', 'temporary.txt', 'a')
+    const retained = files.write('inbound', 'retained.txt', 'b')
+    files.remove(first.relativePath)
+    expect(files.exists(first.relativePath)).toBe(false)
+    expect(files.read(retained.relativePath).toString()).toBe('b')
+    expect(() => files.remove('inbound')).toThrow('只能清理指定的临时文件')
+    expect(() => files.remove('../outside.txt')).toThrow('非法文件路径')
+    expect(() => files.remove(first.relativePath)).not.toThrow()
+  })
 })

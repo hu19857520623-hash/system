@@ -2,6 +2,7 @@ import { InboundService } from './inbound.service'
 function fixture(){
   const order:any={id:97n,omsCustomerCode:'TKL9069',warehouseCode:'WMS-JHB-01',items:[{productId:1n,sku:'TKL9069-A',expectedQty:3},{productId:2n,sku:'TKL9069-B',expectedQty:2}],cartons:[{boxSeq:1,items:[{sku:'TKL9069-A',qty:3}]},{boxSeq:2,items:[{sku:'TKL9069-B',qty:2}]}]}
   const db:any={customer:{findUnique:jest.fn(async()=>({status:1}))},warehouse:{findUnique:jest.fn(async()=>({warehouseType:'wms'}))},inboundOrder:{findUnique:jest.fn(async()=>order),create:jest.fn()},product:{findMany:jest.fn(async()=>[{sku:'TKL9069-A',customerSku:'A'},{sku:'TKL9069-B',customerSku:'B'}]),create:jest.fn()}}
+  db.$transaction=jest.fn(async fn=>fn(db));db.$queryRaw=jest.fn(async()=>[]);db.$queryRawUnsafe=jest.fn(async()=>[])
   const service=new InboundService(db,null as any,null as any,null as any,null as any,null as any)
   jest.spyOn(service as any,'mapInboundForOms').mockImplementation(()=>({id:97,status:'shelved'}))
   const body={inboundNo:'RVTKL9069-AUDIT81',customerCode:'TKL9069',items:[{sku:'TKL9069-A',qty:3,boxNo:1},{sku:'TKL9069-B',qty:2,boxNo:2}]}
