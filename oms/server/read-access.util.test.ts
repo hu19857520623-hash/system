@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { assertApiReadAccess, filterBootstrapReads, readResourceForPath } from './read-access.util.js'
+test('原草稿保存核对和当前记录读取受入库读权限保护，取消不走读豁免', () => {
+  assert.equal(readResourceForPath('POST', '/inbound-orders/saves/c1/request/check'), 'inboundOrders')
+  assert.equal(readResourceForPath('POST', '/inbound-orders/saves/c1/request/cancel'), null)
+  assert.equal(readResourceForPath('GET', '/inbound-orders/by-no/IB001'), 'inboundOrders')
+})
 import { canReadData } from '../src/data/readAccess.js'
 import { assertApiWritePermission, requiredWritePermission, type AuthenticatedRequest } from './auth.js'
 import type { Response } from 'express'

@@ -10,6 +10,7 @@ import type {
 import type { ReturnOrder } from './returnStore'
 import { notifyPersistFailed } from '../utils/userNotify'
 import { mergeInboundOrder, reconcileInboundIds } from './inboundOrderIdentity'
+import { saveInboundBatch } from './inboundSaveWorkflow'
 
 export type AnnouncementItem = {
   id: string
@@ -125,8 +126,15 @@ export function persistInboundOrders(list: InboundOrder[]) {
 }
 
 async function saveInboundOrders(list: InboundOrder[]) {
-  const result = await apiPut<{ identities?: { id: string; inboundNo: string }[] }>('/inbound-orders', list)
-  if (result.identities?.length) setInboundOrders(reconcileInboundIds(state.inboundOrders, result.identities))
+  const current = new Map(state.inboundOrders.map(order => [order.inboundNo, order]))
+  const result = await saveInboundBatch(list)
+  const updates = new Map(result.identities.map(row => [row.inboundNo, row]))
+  const latest = new Map(result.currentOrders.map(row => [row.inboundNo, row]))
+  setInboundOrders(reconcileInboundIds(state.inboundOrders.map(order => {
+    const update = updates.get(order.inboundNo)
+    const server = latest.get(order.inboundNo)
+    return update && order === current.get(order.inboundNo) ? server ? { ...server, erpRevision: order.erpRevision } : { ...order, omsRevision: update.omsRevision } : order
+  }), result.identities))
 }
 
 export async function persistInboundOrdersOrThrow(list: InboundOrder[]) {

@@ -4,6 +4,7 @@ import { getStoredAuthSession, storeAuthSession } from '../api/client'
 import { inboundPendingKey } from './inboundPending'
 import type { InboundOrder } from './mockData'
 import { hydrateAccounts } from '../auth/accountStore'
+import { inboundSaveKey, readInboundSave, storeInboundSave, clearInboundSave, requestInboundSave, saveInboundBatch } from './inboundSaveWorkflow'
 import { getInboundOrdersSnapshot, setInboundOrders } from './entityStore'
 import { inboundMutationFailure, submitInboundToErp, updateInboundOnErp, withdrawInboundOrder,
   voidInboundOrder, reorderInboundOnErp, retryInboundOriginal, resolveInboundOriginal, pendingInboundOperation, readInboundOriginal, refreshInboundsFromErp } from './inboundStore'
@@ -18,6 +19,11 @@ const erp = { id: 12, inboundNo: draft.inboundNo, warehouseCode: 'WMS-JHB-01', t
   revision: 'a'.repeat(64),
   status: 'pending_receipt', omsStatus: 'on_the_way', totalExpectedQty: 2, totalReceivedQty: 0,
   items: [{ sku: 'TKL9001-A', expectedQty: 2, receivedQty: 0, productName: '产品一' }] }
+
+function savedReply(init?: RequestInit) {
+  const orders = JSON.parse(String(init?.body))
+  return Response.json({ requestId: orders[0].saveRequestId, status: 'confirmed', identities: orders.map((order: any) => ({ id: order.id, inboundNo: order.inboundNo, omsRevision: 'b'.repeat(64) })) })
+}
 
 function environment(t: TestContext) {
   const previousFetch = globalThis.fetch
@@ -55,7 +61,7 @@ test('正常提交只保存当前单据，ERP 确认后才转为在途', async t
       const saved = JSON.parse(String(init?.body))
       assert.equal(saved.length, 1)
       assert.equal(saved[0].status, 'on_the_way')
-      return Response.json({ ok: true })
+      return savedReply(init)
     }
     assert.equal(getInboundOrdersSnapshot()[0].status, 'draft')
     return Response.json(erp)
@@ -163,7 +169,7 @@ test('传输中断后拒绝新表单，显式重试发送原请求并采用最�
   globalThis.fetch = async (input, init) => {
     if (String(input) === '/api/inbound-orders') {
       assert.equal(JSON.parse(String(init?.body))[0].lineItems[0].qty, 7)
-      return Response.json({ ok: true })
+      return savedReply(init)
     }
     bodies.push(JSON.parse(String(init?.body))); calls++
     if (calls === 1) throw new TypeError('Failed to fetch')
@@ -184,7 +190,7 @@ test('OMS 回写失败保留原请求，读取不清除，重试不生成新操�
   environment(t); setInboundOrders([draft])
   let failSave = true; const bodies: string[] = []
   globalThis.fetch = async (input, init) => {
-    if (String(input) === '/api/inbound-orders') return failSave ? Response.json({ error: 'Storage unavailable' }, { status: 503 }) : Response.json({ ok: true })
+    if (String(input) === '/api/inbound-orders') return failSave ? Response.json({ error: 'Storage unavailable' }, { status: 503 }) : savedReply(init)
     if (init?.method === 'POST') bodies.push(String(init.body))
     return Response.json(erp)
   }
@@ -214,8 +220,8 @@ test('多页面操作锁阻止第二次提交，存储失败也不发送请求',
   let release!: () => void, entered!: () => void
   const gate = new Promise<void>(r => { release = r }), started = new Promise<void>(r => { entered = r })
   let calls = 0
-  globalThis.fetch = async input => {
-    if (String(input) === '/api/inbound-orders') return Response.json({ ok: true })
+  globalThis.fetch = async (input, init) => {
+    if (String(input) === '/api/inbound-orders') return savedReply(init)
     calls++; entered(); await gate; return Response.json(erp)
   }
   const first = submitInboundToErp(draft); await started
@@ -278,8 +284,8 @@ test('已撤回草稿确认作废后采用 voided，而不被旧 draft 表示覆
   const withdrawn = { ...draft, erpRevision: erp.revision }
   setInboundOrders([withdrawn])
   let calls = 0
-  globalThis.fetch = async input => {
-    if (String(input) === '/api/inbound-orders') return Response.json({ ok: true })
+  globalThis.fetch = async (input, init) => {
+    if (String(input) === '/api/inbound-orders') return savedReply(init)
     calls++; return Response.json({ ...erp, status: 'cancelled', omsStatus: 'voided' })
   }
   const result = await voidInboundOrder(withdrawn)
@@ -364,7 +370,7 @@ test('取消遇到已完成原请求时只回写最新仓库进度，不撤销�
     if (path.endsWith('/original/cancel')) return Response.json({ outcome: 'completed', order: { ...erp, status: 'receiving', omsStatus: 'receiving', totalExpectedQty: 3 }, message: '已找到执行回执' })
     assert.equal(path, '/api/inbound-orders')
     assert.equal(JSON.parse(String(init?.body))[0].status, 'receiving')
-    return Response.json({ ok: true })
+    return savedReply(init)
   }
   const result = await resolveInboundOriginal(draft, true)
   assert.equal(result.ok, true); if (result.ok) { assert.equal(result.order.status, 'receiving'); assert.equal(result.order.totalQty, 3) }
@@ -384,7 +390,7 @@ test('取消修改请求保留原仓库单据，不能套用作废或撤回的�
     }
     assert.equal(String(input), '/api/inbound-orders')
     assert.equal(JSON.parse(String(init?.body))[0].status, 'on_the_way')
-    return Response.json({ ok: true })
+    return savedReply(init)
   }
   const result = await resolveInboundOriginal(order, true)
   assert.equal(result.ok, true); if (result.ok) assert.equal(result.order.status, 'on_the_way')
@@ -483,9 +489,61 @@ test('原操作回执确认读取ERP最新3件，不借用草稿计划5件改写
     if (String(input).endsWith('/original/check')) return Response.json({ outcome: 'completed', order: cancelledErp, message: '原请求已完成' })
     assert.equal(String(input), '/api/inbound-orders')
     const row = JSON.parse(String(init?.body))[0]; assert.equal(row.status, 'voided'); assert.equal(row.totalQty, 3)
-    return Response.json({ ok: true })
+    return savedReply(init)
   }
   const result = await resolveInboundOriginal(draft)
   assert.equal(result.ok, true); if (result.ok) { assert.equal(result.order.status, 'voided'); assert.equal(result.order.totalQty, 3) }
   assert.equal(pendingInboundOperation(draft).record, null)
+})
+
+test('草稿保存响应丢失保留原文，改动后不发新请求，原文重试读取最新计划而非回放旧计划', async t => {
+  environment(t)
+  let calls = 0, original: any
+  globalThis.fetch = async (_input, init) => { calls++; original = JSON.parse(String(init?.body));throw new TypeError('Failed to fetch') }
+  await assert.rejects(saveInboundBatch([draft]))
+  const a = readInboundSave(localStorage, 'u-one', 'c1')!
+  assert.deepEqual(a.orders, original);assert.ok(a.requestId);assert.equal(calls, 1)
+  await assert.rejects(saveInboundBatch([{ ...draft, totalQty: 7 }]), /原草稿保存内容仍待核对/);assert.equal(calls, 1)
+  globalThis.fetch = async (input, init) => {
+    calls++
+    if (String(input) === '/api/inbound-orders') { assert.deepEqual(JSON.parse(String(init?.body)), original);return Response.json({ requestId: a.requestId, status: 'confirmed', replay: true, identities: [{ id: draft.id, inboundNo: draft.inboundNo, omsRevision: 'b'.repeat(64) }] }) }
+    return Response.json({ ...draft, totalQty: 9, omsRevision: 'c'.repeat(64) })
+  }
+  const result = await saveInboundBatch([draft])
+  assert.equal(result.currentOrders[0].totalQty, 9);assert.equal(readInboundSave(localStorage, 'u-one', 'c1'), null)
+})
+test('草稿存储失败先于HTTP发送；损坏原记录保留原始字节且不能被新保存替换', async t => {
+  environment(t);let calls = 0
+  globalThis.fetch = async () => { calls++;throw Error('should not send') }
+  localStorage.setItem(inboundSaveKey('u-one', 'c1'), '{broken')
+  await assert.rejects(saveInboundBatch([draft]), /原草稿保存记录无法读取/)
+  assert.equal(localStorage.getItem(inboundSaveKey('u-one', 'c1')), '{broken');assert.equal(calls, 0)
+  localStorage.removeItem(inboundSaveKey('u-one', 'c1'))
+  const old = localStorage.setItem.bind(localStorage)
+  localStorage.setItem = () => { throw Error('quota') }
+  await assert.rejects(saveInboundBatch([draft]), /未能可靠保存.*没有发送/)
+  localStorage.setItem = old;assert.equal(calls, 0)
+})
+test('只读账号可核对原保存，不能重试或取消；换账号不发送原客户请求', async t => {
+  environment(t)
+  const id = crypto.randomUUID(), a: any = { version: 1, requestId: id, userId: 'u-one', customerId: 'c1', createdAt: new Date().toISOString(), orders: [{ ...draft, saveRequestId: id }] }
+  storeInboundSave(localStorage, a)
+  const session = getStoredAuthSession()!
+  storeAuthSession({ ...session, user: { ...session.user, permissions: ['inbound:read'] } })
+  let calls = 0
+  globalThis.fetch = async input => { calls++;assert.match(String(input), /\/check$/);return Response.json({ requestId: id, status: 'unknown', identities: [] }) }
+  assert.equal((await requestInboundSave(a, 'check')).status, 'unknown')
+  await assert.rejects(requestInboundSave(a, 'submit'), /权限已变化/);await assert.rejects(requestInboundSave(a, 'cancel'), /权限已变化/)
+  storeAuthSession({ ...session, user: { ...session.user, id: 'other' } })
+  await assert.rejects(requestInboundSave(a, 'check'), /原保存账号/);assert.equal(calls, 1)
+  assert.deepEqual(readInboundSave(localStorage, 'u-one', 'c1'), a)
+})
+test('迟到草稿确认不能清除其他页面替换的原请求', t => {
+  environment(t)
+  const id = crypto.randomUUID(), a: any = { version: 1, requestId: id, userId: 'u-one', customerId: 'c1', createdAt: new Date().toISOString(), orders: [{ ...draft, saveRequestId: id }] }
+  storeInboundSave(localStorage, a)
+  const nextId = crypto.randomUUID(), next = { ...a, requestId: nextId, orders: [{ ...draft, saveRequestId: nextId }] }
+  localStorage.setItem(inboundSaveKey('u-one', 'c1'), JSON.stringify(next))
+  assert.throws(() => clearInboundSave(localStorage, a), /被其他页面改变/)
+  assert.deepEqual(readInboundSave(localStorage, 'u-one', 'c1'), next)
 })

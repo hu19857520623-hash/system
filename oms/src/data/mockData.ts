@@ -741,6 +741,8 @@ export const DELIVERY_METHOD_LABELS: Record<DeliveryMethod, string> = {
 }
 
 export interface InboundOrder {
+  omsRevision?: string
+  omsAcknowledgementKind?: 'create' | 'update' | 'reactivate' | 'withdraw' | 'void'
   erpRevision?: string
   id: string
   customerId?: string

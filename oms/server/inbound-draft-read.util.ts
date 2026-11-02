@@ -1,6 +1,7 @@
 import type { Prisma } from '@prisma/client'
 import { InboundIdentityError } from './inbound-order-persistence.util.js'
 import { readInboundPlan } from './inbound-plan.util.js'
+import { inboundSavedVersion } from './inbound-save.util.js'
 
 /** A cancelled ERP ASN describes the last submitted shipment, not the customer's
  * newly saved draft. Read that plan from its owner-scoped OMS row. Bad records
@@ -20,7 +21,7 @@ export async function readSavedInboundDrafts(db: Pick<Prisma.TransactionClient, 
   for (const row of rows) {
     try {
       const { lineItems, attachments } = readInboundPlan(row)
-      drafts.push({ ...row, lineItems, attachments })
+      drafts.push({ ...row, lineItems, attachments, omsRevision: inboundSavedVersion(row) })
     } catch {
       draftReadErrors.push({ inboundNo: row.inboundNo, message: `已保存草稿 ${row.inboundNo} 的货品或附件资料无法读取，请保留记录并核对` })
     }

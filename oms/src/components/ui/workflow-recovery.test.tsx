@@ -5,6 +5,9 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router-dom'
 import { PageErrorBoundary } from './PageErrorBoundary'
 import ProductForm from '../products/ProductForm'
+import InboundSaveRecovery from '../inbound/InboundSaveRecovery'
+import { storeAuthSession } from '../../api/client'
+import { inboundSaveKey } from '../../data/inboundSaveWorkflow'
 
 test('a failed page provides Chinese recovery with both retry and return actions', () => {
   const boundary = new PageErrorBoundary({ children: createElement('p', {}, '正常页面') })
@@ -14,6 +17,21 @@ test('a failed page provides Chinese recovery with both retry and return actions
   assert.match(html, /重新加载/)
   assert.match(html, /返回首页/)
   assert.match(html, /href="\/"/)
+})
+test('入库保存恢复为写账号提供核对、重试、取消和返回，读账号只显示核对和返回', t => {
+  const descriptors = ['localStorage', 'sessionStorage'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const)
+  for (const key of ['localStorage', 'sessionStorage']) { const map = new Map<string, string>();Object.defineProperty(globalThis, key, { configurable: true, value: { getItem: (key: string) => map.get(key) ?? null, setItem: (key: string, value: string) => map.set(key, value), removeItem: (key: string) => map.delete(key) } }) }
+  t.after(() => { for (const [key, descriptor] of descriptors) if (descriptor) Object.defineProperty(globalThis, key, descriptor);else Reflect.deleteProperty(globalThis, key) })
+  const session: any = { token: 'test', user: { id: 'u1', username: 'test', role: 'hybrid', customerId: 'c1', customerCode: 'TKL9001', permissions: ['inbound:read', 'inbound:write'] } }
+  storeAuthSession(session)
+  const requestId = '00000000-0000-4000-8000-000000000097'
+  localStorage.setItem(inboundSaveKey('u1', 'c1'), JSON.stringify({ version: 1, userId: 'u1', customerId: 'c1', requestId, createdAt: new Date().toISOString(), orders: [{ id: 'x', inboundNo: 'IB001', customerId: 'c1', saveRequestId: requestId }] }))
+  const render = () => renderToStaticMarkup(createElement(MemoryRouter, {}, createElement(InboundSaveRecovery, { customerId: 'c1' })))
+  const write = render();assert.match(write, /核对原保存结果/);assert.match(write, /重试原保存/);assert.match(write, /取消原保存请求/);assert.match(write, /返回入库记录/)
+  storeAuthSession({ ...session, user: { ...session.user, permissions: ['inbound:read'] } })
+  const read = render();assert.match(read, /核对原保存结果/);assert.doesNotMatch(read, /重试原保存|取消原保存请求/)
+  localStorage.setItem(inboundSaveKey('u1', 'c1'), '{broken')
+  const corrupt = render();assert.match(corrupt, /原草稿保存记录无法读取/);assert.doesNotMatch(corrupt, /核对原保存结果|重试原保存|取消原保存请求/);assert.equal(localStorage.getItem(inboundSaveKey('u1', 'c1')), '{broken')
 })
 
 test('missing edit targets cannot fall through into a new product form', () => {

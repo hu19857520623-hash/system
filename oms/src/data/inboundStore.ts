@@ -33,7 +33,8 @@ async function finishErpInboundMutation(order: InboundOrder, completed: string, 
   assertSession()
   try {
     await upsertInboundOrderOrThrow(order, assertSession)
-    return { ok: true, order }
+    const saved = getInboundOrdersSnapshot().find(row => row.inboundNo === order.inboundNo)
+    return { ok: true, order: saved || order }
   } catch (error) {
     assertSession()
     // ERP 已确认成功，不能因 OMS 回写失败而把作业退回未提交状态。
@@ -110,6 +111,7 @@ export function buildInboundOrderFromErp(erp: ErpInboundOrder, customerId?: stri
     customerId: customerId || existing?.customerId,
     inboundNo: erp.inboundNo,
     erpRevision: erp.revision,
+    omsRevision: existing?.omsRevision,
     source: erp.source || existing?.source || '客户自发',
     inboundType: sanitizeCustomerInboundType((erp.inboundType as InboundType | null) || existing?.inboundType),
     deliveryMethod: (erp.deliveryMethod as DeliveryMethod | null) || existing?.deliveryMethod || 'self',
@@ -170,6 +172,7 @@ function mergeLocalInboundAfterErp(erp: ErpInboundOrder, local: InboundOrder): I
   return {
     ...merged,
     id: local.id || merged.id,
+    omsRevision: local.omsRevision,
     warehouse: local.warehouse || merged.warehouse,
     lineItems: merged.lineItems,
     attachments: local.attachments ?? merged.attachments,
@@ -218,7 +221,7 @@ async function sendOriginal(record: InboundPending) {
 }
 
 async function finishOriginal(record: InboundPending, erp: ErpInboundOrder, assertSession: () => void) {
-  let order = mergeLocalInboundAfterErp(erp, record.localOrder)
+  let order = { ...mergeLocalInboundAfterErp(erp, record.localOrder), omsAcknowledgementKind: record.kind }
   // An old receipt may now refer to an order already processed by another action.
   if (record.kind === 'withdraw' && (erp.status === 'cancelled' || ['cancelled', 'voided'].includes(erp.omsStatus))) order = { ...order, status: 'draft' }
   if (record.kind === 'void' && (erp.status === 'cancelled' || ['cancelled', 'voided'].includes(erp.omsStatus))) order = { ...order, status: 'voided' }

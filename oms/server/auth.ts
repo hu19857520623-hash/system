@@ -197,6 +197,7 @@ export function requiredWritePermission(method: string, apiPath: string): string
   if (!WRITE_METHODS.has(String(method || '').toUpperCase())) return null
   const p = String(apiPath || '').split('?')[0] || '/'
   if (p.startsWith('/auth')) return null
+  if (method.toUpperCase() === 'POST' && /^\/inbound-orders\/saves\/[^/]+\/[^/]+\/check$/.test(p)) return null
   // The POST carries an immutable request body for lookup; it performs no write.
   // Read permission is enforced independently by readResourceForPath.
   if (method.toUpperCase() === 'POST' && /^\/erp\/inbound\/[^/]+\/original\/check$/.test(p)) return null

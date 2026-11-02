@@ -5,6 +5,7 @@ import { InboundIdentityError, saveInboundOrder, deleteInboundDraft } from './in
 import { assertInboundSnapshot, inboundSnapshotRevision } from './inbound-snapshot-guard.util.js'
 import { readSavedInboundDrafts } from './inbound-draft-read.util.js'
 import { readInboundPlan, assertInboundInputCounts } from './inbound-plan.util.js'
+import { inboundSavedVersion, runInboundSave, resolveInboundSave } from './inbound-save.util.js'
 
 const data = { customerId: 'c1', inboundNo: 'IB001', source: 'ERP回传', inboundType: '客户自发', deliveryMethod: 'self',
   stockSource: 'owned', boxCount: 1, skuCount: 1, totalQty: 2, receivedQty: 0, status: 'draft', createdAt: '2026-10-09', warehouse: 'jhb1', lineItems: JSON.stringify([{ sku: 'A', qty: 2, boxNo: 1 }]) }
@@ -229,4 +230,97 @@ test('明细字段不能通过假值转换悄悄变为空列表；缺省实收�
 test('入库表头不能以对象或过长文本触发数据库错误，合法Unicode文本按字符计长', () => {
   for (const patch of [{ id: {} }, { inboundNo: ['IB001'] }, { warehouse: 42 }, { warehouse: null }, { createdAt: '' }, { remark: {} }, { contactPhone: '1'.repeat(51) }, { status: 'x'.repeat(31) }]) assert.throws(() => assertInboundInputCounts({ ...data, lineItems: [], ...patch }), InboundIdentityError)
   assert.doesNotThrow(() => assertInboundInputCounts({ ...data, lineItems: [], contact: '😀'.repeat(100) }))
+})
+
+function saveProtocolFixture() {
+  let rows: any[] = [{ id: 'saved-id', ...data }], receipts: any[] = [], count = 0, failReceipt = false
+  let tail = Promise.resolve()
+  const db: any = { $transaction: (work: any) => {
+    const next = tail.then(async () => {
+      const before = structuredClone({ rows, receipts, count })
+      const tx: any = {
+        $queryRaw: async (parts: TemplateStringsArray, ...values: any[]) => {
+          const sql = parts.join('?')
+          if (sql.includes('FROM oms_inbound_save')) return receipts.filter(row => row.request_id === values[0])
+          if (sql.includes('FROM oms_customeraccount')) return [{ code: 'TKL9001' }]
+          if (sql.includes('FROM customer')) return [{ id: 1n }]
+          throw Error(sql)
+        },
+        $executeRaw: async (_parts: any, ...values: any[]) => {
+          if (failReceipt) throw Error('receipt storage failure')
+          receipts.push({ request_id: values[0], actor_id: values[1], customer_id: values[2], content_hash: values[3], status: values.length === 5 ? 'confirmed' : 'cancelled', result: values[4] || '[]' }); return 1
+        },
+        inboundOrder: { findUnique: async ({ where }: any) => rows.find(row => row.inboundNo === where.inboundNo) || null,
+          findUniqueOrThrow: async ({ where }: any) => { const row = rows.find(row => row.inboundNo === where.inboundNo); if (!row) throw Error('missing'); return row } },
+      }
+      try { return await work(tx) } catch (error) { rows = before.rows; receipts = before.receipts; count = before.count; throw error }
+    })
+    tail = next.then(() => {}, () => {}); return next
+  } }
+  const save = async (_tx: any, order: any) => {
+    if (order.remark === 'FAIL') throw Error('save failed')
+    const old = rows.find(row => row.inboundNo === order.inboundNo)
+    if (old) Object.assign(old, order, { id: old.id }); else rows.push({ ...order })
+    count++;return { id: old?.id || order.id, inboundNo: order.inboundNo }
+  }
+  return { db, save, rows: () => rows, receipts: () => receipts, count: () => count, failReceipt: () => { failReceipt = true } }
+}
+const saveId = '00000000-0000-4000-8000-000000000097'
+const saveId2 = '00000000-0000-4000-8000-000000000098'
+test('OMS独立版本覆盖全部草稿字段，与ERP版本和字段顺序无关', () => {
+  const row = { id: 'saved-id', ...data }, version = inboundSavedVersion(row)
+  assert.equal(inboundSavedVersion(Object.fromEntries(Object.entries(row).reverse())), version)
+  assert.equal(inboundSavedVersion({ ...row, erpRevision: 'not-part-of-oms-state' }), version)
+  for (const patch of [{ totalQty: 7 }, { remark: 'new' }, { attachments: '[]' }, { lineItems: '[]' }, { status: 'voided' }]) assert.notEqual(inboundSavedVersion({ ...row, ...patch }), version)
+})
+test('新草稿版本保存一次，重复回执即使后续已编辑也不覆盖当前记录', async () => {
+  const f = saveProtocolFixture(), expected = inboundSavedVersion(f.rows()[0]), plan = [{ expected, order: { ...f.rows()[0], totalQty: 5 } }]
+  const first = await runInboundSave(f.db, saveId, 'u1', 'c1', plan, f.save)
+  assert.equal(first.status, 'confirmed');assert.equal(first.replay, false);assert.equal(f.count(), 1)
+  const newer = [{ expected: inboundSavedVersion(f.rows()[0]), order: { ...f.rows()[0], totalQty: 7 } }]
+  await runInboundSave(f.db, saveId2, 'u1', 'c1', newer, f.save)
+  const replay = await runInboundSave(f.db, saveId, 'u1', 'c1', plan, f.save)
+  assert.equal(replay.replay, true);assert.equal(f.rows()[0].totalQty, 7);assert.equal(f.count(), 2)
+  const result = await resolveInboundSave(f.db, saveId, 'u1', 'c1', plan, true)
+  assert.equal(result.status, 'confirmed');assert.equal(f.rows()[0].totalQty, 7)
+})
+test('两个页面相同OMS旧版本并发只有一方提交，失败方不写回执', async () => {
+  const f = saveProtocolFixture(), expected = inboundSavedVersion(f.rows()[0])
+  const outcomes = await Promise.allSettled([runInboundSave(f.db, saveId, 'u1', 'c1', [{ expected, order: { ...f.rows()[0], totalQty: 5 } }], f.save), runInboundSave(f.db, saveId2, 'u2', 'c1', [{ expected, order: { ...f.rows()[0], totalQty: 7 } }], f.save)])
+  assert.equal(outcomes.filter(r => r.status === 'fulfilled').length, 1);assert.equal(f.count(), 1);assert.equal(f.receipts().length, 1)
+  const rejected = outcomes.find(r => r.status === 'rejected') as PromiseRejectedResult
+  assert.match(rejected.reason.message, /发生变化.*未覆盖/)
+})
+test('未知查询不写记录，取消回执阻止迟到原保存，但不撤销已确认的保存', async () => {
+  const f = saveProtocolFixture(), plan = [{ expected: inboundSavedVersion(f.rows()[0]), order: { ...f.rows()[0], totalQty: 5 } }]
+  assert.equal((await resolveInboundSave(f.db, saveId, 'u1', 'c1', plan, false)).status, 'unknown');assert.equal(f.receipts().length, 0)
+  assert.equal((await resolveInboundSave(f.db, saveId, 'u1', 'c1', plan, true)).status, 'cancelled')
+  assert.equal((await runInboundSave(f.db, saveId, 'u1', 'c1', plan, f.save)).status, 'cancelled');assert.equal(f.count(), 0)
+  assert.equal(f.rows()[0].totalQty, 2)
+})
+test('原请求绑定账号客户和完整内容，无法更改载荷或跨账号读取', async () => {
+  const f = saveProtocolFixture(), plan = [{ expected: inboundSavedVersion(f.rows()[0]), order: { ...f.rows()[0], totalQty: 5 } }]
+  await runInboundSave(f.db, saveId, 'u1', 'c1', plan, f.save)
+  await assert.rejects(runInboundSave(f.db, saveId, 'u1', 'c1', [{ ...plan[0], order: { ...plan[0].order, remark: 'changed' } }], f.save), /内容不能更改/)
+  await assert.rejects(resolveInboundSave(f.db, saveId, 'u2', 'c1', plan, false), e => e instanceof InboundIdentityError && e.status === 403)
+  await assert.rejects(resolveInboundSave(f.db, saveId, 'u1', 'c2', plan, false), /不属于当前客户/)
+})
+test('先校验整批版本，第二张单冲突不保存第一张；回执故障同样回滚整批', async () => {
+  const f = saveProtocolFixture(), first = { expected: null, order: { ...data, id: 'new', inboundNo: 'NEW' } }
+  await assert.rejects(runInboundSave(f.db, saveId, 'u1', 'c1', [first, { expected: null, order: { ...f.rows()[0], totalQty: 5 } }], f.save), /发生变化/)
+  assert.equal(f.count(), 0);assert.equal(f.rows().length, 1)
+  f.failReceipt();await assert.rejects(runInboundSave(f.db, saveId, 'u1', 'c1', [first], f.save), /receipt storage failure/)
+  assert.equal(f.rows().length, 1);assert.equal(f.receipts().length, 0)
+})
+test('重复单号、损坏原版本和创建覆盖既存记录均拒绝且不保存', async () => {
+  const f = saveProtocolFixture(), plan = { expected: null, order: { ...f.rows()[0] } }
+  await assert.rejects(runInboundSave(f.db, saveId, 'u1', 'c1', [plan, plan], f.save), /重复/)
+  await assert.rejects(runInboundSave(f.db, saveId, 'u1', 'c1', [{ ...plan, expected: 'bad' }], f.save), /版本无效/)
+  await assert.rejects(runInboundSave(f.db, saveId, 'u1', 'c1', [plan], f.save), /发生变化/)
+  assert.equal(f.count(), 0)
+})
+test('即使调用方声明ERP确认，当前已保存草稿也不能绕过独立OMS版本', async () => {
+  const f = saveProtocolFixture();let canonicalChecks = 0
+  await assert.rejects(runInboundSave(f.db, saveId, 'u1', 'c1', [{ expected: null, order: { ...f.rows()[0], omsAcknowledgementKind: 'withdraw', totalQty: 9 } }], f.save, async () => { canonicalChecks++;return true }), /发生变化/)
+  assert.equal(canonicalChecks, 0);assert.equal(f.count(), 0);assert.equal(f.rows()[0].totalQty, 2)
 })

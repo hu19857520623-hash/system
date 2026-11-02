@@ -20,6 +20,9 @@ import { Prisma } from '@prisma/client'
 import { InboundIdentityError, saveInboundOrder, deleteInboundDraft } from './inbound-order-persistence.util.js'
 import { readSavedInboundDrafts } from './inbound-draft-read.util.js'
 import { assertInboundInputCounts } from './inbound-plan.util.js'
+import { readInboundPlan } from './inbound-plan.util.js'
+import { inboundSavedVersion, runInboundSave, resolveInboundSave } from './inbound-save.util.js'
+import { assertInboundSnapshot } from './inbound-snapshot-guard.util.js'
 import { ownedInventorySnapshot } from './owned-inventory-snapshot.util.js'
 import { applicationCache, cachedFulfillmentWarehouses } from './cache.js'
 import express from 'express'
@@ -374,6 +377,7 @@ async function buildUnscopedBootstrap(
     })),
     inboundOrders: inboundOrders.map(o => ({
       ...o,
+      omsRevision: inboundSavedVersion(o),
       lineItems: o.lineItems ? parseJson(o.lineItems, []) : undefined,
       attachments: o.attachments ? parseJson(o.attachments, []) : undefined,
     })),
@@ -3358,6 +3362,9 @@ app.put('/api/inbound-orders', async (req, res) => {
     if (!Array.isArray(list) || list.some(o => !o || !String(o.id || '').trim() || !String(o.inboundNo || '').trim())) {
       return res.status(400).json({ error: '入库单缺少标识或单号' })
     }
+    const owner = scope || String(list[0]?.customerId || '')
+    const requestId = list[0]?.saveRequestId
+    if (!requestId || list.some(o => o.saveRequestId !== requestId)) return res.status(409).json({ error: '保存页面版本已更新，请保留输入并重新打开入库记录；本次未覆盖任何单据' })
     const canonical = new Map<string, ErpInboundOrder>()
     for (const o of list) {
       assertInboundInputCounts(o)
@@ -3366,9 +3373,8 @@ app.put('/api/inbound-orders', async (req, res) => {
         canonical.set(String(o.inboundNo), { ...current, inboundType: sanitizeOmsInboundType(current.inboundType) })
       }
     }
-    const identities = await prisma.$transaction(async tx => {
-      const saved = []
-      for (const o of list) {
+    const result = await runInboundSave(prisma, requestId, (req as AuthenticatedRequest).auth!.userId, owner,
+      list.map(o => ({ order: o, expected: o.omsRevision === undefined ? null : o.omsRevision })), async (tx, o) => {
         const id = String(o.id)
         const data = {
             customerId: scope ?? (o.customerId as string | null | undefined) ?? null,
@@ -3396,11 +3402,23 @@ app.put('/api/inbound-orders', async (req, res) => {
             lineItems: o.lineItems ? JSON.stringify(o.lineItems) : null,
             attachments: o.attachments ? JSON.stringify(o.attachments) : null,
         }
-        saved.push(await saveInboundOrder(tx, id, data, scope, o.erpRevision, canonical.get(data.inboundNo)))
-      }
-      return saved
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted, timeout: 30000 })
-    res.json({ ok: true, identities })
+        return saveInboundOrder(tx, id, data, scope, o.erpRevision, canonical.get(data.inboundNo))
+    }, async (tx, incoming, current) => {
+      const kind = incoming.omsAcknowledgementKind
+      if (!['create', 'update', 'reactivate', 'withdraw', 'void'].includes(kind)) return false
+      if (incoming.status === 'draft' && kind !== 'withdraw') return false
+      const trusted = canonical.get(String(incoming.inboundNo))
+      if (!trusted?.omsCustomerCode) return false
+      // Validate a withdrawn draft as canonical voided, not the staging bypass.
+      // Arbitrary draft plans cannot use this exception to change quantities.
+      const data = { ...current, ...incoming, source: String(incoming.source || '客户自发'), stockSource: 'owned', deliveryMethod: String(incoming.deliveryMethod),
+        boxCount: Number(incoming.boxCount), skuCount: Number(incoming.skuCount), totalQty: Number(incoming.totalQty), receivedQty: Number(incoming.receivedQty ?? 0),
+        createdAt: String(incoming.createdAt), warehouse: String(incoming.warehouse), status: incoming.status === 'draft' ? 'voided' : String(incoming.status),
+        inboundType: sanitizeOmsInboundType(String(incoming.inboundType)), lineItems: JSON.stringify(incoming.lineItems || []), attachments: JSON.stringify(incoming.attachments || []) }
+      await assertInboundSnapshot(tx, data, trusted.omsCustomerCode, incoming.erpRevision, trusted)
+      return true
+    })
+    res.json({ ok: true, ...result })
   } catch (e) {
     console.error(e)
     if (e instanceof InboundIdentityError) return res.status(e.status).json({ error: e.message })
@@ -3409,6 +3427,36 @@ app.put('/api/inbound-orders', async (req, res) => {
       return res.status(409).json({ error: '入库单号已存在或刚被同步，请刷新后重试' })
     }
     res.status(500).json({ error: '入库单保存失败，请稍后重试' })
+  }
+})
+
+app.post('/api/inbound-orders/saves/:customerId/:requestId/:action', async (req, res) => {
+  try {
+    const { customerId, requestId, action } = req.params
+    if (!['check', 'cancel'].includes(action)) return res.status(404).json({ error: '原保存操作不存在，请返回入库记录' })
+    if (!assertCustomerId(req as AuthenticatedRequest, res, customerId)) return
+    const list = req.body
+    if (!Array.isArray(list)) return res.status(400).json({ error: '缺少原保存资料，请保留记录并核对' })
+    const result = await resolveInboundSave(prisma, requestId, (req as AuthenticatedRequest).auth!.userId, customerId,
+      list.map(o => ({ order: o, expected: o?.omsRevision === undefined ? null : o.omsRevision })), action === 'cancel')
+    res.json(result)
+  } catch (error) {
+    if (error instanceof InboundIdentityError) return res.status(error.status).json({ error: error.message })
+    console.error(error);res.status(500).json({ error: '原保存结果暂无法核对，请保留原请求并稍后重试' })
+  }
+})
+
+app.get('/api/inbound-orders/by-no/:inboundNo', async (req, res) => {
+  try {
+    const scope = customerScope(req as AuthenticatedRequest)
+    if (scope === '') return res.status(403).json({ error: '客户身份无效，请重新登录' })
+    const row = await prisma.inboundOrder.findFirst({ where: { inboundNo: req.params.inboundNo, ...(scope ? { customerId: scope } : {}) } })
+    if (!row) return res.status(404).json({ error: '当前客户的入库记录不存在，请返回列表核对' })
+    const plan = readInboundPlan(row, row.status === 'draft')
+    res.json({ ...row, ...plan, omsRevision: inboundSavedVersion(row) })
+  } catch (error) {
+    if (error instanceof InboundIdentityError) return res.status(error.status).json({ error: `已保存记录无法读取，请保留原资料并联系管理员核对。${error.message}` })
+    console.error(error);res.status(500).json({ error: '读取已保存入库记录失败，请稍后重试' })
   }
 })
 

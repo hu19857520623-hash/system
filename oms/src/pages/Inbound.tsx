@@ -4,6 +4,7 @@ import { authSessionScope } from '../api/client'
 
 import { userFacingError } from '../utils/userFacingError'
 import InboundRecovery from '../components/inbound/InboundRecovery'
+import InboundSaveRecovery from '../components/inbound/InboundSaveRecovery'
 import { useEffect, useRef, useState } from 'react'
 import { displaySku, displaySkuText } from '../data/skuDisplay'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
@@ -14,7 +15,7 @@ import { findProductByCode } from '../data/platformBindingUtils'
 import { useRole } from '../auth/RoleContext'
 import { getCustomerCode, getCustomerIdForRole } from '../data/dataScope'
 import { nextInboundNo, submitInboundToErp, updateInboundOnErp, reorderInboundOnErp, captureInboundWriteAccess, canEditInboundOrder, canReorderInboundOrder, inboundMutationFailure } from '../data/inboundStore'
-import { addInboundOrderOrThrow, updateInboundOrderOrThrow } from '../data/entityStore'
+import { addInboundOrderOrThrow, updateInboundOrderOrThrow, getInboundOrdersSnapshot } from '../data/entityStore'
 import { notifyIfUserError, notifyError, notifySuccess, notifyInfo } from '../utils/userNotify'
 import { fileToAttachment, todayDateInput } from '../data/fileUtils'
 import { importCsvFile } from '../data/csvImportExport'
@@ -69,6 +70,7 @@ export default function Inbound() {
   const fileTask = useRef(false)
   const [submissionUncertain, setSubmissionUncertain] = useState(false)
   const [formErpRevision, setFormErpRevision] = useState<string | undefined>()
+  const [formOmsRevision, setFormOmsRevision] = useState<string | undefined>()
   const [feedback, setFeedback] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const hydratedEditId = useRef<string | null>(null)
@@ -80,7 +82,7 @@ export default function Inbound() {
     setSavingAction(null); setSubmissionUncertain(false); setFeedback(null)
     fileTask.current = false; setReadingFiles(false)
     hydratedEditId.current = null; redirectedEdit.current = false
-    setFormErpRevision(undefined); setDelivery('self'); setInboundType('自发头程')
+    setFormErpRevision(undefined); setFormOmsRevision(undefined); setDelivery('self'); setInboundType('自发头程')
     setEta(''); setTrackingNo(''); setReferenceNo(''); setPlatformRef(''); setRemark('')
     setLines([]); setAttachments([]); setConfirmWarehouseData(false); setSkuPickerOpen(false)
     setBoxCountInput(''); setQtyPerBoxInput(''); setPackTypeInput('自带包装'); setStockTypeInput('以仓库为准')
@@ -90,6 +92,7 @@ export default function Inbound() {
     if (!editOrder || hydratedEditId.current === editOrder.id) return
     hydratedEditId.current = editOrder.id
     setFormErpRevision(editOrder.erpRevision)
+    setFormOmsRevision(editOrder.omsRevision)
     setDelivery(editOrder.deliveryMethod === 'pickup' ? 'pickup' : 'self')
     setInboundType(sanitizeCustomerInboundType(editOrder.inboundType))
     setEta(editOrder.eta || '')
@@ -238,6 +241,7 @@ export default function Inbound() {
       id: editOrder?.id || `ib-${Date.now()}`,
       customerId,
       erpRevision: formErpRevision,
+      omsRevision: formOmsRevision,
       inboundNo: editOrder?.inboundNo || nextInboundNo(getCustomerCode(customerId)),
       source: '客户自发',
       inboundType: sanitizeCustomerInboundType(inboundType),
@@ -305,7 +309,8 @@ export default function Inbound() {
 
       if (!currentView()) return
       if (!asDraft) {
-        const erpResult = await submitInboundToErp(localOrder)
+        const saved = getInboundOrdersSnapshot().find(order => order.inboundNo === localOrder.inboundNo)
+        const erpResult = await submitInboundToErp({ ...localOrder, omsRevision: saved?.omsRevision })
         if (!currentView()) return
         if (!erpResult.ok) {
           setSubmissionUncertain(Boolean(erpResult.uncertain))
@@ -355,6 +360,7 @@ export default function Inbound() {
       </div>
 
       {editOrder && <InboundRecovery orders={[editOrder]} onCompleted={goRecords} />}
+      <InboundSaveRecovery customerId={getCustomerIdForRole(role) || editOrder?.customerId} />
       <div className="space-y-4">
         <FormSection num={1} title="入库信息">
           <FormGrid cols={3}>
