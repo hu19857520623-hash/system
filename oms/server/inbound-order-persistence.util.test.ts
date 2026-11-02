@@ -6,6 +6,7 @@ import { assertInboundSnapshot, inboundSnapshotRevision } from './inbound-snapsh
 import { readSavedInboundDrafts } from './inbound-draft-read.util.js'
 import { readInboundPlan, assertInboundInputCounts } from './inbound-plan.util.js'
 import { inboundSavedVersion, runInboundSave, resolveInboundSave } from './inbound-save.util.js'
+import { receiveInboundStatus } from './inbound-webhook.util.js'
 
 const data = { customerId: 'c1', inboundNo: 'IB001', source: 'ERP回传', inboundType: '客户自发', deliveryMethod: 'self',
   stockSource: 'owned', boxCount: 1, skuCount: 1, totalQty: 2, receivedQty: 0, status: 'draft', createdAt: '2026-10-09', warehouse: 'jhb1', lineItems: JSON.stringify([{ sku: 'A', qty: 2, boxNo: 1 }]) }
@@ -323,4 +324,65 @@ test('即使调用方声明ERP确认，当前已保存草稿也不能绕过独�
   const f = saveProtocolFixture();let canonicalChecks = 0
   await assert.rejects(runInboundSave(f.db, saveId, 'u1', 'c1', [{ expected: null, order: { ...f.rows()[0], omsAcknowledgementKind: 'withdraw', totalQty: 9 } }], f.save, async () => { canonicalChecks++;return true }), /发生变化/)
   assert.equal(canonicalChecks, 0);assert.equal(f.count(), 0);assert.equal(f.rows()[0].totalQty, 2)
+})
+
+function webhookFixture(status = 'pending_receipt', local = 'on_the_way') {
+  const f = linkedSnapshot(status), events: string[] = []
+  let row: any = { id: 'saved', ...data, status: local }, writes = 0, present = true
+  const current: any = { ...f.trusted, inboundType: '自发头程', id: 12, omsCustomerCode: 'TKL9001', status, omsStatus: status === 'cancelled' ? 'voided' : 'on_the_way', totalExpectedQty: 2, totalReceivedQty: 0,
+    warehouseCode: 'WMS-JHB-01', trackingNo: null, createdAt: '2026-11-02T00:00:00Z', remark: null, items: [{ sku: 'A', expectedQty: 2, receivedQty: 0, productName: '商品A' }] }
+  const tx: any = { ...f.tx,
+    customerAccount: { findFirst: async () => ({ id: 'c1' }) },
+    $queryRaw: async (parts: TemplateStringsArray, ...values: any[]) => {
+      const sql = parts.join('?'); events.push(sql)
+      if (sql.includes('FROM customer WHERE')) return [{ id: 1n }]
+      if (sql.includes('FROM oms_customeraccount')) return [{ id: 'c1', code: 'TKL9001' }]
+      if (sql.includes('FROM inbound_order WHERE') && !present) return []
+      return f.tx.$queryRaw(parts, ...values)
+    },
+    inboundOrder: { findUnique: async () => row, upsert: async ({ create, update }: any) => { row = row ? { ...row, ...update } : create; writes++;return row } },
+  }
+  const db: any = { $transaction: async (work: any) => { events.push('transaction');return work(tx) } }
+  const fetch = async () => { events.push('fetch');return current }
+  return { ...f, db, events, current, fetch, row: () => row, writes: () => writes, set: (value: any) => { row = value }, missing: () => { present = false } }
+}
+test('取消通知保留已保存的5件计划和附件原文，不按ERP旧2件重写', async () => {
+  const f = webhookFixture('cancelled', 'draft'), plan = { ...f.row(), totalQty: 5, lineItems: JSON.stringify([{ sku: 'A', qty: 5, boxNo: 1 }]), remark: '新计划', attachments: '[]' }
+  f.set(plan);const before = structuredClone(plan)
+  const result = await receiveInboundStatus(f.db, 'TKL9001', 'IB001', false, f.fetch)
+  assert.match(result.skipped || '', /草稿已保留/);assert.equal(f.writes(), 0);assert.deepEqual(f.row(), before)
+  assert.ok(f.events.indexOf('fetch') < f.events.indexOf('transaction'))
+  const customer = f.events.findIndex(x => x.includes('FROM customer WHERE')), account = f.events.findIndex(x => x.includes('FROM oms_customeraccount')), order = f.events.findIndex(x => x.includes('FROM inbound_order WHERE'))
+  assert.ok(customer < account && account < order)
+})
+test('通知仅触发读取，采用当前ERP明细和真实箱数，不沿用本地旧9箱或旧备注', async () => {
+  const f = webhookFixture();f.set({ ...f.row(), totalQty: 99, boxCount: 9, remark: 'old' })
+  const result = await receiveInboundStatus(f.db, 'TKL9001', 'IB001', false, f.fetch)
+  assert.equal(result.synced, true);assert.equal(f.row().totalQty, 2);assert.equal(f.row().boxCount, 1);assert.equal(f.row().remark, null);assert.equal(f.writes(), 1)
+})
+test('ERP在预读取和加锁之间改变时拒绝整次通知，不修改OMS', async () => {
+  const f = webhookFixture(), before = structuredClone(f.row());f.header.updatedAt = new Date('2026-11-03')
+  await assert.rejects(receiveInboundStatus(f.db, 'TKL9001', 'IB001', false, f.fetch), /同步期间发生变化/)
+  assert.equal(f.writes(), 0);assert.deepEqual(f.row(), before)
+})
+test('旧删除通知不能删除仍存在的ERP单或OMS历史，均不调用保存', async () => {
+  const f = webhookFixture(), before = structuredClone(f.row())
+  assert.match((await receiveInboundStatus(f.db, 'TKL9001', 'IB001', true, async () => { throw Error('must not fetch') })).skipped || '', /原单仍存在/)
+  f.missing();assert.match((await receiveInboundStatus(f.db, 'TKL9001', 'IB001', true, f.fetch)).skipped || '', /保留 OMS 历史/)
+  assert.deepEqual(f.row(), before);assert.equal(f.writes(), 0)
+})
+test('通知不能跨客户覆盖，货盘也不能混入客户入库作业', async () => {
+  const f = webhookFixture();f.current.omsCustomerCode = 'OTHER'
+  await assert.rejects(receiveInboundStatus(f.db, 'TKL9001', 'IB001', false, f.fetch), e => e instanceof InboundIdentityError && e.status === 403)
+  f.current.omsCustomerCode = 'TKL9001';f.set({ ...f.row(), customerId: 'other' })
+  await assert.rejects(receiveInboundStatus(f.db, 'TKL9001', 'IB001', false, f.fetch), /其他客户/)
+  f.set(null);f.current.stockSource = 'catalog';assert.match((await receiveInboundStatus(f.db, 'TKL9001', 'IB001', false, f.fetch)).skipped || '', /货盘/);assert.equal(f.writes(), 0)
+})
+test('历史ERP入库类型采用统一客户类型，预读取失败不会开始事务或覆盖记录', async () => {
+  const f = webhookFixture();f.current.inboundType = '客户自发';f.current.deliveryMethod = null
+  assert.equal((await receiveInboundStatus(f.db, 'TKL9001', 'IB001', false, f.fetch)).synced, true)
+  assert.equal(f.row().inboundType, '自发头程');assert.equal(f.row().deliveryMethod, 'self')
+  const before = structuredClone(f.row()), writes = f.writes()
+  await assert.rejects(receiveInboundStatus(f.db, 'TKL9001', 'IB001', false, async () => { throw Error('ERP read failed') }), /ERP read failed/)
+  assert.equal(f.writes(), writes);assert.deepEqual(f.row(), before)
 })

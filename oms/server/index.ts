@@ -1,3 +1,4 @@
+import { receiveInboundStatus } from './inbound-webhook.util.js'
 import { canReadData } from '../src/data/readAccess.js'
 import { readCatalogPurchaseHistory } from './catalog-purchase-history.util.js'
 import { catalogBootstrapProducts, customerBootstrapProducts } from './catalog-bootstrap-products.util.js'
@@ -183,40 +184,6 @@ function toOmsWarehouseCode(code?: string | null, fallback = 'jhb1'): string {
   if (raw.includes('cpt')) return 'cpt1'
   if (raw.includes('dbn')) return 'dbn'
   return fallback
-}
-
-type InboundLineItemPayload = {
-  sku: string
-  name: string
-  qty: number
-  boxNo: number
-  packType: string
-  stockType: string
-}
-
-function inboundLinesFromErp(inbound: ErpInboundOrder, existing?: { lineItems?: string | null }): InboundLineItemPayload[] {
-  const existingLines = parseJson<InboundLineItemPayload[]>(String(existing?.lineItems || ''), [])
-  const fromCartons = (inbound.cartons || []).flatMap((carton) => {
-    const boxNo = Number(carton.boxSeq) > 0 ? Number(carton.boxSeq) : 1
-    return (carton.items || []).map((item) => ({
-      sku: item.sku,
-      name: inbound.items.find(line => line.sku === item.sku)?.productName || item.sku,
-      qty: item.qty,
-      boxNo,
-      packType: '自带包装',
-      stockType: '以仓库为准',
-    }))
-  })
-  if (fromCartons.length) return fromCartons
-  if (existingLines.length) return existingLines
-  return (inbound.items || []).map((item, index) => ({
-    sku: item.sku,
-    name: item.productName || item.sku,
-    qty: item.expectedQty,
-    boxNo: index + 1,
-    packType: '自带包装',
-    stockType: '以仓库为准',
-  }))
 }
 
 function validWebhookSignature(rawBody: Buffer, signature: string): boolean {
@@ -1579,83 +1546,9 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
     }
 
     if (type === 'inbound.status') {
-      const inbound = data as unknown as ErpInboundOrder & { deleted?: boolean }
-      if (!inbound.inboundNo) return res.status(400).json({ error: '缺少入库单号' })
-      const existing = await prisma.inboundOrder.findFirst({ where: { inboundNo: inbound.inboundNo } })
-      if (inbound.deleted) {
-        if (existing) {
-          await prisma.inboundOrder.delete({ where: { id: existing.id } })
-        }
-        return res.json({ ok: true, type, deleted: true })
-      }
-      const palletInbound = inbound.inboundType === '货盘入库' || inbound.stockSource === 'catalog'
-      if (palletInbound && !existing) {
-        return res.json({ ok: true, type, skipped: 'pallet inbound is ERP-only' })
-      }
-      const status = inbound.omsStatus === 'cancelled' && existing?.status === 'draft'
-        ? 'draft'
-        : inbound.omsStatus || 'on_the_way'
-      const totalQty = inbound.totalExpectedQty ?? 0
-      const receivedQty = inbound.totalReceivedQty ?? 0
-      const lineItemsArr = inboundLinesFromErp(inbound, existing || undefined)
-      const lineItems = JSON.stringify(lineItemsArr)
-      const boxCount = Math.max(
-        inbound.cartons?.length || 0,
-        existing?.boxCount || 0,
-        new Set(lineItemsArr.map(line => Math.max(1, Number(line.boxNo) || 1))).size,
-        1,
-      )
-      const payload = {
-        status,
-        receivedQty,
-        totalQty: totalQty || existing?.totalQty || 0,
-        trackingNo: inbound.trackingNo ?? existing?.trackingNo,
-        warehouse: toOmsWarehouseCode(inbound.warehouseCode, existing?.warehouse),
-        source: inbound.source || existing?.source,
-        inboundType: sanitizeOmsInboundType(inbound.inboundType || existing?.inboundType),
-        deliveryMethod: inbound.deliveryMethod || existing?.deliveryMethod,
-        stockSource: 'owned',
-        referenceNo: inbound.referenceNo || existing?.referenceNo,
-        eta: inbound.eta || existing?.eta,
-        contact: inbound.contact || existing?.contact,
-        contactPhone: inbound.contactPhone || existing?.contactPhone,
-        remark: inbound.remark ?? existing?.remark,
-        lineItems,
-        boxCount,
-        skuCount: inbound.items?.length || existing?.skuCount || 0,
-      }
-      if (existing) {
-        await prisma.inboundOrder.update({
-          where: { id: existing.id },
-          data: payload,
-        })
-      } else {
-        await prisma.inboundOrder.create({
-          data: {
-            id: `erp-ib-${inbound.id}`,
-            customerId: customerId ?? null,
-            inboundNo: inbound.inboundNo,
-            source: inbound.source || 'ERP回传',
-            inboundType: sanitizeOmsInboundType(inbound.inboundType),
-            deliveryMethod: inbound.deliveryMethod || 'self',
-            stockSource: 'owned',
-            boxCount,
-            skuCount: inbound.items?.length || 0,
-            totalQty,
-            receivedQty,
-            status,
-            createdAt: new Date().toISOString().slice(0, 10),
-            warehouse: toOmsWarehouseCode(inbound.warehouseCode, 'jhb1'),
-            referenceNo: inbound.referenceNo,
-            eta: inbound.eta,
-            contact: inbound.contact,
-            contactPhone: inbound.contactPhone,
-            trackingNo: inbound.trackingNo,
-            remark: inbound.remark,
-            lineItems,
-          },
-        })
-      }
+      const no = String(data.inboundNo || '').trim()
+      const result = await receiveInboundStatus(prisma, customerCode, no, data.deleted === true, () => fetchErpInboundByNo(no))
+      return res.json({ ok: true, type, ...result })
     } else if (type === 'outbound.status') {
       const outbound = data as unknown as ErpOutboundOrder
       if (!outbound.outboundNo) return res.status(400).json({ error: '缺少出库单号' })
@@ -1987,7 +1880,9 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
 
     res.json({ ok: true, type, customerCode })
   } catch (e) {
+    if (e instanceof InboundIdentityError) return res.status(e.status).json({ error: e.message })
     console.error('[webhook]', e)
+    if (e instanceof ErpApiError) return sendErpError(res, e)
     res.status(500).json({ error: String(e) })
   }
 })
