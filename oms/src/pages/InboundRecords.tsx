@@ -11,6 +11,7 @@ import {
 } from '../components/ui'
 import InboundDetailDrawer from '../components/inbound/InboundDetailDrawer'
 import InboundRecovery from '../components/inbound/InboundRecovery'
+import { useInboundConfirmation } from '../components/inbound/useInboundConfirmation'
 import { InboundPrintLabelMenu } from '../components/inbound/InboundPrintLabelMenu'
 import {
   SearchField, FilterActions, DropdownBtn, inputCls, matchText, type SearchMode,
@@ -114,6 +115,7 @@ export default function InboundRecords() {
   const [importFeedback, setImportFeedback] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
   const sessionScope = authSessionScope()
   const listScope = JSON.stringify([sessionScope, dataScope.bindingCustomerId])
+  const confirmation = useInboundConfirmation(JSON.stringify([listScope, canWrite]))
   const view = useAsyncViewScope(listScope)
   const captureView = () => { const valid = view.capture(); return () => valid() && authSessionScope() === sessionScope }
   useEffect(() => {
@@ -124,7 +126,7 @@ export default function InboundRecords() {
   const handleWithdraw = async (order: InboundOrder) => {
     const currentView = captureView()
     if (!canWrite) { notifyError('当前账号只有入库查看权限，不能修改单据'); return }
-    if (!window.confirm(`确认撤回入库单 ${order.inboundNo}？仓库将停止收货，之后可在草稿中修改并重新提交。`)) return
+    if (!(await confirmation.confirm(`确认撤回入库单 ${order.inboundNo}？仓库将停止收货，之后可在草稿中修改并重新提交。`, '确认撤回'))) return
     if (!currentView()) return
     setWithdrawingId(order.id)
     try {
@@ -262,7 +264,7 @@ export default function InboundRecords() {
   const confirmVoid = (orders: InboundOrder[]) => {
     const labels = orders.map(o => o.inboundNo).slice(0, 8).join('、')
     const more = orders.length > 8 ? ` 等 ${orders.length} 张` : ''
-    return window.confirm(`确认作废入库单 ${labels}${more}？作废后仓库不再收货，可在详情中确认后重新下单。`)
+    return confirmation.confirm(`确认作废入库单 ${labels}${more}？作废后仓库不再收货，可在详情中确认后重新下单。`, '确认作废')
   }
 
   const handleVoidOrders = async (orders: InboundOrder[]) => {
@@ -273,7 +275,7 @@ export default function InboundRecords() {
       notifyInfo('选中的入库单均不可作废（仅草稿或在途可作废）')
       return
     }
-    if (!confirmVoid(targets) || !currentView()) return
+    if (!(await confirmVoid(targets)) || !currentView()) return
     setVoiding(true)
     const completed: InboundOrder[] = []
     const warnings: string[] = []
@@ -307,6 +309,7 @@ export default function InboundRecords() {
 
   return (
     <div className="page-shell">
+      {confirmation.dialog}
       <PageHeader
         title="入库记录"
         desc={dataScope.isAdmin ? '全平台入库单，可按客户筛选' : '查看预约入库草稿，跟踪已提交单据的在途、收货与上架进度'}

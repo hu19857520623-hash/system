@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import type { Prisma } from '@prisma/client'
 import { InboundIdentityError, saveInboundOrder, deleteInboundDraft } from './inbound-order-persistence.util.js'
 import { assertInboundSnapshot, inboundSnapshotRevision } from './inbound-snapshot-guard.util.js'
+import { readSavedInboundDrafts } from './inbound-draft-read.util.js'
 
 const data = { customerId: 'c1', inboundNo: 'IB001', source: 'ERP回传', inboundType: '客户自发', deliveryMethod: 'self',
   stockSource: 'owned', boxCount: 1, skuCount: 1, totalQty: 2, receivedQty: 0, status: 'draft', createdAt: '2026-10-09', warehouse: 'jhb1' }
@@ -155,5 +156,42 @@ for (const [status, local, received] of [['arrived', 'receiving', 0], ['receivin
   test(`仓库 ${status} 按实际进度保存为 ${local}`, async () => {
     const f = linkedSnapshot(status); f.items[0].actualQty = received
     await assertInboundSnapshot(f.tx, { ...f.incoming, status: local, receivedQty: received }, 'TKL9001', f.revision, f.trusted)
+  })
+}
+
+function draftReader(rows?: any[]) {
+  const queries: any[] = []
+  const row = { ...data, id: 'saved-draft', customerId: 'c1', inboundNo: 'IB001', totalQty: 5, status: 'draft', lineItems: JSON.stringify([{ sku: 'A', name: '已保存计划', qty: 5, boxNo: 1 }]), attachments: '[]' }
+  const db: any = { customerAccount: { findFirst: async (query: any) => { queries.push(query); return { id: 'c1' } } },
+    inboundOrder: { findMany: async (query: any) => { queries.push(query); return rows || [row] } } }
+  return { db, row, queries }
+}
+
+test('读取撤回草稿按登录客户和已取消单号过滤，返回已保存的计划而非ERP旧数量', async () => {
+  const f = draftReader(), before = structuredClone(f.row)
+  const result = await readSavedInboundDrafts(f.db, 'TKL9001', 'c1', ['IB001'])
+  assert.equal(result.drafts[0].totalQty, 5); assert.deepEqual(result.draftReadErrors, [])
+  assert.deepEqual(f.queries[0].where, { code: 'TKL9001', id: 'c1' })
+  assert.deepEqual(f.queries[1].where, { customerId: 'c1', status: 'draft', inboundNo: { in: ['IB001'] } })
+  assert.deepEqual(f.row, before)
+})
+
+test('无已取消单号不查询草稿；无效客户拒绝，管理员无OMS档案时仅返回空草稿', async () => {
+  const f = draftReader()
+  assert.deepEqual(await readSavedInboundDrafts(f.db, 'TKL9001', 'c1', []), { drafts: [], draftReadErrors: [] }); assert.equal(f.queries.length, 0)
+  await assert.rejects(readSavedInboundDrafts(f.db, 'TKL9001', '', ['IB001']), e => e instanceof InboundIdentityError && e.status === 403)
+  f.db.customerAccount.findFirst = async () => null
+  await assert.rejects(readSavedInboundDrafts(f.db, 'TKL9001', 'c2', ['IB001']), /登录客户不一致/)
+  assert.deepEqual(await readSavedInboundDrafts(f.db, 'TKL9001', null, ['IB001']), { drafts: [], draftReadErrors: [] })
+})
+
+for (const patch of [{ lineItems: 'broken' }, { lineItems: '{}' }, { attachments: '{}' }, { totalQty: 9 }, { receivedQty: 1 }, { skuCount: 9 }, { boxCount: 3 }, { lineItems: JSON.stringify([{ sku: 'A', qty: -1, boxNo: 1 }]) }]) {
+  test(`损坏草稿仅报告该单，不将其改为空明细或阻止正常草稿读取 ${JSON.stringify(patch)}`, async () => {
+    const f = draftReader(); const bad = { ...f.row, ...patch }, good = { ...f.row, id: 'good', inboundNo: 'IB002' }
+    const reader = draftReader([bad, good]), before = structuredClone([bad, good])
+    const result = await readSavedInboundDrafts(reader.db, 'TKL9001', 'c1', ['IB001', 'IB002'])
+    assert.equal(result.drafts.length, 1); assert.equal(result.drafts[0].inboundNo, 'IB002')
+    assert.equal(result.draftReadErrors.length, 1); assert.match(result.draftReadErrors[0].message, /已保存草稿 IB001.*保留记录/)
+    assert.deepEqual([bad, good], before)
   })
 }

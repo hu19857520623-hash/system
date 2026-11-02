@@ -18,6 +18,7 @@ import { OutboundAttachmentContentError, requireOutboundAttachmentContent } from
 import { assertGlobalSkuAvailable, GlobalSkuConflict } from './global-sku.util.js'
 import { Prisma } from '@prisma/client'
 import { InboundIdentityError, saveInboundOrder, deleteInboundDraft } from './inbound-order-persistence.util.js'
+import { readSavedInboundDrafts } from './inbound-draft-read.util.js'
 import { ownedInventorySnapshot } from './owned-inventory-snapshot.util.js'
 import { applicationCache, cachedFulfillmentWarehouses } from './cache.js'
 import express from 'express'
@@ -2213,8 +2214,13 @@ app.post('/api/erp/inbound/:inboundNo/reactivate', async (req, res) => {
 
 app.get('/api/erp/inbound/by-customer/:customerCode', async (req, res) => {
   try {
-    res.json(await fetchErpInboundsByCustomer(req.params.customerCode))
+    if (!assertCustomerCode(req as AuthenticatedRequest, res, req.params.customerCode)) return
+    const result = await fetchErpInboundsByCustomer(req.params.customerCode)
+    const cancelledNos = result.items.filter(row => ['cancelled', 'voided'].includes(row.omsStatus) || row.status === 'cancelled').filter(row => row.totalReceivedQty === 0).map(row => row.inboundNo)
+    const saved = await readSavedInboundDrafts(prisma, req.params.customerCode, customerScope(req as AuthenticatedRequest), cancelledNos)
+    res.json({ ...result, ...saved })
   } catch (e) {
+    if (e instanceof InboundIdentityError) return res.status(e.status).json({ error: e.message })
     sendErpError(res, e)
   }
 })

@@ -423,3 +423,69 @@ test('核对等待中切换账号，不清除原请求、不回写前一账号�
   assert.equal((await resolveInboundOriginal(draft, true)).ok, false)
   assert.deepEqual(pendingInboundOperation(draft).record, original); assert.deepEqual(getInboundOrdersSnapshot(), [draft])
 })
+
+const cancelledErp = { ...erp, status: 'cancelled', omsStatus: 'voided', totalExpectedQty: 3, items: [{ ...erp.items[0], expectedQty: 3 }] }
+const savedDraft = { ...draft, totalQty: 5, remark: '已保存的计划5件', lineItems: [{ ...draft.lineItems![0], qty: 5 }] }
+
+test('刷新撤回草稿采用服务器计划5件及最新ERP版本，不回退至旧预报3件或本地旧9件', async t => {
+  environment(t); setInboundOrders([{ ...savedDraft, totalQty: 9 }])
+  globalThis.fetch = async () => Response.json({ items: [cancelledErp], total: 1, drafts: [savedDraft], draftReadErrors: [] })
+  assert.equal(await refreshInboundsFromErp('c1'), 1)
+  const current = getInboundOrdersSnapshot()[0]
+  assert.equal(current.status, 'draft'); assert.equal(current.totalQty, 5); assert.equal(current.lineItems![0].qty, 5); assert.equal(current.remark, savedDraft.remark); assert.equal(current.erpRevision, erp.revision)
+})
+
+test('其他页面已作废草稿后，不能仅因本地仍为draft而保留旧计划', async t => {
+  environment(t); setInboundOrders([savedDraft])
+  globalThis.fetch = async () => Response.json({ items: [cancelledErp], total: 1, drafts: [], draftReadErrors: [] })
+  assert.equal(await refreshInboundsFromErp('c1'), 1)
+  assert.equal(getInboundOrdersSnapshot()[0].status, 'voided'); assert.equal(getInboundOrdersSnapshot()[0].totalQty, 3)
+})
+
+test('已重新提交或已有实收的仓库单不套用旧草稿计划', async t => {
+  environment(t)
+  for (const current of [{ ...erp, totalExpectedQty: 7, items: [{ ...erp.items[0], expectedQty: 7 }] }, { ...cancelledErp, totalReceivedQty: 1 }]) {
+    setInboundOrders([savedDraft]); globalThis.fetch = async () => Response.json({ items: [current], total: 1, drafts: [savedDraft] })
+    await refreshInboundsFromErp('c1')
+    assert.notEqual(getInboundOrdersSnapshot()[0].status, 'draft'); assert.equal(getInboundOrdersSnapshot()[0].totalQty, current.totalExpectedQty)
+  }
+})
+
+test('刷新等候期间本单已完成新修改，迟到响应不覆盖结果，也不报旧草稿错误', async t => {
+  environment(t); setInboundOrders([draft])
+  let release!: () => void, entered!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve }), started = new Promise<void>(resolve => { entered = resolve })
+  globalThis.fetch = async () => { entered(); await gate; return Response.json({ items: [cancelledErp], total: 1, drafts: [savedDraft], draftReadErrors: [{ inboundNo: draft.inboundNo, message: '旧损坏记录' }] }) }
+  const pending = refreshInboundsFromErp('c1'); await started
+  const latest = { ...draft, status: 'on_the_way' as const, totalQty: 7 }; setInboundOrders([latest]); release()
+  assert.equal(await pending, 0); assert.deepEqual(getInboundOrdersSnapshot(), [latest])
+})
+
+test('一张坏草稿保留原视图，其他入库正常刷新；反馈说明部分完成', async t => {
+  environment(t); setInboundOrders([savedDraft])
+  globalThis.fetch = async () => Response.json({ items: [cancelledErp, { ...erp, id: 13, inboundNo: 'OTHER' }], total: 2, drafts: [], draftReadErrors: [{ inboundNo: draft.inboundNo, message: '已保存草稿明细无法读取，请保留记录并核对' }] })
+  await assert.rejects(refreshInboundsFromErp('c1'), /已更新 1 条.*未覆盖.*保留记录/)
+  assert.equal(getInboundOrdersSnapshot().find(row => row.inboundNo === draft.inboundNo), savedDraft)
+  assert.equal(getInboundOrdersSnapshot().find(row => row.inboundNo === 'OTHER')?.status, 'on_the_way')
+})
+
+test('旧服务未返回权威草稿资料或客户不匹配时，不用ERP旧数量覆盖当前草稿', async t => {
+  environment(t)
+  for (const response of [{ items: [cancelledErp], total: 1 }, { items: [cancelledErp], total: 1, drafts: [{ ...savedDraft, customerId: 'OTHER' }] }]) {
+    setInboundOrders([savedDraft]); globalThis.fetch = async () => Response.json(response)
+    await assert.rejects(refreshInboundsFromErp('c1'), /未覆盖/); assert.equal(getInboundOrdersSnapshot()[0], savedDraft)
+  }
+})
+
+test('原操作回执确认读取ERP最新3件，不借用草稿计划5件改写已完成结果', async t => {
+  await uncertainCreate(t); setInboundOrders([savedDraft])
+  globalThis.fetch = async (input, init) => {
+    if (String(input).endsWith('/original/check')) return Response.json({ outcome: 'completed', order: cancelledErp, message: '原请求已完成' })
+    assert.equal(String(input), '/api/inbound-orders')
+    const row = JSON.parse(String(init?.body))[0]; assert.equal(row.status, 'voided'); assert.equal(row.totalQty, 3)
+    return Response.json({ ok: true })
+  }
+  const result = await resolveInboundOriginal(draft)
+  assert.equal(result.ok, true); if (result.ok) { assert.equal(result.order.status, 'voided'); assert.equal(result.order.totalQty, 3) }
+  assert.equal(pendingInboundOperation(draft).record, null)
+})

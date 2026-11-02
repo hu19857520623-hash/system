@@ -1,5 +1,5 @@
 import { apiGet, apiPost, apiPut } from './client'
-import type { OutboundRecipient } from '../data/mockData'
+import type { OutboundRecipient, InboundOrder } from '../data/mockData'
 
 export type ErpCatalogItem = {
   sku: string
@@ -332,7 +332,7 @@ export function resolveErpInboundOriginal(inboundNo: string, resolution: 'check'
 }
 
 export function syncErpInbounds(customerCode: string) {
-  return apiGet<{ items: ErpInboundOrder[]; total: number }>(
+  return apiGet<{ items: ErpInboundOrder[]; total: number; drafts?: InboundOrder[]; draftReadErrors?: { inboundNo: string; message: string }[] }>(
     `/erp/inbound/by-customer/${encodeURIComponent(customerCode)}`,
   )
 }

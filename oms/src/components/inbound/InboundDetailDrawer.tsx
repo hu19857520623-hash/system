@@ -1,4 +1,5 @@
 import { useAsyncViewScope } from '../../utils/useAsyncViewScope'
+import { useInboundConfirmation } from './useInboundConfirmation'
 import { userFacingError } from '../../utils/userFacingError'
 import { displaySku, displaySkuText } from '../../data/skuDisplay'
 import { useEffect, useState } from 'react'
@@ -54,6 +55,7 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mo
   const [confirmReorder, setConfirmReorder] = useState(false)
   const products = useProducts()
   const sessionScope = authSessionScope()
+  const confirmation = useInboundConfirmation(JSON.stringify([sessionScope, order?.id, order?.inboundNo, canWrite]))
   const view = useAsyncViewScope(JSON.stringify([sessionScope, order?.id, order?.inboundNo]))
   const captureView = () => { const valid = view.capture(); return () => valid() && authSessionScope() === sessionScope }
 
@@ -114,7 +116,7 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mo
     if (order.status === 'draft') {
       const pending = pendingInboundOperation(order)
       if (pending.record || pending.error) { showFeedback('err', pending.error || '本单有待核对原请求，请先读取原单结果，不能删除记录'); return }
-      if (!window.confirm(`确认删除草稿入库单 ${order.inboundNo}？此操作不可恢复。`)) return
+      if (!(await confirmation.confirm(`确认删除草稿入库单 ${order.inboundNo}？此操作不可恢复。`, '确认删除草稿')) || !currentView()) return
       try {
         const assertWrite = captureInboundWriteAccess()
         await apiDelete(`/inbound-orders/${encodeURIComponent(order.id)}`)
@@ -136,7 +138,7 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mo
     const currentView = captureView()
     if (!canWrite) { showFeedback('err', '当前账号只有入库查看权限，不能修改单据'); return }
     if (!canVoidInboundOrder(order.status)) return
-    if (!window.confirm(`确认作废入库单 ${order.inboundNo}？作废后仓库不再收货，可在详情中确认后重新下单。`)) return
+    if (!(await confirmation.confirm(`确认作废入库单 ${order.inboundNo}？作废后仓库不再收货，可在详情中确认后重新下单。`, '确认作废')) || !currentView()) return
     setVoiding(true)
     try {
       const result = await voidInboundOrder(order)
@@ -156,7 +158,7 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mo
     const currentView = captureView()
     if (!canWrite) { showFeedback('err', '当前账号只有入库查看权限，不能修改单据'); return }
     if (order.status !== 'on_the_way') return
-    if (!window.confirm(`确认撤回入库单 ${order.inboundNo}？仓库将停止收货，入库单转为草稿后可修改并重新提交。`)) return
+    if (!(await confirmation.confirm(`确认撤回入库单 ${order.inboundNo}？仓库将停止收货，入库单转为草稿后可修改并重新提交。`, '确认撤回')) || !currentView()) return
     setWithdrawing(true)
     try {
       const result = await withdrawInboundOrder(order)
@@ -197,7 +199,7 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mo
   }
 
   return (
-    <div
+    <><div
       className={mode === 'page' ? 'mx-auto w-full max-w-5xl rounded-xl border border-border-light bg-white shadow-sm' : 'fixed inset-0 z-50 flex justify-end bg-slate-900/20 backdrop-blur-sm'}
       onClick={mode === 'drawer' ? onClose : undefined}
     >
@@ -395,6 +397,6 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mo
           {canWrite && order.status === 'draft' && order.erpRevision && <p className="w-full text-xs text-text-muted">该草稿已有 ERP 入库历史，需要保留记录；可核对后修改并重新提交。</p>}
         </div>
       </div>
-    </div>
+    </div>{confirmation.dialog}</>
   )
 }

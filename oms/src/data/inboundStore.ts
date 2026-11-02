@@ -118,8 +118,7 @@ export function buildInboundOrderFromErp(erp: ErpInboundOrder, customerId?: stri
     skuCount: erp.items.length || new Set(lineItems.map(line => line.sku)).size,
     totalQty: erp.totalExpectedQty,
     receivedQty: erp.totalReceivedQty,
-    status: (erp.status === 'cancelled' || ['cancelled', 'voided'].includes(erp.omsStatus)) && existing?.status === 'draft'
-      ? 'draft' : mapErpInboundStatus(erp.omsStatus),
+    status: mapErpInboundStatus(erp.omsStatus),
     createdAt: existing?.createdAt || new Date().toISOString().slice(0, 10),
     eta: erp.eta || undefined,
     warehouse: erp.warehouseCode || existing?.warehouse || 'jhb1',
@@ -364,13 +363,34 @@ export async function refreshInboundsFromErp(customerId: string, isCurrent: () =
   if (!current()) return 0
   const customerCode = getCustomerCode(customerId)
   if (!customerCode || customerCode === '—') return 0
+  const before = new Map(getInboundOrdersSnapshot().map(order => [order.inboundNo, order]))
   const data = await syncErpInbounds(customerCode)
   if (!current()) return 0
+  if ((data.drafts !== undefined && !Array.isArray(data.drafts)) || (data.draftReadErrors !== undefined && !Array.isArray(data.draftReadErrors))) throw knownFailure('入库草稿读取结果无法识别，请保留记录并刷新重试', 502)
+  const drafts = new Map((data.drafts || []).map(order => [order.inboundNo, order]))
+  const errors = new Map((data.draftReadErrors || []).map(error => [error.inboundNo, error.message]))
+  let applied = 0
   for (const item of data.items || []) {
     if (isErpPalletInbound(item)) continue
-    cacheInboundOrder(buildInboundOrderFromErp(item, customerId))
+    const existing = getInboundOrdersSnapshot().find(order => order.inboundNo === item.inboundNo)
+    // A write or another newer read finished while this request was in flight.
+    if (existing !== before.get(item.inboundNo)) { errors.delete(item.inboundNo); continue }
+    if (errors.has(item.inboundNo)) continue
+    const cancelled = item.status === 'cancelled' || ['cancelled', 'voided'].includes(item.omsStatus)
+    if (cancelled && existing?.status === 'draft' && data.drafts === undefined) {
+      errors.set(item.inboundNo, `尚未读取到 ${item.inboundNo} 的已保存草稿，请保留记录并刷新后继续`)
+      continue
+    }
+    const draft = cancelled && item.totalReceivedQty === 0 ? drafts.get(item.inboundNo) : undefined
+    if (draft && (draft.customerId !== customerId || draft.status !== 'draft' || draft.receivedQty !== 0)) {
+      errors.set(item.inboundNo, `草稿 ${item.inboundNo} 的客户或进度不匹配，请保留记录并核对`)
+      continue
+    }
+    cacheInboundOrder(draft ? { ...draft, erpRevision: item.revision } : buildInboundOrderFromErp(item, customerId))
+    applied++
   }
-  return data.total
+  if (errors.size) throw knownFailure(`已更新 ${applied} 条入库状态；以下草稿未覆盖：${[...errors.values()].join('；')}`, 409)
+  return applied
 }
 
 export type { InboundOrder }
