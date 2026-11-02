@@ -317,6 +317,7 @@ export const purchaseApi = {
 export const inboundApi = {
   shipmentOutcome: (requestId) => api.get(`/inbound/shipment-requests/${requestId}`),
   list: (params) => api.get('/inbound', params),
+  listWorkOrders: (params) => api.get('/inbound/work-orders', params),
   detail: (id) => api.get(`/inbound/${id}`),
   create: (data) => api.post('/inbound', data),
   confirm: (id, data) => api.post(`/inbound/${id}/confirm`, data),

@@ -140,6 +140,12 @@ export class InboundController {
     })
   }
 
+  @RequireAnyPerm('inbound.view', 'inbound.arrival_scan', 'inbound.receive', 'inbound.qc', 'inbound.putaway')
+  @Get('work-orders')
+  listWorkOrders(@Query() q: PaginationDto & { warehouseCode?: string }) {
+    return this.service.listWorkOrders(q)
+  }
+
   @RequirePerms('inbound.arrival_scan')
   @Post('arrival-scan')
   arrivalScan(@Body() body: any, @CurrentUser('userId') userId: number) {

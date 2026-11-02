@@ -16,6 +16,7 @@ import { shipmentSeaFreightVersion } from './erp-shipment-edit.util'
 import { runInboundReceiving } from './inbound-receiving-transaction.util'
 import { runInboundPutaway } from './inbound-putaway-transaction.util'
 import { runInboundControl, InboundControlKind } from './inbound-control-transaction.util'
+import { listInboundWorkOrders } from './inbound-work-orders.util'
 import { InboundControlDto } from './dto/inbound-control.dto'
 import { attachInboundWorkflowRevision } from './inbound-workflow-revision.util'
 import { PutawayInboundDto } from './dto/inbound-putaway.dto'
@@ -120,6 +121,10 @@ export class InboundService {
     private inventoryMutation: InventoryMutationService,
     private inboundFee: InboundFeeService,
   ) {}
+
+  listWorkOrders(q: PaginationDto & { warehouseCode?: string }) {
+    return listInboundWorkOrders(this.prisma, q)
+  }
 
   async list(q: PaginationDto & { status?: string; source?: string }) {
     const { page, pageSize } = getPagination(q)

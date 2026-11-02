@@ -11,6 +11,7 @@ import { useAppStore } from '@/stores/app'
 import { INBOUND_STATUS } from '@/constants/index.js'
 import WarehouseControlDialog from '@/components/inbound/WarehouseControlDialog.vue'
 import { warehouseControlOptions, type WarehouseControlKind } from '@/utils/warehouseControl'
+import { loadWarehouseOrderChoices } from '@/utils/warehouseOrderChoices'
 import { clearWarehouseAttempt, readWarehouseAttempts, runWarehouseAttempt, saveWarehouseAttempt, recoverWarehouseAttemptFailure, type WarehouseAttempt, type WarehouseOperation } from '@/utils/warehouseOperation'
 
 function bound990Text(row: any): string {
@@ -376,18 +377,16 @@ async function loadRecent() {
 async function loadActiveOrderList() {
   const version = ++orderListReadVersion, code = warehouseCode.value
   orderListReadError.value = ''
+  activeOrders.value = []
   if (!warehouseCode.value) {
     activeOrders.value = []
     return
   }
   try {
-    const res = await inboundApi.list({ pageSize: 100 })
+    const rows = await loadWarehouseOrderChoices({ listWorkOrders: params => inboundApi.listWorkOrders(params) }, code,
+      () => version === orderListReadVersion && code === warehouseCode.value)
     if (version !== orderListReadVersion || code !== warehouseCode.value) return
-    const rows = res.items || []
-    activeOrders.value = rows.filter((o: any) =>
-      o.warehouseCode === warehouseCode.value
-      && ['arrived', 'receiving', 'pending_putaway', 'exception'].includes(o.status),
-    )
+    if (rows) activeOrders.value = rows
   } catch (error) {
     if (version === orderListReadVersion) orderListReadError.value = `作业入库单未能刷新，请重新读取后选择。${userFacingError(error)}`
   }
