@@ -11,6 +11,12 @@ function fixture(){
   return{service,db,body}
 }
 describe('创建入库原明细重放',()=>{
+  it('客户锁内发现已删除草稿单号时拒绝迟到提交，不创建订单或商品',async()=>{
+    const f=fixture()
+    f.db.$queryRaw.mockImplementation(async (sql:TemplateStringsArray)=>sql.join('?').includes('snapshot_tombstone')?[{entity_id:f.body.inboundNo}]:[])
+    await expect(f.service.createAsnFromOms(f.body)).rejects.toThrow('入库草稿已删除')
+    expect(f.db.inboundOrder.findUnique).not.toHaveBeenCalled();expect(f.db.product.create).not.toHaveBeenCalled()
+  })
   it('新单读取持久化创建回执，预报变化时拒绝原请求重试且不写数据',async()=>{
     const f=fixture(),body={...f.body,contact:'原联系人',items:f.body.items.map(item=>({...item,lengthCm:20,widthCm:10,heightCm:5}))}
     f.db.operationLog.findFirst.mockResolvedValue({detail:{requestIdentityVersion:1,requestIdentity:omsAsnRequestIdentity(body,'WMS-JHB-01',body.items.map(item=>item.sku))}})

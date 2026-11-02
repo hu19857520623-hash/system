@@ -1485,6 +1485,8 @@ export class InboundService {
         }
 
         const inboundNo = String(data.inboundNo || '').trim() || await this.allocateInboundNo(customerCode, tx)
+        const deleted = await tx.$queryRaw<{ entity_id: string }[]>`SELECT entity_id FROM oms_snapshot_tombstone WHERE entity_type = 'inbound_no' AND entity_id = ${inboundNo}`
+        if (deleted.length) throw new ConflictException('入库草稿已删除，原请求不能再提交；新预约请使用新单号')
         const existing = await tx.inboundOrder.findUnique({ where: { inboundNo } })
         if (existing) {
           if (existing.omsCustomerCode !== customerCode) throw new NotFoundException('当前客户的入库单不存在，请核对单号')

@@ -17,7 +17,7 @@ import { catalogBindingSkus, catalogMappingSource } from './catalog-binding.util
 import { OutboundAttachmentContentError, requireOutboundAttachmentContent } from './outbound-attachment-content.util.js'
 import { assertGlobalSkuAvailable, GlobalSkuConflict } from './global-sku.util.js'
 import { Prisma } from '@prisma/client'
-import { InboundIdentityError, saveInboundOrder } from './inbound-order-persistence.util.js'
+import { InboundIdentityError, saveInboundOrder, deleteInboundDraft } from './inbound-order-persistence.util.js'
 import { ownedInventorySnapshot } from './owned-inventory-snapshot.util.js'
 import { applicationCache, cachedFulfillmentWarehouses } from './cache.js'
 import express from 'express'
@@ -3325,7 +3325,7 @@ app.delete('/api/platform-sku-mappings/:id', async (req, res) => {
 app.put('/api/inbound-orders', async (req, res) => {
   try {
     let list = req.body as Record<string, unknown>[]
-    list = await filterDeletedSnapshotRows('inbound', list)
+
     const scope = customerScope(req as AuthenticatedRequest)
     if (!Array.isArray(list) || list.some(o => !o || !String(o.id || '').trim() || !String(o.inboundNo || '').trim())) {
       return res.status(400).json({ error: '入库单缺少标识或单号' })
@@ -3377,15 +3377,12 @@ app.put('/api/inbound-orders', async (req, res) => {
 
 app.delete('/api/inbound-orders/:id', async (req, res) => {
   try {
-    const scope = customerScope(req as AuthenticatedRequest)
-    const result = await prisma.inboundOrder.deleteMany({
-      where: { id: String(req.params.id), ...(scope ? { customerId: scope } : {}) },
-    })
-    if (scope && result.count === 0) return res.status(404).json({ error: '入库单不存在' })
-    res.json({ ok: true })
-  } catch (e) {
-    console.error(e)
-    res.status(500).json({ error: String(e) })
+    const result = await deleteInboundDraft(prisma, String(req.params.id), customerScope(req as AuthenticatedRequest))
+    res.json(result)
+  } catch (error) {
+    if (error instanceof InboundIdentityError) return res.status(error.status).json({ error: error.message })
+    console.error(error)
+    res.status(500).json({ error: '删除结果暂无法确认，请返回入库记录刷新核对后重试原操作' })
   }
 })
 

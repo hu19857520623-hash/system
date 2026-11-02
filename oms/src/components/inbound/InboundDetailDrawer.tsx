@@ -21,7 +21,7 @@ import { downloadInboundReceivingList, printInboundReceivingList } from '../../d
 import { useProducts } from '../../data/inventoryStore'
 import { getInboundOrdersSnapshot, setInboundOrders } from '../../data/entityStore'
 import { apiDelete, authSessionScope } from '../../api/client'
-import { canEditInboundOrder, canVoidInboundOrder, canReorderInboundOrder, voidInboundOrder, reorderInboundOnErp, withdrawInboundOrder, captureInboundWriteAccess } from '../../data/inboundStore'
+import { canEditInboundOrder, canVoidInboundOrder, canReorderInboundOrder, voidInboundOrder, reorderInboundOnErp, withdrawInboundOrder, captureInboundWriteAccess, pendingInboundOperation } from '../../data/inboundStore'
 
 interface InboundDetailDrawerProps {
   order: InboundOrder | null
@@ -112,6 +112,8 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mo
     const currentView = captureView()
     if (!canWrite) { showFeedback('err', '当前账号只有入库查看权限，不能修改单据'); return }
     if (order.status === 'draft') {
+      const pending = pendingInboundOperation(order)
+      if (pending.record || pending.error) { showFeedback('err', pending.error || '本单有待核对原请求，请先读取原单结果，不能删除记录'); return }
       if (!window.confirm(`确认删除草稿入库单 ${order.inboundNo}？此操作不可恢复。`)) return
       try {
         const assertWrite = captureInboundWriteAccess()
@@ -385,11 +387,12 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mo
               {reordering ? '提交中…' : '提交'}
             </Button>
           )}
-          {canWrite && order.status === 'draft' && (
+          {canWrite && order.status === 'draft' && !order.erpRevision && (
             <Button variant="danger-outline" size="sm" className="ml-auto" onClick={() => void handleCancel()}>
               删除草稿
             </Button>
           )}
+          {canWrite && order.status === 'draft' && order.erpRevision && <p className="w-full text-xs text-text-muted">该草稿已有 ERP 入库历史，需要保留记录；可核对后修改并重新提交。</p>}
         </div>
       </div>
     </div>
