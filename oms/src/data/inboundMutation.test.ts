@@ -5,7 +5,7 @@ import type { InboundOrder } from './mockData'
 import { hydrateAccounts } from '../auth/accountStore'
 import { getInboundOrdersSnapshot, setInboundOrders } from './entityStore'
 import { inboundMutationFailure, submitInboundToErp, updateInboundOnErp, withdrawInboundOrder,
-  voidInboundOrder, reorderInboundOnErp, retryInboundOriginal, pendingInboundOperation, readInboundOriginal } from './inboundStore'
+  voidInboundOrder, reorderInboundOnErp, retryInboundOriginal, pendingInboundOperation, readInboundOriginal, refreshInboundsFromErp } from './inboundStore'
 
 const draft: InboundOrder = {
   id: 'oms-one', customerId: 'c1', inboundNo: 'RV-TKL9001-001', source: '客户自发',
@@ -260,4 +260,14 @@ for (const role of ['ecommerce', 'catalog', 'hybrid'] as const) test(`${role}: �
   globalThis.fetch = async () => Response.json(erp)
   assert.equal((await readInboundOriginal(draft)).ok, true)
   assert.deepEqual(pendingInboundOperation(draft).record, original)
+})
+
+test('列表刷新等待期间离页，旧读取不能覆盖当前入库缓存', async t => {
+  environment(t); setInboundOrders([draft])
+  let current = true, release!: () => void, entered!: () => void
+  const started = new Promise<void>(resolve => { entered = resolve }), gate = new Promise<void>(resolve => { release = resolve })
+  globalThis.fetch = async () => { entered(); await gate; return Response.json({ items: [{ ...erp, totalExpectedQty: 99 }], total: 1 }) }
+  const request = refreshInboundsFromErp('c1', () => current); await started
+  const latest = { ...draft, totalQty: 3 }; setInboundOrders([latest]); current = false; release()
+  assert.equal(await request, 0); assert.deepEqual(getInboundOrdersSnapshot(), [latest])
 })

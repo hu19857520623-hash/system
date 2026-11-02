@@ -1,6 +1,8 @@
+import { useAsyncViewScope } from '../utils/useAsyncViewScope'
+import { authSessionScope } from '../api/client'
 
 import { userFacingError } from '../utils/userFacingError'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { RefreshCw } from 'lucide-react'
 import { TableActionLink, actionLinkClass } from '../components/outbound/PodReceiptModals'
@@ -110,27 +112,39 @@ export default function InboundRecords() {
   const [withdrawingId, setWithdrawingId] = useState<string | null>(null)
   const [importing, setImporting] = useState(false)
   const [importFeedback, setImportFeedback] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
+  const sessionScope = authSessionScope()
+  const listScope = JSON.stringify([sessionScope, dataScope.bindingCustomerId])
+  const view = useAsyncViewScope(listScope)
+  const captureView = () => { const valid = view.capture(); return () => valid() && authSessionScope() === sessionScope }
+  useEffect(() => {
+    setDetail(null); setSelected(new Set()); setSyncing(false); setVoiding(false)
+    setWithdrawingId(null); setImporting(false); setImportFeedback(null)
+  }, [listScope])
 
   const handleWithdraw = async (order: InboundOrder) => {
+    const currentView = captureView()
     if (!canWrite) { notifyError('当前账号只有入库查看权限，不能修改单据'); return }
     if (!window.confirm(`确认撤回入库单 ${order.inboundNo}？仓库将停止收货，之后可在草稿中修改并重新提交。`)) return
+    if (!currentView()) return
     setWithdrawingId(order.id)
     try {
       const result = await withdrawInboundOrder(order)
+      if (!currentView()) return
       if (!result.ok) notifyError(result.error)
       else {
-        if (detail?.id === order.id) setDetail(result.order)
+        setDetail(current => current?.id === order.id ? result.order : current)
         if (result.warning) notifyInfo(result.warning)
         else notifySuccess('已撤回为草稿，可修改后重新提交')
       }
     } catch (error) {
-      notifyIfUserError(error, '撤回失败')
+      if (currentView()) notifyIfUserError(error, '撤回失败')
     } finally {
-      setWithdrawingId(null)
+      if (currentView()) setWithdrawingId(null)
     }
   }
 
   const syncFromErp = async () => {
+    const currentView = captureView()
     const customerId = getCustomerIdForRole(role)
     if (!customerId) {
       window.alert('请切换到客户角色后再同步')
@@ -138,12 +152,13 @@ export default function InboundRecords() {
     }
     setSyncing(true)
     try {
-      const n = await refreshInboundsFromErp(customerId)
+      const n = await refreshInboundsFromErp(customerId, currentView)
+      if (!currentView()) return
       window.alert(`已从 ERP 同步 ${n} 条入库单状态`)
     } catch (err) {
-      window.alert(userFacingError(err instanceof Error ? err.message : String(err)))
+      if (currentView()) window.alert(userFacingError(err instanceof Error ? err.message : String(err)))
     } finally {
-      setSyncing(false)
+      if (currentView()) setSyncing(false)
     }
   }
 
@@ -170,6 +185,7 @@ export default function InboundRecords() {
   }
 
   const handleBulkImport = async () => {
+    const currentView = captureView()
     if (!canWrite) { notifyError('当前账号只有入库查看权限，不能导入预约单'); return }
     if (importing) return
     const customerId = dataScope.bindingCustomerId
@@ -182,7 +198,8 @@ export default function InboundRecords() {
     setImportFeedback(null)
     let savingImported = false
     try {
-      const assertWrite = captureInboundWriteAccess()
+      const assertAccess = captureInboundWriteAccess()
+      const assertWrite = () => { assertAccess(); if (!currentView()) throw new Error('原导入页面已离开，请返回当前客户重新读取文件') }
       const { data, errors } = await importCsvFile(INBOUND_ORDER_COLUMNS, parseInboundOrders)
       assertWrite()
       if (errors.length > 0) {
@@ -198,17 +215,21 @@ export default function InboundRecords() {
         customerId, customerCode, existingNos: getInboundOrdersSnapshot().map(order => order.inboundNo),
       })
       savingImported = true
-      await addInboundOrdersOrThrow(orders, assertWrite)
+      // The store must still roll back a failed same-account save after this view leaves.
+      // Only account/permission changes invalidate its data rollback.
+      await addInboundOrdersOrThrow(orders, assertAccess)
+      if (!currentView()) return
       setImportFeedback({ kind: 'ok', text: `已保存 ${orders.length} 张入库预约单（草稿），可在草稿列表继续编辑并提交` })
       setTab('draft')
     } catch (err) {
+      if (!currentView()) return
       if (err === 'cancelled' || (err instanceof Error && err.message === 'cancelled')) return
       const result = inboundMutationFailure(err)
       setImportFeedback({ kind: 'err', text: savingImported && result.uncertain
         ? '导入结果暂无法确认，请先点击“立即刷新”核对记录，请勿重复导入。' + userFacingError(err)
         : `导入未完成：${result.error}` })
     } finally {
-      setImporting(false)
+      if (currentView()) setImporting(false)
     }
   }
 
@@ -245,19 +266,22 @@ export default function InboundRecords() {
   }
 
   const handleVoidOrders = async (orders: InboundOrder[]) => {
+    const currentView = captureView()
     if (!canWrite) { notifyError('当前账号只有入库查看权限，不能修改单据'); return }
     const targets = orders.filter(o => canVoidInboundOrder(o.status))
     if (targets.length === 0) {
       window.alert('选中的入库单均不可作废（仅草稿或在途可作废）')
       return
     }
-    if (!confirmVoid(targets)) return
+    if (!confirmVoid(targets) || !currentView()) return
     setVoiding(true)
     const completed: InboundOrder[] = []
     const warnings: string[] = []
     try {
       for (const order of targets) {
+        if (!currentView()) return
         const result = await voidInboundOrder(order)
+        if (!currentView()) return
         if (!result.ok) {
           notifyError(`${completed.length ? `已作废 ${completed.length} 张；` : ''}${order.inboundNo}：${result.error}`)
           return
@@ -268,8 +292,9 @@ export default function InboundRecords() {
       if (warnings.length) notifyInfo(warnings.join('\n'))
       else notifySuccess(targets.length === 1 ? `入库单 ${targets[0].inboundNo} 已作废` : `已作废 ${targets.length} 张入库单`)
     } catch (error) {
-      notifyIfUserError(error, `作废未全部完成，已完成 ${completed.length} 张`)
+      if (currentView()) notifyIfUserError(error, `作废未全部完成，已完成 ${completed.length} 张`)
     } finally {
+      if (!currentView()) return
       setSelected(prev => {
         const next = new Set(prev)
         for (const order of completed) next.delete(order.id)

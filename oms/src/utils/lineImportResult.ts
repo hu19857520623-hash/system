@@ -19,6 +19,8 @@ export type LineImportResultOptions = {
   emptyMessage?: string
   /** 下载失败明细 CSV 文件名（不含扩展名） */
   csvFilename?: string
+  /** Do not apply or report an import after its page/account has changed. */
+  isCurrent?: () => boolean
 }
 
 /** 表单/批量 CSV 导入：支持部分成功，展示行号 / SKU / 原因并可下载 */
@@ -27,6 +29,8 @@ export async function reportLineImportResult(
   onAcceptedRows: () => void | Promise<void>,
   options?: LineImportResultOptions,
 ): Promise<boolean> {
+  const isCurrent = options?.isCurrent ?? (() => true)
+  if (!isCurrent()) return false
   const failures = resolveImportFailures(result)
   const ok = result.data.length
   const fail = failures.length
@@ -39,12 +43,14 @@ export async function reportLineImportResult(
 
   if (fail === 0) {
     await onAcceptedRows()
+    if (!isCurrent()) return false
     window.alert(successMsg(ok))
     return true
   }
 
   if (ok > 0) {
     await onAcceptedRows()
+    if (!isCurrent()) return false
     showImportFailuresDialog(
       `部分行未导入：成功 ${ok} 行，失败 ${fail} 行`,
       failures,

@@ -309,10 +309,14 @@ export async function reorderInboundOnErp(order: InboundOrder): Promise<InboundM
   return runOriginal(order, order.erpRevision ? 'reactivate' : 'create')
 }
 
-export async function refreshInboundsFromErp(customerId: string): Promise<number> {
+export async function refreshInboundsFromErp(customerId: string, isCurrent: () => boolean = () => true): Promise<number> {
+  const scope = authSessionScope()
+  const current = () => isCurrent() && authSessionScope() === scope
+  if (!current()) return 0
   const customerCode = getCustomerCode(customerId)
   if (!customerCode || customerCode === '—') return 0
   const data = await syncErpInbounds(customerCode)
+  if (!current()) return 0
   for (const item of data.items || []) {
     if (isErpPalletInbound(item)) continue
     cacheInboundOrder(buildInboundOrderFromErp(item, customerId))

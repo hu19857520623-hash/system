@@ -1,3 +1,4 @@
+import { readCurrentFiles } from '../utils/readCurrentFiles'
 import { useAsyncViewScope } from '../utils/useAsyncViewScope'
 import { authSessionScope } from '../api/client'
 
@@ -64,6 +65,8 @@ export default function Inbound() {
   const [confirmWarehouseData, setConfirmWarehouseData] = useState(false)
   const [savingAction, setSavingAction] = useState<'draft' | 'submit' | null>(null)
   const saving = savingAction !== null
+  const [readingFiles, setReadingFiles] = useState(false)
+  const fileTask = useRef(false)
   const [submissionUncertain, setSubmissionUncertain] = useState(false)
   const [formErpRevision, setFormErpRevision] = useState<string | undefined>()
   const [feedback, setFeedback] = useState<string | null>(null)
@@ -75,6 +78,7 @@ export default function Inbound() {
 
   useEffect(() => {
     setSavingAction(null); setSubmissionUncertain(false); setFeedback(null)
+    fileTask.current = false; setReadingFiles(false)
     hydratedEditId.current = null; redirectedEdit.current = false
     setFormErpRevision(undefined); setDelivery('self'); setInboundType('自发头程')
     setEta(''); setTrackingNo(''); setReferenceNo(''); setPlatformRef(''); setRemark('')
@@ -150,9 +154,18 @@ export default function Inbound() {
   }
 
   const handleBatchUploadLines = async () => {
+    if (!canWrite || saving || fileTask.current) return
+    const valid = view.capture()
+    const currentView = () => valid() && authSessionScope() === sessionScope
+    fileTask.current = true; setReadingFiles(true)
     try {
+      const assertWrite = captureInboundWriteAccess()
       const result = await importCsvFile(INBOUND_LINE_COLUMNS, parseInboundLines)
+      if (!currentView()) return
+      assertWrite()
       await reportLineImportResult(result, () => {
+        if (!currentView()) return
+        assertWrite()
         setLines(prev => [...prev, ...result.data.map(row => ({
           id: row.id,
           sku: row.sku,
@@ -162,27 +175,39 @@ export default function Inbound() {
           packType: row.packType ?? '自带包装',
           stockType: row.stockType ?? '以仓库为准',
         }))])
-      })
+      }, { isCurrent: currentView })
     } catch (err) {
-      notifyIfUserError(err, '导入失败')
+      if (currentView()) notifyIfUserError(err, '导入失败')
+    } finally {
+      if (currentView()) { fileTask.current = false; setReadingFiles(false) }
     }
   }
 
   const goRecords = () => navigate('/inbound/records')
 
   const onPickFiles = async (files: FileList | null) => {
-    if (!files?.length) return
-    const next: FileAttachment[] = []
-    for (const file of Array.from(files)) {
-      next.push(await fileToAttachment(file, 'inbound_doc'))
+    if (!files?.length || !canWrite || saving || fileTask.current) return
+    const valid = view.capture()
+    const currentView = () => valid() && authSessionScope() === sessionScope
+    fileTask.current = true; setReadingFiles(true)
+    try {
+      const assertWrite = captureInboundWriteAccess()
+      const next = await readCurrentFiles(Array.from(files), file => fileToAttachment(file, 'inbound_doc'), currentView)
+      if (!next || !currentView()) return
+      assertWrite()
+      setAttachments(previous => [...previous, ...next])
+    } catch (error) {
+      if (currentView()) notifyIfUserError(error, '附件读取失败，请重新选择文件')
+    } finally {
+      if (currentView()) { fileTask.current = false; setReadingFiles(false) }
     }
-    setAttachments(prev => [...prev, ...next])
   }
 
   const handleSubmit = async (asDraft = false) => {
     const valid = view.capture()
     const currentView = () => valid() && authSessionScope() === sessionScope
     if (!canWrite) { setFeedback('当前账号只有入库查看权限，不能保存或提交'); return }
+    if (fileTask.current) { setFeedback('文件仍在读取，请等待完成后核对并提交'); return }
     if (saving || submissionUncertain) return
     setFeedback(null)
     if (editingInTransit && asDraft) return
@@ -403,8 +428,8 @@ export default function Inbound() {
             <div className="flex flex-wrap gap-2">
               <Button size="sm" onClick={() => setSkuPickerOpen(true)}><Plus className="h-3.5 w-3.5" /> 增加</Button>
               <Button variant="secondary" size="sm" onClick={downloadInboundLineTemplate}>下载模板</Button>
-              <Button variant="secondary" size="sm" onClick={() => void handleBatchUploadLines()}>
-                <Upload className="h-3.5 w-3.5" /> 批量上传
+              <Button variant="secondary" size="sm" disabled={saving || readingFiles} onClick={() => void handleBatchUploadLines()}>
+                <Upload className="h-3.5 w-3.5" /> {readingFiles ? '读取中…' : '批量上传'}
               </Button>
             </div>
           }
@@ -492,21 +517,21 @@ export default function Inbound() {
                   : '提交前请勾选「以仓库收货数据为准」'}
           </p>
           <div className="flex gap-2">
-            <Button variant="secondary" onClick={goRecords} disabled={saving}>取消</Button>
+            <Button variant="secondary" onClick={goRecords} disabled={saving}>返回入库记录</Button>
             {editingInTransit ? (
-              <Button disabled={saving || submissionUncertain} onClick={() => void handleSubmit(false)}>
+              <Button disabled={saving || readingFiles || submissionUncertain} onClick={() => void handleSubmit(false)}>
                 {saving ? '保存中…' : '保存修改'}
               </Button>
             ) : reordering ? (
-              <Button disabled={!confirmWarehouseData || saving || submissionUncertain} onClick={() => void handleSubmit(false)}>
+              <Button disabled={!confirmWarehouseData || saving || readingFiles || submissionUncertain} onClick={() => void handleSubmit(false)}>
                 {saving ? '提交中…' : '提交'}
               </Button>
             ) : (
               <>
-                <Button variant="secondary" disabled={saving || submissionUncertain} onClick={() => void handleSubmit(true)}>
+                <Button variant="secondary" disabled={saving || readingFiles || submissionUncertain} onClick={() => void handleSubmit(true)}>
                   {savingAction === 'draft' ? '保存中…' : '保存草稿'}
                 </Button>
-                <Button disabled={!confirmWarehouseData || saving || submissionUncertain} onClick={() => void handleSubmit(false)}>
+                <Button disabled={!confirmWarehouseData || saving || readingFiles || submissionUncertain} onClick={() => void handleSubmit(false)}>
                   {savingAction === 'submit' ? '提交中…' : '提交'}
                 </Button>
               </>
