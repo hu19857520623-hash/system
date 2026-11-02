@@ -19,6 +19,7 @@ import { assertGlobalSkuAvailable, GlobalSkuConflict } from './global-sku.util.j
 import { Prisma } from '@prisma/client'
 import { InboundIdentityError, saveInboundOrder, deleteInboundDraft } from './inbound-order-persistence.util.js'
 import { readSavedInboundDrafts } from './inbound-draft-read.util.js'
+import { assertInboundInputCounts } from './inbound-plan.util.js'
 import { ownedInventorySnapshot } from './owned-inventory-snapshot.util.js'
 import { applicationCache, cachedFulfillmentWarehouses } from './cache.js'
 import express from 'express'
@@ -3359,6 +3360,7 @@ app.put('/api/inbound-orders', async (req, res) => {
     }
     const canonical = new Map<string, ErpInboundOrder>()
     for (const o of list) {
+      assertInboundInputCounts(o)
       if (typeof o.erpRevision === 'string' && /^[a-f0-9]{64}$/.test(o.erpRevision)) {
         const current = await fetchErpInboundByNo(String(o.inboundNo))
         canonical.set(String(o.inboundNo), { ...current, inboundType: sanitizeOmsInboundType(current.inboundType) })

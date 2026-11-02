@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client'
 import type { ErpInboundOrder } from './erpClient.js'
 import { assertInboundSnapshot, InboundIdentityError } from './inbound-snapshot-guard.util.js'
+import { readInboundPlan } from './inbound-plan.util.js'
 export { InboundIdentityError } from './inbound-snapshot-guard.util.js'
 
 type InboundDb = Pick<Prisma.TransactionClient, 'inboundOrder' | '$queryRaw' | '$executeRaw'>
@@ -71,6 +72,7 @@ export async function saveInboundOrder(
   if (byId && byId.inboundNo !== data.inboundNo) {
     throw new InboundIdentityError(409, '入库单标识与单号不一致，请刷新后重试')
   }
+  readInboundPlan(data, data.status === 'draft')
   await assertInboundSnapshot(tx, { id, ...data }, customerCode, revision, trusted)
   return tx.inboundOrder.upsert({
     where: { inboundNo: data.inboundNo },

@@ -4,9 +4,10 @@ import type { Prisma } from '@prisma/client'
 import { InboundIdentityError, saveInboundOrder, deleteInboundDraft } from './inbound-order-persistence.util.js'
 import { assertInboundSnapshot, inboundSnapshotRevision } from './inbound-snapshot-guard.util.js'
 import { readSavedInboundDrafts } from './inbound-draft-read.util.js'
+import { readInboundPlan, assertInboundInputCounts } from './inbound-plan.util.js'
 
 const data = { customerId: 'c1', inboundNo: 'IB001', source: 'ERP回传', inboundType: '客户自发', deliveryMethod: 'self',
-  stockSource: 'owned', boxCount: 1, skuCount: 1, totalQty: 2, receivedQty: 0, status: 'draft', createdAt: '2026-10-09', warehouse: 'jhb1' }
+  stockSource: 'owned', boxCount: 1, skuCount: 1, totalQty: 2, receivedQty: 0, status: 'draft', createdAt: '2026-10-09', warehouse: 'jhb1', lineItems: JSON.stringify([{ sku: 'A', qty: 2, boxNo: 1 }]) }
 function repository(initial: { id: string; inboundNo: string; customerId: string | null }[]) {
   const rows = initial.map(row => ({ ...row }))
   const tx = { $queryRaw: async (query: TemplateStringsArray) => /snapshot_tombstone|FROM inbound_order/.test(query.join('?')) ? [] : [{ code: 'TKL9001', id: 1n }], $executeRaw: async () => 1, inboundOrder: {
@@ -195,3 +196,37 @@ for (const patch of [{ lineItems: 'broken' }, { lineItems: '{}' }, { attachments
     assert.deepEqual([bad, good], before)
   })
 }
+
+test('草稿计划校验保留原始数据，支持同SKU多箱和多个SKU同箱', () => {
+  const row = { ...data, totalQty: 7, skuCount: 2, boxCount: 2, lineItems: JSON.stringify([{ sku: 'A', qty: 2, boxNo: 1 }, { sku: 'A', qty: 3, boxNo: 2 }, { sku: 'B', name: '合法品名', qty: 2, boxNo: 2 }]), attachments: JSON.stringify([{ kind: '文件', fileName: 'file.pdf', url: 'data:application/pdf;base64,QQ==', uploadedAt: '2026-11-02' }]) }
+  const before = structuredClone(row), decoded = readInboundPlan(row)
+  assert.equal(decoded.lineItems.length, 3); assert.equal(decoded.attachments.length, 1); assert.deepEqual(row, before)
+  assert.deepEqual(readInboundPlan({ ...data, totalQty: 0, skuCount: 0, boxCount: 1, lineItems: null }), { lineItems: [], attachments: [] })
+})
+
+for (const patch of [
+  { lineItems: '{}' }, { lineItems: '[null]' }, { lineItems: 'broken' },
+  { lineItems: JSON.stringify([{ sku: 'A', qty: -2 }]) }, { lineItems: JSON.stringify([{ sku: 'A', qty: 2147483648 }]) },
+  { lineItems: JSON.stringify([{ sku: 'A', qty: 2, name: {} }]) }, { lineItems: JSON.stringify([{ sku: 'A', qty: 2, boxNo: 0 }]) },
+  { totalQty: 3 }, { skuCount: 2 }, { boxCount: 2 }, { receivedQty: 1 },
+  { attachments: '{}' }, { attachments: '[null]' }, { attachments: '[{}]' },
+  { attachments: JSON.stringify([{ kind: '文件', fileName: {}, url: '/api/file', uploadedAt: '2026-11-02' }]) },
+  { attachments: JSON.stringify([{ kind: '文件', fileName: 'file.pdf', url: 'javascript:void(0)', uploadedAt: '2026-11-02' }]) },
+  { attachments: JSON.stringify([{ kind: '文件', fileName: 'file.pdf', url: 'blob:temporary', uploadedAt: '2026-11-02' }]) },
+]) test(`草稿保存拒绝无法读取、数量不一致或不安全的附件 ${JSON.stringify(patch)}`, async () => {
+  const { tx, rows } = repository([]), incoming = { ...data, ...patch }, before = structuredClone(incoming)
+  await assert.rejects(saveInboundOrder(tx, 'new-id', incoming, 'c1'), e => e instanceof InboundIdentityError && e.status === 400 && /[\u4e00-\u9fff]/.test(e.message))
+  assert.deepEqual(incoming, before); assert.equal(rows.length, 0)
+})
+
+for (const value of [true, false, '2', -1, 1.5, 2147483648, null]) test(`入库数量在类型转换前拒绝 ${JSON.stringify(value)}`, () => {
+  for (const field of ['totalQty', 'boxCount', 'skuCount']) assert.throws(() => assertInboundInputCounts({ ...data, [field]: value }), e => e instanceof InboundIdentityError && e.status === 400)
+})
+test('明细字段不能通过假值转换悄悄变为空列表；缺省实收仍为零', () => {
+  for (const field of ['lineItems', 'attachments']) for (const value of [false, '', 0, {}]) assert.throws(() => assertInboundInputCounts({ ...data, lineItems: [], [field]: value }), InboundIdentityError)
+  assert.doesNotThrow(() => assertInboundInputCounts({ ...data, lineItems: [], receivedQty: undefined }))
+})
+test('入库表头不能以对象或过长文本触发数据库错误，合法Unicode文本按字符计长', () => {
+  for (const patch of [{ id: {} }, { inboundNo: ['IB001'] }, { warehouse: 42 }, { warehouse: null }, { createdAt: '' }, { remark: {} }, { contactPhone: '1'.repeat(51) }, { status: 'x'.repeat(31) }]) assert.throws(() => assertInboundInputCounts({ ...data, lineItems: [], ...patch }), InboundIdentityError)
+  assert.doesNotThrow(() => assertInboundInputCounts({ ...data, lineItems: [], contact: '😀'.repeat(100) }))
+})
