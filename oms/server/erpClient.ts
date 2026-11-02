@@ -286,6 +286,9 @@ export function fetchErpSkuInventoryByCode(customerCode: string) {
 }
 
 export type ErpInboundOrder = {
+  revision?: string
+  syncPending?: boolean
+
   id: number
   inboundNo: string
   warehouseCode: string
@@ -426,6 +429,8 @@ export type ErpInventoryViewItem = ErpSkuHolding & {
 
 export function createErpInboundAsn(body: {
   inboundNo?: string
+  clientRequestId?: string
+  expectedVersion?: string
   customerCode: string
   warehouseCode?: string
   trackingNo?: string
@@ -449,6 +454,8 @@ export function createErpInboundAsn(body: {
 
 export function updateErpInboundAsn(inboundNo: string, body: {
   inboundNo?: string
+  clientRequestId?: string
+  expectedVersion?: string
   customerCode: string
   warehouseCode?: string
   trackingNo?: string
@@ -470,15 +477,17 @@ export function updateErpInboundAsn(inboundNo: string, body: {
   })
 }
 
-export function cancelErpInboundAsn(inboundNo: string, customerCode: string) {
+export function cancelErpInboundAsn(inboundNo: string, customerCode: string, control: { clientRequestId?: string; expectedVersion?: string } = {}) {
   return erpRequest<ErpInboundOrder>(`/inbound/oms/asn/${encodeURIComponent(inboundNo)}/cancel`, {
     method: 'POST',
-    body: JSON.stringify({ customerCode }),
+    body: JSON.stringify({ customerCode, ...control }),
   })
 }
 
 export function reactivateErpInboundAsn(inboundNo: string, body: {
   inboundNo?: string
+  clientRequestId?: string
+  expectedVersion?: string
   customerCode: string
   warehouseCode?: string
   trackingNo?: string

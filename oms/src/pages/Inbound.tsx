@@ -1,5 +1,6 @@
 
 import { userFacingError } from '../utils/userFacingError'
+import InboundRecovery from '../components/inbound/InboundRecovery'
 import { useEffect, useRef, useState } from 'react'
 import { displaySku, displaySkuText } from '../data/skuDisplay'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
@@ -61,6 +62,7 @@ export default function Inbound() {
   const [savingAction, setSavingAction] = useState<'draft' | 'submit' | null>(null)
   const saving = savingAction !== null
   const [submissionUncertain, setSubmissionUncertain] = useState(false)
+  const [formErpRevision, setFormErpRevision] = useState<string | undefined>()
   const [feedback, setFeedback] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const hydratedEditId = useRef<string | null>(null)
@@ -69,6 +71,7 @@ export default function Inbound() {
   useEffect(() => {
     if (!editOrder || hydratedEditId.current === editOrder.id) return
     hydratedEditId.current = editOrder.id
+    setFormErpRevision(editOrder.erpRevision)
     setDelivery(editOrder.deliveryMethod === 'pickup' ? 'pickup' : 'self')
     setInboundType(sanitizeCustomerInboundType(editOrder.inboundType))
     setEta(editOrder.eta || '')
@@ -192,6 +195,7 @@ export default function Inbound() {
     const localOrder = {
       id: editOrder?.id || `ib-${Date.now()}`,
       customerId,
+      erpRevision: formErpRevision,
       inboundNo: editOrder?.inboundNo || nextInboundNo(getCustomerCode(customerId)),
       source: '客户自发',
       inboundType: sanitizeCustomerInboundType(inboundType),
@@ -260,6 +264,7 @@ export default function Inbound() {
           setSubmissionUncertain(Boolean(erpResult.uncertain))
           setFeedback(displaySkuText(erpResult.uncertain ? erpResult.error
             : `ERP 未接受本次提交，已保留草稿，请修改后重试：${erpResult.error}`))
+          if (!editOrder) navigate(`/inbound?edit=${encodeURIComponent(localOrder.id)}`, { replace: true })
           return
         }
         warning = erpResult.warning
@@ -299,6 +304,7 @@ export default function Inbound() {
         </Link>
       </div>
 
+      {editOrder && <InboundRecovery orders={[editOrder]} onCompleted={goRecords} />}
       <div className="space-y-4">
         <FormSection num={1} title="入库信息">
           <FormGrid cols={3}>

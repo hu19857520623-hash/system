@@ -5,7 +5,7 @@ import { PaginationDto } from '../../common/dto/pagination.dto'
 import { CurrentUser } from '../../common/decorators/current-user.decorator'
 import { RequireAnyPerm, RequirePerms } from '../../common/decorators/require-perms.decorator'
 import { OmsBridge } from '../../common/decorators/oms-bridge.decorator'
-import { CreateOmsAsnDto } from './dto/oms-asn.dto'
+import { CancelOmsAsnDto, CreateOmsAsnDto } from './dto/oms-asn.dto'
 import { ApplyShipmentFreightDto, CreateErpShipmentDto, SaveInboundDraftDto, ShipmentFreightMutationDto, UploadInboundAttachmentDto } from './dto/erp-shipment.dto'
 import { MeasureInboundDto, RecordInboundCartonsDto, ScanInboundCartonDto, ScanInboundQcDto, SubmitInboundQcDto } from './dto/inbound-receiving.dto'
 import { PutawayInboundDto } from './dto/inbound-putaway.dto'
@@ -32,9 +32,9 @@ export class InboundController {
   @Post('oms/asn/:inboundNo/cancel')
   omsCancelAsn(
     @Param('inboundNo') inboundNo: string,
-    @Body() body: { customerCode?: string },
+    @Body() body: CancelOmsAsnDto,
   ) {
-    return this.service.cancelAsnFromOms(inboundNo, { customerCode: String(body?.customerCode || '') })
+    return this.service.cancelAsnFromOms(inboundNo, body)
   }
 
   @OmsBridge()

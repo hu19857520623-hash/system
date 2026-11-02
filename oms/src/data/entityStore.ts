@@ -158,14 +158,17 @@ export async function addInboundOrderOrThrow(order: InboundOrder) {
 }
 
 /** 新导入的草稿在一次服务端事务中保存，不回写其他未修改单据的旧快照。 */
-export async function addInboundOrdersOrThrow(orders: InboundOrder[]) {
+export async function addInboundOrdersOrThrow(orders: InboundOrder[], assertSession: () => void = () => {}) {
+  assertSession()
   if (!orders.length) return
   const before = state.inboundOrders
   const next = orders.reduce((list, order) => nextInboundOrdersWithUpsert(order, list), before)
   setInboundOrders(next)
   try {
     await saveInboundOrders(orders)
+    assertSession()
   } catch (error) {
+    assertSession()
     const imported = new Set(orders.map(order => order.inboundNo))
     const optimistic = new Map(next.map(order => [order.inboundNo, order]))
     const previous = new Map(before.map(order => [order.inboundNo, order]))
@@ -193,8 +196,8 @@ export function upsertInboundOrder(order: InboundOrder) {
   persistInboundOrders(nextInboundOrdersWithUpsert(order))
 }
 
-export async function upsertInboundOrderOrThrow(order: InboundOrder) {
-  await addInboundOrdersOrThrow([order])
+export async function upsertInboundOrderOrThrow(order: InboundOrder, assertSession?: () => void) {
+  await addInboundOrdersOrThrow([order], assertSession)
 }
 
 export function setOrders(list: Order[]) {

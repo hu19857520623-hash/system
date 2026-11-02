@@ -1,4 +1,5 @@
 import { InboundService } from './inbound.service'
+import { omsAsnControl, omsAsnVersion } from './oms-asn-control.util'
 
 function fixture(status = 'pending_receipt') {
   const events: string[] = []
@@ -7,7 +8,7 @@ function fixture(status = 'pending_receipt') {
     $queryRaw: jest.fn(async (parts: TemplateStringsArray) => { events.push(parts.join('?')); return [] }),
     warehouse: { findUnique: jest.fn(async () => ({ warehouseType: 'wms' })) },
     inboundOrder: { findUnique: jest.fn(async () => { events.push('read'); return order }), update: jest.fn(async ({ data }) => ({ ...order, ...data, items: order.items })), findUniqueOrThrow: jest.fn(async () => ({ ...order, status: 'pending_receipt' })) },
-    inboundCarton: { deleteMany: jest.fn() }, inboundOrderItem: { deleteMany: jest.fn() }, operationLog: { create: jest.fn() },
+    inboundCarton: { deleteMany: jest.fn() }, inboundOrderItem: { deleteMany: jest.fn() }, operationLog: { create: jest.fn(), findFirst: jest.fn(async () => null) },
   }
   const db: any = { $transaction: jest.fn(async fn => fn(tx)) }
   const service: any = new InboundService(db, null as any, null as any, null as any, null as any, null as any)
@@ -16,7 +17,7 @@ function fixture(status = 'pending_receipt') {
   jest.spyOn(service, 'saveOmsAsnAttachments').mockResolvedValue(undefined)
   jest.spyOn(service, 'mapInboundForOms').mockImplementation((value: any) => ({ status: value.status }))
   jest.spyOn(service, 'pushInboundStatusToOms').mockResolvedValue(true)
-  return { service, db, tx, order, events, body: { customerCode: 'TKL9069', items: [{ sku: 'A', qty: 1 }] } }
+  return { service, db, tx, order, events, body: { customerCode: 'TKL9069', clientRequestId: '4b9f78d8-4688-47a3-a46d-222222222222', expectedVersion: omsAsnVersion(order), items: [{ sku: 'A', qty: 1 }] } }
 }
 
 describe('客户修改、重新下单与作废的事务边界', () => {
@@ -45,6 +46,7 @@ describe('客户修改、重新下单与作废的事务边界', () => {
 
   it('已作废的重复请求只重发通知，失败时明确返回待同步', async () => {
     const f = fixture('cancelled'); f.service.pushInboundStatusToOms.mockResolvedValue(false)
+    f.tx.operationLog.findFirst.mockResolvedValue({ targetId: 'TEST-ASN', detail: omsAsnControl('TEST-ASN', 'cancel', f.body) })
     await expect(f.service.cancelAsnFromOms('TEST-ASN', f.body)).resolves.toMatchObject({ status: 'cancelled', idempotent: true, syncPending: true })
     expect(f.tx.inboundOrder.update).not.toHaveBeenCalled(); expect(f.tx.operationLog.create).not.toHaveBeenCalled()
     expect(f.service.pushInboundStatusToOms).toHaveBeenCalledWith('TEST-ASN')

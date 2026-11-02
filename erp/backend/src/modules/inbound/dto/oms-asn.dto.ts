@@ -9,6 +9,8 @@ import {
   MaxLength,
   Min,
   ValidateNested,
+  IsUUID,
+  Matches,
 } from 'class-validator'
 
 export class OmsAsnItemDto {
@@ -68,6 +70,13 @@ export class OmsAsnAttachmentDto {
 }
 
 export class CreateOmsAsnDto {
+  @IsOptional()
+  @IsUUID('4')
+  clientRequestId?: string
+
+  @IsOptional()
+  @Matches(/^[a-f0-9]{64}$/)
+  expectedVersion?: string
   @IsOptional()
   @IsString()
   @MaxLength(40)
@@ -142,4 +151,17 @@ export class CreateOmsAsnDto {
   @ValidateNested({ each: true })
   @Type(() => OmsAsnAttachmentDto)
   attachments?: OmsAsnAttachmentDto[]
+}
+
+export class CancelOmsAsnDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(30)
+  customerCode!: string
+
+  @IsUUID('4')
+  clientRequestId!: string
+
+  @Matches(/^[a-f0-9]{64}$/)
+  expectedVersion!: string
 }

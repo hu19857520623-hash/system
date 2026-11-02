@@ -1,3 +1,5 @@
+import { authSessionScope, getStoredAuthSession } from '../api/client'
+import { inboundPendingKey, readInboundPending, saveInboundPending, clearInboundPending, withInboundOperationLock, type InboundPending, type InboundOperationKind } from './inboundPending'
 import type { DeliveryMethod, InboundOrder, InboundStatus, InboundType } from './mockData'
 import { isErpPalletInbound, sanitizeCustomerInboundType } from './mockData'
 import {
@@ -8,14 +10,14 @@ import {
   upsertInboundOrder,
   upsertInboundOrderOrThrow,
 } from './entityStore'
-import { createErpInbound, updateErpInbound, cancelErpInbound, reactivateErpInbound, syncErpInbounds, type ErpInboundOrder } from '../api/erp'
+import { createErpInbound, updateErpInbound, cancelErpInbound, reactivateErpInbound, fetchErpInbound, syncErpInbounds, type ErpInboundOrder } from '../api/erp'
 import { getCustomerCode } from './dataScope'
 import { findProductByCode } from './platformBindingUtils'
 import { buildOmsAsnItem } from './omsAsnItem'
 import { buildInboundNo, inboundNoPrefix, nextSeqFromNos } from './wmsDocNo'
 import { userFacingError } from '../utils/userFacingError'
 
-export type InboundMutationResult = { ok: true; order: InboundOrder; warning?: string }
+export type InboundMutationResult = { ok: true; order: InboundOrder; warning?: string; persistencePending?: boolean }
   | { ok: false; error: string; uncertain?: boolean }
 
 export function inboundMutationFailure(error: unknown): Extract<InboundMutationResult, { ok: false }> {
@@ -26,22 +28,24 @@ export function inboundMutationFailure(error: unknown): Extract<InboundMutationR
     ? `本次操作结果暂无法确认，请返回入库记录并刷新核对，请勿重复提交。${message}` : message }
 }
 
-async function finishErpInboundMutation(order: InboundOrder, completed: string): Promise<InboundMutationResult> {
+async function finishErpInboundMutation(order: InboundOrder, completed: string, assertSession: () => void): Promise<InboundMutationResult> {
+  assertSession()
   try {
-    await upsertInboundOrderOrThrow(order)
+    await upsertInboundOrderOrThrow(order, assertSession)
     return { ok: true, order }
   } catch (error) {
+    assertSession()
     // ERP 已确认成功，不能因 OMS 回写失败而把作业退回未提交状态。
     cacheInboundOrder(order)
-    return { ok: true, order,
-      warning: `${completed}，但 OMS 回写失败。请刷新入库记录核对，请勿重复操作。${userFacingError(error)}` }
+    return { ok: true, order, persistencePending: true,
+      warning: `${completed}，但 OMS 回写失败。原请求已保留，可使用“重试原请求”继续核对，请勿新建重复单据。${userFacingError(error)}` }
   }
 }
 
 export { pushInbound as addInboundOrder, updateInboundOrder, upsertInboundOrder }
 
 export function canEditInboundOrder(status: InboundStatus) {
-  return status === 'draft'
+  return status === 'draft' || status === 'on_the_way'
 }
 
 export function canVoidInboundOrder(status: InboundStatus) {
@@ -87,19 +91,16 @@ export function buildInboundOrderFromErp(erp: ErpInboundOrder, customerId?: stri
   const cartonLines = lineItemsFromErpCartons(erp)
   const lineItems = cartonLines.length
     ? cartonLines
-    : (existing?.lineItems?.length
-      ? existing.lineItems
-      : erp.items.map((i, index) => ({
+    : erp.items.map((i, index) => ({
           sku: i.sku,
           name: i.productName || i.sku,
           qty: i.expectedQty,
           boxNo: index + 1,
           packType: '自带包装',
           stockType: '以仓库为准',
-        })))
+        }))
   const boxCount = Math.max(
     erp.cartons?.length || 0,
-    existing?.boxCount || 0,
     new Set(lineItems.map(line => Math.max(1, Number(line.boxNo) || 1))).size,
     1,
   )
@@ -107,6 +108,7 @@ export function buildInboundOrderFromErp(erp: ErpInboundOrder, customerId?: stri
     id: existing?.id || `erp-ib-${erp.id}`,
     customerId: customerId || existing?.customerId,
     inboundNo: erp.inboundNo,
+    erpRevision: erp.revision,
     source: erp.source || existing?.source || '客户自发',
     inboundType: sanitizeCustomerInboundType((erp.inboundType as InboundType | null) || existing?.inboundType),
     deliveryMethod: (erp.deliveryMethod as DeliveryMethod | null) || existing?.deliveryMethod || 'self',
@@ -115,17 +117,16 @@ export function buildInboundOrderFromErp(erp: ErpInboundOrder, customerId?: stri
     skuCount: erp.items.length || new Set(lineItems.map(line => line.sku)).size,
     totalQty: erp.totalExpectedQty,
     receivedQty: erp.totalReceivedQty,
-    status: erp.omsStatus === 'cancelled' && existing?.status === 'draft'
-      ? 'draft'
-      : mapErpInboundStatus(erp.omsStatus),
+    status: (erp.status === 'cancelled' || ['cancelled', 'voided'].includes(erp.omsStatus)) && existing?.status === 'draft'
+      ? 'draft' : mapErpInboundStatus(erp.omsStatus),
     createdAt: existing?.createdAt || new Date().toISOString().slice(0, 10),
-    eta: erp.eta || existing?.eta,
+    eta: erp.eta || undefined,
     warehouse: erp.warehouseCode || existing?.warehouse || 'jhb1',
-    referenceNo: erp.referenceNo || existing?.referenceNo,
-    trackingNo: erp.trackingNo || existing?.trackingNo,
-    contact: erp.contact || existing?.contact,
-    contactPhone: erp.contactPhone || existing?.contactPhone,
-    remark: erp.remark || existing?.remark,
+    referenceNo: erp.referenceNo || undefined,
+    trackingNo: erp.trackingNo || undefined,
+    contact: erp.contact || undefined,
+    contactPhone: erp.contactPhone || undefined,
+    remark: erp.remark || undefined,
     lineItems,
     attachments: existing?.attachments,
   }
@@ -170,132 +171,135 @@ function mergeLocalInboundAfterErp(erp: ErpInboundOrder, local: InboundOrder): I
     ...merged,
     id: local.id || merged.id,
     warehouse: local.warehouse || merged.warehouse,
-    lineItems: local.lineItems?.length ? local.lineItems : merged.lineItems,
+    lineItems: merged.lineItems,
     attachments: local.attachments ?? merged.attachments,
-    remark: local.remark ?? merged.remark,
-    source: local.source || merged.source,
+    remark: erp.remark || undefined,
+    source: erp.source || merged.source,
   }
 }
 
-/** 提交非草稿入库时推送 ERP ASN，并回写本地状态 */
+const knownFailure = (message: string, status = 409) => Object.assign(new Error(message), { status })
+function pendingContext(order: InboundOrder) {
+  const session = getStoredAuthSession(), customerCode = getCustomerCode(order.customerId)
+  if (!customerCode || customerCode === '—') throw knownFailure('当前角色未绑定客户编码，无法同步 ERP', 403)
+  if (!session?.user.id) throw knownFailure('登录已失效，请重新登录后核对原入库操作', 401)
+  if (session.user.role !== 'sys_admin' && session.user.customerId !== order.customerId) throw knownFailure('本入库单不属于当前登录客户，请返回原账号核对', 403)
+  const scope = authSessionScope(session)
+  return { key: inboundPendingKey(session.user.id, customerCode, order.inboundNo), customerCode,
+    assertSession: () => { if (authSessionScope() !== scope) throw knownFailure('登录或权限已变化，原操作已保留，请回到原账号核对结果', 401) } }
+}
+
+function pendingChanged() {
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event('oms-inbound-original-change'))
+}
+
+export function pendingInboundOperation(order: InboundOrder): { record: InboundPending | null; error?: string } {
+  if (!order.customerId || getCustomerCode(order.customerId) === '—' || !getStoredAuthSession()) return { record: null }
+  try { return { record: readInboundPending(localStorage, pendingContext(order).key) } }
+  catch (error) { return { record: null, error: userFacingError(error) } }
+}
+
+async function sendOriginal(record: InboundPending) {
+  const body = record.body as Parameters<typeof createErpInbound>[0]
+  if (record.kind === 'create') return createErpInbound(body)
+  if (record.kind === 'update') return updateErpInbound(record.inboundNo, body)
+  if (record.kind === 'reactivate') return reactivateErpInbound(record.inboundNo, body)
+  return cancelErpInbound(record.inboundNo, body)
+}
+
+async function finishOriginal(record: InboundPending, erp: ErpInboundOrder, assertSession: () => void) {
+  let order = mergeLocalInboundAfterErp(erp, record.localOrder)
+  // An old receipt may now refer to an order already processed by another action.
+  if (record.kind === 'withdraw' && (erp.status === 'cancelled' || ['cancelled', 'voided'].includes(erp.omsStatus))) order = { ...order, status: 'draft' }
+  const result = await finishErpInboundMutation(order, `入库单 ${order.inboundNo} 的原操作已由 ERP 确认`, assertSession)
+  const expected = record.kind === 'withdraw' ? 'draft' : record.kind === 'void' ? 'voided' : 'on_the_way'
+  if (result.ok && order.status !== expected) {
+    result.warning = [result.warning, '原操作结果已确认，单据已进入其他进度；请返回入库记录按最新状态继续，本次没有重新执行旧操作。'].filter(Boolean).join(' ')
+  }
+  if (result.ok && erp.syncPending) result.warning = [result.warning, 'ERP 原操作已完成，OMS 状态通知仍待同步；可从原操作入口再次核对。'].filter(Boolean).join(' ')
+  return result
+}
+
+async function runOriginal(order: InboundOrder, kind: InboundOperationKind, retry = false): Promise<InboundMutationResult> {
+  try {
+    const context = pendingContext(order)
+    return await withInboundOperationLock(context.key, async () => {
+      context.assertSession()
+      let record = readInboundPending(localStorage, context.key)
+      if (retry) {
+        if (!record) throw knownFailure('没有待处理的原操作，请读取最新入库单后继续')
+      } else {
+        if (record) throw knownFailure('本单有待核对的原操作，请先使用原请求重试或读取原单')
+        if (kind !== 'create' && !/^[a-f0-9]{64}$/.test(order.erpRevision || '')) throw knownFailure('原单缺少最新版本，请刷新入库记录并重新打开原单后操作')
+        const control = { clientRequestId: crypto.randomUUID(), ...(kind === 'create' ? {} : { expectedVersion: order.erpRevision }) }
+        const body = kind === 'withdraw' || kind === 'void'
+          ? { customerCode: context.customerCode, customerId: order.customerId, ...control }
+          : { ...erpAsnPayload(order, context.customerCode), ...control }
+        record = saveInboundPending(localStorage, context.key, { version: 1, kind, customerCode: context.customerCode, inboundNo: order.inboundNo, body, localOrder: JSON.parse(JSON.stringify(order)), createdAt: new Date().toISOString() })
+        pendingChanged()
+      }
+      if (record.customerCode !== context.customerCode || record.inboundNo !== order.inboundNo) throw knownFailure('原请求与当前客户或单据不符，请返回原账号核对')
+      let erp: ErpInboundOrder
+      try { erp = await sendOriginal(record) }
+      catch (error) {
+        context.assertSession()
+        const status = Number((error as { status?: number })?.status)
+        // Only a definite first-attempt rejection proves this original did not commit.
+        if (!retry && status >= 400 && status < 500 && status !== 408) { clearInboundPending(localStorage, context.key, record); pendingChanged() }
+        throw error
+      }
+      context.assertSession()
+      const result = await finishOriginal(record, erp, context.assertSession)
+      context.assertSession()
+      if (result.ok && !result.persistencePending && !erp.syncPending) { clearInboundPending(localStorage, context.key, record); pendingChanged() }
+      return result
+    })
+  } catch (error) { return inboundMutationFailure(error) }
+}
+
+export async function retryInboundOriginal(order: InboundOrder) { return runOriginal(order, 'update', true) }
+
+/** Reading never clears an unresolved original or authorizes a stale form's version. */
+export async function readInboundOriginal(order: InboundOrder): Promise<InboundMutationResult> {
+  try {
+    const context = pendingContext(order); context.assertSession()
+    const erp = await fetchErpInbound(order.inboundNo); context.assertSession()
+    const current = buildInboundOrderFromErp(erp, order.customerId)
+    cacheInboundOrder(current)
+    return { ok: true, order: current, warning: '已读取最新单据；待核对原请求仍保留，读取不会取消或再次提交作业。' }
+  } catch (error) { return inboundMutationFailure(error) }
+}
+
 export async function submitInboundToErp(order: InboundOrder): Promise<InboundMutationResult> {
-  const customerCode = getCustomerCode(order.customerId)
-  if (!customerCode || customerCode === '—') {
-    return { ok: false, error: '当前角色未绑定客户编码，无法同步 ERP' }
-  }
-  try {
-    const payload = erpAsnPayload(order, customerCode)
-    let erp: ErpInboundOrder
-    try {
-      erp = await reactivateErpInbound(order.inboundNo, payload)
-    } catch (err) {
-      if (!isNotFoundError(err)) throw err
-      erp = await createErpInbound(payload)
-    }
-    const merged = mergeLocalInboundAfterErp(erp, order)
-    return await finishErpInboundMutation(merged, `入库单 ${order.inboundNo} 已提交 ERP`)
-  } catch (err) {
-    return inboundMutationFailure(err)
-  }
+  return runOriginal(order, order.erpRevision ? 'reactivate' : 'create')
 }
 
-/** 在途入库单修改后同步 ERP，并回写本地状态 */
-export async function updateInboundOnErp(order: InboundOrder): Promise<InboundMutationResult> {
-  const customerCode = getCustomerCode(order.customerId)
-  if (!customerCode || customerCode === '—') {
-    return { ok: false, error: '当前角色未绑定客户编码，无法同步 ERP' }
-  }
-  try {
-    const erp = await updateErpInbound(order.inboundNo, erpAsnPayload(order, customerCode))
-    const merged = mergeLocalInboundAfterErp(erp, order)
-    return await finishErpInboundMutation(merged, `入库单 ${order.inboundNo} 在 ERP 的修改已保存`)
-  } catch (err) {
-    return inboundMutationFailure(err)
-  }
-}
+export async function updateInboundOnErp(order: InboundOrder): Promise<InboundMutationResult> { return runOriginal(order, 'update') }
 
-/** 在途单撤回成草稿；ERP 停止收货，修改后重新提交时激活同一单号。 */
 export async function withdrawInboundOrder(order: InboundOrder): Promise<InboundMutationResult> {
   if (order.status !== 'on_the_way') return { ok: false, error: '仅在途入库单可撤回' }
-  const customerCode = getCustomerCode(order.customerId)
-  if (!customerCode || customerCode === '—') return { ok: false, error: '当前角色未绑定客户编码，无法同步 ERP' }
-  try {
-    const erp = await cancelErpInbound(order.inboundNo, { customerCode, customerId: order.customerId })
-    const draft = { ...mergeLocalInboundAfterErp(erp, order), status: 'draft' as InboundStatus }
-    return await finishErpInboundMutation(draft, `入库单 ${order.inboundNo} 已在 ERP 停止收货并撤回为草稿`)
-  } catch (err) {
-    return inboundMutationFailure(err)
-  }
+  return runOriginal(order, 'withdraw')
 }
 
-/** 草稿本地作废；在途单同步 ERP 后不再收货 */
 export async function voidInboundOrder(order: InboundOrder): Promise<InboundMutationResult> {
-  if (!canVoidInboundOrder(order.status)) {
-    return { ok: false, error: '仅草稿或在途入库单可作废' }
-  }
-  if (order.status === 'on_the_way') {
-    const customerCode = getCustomerCode(order.customerId)
-    if (!customerCode || customerCode === '—') {
-      return { ok: false, error: '当前角色未绑定客户编码，无法同步 ERP' }
-    }
-    try {
-      const erp = await cancelErpInbound(order.inboundNo, {
-        customerCode,
-        customerId: order.customerId,
-      })
-      const merged = {
-        ...mergeLocalInboundAfterErp(erp, order),
-        status: 'voided' as InboundStatus,
-      }
-      return await finishErpInboundMutation(merged, `入库单 ${order.inboundNo} 已在 ERP 作废`)
-    } catch (err) {
-      return inboundMutationFailure(err)
-    }
-  }
-  const next = { ...order, status: 'voided' as InboundStatus }
+  if (!canVoidInboundOrder(order.status)) return { ok: false, error: '仅草稿或在途入库单可作废' }
+  if (order.status === 'on_the_way' || order.erpRevision) return runOriginal(order, 'void')
   try {
-    await upsertInboundOrderOrThrow(next)
-    return { ok: true, order: next }
-  } catch (error) {
-    return inboundMutationFailure(error)
-  }
+    const context = pendingContext(order)
+    return await withInboundOperationLock(context.key, async () => {
+      context.assertSession()
+      if (readInboundPending(localStorage, context.key)) throw knownFailure('本单仍有待核对的原操作，请先处理原请求')
+      const next = { ...order, status: 'voided' as InboundStatus }
+      await upsertInboundOrderOrThrow(next, context.assertSession); context.assertSession()
+      return { ok: true as const, order: next }
+    })
+  } catch (error) { return inboundMutationFailure(error) }
 }
 
-function isNotFoundError(err: unknown) {
-  const status = err && typeof err === 'object' ? (err as { status?: number }).status : undefined
-  const message = err instanceof Error ? err.message : String(err)
-  return status === 404 || message.includes('不存在')
-}
-
-/** 作废单确认后重新下单：ERP 已取消则激活，否则按新 ASN 提交，进入在途 */
 export async function reorderInboundOnErp(order: InboundOrder): Promise<InboundMutationResult> {
-  if (!canReorderInboundOrder(order.status)) {
-    return { ok: false, error: '仅已作废的入库单可重新下单' }
-  }
-  if (!order.lineItems?.length) {
-    return { ok: false, error: '请先确认入库货品后再提交' }
-  }
-  const customerCode = getCustomerCode(order.customerId)
-  if (!customerCode || customerCode === '—') {
-    return { ok: false, error: '当前角色未绑定客户编码，无法同步 ERP' }
-  }
-  const payload = erpAsnPayload(order, customerCode)
-  try {
-    let erp: ErpInboundOrder
-    try {
-      erp = await reactivateErpInbound(order.inboundNo, payload)
-    } catch (err) {
-      if (!isNotFoundError(err)) throw err
-      erp = await createErpInbound(payload)
-    }
-    const merged = {
-      ...mergeLocalInboundAfterErp(erp, order),
-      status: 'on_the_way' as InboundStatus,
-    }
-    return await finishErpInboundMutation(merged, `入库单 ${order.inboundNo} 已在 ERP 重新下单`)
-  } catch (err) {
-    return inboundMutationFailure(err)
-  }
+  if (!canReorderInboundOrder(order.status)) return { ok: false, error: '仅已作废的入库单可重新下单' }
+  if (!order.lineItems?.length) return { ok: false, error: '请先确认入库货品后再提交' }
+  return runOriginal(order, order.erpRevision ? 'reactivate' : 'create')
 }
 
 export async function refreshInboundsFromErp(customerId: string): Promise<number> {

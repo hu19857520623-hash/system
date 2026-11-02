@@ -2013,6 +2013,8 @@ type OmsAsnRequestItem = {
 
 function mapOmsAsnRequest(body: {
   inboundNo?: string
+  clientRequestId?: string
+  expectedVersion?: string
   customerCode?: string
   warehouseCode?: string
   trackingNo?: string
@@ -2042,6 +2044,8 @@ function mapOmsAsnRequest(body: {
 
   return {
     inboundNo: body.inboundNo,
+    clientRequestId: body.clientRequestId,
+    expectedVersion: body.expectedVersion,
     customerCode,
     warehouseCode: body.warehouseCode || 'WMS-JHB-01',
     trackingNo: body.trackingNo,
@@ -2063,6 +2067,8 @@ app.post('/api/erp/inbound', async (req, res) => {
   try {
     const body = req.body as {
       inboundNo?: string
+  clientRequestId?: string
+  expectedVersion?: string
       customerCode?: string
       customerId?: string
       warehouseCode?: string
@@ -2099,6 +2105,8 @@ app.put('/api/erp/inbound/:inboundNo', async (req, res) => {
     if (!inboundNo) return res.status(400).json({ error: '缺少入库单号' })
     const body = req.body as {
       inboundNo?: string
+  clientRequestId?: string
+  expectedVersion?: string
       customerCode?: string
       customerId?: string
       warehouseCode?: string
@@ -2133,14 +2141,14 @@ app.post('/api/erp/inbound/:inboundNo/cancel', async (req, res) => {
   try {
     const inboundNo = String(req.params.inboundNo || '').trim()
     if (!inboundNo) return res.status(400).json({ error: '缺少入库单号' })
-    const body = req.body as { customerCode?: string; customerId?: string }
+    const body = req.body as { customerCode?: string; customerId?: string; clientRequestId?: string; expectedVersion?: string }
     let customerCode = authenticatedCustomerCode(req, body.customerCode)
     if (!customerCode && body.customerId) {
       const account = await prisma.customerAccount.findUnique({ where: { id: String(body.customerId) } })
       customerCode = account?.code?.trim() || ''
     }
     if (!customerCode) return res.status(400).json({ error: '缺少客户代码' })
-    res.json(await cancelErpInboundAsn(inboundNo, customerCode))
+    res.json(await cancelErpInboundAsn(inboundNo, customerCode, { clientRequestId: body.clientRequestId, expectedVersion: body.expectedVersion }))
   } catch (e) {
     sendErpError(res, e)
   }
@@ -2152,6 +2160,8 @@ app.post('/api/erp/inbound/:inboundNo/reactivate', async (req, res) => {
     if (!inboundNo) return res.status(400).json({ error: '缺少入库单号' })
     const body = req.body as {
       inboundNo?: string
+  clientRequestId?: string
+  expectedVersion?: string
       customerCode?: string
       customerId?: string
       warehouseCode?: string

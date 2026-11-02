@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
 import test, { type TestContext } from 'node:test'
+import { getStoredAuthSession, storeAuthSession } from '../api/client'
 import type { InboundOrder } from './mockData'
 import { hydrateAccounts } from '../auth/accountStore'
 import { getInboundOrdersSnapshot, setInboundOrders } from './entityStore'
 import { inboundMutationFailure, submitInboundToErp, updateInboundOnErp, withdrawInboundOrder,
-  voidInboundOrder, reorderInboundOnErp } from './inboundStore'
+  voidInboundOrder, reorderInboundOnErp, retryInboundOriginal, pendingInboundOperation, readInboundOriginal } from './inboundStore'
 
 const draft: InboundOrder = {
   id: 'oms-one', customerId: 'c1', inboundNo: 'RV-TKL9001-001', source: '客户自发',
@@ -13,15 +14,23 @@ const draft: InboundOrder = {
   lineItems: [{ sku: 'TKL9001-A', name: '产品一', qty: 2, boxNo: 1 }],
 }
 const erp = { id: 12, inboundNo: draft.inboundNo, warehouseCode: 'WMS-JHB-01', trackingNo: null,
+  revision: 'a'.repeat(64),
   status: 'pending_receipt', omsStatus: 'on_the_way', totalExpectedQty: 2, totalReceivedQty: 0,
   items: [{ sku: 'TKL9001-A', expectedQty: 2, receivedQty: 0, productName: '产品一' }] }
 
 function environment(t: TestContext) {
   const previousFetch = globalThis.fetch
-  const descriptors = ['localStorage', 'sessionStorage'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const)
-  for (const [key] of descriptors) Object.defineProperty(globalThis, key, {
-    configurable: true, value: { getItem: () => null, removeItem: () => {} },
-  })
+  const descriptors = ['localStorage', 'sessionStorage', 'navigator'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const)
+  for (const key of ['localStorage', 'sessionStorage']) {
+    const values = new Map<string, string>()
+    Object.defineProperty(globalThis, key, { configurable: true, value: { getItem: (name: string) => values.get(name) ?? null, setItem: (name: string, value: string) => { values.set(name, value) }, removeItem: (name: string) => { values.delete(name) } } })
+  }
+  const held = new Set<string>()
+  Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { locks: { request: async (key: string, _options: unknown, fn: (lock: unknown) => unknown) => {
+    if (held.has(key)) return fn(null)
+    held.add(key); try { return await fn({ name: key }) } finally { held.delete(key) }
+  } } } })
+  storeAuthSession({ token: 'test-one', user: { id: 'u-one', username: 'test-one', role: 'hybrid', customerId: 'c1', customerCode: 'TKL9001', warehouse: 'jhb1', permissions: [], status: 'active', mustChangePassword: false, name: '测试' } } as any)
   hydrateAccounts([{ id: 'c1', code: 'TKL9001', permissions: [] } as any])
   t.after(() => {
     globalThis.fetch = previousFetch
@@ -66,7 +75,7 @@ const mutations = [
 ] as const
 for (const mutation of mutations) test(`${mutation.name}已被 ERP 确认、OMS 回写失败时保留已完成结果和中文核对提示`, async t => {
   environment(t)
-  const before = { ...draft, status: mutation.initial }
+  const before = { ...draft, status: mutation.initial, ...(mutation.initial === 'draft' ? {} : { erpRevision: erp.revision }) }
   setInboundOrders([before])
   let erpCalls = 0, omsCalls = 0
   globalThis.fetch = async input => {
@@ -82,7 +91,7 @@ for (const mutation of mutations) test(`${mutation.name}已被 ERP 确认、OMS 
   if (!result.ok) return
   assert.equal(result.order.status, mutation.expected)
   assert.match(result.warning || '', /OMS 回写失败/)
-  assert.match(result.warning || '', /请勿重复操作/)
+  assert.match(result.warning || '', /重试原请求.*请勿新建重复单据/)
   assert.doesNotMatch(result.warning || '', /Storage unavailable/)
   assert.equal(getInboundOrdersSnapshot()[0].status, mutation.expected)
   assert.equal(before.status, mutation.initial)
@@ -131,7 +140,7 @@ test('确认原单不存在后仅创建一次，不把其他拒绝误当成原�
 test('没有客户编码时不发起任何保存或提交', async t => {
   environment(t); hydrateAccounts([])
   globalThis.fetch = async () => { assert.fail('不应请求接口') }
-  const result = await submitInboundToErp(draft)
+  const result = await submitInboundToErp({ ...draft, customerId: 'unbound' })
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.error, /未绑定客户编码/)
 })
@@ -143,4 +152,94 @@ test('超时、网关错误及未知状态均保留结果待核对语义', () =>
     assert.match(result.error, /刷新核对/)
     assert.doesNotMatch(result.error, /Request unavailable/)
   }
+})
+
+test('传输中断后拒绝新表单，显式重试发送原请求并采用最新仓库数量', async t => {
+  environment(t)
+  const original = { ...draft, status: 'on_the_way' as const, erpRevision: erp.revision }
+  setInboundOrders([original])
+  let calls = 0; const bodies: any[] = []
+  globalThis.fetch = async (input, init) => {
+    if (String(input) === '/api/inbound-orders') {
+      assert.equal(JSON.parse(String(init?.body))[0].lineItems[0].qty, 7)
+      return Response.json({ ok: true })
+    }
+    bodies.push(JSON.parse(String(init?.body))); calls++
+    if (calls === 1) throw new TypeError('Failed to fetch')
+    return Response.json({ ...erp, idempotent: true, revision: 'b'.repeat(64), status: 'receiving', omsStatus: 'receiving', totalExpectedQty: 7, items: [{ ...erp.items[0], expectedQty: 7 }] })
+  }
+  assert.equal((await updateInboundOnErp(original)).ok, false)
+  assert.ok(pendingInboundOperation(original).record)
+  const changed = { ...original, lineItems: [{ ...original.lineItems![0], qty: 9 }] }
+  const refused = await updateInboundOnErp(changed)
+  assert.equal(refused.ok, false); assert.equal(calls, 1)
+  const recovered = await retryInboundOriginal(changed)
+  assert.equal(recovered.ok, true); assert.deepEqual(bodies[0], bodies[1])
+  if (recovered.ok) { assert.equal(recovered.order.lineItems![0].qty, 7); assert.equal(recovered.order.status, 'receiving') }
+  assert.equal(pendingInboundOperation(original).record, null)
+})
+
+test('OMS 回写失败保留原请求，读取不清除，重试不生成新操作标识', async t => {
+  environment(t); setInboundOrders([draft])
+  let failSave = true; const bodies: string[] = []
+  globalThis.fetch = async (input, init) => {
+    if (String(input) === '/api/inbound-orders') return failSave ? Response.json({ error: 'Storage unavailable' }, { status: 503 }) : Response.json({ ok: true })
+    if (init?.method === 'POST') bodies.push(String(init.body))
+    return Response.json(erp)
+  }
+  const first = await submitInboundToErp(draft); assert.equal(first.ok, true)
+  assert.ok(pendingInboundOperation(draft).record)
+  assert.equal((await readInboundOriginal(draft)).ok, true); assert.ok(pendingInboundOperation(draft).record)
+  failSave = false
+  assert.equal((await retryInboundOriginal(draft)).ok, true)
+  assert.equal(bodies[0], bodies[1]); assert.equal(pendingInboundOperation(draft).record, null)
+})
+
+test('新版本不能为旧表单自动放行；缺少打开时的版本不会发起请求', async t => {
+  environment(t); setInboundOrders([{ ...draft, erpRevision: 'b'.repeat(64) }])
+  let calls = 0
+  globalThis.fetch = async (_input, init) => {
+    calls++; assert.equal(JSON.parse(String(init?.body)).expectedVersion, 'a'.repeat(64))
+    return Response.json({ error: '入库单已被其他操作更新，请刷新' }, { status: 409 })
+  }
+  const missing = await updateInboundOnErp(draft)
+  assert.equal(missing.ok, false); assert.equal(calls, 0)
+  assert.equal((await updateInboundOnErp({ ...draft, erpRevision: 'a'.repeat(64) })).ok, false)
+  assert.equal(calls, 1); assert.equal(pendingInboundOperation(draft).record, null)
+})
+
+test('多页面操作锁阻止第二次提交，存储失败也不发送请求', async t => {
+  environment(t); setInboundOrders([draft])
+  let release!: () => void, entered!: () => void
+  const gate = new Promise<void>(r => { release = r }), started = new Promise<void>(r => { entered = r })
+  let calls = 0
+  globalThis.fetch = async input => {
+    if (String(input) === '/api/inbound-orders') return Response.json({ ok: true })
+    calls++; entered(); await gate; return Response.json(erp)
+  }
+  const first = submitInboundToErp(draft); await started
+  const second = await submitInboundToErp(draft)
+  assert.equal(second.ok, false); if (!second.ok) assert.equal(second.uncertain, false)
+  assert.equal(calls, 1); release(); await first
+  const set = localStorage.setItem
+  localStorage.setItem = () => { throw Error('quota') }
+  const failed = await submitInboundToErp({ ...draft, inboundNo: 'SECOND' })
+  assert.equal(failed.ok, false); assert.equal(calls, 1)
+  localStorage.setItem = set
+})
+
+test('回写期间切换身份，旧失败不得恢复旧缓存或清除原请求', async t => {
+  environment(t); setInboundOrders([draft]); const owner = getStoredAuthSession()!
+  let release!: () => void, entered!: () => void
+  const gate = new Promise<void>(r => { release = r }), started = new Promise<void>(r => { entered = r })
+  globalThis.fetch = async input => {
+    if (String(input) !== '/api/inbound-orders') return Response.json(erp)
+    entered(); await gate; return Response.json({ error: 'Storage unavailable' }, { status: 503 })
+  }
+  const pending = submitInboundToErp(draft); await started
+  storeAuthSession({ ...owner, token: 'another', user: { ...owner.user, id: 'u-two' } })
+  const other = { ...draft, id: 'new-login', inboundNo: 'NEW-LOGIN' }; setInboundOrders([other])
+  release(); assert.equal((await pending).ok, false)
+  assert.deepEqual(getInboundOrdersSnapshot(), [other])
+  storeAuthSession(owner); assert.ok(pendingInboundOperation(draft).record)
 })

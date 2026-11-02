@@ -741,6 +741,7 @@ export const DELIVERY_METHOD_LABELS: Record<DeliveryMethod, string> = {
 }
 
 export interface InboundOrder {
+  erpRevision?: string
   id: string
   customerId?: string
   inboundNo: string

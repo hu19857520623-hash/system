@@ -8,6 +8,7 @@ import {
   Badge, Button, Card, PageHeader, MonoCode, Tabs, Table, TableFooter, Select, StatCard,
 } from '../components/ui'
 import InboundDetailDrawer from '../components/inbound/InboundDetailDrawer'
+import InboundRecovery from '../components/inbound/InboundRecovery'
 import { InboundPrintLabelMenu } from '../components/inbound/InboundPrintLabelMenu'
 import {
   SearchField, FilterActions, DropdownBtn, inputCls, matchText, type SearchMode,
@@ -321,6 +322,7 @@ export default function InboundRecords() {
         />
       </div>
 
+      <InboundRecovery orders={scopedInbound} />
       <Card className="mb-4 p-4">
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {dataScope.isAdmin && <AdminCustomerFilter scope={dataScope} />}

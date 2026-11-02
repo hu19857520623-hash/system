@@ -120,6 +120,9 @@ export type ErpInboundAsnItem = {
 }
 
 export type ErpInboundOrder = {
+  revision?: string
+  syncPending?: boolean
+
   id: number
   inboundNo: string
   warehouseCode: string
@@ -244,6 +247,8 @@ export type ErpInventoryViewItem = ErpSkuHolding & {
 
 export function createErpInbound(body: {
   inboundNo?: string
+  clientRequestId?: string
+  expectedVersion?: string
   customerCode?: string
   customerId?: string
   warehouseCode?: string
@@ -265,6 +270,8 @@ export function createErpInbound(body: {
 
 export function updateErpInbound(inboundNo: string, body: {
   inboundNo?: string
+  clientRequestId?: string
+  expectedVersion?: string
   customerCode?: string
   customerId?: string
   warehouseCode?: string
@@ -285,6 +292,8 @@ export function updateErpInbound(inboundNo: string, body: {
 }
 
 export function cancelErpInbound(inboundNo: string, body: {
+  clientRequestId?: string
+  expectedVersion?: string
   customerCode?: string
   customerId?: string
 }) {
@@ -293,6 +302,8 @@ export function cancelErpInbound(inboundNo: string, body: {
 
 export function reactivateErpInbound(inboundNo: string, body: {
   inboundNo?: string
+  clientRequestId?: string
+  expectedVersion?: string
   customerCode?: string
   customerId?: string
   warehouseCode?: string
@@ -310,6 +321,10 @@ export function reactivateErpInbound(inboundNo: string, body: {
   items: ErpInboundAsnItem[]
 }) {
   return apiPost<ErpInboundOrder>(`/erp/inbound/${encodeURIComponent(inboundNo)}/reactivate`, body)
+}
+
+export function fetchErpInbound(inboundNo: string) {
+  return apiGet<ErpInboundOrder>(`/erp/inbound/${encodeURIComponent(inboundNo)}`)
 }
 
 export function syncErpInbounds(customerCode: string) {
