@@ -1,6 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { assertLegacyOmsAsnMetadata, omsAsnRequestIdentity } from './oms-asn-request-identity.util'
-import { assertOmsAsnVersion, omsAsnControl, omsAsnVersion, previousOmsAsnControl, OmsAsnControl } from './oms-asn-control.util'
+import { assertOmsAsnVersion, omsAsnControl, omsAsnCreateControl, omsAsnVersion, previousOmsAsnControl, readOmsAsnReceipt, OmsAsnControl } from './oms-asn-control.util'
+import { plainToInstance } from 'class-transformer'
+import { validateSync } from 'class-validator'
+import { chineseValidationException } from '../../common/pipes/validation-feedback.util'
+import { CancelOmsAsnDto, CreateOmsAsnDto, OmsAsnOriginalDto } from './dto/oms-asn.dto'
 import { readErpShipmentOutcome } from './erp-shipment-outcome.util'
 import { assertGlobalSkuAvailable } from '../../common/global-sku.util'
 import { isCatalogPurchaseInbound } from './catalog-inbound.util'
@@ -1452,6 +1456,8 @@ export class InboundService {
 
   /** OMS：客户自发货预报入库（ASN），不扣中转仓库存 */
   async createAsnFromOms(data: {
+    clientRequestId?: string
+    expectedVersion?: string
     inboundNo?: string
     customerCode: string
     warehouseCode?: string
@@ -1488,6 +1494,13 @@ export class InboundService {
         const deleted = await tx.$queryRaw<{ entity_id: string }[]>`SELECT entity_id FROM oms_snapshot_tombstone WHERE entity_type = 'inbound_no' AND entity_id = ${inboundNo}`
         if (deleted.length) throw new ConflictException('入库草稿已删除，原请求不能再提交；新预约请使用新单号')
         const existing = await tx.inboundOrder.findUnique({ where: { inboundNo } })
+        if (existing && existing.omsCustomerCode !== customerCode) throw new NotFoundException('当前客户的入库单不存在，请核对单号')
+        const request = data.clientRequestId ? omsAsnCreateControl(inboundNo, data) : undefined
+        if (request && await previousOmsAsnControl(tx, customerCode, inboundNo, request)) {
+          if (!existing) throw new ConflictException('原创建请求已执行，但原单暂无法读取；请保留记录并核对，不要重新创建')
+          const current = await tx.inboundOrder.findUnique({ where: { id: existing.id }, include: { items: true, cartons: { include: { items: true }, orderBy: { boxSeq: 'asc' } } } })
+          return { ...this.mapInboundForOms(current!), idempotent: true }
+        }
         if (existing) {
           if (existing.omsCustomerCode !== customerCode) throw new NotFoundException('当前客户的入库单不存在，请核对单号')
           const detail = await tx.inboundOrder.findUnique({
@@ -1519,6 +1532,7 @@ export class InboundService {
             }
           } else assertLegacyOmsAsnMetadata(data, detail)
           await this.checkOmsAsnAttachments(tx, detail.id, data.attachments)
+          if (request) await tx.operationLog.create({ data: { module: 'inbound', action: 'oms_asn_create_replay', targetType: 'inbound_order', targetId: inboundNo, detail: { customerCode, ...request } } })
           return { ...this.mapInboundForOms(detail!), idempotent: true }
         }
 
@@ -1577,7 +1591,7 @@ export class InboundService {
           action: 'oms_asn_create',
           targetType: 'inbound_order',
           targetId: inboundNo,
-          detail: { customerCode, warehouseCode, itemCount: inboundItems.length, requestIdentityVersion: 1, requestIdentity: omsAsnRequestIdentity(data, warehouseCode, resolved.map(line => line.sku)) },
+          detail: { customerCode, warehouseCode, itemCount: inboundItems.length, requestIdentityVersion: 1, requestIdentity: omsAsnRequestIdentity(data, warehouseCode, resolved.map(line => line.sku)), ...(request || {}) },
         } })
 
         const fresh = await tx.inboundOrder.findUnique({
@@ -1590,6 +1604,46 @@ export class InboundService {
       await this.cleanUnreferencedAsnFiles(written)
       throw error
     }
+  }
+
+  /** An absence of a receipt is not proof of non-execution. Only a committed
+   * cancellation receipt, checked by every late writer under this same customer
+   * lock, authorizes the client to retire its saved original. */
+  async resolveAsnOriginal(inboundNo: string, data: OmsAsnOriginalDto, cancel = false) {
+    const no = String(inboundNo || '').trim(), customerCode = String(data.customerCode || '').trim()
+    if (!no || !customerCode) throw new BadRequestException('缺少原入库单号或客户编码，请核对原记录')
+    if (no.length > 40) throw new BadRequestException('原入库单号过长，请保留原记录并核对单号')
+    if (!['create', 'update', 'reactivate', 'cancel'].includes(data.kind)) throw new BadRequestException('原入库操作类型无效，请保留记录并核对')
+    if (!data.original || Array.isArray(data.original) || data.original.customerCode !== customerCode) throw new BadRequestException('原请求客户与当前客户不一致，请保留原记录')
+    // Use the same transformation and validation as the original write routes;
+    // hashes must bind the ERP payload, not a different client-side envelope.
+    const original = data.kind === 'cancel'
+      ? plainToInstance(CancelOmsAsnDto, data.original)
+      : plainToInstance(CreateOmsAsnDto, data.original)
+    const errors = validateSync(original, { whitelist: true, forbidNonWhitelisted: true })
+    if (errors.length) throw chineseValidationException(errors)
+    if (data.kind !== 'cancel' && (original as CreateOmsAsnDto).inboundNo !== no) throw new BadRequestException('原请求单号与当前单据不一致，请保留原记录')
+    const request = data.kind === 'create' ? omsAsnCreateControl(no, original) : omsAsnControl(no, data.kind, original)
+    return this.prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM customer WHERE customer_code = ${customerCode} FOR UPDATE`
+      const customer = await tx.customer.findUnique({ where: { customerCode } })
+      if (!customer) throw new NotFoundException('原入库客户不存在，请核对客户编码')
+      if (customer.status !== 1) throw new BadRequestException('客户已停用，请联系管理员核对原操作')
+      const existing = await tx.inboundOrder.findUnique({ where: { inboundNo: no } })
+      if (existing && existing.omsCustomerCode !== customerCode) throw new NotFoundException('当前客户的入库单不存在，请核对单号')
+      if (existing) await tx.$queryRaw`SELECT id FROM inbound_order WHERE id = ${existing.id} FOR UPDATE`
+      const current = existing ? await tx.inboundOrder.findUnique({ where: { id: existing.id }, include: { items: true, cartons: { include: { items: true }, orderBy: { boxSeq: 'asc' } } } }) : null
+      if (current && current.omsCustomerCode !== customerCode) throw new NotFoundException('当前客户的入库单不存在，请核对单号')
+      let outcome = await readOmsAsnReceipt(tx, customerCode, no, request)
+      if (!outcome && cancel) {
+        await tx.operationLog.create({ data: { module: 'inbound', action: 'oms_asn_request_cancelled', targetType: 'inbound_order', targetId: no, detail: { customerCode, kind: data.kind, ...request } } })
+        outcome = 'cancelled'
+      }
+      return { outcome: outcome || 'unresolved', order: current ? this.mapInboundForOms(current) : null,
+        message: outcome === 'completed' ? '已找到匹配原请求的执行回执，请按原单最新进度继续'
+          : outcome === 'cancelled' ? '已阻止该原请求继续执行；已有单据保留，请按最新进度继续'
+            : '尚未找到匹配原请求的执行回执，不能据此认定未执行；请保留原记录并继续核对' }
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted, timeout: 30000 })
   }
 
   private omsAsnPayloadFields(data: {

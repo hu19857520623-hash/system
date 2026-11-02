@@ -1,6 +1,7 @@
 import { canReadData, type DataResource, type ReadIdentity } from '../src/data/readAccess.js'
 
 export function readResourceForPath(method: string, value: string): DataResource | null {
+  if (method.toUpperCase() === 'POST' && /^\/erp\/inbound\/[^/]+\/original\/check$/.test(value.split('?')[0])) return 'inboundOrders'
   if (!['GET', 'HEAD'].includes(method.toUpperCase())) return null
   const path = value.split('?')[0].replace(/\/+$/, '') || '/'
   if (/^\/erp\/customers\/[^/]+\/(billing-snapshot|charges|bills)$/.test(path) || path === '/billing') return 'billing'

@@ -123,6 +123,7 @@ for (const role of ['ecommerce', 'catalog', 'hybrid'] as const) test(`${role}: �
   }
   const recovery = render(<InboundRecovery orders={[inbound]} />)
   assert.ok(labels(recovery).includes('读取原单结果')); assert.ok(!labels(recovery).includes('重试原请求'))
+  assert.ok(labels(recovery).includes('核对原请求回执')); assert.ok(!labels(recovery).includes('取消待核对请求'))
 })
 
 test('入库写入账号保留在途编辑、撤回及原请求重试', t => {
@@ -132,6 +133,7 @@ test('入库写入账号保留在途编辑、撤回及原请求重试', t => {
   const detail = render(<InboundDetailDrawer order={inbound} mode="page" onClose={() => {}} />)
   assert.ok(labels(detail).includes('修改')); assert.ok(labels(detail).includes('撤回为草稿'))
   assert.ok(labels(render(<InboundRecovery orders={[inbound]} />)).includes('重试原请求'))
+  assert.ok(labels(render(<InboundRecovery orders={[inbound]} />)).includes('取消待核对请求'))
 })
 
 test('原入库记录损坏时提供中文核对和返回入口，不提供重试或清除操作', t => {
@@ -141,6 +143,7 @@ test('原入库记录损坏时提供中文核对和返回入口，不提供重�
   assert.ok(html.includes('原操作记录无法读取')); assert.ok(html.includes('暂不提交新操作'))
   assert.ok(labels(html).includes('读取原单结果')); assert.ok(html.includes('返回入库记录'))
   assert.ok(!labels(html).includes('重试原请求')); assert.ok(!html.includes('清除记录'))
+  assert.ok(!labels(html).includes('取消待核对请求')); assert.ok(!labels(html).includes('核对原请求回执'))
 })
 for(const role of ['ecommerce','catalog','hybrid'] as const) test(`${role}: read-only product page retains reads and hides mutation entries`, t=>{
   environment(t,['product:read','inventory:read'],role)

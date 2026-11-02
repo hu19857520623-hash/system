@@ -11,7 +11,7 @@ import {
   upsertInboundOrder,
   upsertInboundOrderOrThrow,
 } from './entityStore'
-import { createErpInbound, updateErpInbound, cancelErpInbound, reactivateErpInbound, fetchErpInbound, syncErpInbounds, type ErpInboundOrder } from '../api/erp'
+import { createErpInbound, updateErpInbound, cancelErpInbound, reactivateErpInbound, fetchErpInbound, resolveErpInboundOriginal, syncErpInbounds, type ErpInboundOrder } from '../api/erp'
 import { getCustomerCode } from './dataScope'
 import { findProductByCode } from './platformBindingUtils'
 import { buildOmsAsnItem } from './omsAsnItem'
@@ -270,6 +270,50 @@ async function runOriginal(order: InboundOrder, kind: InboundOperationKind, retr
 }
 
 export async function retryInboundOriginal(order: InboundOrder) { return runOriginal(order, 'update', true) }
+
+/** Retire a saved original only after a matching server receipt. A failed or
+ * lost cancellation response keeps the exact record, so a later lookup/retry
+ * can acknowledge it without sending the original business operation again. */
+export async function resolveInboundOriginal(order: InboundOrder, cancel = false): Promise<InboundMutationResult> {
+  try {
+    const context = pendingContext(order, cancel)
+    return await withInboundOperationLock(context.key, async () => {
+      context.assertSession()
+      const record = readInboundPending(localStorage, context.key)
+      if (!record) throw knownFailure('没有待核对的原请求，请读取最新入库单后继续')
+      if (record.customerCode !== context.customerCode || record.inboundNo !== order.inboundNo || record.localOrder.customerId !== order.customerId) throw knownFailure('原请求与当前客户或单据不符，请保留原记录并返回原账号核对')
+      const reply = await resolveErpInboundOriginal(record.inboundNo, cancel ? 'cancel' : 'check', {
+        customerCode: record.customerCode,
+        kind: record.kind === 'withdraw' || record.kind === 'void' ? 'cancel' : record.kind,
+        original: record.body,
+      })
+      context.assertSession()
+      if (!['completed', 'cancelled', 'unresolved'].includes(reply.outcome) || (reply.order && reply.order.inboundNo !== record.inboundNo)) throw knownFailure('原请求核对结果无法识别，请保留原记录并再次核对', 502)
+      if (reply.outcome === 'completed' && !reply.order) throw knownFailure('原操作已有执行回执，但原单暂无法读取；请保留记录并联系管理员核对', 409)
+      const current = reply.order ? mergeLocalInboundAfterErp(reply.order, order) : order
+      const session = getStoredAuthSession()
+      const canWrite = Boolean(session && can(session.user.role, 'inbound:write', session.user.permissions))
+      if (reply.outcome === 'unresolved' || !canWrite) {
+        if (reply.order) cacheInboundOrder(current)
+        return { ok: true as const, order: current, warning: `${reply.message}；原请求记录仍保留。` }
+      }
+      // A new permission check also protects the subsequent OMS canonical write.
+      const assertWrite = captureInboundWriteAccess()
+      const assertCurrent = () => { context.assertSession(); assertWrite() }
+      const result = reply.outcome === 'completed'
+        ? await finishOriginal(record, reply.order!, assertCurrent)
+        : reply.order ? await finishErpInboundMutation(current, reply.message, assertCurrent)
+          : record.kind === 'create' ? { ok: true as const, order: current }
+            : { ok: false as const, error: '已阻止原请求继续执行，但原单暂无法读取；请保留记录并联系管理员核对' }
+      assertCurrent()
+      if (result.ok) {
+        result.warning = [reply.message, result.warning].filter(Boolean).join('。')
+        if (!result.persistencePending) { clearInboundPending(localStorage, context.key, record); pendingChanged() }
+      }
+      return result
+    })
+  } catch (error) { return inboundMutationFailure(error) }
+}
 
 /** Reading never clears an unresolved original or authorizes a stale form's version. */
 export async function readInboundOriginal(order: InboundOrder): Promise<InboundMutationResult> {

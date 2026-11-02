@@ -2,10 +2,36 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { assertApiReadAccess, filterBootstrapReads, readResourceForPath } from './read-access.util.js'
 import { canReadData } from '../src/data/readAccess.js'
-import { assertApiWritePermission, type AuthenticatedRequest } from './auth.js'
+import { assertApiWritePermission, requiredWritePermission, type AuthenticatedRequest } from './auth.js'
 import type { Response } from 'express'
 
 const identity = (permissions: string[], role='hybrid') => ({role,permissions})
+
+test('POST 原请求核对按入库读取权限处理，取消仍要求入库写权限', () => {
+  const check = '/erp/inbound/RV1/original/check', cancel = '/erp/inbound/RV1/original/cancel'
+  assert.equal(readResourceForPath('POST', check), 'inboundOrders')
+  assert.equal(requiredWritePermission('POST', check), null)
+  assert.equal(assertApiReadAccess(identity(['inbound:read']), 'POST', check), true)
+  assert.equal(assertApiReadAccess(identity(['product:read']), 'POST', check), false)
+  assert.equal(requiredWritePermission('POST', cancel), 'inbound:write')
+  assert.equal(requiredWritePermission('PUT', check), 'inbound:write')
+  assert.equal(requiredWritePermission('POST', check + '/anything'), 'inbound:write')
+})
+
+test('单号含 recharge 不能把入库、出库、退件的写权限混成充值权限', () => {
+  const response = { status: () => response, json: () => response } as unknown as Response
+  for (const [path, permission] of [
+    ['/erp/inbound/recharge-audit93/original/cancel', 'inbound:write'],
+    ['/erp/inbound/recharge-audit93/cancel', 'inbound:write'],
+    ['/erp/outbound/recharge-audit93/cancel', 'outbound:write'],
+    ['/erp/returns/recharge-audit93/decide', 'returns:write'],
+    ['/orders/recharge-audit93', 'order:write'],
+  ]) {
+    assert.equal(requiredWritePermission('POST', path), permission)
+    assert.equal(assertApiWritePermission({ method: 'POST', path, auth: identity(['billing:recharge']) } as AuthenticatedRequest, response), false)
+  }
+  assert.equal(requiredWritePermission('POST', '/erp/customers/TKL9069/recharge'), 'billing:recharge')
+})
 const data = { products:[{id:'product'}],inventory:[{id:'stock'}],orders:[{id:'order'}],inboundOrders:[{id:'inbound'}],
   outboundOrders:[{id:'outbound'}],returnOrders:[{id:'return'}],logistics:[{id:'logistics'}],platformSkuMappings:[{id:'mapping'}],
   stores:[{id:'store'}],purchases:[{id:'purchase'}],systemMessages:[{id:'message'}],announcements:[{id:'announcement'}],

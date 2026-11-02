@@ -67,6 +67,7 @@ import {
   createErpInboundAsn,
   updateErpInboundAsn,
   cancelErpInboundAsn,
+  resolveErpInboundOriginal,
   reactivateErpInboundAsn,
   createErpOutbound,
   cancelErpOutbound,
@@ -2152,6 +2153,26 @@ app.post('/api/erp/inbound/:inboundNo/cancel', async (req, res) => {
   } catch (e) {
     sendErpError(res, e)
   }
+})
+
+app.post(['/api/erp/inbound/:inboundNo/original/check', '/api/erp/inbound/:inboundNo/original/cancel'], async (req, res) => {
+  try {
+    const inboundNo = String(req.params.inboundNo || '').trim()
+    const body = req.body as { customerCode?: string; kind?: string; original?: Record<string, unknown> }
+    const original = body.original
+    const customerCode = authenticatedCustomerCode(req, body.customerCode)
+    if (!inboundNo || !customerCode || !original || Array.isArray(original) || typeof original !== 'object'
+      || original.customerCode !== customerCode || !['create', 'update', 'reactivate', 'cancel'].includes(body.kind || '')) {
+      return res.status(400).json({ error: '原入库请求、操作类型或客户编码无效，请保留原记录并核对' })
+    }
+    if (body.kind !== 'cancel' && original.inboundNo !== inboundNo) return res.status(400).json({ error: '原请求单号与当前单据不一致，请保留原记录' })
+    const payload = body.kind === 'cancel'
+      ? { customerCode, clientRequestId: original.clientRequestId, expectedVersion: original.expectedVersion }
+      : mapOmsAsnRequest(original, customerCode)
+    res.json(await resolveErpInboundOriginal(inboundNo, req.path.endsWith('/cancel') ? 'cancel' : 'check', {
+      customerCode, kind: body.kind as 'create' | 'update' | 'reactivate' | 'cancel', original: payload,
+    }))
+  } catch (error) { sendErpError(res, error) }
 })
 
 app.post('/api/erp/inbound/:inboundNo/reactivate', async (req, res) => {

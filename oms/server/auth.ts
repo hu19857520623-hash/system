@@ -197,9 +197,12 @@ export function requiredWritePermission(method: string, apiPath: string): string
   if (!WRITE_METHODS.has(String(method || '').toUpperCase())) return null
   const p = String(apiPath || '').split('?')[0] || '/'
   if (p.startsWith('/auth')) return null
+  // The POST carries an immutable request body for lookup; it performs no write.
+  // Read permission is enforced independently by readResourceForPath.
+  if (method.toUpperCase() === 'POST' && /^\/erp\/inbound\/[^/]+\/original\/check$/.test(p)) return null
   if (p === '/health' || p.startsWith('/erp/webhooks')) return null
   if (p === '/system-messages/read') return 'dashboard:read'
-  if (p.includes('/recharge')) return 'billing:recharge'
+  if (/^\/erp\/customers\/[^/]+\/recharge\/?$/.test(p)) return 'billing:recharge'
   if (p === '/billing' || p.startsWith('/billing/pre-deduct')) return '__readonly_billing__'
   if (p.startsWith('/billing')) return '__unknown_write__'
   if (p.startsWith('/erp/purchase')) return 'catalog:write'

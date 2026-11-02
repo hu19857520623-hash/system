@@ -327,6 +327,10 @@ export function fetchErpInbound(inboundNo: string) {
   return apiGet<ErpInboundOrder>(`/erp/inbound/${encodeURIComponent(inboundNo)}`)
 }
 
+export function resolveErpInboundOriginal(inboundNo: string, resolution: 'check' | 'cancel', body: { customerCode: string; kind: 'create' | 'update' | 'reactivate' | 'cancel'; original: Record<string, unknown> }) {
+  return apiPost<{ outcome: 'completed' | 'cancelled' | 'unresolved'; order: ErpInboundOrder | null; message: string }>(`/erp/inbound/${encodeURIComponent(inboundNo)}/original/${resolution}`, body)
+}
+
 export function syncErpInbounds(customerCode: string) {
   return apiGet<{ items: ErpInboundOrder[]; total: number }>(
     `/erp/inbound/by-customer/${encodeURIComponent(customerCode)}`,

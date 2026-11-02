@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import type { Prisma } from '@prisma/client'
 
 export type OmsAsnControl = { clientRequestId?: string; expectedVersion?: string }
-export const OMS_ASN_ACTIONS = ['oms_asn_update', 'oms_asn_reactivate', 'oms_asn_cancel']
+export const OMS_ASN_ACTIONS = ['oms_asn_create', 'oms_asn_create_replay', 'oms_asn_update', 'oms_asn_reactivate', 'oms_asn_cancel', 'oms_asn_request_cancelled']
 const canonical = (value: any): any => Array.isArray(value) ? value.map(canonical)
   : value && typeof value === 'object' && !(value instanceof Date)
     ? Object.fromEntries(Object.keys(value).sort().filter(key => value[key] !== undefined).map(key => [key, canonical(value[key])])) : value
@@ -21,14 +21,26 @@ export function omsAsnControl<T extends OmsAsnControl>(no: string, kind: string,
   return { clientRequestId: data.clientRequestId!, expectedVersion: data.expectedVersion!, requestFingerprint: hash({ no, kind, data }) }
 }
 
-export async function previousOmsAsnControl(tx: Prisma.TransactionClient, customerCode: string, no: string, request: ReturnType<typeof omsAsnControl>) {
+export function omsAsnCreateControl<T extends OmsAsnControl>(no: string, data: T) {
+  if (!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(data.clientRequestId || '')) throw new BadRequestException('缺少有效的入库操作标识，请核对原请求')
+  return { clientRequestId: data.clientRequestId!, requestFingerprint: hash({ no, kind: 'create', data }) }
+}
+
+type OmsRequestIdentity = { clientRequestId: string; requestFingerprint: string }
+export async function readOmsAsnReceipt(tx: Prisma.TransactionClient, customerCode: string, no: string, request: OmsRequestIdentity) {
   const previous = await tx.operationLog.findFirst({ where: { module: 'inbound', action: { in: OMS_ASN_ACTIONS }, AND: [
     { detail: { path: '$.customerCode', equals: customerCode } }, { detail: { path: '$.clientRequestId', equals: request.clientRequestId } },
   ] } })
-  if (!previous) return false
+  if (!previous) return null
   const detail = previous.detail as { requestFingerprint?: string }
   if (previous.targetId !== no || detail?.requestFingerprint !== request.requestFingerprint) throw new ConflictException('原入库操作对应的单据或内容不同，请先核对原操作，不要修改后重试')
-  return true
+  return previous.action === 'oms_asn_request_cancelled' ? 'cancelled' as const : 'completed' as const
+}
+
+export async function previousOmsAsnControl(tx: Prisma.TransactionClient, customerCode: string, no: string, request: OmsRequestIdentity) {
+  const receipt = await readOmsAsnReceipt(tx, customerCode, no, request)
+  if (receipt === 'cancelled') throw new ConflictException('该原入库请求已确认取消，请核对最新单据后使用新操作继续')
+  return receipt === 'completed'
 }
 
 export function assertOmsAsnVersion(order: Parameters<typeof omsAsnVersion>[0], expectedVersion: string) {

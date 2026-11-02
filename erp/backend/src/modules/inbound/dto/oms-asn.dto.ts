@@ -11,7 +11,22 @@ import {
   ValidateNested,
   IsUUID,
   Matches,
+  IsIn,
+  IsObject,
 } from 'class-validator'
+
+export class OmsAsnOriginalDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(30)
+  customerCode!: string
+
+  @IsIn(['create', 'update', 'reactivate', 'cancel'])
+  kind!: 'create' | 'update' | 'reactivate' | 'cancel'
+
+  @IsObject()
+  original!: Record<string, unknown>
+}
 
 export class OmsAsnItemDto {
   @IsString()

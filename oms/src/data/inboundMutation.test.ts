@@ -6,7 +6,7 @@ import type { InboundOrder } from './mockData'
 import { hydrateAccounts } from '../auth/accountStore'
 import { getInboundOrdersSnapshot, setInboundOrders } from './entityStore'
 import { inboundMutationFailure, submitInboundToErp, updateInboundOnErp, withdrawInboundOrder,
-  voidInboundOrder, reorderInboundOnErp, retryInboundOriginal, pendingInboundOperation, readInboundOriginal, refreshInboundsFromErp } from './inboundStore'
+  voidInboundOrder, reorderInboundOnErp, retryInboundOriginal, resolveInboundOriginal, pendingInboundOperation, readInboundOriginal, refreshInboundsFromErp } from './inboundStore'
 
 const draft: InboundOrder = {
   id: 'oms-one', customerId: 'c1', inboundNo: 'RV-TKL9001-001', source: '客户自发',
@@ -313,4 +313,113 @@ test('重试入口遇到损坏原请求时不发请求、不清记录、不覆�
     assert.equal((await readInboundOriginal(draft)).ok, true); assert.equal(localStorage.getItem(key), raw)
     setInboundOrders([draft])
   }
+})
+
+async function uncertainCreate(t: TestContext) {
+  environment(t); setInboundOrders([draft])
+  globalThis.fetch = async () => { throw new TypeError('Failed to fetch') }
+  assert.equal((await submitInboundToErp(draft)).ok, false)
+  const original = pendingInboundOperation(draft).record!
+  assert.ok(original)
+  return original
+}
+
+test('服务器仅查不到回执时保留原记录，不写 OMS、不把旧表单视为已取消', async t => {
+  const original = await uncertainCreate(t)
+  globalThis.fetch = async (input, init) => {
+    assert.equal(String(input), `/api/erp/inbound/${draft.inboundNo}/original/check`)
+    const body = JSON.parse(String(init?.body))
+    assert.deepEqual(body.original, original.body); assert.equal(body.kind, 'create')
+    return Response.json({ outcome: 'unresolved', order: null, message: '不能据此认定未执行' })
+  }
+  const result = await resolveInboundOriginal({ ...draft, totalQty: 99 })
+  assert.equal(result.ok, true); if (result.ok) assert.match(result.warning || '', /不能据此认定未执行.*原请求记录仍保留/)
+  assert.deepEqual(pendingInboundOperation(draft).record, original); assert.deepEqual(getInboundOrdersSnapshot(), [draft])
+})
+
+test('服务器取消响应丢失时保留原记录，再次核对取消回执才清除；不重发创建', async t => {
+  const original = await uncertainCreate(t)
+  let calls = 0
+  globalThis.fetch = async (input, init) => {
+    calls++; assert.equal(String(input), `/api/erp/inbound/${draft.inboundNo}/original/cancel`)
+    assert.deepEqual(JSON.parse(String(init?.body)).original, original.body)
+    throw new TypeError('Failed to fetch')
+  }
+  assert.equal((await resolveInboundOriginal(draft, true)).ok, false)
+  assert.deepEqual(pendingInboundOperation(draft).record, original)
+  globalThis.fetch = async input => {
+    calls++; assert.equal(String(input), `/api/erp/inbound/${draft.inboundNo}/original/check`)
+    return Response.json({ outcome: 'cancelled', order: null, message: '已阻止该原请求继续执行' })
+  }
+  const result = await resolveInboundOriginal(draft)
+  assert.equal(result.ok, true); assert.equal(pendingInboundOperation(draft).record, null)
+  assert.equal(calls, 2); assert.deepEqual(getInboundOrdersSnapshot(), [draft])
+})
+
+test('取消遇到已完成原请求时只回写最新仓库进度，不撤销或再次执行原业务', async t => {
+  await uncertainCreate(t)
+  const calls: string[] = []
+  globalThis.fetch = async (input, init) => {
+    const path = String(input); calls.push(path)
+    if (path.endsWith('/original/cancel')) return Response.json({ outcome: 'completed', order: { ...erp, status: 'receiving', omsStatus: 'receiving', totalExpectedQty: 3 }, message: '已找到执行回执' })
+    assert.equal(path, '/api/inbound-orders')
+    assert.equal(JSON.parse(String(init?.body))[0].status, 'receiving')
+    return Response.json({ ok: true })
+  }
+  const result = await resolveInboundOriginal(draft, true)
+  assert.equal(result.ok, true); if (result.ok) { assert.equal(result.order.status, 'receiving'); assert.equal(result.order.totalQty, 3) }
+  assert.equal(pendingInboundOperation(draft).record, null); assert.equal(calls.length, 2)
+})
+
+test('取消修改请求保留原仓库单据，不能套用作废或撤回的本地目标状态', async t => {
+  environment(t)
+  const order = { ...draft, status: 'on_the_way' as const, erpRevision: erp.revision }; setInboundOrders([order])
+  globalThis.fetch = async () => { throw new TypeError('Failed to fetch') }
+  await withdrawInboundOrder(order)
+  const original = pendingInboundOperation(order).record!
+  globalThis.fetch = async (input, init) => {
+    if (String(input).endsWith('/original/cancel')) {
+      const body = JSON.parse(String(init?.body)); assert.equal(body.kind, 'cancel'); assert.deepEqual(body.original, original.body)
+      return Response.json({ outcome: 'cancelled', order: erp, message: '已阻止该原请求继续执行' })
+    }
+    assert.equal(String(input), '/api/inbound-orders')
+    assert.equal(JSON.parse(String(init?.body))[0].status, 'on_the_way')
+    return Response.json({ ok: true })
+  }
+  const result = await resolveInboundOriginal(order, true)
+  assert.equal(result.ok, true); if (result.ok) assert.equal(result.order.status, 'on_the_way')
+  assert.equal(pendingInboundOperation(order).record, null)
+})
+
+test('已完成回执的 OMS 回写仍失败时保留原请求，避免误报恢复完成', async t => {
+  const original = await uncertainCreate(t)
+  globalThis.fetch = async input => String(input).endsWith('/original/check')
+    ? Response.json({ outcome: 'completed', order: erp, message: '已找到执行回执' })
+    : Response.json({ error: 'Storage unavailable' }, { status: 503 })
+  const result = await resolveInboundOriginal(draft)
+  assert.equal(result.ok, true); if (result.ok) assert.equal(result.persistencePending, true)
+  assert.deepEqual(pendingInboundOperation(draft).record, original)
+})
+
+test('只有入库查看权限可核对回执和读取最新状态，不能取消、回写或清除原记录', async t => {
+  const original = await uncertainCreate(t)
+  const session = getStoredAuthSession()!; storeAuthSession({ ...session, user: { ...session.user, permissions: ['inbound:read'] } })
+  let calls = 0
+  globalThis.fetch = async input => {
+    calls++; assert.equal(String(input), `/api/erp/inbound/${draft.inboundNo}/original/check`)
+    return Response.json({ outcome: 'completed', order: erp, message: '已找到执行回执' })
+  }
+  assert.equal((await resolveInboundOriginal(draft)).ok, true)
+  assert.equal((await resolveInboundOriginal(draft, true)).ok, false)
+  assert.equal(calls, 1); assert.deepEqual(pendingInboundOperation(draft).record, original)
+})
+
+test('核对等待中切换账号，不清除原请求、不回写前一账号的结果', async t => {
+  const original = await uncertainCreate(t)
+  globalThis.fetch = async () => {
+    const session = getStoredAuthSession()!; storeAuthSession({ ...session, token: 'new-session' })
+    return Response.json({ outcome: 'completed', order: erp, message: '已找到执行回执' })
+  }
+  assert.equal((await resolveInboundOriginal(draft, true)).ok, false)
+  assert.deepEqual(pendingInboundOperation(draft).record, original); assert.deepEqual(getInboundOrdersSnapshot(), [draft])
 })

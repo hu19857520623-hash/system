@@ -484,6 +484,10 @@ export function cancelErpInboundAsn(inboundNo: string, customerCode: string, con
   })
 }
 
+export function resolveErpInboundOriginal(inboundNo: string, resolution: 'check' | 'cancel', body: { customerCode: string; kind: 'create' | 'update' | 'reactivate' | 'cancel'; original: Record<string, unknown> }) {
+  return erpRequest<{ outcome: 'completed' | 'cancelled' | 'unresolved'; order: ErpInboundOrder | null; message: string }>(`/inbound/oms/asn/${encodeURIComponent(inboundNo)}/original/${resolution}`, { method: 'POST', body: JSON.stringify(body) })
+}
+
 export function reactivateErpInboundAsn(inboundNo: string, body: {
   inboundNo?: string
   clientRequestId?: string
