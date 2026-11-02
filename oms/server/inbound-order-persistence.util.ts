@@ -1,8 +1,7 @@
 import { Prisma } from '@prisma/client'
-
-export class InboundIdentityError extends Error {
-  constructor(public status: number, message: string) { super(message) }
-}
+import type { ErpInboundOrder } from './erpClient.js'
+import { assertInboundSnapshot, InboundIdentityError } from './inbound-snapshot-guard.util.js'
+export { InboundIdentityError } from './inbound-snapshot-guard.util.js'
 
 type InboundDb = Pick<Prisma.TransactionClient, 'inboundOrder' | '$queryRaw' | '$executeRaw'>
 
@@ -52,11 +51,13 @@ export async function saveInboundOrder(
   id: string,
   data: Omit<Prisma.InboundOrderUncheckedCreateInput, 'id'>,
   scope: string | null,
+  revision?: unknown,
+  trusted?: ErpInboundOrder,
 ) {
   if (scope !== null && !scope) throw new InboundIdentityError(403, '客户身份无效，请重新登录')
   const owner = scope || data.customerId
   if (scope && data.customerId !== scope) throw new InboundIdentityError(403, '该入库单不属于当前客户，无法保存')
-  await lockInboundOwner(tx, owner)
+  const customerCode = await lockInboundOwner(tx, owner)
   await assertNotDeleted(tx, id, data.inboundNo)
   const [byId, byNo] = await Promise.all([
     tx.inboundOrder.findUnique({ where: { id }, select: { id: true, inboundNo: true, customerId: true } }),
@@ -70,6 +71,7 @@ export async function saveInboundOrder(
   if (byId && byId.inboundNo !== data.inboundNo) {
     throw new InboundIdentityError(409, '入库单标识与单号不一致，请刷新后重试')
   }
+  await assertInboundSnapshot(tx, { id, ...data }, customerCode, revision, trusted)
   return tx.inboundOrder.upsert({
     where: { inboundNo: data.inboundNo },
     create: { id, ...data },

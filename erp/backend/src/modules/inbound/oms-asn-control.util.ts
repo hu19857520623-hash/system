@@ -11,7 +11,11 @@ const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(cano
 
 /** Include stable item IDs so cancel/reactivate cannot restore an old form's version. */
 export function omsAsnVersion(order: { id: bigint | number; inboundNo: string; status: string; updatedAt: Date; remark: string | null; warehouseCode: string; trackingNo: string | null; items?: { id?: bigint | number; sku: string; expectedQty: number }[] }) {
-  return hash({ id: order.id, inboundNo: order.inboundNo, status: order.status, updatedAt: order.updatedAt, remark: order.remark, warehouseCode: order.warehouseCode, trackingNo: order.trackingNo,
+  const id = Number(order.id)
+  if (!Number.isSafeInteger(id) || id <= 0) throw new BadRequestException('入库单编号超出可核对范围，请联系管理员')
+  // main.ts serializes BigInt IDs as numbers. Make the wire representation
+  // explicit so hashing is independent of that process-wide toJSON hook.
+  return hash({ id, inboundNo: order.inboundNo, status: order.status, updatedAt: order.updatedAt, remark: order.remark, warehouseCode: order.warehouseCode, trackingNo: order.trackingNo,
     items: (order.items || []).map(row => [String(row.id ?? ''), row.sku, row.expectedQty]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))) })
 }
 

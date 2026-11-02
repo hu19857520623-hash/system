@@ -4,6 +4,19 @@ const order = { id: 1n, inboundNo: 'ASN-ONE', status: 'pending_receipt', updated
 const body = { clientRequestId: '4b9f78d8-4688-47a3-a46d-222222222222', customerCode: 'TKL9069', expectedVersion: omsAsnVersion(order), items: [{ sku: 'A', qty: 1 }] }
 
 describe('客户入库版本及持久化回执', () => {
+  it('版本摘要与生产 BigInt 全局序列化钩子无关，且拒绝超出安全范围的编号', () => {
+    const before = omsAsnVersion(order)
+    const descriptor = Object.getOwnPropertyDescriptor(BigInt.prototype, 'toJSON')
+    try {
+      Object.defineProperty(BigInt.prototype, 'toJSON', { configurable: true, value: function () { return Number(this) } })
+      expect(omsAsnVersion(order)).toBe(before)
+      expect(omsAsnVersion({ ...order, id: Number(order.id) })).toBe(before)
+    } finally {
+      if (descriptor) Object.defineProperty(BigInt.prototype, 'toJSON', descriptor)
+      else Reflect.deleteProperty(BigInt.prototype, 'toJSON')
+    }
+    expect(() => omsAsnVersion({ ...order, id: 9007199254740993n })).toThrow('编号超出可核对范围')
+  })
   it('相同数据换了属性顺序仍为原请求，修改内容、单号或操作类型都改变回执', () => {
     const original = omsAsnControl('ASN-ONE', 'update', body)
     expect(omsAsnControl('ASN-ONE', 'update', { ...body, items: [{ qty: 1, sku: 'A' }] })).toEqual(original)

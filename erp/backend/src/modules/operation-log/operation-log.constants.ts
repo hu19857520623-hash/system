@@ -14,6 +14,12 @@ export const OPERATION_MODULE_LABELS: Record<string, string> = {
 }
 
 export const OPERATION_ACTION_LABELS: Record<string, string> = {
+  oms_asn_create: 'OMS 创建入库预报',
+  oms_asn_create_replay: '核对原入库创建请求',
+  oms_asn_update: 'OMS 修改入库预报',
+  oms_asn_reactivate: 'OMS 重新提交入库单',
+  oms_asn_cancel: 'OMS 撤回或作废入库单',
+  oms_asn_request_cancelled: '取消待核对入库请求',
   pick: '完成拣货', pick_cancel: '取消原拣货请求',
   assign_picker: '分配拣货员', assign_picker_cancel: '取消原分配请求',
   pack: '完成复核打包', pack_cancel: '取消原复核请求', start_review: '开始复核',

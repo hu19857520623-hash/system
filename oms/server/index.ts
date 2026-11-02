@@ -3351,6 +3351,13 @@ app.put('/api/inbound-orders', async (req, res) => {
     if (!Array.isArray(list) || list.some(o => !o || !String(o.id || '').trim() || !String(o.inboundNo || '').trim())) {
       return res.status(400).json({ error: '入库单缺少标识或单号' })
     }
+    const canonical = new Map<string, ErpInboundOrder>()
+    for (const o of list) {
+      if (typeof o.erpRevision === 'string' && /^[a-f0-9]{64}$/.test(o.erpRevision)) {
+        const current = await fetchErpInboundByNo(String(o.inboundNo))
+        canonical.set(String(o.inboundNo), { ...current, inboundType: sanitizeOmsInboundType(current.inboundType) })
+      }
+    }
     const identities = await prisma.$transaction(async tx => {
       const saved = []
       for (const o of list) {
@@ -3381,14 +3388,15 @@ app.put('/api/inbound-orders', async (req, res) => {
             lineItems: o.lineItems ? JSON.stringify(o.lineItems) : null,
             attachments: o.attachments ? JSON.stringify(o.attachments) : null,
         }
-        saved.push(await saveInboundOrder(tx, id, data, scope))
+        saved.push(await saveInboundOrder(tx, id, data, scope, o.erpRevision, canonical.get(data.inboundNo)))
       }
       return saved
-    })
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted, timeout: 30000 })
     res.json({ ok: true, identities })
   } catch (e) {
     console.error(e)
     if (e instanceof InboundIdentityError) return res.status(e.status).json({ error: e.message })
+    if (e instanceof ErpApiError) return sendErpError(res, e)
     if ((e as { code?: string }).code === 'P2002') {
       return res.status(409).json({ error: '入库单号已存在或刚被同步，请刷新后重试' })
     }

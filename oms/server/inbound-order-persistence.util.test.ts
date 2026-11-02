@@ -2,12 +2,13 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import type { Prisma } from '@prisma/client'
 import { InboundIdentityError, saveInboundOrder, deleteInboundDraft } from './inbound-order-persistence.util.js'
+import { assertInboundSnapshot, inboundSnapshotRevision } from './inbound-snapshot-guard.util.js'
 
 const data = { customerId: 'c1', inboundNo: 'IB001', source: 'ERP回传', inboundType: '客户自发', deliveryMethod: 'self',
-  stockSource: 'owned', boxCount: 1, skuCount: 1, totalQty: 2, receivedQty: 1, status: 'partial', createdAt: '2026-10-09', warehouse: 'jhb1' }
+  stockSource: 'owned', boxCount: 1, skuCount: 1, totalQty: 2, receivedQty: 0, status: 'draft', createdAt: '2026-10-09', warehouse: 'jhb1' }
 function repository(initial: { id: string; inboundNo: string; customerId: string | null }[]) {
   const rows = initial.map(row => ({ ...row }))
-  const tx = { $queryRaw: async (query: TemplateStringsArray) => query.join('?').includes('snapshot_tombstone') ? [] : [{ code: 'TKL9001', id: 1n }], $executeRaw: async () => 1, inboundOrder: {
+  const tx = { $queryRaw: async (query: TemplateStringsArray) => /snapshot_tombstone|FROM inbound_order/.test(query.join('?')) ? [] : [{ code: 'TKL9001', id: 1n }], $executeRaw: async () => 1, inboundOrder: {
     findUnique: async ({ where }: { where: { id?: string; inboundNo?: string } }) =>
       rows.find(r => where.id ? r.id === where.id : r.inboundNo === where.inboundNo) ?? null,
     upsert: async ({ where, create, update }: { where: { inboundNo: string }; create: typeof data & { id: string }; update: typeof data }) => {
@@ -26,7 +27,7 @@ test('ERP and OMS aliases update one existing order and retain its database ID',
   }
   assert.equal(rows.length, 1)
   assert.equal(rows[0].id, 'original-oms-id')
-  assert.equal((rows[0] as typeof data & { id: string }).receivedQty, 1)
+  assert.equal((rows[0] as typeof data & { id: string }).receivedQty, 0)
 })
 
 test('a new inbound is created once and repeated saves are idempotent', async () => {
@@ -89,3 +90,70 @@ test('旧标签页保存不能绕过锁后的删除标记恢复草稿', async ()
   const f = deletionFixture(); await deleteInboundDraft(f.db, 'draft-id', 'c1')
   await assert.rejects(saveInboundOrder(f.tx, 'new-alias', data, 'c1'), /入库草稿已删除/)
 })
+
+function linkedSnapshot(status = 'pending_receipt') {
+  const header = { id: 12n, inboundNo: 'IB001', status, updatedAt: new Date('2026-11-02T04:00:00Z'), remark: null, warehouseCode: 'WMS-JHB-01', trackingNo: null, omsCustomerCode: 'TKL9001' }
+  const items = [{ id: 21n, sku: 'A', expectedQty: 2, actualQty: 0 }]
+  const revision = inboundSnapshotRevision(header, items)
+  const trusted: any = { inboundNo: 'IB001', revision, inboundType: data.inboundType, deliveryMethod: data.deliveryMethod, source: data.source }
+  const events: string[] = []
+  const tx: any = { $queryRaw: async (parts: TemplateStringsArray) => {
+    const query = parts.join('?'); events.push(query)
+    if (query.includes('FROM inbound_order WHERE')) return [header]
+    if (query.includes('FROM inbound_order_item')) return items
+    if (query.includes('JOIN inbound_carton_item')) return [{ sku: 'A', qty: 2, boxNo: 1 }]
+    if (query.includes('FROM inbound_carton')) return [{ id: 1n, boxSeq: 1 }]
+    throw Error('Unexpected test query')
+  } }
+  const incoming = { id: 'order1', ...data, status: 'on_the_way', lineItems: JSON.stringify([{ sku: 'A', qty: 2, boxNo: 1 }]) }
+  return { tx, header, items, revision, trusted, events, incoming }
+}
+
+test('当前 ERP 快照可重复保存，使用单据行锁并核对实际箱明细', async () => {
+  const f = linkedSnapshot()
+  const before = structuredClone(f.incoming)
+  await assertInboundSnapshot(f.tx, f.incoming, 'TKL9001', f.revision, f.trusted)
+  assert.deepEqual(f.incoming, before)
+  assert.match(f.events[0], /inbound_order.*FOR UPDATE/)
+  assert.ok(f.events.some(query => query.includes('JOIN inbound_carton_item')))
+})
+
+for (const patch of [{ status: 'draft' }, { status: 'shelved' }, { totalQty: 99 }, { receivedQty: 1 }, { boxCount: 2 }, { skuCount: 2 }, { warehouse: 'cpt1' }, { remark: '绕过ERP直接改备注' }, { trackingNo: '伪造跟踪号' }, { lineItems: JSON.stringify([{ sku: 'A', qty: 1, boxNo: 1 }]) }, { lineItems: JSON.stringify([{ sku: 'B', qty: 2, boxNo: 1 }]) }, { lineItems: 'broken' }]) {
+  test(`当前版本也不能伪造仓库状态、数量或预报资料 ${JSON.stringify(patch)}`, async () => {
+    const f = linkedSnapshot()
+    await assert.rejects(assertInboundSnapshot(f.tx, { ...f.incoming, ...patch }, 'TKL9001', f.revision, f.trusted), e => e instanceof InboundIdentityError && e.status === 409)
+  })
+}
+
+test('已提交快照必须有当前版本，并绑定原客户和同版本的规范资料', async () => {
+  const f = linkedSnapshot()
+  for (const revision of [undefined, '', '0'.repeat(64)]) await assert.rejects(assertInboundSnapshot(f.tx, f.incoming, 'TKL9001', revision, f.trusted), /快照已过期/)
+  await assert.rejects(assertInboundSnapshot(f.tx, f.incoming, 'OTHER', f.revision, f.trusted), e => e instanceof InboundIdentityError && e.status === 403)
+  await assert.rejects(assertInboundSnapshot(f.tx, f.incoming, 'TKL9001', f.revision, { ...f.trusted, revision: '0'.repeat(64) }), /快照已过期/)
+  f.items[0].id = 22n
+  await assert.rejects(assertInboundSnapshot(f.tx, f.incoming, 'TKL9001', f.revision, f.trusted), /快照已过期/)
+})
+
+test('撤回草稿可暂存修改后再下单；当前在途和已有实收的单据不能套用这条路径', async () => {
+  const f = linkedSnapshot('cancelled'), draft = { ...f.incoming, status: 'draft', totalQty: 99, lineItems: JSON.stringify([{ sku: 'A', qty: 99 }]) }
+  await assertInboundSnapshot(f.tx, draft, 'TKL9001', f.revision, f.trusted)
+  f.items[0].actualQty = 1
+  await assert.rejects(assertInboundSnapshot(f.tx, draft, 'TKL9001', f.revision, f.trusted), /快照已过期/)
+  const active = linkedSnapshot()
+  await assert.rejects(assertInboundSnapshot(active.tx, draft, 'TKL9001', active.revision, active.trusted), /快照已过期/)
+})
+
+test('未关联 ERP 的预约仅可为未收货草稿或本地作废，不能伪造仓库作业', async () => {
+  const tx: any = { $queryRaw: async () => [] }
+  for (const status of ['on_the_way', 'receiving', 'partial', 'shelved']) await assert.rejects(assertInboundSnapshot(tx, { id: 'x', ...data, status }, 'TKL9001'), /尚未提交 ERP/)
+  await assert.rejects(assertInboundSnapshot(tx, { id: 'x', ...data, receivedQty: 1 }, 'TKL9001'), /尚未提交 ERP/)
+  for (const status of ['draft', 'voided']) await assertInboundSnapshot(tx, { id: 'x', ...data, status }, 'TKL9001')
+  await assert.rejects(assertInboundSnapshot(tx, { id: 'x', ...data, totalQty: -1 }, 'TKL9001'), e => e instanceof InboundIdentityError && e.status === 400)
+})
+
+for (const [status, local, received] of [['arrived', 'receiving', 0], ['receiving', 'receiving', 1], ['pending_putaway', 'partial', 2], ['completed', 'shelved', 2], ['confirmed', 'partial', 1], ['exception', 'exception', 0], ['cancelled', 'voided', 0]] as const) {
+  test(`仓库 ${status} 按实际进度保存为 ${local}`, async () => {
+    const f = linkedSnapshot(status); f.items[0].actualQty = received
+    await assertInboundSnapshot(f.tx, { ...f.incoming, status: local, receivedQty: received }, 'TKL9001', f.revision, f.trusted)
+  })
+}

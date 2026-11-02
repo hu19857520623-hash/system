@@ -147,16 +147,16 @@ export default function InboundRecords() {
     const currentView = captureView()
     const customerId = getCustomerIdForRole(role)
     if (!customerId) {
-      window.alert('请切换到客户角色后再同步')
+      notifyError('请切换到客户角色后再同步')
       return
     }
     setSyncing(true)
     try {
       const n = await refreshInboundsFromErp(customerId, currentView)
       if (!currentView()) return
-      window.alert(`已从 ERP 同步 ${n} 条入库单状态`)
+      notifySuccess(`已从 ERP 同步 ${n} 条入库单状态`)
     } catch (err) {
-      if (currentView()) window.alert(userFacingError(err instanceof Error ? err.message : String(err)))
+      if (currentView()) notifyError(userFacingError(err instanceof Error ? err.message : String(err)))
     } finally {
       if (currentView()) setSyncing(false)
     }
@@ -253,7 +253,7 @@ export default function InboundRecords() {
 
   const handleExportSelected = () => {
     if (selectedOrders.length === 0) {
-      window.alert('请先勾选要导出的入库单')
+      notifyInfo('请先勾选要导出的入库单')
       return
     }
     exportInboundOrders(selectedOrders)
@@ -270,7 +270,7 @@ export default function InboundRecords() {
     if (!canWrite) { notifyError('当前账号只有入库查看权限，不能修改单据'); return }
     const targets = orders.filter(o => canVoidInboundOrder(o.status))
     if (targets.length === 0) {
-      window.alert('选中的入库单均不可作废（仅草稿或在途可作废）')
+      notifyInfo('选中的入库单均不可作废（仅草稿或在途可作废）')
       return
     }
     if (!confirmVoid(targets) || !currentView()) return
