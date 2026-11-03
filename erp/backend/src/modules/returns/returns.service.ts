@@ -1,4 +1,4 @@
-import { randomUUID } from 'crypto'
+import { createHash, randomUUID } from 'crypto'
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
@@ -299,6 +299,14 @@ export class ReturnsService {
       remark: data.remark?.trim() || undefined,
     }
 
+    const requestFields = ['orderNo', 'referenceNo', 'trackingNo', 'sellerStoreName', 'sellerTaxNo', 'returnWarehouse', 'expectedArrivalAt', 'returnReason', 'returnDescription', 'requestedProcess', 'remark'] as const
+    const fieldValue = (value: unknown) => value instanceof Date ? value.toISOString() : value ?? ''
+    const itemValues = (items: { sku: string; quantity: number; productName: string | null }[]) => items.map(item => [item.sku, item.quantity, item.productName || item.sku]).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))
+    const requestedAttachments = this.normalizeAttachments(data.attachments)
+    const requestFingerprint = createHash('sha256').update(JSON.stringify({
+      customerCode, fields: requestFields.map(key => fieldValue(returnData[key])), items: itemValues(parsedItems),
+      attachments: requestedAttachments.map(file => [file.fileType, file.fileName, createHash('sha256').update(Buffer.from(file.contentBase64, 'base64')).digest('hex')]).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
+    })).digest('hex')
     const written: string[] = []
     const run = () => this.prisma.$transaction(async tx => {
       await tx.$queryRaw`SELECT id FROM return_order WHERE return_no = ${returnNo} FOR UPDATE`
@@ -313,6 +321,21 @@ export class ReturnsService {
           where: { id: existing.id },
           include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
         })
+        const receipt = await tx.operationLog.findFirst({
+          where: { module: 'returns', action: { in: ['oms_return_create', 'oms_return_resubmit'] }, targetId: returnNo },
+          orderBy: { id: 'desc' },
+        })
+        const savedFingerprint = (receipt?.detail as { requestFingerprint?: string } | null)?.requestFingerprint
+        if (savedFingerprint) {
+          if (savedFingerprint !== requestFingerprint) throw new ConflictException('退件单号已用于不同内容，请核对原单；修改后请先撤回再重新提交')
+        } else if (detail) {
+          // Older records have no original intent hash. Compare immutable submitted data,
+          // leaving warehouse progress and operator remarks out of the compatibility check.
+          const sameFields = requestFields.filter(key => key !== 'remark').every(key => fieldValue(detail[key]) === fieldValue(returnData[key]))
+          const sameItems = JSON.stringify(itemValues(detail.items)) === JSON.stringify(itemValues(parsedItems))
+          const sameFiles = requestedAttachments.every(file => detail.attachments.some(saved => saved.fileName === file.fileName && saved.fileType === file.fileType && this.files.read(saved.filePath).equals(Buffer.from(file.contentBase64, 'base64'))))
+          if (!sameFields || !sameItems || !sameFiles) throw new ConflictException('退件单内容与原单不同，请核对原单；修改后请先撤回再重新提交')
+        }
         return { row: detail!, idempotent: true, reactivated: false }
       }
 
@@ -361,7 +384,7 @@ export class ReturnsService {
         action: existing?.status === 'cancelled' ? 'oms_return_resubmit' : 'oms_return_create',
         targetType: 'return_order',
         targetId: returnNo,
-        detail: { customerCode, orderNo, itemCount: parsedItems.length, reactivated: existing?.status === 'cancelled' },
+        detail: { customerCode, orderNo, itemCount: parsedItems.length, reactivated: existing?.status === 'cancelled', requestFingerprint },
       }, tx)
       return { row, idempotent: false, reactivated: existing?.status === 'cancelled' }
     }, { isolationLevel: 'ReadCommitted' })
