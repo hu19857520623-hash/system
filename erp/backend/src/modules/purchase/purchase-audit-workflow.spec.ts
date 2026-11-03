@@ -4,6 +4,8 @@ function setup(status = 'pending_actual_qty') {
   const row: any = { id: 9n, poNo: 'PO-AUDIT', prePoId: 8n, status, warehouseCode: 'LW-TEST', items: [{ id: 11n, sku: 'AUDIT', plannedQty: 2, quantity: 0, unitPrice: 10 }] }
   const prePo: any = { id: 8n, convertedPoId: 9n, status: 'confirmed' }
   const tx: any = {
+    sysUser: { findUnique: jest.fn().mockResolvedValue({ realName: '审核验收员' }) },
+    operationLog: { create: jest.fn().mockResolvedValue({ id: 1n }) },
     $queryRaw: jest.fn().mockResolvedValue([]),
     purchaseOrder: {
       findUnique: jest.fn(async () => ({ ...row, items: row.items.map(line => ({ ...line })) })),
@@ -43,6 +45,20 @@ function setup(status = 'pending_actual_qty') {
 }
 
 describe('采购核定、审核和驳回继续', () => {
+  it('审核日志写失败时拒绝事务，不在提交后补写日志或读取响应', async () => {
+    const {service,row,tx,log}=setup('pending_po_audit');row.items[0].quantity=2
+    tx.operationLog.create.mockRejectedValueOnce(new Error('审核日志写入失败'))
+    await expect(service.approve(9,1)).rejects.toThrow('审核日志写入失败')
+    expect(tx.operationLog.create).toHaveBeenCalledWith(expect.objectContaining({data:expect.objectContaining({module:'purchase',action:'po_approve',targetId:'PO-AUDIT',operatorName:'审核验收员'})}))
+    expect(log.log).not.toHaveBeenCalled();expect((service as any).enrichOrders).not.toHaveBeenCalled()
+  })
+  it('响应读取也使用当前事务，读取失败向事务抛出而不是提交后报错', async()=>{
+    const {service,row,tx,log}=setup('pending_po_audit');row.items[0].quantity=2
+    jest.mocked((service as any).enrichOrders).mockRejectedValueOnce(new Error('响应读取失败'))
+    await expect(service.approve(9,1)).rejects.toThrow('响应读取失败')
+    expect((service as any).enrichOrders).toHaveBeenCalledWith([expect.objectContaining({status:'finance_approved'})],tx)
+    expect(tx.operationLog.create).toHaveBeenCalledTimes(1);expect(log.log).not.toHaveBeenCalled()
+  })
   it.each([0, -1, 1.5, 2147483648, Infinity, NaN])('拒绝无效数量 %s，且不写入', async quantity => {
     const { service, tx } = setup()
     await expect(service.setActualQty(9, { quantity })).rejects.toThrow('实际采购数量须为')

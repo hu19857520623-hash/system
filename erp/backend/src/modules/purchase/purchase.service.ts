@@ -67,10 +67,10 @@ export class PurchaseService {
     private opLog: OperationLogService,
   ) {}
 
-  private async enrichOrders(rows: any[]) {
+  private async enrichOrders(rows: any[], database = this.prisma) {
     const receiving = rows.filter(row => ['finance_approved', 'at_logistics_wh', 'approved', 'received'].includes(row.status))
     if (receiving.length) {
-      const receipts = await this.prisma.logisticsReceipt.findMany({ where: { poId: { in: receiving.map(row => row.id) } }, include: { items: { orderBy: { id: 'asc' } } } })
+      const receipts = await database.logisticsReceipt.findMany({ where: { poId: { in: receiving.map(row => row.id) } }, include: { items: { orderBy: { id: 'asc' } } } })
       rows = rows.map(row => {
         if (!receiving.includes(row)) return row
         const progress = logisticsReceiptProgress(row.items, receipts.filter(receipt => receipt.poId === row.id))
@@ -89,17 +89,17 @@ export class PurchaseService {
     const prePoIds = [...new Set(rows.map((r) => r.prePoId).filter(Boolean))] as bigint[]
 
     const [suppliers, users, warehouses, prePos] = await Promise.all([
-      this.prisma.supplier.findMany({ where: { id: { in: supplierIds } } }),
-      userIds.length ? this.prisma.sysUser.findMany({ where: { id: { in: userIds } } }) : [],
-      whCodes.length ? this.prisma.warehouse.findMany({ where: { warehouseCode: { in: whCodes } } }) : [],
-      prePoIds.length ? this.prisma.prePurchaseOrder.findMany({ where: { id: { in: prePoIds } }, select: { id: true, status: true } }) : [],
+      database.supplier.findMany({ where: { id: { in: supplierIds } } }),
+      userIds.length ? database.sysUser.findMany({ where: { id: { in: userIds } } }) : [],
+      whCodes.length ? database.warehouse.findMany({ where: { warehouseCode: { in: whCodes } } }) : [],
+      prePoIds.length ? database.prePurchaseOrder.findMany({ where: { id: { in: prePoIds } }, select: { id: true, status: true } }) : [],
     ])
     const supMap = new Map<number, string>(suppliers.map((s) => [Number(s.id), s.supplierName] as [number, string]))
     const userMap = new Map<number, string>(users.map((u) => [Number(u.id), u.realName] as [number, string]))
     const whMap = new Map<string, string>(warehouses.map((w) => [w.warehouseCode, w.warehouseName] as [string, string]))
     const prePoStatusMap = new Map<number, string>(prePos.map((item) => [Number(item.id), item.status] as [number, string]))
     const paymentRows = rows.length
-      ? await this.prisma.purchasePayment.findMany({ where: { poId: { in: rows.map((row) => row.id) } }, orderBy: { id: 'asc' } })
+      ? await database.purchasePayment.findMany({ where: { poId: { in: rows.map((row) => row.id) } }, orderBy: { id: 'asc' } })
       : []
     const paymentsByPo = new Map<string, any[]>()
     for (const payment of paymentRows) {
@@ -764,7 +764,7 @@ export class PurchaseService {
 
   async approve(id: number, auditorId?: number, remark?: string, warehouseCode?: string) {
     const auditWarehouseCode = String(warehouseCode || '').trim()
-    const updated = await this.prisma.$transaction(async (tx) => {
+    return this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM purchase_order WHERE id = ${BigInt(id)} FOR UPDATE`
       const row = await tx.purchaseOrder.findUnique({ where: { id: BigInt(id) }, include: { items: true } })
       if (!row) throw new NotFoundException('采购单不存在')
@@ -791,7 +791,7 @@ export class PurchaseService {
           convertedPoId: row.items.length === 1 ? row.id : undefined,
           reason: `采购审核通过后转入分配 ${row.poNo}`,
         })
-        return tx.purchaseOrder.update({
+        const assigned = await tx.purchaseOrder.update({
           where: { id: BigInt(id) },
           data: {
             status: 'draft',
@@ -803,6 +803,7 @@ export class PurchaseService {
           } as any,
           include: { items: true },
         })
+        return this.completePurchaseApproval(tx, assigned, auditorId, remark)
       }
       const order = await tx.purchaseOrder.update({
         where: { id: BigInt(id) },
@@ -823,17 +824,22 @@ export class PurchaseService {
         })
       }
       await this.applyPostAuditEffects(tx, order, auditorId)
-      return order
+      return this.completePurchaseApproval(tx, order, auditorId, remark)
     }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted })
-    const [item] = await this.enrichOrders([updated])
-    await this.opLog.log({
+  }
+
+  private async completePurchaseApproval(tx: any, order: any, auditorId?: number, remark?: string) {
+    await new OperationLogService(tx).log({
       operatorId: auditorId,
       module: 'purchase',
       action: 'po_approve',
       targetType: 'purchase_order',
-      targetId: item.poNo,
-      detail: { remark: remark || '审核通过', warehouseCode: updated.warehouseCode, statusAfter: item.status },
+      targetId: order.poNo,
+      detail: { remark: remark || '审核通过', warehouseCode: order.warehouseCode, statusAfter: order.status },
     })
+    // A response lookup failure must roll back approval as well. Read the same
+    // transaction so newly created pre-purchase assignments are visible here.
+    const [item] = await this.enrichOrders([order], tx)
     return item
   }
 
@@ -1137,7 +1143,7 @@ export class PurchaseService {
     await this.ensureCostRecordsForPo(tx, po, operatorId)
 
     for (const { line } of productLines) {
-      await this.opLog.log({
+      await new OperationLogService(tx).log({
         operatorId,
         module: 'product',
         action: 'sync_from_po',
