@@ -1169,7 +1169,7 @@ export class InboundService {
       remark: stripOmsSystemTags(order.remark),
       source: meta.source || null,
       inboundType: order.inboundType || meta.inboundType || null,
-      deliveryMethod: order.deliveryMethod || meta.deliveryMethod || null,
+      deliveryMethod: order.deliveryMethod || meta.deliveryMethod || 'self',
       stockSource: order.stockSource || meta.stockSource || 'owned',
       referenceNo: order.referenceNo || meta.referenceNo || null,
       eta: order.eta || meta.eta || null,
@@ -1195,7 +1195,7 @@ export class InboundService {
       case 'receiving':
         return 'receiving'
       case 'pending_putaway':
-        return 'partial'
+        return 'completed'
       case 'completed':
         return 'shelved'
       case 'exception':
@@ -1884,7 +1884,7 @@ export class InboundService {
         if (strict) throw new Error('OMS入库状态待同步')
         return false
       }
-      if (payload.omsStatus === 'shelved' || payload.omsStatus === 'partial') {
+      if (['shelved', 'partial', 'completed'].includes(payload.omsStatus)) {
         const inventoryRows = await this.prisma.inventory.findMany({
           where: {
             warehouseCode: row.warehouseCode,

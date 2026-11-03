@@ -69,7 +69,7 @@ export async function assertInboundSnapshot(tx: Pick<Prisma.TransactionClient, '
   const expected = items.reduce((sum, row) => sum + row.expectedQty, 0), received = items.reduce((sum, row) => sum + (row.actualQty || 0), 0)
   const status = ['pending_receipt', 'pending_push', 'push_failed', 'pushed'].includes(order.status) ? 'on_the_way'
     : ['arrived', 'receiving'].includes(order.status) ? 'receiving'
-      : order.status === 'pending_putaway' ? 'partial'
+      : order.status === 'pending_putaway' ? 'completed'
         : ['completed', 'confirmed'].includes(order.status) ? 'shelved'
           : order.status === 'cancelled' ? 'voided' : order.status
   if (data.status !== status || data.totalQty !== expected || data.receivedQty !== received || data.skuCount !== items.length || warehouse(data.warehouse) !== warehouse(order.warehouseCode)) throw conflict()
