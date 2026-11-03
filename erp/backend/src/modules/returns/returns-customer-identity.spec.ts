@@ -15,7 +15,8 @@ describe('OMS return number ownership', () => {
   })
   it.each(['receive', 'reReceive'] as const)('%s rejects fractional and invalid quantities before writing or clearing charges', async method => {
     const prisma = { returnOrder: { findUnique: jest.fn().mockResolvedValue({ id: 1n, status: method === 'receive' ? 'pending_arrival' : 'received' }) }, returnOrderItem: { aggregate: jest.fn().mockResolvedValue({ _sum: { quantity: 2 } }) } }
-    const service = new ReturnsService(prisma as any, null as any, null as any, null as any, null as any, null as any)
+    const db = { $transaction: (work: any) => work({ ...prisma, $queryRaw: jest.fn() }) }
+    const service = new ReturnsService(db as any, null as any, null as any, null as any, null as any, null as any)
     for (const value of [1.5, NaN, Infinity, -1, Number.MAX_SAFE_INTEGER + 1]) {
       await expect(service[method](1, { receivedQty: value, receivedCartonCount: 1 }, 1)).rejects.toThrow('实收件数须为大于零的整数')
       await expect(service[method](1, { receivedQty: 2, receivedCartonCount: value }, 1)).rejects.toThrow('实收箱数须为大于零的整数')

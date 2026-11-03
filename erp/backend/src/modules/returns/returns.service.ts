@@ -365,46 +365,50 @@ export class ReturnsService {
     body: { receivedQty?: number; receivedCartonCount?: number; remark?: string },
     userId: number,
   ) {
-    const row = await this.prisma.returnOrder.findUnique({ where: { id: BigInt(id) } })
-    if (!row) throw new NotFoundException('退件单不存在')
-    if (row.status !== 'pending_arrival') {
-      throw new BadRequestException('当前状态不可收货，仅「在途」可收货')
-    }
-    const expectedQty = await this.prisma.returnOrderItem.aggregate({
-      where: { returnId: row.id },
-      _sum: { quantity: true },
-    })
-    const receivedQty = body.receivedQty != null
-      ? Number(body.receivedQty)
-      : expectedQty._sum.quantity || 0
-    const receivedCartonCount = body.receivedCartonCount != null
-      ? Number(body.receivedCartonCount)
-      : 1
-    if (!Number.isSafeInteger(receivedQty) || receivedQty <= 0) throw new BadRequestException('实收件数须为大于零的整数')
-    if (!Number.isSafeInteger(receivedCartonCount) || receivedCartonCount <= 0) throw new BadRequestException('实收箱数须为大于零的整数')
+    const updated = await this.prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM return_order WHERE id = ${BigInt(id)} FOR UPDATE`
+      const row = await tx.returnOrder.findUnique({ where: { id: BigInt(id) } })
+      if (!row) throw new NotFoundException('退件单不存在')
+      if (row.status !== 'pending_arrival') {
+        throw new BadRequestException('当前状态不可收货，仅「在途」可收货')
+      }
+      const expectedQty = await tx.returnOrderItem.aggregate({
+        where: { returnId: row.id },
+        _sum: { quantity: true },
+      })
+      const receivedQty = body.receivedQty != null
+        ? Number(body.receivedQty)
+        : expectedQty._sum.quantity || 0
+      const receivedCartonCount = body.receivedCartonCount != null
+        ? Number(body.receivedCartonCount)
+        : 1
+      if (!Number.isSafeInteger(receivedQty) || receivedQty <= 0) throw new BadRequestException('实收件数须为大于零的整数')
+      if (!Number.isSafeInteger(receivedCartonCount) || receivedCartonCount <= 0) throw new BadRequestException('实收箱数须为大于零的整数')
 
-    const updated = await this.prisma.returnOrder.update({
-      where: { id: row.id },
-      data: {
-        status: 'received',
-        receivedAt: new Date(),
-        receivedBy: BigInt(userId),
-        receivedQty,
-        receivedCartonCount,
-        remark: body.remark?.trim() || row.remark || undefined,
-        feeStatus: row.feeStatus === 'none' ? 'none' : row.feeStatus,
-      },
-      include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
-    })
-    await this.opLog.log({
-      module: 'returns',
-      action: 'receive',
-      targetType: 'return_order',
-      targetId: row.returnNo,
-      operatorId: userId,
-      detail: { receivedQty, receivedCartonCount },
-    })
-    void this.pushReturnStatusToOms(row.returnNo)
+      const updated = await tx.returnOrder.update({
+        where: { id: row.id },
+        data: {
+          status: 'received',
+          receivedAt: new Date(),
+          receivedBy: BigInt(userId),
+          receivedQty,
+          receivedCartonCount,
+          remark: body.remark?.trim() || row.remark || undefined,
+          feeStatus: row.feeStatus === 'none' ? 'none' : row.feeStatus,
+        },
+        include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
+      })
+      await this.opLog.log({
+        module: 'returns',
+        action: 'receive',
+        targetType: 'return_order',
+        targetId: row.returnNo,
+        operatorId: userId,
+        detail: { receivedQty, receivedCartonCount },
+      }, tx)
+      return updated
+    }, { isolationLevel: 'ReadCommitted' })
+    void this.pushReturnStatusToOms(updated.returnNo)
     return this.enrichRow(updated)
   }
 
@@ -413,26 +417,27 @@ export class ReturnsService {
     body: { receivedQty?: number; receivedCartonCount?: number; remark?: string },
     userId: number,
   ) {
-    const row = await this.prisma.returnOrder.findUnique({ where: { id: BigInt(id) } })
-    if (!row) throw new NotFoundException('退件单不存在')
-    if (!(RETURN_RE_RECEIVE_STATUSES as readonly string[]).includes(row.status)) {
-      throw new BadRequestException('当前状态不可重新收货，仅已收货/已测体积/已算费可修正')
-    }
+    const updated = await this.prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM return_order WHERE id = ${BigInt(id)} FOR UPDATE`
+      const row = await tx.returnOrder.findUnique({ where: { id: BigInt(id) } })
+      if (!row) throw new NotFoundException('退件单不存在')
+      if (!(RETURN_RE_RECEIVE_STATUSES as readonly string[]).includes(row.status)) {
+        throw new BadRequestException('当前状态不可重新收货，仅已收货/已测体积/已算费可修正')
+      }
 
-    const receivedQty = body.receivedQty != null
-      ? Number(body.receivedQty)
-      : row.receivedQty || 0
-    const receivedCartonCount = body.receivedCartonCount != null
-      ? Number(body.receivedCartonCount)
-      : row.receivedCartonCount || 1
-    if (!Number.isSafeInteger(receivedQty) || receivedQty <= 0) throw new BadRequestException('实收件数须为大于零的整数')
-    if (!Number.isSafeInteger(receivedCartonCount) || receivedCartonCount <= 0) throw new BadRequestException('实收箱数须为大于零的整数')
+      const receivedQty = body.receivedQty != null
+        ? Number(body.receivedQty)
+        : row.receivedQty || 0
+      const receivedCartonCount = body.receivedCartonCount != null
+        ? Number(body.receivedCartonCount)
+        : row.receivedCartonCount || 1
+      if (!Number.isSafeInteger(receivedQty) || receivedQty <= 0) throw new BadRequestException('实收件数须为大于零的整数')
+      if (!Number.isSafeInteger(receivedCartonCount) || receivedCartonCount <= 0) throw new BadRequestException('实收箱数须为大于零的整数')
 
-    await this.returnCharges.clearPendingReturnCharges(row.returnNo)
+      await new ReturnsChargeService(tx as PrismaService, this.billing).clearPendingReturnCharges(row.returnNo)
 
-    const updated = await this.prisma.$transaction(async (tx) => {
       await tx.returnCartonMeasure.deleteMany({ where: { returnId: row.id } })
-      return tx.returnOrder.update({
+      const updated = await tx.returnOrder.update({
         where: { id: row.id },
         data: {
           status: 'received',
@@ -451,17 +456,18 @@ export class ReturnsService {
         },
         include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
       })
-    })
 
-    await this.opLog.log({
-      module: 'returns',
-      action: 're_receive',
-      targetType: 'return_order',
-      targetId: row.returnNo,
-      operatorId: userId,
-      detail: { receivedQty, receivedCartonCount, previousStatus: row.status },
-    })
-    void this.pushReturnStatusToOms(row.returnNo)
+      await this.opLog.log({
+        module: 'returns',
+        action: 're_receive',
+        targetType: 'return_order',
+        targetId: row.returnNo,
+        operatorId: userId,
+        detail: { receivedQty, receivedCartonCount, previousStatus: row.status },
+      }, tx)
+      return updated
+    }, { isolationLevel: 'ReadCommitted' })
+    void this.pushReturnStatusToOms(updated.returnNo)
     return this.enrichRow(updated)
   }
 
