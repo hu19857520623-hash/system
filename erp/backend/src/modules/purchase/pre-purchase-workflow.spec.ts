@@ -3,9 +3,12 @@ import { PrePurchaseService } from './pre-purchase.service'
 function setup() {
   const row: any = { id: 8n, devId: 12n, sku: 'AUDIT-PD', prePoNo: 'PRE-AUDIT-PD', status: 'assigned', purchaserId: 1n, supplierId: 2n, plannedQty: 2, unitPrice: 10, spec: '虚构规格', productName: '虚构商品', productVolumeCbm: 0.001, packageVolumeCbm: 0.002 }
   let po: any = null
+  const audits:any[]=[]
   const tx: any = {
+    sysUser:{findUnique:jest.fn().mockResolvedValue({roleCode:'purchaser',status:1,realName:'采购验收员'})},
+    operationLog:{create:jest.fn(async({data})=>{audits.push(data);return {id:audits.length,...data}}),findFirst:jest.fn(async({where})=>audits.find(x=>x.targetId===where.targetId&&x.detail?.conversionKey===where.detail.equals)||null)},
     $queryRaw: jest.fn().mockResolvedValue([]),
-    prePurchaseOrder: { findUnique: jest.fn(async () => ({ ...row })), update: jest.fn(async ({ data }) => { Object.assign(row, data); return { ...row } }) },
+    prePurchaseOrder: { findUnique: jest.fn(async () => ({ ...row })),findUniqueOrThrow:jest.fn(async()=>({...row})),updateMany:jest.fn(async({data})=>{Object.assign(row,data);return {count:1}}),delete:jest.fn(), update: jest.fn(async ({ data }) => { Object.assign(row, data); return { ...row } }) },
     supplier: { findUnique: jest.fn().mockResolvedValue({ id: 2n, status: 1 }), findFirst: jest.fn().mockResolvedValue(null), create: jest.fn().mockResolvedValue({ id: 3n }) },
     purchaseOrder: { create: jest.fn(async ({ data }) => { po = { ...data, id: 9n }; return po }), findUnique: jest.fn(async () => po) },
     product: { findFirst: jest.fn().mockResolvedValue(null) }, productDev: { findFirst: jest.fn().mockResolvedValue(null), update: jest.fn() },
@@ -13,10 +16,34 @@ function setup() {
   const prisma = { ...tx, $transaction: jest.fn(async callback => callback(tx)) }
   const log = { log: jest.fn().mockResolvedValue({}) }
   const service = new PrePurchaseService(prisma as any, log as any)
+  jest.spyOn(service as any,'enrich').mockImplementation(async(rows:any[])=>rows)
   return { service, row, tx, log }
 }
 
 describe('预采购确认与所属采购员', () => {
+  it('首次确认的转换日志失败向业务事务抛出，不在提交后写日志',async()=>{
+    const {service,tx,log}=setup();tx.operationLog.create.mockRejectedValueOnce(new Error('转换日志失败'))
+    await expect(service.confirm(8,{userId:1,roleCode:'purchaser'})).rejects.toThrow('转换日志失败')
+    expect(tx.purchaseOrder.create).toHaveBeenCalledTimes(1);expect(log.log).not.toHaveBeenCalled()
+  })
+  it('旧转换缺日志时只补一次当前重试核对记录，不重建采购或伪造旧操作者',async()=>{
+    const {service,row,tx,log}=setup();row.status='confirmed';row.convertedPoId=9n;row.confirmedAt=new Date('2026-11-03T00:00:00Z');tx.purchaseOrder.findUnique.mockResolvedValue({id:9n,prePoId:8n,poNo:'PO-OLD',status:'pending_actual_qty'})
+    const first=await service.confirm(8,{userId:1,roleCode:'purchaser'}),again=await service.confirm(8,{userId:1,roleCode:'purchaser'})
+    expect(first.duplicate).toBe(true);expect(again.poId).toBe(9);expect(tx.purchaseOrder.create).not.toHaveBeenCalled();expect(tx.prePurchaseOrder.update).not.toHaveBeenCalled()
+    expect(tx.operationLog.create).toHaveBeenCalledTimes(1);expect(tx.operationLog.create).toHaveBeenCalledWith(expect.objectContaining({data:expect.objectContaining({operatorId:1n,detail:expect.objectContaining({recoveredOnRetry:true,conversionKey:'9:2026-11-03T00:00:00.000Z',message:expect.stringContaining('未重复建单')})})}));expect(log.log).not.toHaveBeenCalled()
+  })
+  it.each([['分配','pending_assign',(s:any)=>s.assign(8,1,1)],['取消','assigned',(s:any)=>s.cancel(8,'虚构取消',{userId:1,roleCode:'purchaser'})],['删除','cancelled',(s:any)=>s.removeCancelled(8,{userId:1,roleCode:'purchaser'})]])('%s日志失败使事务拒绝，不调用独立日志连接',async(_label,status,run)=>{
+    const {service,row,tx,log}=setup();row.status=status;tx.operationLog.create.mockRejectedValueOnce(new Error('预采购日志失败'))
+    await expect((run as (s:any)=>Promise<any>)(service)).rejects.toThrow('预采购日志失败');expect(tx.operationLog.create).toHaveBeenCalledTimes(1);expect(log.log).not.toHaveBeenCalled()
+  })
+  it('驳回重提的资料修改、分配重置与日志属于同一事务',async()=>{
+    const {service,row,tx,log}=setup();row.status='returned';row.convertedPoId=9n;tx.purchaseOrder.findUnique.mockResolvedValue({id:9n,prePoId:8n,status:'rejected',poNo:'PO-OLD'});tx.operationLog.create.mockRejectedValueOnce(new Error('重提日志失败'))
+    await expect(service.resubmitRejected(9,{remark:'已改资料'},{userId:1,roleCode:'purchaser'})).rejects.toThrow('重提日志失败');expect(row.remark).toBe('已改资料');expect(tx.prePurchaseOrder.updateMany).toHaveBeenCalledTimes(1);expect(log.log).not.toHaveBeenCalled()
+  })
+  it('预采购编辑的响应读取在写入事务内，读取失败向事务抛出',async()=>{
+    const {service,tx}=setup();jest.mocked((service as any).enrich).mockRejectedValueOnce(new Error('资料读取失败'))
+    await expect(service.update(8,{remark:'资料修改'},{userId:1,roleCode:'purchaser'})).rejects.toThrow('资料读取失败');expect((service as any).enrich).toHaveBeenCalledWith([expect.anything()],tx)
+  })
   it('未分配给当前采购员的确认请求被拒绝且不建单', async () => {
     const { service, tx } = setup()
     await expect(service.confirm(8, { userId: 7, roleCode: 'purchaser' })).rejects.toThrow('无权确认未分配给您的预采购单')
@@ -30,7 +57,7 @@ describe('预采购确认与所属采购员', () => {
     expect(replay.duplicate).toBe(true)
     expect(tx.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(tx.prePurchaseOrder.findUnique.mock.invocationCallOrder[0])
     expect(tx.purchaseOrder.create).toHaveBeenCalledTimes(1)
-    expect(log.log).toHaveBeenCalledTimes(1)
+    expect(tx.operationLog.create).toHaveBeenCalledTimes(1);expect(log.log).not.toHaveBeenCalled()
   })
   it('已取消记录不能确认，也不生成采购单', async () => {
     const { service, row, tx } = setup(); row.status = 'cancelled'
@@ -101,10 +128,11 @@ describe('预采购确认与所属采购员', () => {
     tx.purchaseOrder.findUnique.mockResolvedValue({ id: 9n, prePoId: 8n, poNo: 'PO-ORIGINAL', status: 'rejected' })
     tx.prePurchaseOrder.updateMany = jest.fn(async () => ({ count: 1 }))
     tx.prePurchaseOrder.findUniqueOrThrow = jest.fn(async () => ({ ...row, status: 'pending_assign', purchaserId: null }))
-    jest.spyOn(service, 'update').mockResolvedValue({} as any)
+    const update = jest.spyOn(service as any, 'updateInTransaction')
     jest.spyOn(service as any, 'enrich').mockImplementation(async (rows: any[]) => rows)
     const item = await service.resubmitRejected(9, { remark: '已改价' }, { userId: 1, roleCode: 'purchaser' })
-    expect(service.update).toHaveBeenCalledWith(8, { remark: '已改价' }, { userId: 1, roleCode: 'purchaser' })
+    expect(update).toHaveBeenCalledWith(tx,8,{remark:'已改价'},{userId:1,roleCode:'purchaser'})
+    expect(update.mock.invocationCallOrder[0]).toBeLessThan(tx.prePurchaseOrder.updateMany.mock.invocationCallOrder[0])
     expect(tx.prePurchaseOrder.updateMany).toHaveBeenCalledWith(expect.objectContaining({
       data: { status: 'pending_assign', purchaserId: null, assignerId: null, assignedAt: null },
     }))
@@ -126,7 +154,8 @@ describe('预采购确认与所属采购员', () => {
       data: expect.objectContaining({ status: 'pending_assign', sku: '22222', convertedPoId: 9n }),
     }))
     expect(item.status).toBe('pending_assign')
-    expect(log.log).toHaveBeenCalledWith(expect.objectContaining({ detail: expect.objectContaining({ createdFromDirectPo: true }) }))
+    expect(tx.operationLog.create).toHaveBeenCalledWith(expect.objectContaining({data:expect.objectContaining({ detail: expect.objectContaining({ createdFromDirectPo: true }) })}))
+    expect(log.log).not.toHaveBeenCalled()
   })
   it('已取消且没有采购单的预采购可以删除', async () => {
     const { service, row, tx, log } = setup()
@@ -135,7 +164,8 @@ describe('预采购确认与所属采购员', () => {
     tx.prePurchaseOrder.delete = jest.fn()
     await service.removeCancelled(8, { userId: 1, roleCode: 'purchaser' })
     expect(tx.prePurchaseOrder.delete).toHaveBeenCalledWith({ where: { id: 8n } })
-    expect(log.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'delete', targetId: 'PRE-AUDIT-PD' }))
+    expect(tx.operationLog.create).toHaveBeenCalledWith(expect.objectContaining({data:expect.objectContaining({ action: 'delete', targetId: 'PRE-AUDIT-PD' })}))
+    expect(log.log).not.toHaveBeenCalled()
   })
   it('进行中或仍关联采购单的预采购不能删除', async () => {
     const { service, row, tx } = setup()
