@@ -27,7 +27,10 @@ function setup(quantity = 10) {
       create: jest.fn(async ({ data }) => { const row = { ...data, id: 1n }; inventories.push(row); return row }),
       update: jest.fn(async ({ data }) => { const row = inventories[0]; row.totalQty += data.totalQty.increment; row.availableQty += data.availableQty.increment; return row }),
     },
-    inventoryLog: { create: jest.fn().mockResolvedValue({}) }, operationLog: { create: jest.fn().mockResolvedValue({}) },
+    inventoryLog: { create: jest.fn().mockResolvedValue({}) }, operationLog: {
+      findFirst: jest.fn(async () => tx.operationLog.create.mock.calls.length ? { id: 1n } : null),
+      create: jest.fn().mockResolvedValue({}),
+    },
   }
   let queue = Promise.resolve()
   const prisma: any = { ...tx, $transaction: jest.fn(callback => { const result = queue.then(() => callback(tx)); queue = result.catch(() => undefined); return result }) }
@@ -38,6 +41,28 @@ function setup(quantity = 10) {
 }
 
 describe('中转仓收货规范', () => {
+  it('审计写入失败必须由收货事务拒绝，不能在事务提交后报错', async () => {
+    const f = setup()
+    f.tx.operationLog.create.mockRejectedValue(new Error('audit write failed'))
+    await expect(f.service.create(f.body())).rejects.toThrow('audit write failed')
+    expect(f.tx.operationLog.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ module: 'logistics_receipt', action: 'create' }) }))
+    expect(f.log.log).not.toHaveBeenCalled()
+  })
+
+  it('原请求补齐历史缺失日志，不再次收货，已有日志不重复补写', async () => {
+    const f = setup()
+    await f.service.create(f.body())
+    f.tx.operationLog.create.mockClear()
+    const first = await f.service.create(f.body(), '恢复岗位', 7)
+    expect(first.duplicate).toBe(true)
+    expect(f.tx.operationLog.create).toHaveBeenCalledTimes(1)
+    expect(f.tx.operationLog.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ operatorId: 7n, operatorName: '恢复岗位', detail: expect.objectContaining({ recoveredOnOriginalRetry: true }) }) }))
+    await f.service.create(f.body())
+    expect(f.tx.operationLog.create).toHaveBeenCalledTimes(1)
+    expect(f.tx.logisticsReceipt.create).toHaveBeenCalledTimes(1)
+    expect(f.inventories[0].totalQty).toBe(8)
+  })
+
   it('采购10、良品8、破损2即收齐，库存只增加8，破损强制记为质检异常', async () => {
     const { service, po, body, inventories, tx } = setup()
     const result = await service.create(body())
@@ -51,7 +76,7 @@ describe('中转仓收货规范', () => {
     const results = await Promise.all([service.create(body()), service.create(body())])
     const replay = await service.create(body())
     expect(results[0].receiptNo).toBe(results[1].receiptNo); expect(replay.duplicate).toBe(true)
-    expect(tx.logisticsReceipt.create).toHaveBeenCalledTimes(1); expect(log.log).toHaveBeenCalledTimes(1)
+    expect(tx.logisticsReceipt.create).toHaveBeenCalledTimes(1); expect(tx.operationLog.create).toHaveBeenCalledTimes(1); expect(log.log).not.toHaveBeenCalled()
     expect(inventories[0].totalQty).toBe(8)
   })
   it('同一操作标识不能改数量后再次使用', async () => {
