@@ -1,4 +1,5 @@
 import {OutboundService} from './outbound.service'
+import {createHash} from 'crypto'
 
 function fixture(){
   const order:any={id:1n,outboundNo:'OUT-1',status:'picking',problemRemark:null},logs:any[]=[]
@@ -10,6 +11,14 @@ function fixture(){
   return{service,db,tx,order,logs,push,root,body}
 }
 describe('问题标记原请求和事务',()=>{
+  it('兼容主分支已发布的回执指纹，同时保持原账号、原单和内容绑定',async()=>{
+    const f=fixture(),request={markType:'problem',isProblem:null,problemType:'stock_short',exceptionType:null,problemRemark:'缺少一件'}
+    f.logs.push({operatorId:21n,targetId:'OUT-1',detail:{...request,clientRequestId:'original-1',requestFingerprint:createHash('sha256').update(JSON.stringify(request)).digest('hex')}})
+    await expect(f.service.setProblem(1,f.body,21)).resolves.toMatchObject({duplicate:true})
+    f.tx.outboundOrder.findUnique.mockResolvedValueOnce({id:2n,outboundNo:'OUT-2',status:'picking'})
+    await expect(f.service.setProblem(2,f.body,21)).rejects.toThrow('原标记请求')
+    expect(f.tx.outboundOrder.update).not.toHaveBeenCalled();expect(f.tx.operationLog.create).not.toHaveBeenCalled()
+  })
   it('相同原请求并发只改一次；后续状态变化后重放不覆盖当前状态',async()=>{
     const f=fixture();const results=await Promise.all([f.service.setProblem(1,f.body,21),f.service.setProblem(1,f.body,21)])
     expect(results.filter(x=>x.duplicate).length).toBe(1);expect(f.tx.outboundOrder.update).toHaveBeenCalledTimes(1);expect(f.tx.operationLog.create).toHaveBeenCalledTimes(1)
