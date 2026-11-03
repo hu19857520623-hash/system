@@ -28,6 +28,11 @@ function setup(status = 'finance_approved', paymentStatus = 'paid') {
 }
 
 describe('采购主管审核后的箱子尺寸修改', () => {
+  it('尺寸保存后的详情读取仍在当前事务，读取失败使请求拒绝',async()=>{
+    const {service,tx,body}=setup();jest.mocked(service.detail).mockRejectedValueOnce(new Error('详情读取失败'))
+    await expect(service.updatePackageDimensions(9,body(),user)).rejects.toThrow('详情读取失败')
+    expect(service.detail).toHaveBeenCalledWith(9,tx);expect(tx.operationLog.create).toHaveBeenCalledTimes(1)
+  })
   it.each(['finance_approved', 'approved', 'at_logistics_wh', 'received'])('%s 状态且已付款也可保存，不触发重新审核或重复费用', async status => {
     const { service, order, confirmation, tx, body } = setup(status)
     const before = { ...order }

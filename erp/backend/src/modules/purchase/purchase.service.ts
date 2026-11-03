@@ -67,7 +67,7 @@ export class PurchaseService {
     private opLog: OperationLogService,
   ) {}
 
-  private async enrichOrders(rows: any[], database = this.prisma) {
+  private async enrichOrders(rows: any[], database: Prisma.TransactionClient = this.prisma) {
     const receiving = rows.filter(row => ['finance_approved', 'at_logistics_wh', 'approved', 'received'].includes(row.status))
     if (receiving.length) {
       const receipts = await database.logisticsReceipt.findMany({ where: { poId: { in: receiving.map(row => row.id) } }, include: { items: { orderBy: { id: 'asc' } } } })
@@ -281,19 +281,20 @@ export class PurchaseService {
 
   /** 将 SKU 采购需求分配给指定采购员 */
   async assignPurchaser(devId: number, purchaserId: number, operatorId?: number) {
-    const row = await this.prisma.productDev.findUnique({ where: { id: BigInt(devId) } })
-    if (!row) throw new NotFoundException('选品申请不存在')
-    if (row.status !== 'approved') throw new BadRequestException('仅已通过选品可分配采购员')
-    if (!purchaserId) throw new BadRequestException('请选择采购员')
-
-    const purchaser = await this.prisma.sysUser.findUnique({ where: { id: BigInt(purchaserId) } })
-    if (!purchaser || purchaser.roleCode !== 'purchaser') {
-      throw new BadRequestException('请选择有效的采购员')
-    }
-
-    const sku = row.sku?.trim() || `TK-${String(devId).padStart(5, '0')}`
-
     return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM product_dev WHERE id = ${BigInt(devId)} FOR UPDATE`
+
+      const row = await tx.productDev.findUnique({ where: { id: BigInt(devId) } })
+      if (!row) throw new NotFoundException('选品申请不存在')
+      if (row.status !== 'approved') throw new BadRequestException('仅已通过选品可分配采购员')
+      if (!purchaserId) throw new BadRequestException('请选择采购员')
+
+      const purchaser = await tx.sysUser.findUnique({ where: { id: BigInt(purchaserId) } })
+      if (!purchaser || purchaser.roleCode !== 'purchaser') {
+        throw new BadRequestException('请选择有效的采购员')
+      }
+
+      const sku = row.sku?.trim() || `TK-${String(devId).padStart(5, '0')}`
       if (!row.sku?.trim()) {
         await tx.productDev.update({ where: { id: BigInt(devId) }, data: { sku } })
       }
@@ -330,7 +331,7 @@ export class PurchaseService {
         data: { purchaserId: BigInt(purchaserId) },
       })
 
-      return {
+      const result = {
         devId,
         applyNo: row.applyNo,
         sku,
@@ -338,8 +339,7 @@ export class PurchaseService {
         purchaserId,
         purchaserName: purchaser.realName,
       }
-    }).then(async (result) => {
-      await this.opLog.log({
+      await new OperationLogService(tx as PrismaService).log({
         operatorId,
         module: 'purchase',
         action: 'assign_purchaser',
@@ -544,27 +544,27 @@ export class PurchaseService {
     return { items, total, page, pageSize }
   }
 
-  async detail(id: number) {
-    const row = await this.prisma.purchaseOrder.findUnique({
+  async detail(id: number, database: Prisma.TransactionClient = this.prisma) {
+    const row = await database.purchaseOrder.findUnique({
       where: { id: BigInt(id) },
       include: { items: true },
     })
     if (!row) throw new NotFoundException('采购单不存在')
-    const [item] = await this.enrichOrders([row])
+    const [item] = await this.enrichOrders([row], database)
     const confirmation = row.prePoId
-      ? await this.prisma.prePurchaseOrder.findUnique({ where: { id: row.prePoId } })
+      ? await database.prePurchaseOrder.findUnique({ where: { id: row.prePoId } })
       : null
     return { ...item, purchaseConfirmation: this.serializePurchaseConfirmation(confirmation) }
   }
 
   /** Direct purchase orders also accept a manually entered supplier name. */
-  private async resolveSupplierForCreate(data: any): Promise<bigint> {
+  private async resolveSupplierForCreate(data: any, database: Prisma.TransactionClient = this.prisma): Promise<bigint> {
     const supplierName = data.supplierName == null ? '' : String(data.supplierName).trim()
     if (supplierName) {
-      const existing = await this.prisma.supplier.findFirst({ where: { supplierName }, orderBy: { id: 'asc' } })
+      const existing = await database.supplier.findFirst({ where: { supplierName }, orderBy: { id: 'asc' } })
       if (existing) return existing.id
       const supplierCode = `SUP-${Date.now()}-${Math.floor(Math.random() * 1000)}`.slice(0, 30)
-      const created = await this.prisma.supplier.create({ data: { supplierCode, supplierName, paymentTerms: '现结' } })
+      const created = await database.supplier.create({ data: { supplierCode, supplierName, paymentTerms: '现结' } })
       return created.id
     }
     if (data.supplierId) return BigInt(data.supplierId)
@@ -575,7 +575,6 @@ export class PurchaseService {
     const lines: any[] = data.items || data.lines || []
     if (!lines.length) throw new BadRequestException('请添加采购明细')
 
-    const supplierId = await this.resolveSupplierForCreate(data)
     const warehouseCode = String(data.warehouseCode || '').trim()
     if (!warehouseCode) throw new BadRequestException('请选择目标中转仓')
     const prepared = lines.map((line) => {
@@ -592,10 +591,11 @@ export class PurchaseService {
     })
     const orderDomestic = data.domesticFreight != null && data.domesticFreight !== '' ? Number(data.domesticFreight) : 0
 
-    const created = await this.prisma.$transaction(async (tx) => {
+    return this.prisma.$transaction(async (tx) => {
       const warehouse = await tx.warehouse.findUnique({ where: { warehouseCode } })
       if (!warehouse || warehouse.status !== 1 || warehouse.warehouseType !== 'logistics') throw new BadRequestException('请选择有效且启用的物流中转仓')
-      return this.createAssignmentPreOrders(tx, {
+      const supplierId = await this.resolveSupplierForCreate(data, tx)
+      const created = await this.createAssignmentPreOrders(tx, {
         supplierId,
         warehouseCode,
         expectedArrival: data.expectedArrival,
@@ -604,25 +604,25 @@ export class PurchaseService {
         lines: prepared,
         reason: '创建采购单后进入分配',
       })
+      await new OperationLogService(tx as PrismaService).log({
+        operatorId: purchaserId,
+        module: 'purchase',
+        action: 'create',
+        targetType: 'pre_purchase_order',
+        targetId: created[0]?.prePoNo,
+        detail: { count: created.length, prePoNos: created.map((row) => row.prePoNo), warehouseCode },
+      })
+      return {
+        status: 'pending_assign',
+        count: created.length,
+        prePurchaseOrders: created.map((row) => ({
+          id: Number(row.id),
+          prePoNo: row.prePoNo,
+          sku: row.sku,
+          status: row.status,
+        })),
+      }
     })
-    await this.opLog.log({
-      operatorId: purchaserId,
-      module: 'purchase',
-      action: 'create',
-      targetType: 'pre_purchase_order',
-      targetId: created[0]?.prePoNo,
-      detail: { count: created.length, prePoNos: created.map((row) => row.prePoNo), warehouseCode },
-    })
-    return {
-      status: 'pending_assign',
-      count: created.length,
-      prePurchaseOrders: created.map((row) => ({
-        id: Number(row.id),
-        prePoNo: row.prePoNo,
-        sku: row.sku,
-        status: row.status,
-      })),
-    }
   }
 
   /** 直接创建或尚未关联预采购的审核通过：按明细生成待分配预采购，不进入打款。 */
@@ -828,6 +828,12 @@ export class PurchaseService {
     }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted })
   }
 
+  private async finishPurchaseChange(tx: any, updated: any, log: (item: any, updated: any) => Parameters<OperationLogService['log']>[0]) {
+    const [item] = await this.enrichOrders([updated], tx)
+    await new OperationLogService(tx).log(log(item, updated))
+    return item
+  }
+
   private async completePurchaseApproval(tx: any, order: any, auditorId?: number, remark?: string) {
     await new OperationLogService(tx).log({
       operatorId: auditorId,
@@ -845,7 +851,7 @@ export class PurchaseService {
 
   async rejectPoAudit(id: number, auditorId?: number, remark?: string) {
     if (!remark?.trim()) throw new BadRequestException('请填写驳回原因')
-    const updated = await this.prisma.$transaction(async (tx) => {
+    return this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM purchase_order WHERE id = ${BigInt(id)} FOR UPDATE`
       const row = await tx.purchaseOrder.findUnique({ where: { id: BigInt(id) } })
       if (!row) throw new NotFoundException('采购单不存在')
@@ -855,7 +861,7 @@ export class PurchaseService {
         if (!prePo || prePo.convertedPoId !== row.id || prePo.status !== 'confirmed') throw new BadRequestException('关联预采购单状态异常，请联系管理员核对')
         await tx.prePurchaseOrder.update({ where: { id: prePo.id }, data: { status: 'returned' } })
       }
-      return tx.purchaseOrder.update({
+      return this.finishPurchaseChange(tx, await (tx.purchaseOrder.update({
         where: { id: BigInt(id) },
         data: {
           status: 'rejected',
@@ -864,25 +870,22 @@ export class PurchaseService {
           poAuditRemark: remark.trim(),
         } as any,
         include: { items: true },
-      })
+      })), (item) => ({
+        operatorId: auditorId,
+        module: 'purchase',
+        action: 'po_reject',
+        targetType: 'purchase_order',
+        targetId: item.poNo,
+        detail: { remark: remark?.trim() },
+      }))
     })
-    const [item] = await this.enrichOrders([updated])
-    await this.opLog.log({
-      operatorId: auditorId,
-      module: 'purchase',
-      action: 'po_reject',
-      targetType: 'purchase_order',
-      targetId: item.poNo,
-      detail: { remark: remark?.trim() },
-    })
-    return item
   }
 
   /** 产品主管核定实际采购数量 → 进入采购主管审核 */
   async setActualQty(id: number, body: { quantity?: number; remark?: string }, operatorId?: number) {
     const qty = Number(body.quantity)
     if (!Number.isSafeInteger(qty) || qty <= 0 || qty > 2147483647) throw new BadRequestException('实际采购数量须为 1 至 2147483647 的整数')
-    const updated = await this.prisma.$transaction(async (tx) => {
+    return this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM purchase_order WHERE id = ${BigInt(id)} FOR UPDATE`
       const row = await tx.purchaseOrder.findUnique({
         where: { id: BigInt(id) },
@@ -905,7 +908,7 @@ export class PurchaseService {
         lineDomestic = orderDomestic
       }
 
-      return tx.purchaseOrder.update({
+      return this.finishPurchaseChange(tx, await (tx.purchaseOrder.update({
         where: { id: BigInt(id) },
         data: {
           status: 'pending_po_audit',
@@ -923,19 +926,15 @@ export class PurchaseService {
           },
         },
         include: { items: true },
-      })
+      })), (item, updated) => ({
+        operatorId,
+        module: 'purchase',
+        action: 'set_actual_qty',
+        targetType: 'purchase_order',
+        targetId: item.poNo,
+        detail: { sku: updated.items[0].sku, plannedQty: updated.items[0].plannedQty, actualQty: qty },
+      }))
     })
-
-    const [item] = await this.enrichOrders([updated])
-    await this.opLog.log({
-      operatorId,
-      module: 'purchase',
-      action: 'set_actual_qty',
-      targetType: 'purchase_order',
-      targetId: item.poNo,
-      detail: { sku: updated.items[0].sku, plannedQty: updated.items[0].plannedQty, actualQty: qty },
-    })
-    return item
   }
 
   private async syncProductMasterFromLine(tx: any, po: any, line: any, domesticFeePerUnit = 0) {
@@ -1217,7 +1216,7 @@ export class PurchaseService {
     remark?: string,
     payment?: { paymentType?: string; amount?: number },
   ) {
-    const updated = await this.prisma.$transaction(async (tx) => {
+    return this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM purchase_order WHERE id = ${BigInt(id)} FOR UPDATE`
       const row = await tx.purchaseOrder.findUnique({ where: { id: BigInt(id) }, include: { items: true } })
       if (!row) throw new NotFoundException('采购单不存在')
@@ -1238,7 +1237,21 @@ export class PurchaseService {
           include: { items: true },
         })
         await this.ensureCostRecordsForPo(tx, order, operatorId)
-        return order
+        return this.finishPurchaseChange(tx, await (order), (item) => ({
+          operatorId,
+          module: 'purchase',
+          action: paid ? 'po_mark_paid' : 'po_mark_unpaid',
+          targetType: 'purchase_order',
+          targetId: item.poNo,
+          detail: {
+            paymentStatus: item.paymentStatus,
+            paymentType: payment?.paymentType || null,
+            amount: payment?.amount ?? null,
+            remark: remark?.trim() || (paid ? '登记付款' : '已标记未打款'),
+            totalAmount: item.totalAmount,
+            supplierName: item.supplierName,
+          },
+        }))
       }
       const totalCents = decimalCents(row.totalAmount)
       const paidCents = existing.reduce((sum, item) => sum + decimalCents(item.amount), 0)
@@ -1276,32 +1289,30 @@ export class PurchaseService {
         include: { items: true },
       })
       await this.ensureCostRecordsForPo(tx, order, operatorId)
-      return order
+      return this.finishPurchaseChange(tx, await (order), (item) => ({
+        operatorId,
+        module: 'purchase',
+        action: paid ? 'po_mark_paid' : 'po_mark_unpaid',
+        targetType: 'purchase_order',
+        targetId: item.poNo,
+        detail: {
+          paymentStatus: item.paymentStatus,
+          paymentType: payment?.paymentType || null,
+          amount: payment?.amount ?? null,
+          remark: remark?.trim() || (paid ? '登记付款' : '已标记未打款'),
+          totalAmount: item.totalAmount,
+          supplierName: item.supplierName,
+        },
+      }))
     })
-    const [item] = await this.enrichOrders([updated])
-    await this.opLog.log({
-      operatorId,
-      module: 'purchase',
-      action: paid ? 'po_mark_paid' : 'po_mark_unpaid',
-      targetType: 'purchase_order',
-      targetId: item.poNo,
-      detail: {
-        paymentStatus: item.paymentStatus,
-        paymentType: payment?.paymentType || null,
-        amount: payment?.amount ?? null,
-        remark: remark?.trim() || (paid ? '登记付款' : '已标记未打款'),
-        totalAmount: item.totalAmount,
-        supplierName: item.supplierName,
-      },
-    })
-    return item
   }
 
   async financeApprove(id: number, financeId?: number, remark?: string) {
-    const row = await this.detail(id)
-    if (row.status !== 'pending_finance') throw new BadRequestException('财务审核环节已取消，请在采购审核通过后标记打款')
-
-    const updated = await this.prisma.$transaction(async (tx) => {
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM purchase_order WHERE id = ${BigInt(id)} FOR UPDATE`
+      const row = await tx.purchaseOrder.findUnique({ where: { id: BigInt(id) } })
+      if (!row) throw new NotFoundException('采购单不存在')
+      if (row.status !== 'pending_finance') throw new BadRequestException('财务审核环节已取消，请在采购审核通过后标记打款')
       const po = await tx.purchaseOrder.update({
         where: { id: BigInt(id) },
         data: {
@@ -1314,42 +1325,43 @@ export class PurchaseService {
         include: { items: true },
       })
       await this.applyPostAuditEffects(tx, po, financeId)
-      return po
+      const [item] = await this.enrichOrders([po], tx)
+      return item
     }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted })
-    const [item] = await this.enrichOrders([updated])
-    return item
   }
 
   async rejectFinance(id: number, financeId?: number, remark?: string) {
-    const row = await this.detail(id)
-    if (row.status !== 'pending_finance') throw new BadRequestException('当前状态不可驳回')
     if (!remark?.trim()) throw new BadRequestException('请填写驳回原因')
-    const updated = await this.prisma.purchaseOrder.update({
-      where: { id: BigInt(id) },
-      data: {
-        status: 'rejected',
-        financeId: financeId ? BigInt(financeId) : undefined,
-        financeAt: new Date(),
-        financeRemark: remark.trim(),
-      } as any,
-      include: { items: true },
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM purchase_order WHERE id = ${BigInt(id)} FOR UPDATE`
+      const row = await tx.purchaseOrder.findUnique({ where: { id: BigInt(id) } })
+      if (!row) throw new NotFoundException('采购单不存在')
+      if (row.status !== 'pending_finance') throw new BadRequestException('当前状态不可驳回')
+      const updated = await tx.purchaseOrder.update({
+        where: { id: BigInt(id) },
+        data: {
+          status: 'rejected',
+          financeId: financeId ? BigInt(financeId) : undefined,
+          financeAt: new Date(),
+          financeRemark: remark.trim(),
+        } as any,
+        include: { items: true },
+      })
+      return this.finishPurchaseChange(tx, updated, (item) => ({
+        operatorId: financeId,
+        module: 'purchase',
+        action: 'finance_reject',
+        targetType: 'purchase_order',
+        targetId: item.poNo,
+        detail: { remark: remark?.trim() },
+      }))
     })
-    const [item] = await this.enrichOrders([updated])
-    await this.opLog.log({
-      operatorId: financeId,
-      module: 'purchase',
-      action: 'finance_reject',
-      targetType: 'purchase_order',
-      targetId: item.poNo,
-      detail: { remark: remark?.trim() },
-    })
-    return item
   }
 
   /** 审核通过且尚未收货、付款的采购单退回待审核，并清掉本次审核写入的成本，改完后重新审核。 */
   async reopenAudit(id: number, operatorId?: number, remark?: string) {
     const reason = String(remark || '').trim() || '撤回审核，退回待审核'
-    const updated = await this.prisma.$transaction(async (tx) => {
+    return this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM purchase_order WHERE id = ${BigInt(id)} FOR UPDATE`
       const row = await tx.purchaseOrder.findUnique({ where: { id: BigInt(id) }, include: { items: true } })
       if (!row) throw new NotFoundException('采购单不存在')
@@ -1365,7 +1377,7 @@ export class PurchaseService {
       if (bills) throw new BadRequestException('该采购单已有运费账单，不能撤回审核')
       if (payments || row.paymentStatus === 'paid' || row.paymentStatus === 'partial') throw new BadRequestException('该采购单已登记付款，请先清除打款后再撤回审核')
       await tx.costLedger.deleteMany({ where: { referenceNo: row.poNo } })
-      return tx.purchaseOrder.update({
+      return this.finishPurchaseChange(tx, await (tx.purchaseOrder.update({
         where: { id: row.id },
         data: {
           status: 'pending_po_audit',
@@ -1375,18 +1387,15 @@ export class PurchaseService {
           poAuditRemark: reason,
         } as any,
         include: { items: true },
-      })
+      })), (item) => ({
+        operatorId,
+        module: 'purchase',
+        action: 'po_reopen_audit',
+        targetType: 'purchase_order',
+        targetId: item.poNo,
+        detail: { remark: reason, statusAfter: 'pending_po_audit' },
+      }))
     })
-    const [item] = await this.enrichOrders([updated])
-    await this.opLog.log({
-      operatorId,
-      module: 'purchase',
-      action: 'po_reopen_audit',
-      targetType: 'purchase_order',
-      targetId: item.poNo,
-      detail: { remark: reason, statusAfter: 'pending_po_audit' },
-    })
-    return item
   }
 
   /** 审核后只维护包装尺寸，保留审核、采购金额和付款记录。 */
@@ -1401,7 +1410,7 @@ export class PurchaseService {
     if (reason.length < 2 || reason.length > 500) throw new BadRequestException('请填写 2 至 500 字的修改原因')
     const expectedTime = new Date(body.expectedUpdatedAt).getTime()
     if (!Number.isFinite(expectedTime)) throw new BadRequestException('请重新读取采购单后修改尺寸')
-    await this.prisma.$transaction(async (tx) => {
+    return this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM purchase_order WHERE id = ${BigInt(id)} FOR UPDATE`
       const order = await tx.purchaseOrder.findUnique({ where: { id: BigInt(id) }, include: { items: true } })
       if (!order) throw new NotFoundException('采购单不存在')
@@ -1426,23 +1435,33 @@ export class PurchaseService {
       }
       const before = this.serializePurchaseConfirmation(confirmation)!
       await tx.prePurchaseOrder.update({ where: { id: confirmation.id }, data: patch })
-      await tx.productDev.update({ where: { id: confirmation.devId }, data: {
-        packageLengthCm: patch.packageLengthCm, packageWidthCm: patch.packageWidthCm, packageHeightCm: patch.packageHeightCm,
-        cbm: patch.packageVolumeCbm, volumetricWeightKg: patch.volumetricWeightKg,
-      } })
+      await tx.productDev.update({
+        where: { id: confirmation.devId }, data: {
+          packageLengthCm: patch.packageLengthCm, packageWidthCm: patch.packageWidthCm, packageHeightCm: patch.packageHeightCm,
+          cbm: patch.packageVolumeCbm, volumetricWeightKg: patch.volumetricWeightKg,
+        }
+      })
       // 只更新申报尺寸；仓库实测尺寸和已生成的发运、计费快照保留原值。
-      await tx.product.update({ where: { sku: confirmation.sku }, data: {
-        lengthCm: patch.packageLengthCm, widthCm: patch.packageWidthCm, heightCm: patch.packageHeightCm, syncStatus: 'pending',
-      } })
-      await tx.operationLog.create({ data: {
-        operatorId: BigInt(user.userId), operatorName: user.realName || user.username,
-        module: 'purchase', action: 'po_package_dimensions', targetType: 'purchase_order', targetId: order.poNo,
-        detail: { reason, sku: confirmation.sku, status: order.status,
-          before: { packageLengthCm: before.packageLengthCm, packageWidthCm: before.packageWidthCm, packageHeightCm: before.packageHeightCm,
-            packageVolumeCbm: before.packageVolumeCbm, volumetricWeightKg: before.volumetricWeightKg }, after: patch },
-      } })
+      await tx.product.update({
+        where: { sku: confirmation.sku }, data: {
+          lengthCm: patch.packageLengthCm, widthCm: patch.packageWidthCm, heightCm: patch.packageHeightCm, syncStatus: 'pending',
+        }
+      })
+      await tx.operationLog.create({
+        data: {
+          operatorId: BigInt(user.userId), operatorName: user.realName || user.username,
+          module: 'purchase', action: 'po_package_dimensions', targetType: 'purchase_order', targetId: order.poNo,
+          detail: {
+            reason, sku: confirmation.sku, status: order.status,
+            before: {
+              packageLengthCm: before.packageLengthCm, packageWidthCm: before.packageWidthCm, packageHeightCm: before.packageHeightCm,
+              packageVolumeCbm: before.packageVolumeCbm, volumetricWeightKg: before.volumetricWeightKg
+            }, after: patch
+          },
+        }
+      })
+      return this.detail(id, tx)
     })
-    return this.detail(id)
   }
 
   /** 待审核采购单可改供应商、仓库、数量和单价，保存后仍停留在待审核。 */
@@ -1478,14 +1497,14 @@ export class PurchaseService {
     const totalQty = prepared.reduce((sum, line) => sum + line.quantity, 0)
     const totalAmount = Math.round(prepared.reduce((sum, line) => sum + line.quantity * line.unitPrice, 0) * 100) / 100
 
-    const updated = await this.prisma.$transaction(async (tx) => {
+    return this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM purchase_order WHERE id = ${BigInt(id)} FOR UPDATE`
       const row = await tx.purchaseOrder.findUnique({ where: { id: BigInt(id) }, include: { items: true } })
       if (!row) throw new NotFoundException('采购单不存在')
       if (row.status !== 'pending_po_audit') throw new BadRequestException('仅待审核的采购单可以修改，请先撤回到待审核')
       const warehouse = await tx.warehouse.findUnique({ where: { warehouseCode } })
       if (!warehouse || warehouse.status !== 1 || warehouse.warehouseType !== 'logistics') throw new BadRequestException('请选择有效且启用的物流中转仓')
-      const supplierId = await this.resolveSupplierForCreate({ supplierName, supplierId: row.supplierId })
+      const supplierId = await this.resolveSupplierForCreate({ supplierName, supplierId: row.supplierId }, tx)
       const kept = new Set(prepared.filter((line) => line.id).map((line) => String(line.id)))
       for (const existing of row.items) {
         if (!kept.has(String(existing.id))) {
@@ -1516,7 +1535,7 @@ export class PurchaseService {
           await tx.purchaseOrderItem.create({ data: { ...itemData, poId: row.id, productId: BigInt(line.productId || 0) } })
         }
       }
-      return tx.purchaseOrder.update({
+      return this.finishPurchaseChange(tx, await (tx.purchaseOrder.update({
         where: { id: row.id },
         data: {
           supplierId,
@@ -1527,23 +1546,20 @@ export class PurchaseService {
           totalAmount,
         },
         include: { items: true },
-      })
+      })), (item) => ({
+        operatorId,
+        module: 'purchase',
+        action: 'po_revise',
+        targetType: 'purchase_order',
+        targetId: item.poNo,
+        detail: { totalAmount, itemCount: prepared.length },
+      }))
     })
-    const [item] = await this.enrichOrders([updated])
-    await this.opLog.log({
-      operatorId,
-      module: 'purchase',
-      action: 'po_revise',
-      targetType: 'purchase_order',
-      targetId: item.poNo,
-      detail: { totalAmount, itemCount: prepared.length },
-    })
-    return item
   }
 
   /** 已驳回或草稿的采购单改为废订单，保留单据，不再进入分配和审核。 */
   async voidOrder(id: number, operatorId?: number) {
-    const updated = await this.prisma.$transaction(async (tx) => {
+    return this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM purchase_order WHERE id = ${BigInt(id)} FOR UPDATE`
       const row = await tx.purchaseOrder.findUnique({ where: { id: BigInt(id) }, include: { items: true } })
       if (!row) throw new NotFoundException('采购单不存在')
@@ -1566,22 +1582,19 @@ export class PurchaseService {
           })
         }
       }
-      return tx.purchaseOrder.update({
+      return this.finishPurchaseChange(tx, await (tx.purchaseOrder.update({
         where: { id: row.id },
         data: { status: 'voided' },
         include: { items: true },
-      })
+      })), (item) => ({
+        operatorId,
+        module: 'purchase',
+        action: 'void',
+        targetType: 'purchase_order',
+        targetId: item.poNo,
+        detail: { statusAfter: 'voided' },
+      }))
     })
-    const [item] = await this.enrichOrders([updated])
-    await this.opLog.log({
-      operatorId,
-      module: 'purchase',
-      action: 'void',
-      targetType: 'purchase_order',
-      targetId: item.poNo,
-      detail: { statusAfter: 'voided' },
-    })
-    return item
   }
 
   async remove(id: number, operatorId?: number) {

@@ -45,6 +45,23 @@ function setup(status = 'pending_actual_qty') {
 }
 
 describe('采购核定、审核和驳回继续', () => {
+  it.each([
+    ['核定','pending_actual_qty',(s:any)=>s.setActualQty(9,{quantity:2},1)],
+    ['驳回','pending_po_audit',(s:any)=>s.rejectPoAudit(9,1,'需要核对')],
+    ['撤回','finance_approved',(s:any)=>s.reopenAudit(9,1,'需要修改')],
+    ['修改','pending_po_audit',(s:any)=>s.revisePendingAudit(9,{supplierName:'示例供应商',warehouseCode:'LW-TEST',items:[{id:11,sku:'AUDIT',productName:'验收商品',quantity:2,unitPrice:10}]},1)],
+    ['付款','finance_approved',(s:any)=>s.setPaymentStatus(9,true,1,'虚构登记',{paymentType:'deposit',amount:1})],
+    ['清除付款','finance_approved',(s:any)=>s.setPaymentStatus(9,false,1)],
+    ['作废','rejected',(s:any)=>s.voidOrder(9,1)],
+    ['旧财务驳回','pending_finance',(s:any)=>s.rejectFinance(9,1,'需要核对')],
+  ])('%s 日志失败在同一业务事务中拒绝，不走独立日志连接',async (_label,status,invoke)=>{
+    const {service,row,tx,log}=setup(status as string);row.items[0].quantity=2;row.totalAmount=20;row.paymentStatus=_label==='清除付款'?'partial':'unpaid'
+    jest.spyOn(service as any,'ensureCostRecordsForPo').mockResolvedValue({})
+    tx.operationLog.create.mockRejectedValueOnce(new Error('操作日志写入失败'))
+    await expect((invoke as (s:any)=>Promise<any>)(service)).rejects.toThrow('操作日志写入失败')
+    expect(tx.operationLog.create).toHaveBeenCalledTimes(1);expect(log.log).not.toHaveBeenCalled()
+    expect((service as any).enrichOrders).toHaveBeenCalledWith([expect.anything()],tx)
+  })
   it('审核日志写失败时拒绝事务，不在提交后补写日志或读取响应', async () => {
     const {service,row,tx,log}=setup('pending_po_audit');row.items[0].quantity=2
     tx.operationLog.create.mockRejectedValueOnce(new Error('审核日志写入失败'))
@@ -202,7 +219,8 @@ describe('采购核定、审核和驳回继续', () => {
     expect(prePo.status).toBe('cancelled')
     expect(prePo.convertedPoId).toBeNull()
     expect(tx.purchaseOrder.delete).not.toHaveBeenCalled()
-    expect(log.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'void', targetId: 'PO-AUDIT' }))
+    expect(tx.operationLog.create).toHaveBeenCalledWith(expect.objectContaining({data:expect.objectContaining({ action: 'void', targetId: 'PO-AUDIT' })}))
+    expect(log.log).not.toHaveBeenCalled()
   })
   it('已有收货记录的驳回单不能标为废订单', async () => {
     const { service, row, tx } = setup('rejected')
