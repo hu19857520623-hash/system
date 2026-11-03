@@ -4,7 +4,8 @@ describe('OMS return number ownership', () => {
   it.each(['pending_arrival', 'cancelled'])('rejects a different customer reusing an existing %s return number', async status => {
     const prisma = { customer: { findUnique: jest.fn().mockResolvedValue({ id: 1n, status: 1 }) },
       returnOrder: { findUnique: jest.fn().mockResolvedValue({ id: 2n, status, omsCustomerCode: 'TKL9002' }) } }
-    const service = new ReturnsService(prisma as any, null as any, null as any, null as any, null as any, null as any)
+    const db = { ...prisma, $transaction: (work: any) => work({ ...prisma, $queryRaw: jest.fn() }) }
+    const service = new ReturnsService(db as any, null as any, null as any, null as any, null as any, null as any)
     await expect(service.createFromOms({ customerCode: 'TKL9001', returnNo: 'RT-EXISTING', orderNo: 'O1', returnReason: '平台退货', requestedProcess: 'restock', returnWarehouse: 'JHB3', items: [{ sku: 'A', quantity: 1 }] }))
       .rejects.toThrow('客户编码与退件单不匹配，请刷新核对单号')
     expect(prisma.returnOrder.findUnique).toHaveBeenCalledTimes(1)

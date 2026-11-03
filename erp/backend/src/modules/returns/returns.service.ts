@@ -106,10 +106,12 @@ export class ReturnsService {
     tx: any,
     returnId: bigint,
     attachments: { fileType?: string; fileName: string; contentBase64?: string; url?: string }[],
+    written?: string[],
   ) {
     const normalized = this.normalizeAttachments(attachments)
     for (const att of normalized) {
       const saved = this.writeAttachment(att.fileName, att.contentBase64)
+      written?.push(saved.filePath)
       await tx.returnAttachment.create({
         data: {
           returnId,
@@ -260,22 +262,10 @@ export class ReturnsService {
     if (!lines.length) throw new BadRequestException('请填写 SKU 明细')
 
     const returnNo = String(data.returnNo || '').trim() || `RT-${Date.now().toString().slice(-10)}`
-    const existing = await this.prisma.returnOrder.findUnique({ where: { returnNo } })
-    if (existing && existing.omsCustomerCode !== customerCode) {
-      throw new BadRequestException('客户编码与退件单不匹配，请刷新核对单号')
-    }
-    if (existing && existing.status !== 'cancelled') {
-      const detail = await this.prisma.returnOrder.findUnique({
-        where: { id: existing.id },
-        include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
-      })
-      return { ...this.mapReturnForOms(detail!), idempotent: true }
-    }
-
     const parsedItems = lines.map((l) => {
       const sku = String(l.sku || '').trim()
-      const quantity = Math.floor(Number(l.quantity ?? 0))
-      if (!sku || quantity <= 0) throw new BadRequestException('SKU 与数量无效')
+      const quantity = Number(l.quantity ?? 0)
+      if (!sku || !Number.isSafeInteger(quantity) || quantity <= 0) throw new BadRequestException('SKU 与数量无效')
       return {
         sku,
         quantity,
@@ -309,7 +299,25 @@ export class ReturnsService {
       remark: data.remark?.trim() || undefined,
     }
 
-    const row = await this.prisma.$transaction(async (tx) => {
+    const written: string[] = []
+    const run = () => this.prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM return_order WHERE return_no = ${returnNo} FOR UPDATE`
+      const currentCustomer = await tx.customer.findUnique({ where: { id: customer.id } })
+      if (!currentCustomer || currentCustomer.status !== 1) throw new BadRequestException('客户已停用或不存在')
+      const existing = await tx.returnOrder.findUnique({ where: { returnNo } })
+      if (existing && existing.omsCustomerCode !== customerCode) {
+        throw new BadRequestException('客户编码与退件单不匹配，请刷新核对单号')
+      }
+      if (existing && existing.status !== 'cancelled') {
+        const detail = await tx.returnOrder.findUnique({
+          where: { id: existing.id },
+          include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
+        })
+        return { row: detail!, idempotent: true, reactivated: false }
+      }
+
+      let row
+
       if (existing?.status === 'cancelled') {
         if (existing.omsCustomerCode && existing.omsCustomerCode !== customerCode) {
           throw new BadRequestException('客户编码与退件单不匹配')
@@ -324,41 +332,50 @@ export class ReturnsService {
           },
           include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
         })
-        await this.persistAttachments(tx, existing.id, data.attachments || [])
-        return tx.returnOrder.findUnique({
+        await this.persistAttachments(tx, existing.id, data.attachments || [], written)
+        row = await tx.returnOrder.findUnique({
           where: { id: existing.id },
           include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
         }) ?? updated
+      } else {
+        const created = await tx.returnOrder.create({
+          data: {
+            returnNo,
+            customerId: customer.id,
+            omsCustomerCode: customerCode,
+            ...returnData,
+            items: { create: parsedItems },
+          },
+          include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
+        })
+        await this.persistAttachments(tx, created.id, data.attachments || [], written)
+        row = await tx.returnOrder.findUnique({
+          where: { id: created.id },
+          include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
+        })
       }
+      if (!row) throw new NotFoundException('退件单创建失败')
 
-      const created = await tx.returnOrder.create({
-        data: {
-          returnNo,
-          customerId: customer.id,
-          omsCustomerCode: customerCode,
-          ...returnData,
-          items: { create: parsedItems },
-        },
-        include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
-      })
-      await this.persistAttachments(tx, created.id, data.attachments || [])
-      return tx.returnOrder.findUnique({
-        where: { id: created.id },
-        include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
-      })
+      await this.opLog.log({
+        module: 'returns',
+        action: existing?.status === 'cancelled' ? 'oms_return_resubmit' : 'oms_return_create',
+        targetType: 'return_order',
+        targetId: returnNo,
+        detail: { customerCode, orderNo, itemCount: parsedItems.length, reactivated: existing?.status === 'cancelled' },
+      }, tx)
+      return { row, idempotent: false, reactivated: existing?.status === 'cancelled' }
+    }, { isolationLevel: 'ReadCommitted' })
+    const result = await run().catch(error => {
+      // A concurrent creation can win the unique return number; re-read its committed row.
+      if (error?.code === 'P2002') return run()
+      throw error
+    }).catch(error => {
+      for (const path of written) this.files.remove(path)
+      throw error
     })
-    if (!row) throw new NotFoundException('退件单创建失败')
-
-    await this.opLog.log({
-      module: 'returns',
-      action: existing?.status === 'cancelled' ? 'oms_return_resubmit' : 'oms_return_create',
-      targetType: 'return_order',
-      targetId: returnNo,
-      detail: { customerCode, orderNo, itemCount: parsedItems.length, reactivated: existing?.status === 'cancelled' },
-    })
-
+    // Replays must also repair notifications after an earlier committed response was lost.
     void this.pushReturnStatusToOms(returnNo)
-    return { ...this.mapReturnForOms(row), idempotent: false, reactivated: existing?.status === 'cancelled' }
+    return { ...this.mapReturnForOms(result.row), idempotent: result.idempotent, reactivated: result.reactivated }
   }
 
   async receive(
