@@ -438,7 +438,7 @@ export default function InboundRecords() {
               <th>跟踪号</th>
               <th>箱数</th>
               <th>总数量</th>
-              <th>应收/实收</th>
+              <th>实收/应收</th>
               <th>状态</th>
               <th>创建日期</th>
               <th className="min-w-[120px] whitespace-nowrap">操作</th>
