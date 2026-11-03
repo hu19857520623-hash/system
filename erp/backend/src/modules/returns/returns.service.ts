@@ -591,30 +591,70 @@ export class ReturnsService {
     const wh = normalizeReturnWarehouse(body.warehouseCode)
     if (!wh) throw new BadRequestException('请选择有效退件仓库（JHB3 / CPT2 / DBN）')
 
-    const exists = await this.prisma.returnFeeTemplate.findFirst({
-      where: { status: 'active', warehouseCode: wh },
-    })
-    if (exists) throw new BadRequestException(`${wh} 仓库已有收费模板，请直接编辑或先删除`)
+    return this.prisma.$transaction(async tx => {
+      // Serialize warehouse assignment changes across all template editors.
+      await tx.$queryRaw`SELECT id FROM return_fee_template ORDER BY id FOR UPDATE`
+      const exists = await tx.returnFeeTemplate.findFirst({
+        where: { status: 'active', warehouseCode: wh },
+      })
+      if (exists) throw new BadRequestException(`${wh} 仓库已有收费模板，请直接编辑或先删除`)
 
-    let normalizedRules: FeeTemplateRule[]
-    try {
-      normalizedRules = normalizeTemplateRulesInput(body.rules || [])
-    } catch (err) {
-      throw new BadRequestException(err instanceof Error ? err.message : '收费规则无效')
-    }
+      let normalizedRules: FeeTemplateRule[]
+      try {
+        normalizedRules = normalizeTemplateRulesInput(body.rules || [])
+      } catch (err) {
+        throw new BadRequestException(err instanceof Error ? err.message : '收费规则无效')
+      }
 
-    const templateName = body.templateName?.trim() || `${wh} 退件收费`
+      const templateName = body.templateName?.trim() || `${wh} 退件收费`
 
-    const inactive = await this.prisma.returnFeeTemplate.findFirst({
-      where: { status: 'inactive', warehouseCode: wh },
-    })
-    if (inactive) {
-      const revived = await this.prisma.$transaction(async (tx) => {
-        await tx.returnFeeTemplateRule.deleteMany({ where: { templateId: inactive.id } })
-        for (const rule of normalizedRules) {
-          await tx.returnFeeTemplateRule.create({
-            data: {
-              templateId: inactive.id,
+      const inactive = await tx.returnFeeTemplate.findFirst({
+        where: { status: 'inactive', warehouseCode: wh },
+      })
+      if (inactive) {
+          await tx.returnFeeTemplateRule.deleteMany({ where: { templateId: inactive.id } })
+          for (const rule of normalizedRules) {
+            await tx.returnFeeTemplateRule.create({
+              data: {
+                templateId: inactive.id,
+                chargeType: rule.chargeType,
+                description: rule.description,
+                calcMode: rule.calcMode,
+                unitPrice: rule.unitPrice,
+                minQty: rule.minQty,
+                sortOrder: rule.sortOrder,
+                autoApply: rule.autoApply !== false,
+              },
+            })
+          }
+        const revived = await tx.returnFeeTemplate.update({
+            where: { id: inactive.id },
+            data: { templateName, status: 'active', customerId: null },
+            include: { rules: { orderBy: { sortOrder: 'asc' } } },
+          })
+        await this.opLog.log({
+          module: 'returns',
+          action: 'return_fee_template_create',
+          targetType: 'return_fee_template',
+          targetId: inactive.templateCode,
+          operatorId: userId,
+          detail: { warehouseCode: wh, ruleCount: normalizedRules.length, revived: true },
+        }, tx)
+        return this.mapFeeTemplate(revived)
+      }
+
+      const templateCode = `wh_${wh.toLowerCase()}`
+
+      const created = await tx.returnFeeTemplate.create({
+        data: {
+          templateCode,
+          templateName,
+          isDefault: false,
+          warehouseCode: wh,
+          customerId: null,
+          status: 'active',
+          rules: {
+            create: normalizedRules.map((rule) => ({
               chargeType: rule.chargeType,
               description: rule.description,
               calcMode: rule.calcMode,
@@ -622,82 +662,48 @@ export class ReturnsService {
               minQty: rule.minQty,
               sortOrder: rule.sortOrder,
               autoApply: rule.autoApply !== false,
-            },
-          })
-        }
-        return tx.returnFeeTemplate.update({
-          where: { id: inactive.id },
-          data: { templateName, status: 'active', customerId: null },
-          include: { rules: { orderBy: { sortOrder: 'asc' } } },
-        })
+            })),
+          },
+        },
+        include: { rules: { orderBy: { sortOrder: 'asc' } } },
       })
+
       await this.opLog.log({
         module: 'returns',
         action: 'return_fee_template_create',
         targetType: 'return_fee_template',
-        targetId: inactive.templateCode,
+        targetId: templateCode,
         operatorId: userId,
-        detail: { warehouseCode: wh, ruleCount: normalizedRules.length, revived: true },
-      })
-      return this.mapFeeTemplate(revived)
-    }
+        detail: { warehouseCode: wh, ruleCount: normalizedRules.length },
+      }, tx)
 
-    const templateCode = `wh_${wh.toLowerCase()}`
-
-    const created = await this.prisma.returnFeeTemplate.create({
-      data: {
-        templateCode,
-        templateName,
-        isDefault: false,
-        warehouseCode: wh,
-        customerId: null,
-        status: 'active',
-        rules: {
-          create: normalizedRules.map((rule) => ({
-            chargeType: rule.chargeType,
-            description: rule.description,
-            calcMode: rule.calcMode,
-            unitPrice: rule.unitPrice,
-            minQty: rule.minQty,
-            sortOrder: rule.sortOrder,
-            autoApply: rule.autoApply !== false,
-          })),
-        },
-      },
-      include: { rules: { orderBy: { sortOrder: 'asc' } } },
-    })
-
-    await this.opLog.log({
-      module: 'returns',
-      action: 'return_fee_template_create',
-      targetType: 'return_fee_template',
-      targetId: templateCode,
-      operatorId: userId,
-      detail: { warehouseCode: wh, ruleCount: normalizedRules.length },
-    })
-
-    return this.mapFeeTemplate(created)
+      return this.mapFeeTemplate(created)
+    }, { isolationLevel: 'ReadCommitted' })
   }
 
   async deleteFeeTemplate(id: number, userId: number) {
-    const row = await this.prisma.returnFeeTemplate.findUnique({ where: { id: BigInt(id) } })
-    if (!row || row.status !== 'active') throw new NotFoundException('收费模板不存在')
+    return this.prisma.$transaction(async tx => {
+      // Serialize warehouse assignment changes across all template editors.
+      await tx.$queryRaw`SELECT id FROM return_fee_template ORDER BY id FOR UPDATE`
+      const row = await tx.returnFeeTemplate.findUnique({ where: { id: BigInt(id) } })
+      if (!row || row.status !== 'active') throw new NotFoundException('收费模板不存在')
 
-    await this.prisma.returnFeeTemplate.update({
-      where: { id: row.id },
-      data: { status: 'inactive' },
-    })
+      await tx.returnFeeTemplate.update({
+        where: { id: row.id },
+        data: { status: 'inactive' },
+      })
 
-    await this.opLog.log({
-      module: 'returns',
-      action: 'return_fee_template_delete',
-      targetType: 'return_fee_template',
-      targetId: row.templateCode,
-      operatorId: userId,
-      detail: { warehouseCode: row.warehouseCode },
-    })
+      await this.opLog.log({
+        module: 'returns',
+        action: 'return_fee_template_delete',
+        targetType: 'return_fee_template',
+        targetId: row.templateCode,
+        operatorId: userId,
+        detail: { warehouseCode: row.warehouseCode },
+      }, tx)
 
-    return { ok: true }
+      return { ok: true }
+    }, { isolationLevel: 'ReadCommitted' })
   }
 
   async previewReturnFees(
@@ -837,72 +843,74 @@ export class ReturnsService {
     },
     userId: number,
   ) {
-    const row = await this.prisma.returnFeeTemplate.findUnique({ where: { id: BigInt(id) } })
-    if (!row) throw new NotFoundException('收费模板不存在')
-    if (row.status !== 'active') throw new BadRequestException('模板已停用，不可编辑')
+    return this.prisma.$transaction(async tx => {
+      // Serialize warehouse assignment changes across all template editors.
+      await tx.$queryRaw`SELECT id FROM return_fee_template ORDER BY id FOR UPDATE`
+      const row = await tx.returnFeeTemplate.findUnique({ where: { id: BigInt(id) } })
+      if (!row) throw new NotFoundException('收费模板不存在')
+      if (row.status !== 'active') throw new BadRequestException('模板已停用，不可编辑')
 
-    let normalizedRules: FeeTemplateRule[]
-    try {
-      normalizedRules = normalizeTemplateRulesInput(body.rules || [])
-    } catch (err) {
-      throw new BadRequestException(err instanceof Error ? err.message : '收费规则无效')
-    }
-
-    const templateName = body.templateName?.trim() || row.templateName
-    if (!templateName) throw new BadRequestException('模板名称不能为空')
-
-    const warehouseCode = body.warehouseCode !== undefined
-      ? (body.warehouseCode?.trim().toUpperCase() || null)
-      : row.warehouseCode
-    if (!warehouseCode || !isValidReturnWarehouse(warehouseCode)) {
-      throw new BadRequestException('须指定有效退件仓库（JHB3 / CPT2 / DBN）')
-    }
-
-    const wh = normalizeReturnWarehouse(warehouseCode)!
-    const conflict = await this.prisma.returnFeeTemplate.findFirst({
-      where: { status: 'active', warehouseCode: wh, id: { not: row.id } },
-    })
-    if (conflict) throw new BadRequestException(`${wh} 仓库已有其他收费模板`)
-
-    const customerId = null as bigint | null
-
-    const updated = await this.prisma.$transaction(async (tx) => {
-      await tx.returnFeeTemplateRule.deleteMany({ where: { templateId: row.id } })
-      for (const rule of normalizedRules) {
-        await tx.returnFeeTemplateRule.create({
-          data: {
-            templateId: row.id,
-            chargeType: rule.chargeType,
-            description: rule.description,
-            calcMode: rule.calcMode,
-            unitPrice: rule.unitPrice,
-            minQty: rule.minQty,
-            sortOrder: rule.sortOrder,
-            autoApply: rule.autoApply !== false,
-          },
-        })
+      let normalizedRules: FeeTemplateRule[]
+      try {
+        normalizedRules = normalizeTemplateRulesInput(body.rules || [])
+      } catch (err) {
+        throw new BadRequestException(err instanceof Error ? err.message : '收费规则无效')
       }
-      return tx.returnFeeTemplate.update({
-        where: { id: row.id },
-        data: {
-          templateName,
-          warehouseCode: wh,
-          customerId,
-        },
-        include: { rules: { orderBy: { sortOrder: 'asc' } } },
+
+      const templateName = body.templateName?.trim() || row.templateName
+      if (!templateName) throw new BadRequestException('模板名称不能为空')
+
+      const warehouseCode = body.warehouseCode !== undefined
+        ? (body.warehouseCode?.trim().toUpperCase() || null)
+        : row.warehouseCode
+      if (!warehouseCode || !isValidReturnWarehouse(warehouseCode)) {
+        throw new BadRequestException('须指定有效退件仓库（JHB3 / CPT2 / DBN）')
+      }
+
+      const wh = normalizeReturnWarehouse(warehouseCode)!
+      const conflict = await tx.returnFeeTemplate.findFirst({
+        where: { status: 'active', warehouseCode: wh, id: { not: row.id } },
       })
-    })
+      if (conflict) throw new BadRequestException(`${wh} 仓库已有其他收费模板`)
 
-    await this.opLog.log({
-      module: 'returns',
-      action: 'return_fee_template_update',
-      targetType: 'return_fee_template',
-      targetId: row.templateCode,
-      operatorId: userId,
-      detail: { templateName, ruleCount: normalizedRules.length },
-    })
+      const customerId = null as bigint | null
 
-    return this.mapFeeTemplate(updated)
+        await tx.returnFeeTemplateRule.deleteMany({ where: { templateId: row.id } })
+        for (const rule of normalizedRules) {
+          await tx.returnFeeTemplateRule.create({
+            data: {
+              templateId: row.id,
+              chargeType: rule.chargeType,
+              description: rule.description,
+              calcMode: rule.calcMode,
+              unitPrice: rule.unitPrice,
+              minQty: rule.minQty,
+              sortOrder: rule.sortOrder,
+              autoApply: rule.autoApply !== false,
+            },
+          })
+        }
+      const updated = await tx.returnFeeTemplate.update({
+          where: { id: row.id },
+          data: {
+            templateName,
+            warehouseCode: wh,
+            customerId,
+          },
+          include: { rules: { orderBy: { sortOrder: 'asc' } } },
+        })
+
+      await this.opLog.log({
+        module: 'returns',
+        action: 'return_fee_template_update',
+        targetType: 'return_fee_template',
+        targetId: row.templateCode,
+        operatorId: userId,
+        detail: { templateName, ruleCount: normalizedRules.length },
+      }, tx)
+
+      return this.mapFeeTemplate(updated)
+    }, { isolationLevel: 'ReadCommitted' })
   }
 
   private mapFeeTemplate(template: {
@@ -942,34 +950,39 @@ export class ReturnsService {
   }
 
   private async ensureMissingWarehouseTemplates() {
-    for (const wh of RETURN_WAREHOUSES) {
-      const exists = await this.prisma.returnFeeTemplate.findFirst({
-        where: { status: 'active', warehouseCode: wh },
-      })
-      if (exists) continue
-      const rules = defaultMeasureFeeRules(wh)
-      await this.prisma.returnFeeTemplate.create({
-        data: {
-          templateCode: `wh_${wh.toLowerCase()}`,
-          templateName: `${wh} 退件收费`,
-          isDefault: false,
-          warehouseCode: wh,
-          customerId: null,
-          status: 'active',
-          rules: {
-            create: rules.map((rule) => ({
-              chargeType: rule.chargeType,
-              description: rule.description,
-              calcMode: rule.calcMode,
-              unitPrice: rule.unitPrice,
-              minQty: rule.minQty,
-              sortOrder: rule.sortOrder,
-              autoApply: rule.autoApply !== false,
-            })),
+    await this.prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM return_fee_template ORDER BY id FOR UPDATE`
+      for (const wh of RETURN_WAREHOUSES) {
+        const exists = await tx.returnFeeTemplate.findFirst({
+          where: { warehouseCode: wh },
+        })
+        if (exists) continue
+        const rules = defaultMeasureFeeRules(wh)
+        await tx.returnFeeTemplate.upsert({
+          where: { templateCode: `wh_${wh.toLowerCase()}` },
+          update: {},
+          create: {
+            templateCode: `wh_${wh.toLowerCase()}`,
+            templateName: `${wh} 退件收费`,
+            isDefault: false,
+            warehouseCode: wh,
+            customerId: null,
+            status: 'active',
+            rules: {
+              create: rules.map((rule) => ({
+                chargeType: rule.chargeType,
+                description: rule.description,
+                calcMode: rule.calcMode,
+                unitPrice: rule.unitPrice,
+                minQty: rule.minQty,
+                sortOrder: rule.sortOrder,
+                autoApply: rule.autoApply !== false,
+              })),
+            },
           },
-        },
-      })
-    }
+        })
+      }
+    }, { isolationLevel: 'ReadCommitted' })
   }
 
   private async resolveWarehouseFeeTemplate(warehouseCode: string | null, client: PrismaService = this.prisma) {
