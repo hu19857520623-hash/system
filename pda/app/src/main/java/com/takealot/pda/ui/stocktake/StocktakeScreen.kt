@@ -29,6 +29,7 @@ import com.takealot.pda.data.ErpException
 import com.takealot.pda.data.PdaResumeWork
 import com.takealot.pda.data.StocktakeLine
 import com.takealot.pda.data.StocktakePlan
+import com.takealot.pda.data.validateStocktakeWork
 import com.takealot.pda.data.customerSkuForScan
 import com.takealot.pda.data.stocktakeStatusLabel
 import com.takealot.pda.data.requireUniqueScanSku
@@ -91,12 +92,15 @@ class StocktakeViewModel : ViewModel() {
         scan = ""
         loadList()
         val resume = PdaApp.instance.workJournal.active("stocktake", "count") ?: return
+        busy = true
         viewModelScope.launch {
             try {
-                openPlan(resume.orderId)
+                applyPlan(api.stocktake(resume.orderId))
                 feedback = Feedback(true, "已恢复 ${resume.orderNo} 的未完成作业")
             } catch (e: Exception) {
                 feedback = Feedback(false, e.message ?: "恢复盘点失败，请返回首页重试，未完成作业已保留")
+            } finally {
+                busy = false
             }
         }
     }
@@ -187,21 +191,27 @@ class StocktakeViewModel : ViewModel() {
     }
 
     fun openPlan(id: Int) {
+        if (busy || pendingScanCount > 0) return
+        busy = true
         viewModelScope.launch {
-            busy = true
             try {
-                val detail = api.stocktake(id)
-                plan = detail
-                locationCode = ""
-                selectedLineId = null
-                qty = 1
-                PdaApp.instance.workJournal.activate(PdaResumeWork("stocktake", "count", detail.id, detail.no))
+                applyPlan(api.stocktake(id))
+                feedback = Feedback(true, "${plan!!.no} 已打开，请扫描库位")
             } catch (e: Exception) {
                 feedback = Feedback(false, e.message ?: "打开盘点单失败")
             } finally {
                 busy = false
             }
         }
+    }
+
+    private fun applyPlan(detail: StocktakePlan) {
+        validateStocktakeWork(detail, session.warehouseCode)
+        plan = detail
+        locationCode = ""
+        selectedLineId = null
+        qty = 1
+        PdaApp.instance.workJournal.activate(PdaResumeWork("stocktake", "count", detail.id, detail.no))
     }
 
     private suspend fun openByCode(code: String) {
@@ -213,17 +223,15 @@ class StocktakeViewModel : ViewModel() {
         val hit = rows.firstOrNull { it.no.equals(code, ignoreCase = true) }
             ?: list.firstOrNull { it.no.equals(code, ignoreCase = true) }
             ?: throw ErpException("未找到盘点单 $code")
-        val detail = api.stocktake(hit.id)
-        plan = detail
-        locationCode = ""
-        selectedLineId = null
-        qty = 1
-        PdaApp.instance.workJournal.activate(PdaResumeWork("stocktake", "count", detail.id, detail.no))
-        feedback = Feedback(true, "${detail.no} 已打开")
+        applyPlan(api.stocktake(hit.id))
+        feedback = Feedback(true, "${plan!!.no} 已打开")
     }
 
     fun submitCount() {
+        if (busy || pendingScanCount > 0) { feedback = Feedback(false, "请等待扫码处理完成后再提交"); return }
         val current = plan ?: return
+        try { validateStocktakeWork(current, session.warehouseCode) }
+        catch (e: ErpException) { feedback = Feedback(false, e.message.orEmpty()); return }
         val line = selectedLine ?: run {
             feedback = Feedback(false, "请先扫库位和 SKU")
             return
@@ -232,8 +240,8 @@ class StocktakeViewModel : ViewModel() {
             feedback = Feedback(false, "该明细已盘完")
             return
         }
+        busy = true
         viewModelScope.launch {
-            busy = true
             val journal = PdaApp.instance.workJournal
             val recordId = journal.beginScan("stocktake", "count_submit", line.skuCode, current.id, current.no)
             try {
