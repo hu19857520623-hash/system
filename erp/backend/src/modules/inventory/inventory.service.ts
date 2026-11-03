@@ -827,18 +827,21 @@ export class InventoryService {
 
     if (!Object.keys(data).length) throw new BadRequestException('没有可更新的字段')
 
-    const updated = await this.prisma.product.update({
-      where: { id: BigInt(id) },
-      data,
-    })
+    const updated = await this.prisma.$transaction(async tx => {
+      const result = await tx.product.update({
+        where: { id: BigInt(id) },
+        data,
+      })
 
-    await this.opLog.log({
-      operatorId,
-      module: 'product',
-      action: 'sku_catalog_update',
-      targetType: 'product',
-      targetId: updated.sku,
-      detail: { hasInventory, editMode: hasInventory ? 'measured_only' : 'full', changes: data },
+      await this.opLog.log({
+        operatorId,
+        module: 'product',
+        action: 'sku_catalog_update',
+        targetType: 'product',
+        targetId: result.sku,
+        detail: { hasInventory, editMode: hasInventory ? 'measured_only' : 'full', changes: data },
+      }, tx)
+      return result
     })
 
     const invFlags = await this.loadSkuInventoryFlags([updated.sku])
@@ -1438,135 +1441,135 @@ export class InventoryService {
     const refNo = `ADJ-${Date.now()}`
     const remark = this.formatCustomerRemark(customerCode, body.remark)
 
-    const result = await this.prisma.$transaction(async (tx) => {
-      if (locationChanged) {
-        const targetLoc = await tx.warehouseLocation.findFirst({
-          where: {
-            warehouseCode: row.warehouseCode,
-            locationCode: newLocationCode,
-            status: 'available',
-          },
-        })
-        if (!targetLoc) throw new BadRequestException(`库位 ${newLocationCode} 不可用或不存在`)
-
-        await tx.inventoryLocation.delete({ where: { id: row.id } })
-
-        if (newQty > 0) {
-          const existing = await tx.inventoryLocation.findFirst({
+    return this.prisma.$transaction(async (tx) => {
+      const result = await (async () => {
+        if (locationChanged) {
+          const targetLoc = await tx.warehouseLocation.findFirst({
             where: {
-              productId: row.productId,
-              locationId: targetLoc.id,
-              batchNo: row.batchNo,
+              warehouseCode: row.warehouseCode,
+              locationCode: newLocationCode,
+              status: 'available',
             },
           })
-          if (existing) {
-            await tx.inventoryLocation.update({
-              where: { id: existing.id },
-              data: { qty: existing.qty + newQty, inboundNo: row.inboundNo ?? existing.inboundNo },
+          if (!targetLoc) throw new BadRequestException(`库位 ${newLocationCode} 不可用或不存在`)
+
+          await tx.inventoryLocation.delete({ where: { id: row.id } })
+
+          if (newQty > 0) {
+            const existing = await tx.inventoryLocation.findFirst({
+              where: {
+                productId: row.productId,
+                locationId: targetLoc.id,
+                batchNo: row.batchNo,
+              },
+            })
+            if (existing) {
+              await tx.inventoryLocation.update({
+                where: { id: existing.id },
+                data: { qty: existing.qty + newQty, inboundNo: row.inboundNo ?? existing.inboundNo },
+              })
+            } else {
+              await tx.inventoryLocation.create({
+                data: {
+                  productId: row.productId,
+                  sku: row.sku,
+                  warehouseCode: row.warehouseCode,
+                  locationId: targetLoc.id,
+                  locationCode: targetLoc.locationCode,
+                  qty: newQty,
+                  batchNo: row.batchNo,
+                  inboundNo: row.inboundNo,
+                  costRmb: row.costRmb,
+                  seaFreightPerUnit: row.seaFreightPerUnit,
+                  domesticFeePerUnit: row.domesticFeePerUnit,
+                  unitCostRmb: row.unitCostRmb,
+                  receivedAt: row.receivedAt,
+                },
+              })
+            }
+          }
+
+          const whDiff = newQty - oldQty
+          if (whDiff !== 0) {
+            await this.applyWarehouseQtyDelta(tx, row.productId, row.sku, row.warehouseCode, whDiff, operatorId, {
+              changeType: 'adjust',
+              remark: remark || `移库并调整 ${oldLocationCode}(${oldQty}) → ${newLocationCode}(${newQty})`,
+              referenceNo: refNo,
             })
           } else {
-            await tx.inventoryLocation.create({
+            const whInv = await tx.inventory.findUnique({
+              where: { productId_warehouseCode: { productId: row.productId, warehouseCode: row.warehouseCode } },
+            })
+            await tx.inventoryLog.create({
               data: {
                 productId: row.productId,
                 sku: row.sku,
                 warehouseCode: row.warehouseCode,
-                locationId: targetLoc.id,
-                locationCode: targetLoc.locationCode,
-                qty: newQty,
-                batchNo: row.batchNo,
-                inboundNo: row.inboundNo,
-                costRmb: row.costRmb,
-                seaFreightPerUnit: row.seaFreightPerUnit,
-                domesticFeePerUnit: row.domesticFeePerUnit,
-                unitCostRmb: row.unitCostRmb,
-                receivedAt: row.receivedAt,
+                changeType: 'move',
+                changeQty: newQty,
+                beforeQty: whInv?.totalQty ?? oldQty,
+                afterQty: whInv?.totalQty ?? oldQty,
+                referenceNo: refNo,
+                operatorId: operatorId ? BigInt(operatorId) : undefined,
+                remark: remark || `移库 ${oldLocationCode} → ${newLocationCode} · ${newQty} 件`,
               },
             })
           }
+
+          return {
+            id: Number(row.id),
+            sku: row.sku,
+            warehouseCode: row.warehouseCode,
+            locationCode: newLocationCode,
+            qty: newQty,
+            batchNo: row.batchNo,
+            inboundNo: row.inboundNo,
+            moved: true,
+          }
         }
 
-        const whDiff = newQty - oldQty
-        if (whDiff !== 0) {
-          await this.applyWarehouseQtyDelta(tx, row.productId, row.sku, row.warehouseCode, whDiff, operatorId, {
-            changeType: 'adjust',
-            remark: remark || `移库并调整 ${oldLocationCode}(${oldQty}) → ${newLocationCode}(${newQty})`,
-            referenceNo: refNo,
-          })
+        const diff = newQty - oldQty
+        if (newQty === 0) {
+          await tx.inventoryLocation.delete({ where: { id: row.id } })
         } else {
-          const whInv = await tx.inventory.findUnique({
-            where: { productId_warehouseCode: { productId: row.productId, warehouseCode: row.warehouseCode } },
-          })
-          await tx.inventoryLog.create({
-            data: {
-              productId: row.productId,
-              sku: row.sku,
-              warehouseCode: row.warehouseCode,
-              changeType: 'move',
-              changeQty: newQty,
-              beforeQty: whInv?.totalQty ?? oldQty,
-              afterQty: whInv?.totalQty ?? oldQty,
-              referenceNo: refNo,
-              operatorId: operatorId ? BigInt(operatorId) : undefined,
-              remark: remark || `移库 ${oldLocationCode} → ${newLocationCode} · ${newQty} 件`,
-            },
-          })
+          await tx.inventoryLocation.update({ where: { id: row.id }, data: { qty: newQty } })
         }
+
+        await this.applyWarehouseQtyDelta(tx, row.productId, row.sku, row.warehouseCode, diff, operatorId, {
+          changeType: 'adjust',
+          remark: remark || `库位 ${oldLocationCode} 数量 ${oldQty} → ${newQty}`,
+          referenceNo: refNo,
+        })
 
         return {
           id: Number(row.id),
           sku: row.sku,
           warehouseCode: row.warehouseCode,
-          locationCode: newLocationCode,
+          locationCode: oldLocationCode,
           qty: newQty,
           batchNo: row.batchNo,
           inboundNo: row.inboundNo,
-          moved: true,
         }
-      }
-
-      const diff = newQty - oldQty
-      if (newQty === 0) {
-        await tx.inventoryLocation.delete({ where: { id: row.id } })
-      } else {
-        await tx.inventoryLocation.update({ where: { id: row.id }, data: { qty: newQty } })
-      }
-
-      await this.applyWarehouseQtyDelta(tx, row.productId, row.sku, row.warehouseCode, diff, operatorId, {
-        changeType: 'adjust',
-        remark: remark || `库位 ${oldLocationCode} 数量 ${oldQty} → ${newQty}`,
-        referenceNo: refNo,
-      })
-
-      return {
-        id: Number(row.id),
-        sku: row.sku,
-        warehouseCode: row.warehouseCode,
-        locationCode: oldLocationCode,
-        qty: newQty,
-        batchNo: row.batchNo,
-        inboundNo: row.inboundNo,
-      }
+      })()
+      await this.opLog.log({
+        operatorId,
+        module: 'inventory',
+        action: locationChanged ? 'adjust_location' : 'adjust_qty',
+        targetType: 'inventory_location',
+        targetId: row.sku,
+        detail: {
+          warehouseCode: row.warehouseCode,
+          fromLocation: oldLocationCode,
+          toLocation: newLocationCode,
+          fromQty: oldQty,
+          toQty: newQty,
+          remark: body.remark,
+          customerCode,
+          referenceNo: refNo,
+        },
+      }, tx)
+      return result
     })
-
-    await this.opLog.log({
-      operatorId,
-      module: 'inventory',
-      action: locationChanged ? 'adjust_location' : 'adjust_qty',
-      targetType: 'inventory_location',
-      targetId: row.sku,
-      detail: {
-        warehouseCode: row.warehouseCode,
-        fromLocation: oldLocationCode,
-        toLocation: newLocationCode,
-        fromQty: oldQty,
-        toQty: newQty,
-        remark: body.remark,
-        customerCode,
-        referenceNo: refNo,
-      },
-    })
-
-    return result
   }
 
   async addLocationStock(
@@ -1616,7 +1619,7 @@ export class InventoryService {
     const refNo = `ADJ-${Date.now()}`
     const remark = this.formatCustomerRemark(customerCode, body.remark)
 
-    const result = await this.prisma.$transaction(async (tx) => {
+    return this.prisma.$transaction(async (tx) => {
       await this.inventoryMutation.addLocationStock(
         tx,
         {
@@ -1640,7 +1643,7 @@ export class InventoryService {
         },
       )
 
-      return {
+      const result = {
         sku,
         warehouseCode,
         locationCode: loc.locationCode,
@@ -1648,26 +1651,24 @@ export class InventoryService {
         batchNo: refNo,
         inboundNo: null as string | null,
       }
+      await this.opLog.log({
+        operatorId,
+        module: 'inventory',
+        action: 'add_location',
+        targetType: 'inventory_location',
+        targetId: sku,
+        detail: {
+          warehouseCode,
+          locationCode: result.locationCode,
+          addQty: qty,
+          afterQty: result.qty,
+          remark: body.remark,
+          customerCode,
+          referenceNo: refNo,
+        },
+      }, tx)
+      return result
     })
-
-    await this.opLog.log({
-      operatorId,
-      module: 'inventory',
-      action: 'add_location',
-      targetType: 'inventory_location',
-      targetId: sku,
-      detail: {
-        warehouseCode,
-        locationCode: result.locationCode,
-        addQty: qty,
-        afterQty: result.qty,
-        remark: body.remark,
-        customerCode,
-        referenceNo: refNo,
-      },
-    })
-
-    return result
   }
 
   /** 中转仓之间调拨可发库存（深圳 → 义乌等） */
@@ -1686,7 +1687,7 @@ export class InventoryService {
     const refNo = `LT-${Date.now()}`
     const remarks = transferLogRemarks(fromWarehouse.warehouseName, toWarehouse.warehouseName, input.remark)
 
-    const result = await this.prisma.$transaction(async (tx) => {
+    return this.prisma.$transaction(async (tx) => {
       const source = await tx.inventory.findUnique({
         where: { productId_warehouseCode: { productId: product.id, warehouseCode: fromWarehouse.warehouseCode } },
       })
@@ -1716,7 +1717,7 @@ export class InventoryService {
         remark: remarks.inRemark,
       })
 
-      return {
+      const result = {
         sku: product.sku,
         qty: input.qty,
         fromWarehouseCode: fromWarehouse.warehouseCode,
@@ -1725,17 +1726,15 @@ export class InventoryService {
         toWarehouseName: toWarehouse.warehouseName,
         referenceNo: refNo,
       }
+      await this.opLog.log({
+        operatorId,
+        module: 'inventory',
+        action: 'logistics_transfer',
+        targetType: 'inventory',
+        targetId: result.sku,
+        detail: { ...result, remark: input.remark || '' },
+      }, tx)
+      return result
     })
-
-    await this.opLog.log({
-      operatorId,
-      module: 'inventory',
-      action: 'logistics_transfer',
-      targetType: 'inventory',
-      targetId: result.sku,
-      detail: { ...result, remark: input.remark || '' },
-    })
-
-    return result
   }
 }

@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common'
 import { Prisma } from '@prisma/client'
+import type { InventoryTx } from '../../common/inventory/inventory-mutation.types'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
 import { operationActionLabel, operationModuleLabel } from './operation-log.constants'
@@ -19,17 +20,17 @@ export interface OperationLogInput {
 export class OperationLogService {
   constructor(private prisma: PrismaService) {}
 
-  async log(params: OperationLogInput) {
+  async log(params: OperationLogInput, client: InventoryTx = this.prisma) {
     let operatorName = params.operatorName?.trim()
     if (!operatorName && params.operatorId) {
-      const user = await this.prisma.sysUser.findUnique({
+      const user = await client.sysUser.findUnique({
         where: { id: BigInt(params.operatorId) },
         select: { realName: true, username: true },
       })
       operatorName = user?.realName || user?.username || undefined
     }
 
-    return this.prisma.operationLog.create({
+    return client.operationLog.create({
       data: {
         operatorId: params.operatorId ? BigInt(params.operatorId) : undefined,
         operatorName,

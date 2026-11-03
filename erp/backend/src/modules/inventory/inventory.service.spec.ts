@@ -54,7 +54,7 @@ describe('InventoryService.transferLogistics', () => {
     expect(opLog.log).toHaveBeenCalledWith(expect.objectContaining({
       action: 'logistics_transfer',
       targetId: 'TKL-HX6',
-    }))
+    }), tx)
   })
 
   it('rejects when available qty is insufficient', async () => {

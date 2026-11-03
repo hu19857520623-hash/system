@@ -67,11 +67,15 @@ describe('PDA phase 2 warehouse exception flows', () => {
 
   it('marks a short pick as a problem and writes an audit entry', async () => {
     const prisma: any = {
+      $queryRaw: jest.fn(),
+      operationLog: { findFirst: jest.fn().mockResolvedValue(null), create: jest.fn().mockResolvedValue({}) },
+      sysUser: { findUnique: jest.fn().mockResolvedValue({ realName: '仓库员' }) },
       outboundOrder: {
         findUnique: jest.fn().mockResolvedValue({ id: 8n, outboundNo: 'OUT-8', status: 'picking', problemRemark: null }),
         update: jest.fn().mockResolvedValue({}),
       },
     }
+    prisma.$transaction = (work: any) => work(prisma)
     const opLog = { log: jest.fn().mockResolvedValue(undefined), hasClientRequest: jest.fn().mockResolvedValue(false) }
     const service = new OutboundService(prisma, {} as any, {} as any, {} as any, {} as any, opLog as any)
     jest.spyOn(service, 'detail').mockResolvedValue({ id: 8, outboundNo: 'OUT-8', isProblem: true } as any)
@@ -86,11 +90,11 @@ describe('PDA phase 2 warehouse exception flows', () => {
     expect(prisma.outboundOrder.update).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ isProblem: true, problemType: 'stock_short' }),
     }))
-    expect(opLog.log).toHaveBeenCalledWith(expect.objectContaining({
-      operatorId: 21,
+    expect(prisma.operationLog.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      operatorId: 21n,
       action: 'set_problem',
       detail: expect.objectContaining({ clientRequestId: 'req-short-8' }),
-    }))
+    }) })
   })
 
   it('rejects a recount performed by the first counter', async () => {
