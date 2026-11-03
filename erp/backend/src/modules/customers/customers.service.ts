@@ -165,7 +165,7 @@ export class CustomersService {
   }
 
   private async inventoryViewSnapshot(tx: Prisma.TransactionClient, customer: { id: number; customerCode: string; customerName: string }, warehouseCode: string) {
-    const [holdings, inboundOrders] = await Promise.all([
+    const [holdings, inboundOrders, registeredOwned] = await Promise.all([
       this.listSkuInventory(BigInt(customer.id), tx),
       tx.inboundOrder.findMany({
         where: {
@@ -178,18 +178,21 @@ export class CustomersService {
           items: { select: { productId: true, sku: true, expectedQty: true, actualQty: true, putawayQty: true } },
         },
       }),
+      tx.$queryRaw<{ sku: string }[]>`SELECT p.internalSku AS sku FROM oms_product p JOIN oms_customeraccount a ON a.id=p.customerId WHERE a.code=${customer.customerCode} AND p.inCatalog=0`,
     ])
     const inboundItems = inboundOrders.flatMap(order => order.items)
     const pipeline = buildInboundPipelineQtyMap(inboundOrders)
     const catalogSkus = holdings.map((holding) => holding.sku)
     const ownedProductIdValues = [...new Set(inboundItems.map(item => item.productId.toString()))]
     const ownedProductIds = ownedProductIdValues.map(BigInt)
-    const products = catalogSkus.length || ownedProductIds.length
+    const ownedSkus = new Set(registeredOwned.map(product => product.sku))
+    const products = catalogSkus.length || ownedProductIds.length || ownedSkus.size
       ? await tx.product.findMany({
         where: {
           OR: [
             ...(catalogSkus.length ? [{ sku: { in: catalogSkus } }] : []),
             ...(ownedProductIds.length ? [{ id: { in: ownedProductIds } }] : []),
+            ...(ownedSkus.size ? [{ sku: { in: [...ownedSkus] } }] : []),
           ],
         },
       })
@@ -220,12 +223,12 @@ export class CustomersService {
       }
     })
 
-    // A customer-owned SKU is linked to the customer by its OMS ASN. Unlike a
-    // catalog holding, it has no customer_sku_inventory record, so include it
-    // directly from submitted inbound orders, including not-yet-stocked goods.
+    // Ownership comes from submitted ASNs or the customer's registered private
+    // products, including return-only stock without a first ASN. Catalog holdings
+    // remain separate; not-yet-stocked submitted goods keep their pipeline counts.
     const ownedProductIdSet = new Set(ownedProductIdValues)
     const ownedItems = products
-      .filter(product => ownedProductIdSet.has(product.id.toString()))
+      .filter(product => ownedProductIdSet.has(product.id.toString()) || ownedSkus.has(product.sku))
       .map((product) => {
         const inventory = inventoryByProductId.get(Number(product.id))
         return {

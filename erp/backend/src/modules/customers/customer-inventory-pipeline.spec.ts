@@ -3,6 +3,7 @@ import { CustomersService } from './customers.service'
 describe('客户库存同步的在途和待上架数量', () => {
   function fixture(statuses: string[], stocked = false) {
     const prisma: any = {
+      $queryRaw: jest.fn().mockResolvedValue([]),
       inboundOrder: { findMany: jest.fn().mockResolvedValue(statuses.map(status => ({
         warehouseCode: 'WMS-JHB-01', status,
         items: [{ productId: 7n, sku: 'TKL9001-A', expectedQty: 3, actualQty: status === 'pending_putaway' ? 3 : null, putawayQty: status === 'pending_putaway' ? 1 : 0 }],
@@ -32,5 +33,13 @@ describe('客户库存同步的在途和待上架数量', () => {
     const result = await service.inventoryViewForOms('TKL9001')
     expect(result.total).toBe(1)
     expect(result.items[0]).toMatchObject({ warehouseAvailable: 2, warehouseTotal: 2, inTransitQty: 3, pendingShelvingQty: 2 })
+  })
+
+  it('客户注册私有SKU即使没有首次入库记录，返库后的实物库存也不会被遗漏', async () => {
+    const { prisma, service } = fixture([], true)
+    prisma.$queryRaw.mockResolvedValue([{ sku: 'TKL9001-A' }])
+    const result = await service.inventoryViewForOms('TKL9001')
+    expect(result.total).toBe(1)
+    expect(result.items[0]).toMatchObject({ sku: 'TKL9001-A', stockSource: 'owned', warehouseAvailable: 2, inTransitQty: 0, pendingShelvingQty: 0 })
   })
 })
