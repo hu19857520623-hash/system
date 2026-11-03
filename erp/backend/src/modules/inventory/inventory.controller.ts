@@ -99,6 +99,7 @@ export class InventoryController {
   @Post('location-change')
   changeLocationStock(
     @Body() body: {
+      clientRequestId?: string
       customerCode: string
       sku: string
       warehouseCode: string
@@ -116,6 +117,7 @@ export class InventoryController {
   @Post('location-change/batch')
   batchChangeLocationStock(
     @Body() body: {
+      clientRequestId?: string
       rows?: Array<{
         customerCode: string
         sku: string

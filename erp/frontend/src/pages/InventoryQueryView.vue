@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useInventoryChangeAttempt } from '@/utils/inventoryChangeAttempt'
 import { useInventoryAdjustAttempt } from '@/utils/inventoryAdjustAttempt'
 import { getAccessToken } from '@/auth/tokenStore'
 import { userFacingError } from '@erp/shared/user-facing-error'
@@ -10,7 +11,6 @@ import { ElMessage } from 'element-plus'
 import type { TableInstance } from 'element-plus'
 import { inventoryApi, warehouseApi, locationApi, productApi } from '@/api/client.js'
 import { mapWarehouse } from '@/api/mappers.ts'
-import { withAction } from '@/composables/useListLoader.ts'
 import { useAppStore } from '@/stores/app'
 import ListPagination from '@/components/ListPagination.vue'
 import {
@@ -276,12 +276,27 @@ const adjustmentScope = computed(() => app.authenticatedUser && getAccessToken()
 const originalAdjustment = useInventoryAdjustAttempt({ actor: () => String(app.authenticatedUser?.id || ''), scope: () => adjustmentScope.value, allowed: () => canAdjust.value, storage: localStorage, request: payload => inventoryApi.adjustLocation(payload.id, payload) })
 const { pending: pendingAdjustment, busy: adjusting, blocked: adjustmentBlocked, feedback: adjustmentFeedback } = originalAdjustment
 async function continueAdjustment() {
-  if (await originalAdjustment.resume()) { adjustDialogVisible.value = false; await load() }
+  const scope = adjustmentScope.value
+  if (await originalAdjustment.resume() && scope === adjustmentScope.value) { adjustDialogVisible.value = false; await load() }
 }
 watch(adjustmentScope, () => { adjustDialogVisible.value = false })
+const originalChange = useInventoryChangeAttempt({ actor: () => String(app.authenticatedUser?.id || ''), scope: () => adjustmentScope.value, allowed: () => canAdjust.value, storage: localStorage, request: async attempt => {
+  const payload = { ...attempt.payload, clientRequestId: attempt.clientRequestId }
+  if (attempt.kind === 'single') return inventoryApi.changeLocationStock(payload)
+  const result = await inventoryApi.batchChangeLocationStock(payload)
+  if (result.fail > 0) throw new Error(`本批成功 ${result.ok} 行，尚有 ${result.fail} 行失败：${result.results?.find((row: any) => !row.ok)?.error || '请核对条件后继续原批次'}。已成功行重试不会重复执行`)
+  return result
+} })
+const { pending: pendingChange, busy: changing, blocked: changeBlocked, feedback: changeFeedback } = originalChange
+async function continueChange() {
+  const scope = adjustmentScope.value
+  if (await originalChange.resume() && scope === adjustmentScope.value) { changeDialogVisible.value = false; batchPreviewRows.value = []; await load() }
+}
+watch(adjustmentScope, () => { changeDialogVisible.value = false })
+
 
 function openAdjust(row: any, customerCode?: string) {
-  if (pendingAdjustment.value || adjusting.value || adjustmentBlocked.value || !canAdjust.value) { ElMessage.warning('请先核对原库存调整，勿重复提交'); return }
+  if (pendingChange.value || changing.value || changeBlocked.value || pendingAdjustment.value || adjusting.value || adjustmentBlocked.value || !canAdjust.value) { ElMessage.warning('请先核对原库存调整，勿重复提交'); return }
   adjustForm.value = {
     id: row.id,
     sku: row.sku,
@@ -320,7 +335,7 @@ async function openAdjustFromRow(row: any) {
 }
 
 async function submitAdjust() {
-  if (adjusting.value || pendingAdjustment.value || adjustmentBlocked.value || !canAdjust.value) return
+  if (pendingChange.value || changing.value || changeBlocked.value || adjusting.value || pendingAdjustment.value || adjustmentBlocked.value || !canAdjust.value) return
   const form = adjustForm.value
   if (!form.customerCode.trim()) return ElMessage.warning('请填写客户代码')
   if (!Number.isSafeInteger(form.qty) || form.qty < 0) return ElMessage.warning('数量须为非负整数')
@@ -343,7 +358,7 @@ function openStockChange(preset?: {
   toLocationCode?: string
   qty?: number
 }) {
-  if (pendingAdjustment.value || adjusting.value || adjustmentBlocked.value) { ElMessage.warning('请先核对原库存调整'); return }
+  if (pendingChange.value || changing.value || changeBlocked.value || pendingAdjustment.value || adjusting.value || adjustmentBlocked.value) { ElMessage.warning('请先核对原库存调整'); return }
   changeTab.value = 'single'
   batchPreviewRows.value = []
   changeForm.value = {
@@ -382,51 +397,27 @@ async function handleBatchImportFile(e: Event) {
 }
 
 async function submitSingleChange() {
-  if (pendingAdjustment.value || adjusting.value || adjustmentBlocked.value) return
+  if (pendingChange.value || changing.value || changeBlocked.value || pendingAdjustment.value || adjusting.value || adjustmentBlocked.value) return
   const f = changeForm.value
   if (!f.customerCode.trim()) return ElMessage.warning('请填写客户代码')
   if (!f.sku.trim()) return ElMessage.warning('请选择 SKU')
   if (!f.toLocationCode) return ElMessage.warning('请选择目标库位')
   if (f.qty < 0) return ElMessage.warning('数量不能为负')
   if (f.qty === 0 && !f.fromLocationCode) return ElMessage.warning('新库位库存数量须大于 0')
-  const ok = await withAction(async () => {
-    await inventoryApi.changeLocationStock({
-      customerCode: f.customerCode.trim(),
-      sku: f.sku.trim(),
-      warehouseCode: f.warehouseCode,
-      fromLocationCode: f.fromLocationCode.trim() || undefined,
-      toLocationCode: f.toLocationCode,
-      qty: f.qty,
-      remark: f.remark || undefined,
-    })
-    load()
-  }, '库存变更已保存')
-  if (ok) changeDialogVisible.value = false
+  const scope = adjustmentScope.value
+  const confirmed = await originalChange.start({ kind: 'single', payload: { customerCode: f.customerCode.trim(), sku: f.sku.trim(), warehouseCode: f.warehouseCode, fromLocationCode: f.fromLocationCode.trim() || undefined, toLocationCode: f.toLocationCode, qty: f.qty, remark: f.remark || undefined } })
+  if (confirmed && scope === adjustmentScope.value) { changeDialogVisible.value = false; await load() }
 }
 
 async function submitBatchChange() {
-  if (pendingAdjustment.value || adjusting.value || adjustmentBlocked.value) return
+  if (pendingChange.value || changing.value || changeBlocked.value || pendingAdjustment.value || adjusting.value || adjustmentBlocked.value) return
   if (!batchPreviewRows.value.length) return ElMessage.warning('请先上传 XLS 或 CSV 模板')
+  const scope = adjustmentScope.value
   batchSubmitting.value = true
   try {
-    const res = await inventoryApi.batchChangeLocationStock({
-      rows: batchPreviewRows.value,
-      defaultWarehouse: changeForm.value.warehouseCode || JHB_WAREHOUSE_CODE,
-    })
-    const failed = (res.results || []).filter((r: any) => !r.ok)
-    if (res.fail > 0) {
-      ElMessage.warning(`成功 ${res.ok} 行，失败 ${res.fail} 行${failed[0]?.error ? `：${failed[0].error}` : ''}`)
-    } else {
-      ElMessage.success(`批量变更完成，共 ${res.ok} 行`)
-      changeDialogVisible.value = false
-      batchPreviewRows.value = []
-      load()
-    }
-  } catch (e: any) {
-    ElMessage.error(userFacingError(displaySkuText(e?.message || '批量变更失败')))
-  } finally {
-    batchSubmitting.value = false
-  }
+    const confirmed = await originalChange.start({ kind: 'batch', payload: { rows: JSON.parse(JSON.stringify(batchPreviewRows.value)), defaultWarehouse: changeForm.value.warehouseCode || JHB_WAREHOUSE_CODE } })
+    if (confirmed && scope === adjustmentScope.value) { changeDialogVisible.value = false; batchPreviewRows.value = []; await load() }
+  } finally { batchSubmitting.value = false }
 }
 
 async function searchSkuOptions(keyword: string) {
@@ -466,6 +457,12 @@ watch([page, pageSize], () => load())
 
 <template>
   <div class="inv-query-page">
+    <el-alert v-if="changeFeedback" :title="changeFeedback" :closable="false" type="warning" />
+    <el-card v-if="pendingChange" shadow="never">
+      <p>待核对原库存变更：{{ pendingChange.kind === 'batch' ? '批量导入' : '单条变更' }}，请继续原操作。</p>
+      <el-button :loading="changing" :disabled="!canAdjust || changeBlocked || adjusting" @click="continueChange">核对并继续原库存变更</el-button>
+      <el-button @click="router.push('/dashboard')">返回工作台（保留原请求）</el-button>
+    </el-card>
     <el-alert v-if="adjustmentFeedback" :title="adjustmentFeedback" :closable="false" type="warning" />
     <el-card v-if="pendingAdjustment" shadow="never">
       <p>待核对原库存调整：库位记录 {{ pendingAdjustment.id }} → {{ pendingAdjustment.locationCode }} · {{ pendingAdjustment.qty }} 件</p>

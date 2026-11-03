@@ -1292,28 +1292,33 @@ export class InventoryService {
     return customer
   }
 
-  private async resolveProductForCustomer(customerCode: string, skuInput: string) {
+  private async resolveProductForCustomer(customerCode: string, skuInput: string, db: Tx = this.prisma) {
     const input = skuInput.trim()
     if (!input) throw new BadRequestException('SKU 不能为空')
 
-    let product = await this.prisma.product.findFirst({ where: { sku: input } })
+    let product = await db.product.findFirst({ where: { sku: input } })
     if (product) return product
 
     const prefixed = buildInternalSku(customerCode, input)
-    product = await this.prisma.product.findFirst({ where: { sku: prefixed } })
+    product = await db.product.findFirst({ where: { sku: prefixed } })
     if (product) return product
 
     const code = customerCode.trim().toUpperCase()
     if (input.toUpperCase().startsWith(`${code}-`)) {
-      product = await this.prisma.product.findFirst({ where: { sku: input } })
+      product = await db.product.findFirst({ where: { sku: input } })
       if (product) return product
     }
 
     throw new NotFoundException(`客户 ${customerCode} 下未找到 SKU ${input}`)
   }
 
+  private inventoryTransaction<T>(work: (tx: Tx) => Promise<T>, existing?: Tx): Promise<T> {
+    return existing ? work(existing) : this.prisma.$transaction(work, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted })
+  }
+
   async applyLocationChange(
     body: {
+      clientRequestId?: string
       customerCode: string
       sku: string
       warehouseCode: string
@@ -1324,9 +1329,23 @@ export class InventoryService {
     },
     operatorId?: number,
   ) {
+    const clientRequestId = String(body.clientRequestId || '').trim()
+    if (clientRequestId && (!operatorId || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(clientRequestId))) throw new BadRequestException('库存变更原请求标识无效')
+    const requestFingerprint = createHash('sha256').update(JSON.stringify({ customerCode: body.customerCode?.trim(), sku: body.sku?.trim(), warehouseCode: body.warehouseCode?.trim(), fromLocationCode: body.fromLocationCode?.trim() || '', toLocationCode: body.toLocationCode?.trim(), qty: body.qty, remark: body.remark?.trim() || '' })).digest('hex')
+    return this.inventoryTransaction(async tx => {
+      if (clientRequestId) {
+        await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(operatorId!)} FOR UPDATE`
+        const receipt = await tx.operationLog.findFirst({ where: { module: 'inventory', action: 'location_change_request', operatorId: BigInt(operatorId!), detail: { path: '$.clientRequestId', equals: clientRequestId } }, orderBy: { id: 'desc' } })
+        if (receipt) {
+          const detail = receipt.detail as any
+          if (detail.requestFingerprint !== requestFingerprint || !detail.result) throw new ConflictException('原库存变更内容不同，请核对原请求后继续')
+          return { ...detail.result, duplicate: true }
+        }
+      }
+      const result = await (async () => {
     const customerCode = body.customerCode?.trim()
     if (!customerCode) throw new BadRequestException('请填写客户代码')
-    await this.assertActiveCustomer(customerCode)
+    await this.assertActiveCustomer(customerCode, tx)
 
     const warehouseCode = body.warehouseCode?.trim()
     const toLocationCode = body.toLocationCode?.trim()
@@ -1338,11 +1357,12 @@ export class InventoryService {
       throw new BadRequestException('数量须为非负整数')
     }
 
-    const product = await this.resolveProductForCustomer(customerCode, body.sku)
+    const product = await this.resolveProductForCustomer(customerCode, body.sku, tx)
+    await tx.$queryRaw`SELECT id FROM product WHERE id = ${product.id} FOR UPDATE`
     const remark = this.formatCustomerRemark(customerCode, body.remark)
 
     if (fromLocationCode && fromLocationCode !== toLocationCode) {
-      const source = await this.prisma.inventoryLocation.findFirst({
+      const source = await tx.inventoryLocation.findFirst({
         where: { productId: product.id, warehouseCode, locationCode: fromLocationCode },
       })
       if (!source) throw new NotFoundException(`原库位 ${fromLocationCode} 无 SKU ${product.sku} 库存`)
@@ -1351,10 +1371,10 @@ export class InventoryService {
         locationCode: toLocationCode,
         remark,
         customerCode,
-      }, operatorId)
+      }, operatorId, tx)
     }
 
-    const target = await this.prisma.inventoryLocation.findFirst({
+    const target = await tx.inventoryLocation.findFirst({
       where: { productId: product.id, warehouseCode, locationCode: toLocationCode },
     })
     if (target) {
@@ -1363,7 +1383,7 @@ export class InventoryService {
         locationCode: toLocationCode,
         remark,
         customerCode,
-      }, operatorId)
+      }, operatorId, tx)
     }
 
     if (qty <= 0) throw new BadRequestException('新库位库存数量须大于 0')
@@ -1374,16 +1394,34 @@ export class InventoryService {
       qty,
       remark,
       customerCode,
-    }, operatorId)
+    }, operatorId, tx)
+      })()
+      if (clientRequestId) await new OperationLogService(tx as PrismaService).log({ operatorId, module: 'inventory', action: 'location_change_request', targetType: 'inventory_location', targetId: body.sku, detail: { clientRequestId, requestFingerprint, result } })
+      return result
+    })
   }
 
   async batchApplyLocationChange(
-    input: { rows?: InventoryAdjustImportRow[]; content?: string; defaultWarehouse?: string },
+    input: { clientRequestId?: string; rows?: InventoryAdjustImportRow[]; content?: string; defaultWarehouse?: string },
     operatorId?: number,
   ) {
     const rows = input.rows?.length
       ? input.rows
       : parseInventoryAdjustCsv(String(input.content || ''), input.defaultWarehouse || 'WMS-JHB-01')
+
+    if (input.clientRequestId) {
+      if (!operatorId || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(input.clientRequestId)) throw new BadRequestException('批量库存变更原请求标识无效')
+      const batchFingerprint = createHash('sha256').update(JSON.stringify(rows)).digest('hex')
+      await this.inventoryTransaction(async tx => {
+        await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(operatorId)} FOR UPDATE`
+        const existing = await tx.operationLog.findFirst({ where: { module: 'inventory', action: 'location_batch_request', operatorId: BigInt(operatorId), detail: { path: '$.clientRequestId', equals: input.clientRequestId } }, orderBy: { id: 'desc' } })
+        if (existing) {
+          if ((existing.detail as any)?.batchFingerprint !== batchFingerprint) throw new ConflictException('原批量库存变更内容不同，请继续原批次，勿更改、追加或重排行后重试')
+        } else {
+          await new OperationLogService(tx as PrismaService).log({ operatorId, module: 'inventory', action: 'location_batch_request', targetType: 'inventory_batch', targetId: input.clientRequestId, detail: { clientRequestId: input.clientRequestId, batchFingerprint, rowCount: rows.length } })
+        }
+      })
+    }
 
     const results: Array<{ line: number; ok: boolean; sku?: string; error?: string }> = []
     let ok = 0
@@ -1392,7 +1430,13 @@ export class InventoryService {
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i]
       try {
-        await this.applyLocationChange(row, operatorId)
+        let clientRequestId: string | undefined
+        if (input.clientRequestId) {
+          if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(input.clientRequestId)) throw new BadRequestException('批量库存变更原请求标识无效')
+          const h = createHash('sha256').update(input.clientRequestId + ':' + i).digest('hex')
+          clientRequestId = `${h.slice(0,8)}-${h.slice(8,12)}-4${h.slice(13,16)}-8${h.slice(17,20)}-${h.slice(20,32)}`
+        }
+        await this.applyLocationChange({ ...row, clientRequestId }, operatorId)
         results.push({ line: i + 2, ok: true, sku: row.sku })
         ok++
       } catch (err) {
@@ -1409,11 +1453,12 @@ export class InventoryService {
     id: number,
     body: { clientRequestId?: string; qty?: number; locationCode?: string; remark?: string; customerCode?: string },
     operatorId?: number,
+    existing?: Tx,
   ) {
     const clientRequestId = String(body.clientRequestId || '').trim()
     if (clientRequestId && (!operatorId || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(clientRequestId))) throw new BadRequestException('库存调整原请求标识无效，请核对原操作')
     const requestFingerprint = createHash('sha256').update(JSON.stringify({ id, qty: body.qty ?? null, locationCode: body.locationCode?.trim() || null, customerCode: body.customerCode?.trim() || null, remark: body.remark?.trim() || null })).digest('hex')
-    return this.prisma.$transaction(async tx => {
+    return this.inventoryTransaction(async tx => {
       if (clientRequestId) {
         await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(operatorId!)} FOR UPDATE`
         const receipt = await tx.operationLog.findFirst({ where: { module: 'inventory', action: 'location_adjust_request', operatorId: BigInt(operatorId!), detail: { path: '$.clientRequestId', equals: clientRequestId } }, orderBy: { id: 'desc' } })
@@ -1595,7 +1640,7 @@ export class InventoryService {
       })()
       if (clientRequestId) await new OperationLogService(tx as PrismaService).log({ operatorId, module: 'inventory', action: 'location_adjust_request', targetType: 'inventory_location', targetId: String(id), detail: { clientRequestId, requestFingerprint, result: finalResult } })
       return finalResult
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted })
+    }, existing)
   }
 
   async addLocationStock(
@@ -1608,8 +1653,9 @@ export class InventoryService {
       customerCode: string
     },
     operatorId?: number,
+    existing?: Tx,
   ) {
-    return this.prisma.$transaction(async tx => {
+    return this.inventoryTransaction(async tx => {
 
       const customerCode = body.customerCode?.trim()
       if (!customerCode) throw new BadRequestException('请填写客户代码')
@@ -1700,7 +1746,7 @@ export class InventoryService {
       })
 
       return result
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted })
+    }, existing)
   }
 
   /** 中转仓之间调拨可发库存（深圳 → 义乌等） */
