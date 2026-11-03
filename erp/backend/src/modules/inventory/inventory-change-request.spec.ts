@@ -22,11 +22,21 @@ describe('stable inventory change batch requests', () => {
     expect(apply).not.toHaveBeenCalled()
   })
   it('rejects changed batch content before running any row', async () => {
-    const tx = { $queryRaw: jest.fn(), operationLog: { findFirst: jest.fn().mockResolvedValue({ detail: { batchFingerprint: 'original' } }) } }
+    const tx = { $queryRaw: jest.fn(), operationLog: { findFirst: jest.fn(async ({ where }) => where.action === 'location_batch_closed' ? null : { detail: { batchFingerprint: 'original' } }) } }
     const service = new InventoryService({ $transaction: (work: any) => work(tx) } as any, {} as any, {} as any)
     const apply = jest.spyOn(service, 'applyLocationChange')
     await expect(service.batchApplyLocationChange({ clientRequestId: uuid, rows: [row, row] }, 7)).rejects.toThrow('勿更改、追加或重排行')
     expect(apply).not.toHaveBeenCalled()
+  })
+
+  it('returns readable Chinese per-row failures without exposing database diagnostics', async () => {
+    const service = new InventoryService({} as any, {} as any, {} as any)
+    jest.spyOn(service, 'applyLocationChange').mockRejectedValue(new Error('Invalid prisma.inventory.update() invocation: database secret unavailable'))
+    const result = await service.batchApplyLocationChange({ rows: [row] }, 7)
+    expect(result.fail).toBe(1)
+    expect(result.results[0].error).toMatch(/[\u4e00-\u9fff]/)
+    expect(result.results[0].error).not.toContain('prisma')
+    expect(result.results[0].error).not.toContain('secret')
   })
 
 })

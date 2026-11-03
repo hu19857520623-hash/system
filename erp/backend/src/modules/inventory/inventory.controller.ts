@@ -64,6 +64,12 @@ export class InventoryController {
   }
 
   @RequirePerms('inventory_query.adjust')
+  @Post('location-change/batch/close')
+  closeLocationChangeBatch(@Body() body: { clientRequestId: string; rows: any[] }, @CurrentUser('userId') userId: number) {
+    return this.service.closeLocationChangeBatch(body, userId)
+  }
+
+  @RequirePerms('inventory_query.adjust')
   @Patch('sku-query/:id')
   updateSkuCatalogItem(
     @Param('id', ParseIntPipe) id: number,

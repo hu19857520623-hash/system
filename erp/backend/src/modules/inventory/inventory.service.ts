@@ -1,3 +1,4 @@
+import { userFacingError } from '@erp/shared/user-facing-error'
 import { createHash } from 'crypto'
 import { Prisma } from '@prisma/client'
 import { billingSourceSnapshot } from '../billing/billing-snapshot.util'
@@ -1319,6 +1320,7 @@ export class InventoryService {
   async applyLocationChange(
     body: {
       clientRequestId?: string
+      batchRequestId?: string
       customerCode: string
       sku: string
       warehouseCode: string
@@ -1341,6 +1343,10 @@ export class InventoryService {
           if (detail.requestFingerprint !== requestFingerprint || !detail.result) throw new ConflictException('原库存变更内容不同，请核对原请求后继续')
           return { ...detail.result, duplicate: true }
         }
+      }
+      if (body.batchRequestId) {
+        const closed = await tx.operationLog.findFirst({ where: { module: 'inventory', action: 'location_batch_closed', operatorId: BigInt(operatorId!), detail: { path: '$.clientRequestId', equals: body.batchRequestId } }, orderBy: { id: 'desc' } })
+        if (closed) throw new ConflictException('原批次已结束，本行未再执行，请按核对结果修正未成功行后新建批次')
       }
       const result = await (async () => {
     const customerCode = body.customerCode?.trim()
@@ -1414,6 +1420,8 @@ export class InventoryService {
       const batchFingerprint = createHash('sha256').update(JSON.stringify(rows)).digest('hex')
       await this.inventoryTransaction(async tx => {
         await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(operatorId)} FOR UPDATE`
+        const closed = await tx.operationLog.findFirst({ where: { module: 'inventory', action: 'location_batch_closed', operatorId: BigInt(operatorId), detail: { path: '$.clientRequestId', equals: input.clientRequestId } }, orderBy: { id: 'desc' } })
+        if (closed) throw new ConflictException('原批次已结束，请核对结束回执后处理未成功行')
         const existing = await tx.operationLog.findFirst({ where: { module: 'inventory', action: 'location_batch_request', operatorId: BigInt(operatorId), detail: { path: '$.clientRequestId', equals: input.clientRequestId } }, orderBy: { id: 'desc' } })
         if (existing) {
           if ((existing.detail as any)?.batchFingerprint !== batchFingerprint) throw new ConflictException('原批量库存变更内容不同，请继续原批次，勿更改、追加或重排行后重试')
@@ -1436,17 +1444,44 @@ export class InventoryService {
           const h = createHash('sha256').update(input.clientRequestId + ':' + i).digest('hex')
           clientRequestId = `${h.slice(0,8)}-${h.slice(8,12)}-4${h.slice(13,16)}-8${h.slice(17,20)}-${h.slice(20,32)}`
         }
-        await this.applyLocationChange({ ...row, clientRequestId }, operatorId)
+        await this.applyLocationChange({ ...row, clientRequestId, batchRequestId: input.clientRequestId }, operatorId)
         results.push({ line: i + 2, ok: true, sku: row.sku })
         ok++
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
+        const message = userFacingError(err, undefined, '本行库存变更未确认完成，请核对原批次后继续')
         results.push({ line: i + 2, ok: false, sku: row.sku, error: message })
         fail++
       }
     }
 
     return { ok, fail, total: rows.length, results }
+  }
+
+  async closeLocationChangeBatch(input: { clientRequestId: string; rows: InventoryAdjustImportRow[] }, operatorId: number) {
+    if (!operatorId || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(input.clientRequestId || '') || !Array.isArray(input.rows) || !input.rows.length) throw new BadRequestException('结束原批次需要完整原请求标识和原明细')
+    const batchFingerprint = createHash('sha256').update(JSON.stringify(input.rows)).digest('hex')
+    return this.inventoryTransaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(operatorId)} FOR UPDATE`
+      const where = (action: string) => ({ module: 'inventory', action, operatorId: BigInt(operatorId), detail: { path: '$.clientRequestId', equals: input.clientRequestId } })
+      const closed = await tx.operationLog.findFirst({ where: where('location_batch_closed'), orderBy: { id: 'desc' } })
+      if (closed) {
+        const detail = closed.detail as any
+        if (detail.batchFingerprint !== batchFingerprint) throw new ConflictException('结束请求与原批次内容不同，请核对原明细')
+        return detail.result
+      }
+      const manifest = await tx.operationLog.findFirst({ where: where('location_batch_request'), orderBy: { id: 'desc' } })
+      if (manifest && (manifest.detail as any)?.batchFingerprint !== batchFingerprint) throw new ConflictException('结束请求与原批次内容不同，请核对原明细')
+      const appliedIndices: number[] = [], unappliedIndices: number[] = []
+      for (let index = 0; index < input.rows.length; index++) {
+        const h = createHash('sha256').update(input.clientRequestId + ':' + index).digest('hex')
+        const rowRequest = `${h.slice(0,8)}-${h.slice(8,12)}-4${h.slice(13,16)}-8${h.slice(17,20)}-${h.slice(20,32)}`
+        const receipt = await tx.operationLog.findFirst({ where: { module: 'inventory', action: 'location_change_request', operatorId: BigInt(operatorId), detail: { path: '$.clientRequestId', equals: rowRequest } }, orderBy: { id: 'desc' } })
+        if (receipt) appliedIndices.push(index); else unappliedIndices.push(index)
+      }
+      const result = { status: 'closed', clientRequestId: input.clientRequestId, appliedIndices, unappliedIndices, total: input.rows.length }
+      await new OperationLogService(tx as PrismaService).log({ operatorId, module: 'inventory', action: 'location_batch_closed', targetType: 'inventory_batch', targetId: input.clientRequestId, detail: { clientRequestId: input.clientRequestId, batchFingerprint, result } })
+      return result
+    })
   }
 
   async updateLocationLine(

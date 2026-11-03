@@ -65,6 +65,7 @@ export const OPERATION_ACTION_LABELS: Record<string, string> = {
   resolve_exception: '异常放行',
   putaway: '入库上架',
   location_change_request: '库存变更请求确认',
+  location_batch_closed: '批量库存变更核对结束',
   location_batch_request: '批量库存变更原内容登记',
   location_adjust_request: '库存调整请求确认',
   adjust_qty: '调整数量',

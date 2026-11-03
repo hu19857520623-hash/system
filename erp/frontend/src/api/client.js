@@ -383,6 +383,7 @@ export const inventoryApi = {
   addLocationStock: (data) => api.post('/inventory/by-location', data),
   changeLocationStock: (data) => api.post('/inventory/location-change', data),
   batchChangeLocationStock: (data) => api.post('/inventory/location-change/batch', data),
+  closeLocationChangeBatch: (data) => api.post('/inventory/location-change/batch/close', data),
   adjustLocation: (id, data) => api.patch(`/inventory/by-location/${id}`, data),
   logs: (sku, params) => api.get(`/inventory/logs/${encodeURIComponent(sku)}`, params),
   outboundLogs: (sku, params) => api.get(`/inventory/logs/${encodeURIComponent(sku)}/outbound`, params),
