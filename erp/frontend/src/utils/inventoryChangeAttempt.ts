@@ -1,8 +1,10 @@
+import { claimInventoryRequest, InventoryClaimConflict, type InventoryClaimLock } from './inventoryRequestClaim'
 import { onScopeDispose, ref, shallowRef, watch } from 'vue'
 import { userFacingError } from '@erp/shared/user-facing-error'
 
 export type InventoryChange = { clientRequestId: string; kind: 'single' | 'batch'; payload: Record<string, any> }
 export function useInventoryChangeAttempt(options: {
+  claimLock?: InventoryClaimLock
   actor: () => string; scope: () => string | null; allowed: () => boolean
   storage: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
   request: (payload: InventoryChange) => Promise<unknown>
@@ -48,13 +50,19 @@ export function useInventoryChangeAttempt(options: {
   }
   async function start(payload: Omit<InventoryChange, 'clientRequestId'>) {
     if (stopped || busy.value || blocked.value || pending.value || !options.actor() || !options.scope() || !options.allowed()) return false
+    const actor = options.actor(), scope = options.scope(), version = revision
     try {
-      if (options.storage.getItem(key(options.actor()))) { restore(); return false }
-      const p = { ...structuredClone(payload), clientRequestId: crypto.randomUUID() }, raw = JSON.stringify(p)
-      options.storage.setItem(key(options.actor()), raw)
-      if (options.storage.getItem(key(options.actor())) !== raw) throw Error()
-      pending.value = p
-    } catch { blocked.value = true; feedback.value = '无法保存原库存变更信息，本次尚未提交，请检查存储后重试。'; return false }
+      const intent = structuredClone(payload)
+      const prepared = await claimInventoryRequest({ actor, storage: options.storage, lock: options.claimLock, current: () => !stopped && version === revision && actor === options.actor() && scope === options.scope() && options.allowed(), prepare: () => {
+        if (options.storage.getItem(key(options.actor()))) { restore(); return false }
+        const p = { ...intent, clientRequestId: crypto.randomUUID() }, raw = JSON.stringify(p)
+        options.storage.setItem(key(options.actor()), raw)
+        if (options.storage.getItem(key(options.actor())) !== raw) throw Error()
+        pending.value = p
+        return true
+      } })
+      if (!prepared) return false
+    } catch (error) { if (stopped || version !== revision || actor !== options.actor() || scope !== options.scope()) return false; blocked.value = !(error instanceof InventoryClaimConflict); feedback.value = userFacingError(error, undefined, '无法保存原库存变更信息，本次尚未提交，请检查存储后重试。'); return false }
     return run('submit')
   }
   return { pending, busy, blocked, feedback, start, resume: () => run('submit'), closeBatch: () => run('close') }

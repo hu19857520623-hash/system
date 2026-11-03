@@ -8,7 +8,7 @@ describe('durable original logistics transfer', () => {
     const map = new Map<string, string>()
     const storage = { getItem: (k: string) => map.get(k) ?? null, setItem: (k: string, v: string) => { map.set(k, v) }, removeItem: (k: string) => { map.delete(k) } }
     const actor = ref('7'), scope = ref('session7'), allowed = ref(true), request = vi.fn(), closeRequest = vi.fn()
-    function mount() { const owner = effectScope(); const attempt = owner.run(() => useInventoryChangeAttempt({ actor: () => actor.value, scope: () => scope.value, allowed: () => allowed.value, storage, request, closeRequest }))!; return { owner, attempt } }
+    function mount() { const owner = effectScope(); const attempt = owner.run(() => useInventoryChangeAttempt({ actor: () => actor.value, scope: () => scope.value, allowed: () => allowed.value, claimLock: async (_name, prepare) => prepare(), storage, request, closeRequest }))!; return { owner, attempt } }
     return { storage, map, actor, scope, allowed, request, closeRequest, mount }
   }
   it('preserves UUID and original payload through lost response and page remount', async () => {
@@ -20,7 +20,7 @@ describe('durable original logistics transfer', () => {
     f.request.mockResolvedValueOnce({ duplicate: true })
     expect(await second.attempt.resume()).toBe(true)
     expect(f.request.mock.calls[1][0]).toEqual(original)
-    expect(f.map.size).toBe(0); second.owner.stop()
+    expect(f.storage.getItem('erp.inventory.change.7')).toBeNull(); second.owner.stop()
   })
   it('does not submit if durable storage fails', async () => {
     const f = fixture(); f.storage.setItem = () => { throw Error('disk') }; const p = f.mount()
@@ -29,7 +29,7 @@ describe('durable original logistics transfer', () => {
   it('ignores a late success after account switch and retains original actor recovery', async () => {
     const f = fixture(), p = f.mount(); let finish!: (v: unknown) => void
     f.request.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
-    const running = p.attempt.start(payload); f.actor.value = '8'; f.scope.value = 'session8'; await nextTick(); finish({})
+    const running = p.attempt.start(payload); await vi.waitFor(() => expect(f.request).toHaveBeenCalledTimes(1)); f.actor.value = '8'; f.scope.value = 'session8'; await nextTick(); finish({})
     expect(await running).toBe(false); expect(f.storage.getItem('erp.inventory.change.7')).not.toBeNull()
     expect(p.attempt.pending.value).toBeNull(); p.owner.stop()
   })
@@ -50,13 +50,28 @@ describe('durable original logistics transfer', () => {
     f.closeRequest.mockResolvedValueOnce(receipt)
     expect(await next.attempt.closeBatch()).toEqual(receipt)
     expect(f.closeRequest.mock.calls[0][0]).toEqual(f.closeRequest.mock.calls[1][0])
-    expect(f.map.size).toBe(0); expect(f.request).toHaveBeenCalledTimes(1); next.owner.stop()
+    expect(f.storage.getItem('erp.inventory.change.7')).toBeNull(); expect(f.request).toHaveBeenCalledTimes(1); next.owner.stop()
   })
   it('does not erase recovery on malformed close receipts', async () => {
     const f = fixture(), p = f.mount(); f.request.mockRejectedValue(new Error('lost'))
     await p.attempt.start({ kind: 'batch', payload: { rows: [{ sku: 'A' }] } })
     f.closeRequest.mockResolvedValue({ status: 'closed', clientRequestId: 'wrong', total: 1, appliedIndices: [], unappliedIndices: [0] })
-    expect(await p.attempt.closeBatch()).toBe(false); expect(f.map.size).toBe(1); p.owner.stop()
+    expect(await p.attempt.closeBatch()).toBe(false); expect(f.storage.getItem('erp.inventory.change.7')).not.toBeNull(); p.owner.stop()
+  })
+
+  it('waits for the shared claim and submits only the winner across two mounted pages', async () => {
+    const f = fixture(), queue: Array<() => void> = []
+    const lock = (_name: string, prepare: () => boolean): Promise<boolean> => new Promise((resolve, reject) => { queue.push(() => { try { resolve(prepare()) } catch(e) { reject(e) } }) })
+    const owner1 = effectScope(), owner2 = effectScope()
+    const options = { actor: () => f.actor.value, scope: () => f.scope.value, allowed: () => true, storage: f.storage, claimLock: lock, request: f.request }
+    const a = owner1.run(() => useInventoryChangeAttempt(options))!, b = owner2.run(() => useInventoryChangeAttempt(options))!
+    f.request.mockRejectedValue(new Error('lost'))
+    const first = a.start(payload), second = b.start(payload)
+    queue.shift()!(); await first
+    queue.shift()!(); expect(await second).toBe(false)
+    expect(f.request).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(f.storage.getItem('erp.inventory.change.7')!).clientRequestId).toBe(a.pending.value!.clientRequestId)
+    expect(b.feedback.value).toContain('另一库存页面'); owner1.stop(); owner2.stop()
   })
 
 })
