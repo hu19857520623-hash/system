@@ -472,23 +472,24 @@ export class ReturnsService {
   }
 
   async measure(id: number, body: { cartons: CartonInput[] }, userId: number) {
-    const row = await this.prisma.returnOrder.findUnique({ where: { id: BigInt(id) } })
-    if (!row) throw new NotFoundException('退件单不存在')
-    if (!['received', 'arrived', 'measured', 'fee_calculated'].includes(row.status)) {
-      throw new BadRequestException('当前状态不可测量，请先完成收货')
-    }
-    const cartons = Array.isArray(body.cartons) ? body.cartons : []
-    if (!cartons.length) throw new BadRequestException('请至少录入 1 箱外箱尺寸')
+    const updated = await this.prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM return_order WHERE id = ${BigInt(id)} FOR UPDATE`
+      const row = await tx.returnOrder.findUnique({ where: { id: BigInt(id) } })
+      if (!row) throw new NotFoundException('退件单不存在')
+      if (!['received', 'arrived', 'measured', 'fee_calculated'].includes(row.status)) {
+        throw new BadRequestException('当前状态不可测量，请先完成收货')
+      }
+      const cartons = Array.isArray(body.cartons) ? body.cartons : []
+      if (!cartons.length) throw new BadRequestException('请至少录入 1 箱外箱尺寸')
 
-    let computed
-    try {
-      computed = computeCartonMeasures(cartons)
-    } catch (err) {
-      throw new BadRequestException(err instanceof Error ? err.message : '外箱尺寸无效')
-    }
-    const totals = sumCartonTotals(computed)
+      let computed
+      try {
+        computed = computeCartonMeasures(cartons)
+      } catch (err) {
+        throw new BadRequestException(err instanceof Error ? err.message : '外箱尺寸无效')
+      }
+      const totals = sumCartonTotals(computed)
 
-    const updated = await this.prisma.$transaction(async (tx) => {
       await tx.returnCartonMeasure.deleteMany({ where: { returnId: row.id } })
       for (const c of computed) {
         await tx.returnCartonMeasure.create({
@@ -505,7 +506,7 @@ export class ReturnsService {
           },
         })
       }
-      return tx.returnOrder.update({
+      const updated = await tx.returnOrder.update({
         where: { id: row.id },
         data: {
           status: 'measured',
@@ -519,18 +520,19 @@ export class ReturnsService {
         },
         include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
       })
-    })
 
-    await this.returnCharges.clearPendingAutoReturnCharges(row.returnNo)
-    await this.opLog.log({
-      module: 'returns',
-      action: 'return_measure',
-      targetType: 'return_order',
-      targetId: row.returnNo,
-      operatorId: userId,
-      detail: { cartonCount: computed.length, ...totals },
-    })
-    void this.pushReturnStatusToOms(row.returnNo)
+      await new ReturnsChargeService(tx as PrismaService, this.billing).clearPendingAutoReturnCharges(row.returnNo)
+      await this.opLog.log({
+        module: 'returns',
+        action: 'return_measure',
+        targetType: 'return_order',
+        targetId: row.returnNo,
+        operatorId: userId,
+        detail: { cartonCount: computed.length, ...totals },
+      }, tx)
+      return updated
+    }, { isolationLevel: 'ReadCommitted' })
+    void this.pushReturnStatusToOms(updated.returnNo)
     return this.enrichRow(updated)
   }
 
@@ -724,70 +726,78 @@ export class ReturnsService {
     userId: number,
     _body?: { extraLines?: { description?: string; amount?: number; quantity?: number; unitPrice?: number }[] },
   ) {
-    const row = await this.prisma.returnOrder.findUnique({
-      where: { id: BigInt(id) },
-      include: { items: true, cartons: { orderBy: { cartonNo: 'asc' } } },
-    })
-    if (!row) throw new NotFoundException('退件单不存在')
-    if (row.status !== 'measured') {
-      throw new BadRequestException('请先完成外箱体积测量，再生成费用')
-    }
-    if (!row.cartons.length) {
-      throw new BadRequestException('缺少外箱测量数据')
-    }
-
-    const totalVolumeCbm = Number(row.totalVolumeCbm || 0)
-    const template = await this.resolveWarehouseFeeTemplate(row.returnWarehouse)
-    const rules = mapDbTemplateRules(template.rules || [])
-    const ctx = buildFeePreviewContext({
-      cartonCount: row.cartons.length,
-      totalVolumeCbm,
-      totalChargeableWeightKg: Number(row.totalChargeableWeightKg || 0),
-      receivedQty: row.receivedQty,
-      items: row.items,
-    })
-    const autoLines = buildMeasurePhaseFeeLines(ctx, rules)
-    const estimatedFeeTotal = autoLines.reduce((s, l) => s + l.amount, 0)
-
-    await this.returnCharges.clearPendingAutoReturnCharges(row.returnNo)
-    await this.returnCharges.clearPendingManualExtraCharges(row.returnNo)
-    for (const line of autoLines) {
-      await this.returnCharges.createReturnCharge({
-        customerId: Number(row.customerId),
-        returnNo: row.returnNo,
-        warehouseCode: row.returnWarehouse || undefined,
-        source: 'wms',
-        ...line,
+    await this.ensureMissingWarehouseTemplates()
+    const updated = await this.prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM return_order WHERE id = ${BigInt(id)} FOR UPDATE`
+      const row = await tx.returnOrder.findUnique({
+        where: { id: BigInt(id) },
+        include: { items: true, cartons: { orderBy: { cartonNo: 'asc' } } },
       })
-    }
+      if (!row) throw new NotFoundException('退件单不存在')
+      if (row.status !== 'measured') {
+        throw new BadRequestException('请先完成外箱体积测量，再生成费用')
+      }
+      if (!row.cartons.length) {
+        throw new BadRequestException('缺少外箱测量数据')
+      }
 
-    const updated = await this.prisma.returnOrder.update({
-      where: { id: row.id },
-      data: {
-        status: 'fee_calculated',
-        feeCalculatedAt: new Date(),
-        estimatedFeeTotal,
-        feeStatus: 'estimated',
-      },
-      include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
-    })
+      const totalVolumeCbm = Number(row.totalVolumeCbm || 0)
+      const template = await this.resolveWarehouseFeeTemplate(row.returnWarehouse, tx as PrismaService)
+      const rules = mapDbTemplateRules(template.rules || [])
+      const ctx = buildFeePreviewContext({
+        cartonCount: row.cartons.length,
+        totalVolumeCbm,
+        totalChargeableWeightKg: Number(row.totalChargeableWeightKg || 0),
+        receivedQty: row.receivedQty,
+        items: row.items,
+      })
+      const autoLines = buildMeasurePhaseFeeLines(ctx, rules)
+      const estimatedFeeTotal = autoLines.reduce((s, l) => s + l.amount, 0)
 
-    await this.opLog.log({
-      module: 'returns',
-      action: 'return_calc_fee',
-      targetType: 'return_order',
-      targetId: row.returnNo,
-      operatorId: userId,
-      detail: {
-        estimatedFeeTotal,
-        templateCode: template.templateCode,
-        autoLines,
-        phase: 'measure_logistics_only',
-      },
-    })
-    void this.pushReturnStatusToOms(row.returnNo)
+      await tx.$queryRaw`SELECT id FROM customer WHERE id = ${row.customerId} FOR UPDATE`
+      const charges = new ReturnsChargeService(tx as PrismaService, this.billing)
+      await charges.clearPendingAutoReturnCharges(row.returnNo)
+      await charges.clearPendingManualExtraCharges(row.returnNo)
+      for (const line of autoLines) {
+        await charges.createReturnCharge({
+          customerId: Number(row.customerId),
+          returnNo: row.returnNo,
+          warehouseCode: row.returnWarehouse || undefined,
+          source: 'wms',
+          ...line,
+        }, false)
+      }
+
+      const updated = await tx.returnOrder.update({
+        where: { id: row.id },
+        data: {
+          status: 'fee_calculated',
+          feeCalculatedAt: new Date(),
+          estimatedFeeTotal,
+          feeStatus: 'estimated',
+        },
+        include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
+      })
+
+      await this.opLog.log({
+        module: 'returns',
+        action: 'return_calc_fee',
+        targetType: 'return_order',
+        targetId: row.returnNo,
+        operatorId: userId,
+        detail: {
+          estimatedFeeTotal,
+          templateCode: template.templateCode,
+          autoLines,
+          phase: 'measure_logistics_only',
+        },
+      }, tx)
+      return updated
+    }, { isolationLevel: 'ReadCommitted' })
+    void this.billing.pushCustomerBillingToOms(Number(updated.customerId))
+    void this.pushReturnStatusToOms(updated.returnNo)
     const enriched = this.enrichRow(updated)
-    const loadedFeeLines = await this.returnCharges.loadFeeLines(row.returnNo)
+    const loadedFeeLines = await this.returnCharges.loadFeeLines(updated.returnNo)
     return { ...enriched, feeLines: loadedFeeLines }
   }
 
@@ -944,13 +954,13 @@ export class ReturnsService {
     }
   }
 
-  private async resolveWarehouseFeeTemplate(warehouseCode: string | null) {
+  private async resolveWarehouseFeeTemplate(warehouseCode: string | null, client: PrismaService = this.prisma) {
     const wh = normalizeReturnWarehouse(warehouseCode)
     if (!wh) {
       throw new BadRequestException('退件单缺少有效退件仓库，无法匹配收费模板')
     }
-    await this.ensureMissingWarehouseTemplates()
-    const row = await this.prisma.returnFeeTemplate.findFirst({
+    if (client === this.prisma) await this.ensureMissingWarehouseTemplates()
+    const row = await client.returnFeeTemplate.findFirst({
       where: { status: 'active', warehouseCode: wh },
       include: { rules: { where: { autoApply: true }, orderBy: { sortOrder: 'asc' } } },
     })
