@@ -24,7 +24,7 @@ import { assertInboundInputCounts } from './inbound-plan.util.js'
 import { readInboundPlan } from './inbound-plan.util.js'
 import { inboundSavedVersion, runInboundSave, resolveInboundSave } from './inbound-save.util.js'
 import { assertInboundSnapshot } from './inbound-snapshot-guard.util.js'
-import { ownedInventorySnapshot } from './owned-inventory-snapshot.util.js'
+import { applyOwnedInventoryNotification } from './owned-inventory-notification.util.js'
 import { applicationCache, cachedFulfillmentWarehouses } from './cache.js'
 import express from 'express'
 import cors from 'cors'
@@ -174,16 +174,6 @@ function parseJson<T>(raw: string, fallback: T): T {
   } catch {
     return fallback
   }
-}
-
-function toOmsWarehouseCode(code?: string | null, fallback = 'jhb1'): string {
-  const raw = String(code || '').trim().toLowerCase()
-  if (!raw) return fallback
-  if (['jhb1', 'jhb3', 'cpt1', 'cpt2', 'dbn'].includes(raw)) return raw
-  if (raw.includes('jhb')) return 'jhb1'
-  if (raw.includes('cpt')) return 'cpt1'
-  if (raw.includes('dbn')) return 'dbn'
-  return fallback
 }
 
 function validWebhookSignature(rawBody: Buffer, signature: string): boolean {
@@ -1697,60 +1687,7 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
         for (const line of payload.items || []) await applyCatalogReturnSnapshot(prisma, customerId, line, () => fetchErpSkuInventoryByCode(customerCode))
       }
       if (customerId && payload.stockSource === 'owned') {
-        const warehouse = toOmsWarehouseCode(payload.warehouseCode, 'jhb1')
-        for (const line of payload.items || []) {
-          const sku = String(line.sku || '').trim()
-          if (!sku) continue
-          if (!ownedInventorySnapshot(line)) continue
-          const product = await prisma.product.findFirst({
-            where: { customerId, internalSku: sku },
-          })
-          if (!product) continue
-
-          const inventory = await prisma.inventoryItem.findFirst({
-            where: { customerId, sku, stockSource: 'owned' },
-          })
-          const { available, locked, pendingShelving } = ownedInventorySnapshot(line, inventory?.pendingShelving ?? 0)!
-          const inventoryData = {
-            name: product.name,
-            image: product.image,
-            available,
-            locked,
-            inTransit: payload.reason?.startsWith('outbound_') || payload.reason === 'return_restock' ? inventory?.inTransit ?? 0 : 0,
-            safetyStock: inventory?.safetyStock ?? 0,
-            spec: product.spec,
-            customCode: product.customCode,
-            ean: inventory?.ean ?? null,
-            warehouse,
-            pendingShelving,
-            pendingOutbound: inventory?.pendingOutbound ?? 0,
-            defective: inventory?.defective ?? 0,
-            shipped: inventory?.shipped ?? 0,
-            warningQty: inventory?.warningQty ?? 0,
-            price: product.price,
-            declaredNameEn: product.declaredNameEn,
-            categoryPath: product.categoryPath,
-            stockSource: 'owned',
-          }
-          if (inventory) {
-            await prisma.inventoryItem.update({ where: { id: inventory.id }, data: inventoryData })
-          } else {
-            await prisma.inventoryItem.create({
-              // The inventory table id is VARCHAR(50); keep the mirror id
-              // short even when an imported SKU itself is long.
-              data: {
-                id: `erp-owned-${createHash('sha256').update(`${customerId}:${sku}`).digest('hex').slice(0, 24)}`,
-                customerId,
-                sku,
-                ...inventoryData,
-              },
-            })
-          }
-          await prisma.product.update({
-            where: { id: product.id },
-            data: { availableQty: available, lockedQty: locked },
-          })
-        }
+        await applyOwnedInventoryNotification(prisma, customerId, customerCode, String(payload.warehouseCode || ''), fetchErpInventoryView)
       }
       if (customerId) {
         await prisma.systemMessage.create({

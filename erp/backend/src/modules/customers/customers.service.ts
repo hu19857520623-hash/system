@@ -159,9 +159,15 @@ export class CustomersService {
   /** OMS P1：客户库存视图（货盘持有 + 客户自有海外仓库存）。 */
   async inventoryViewForOms(customerCode: string, warehouseCode = 'WMS-JHB-01') {
     const customer = await this.findByCodeForOms(customerCode)
+    return this.prisma.$transaction(tx => this.inventoryViewSnapshot(tx, customer, warehouseCode), {
+      isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead, timeout: 30000,
+    })
+  }
+
+  private async inventoryViewSnapshot(tx: Prisma.TransactionClient, customer: { id: number; customerCode: string; customerName: string }, warehouseCode: string) {
     const [holdings, inboundOrders] = await Promise.all([
-      this.listSkuInventory(BigInt(customer.id)),
-      this.prisma.inboundOrder.findMany({
+      this.listSkuInventory(BigInt(customer.id), tx),
+      tx.inboundOrder.findMany({
         where: {
           omsCustomerCode: customer.customerCode,
           warehouseCode,
@@ -179,7 +185,7 @@ export class CustomersService {
     const ownedProductIdValues = [...new Set(inboundItems.map(item => item.productId.toString()))]
     const ownedProductIds = ownedProductIdValues.map(BigInt)
     const products = catalogSkus.length || ownedProductIds.length
-      ? await this.prisma.product.findMany({
+      ? await tx.product.findMany({
         where: {
           OR: [
             ...(catalogSkus.length ? [{ sku: { in: catalogSkus } }] : []),
@@ -190,7 +196,7 @@ export class CustomersService {
       : []
     const inventoryProductIds = products.map((product) => product.id)
     const inventoryRows = inventoryProductIds.length
-      ? await this.prisma.inventory.findMany({
+      ? await tx.inventory.findMany({
           where: { productId: { in: inventoryProductIds }, warehouseCode },
         })
       : []
@@ -561,8 +567,8 @@ export class CustomersService {
     }
   }
 
-  private async listSkuInventory(customerId: bigint) {
-    const rows = await this.prisma.customerSkuInventory.findMany({
+  private async listSkuInventory(customerId: bigint, db: Pick<Prisma.TransactionClient, 'customerSkuInventory'> = this.prisma) {
+    const rows = await db.customerSkuInventory.findMany({
       where: { customerId },
       orderBy: { updatedAt: 'desc' },
     })
