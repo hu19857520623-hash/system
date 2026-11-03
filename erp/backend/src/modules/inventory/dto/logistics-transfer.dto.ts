@@ -1,7 +1,11 @@
 import { Type } from 'class-transformer'
-import { IsInt, IsNotEmpty, IsOptional, IsString, Min } from 'class-validator'
+import { IsUUID, IsInt, IsNotEmpty, IsOptional, IsString, Min } from 'class-validator'
 
 export class LogisticsTransferDto {
+  @IsOptional()
+  @IsUUID('4')
+  clientRequestId?: string
+
   @IsString()
   @IsNotEmpty()
   sku: string

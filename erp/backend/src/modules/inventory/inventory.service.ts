@@ -1,10 +1,11 @@
+import { createHash } from 'crypto'
 import { Prisma } from '@prisma/client'
 import { billingSourceSnapshot } from '../billing/billing-snapshot.util'
 import { previewCatalogReclaim, reclaimCatalog } from './catalog-reclaim.util'
 import { catalogReclaimHistory, catalogReclaimSyncReceipt } from './catalog-reclaim-history.util'
 import type { CatalogReclaimHistoryQueryDto } from './dto/catalog-reclaim.dto'
 import type { CatalogReclaimDto } from './dto/catalog-reclaim.dto'
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
 import { buildInboundPipelineQtyMap, INBOUND_PIPELINE_STATUSES } from '../../common/inbound-pipeline.util'
@@ -1688,9 +1689,20 @@ export class InventoryService {
 
   /** 中转仓之间调拨可发库存（深圳 → 义乌等） */
   async transferLogistics(body: Record<string, unknown>, operatorId?: number) {
+    const input = parseLogisticsTransferBody(body)
+    const clientRequestId = String(body.clientRequestId || '').trim()
+    if (clientRequestId && (!operatorId || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(clientRequestId))) throw new BadRequestException('调拨原请求标识无效，请核对原操作')
+    const requestFingerprint = createHash('sha256').update(JSON.stringify(input)).digest('hex')
     return this.prisma.$transaction(async tx => {
-
-      const input = parseLogisticsTransferBody(body)
+      if (clientRequestId) {
+        await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(operatorId!)} FOR UPDATE`
+        const prior = await tx.operationLog.findFirst({ where: { module: 'inventory', action: 'logistics_transfer', operatorId: BigInt(operatorId!), detail: { path: '$.clientRequestId', equals: clientRequestId } }, orderBy: { id: 'desc' } })
+        if (prior) {
+          const detail = prior.detail as any
+          if (detail.requestFingerprint !== requestFingerprint || !detail.result) throw new ConflictException('原调拨请求内容不同，请使用原操作核对，勿修改后重复提交')
+          return { ...detail.result, duplicate: true }
+        }
+      }
       const [fromWh, toWh] = await Promise.all([
         tx.warehouse.findUnique({ where: { warehouseCode: input.fromWarehouseCode } }),
         tx.warehouse.findUnique({ where: { warehouseCode: input.toWarehouseCode } }),
@@ -1752,7 +1764,7 @@ export class InventoryService {
         action: 'logistics_transfer',
         targetType: 'inventory',
         targetId: result.sku,
-        detail: { ...result, remark: input.remark || '' },
+        detail: { ...result, remark: input.remark || '', clientRequestId: clientRequestId || null, requestFingerprint, result },
       })
 
       return result

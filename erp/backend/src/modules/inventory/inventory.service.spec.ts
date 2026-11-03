@@ -7,7 +7,7 @@ describe('InventoryService.transferLogistics', () => {
   const product = { id: 9n, sku: 'TKL-HX6' }
 
   function createService() {
-    const tx = {
+    const tx: any = {
       $queryRaw:jest.fn(),warehouse:{findUnique:jest.fn()},product:{findFirst:jest.fn()},
       sysUser:{findUnique:jest.fn().mockResolvedValue({realName:'库存验收员'})},operationLog:{create:jest.fn()},
       inventory: { findUnique: jest.fn() },
@@ -91,4 +91,22 @@ describe('InventoryService.transferLogistics', () => {
     await expect(service.transferLogistics({sku:'TKL-HX6',fromWarehouseCode:'LW-SZ-01',toWarehouseCode:'LW-YW-01',qty:2},1)).rejects.toThrow('库存日志失败')
     expect(inventoryMutation.applyWarehouseQtyDelta).toHaveBeenCalledTimes(2);expect(opLog.log).not.toHaveBeenCalled()
   })
+  it('returns original receipt without repeating stock mutation and rejects changed content', async () => {
+    const { service, prisma, tx, inventoryMutation } = createService()
+    prisma.warehouse.findUnique.mockImplementation(async ({ where }) => where.warehouseCode === sz.warehouseCode ? sz : yw)
+    prisma.product.findFirst.mockResolvedValue(product)
+    tx.inventory.findUnique.mockResolvedValue({ availableQty: 80 })
+    let receipt: any = null
+    tx.operationLog = { findFirst: jest.fn(async () => receipt) }
+    tx.operationLog.create = jest.fn(async ({ data }: any) => { receipt = { detail: data.detail }; return {} })
+    const request = { sku: 'TKL-HX6', fromWarehouseCode: sz.warehouseCode, toWarehouseCode: yw.warehouseCode, qty: 3, clientRequestId: '7d3ec662-cd20-4b8c-b459-eb2d74851e76' }
+    const original = await service.transferLogistics(request, 7)
+    tx.inventory.findUnique.mockResolvedValue({ availableQty: 0 })
+    expect(await service.transferLogistics(request, 7)).toEqual({ ...original, duplicate: true })
+    expect(inventoryMutation.applyWarehouseQtyDelta).toHaveBeenCalledTimes(2)
+    await expect(service.transferLogistics({ ...request, qty: 4 }, 7)).rejects.toThrow('原调拨请求内容不同')
+    expect(inventoryMutation.applyWarehouseQtyDelta).toHaveBeenCalledTimes(2)
+    expect(tx.operationLog.findFirst).toHaveBeenLastCalledWith(expect.objectContaining({ where: expect.objectContaining({ operatorId: 7n }) }))
+  })
+
 })

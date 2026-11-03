@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { userFacingError } from '@erp/shared/user-facing-error'
+import { useLogisticsTransferAttempt } from '@/utils/logisticsTransferAttempt'
+import { getAccessToken } from '@/auth/tokenStore'
 
-import { displaySku, displaySkuText } from '@erp/shared/sku-display'
+import { displaySku } from '@erp/shared/sku-display'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -52,7 +53,13 @@ function canTransferRow(row: any) {
 }
 
 const transferVisible = ref(false)
-const transferring = ref(false)
+const transferScope = computed(() => app.authenticatedUser && getAccessToken() ? JSON.stringify([getAccessToken(), app.authenticatedUser.id, app.authenticatedUser.roleCode, [...app.currentPermSet].sort()]) : null)
+const transferAttempt = useLogisticsTransferAttempt({ actor: () => String(app.authenticatedUser?.id || ''), scope: () => transferScope.value, allowed: () => canTransfer.value, storage: localStorage, request: payload => inventoryApi.transferLogistics(payload) })
+const { pending: pendingTransfer, busy: transferring, blocked: transferBlocked, feedback: transferFeedback } = transferAttempt
+async function continueTransfer() {
+  if (await transferAttempt.resume()) { transferVisible.value = false; await load() }
+}
+watch(transferScope, () => { transferVisible.value = false })
 const transferForm = ref({
   sku: '',
   name: '',
@@ -176,6 +183,7 @@ function goCreateInbound(row?: any) {
 }
 
 function openTransfer(row: any) {
+  if (pendingTransfer.value || transferBlocked.value || transferring.value) { ElMessage.warning('请先核对原调拨，勿创建重复操作'); return }
   if (!canTransfer.value) {
     ElMessage.warning('当前角色不能调拨中转仓库存')
     return
@@ -196,6 +204,7 @@ function openTransfer(row: any) {
 }
 
 async function submitTransfer() {
+  if (transferring.value || pendingTransfer.value || transferBlocked.value || !canTransfer.value) return
   const form = transferForm.value
   if (!form.toWarehouse) {
     ElMessage.warning('请选择调入仓')
@@ -209,24 +218,12 @@ async function submitTransfer() {
     ElMessage.warning(`超过可发数量 ${form.available}`)
     return
   }
-  transferring.value = true
-  try {
-    const res = await inventoryApi.transferLogistics({
-      sku: form.sku,
-      fromWarehouseCode: form.fromWarehouse,
-      toWarehouseCode: form.toWarehouse,
-      qty: form.qty,
-      remark: form.remark.trim() || undefined,
-    })
-    const destName = transferDestOptions.value.find((wh) => wh.code === form.toWarehouse)?.name || form.toWarehouse
-    ElMessage.success(displaySkuText(`已调拨 ${form.qty} 件 ${displaySku(form)} 至 ${res.toWarehouseName || destName}`))
-    transferVisible.value = false
-    await load()
-  } catch (e: any) {
-    ElMessage.error(userFacingError(displaySkuText(e?.message || '调拨失败')))
-  } finally {
-    transferring.value = false
-  }
+  const scope = transferScope.value
+  const confirmed = await transferAttempt.start({ sku: form.sku, fromWarehouseCode: form.fromWarehouse, toWarehouseCode: form.toWarehouse, qty: form.qty, remark: form.remark.trim() || undefined })
+  if (!confirmed || scope !== transferScope.value) return
+  ElMessage.success('调拨已确认，请查看库存流水')
+  transferVisible.value = false
+  await load()
 }
 
 watch([page, pageSize], () => load())
@@ -239,6 +236,12 @@ onMounted(async () => {
 
 <template>
   <div class="transit-stock-page">
+    <el-alert v-if="transferFeedback" :title="transferFeedback" :closable="false" type="warning" />
+    <el-card v-if="pendingTransfer" shadow="never">
+      <p>待核对原调拨：{{ displaySku(pendingTransfer.sku) }} · {{ pendingTransfer.fromWarehouseCode }} → {{ pendingTransfer.toWarehouseCode }} · {{ pendingTransfer.qty }} 件</p>
+      <el-button :loading="transferring" :disabled="!canTransfer || transferBlocked" @click="continueTransfer">核对并继续原调拨</el-button>
+      <el-button @click="router.push('/dashboard')">返回工作台（保留原请求）</el-button>
+    </el-card>
     <el-card shadow="never" class="page-card">
       <div class="page-head">
         <div>
@@ -455,7 +458,7 @@ onMounted(async () => {
       class="transfer-dialog"
       destroy-on-close
     >
-      <el-form label-width="88px">
+      <el-form label-width="88px" :disabled="transferring || !!pendingTransfer">
         <el-form-item label="SKU">
           <div>
             <div class="mono">{{ displaySku(transferForm) }}</div>
@@ -494,7 +497,7 @@ onMounted(async () => {
       </el-form>
       <template #footer>
         <el-button @click="transferVisible = false">取消</el-button>
-        <el-button type="primary" :loading="transferring" :disabled="!transferForm.toWarehouse" @click="submitTransfer">
+        <el-button type="primary" :loading="transferring" :disabled="!transferForm.toWarehouse || !!pendingTransfer || transferBlocked || !canTransfer" @click="submitTransfer">
           确认调拨
         </el-button>
       </template>
