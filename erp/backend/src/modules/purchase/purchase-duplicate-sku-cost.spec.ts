@@ -3,6 +3,23 @@ import { computePoFinanceApprovalCosts } from '../../common/po-finance-cost.util
 
 describe('同SKU多采购明细的费用及商品汇总', () => {
   const items = [{ id: 11n, sku: 'A', quantity: 2, unitPrice: 2, domesticFreight: 1 }, { id: 12n, sku: 'A', quantity: 3, unitPrice: 3, domesticFreight: 2 }]
+  it('多SKU审核不把单头SKU的规格、尺寸、重量、图片或开发员写到其它SKU', async () => {
+    const service: any = Object.create(PurchaseService.prototype)
+    const pre = { sku:'A',devId:10n,spec:'A规格',packageLengthCm:20,packageWidthCm:21,packageHeightCm:22,packageWeightKg:2,productLink:'https://example.test/a',productImageUrl:'/a.png' }
+    const dev = {sku:'B',spec:'B规格',packageLengthCm:40,packageWidthCm:41,packageHeightCm:42,packageWeightKg:4,takealotUrl:'https://example.test/b',takealotPriceImageUrl:'/b.png',applicantId:20n,applyNo:'DEV-B'}
+    const update=jest.fn().mockResolvedValue({id:7n}),findFirst=jest.fn().mockResolvedValue(dev)
+    const tx:any={prePurchaseOrder:{findUnique:async()=>pre},productDev:{findFirst},product:{findUnique:async()=>({id:7n}),update},purchaseOrderItem:{update:jest.fn()}}
+    await service.syncProductMasterFromLine(tx,{prePoId:1n,supplierId:3n},{id:11n,sku:'B',unitPrice:3})
+    expect(findFirst).toHaveBeenCalledWith({where:{sku:{in:expect.arrayContaining(['B','TKL-B'])},status:'approved'},orderBy:{id:'desc'}})
+    expect(update).toHaveBeenCalledWith({where:{sku:'B'},data:expect.objectContaining({spec:'B规格',lengthCm:40,widthCm:41,heightCm:42,weightKg:4,takealotUrl:'https://example.test/b',imageUrl:'/b.png',developerId:20n,remark:'选品申请 DEV-B'})})
+  })
+  it('匹配同一SKU别名的确认资料仍优先，关联开发记录也必须匹配该SKU', async () => {
+    const service:any=Object.create(PurchaseService.prototype),update=jest.fn().mockResolvedValue({id:7n}),findFirst=jest.fn().mockResolvedValue(null)
+    const tx:any={prePurchaseOrder:{findUnique:async()=>({sku:'TKL-A',devId:10n,spec:'确认规格',packageLengthCm:25,packageWeightKg:2})},productDev:{findFirst},product:{findUnique:async()=>({id:7n}),update},purchaseOrderItem:{update:jest.fn()}}
+    await service.syncProductMasterFromLine(tx,{prePoId:1n},{id:11n,sku:'A',unitPrice:3})
+    expect(findFirst).toHaveBeenCalledWith({where:{id:10n,sku:{in:expect.arrayContaining(['A','TKL-A'])}},orderBy:{id:'desc'}})
+    expect(update.mock.calls[0][0].data).toEqual(expect.objectContaining({spec:'确认规格',lengthCm:25,weightKg:2,imageUrl:undefined,developerId:undefined}))
+  })
   it('相同SKU的货款、运费、税费仍按明细ID精确对应', () => {
     const result = computePoFinanceApprovalCosts({ poNo: 'PO-DUP', items }, { unitTax: 0.5 })
     expect(result.entries.filter(x => x.poItemId === '11').map(x => x.amountRmb)).toEqual([4, 1, 1])

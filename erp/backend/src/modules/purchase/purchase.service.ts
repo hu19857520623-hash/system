@@ -933,13 +933,17 @@ export class PurchaseService {
   }
 
   private async syncProductMasterFromLine(tx: any, po: any, line: any, domesticFeePerUnit = 0) {
-    const prePo = po.prePoId
+    const skuKeys = catalogSkuLookupKeys(line.sku)
+    const headerPrePo = po.prePoId
       ? await tx.prePurchaseOrder.findUnique({ where: { id: po.prePoId } })
       : null
+    // A legacy/multi-line PO header only identifies one SKU's confirmation.
+    // Other lines must use their own development data, never that SKU's metadata.
+    const prePo = headerPrePo && skuKeys.includes(headerPrePo.sku) ? headerPrePo : null
     const dev = await tx.productDev.findFirst({
       where: prePo
-        ? { id: prePo.devId }
-        : { sku: line.sku, status: 'approved' },
+        ? { id: prePo.devId, sku: { in: skuKeys } }
+        : { sku: { in: skuKeys }, status: 'approved' },
       orderBy: { id: 'desc' },
     })
     const productData = {
