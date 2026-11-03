@@ -7,9 +7,10 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { RefreshCw } from 'lucide-react'
 import { TableActionLink, actionLinkClass } from '../components/outbound/PodReceiptModals'
 import {
-  Badge, Button, Card, PageHeader, MonoCode, Tabs, Table, TableFooter, Select, StatCard,
+  Button, Card, PageHeader, MonoCode, Tabs, Table, TableFooter, Select, StatCard,
 } from '../components/ui'
 import InboundDetailDrawer from '../components/inbound/InboundDetailDrawer'
+import { InboundReceiptStatus } from '../components/inbound/InboundReceiptStatus'
 import InboundRecovery from '../components/inbound/InboundRecovery'
 import InboundSaveRecovery from '../components/inbound/InboundSaveRecovery'
 import { useInboundConfirmation } from '../components/inbound/useInboundConfirmation'
@@ -18,7 +19,7 @@ import {
   SearchField, FilterActions, DropdownBtn, inputCls, matchText, type SearchMode,
 } from '../components/ui/filters'
 import {
-  InboundOrder, DELIVERY_METHOD_LABELS, STOCK_SOURCE_LABELS, statusLabels, warehouseFilterOptions, warehouseLabel,
+  InboundOrder, DELIVERY_METHOD_LABELS, STOCK_SOURCE_LABELS, warehouseFilterOptions, warehouseLabel,
   CUSTOMER_INBOUND_TYPES, customerInboundTypeLabel, customerInboundStockLabel,
 } from '../data/mockData'
 import { useInboundOrders } from '../data/entityStore'
@@ -474,7 +475,7 @@ export default function InboundRecords() {
                 <td className="table-cell text-xs">{o.boxCount}</td>
                 <td className="table-cell text-xs font-semibold">{o.totalQty}</td>
                 <td className="table-cell text-xs"><span className="font-semibold">{o.receivedQty}</span><span className="text-text-muted"> / {o.totalQty}</span></td>
-                <td className="table-cell"><Badge status={o.status} label={statusLabels[o.status]} /></td>
+                <td className="table-cell"><InboundReceiptStatus order={o} /></td>
                 <td className="table-cell text-xs text-text-muted">{o.createdAt}</td>
                 <td className="table-cell align-top">
                   <div className="flex min-w-[72px] flex-col gap-0.5">

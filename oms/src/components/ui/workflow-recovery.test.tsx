@@ -8,6 +8,24 @@ import ProductForm from '../products/ProductForm'
 import InboundSaveRecovery from '../inbound/InboundSaveRecovery'
 import { storeAuthSession } from '../../api/client'
 import { inboundSaveKey } from '../../data/inboundSaveWorkflow'
+import { InboundReceiptStatus } from '../inbound/InboundReceiptStatus'
+
+test('接受短收并上架完成后，状态和短收件数同时明确显示', () => {
+  const html = renderToStaticMarkup(createElement(InboundReceiptStatus, { order: { status: 'shelved', totalQty: 3, receivedQty: 2 } }))
+  assert.match(html, /上架完成/);assert.match(html, /短收 1 件/);assert.doesNotMatch(html, /部分收货/)
+})
+test('足量上架完成不显示短收或零件差异', () => {
+  const html = renderToStaticMarkup(createElement(InboundReceiptStatus, { order: { status: 'shelved', totalQty: 3, receivedQty: 3 } }))
+  assert.match(html, /上架完成/);assert.doesNotMatch(html, /短收/)
+})
+test('尚未上架完结的部分收货不会提前显示上架完成', () => {
+  const html = renderToStaticMarkup(createElement(InboundReceiptStatus, { order: { status: 'partial', totalQty: 3, receivedQty: 2 } }))
+  assert.match(html, /部分收货/);assert.doesNotMatch(html, /上架完成/)
+})
+test('零收货完结明确显示零收货结束，不表示有实物上架', () => {
+  const html = renderToStaticMarkup(createElement(InboundReceiptStatus, { order: { status: 'shelved', totalQty: 3, receivedQty: 0 } }))
+  assert.match(html, /零收货结束/);assert.match(html, /短收 3 件/);assert.doesNotMatch(html, /上架完成/)
+})
 
 test('a failed page provides Chinese recovery with both retry and return actions', () => {
   const boundary = new PageErrorBoundary({ children: createElement('p', {}, '正常页面') })

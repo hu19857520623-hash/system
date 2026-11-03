@@ -5,9 +5,10 @@ import { displaySku, displaySkuText } from '../../data/skuDisplay'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { X, Download, Printer } from 'lucide-react'
-import { Badge, Button, MonoCode } from '../ui'
+import { Button, MonoCode } from '../ui'
+import { InboundReceiptStatus } from './InboundReceiptStatus'
 import {
-  InboundOrder, DELIVERY_METHOD_LABELS, STOCK_SOURCE_LABELS, statusLabels,
+  InboundOrder, DELIVERY_METHOD_LABELS, STOCK_SOURCE_LABELS,
   customerInboundTypeLabel, customerInboundStockLabel,
 } from '../../data/mockData'
 import { useRole } from '../../auth/RoleContext'
@@ -68,7 +69,8 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mo
 
   if (!order) return null
 
-  const timeline = TIMELINE[order.status] ?? ['已提交预约']
+  const timeline = order.status === 'shelved' && order.receivedQty === 0 && order.totalQty > 0
+    ? ['已提交预约', '零收货结束'] : TIMELINE[order.status] ?? ['已提交预约']
   const customerCode = dataScope.getCustomerCode(order.customerId)
   const skuLabelOrder = {
     ...order,
@@ -225,7 +227,7 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mo
           )}
 
           <div className="flex items-center gap-2">
-            <Badge status={order.status} label={statusLabels[order.status]} />
+            <InboundReceiptStatus order={order} />
             <span className="rounded-md bg-surface-muted px-2 py-0.5 text-[11px] font-medium text-text-secondary">
               {customerView ? customerInboundStockLabel(order.stockSource) : STOCK_SOURCE_LABELS[order.stockSource]}
             </span>
@@ -242,7 +244,7 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mo
               ['联系人', order.contact ?? '—'],
               ['联系电话', order.contactPhone ?? '—'],
               ['箱数 / SKU', `${order.boxCount} 箱 · ${order.skuCount} SKU`],
-              ['应收 / 实收', `${order.receivedQty} / ${order.totalQty}`],
+              ['实收 / 应收', `${order.receivedQty} / ${order.totalQty}`],
             ].map(([k, v]) => (
               <div key={k}>
                 <p className="text-[11px] text-text-muted">{k}</p>

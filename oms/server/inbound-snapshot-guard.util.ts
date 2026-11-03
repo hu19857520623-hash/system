@@ -70,7 +70,7 @@ export async function assertInboundSnapshot(tx: Pick<Prisma.TransactionClient, '
   const status = ['pending_receipt', 'pending_push', 'push_failed', 'pushed'].includes(order.status) ? 'on_the_way'
     : ['arrived', 'receiving'].includes(order.status) ? 'receiving'
       : order.status === 'pending_putaway' ? 'partial'
-        : ['completed', 'confirmed'].includes(order.status) ? (received < expected ? 'partial' : 'shelved')
+        : ['completed', 'confirmed'].includes(order.status) ? 'shelved'
           : order.status === 'cancelled' ? 'voided' : order.status
   if (data.status !== status || data.totalQty !== expected || data.receivedQty !== received || data.skuCount !== items.length || warehouse(data.warehouse) !== warehouse(order.warehouseCode)) throw conflict()
   const cartons = await tx.$queryRaw<{ id: bigint; boxSeq: number }[]>`SELECT id, box_seq AS boxSeq FROM inbound_carton WHERE inbound_id = ${order.id} ORDER BY box_seq`

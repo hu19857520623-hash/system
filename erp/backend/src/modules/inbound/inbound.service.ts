@@ -1153,12 +1153,9 @@ export class InboundService {
     const meta = parseOmsInboundMeta(order.remark)
     const totalExpectedQty = items.reduce((s, i) => s + i.expectedQty, 0)
     const totalReceivedQty = items.reduce((s, i) => s + i.receivedQty, 0)
-    // A short-received ASN can be physically put away, but must not be shown
-    // to OMS as fully shelved. The `partial` status keeps the shortage clear.
-    const omsStatus = displayStatus === 'completed'
-      && totalReceivedQty < totalExpectedQty
-      ? 'partial'
-      : this.toOmsInboundStatus(displayStatus)
+    // Completion describes warehouse work; the unchanged expected/received
+    // quantities retain any accepted shortage for the customer's display.
+    const omsStatus = this.toOmsInboundStatus(displayStatus)
     return {
       id: Number(order.id),
       inboundNo: order.inboundNo,

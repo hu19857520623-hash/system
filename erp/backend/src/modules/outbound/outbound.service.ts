@@ -332,16 +332,16 @@ export class OutboundService {
     return where
   }
 
-  private async enrichOrders(rows: any[]) {
+  private async enrichOrders(rows: any[], db: Prisma.TransactionClient = this.prisma) {
     const customerIds = [...new Set(rows.map((r) => r.customerId).filter(Boolean))] as bigint[]
     const pickerIds = [...new Set(rows.map((r) => r.pickerId).filter(Boolean))] as bigint[]
     const reviewerIds = [...new Set(rows.map((r) => r.reviewerId).filter(Boolean))] as bigint[]
     const userIds = [...new Set([...pickerIds, ...reviewerIds])]
     const customers = customerIds.length
-      ? await this.prisma.customer.findMany({ where: { id: { in: customerIds } } })
+      ? await db.customer.findMany({ where: { id: { in: customerIds } } })
       : []
     const users = userIds.length
-      ? await this.prisma.sysUser.findMany({ where: { id: { in: userIds } } })
+      ? await db.sysUser.findMany({ where: { id: { in: userIds } } })
       : []
     const custMap = new Map(
       customers.map((c) => [
@@ -359,11 +359,11 @@ export class OutboundService {
       rows.flatMap((r) => (r.items || []).map((i: any) => i.productId).filter(Boolean)),
     )] as bigint[]
     const products = productIds.length
-      ? await this.prisma.product.findMany({ where: { id: { in: productIds } } })
+      ? await db.product.findMany({ where: { id: { in: productIds } } })
       : []
     const productMap = new Map(products.map((p) => [Number(p.id), p]))
     const platformBySku = await loadPlatformBarcodesByInternalSku(
-      this.prisma,
+      db,
       rows.flatMap((r) =>
         (r.items || []).flatMap((i: any) => {
           const product = productMap.get(Number(i.productId))
@@ -518,13 +518,24 @@ export class OutboundService {
 
   async exportList(q: OutboundListQuery) {
     const where = this.buildListWhere(q)
-    const rows = await this.prisma.outboundOrder.findMany({
-      where,
-      include: { items: true, attachments: { orderBy: { id: 'asc' } } },
-      orderBy: { id: 'desc' },
-      take: 5000,
-    })
-    const items = await this.enrichOrders(rows)
+    const items = await this.prisma.$transaction(async tx => {
+      const result: any[] = []
+      let lastId: bigint | undefined
+      // The order, its lines and display names share one read snapshot. Keyset
+      // paging has no history cap and cannot silently return a partial file.
+      for (;;) {
+        const rows = await tx.outboundOrder.findMany({
+          where: lastId == null ? where : { AND: [where, { id: { lt: lastId } }] },
+          include: { items: true, attachments: { orderBy: { id: 'asc' } } },
+          orderBy: { id: 'desc' },
+          take: 500,
+        })
+        result.push(...await this.enrichOrders(rows, tx))
+        if (rows.length < 500) break
+        lastId = rows[rows.length - 1].id
+      }
+      return result
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead, timeout: 60000 })
     const destLabel: Record<string, string> = { cpt: 'CPT自提', fba: 'FBA转运', local: '本地配送' }
     const headers = [
       '出库单号', '客户', '仓库', '目的地', '箱货类型', '目的仓', 'PO单号', '批次号', '平台', '预约状态', '预约送仓时间', 'SKU摘要', '件数', '状态',

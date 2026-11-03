@@ -4,6 +4,13 @@ jest.mock('../../common/oms-notify.util', () => ({ notifyOms: jest.fn() }))
 
 describe('入库通知真实失败状态', () => {
   beforeEach(() => jest.resetAllMocks())
+  it.each([['completed', 2, 'shelved'], ['confirmed', 2, 'shelved'], ['completed', 3, 'shelved'], ['pending_putaway', 2, 'partial'], ['receiving', 2, 'receiving']])('仓库%s实收%s映射为%s，保留短收数量', (status, actualQty, expectedStatus) => {
+    const service: any = Object.create(InboundService.prototype)
+    const result = service.mapInboundForOms({ id: 127n, inboundNo: 'AUDIT-SHORT', status, warehouseCode: 'WMS-JHB-01', omsCustomerCode: 'TKL9069', remark: null, trackingNo: null,
+      createdAt: new Date('2026-11-02T00:00:00Z'), updatedAt: new Date('2026-11-02T00:00:00Z'),
+      items: [{ id: 1n, productId: 696n, sku: 'A', expectedQty: 3, actualQty }] })
+    expect(result.omsStatus).toBe(expectedStatus);expect(result.totalExpectedQty).toBe(3);expect(result.totalReceivedQty).toBe(actualQty)
+  })
   it('非严格通知也必须将状态推送失败返回给调用方', async () => {
     const db: any = { inboundOrder: { findUnique: async () => ({ omsCustomerCode: 'TKL9069', items: [] }) } }
     const service: any = new InboundService(db, null as any, null as any, null as any, null as any, null as any)

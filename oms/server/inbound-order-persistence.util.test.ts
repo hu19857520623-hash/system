@@ -155,7 +155,7 @@ test('未关联 ERP 的预约仅可为未收货草稿或本地作废，不能伪
   await assert.rejects(assertInboundSnapshot(tx, { id: 'x', ...data, totalQty: -1 }, 'TKL9001'), e => e instanceof InboundIdentityError && e.status === 400)
 })
 
-for (const [status, local, received] of [['arrived', 'receiving', 0], ['receiving', 'receiving', 1], ['pending_putaway', 'partial', 2], ['completed', 'shelved', 2], ['confirmed', 'partial', 1], ['exception', 'exception', 0], ['cancelled', 'voided', 0]] as const) {
+for (const [status, local, received] of [['arrived', 'receiving', 0], ['receiving', 'receiving', 1], ['pending_putaway', 'partial', 2], ['completed', 'shelved', 2], ['completed', 'shelved', 1], ['confirmed', 'shelved', 1], ['exception', 'exception', 0], ['cancelled', 'voided', 0]] as const) {
   test(`仓库 ${status} 按实际进度保存为 ${local}`, async () => {
     const f = linkedSnapshot(status); f.items[0].actualQty = received
     await assertInboundSnapshot(f.tx, { ...f.incoming, status: local, receivedQty: received }, 'TKL9001', f.revision, f.trusted)
