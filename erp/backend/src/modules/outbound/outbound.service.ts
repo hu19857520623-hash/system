@@ -1165,10 +1165,26 @@ export class OutboundService {
     operatorId?: number,
   ) {
     const clientRequestId = String(payload.clientRequestId || '').trim().slice(0, 100)
-    if (clientRequestId && await this.opLog.hasClientRequest('outbound', 'set_problem', clientRequestId)) {
-      return { ...(await this.detail(id)), duplicate: true }
-    }
-    const order = await this.prisma.outboundOrder.findUnique({ where: { id: BigInt(id) } })
+    const request = { markType: payload.markType || null, isProblem: payload.isProblem ?? null,
+      problemType: payload.problemType || null, exceptionType: payload.exceptionType || null,
+      problemRemark: payload.problemRemark?.trim() || null }
+    const requestFingerprint = createHash('sha256').update(JSON.stringify(request)).digest('hex')
+    const result = await this.prisma.$transaction(async tx => {
+      if (operatorId) await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(operatorId)} FOR UPDATE`
+      await tx.$queryRaw`SELECT id FROM outbound_order WHERE id = ${BigInt(id)} FOR UPDATE`
+      const previous = clientRequestId ? await tx.operationLog.findFirst({ where: {
+        module: 'outbound', action: 'set_problem', detail: { path: '$.clientRequestId', equals: clientRequestId },
+      }, orderBy: { id: 'desc' } }) : null
+      if (previous) {
+        const target = await tx.outboundOrder.findUnique({ where: { id: BigInt(id) } })
+        if (!target || previous.targetId !== target.outboundNo ||
+            Number(previous.operatorId || 0) !== Number(operatorId || 0) ||
+            (previous.detail as any)?.requestFingerprint !== requestFingerprint) {
+          throw new ConflictException('原标记请求对应的单据、操作人或内容不同，请核对原请求后继续')
+        }
+        return { duplicate: true, markType: request.markType, outboundNo: target.outboundNo }
+      }
+    const order = await tx.outboundOrder.findUnique({ where: { id: BigInt(id) } })
     if (!order) throw new NotFoundException('出库单不存在')
     if (order.status === 'cancelled') throw new BadRequestException('已取消单不可变更标记')
 
@@ -1189,7 +1205,7 @@ export class OutboundService {
         if (!payload.problemType || !PICKING_PROBLEM_LABELS[payload.problemType]) {
           throw new BadRequestException('请选择有效的拣货问题类型')
         }
-        await this.prisma.outboundOrder.update({
+        await tx.outboundOrder.update({
           where: { id: BigInt(id) },
           data: {
             isProblem: true,
@@ -1208,7 +1224,7 @@ export class OutboundService {
         if (!payload.exceptionType || !ORDER_EXCEPTION_LABELS[payload.exceptionType]) {
           throw new BadRequestException('请选择有效的订单异常类型')
         }
-        await this.prisma.outboundOrder.update({
+        await tx.outboundOrder.update({
           where: { id: BigInt(id) },
           data: {
             exceptionFromStatus: order.status,
@@ -1219,7 +1235,7 @@ export class OutboundService {
         })
         break
       case 'clear_problem':
-        await this.prisma.outboundOrder.update({
+        await tx.outboundOrder.update({
           where: { id: BigInt(id) },
           data: { isProblem: false, problemType: null, problemRemark: null },
         })
@@ -1228,7 +1244,7 @@ export class OutboundService {
         if (order.status !== 'exception') {
           throw new BadRequestException('仅异常状态可解除异常')
         }
-        await this.prisma.outboundOrder.update({
+        await tx.outboundOrder.update({
           where: { id: BigInt(id) },
           data: {
             status: order.exceptionFromStatus || 'pending_pick',
@@ -1240,24 +1256,20 @@ export class OutboundService {
       default:
         throw new BadRequestException('标记类型无效')
     }
-    await this.opLog.log({
-      operatorId,
-      module: 'outbound',
-      action: 'set_problem',
-      targetType: 'outbound_order',
-      targetId: order.outboundNo,
-      detail: {
-        markType,
-        problemType: payload.problemType || null,
-        exceptionType: payload.exceptionType || null,
-        problemRemark: payload.problemRemark?.trim() || null,
-        clientRequestId: clientRequestId || null,
-      },
+    const actor = operatorId ? await tx.sysUser.findUnique({ where: { id: BigInt(operatorId) }, select: { realName: true, username: true } }) : null
+    await tx.operationLog.create({ data: {
+      operatorId: operatorId ? BigInt(operatorId) : undefined,
+      operatorName: actor?.realName || actor?.username || undefined,
+      module: 'outbound', action: 'set_problem', targetType: 'outbound_order', targetId: order.outboundNo,
+      detail: { markType, problemType: payload.problemType || null, exceptionType: payload.exceptionType || null,
+        problemRemark: payload.problemRemark?.trim() || null, clientRequestId: clientRequestId || null, requestFingerprint },
+    } })
+    return { duplicate: false, markType, outboundNo: order.outboundNo }
     })
-    if (markType === 'exception' || markType === 'clear_exception') {
-      await this.pushOutboundStatusToOms(order.outboundNo)
+    if (result.markType === 'exception' || result.markType === 'clear_exception') {
+      await this.pushOutboundStatusToOms(result.outboundNo)
     }
-    return this.detail(id)
+    return { ...(await this.detail(id)), ...(result.duplicate ? { duplicate: true } : {}) }
   }
 
   private suggestPickLocations(warehouseCode: string, sku: string, needQty: number) {

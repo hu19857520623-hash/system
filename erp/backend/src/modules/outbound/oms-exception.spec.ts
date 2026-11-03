@@ -3,12 +3,15 @@ import { OutboundService } from './outbound.service'
 describe('outbound exception synchronization', () => {
   function setup(status = 'picking') {
     const service = Object.create(OutboundService.prototype) as OutboundService
-    const prisma = {
+    const prisma: any = {
+      $queryRaw: jest.fn(),
+      operationLog: { create: jest.fn().mockResolvedValue({}) },
       outboundOrder: {
         findUnique: jest.fn().mockResolvedValue({ id: 1n, outboundNo: 'OUT-1', status, exceptionFromStatus: 'picking' }),
         update: jest.fn().mockResolvedValue({}),
       },
     }
+    prisma.$transaction = jest.fn(async work => work(prisma))
     const push = jest.fn().mockResolvedValue(undefined)
     Object.assign(service, { prisma, opLog: { log: jest.fn().mockResolvedValue(undefined) }, pushOutboundStatusToOms: push, detail: jest.fn().mockResolvedValue({}) })
     return { service, prisma, push }
