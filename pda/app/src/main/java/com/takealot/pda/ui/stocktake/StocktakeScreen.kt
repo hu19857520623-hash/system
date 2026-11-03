@@ -95,8 +95,8 @@ class StocktakeViewModel : ViewModel() {
             try {
                 openPlan(resume.orderId)
                 feedback = Feedback(true, "已恢复 ${resume.orderNo} 的未完成作业")
-            } catch (_: Exception) {
-                PdaApp.instance.workJournal.clearActive("stocktake")
+            } catch (e: Exception) {
+                feedback = Feedback(false, e.message ?: "恢复盘点失败，请返回首页重试，未完成作业已保留")
             }
         }
     }
