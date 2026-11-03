@@ -1,7 +1,6 @@
 
 import { userFacingError } from '@erp/shared/user-facing-error'
-import { ref, watch, onMounted, type Ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ref, watch, onMounted, onScopeDispose, type Ref } from 'vue'
 import { returnsApi } from '@/api/client.js'
 
 export type ReturnStatusFilter =
@@ -59,7 +58,7 @@ export function buildReturnQueryParams(filters: ReturnListFilters) {
 }
 
 /** 退件列表加载、筛选与分页 */
-export function useReturnList() {
+export function useReturnList(scope: () => string | null) {
   const filter = ref<ReturnStatusFilter>('all')
   const processFilter = ref('')
   const customerCode = ref('')
@@ -74,6 +73,8 @@ export function useReturnList() {
   const pageSize = ref(20)
   const listTotal = ref(0)
   const loading = ref(false)
+  const loadError = ref('')
+  let generation = 0, disposed = false, queued = false
   const rows = ref<any[]>([])
   const selectedIds = ref<number[]>([])
 
@@ -91,23 +92,66 @@ export function useReturnList() {
     pageSize,
   }
 
+  function clearRows() {
+    rows.value = []
+    listTotal.value = 0
+    selectedIds.value = []
+  }
+
+  function currentScope() {
+    try { return scope() } catch { return null }
+  }
+
   async function loadList() {
+    queued = false
+    if (disposed) return false
+    const identity = currentScope(), version = ++generation
+    const active = () => !disposed && version === generation && !!identity && identity === currentScope()
+    clearRows()
+    loadError.value = ''
+    if (!identity) {
+      loading.value = false
+      loadError.value = '当前无法读取退件列表，请核对登录和查看权限后重新查询。'
+      return false
+    }
     loading.value = true
     try {
       const res = await returnsApi.list(buildReturnQueryParams(filters))
+      if (!active()) return false
       rows.value = res.items || []
       listTotal.value = res.total || 0
-      selectedIds.value = []
-    } catch (e: any) {
-      ElMessage.error(userFacingError(e?.message || '加载失败'))
+      return true
+    } catch (e) {
+      if (active()) loadError.value = `退件列表加载失败。${userFacingError(e)} 请重试，也可修改筛选后重新查询。`
+      return false
     } finally {
-      loading.value = false
+      if (!disposed && version === generation) {
+        loading.value = false
+        if (identity !== currentScope()) {
+          clearRows()
+          loadError.value = '登录或查看权限已变化，请使用当前账号重新查询退件列表。'
+        }
+      }
     }
+  }
+
+  function scheduleLoad() {
+    if (disposed) return
+    ++generation
+    clearRows()
+    loadError.value = ''
+    loading.value = false
+    if (queued) return
+    queued = true
+    void Promise.resolve().then(() => {
+      if (!queued || disposed) return
+      return loadList()
+    })
   }
 
   function search() {
     page.value = 1
-    void loadList()
+    scheduleLoad()
   }
 
   function resetFilters() {
@@ -121,7 +165,7 @@ export function useReturnList() {
     sellerTaxNo.value = ''
     expectedArrivalRange.value = null
     page.value = 1
-    void loadList()
+    scheduleLoad()
   }
 
   function setStatusFilter(v: ReturnStatusFilter) {
@@ -136,13 +180,11 @@ export function useReturnList() {
     page.value = 1
   }
 
-  watch([filter, processFilter, page, pageSize], () => {
-    void loadList()
-  })
+  watch([filter, processFilter, page, pageSize], scheduleLoad, { flush: 'sync' })
+  watch(currentScope, scheduleLoad, { flush: 'sync' })
 
-  onMounted(() => {
-    void loadList()
-  })
+  onMounted(scheduleLoad)
+  onScopeDispose(() => { disposed = true; queued = false; ++generation; clearRows(); loading.value = false; loadError.value = '' })
 
   return {
     filters,
@@ -159,6 +201,7 @@ export function useReturnList() {
     pageSize,
     listTotal,
     loading,
+    loadError,
     rows,
     selectedIds,
     loadList,

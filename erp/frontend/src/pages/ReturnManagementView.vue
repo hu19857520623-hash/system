@@ -16,6 +16,12 @@ import DetailSheet from '@/components/ui/DetailSheet.vue'
 
 const app = useAppStore()
 
+function returnListScope() {
+  const token = getAccessToken(), user = app.authenticatedUser
+  return token && user && (app.hasPerm('return.view') || app.hasPerm('inbound.view'))
+    ? JSON.stringify([token, user.id, user.roleCode, user.workstation, [...app.currentPermSet].sort()]) : null
+}
+
 const {
   filter,
   processFilter,
@@ -30,6 +36,7 @@ const {
   pageSize,
   listTotal,
   loading,
+  loadError: listReadError,
   rows,
   selectedIds,
   loadList,
@@ -37,7 +44,7 @@ const {
   resetFilters,
   setStatusFilter,
   setProcessFilter,
-} = useReturnList()
+} = useReturnList(returnListScope)
 
 type CartonForm = { lengthCm: string; widthCm: string; heightCm: string; grossWeightKg: string }
 
@@ -997,6 +1004,10 @@ void _removeExtraFeeLine
       </div>
     </div>
 
+    <el-alert v-if="listReadError" type="error" :closable="false" :title="listReadError" show-icon>
+      <el-button :loading="loading" @click="loadList()">重试加载退件列表</el-button>
+    </el-alert>
+
     <el-table
       v-loading="loading"
       :data="tableRows"
@@ -1154,7 +1165,7 @@ void _removeExtraFeeLine
       </el-table-column>
     </el-table>
 
-    <el-empty v-if="!loading && !tableRows.length" description="暂无退件记录" />
+    <el-empty v-if="!loading && !listReadError && !tableRows.length" description="暂无退件记录" />
 
     <ListPagination
       v-model:page="page"
