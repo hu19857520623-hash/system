@@ -578,8 +578,8 @@ export class OutboundService {
     return toCsv(headers, dataRows)
   }
 
-  async detail(id: number) {
-    const row = await this.prisma.outboundOrder.findUnique({
+  async detail(id: number, db: Prisma.TransactionClient = this.prisma) {
+    const row = await db.outboundOrder.findUnique({
       where: { id: BigInt(id) },
       include: {
         items: { include: { pickAllocations: { orderBy: { id: 'asc' } } } },
@@ -587,14 +587,14 @@ export class OutboundService {
       },
     })
     if (!row) throw new NotFoundException('出库单不存在')
-    const [item] = await this.enrichOrders([row])
+    const [item] = await this.enrichOrders([row], db)
     const pickStatus = row.status === 'exception' ? row.exceptionFromStatus : row.status
     const showSuggestions = pickStatus === 'pending_pick' || pickStatus === 'picking'
     const items = await Promise.all(item.items.map(async (line) => {
       if (!showSuggestions || line.pickAllocations.length || line.pickedQty > 0) {
         return { ...line, suggestedLocations: [], locationUncovered: 0 }
       }
-      const plan = await this.suggestPickLocations(row.warehouseCode, line.sku, line.qty)
+      const plan = await this.suggestPickLocations(row.warehouseCode, line.sku, line.qty, db)
       return { ...line, suggestedLocations: plan.suggestions, locationUncovered: plan.uncovered }
     }))
     return { ...item, items }
@@ -1164,116 +1164,152 @@ export class OutboundService {
     },
     operatorId?: number,
   ) {
-    const clientRequestId = String(payload.clientRequestId || '').trim().slice(0, 100)
-    const request = { markType: payload.markType || null, isProblem: payload.isProblem ?? null,
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new BadRequestException('请提交有效的出库单标记')
+    for (const field of ['clientRequestId', 'markType', 'problemType', 'exceptionType', 'problemRemark'] as const) {
+      if (payload[field] != null && typeof payload[field] !== 'string') throw new BadRequestException('标记类型、备注与原操作标识须为有效文本')
+    }
+    const clientRequestId = String(payload.clientRequestId || '').trim()
+    if (clientRequestId && (clientRequestId.length > 100 || !Number.isSafeInteger(operatorId) || Number(operatorId) <= 0)) throw new BadRequestException('请使用原账号和有效操作标识核对标记')
+    const requestedMark = payload.markType || (payload.isProblem === true ? 'legacy_problem' : payload.isProblem === false ? 'legacy_clear' : '')
+    const requestFingerprint = createHash('sha256').update(JSON.stringify([id, requestedMark, payload.problemType || '', payload.exceptionType || '', payload.problemRemark?.trim() || ''])).digest('hex')
+    // Preserve receipts written by the concurrent main-branch implementation.
+    // Actor and target binding below still apply to either fingerprint format.
+    const previousFingerprint = createHash('sha256').update(JSON.stringify({
+      markType: payload.markType || null, isProblem: payload.isProblem ?? null,
       problemType: payload.problemType || null, exceptionType: payload.exceptionType || null,
-      problemRemark: payload.problemRemark?.trim() || null }
-    const requestFingerprint = createHash('sha256').update(JSON.stringify(request)).digest('hex')
+      problemRemark: payload.problemRemark?.trim() || null,
+    })).digest('hex')
     const result = await this.prisma.$transaction(async tx => {
-      if (operatorId) await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(operatorId)} FOR UPDATE`
+      if (clientRequestId) await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(operatorId!)} FOR UPDATE`
       await tx.$queryRaw`SELECT id FROM outbound_order WHERE id = ${BigInt(id)} FOR UPDATE`
-      const previous = clientRequestId ? await tx.operationLog.findFirst({ where: {
-        module: 'outbound', action: 'set_problem', detail: { path: '$.clientRequestId', equals: clientRequestId },
-      }, orderBy: { id: 'desc' } }) : null
-      if (previous) {
-        const target = await tx.outboundOrder.findUnique({ where: { id: BigInt(id) } })
-        if (!target || previous.targetId !== target.outboundNo ||
-            Number(previous.operatorId || 0) !== Number(operatorId || 0) ||
-            (previous.detail as any)?.requestFingerprint !== requestFingerprint) {
-          throw new ConflictException('原标记请求对应的单据、操作人或内容不同，请核对原请求后继续')
+      const order = await tx.outboundOrder.findUnique({ where: { id: BigInt(id) } })
+      if (!order) throw new NotFoundException('出库单不存在')
+      if (clientRequestId) {
+        const receipt = await tx.operationLog.findFirst({
+          where: {
+            module: 'outbound', action: 'set_problem',
+            detail: { path: '$.clientRequestId', equals: clientRequestId },
+          }, orderBy: { id: 'asc' }
+        })
+        if (receipt) {
+          const detail = receipt.detail as Record<string, unknown> | null
+          const priorMark = String(detail?.markType || '')
+          const legacyMarkMatches = requestedMark === 'legacy_clear'
+            ? ['clear_problem', 'clear_exception'].includes(priorMark)
+            : priorMark === (requestedMark === 'legacy_problem' ? 'problem' : requestedMark)
+          const legacyMatches = legacyMarkMatches && String(detail?.problemType || '') === String(payload.problemType || '')
+            && String(detail?.exceptionType || '') === String(payload.exceptionType || '')
+            && String(detail?.problemRemark || '') === (payload.problemRemark?.trim() || '')
+          if (Number(receipt.operatorId) !== operatorId || receipt.targetId !== order.outboundNo || (detail?.requestFingerprint
+            ? ![requestFingerprint, previousFingerprint].includes(String(detail.requestFingerprint)) : !legacyMatches)) {
+            throw new ConflictException('原标记请求对应的账号、出库单或内容不同，请核对原操作，不能修改后重试')
+          }
+          return {
+            item: await this.detail(id, tx), duplicate: true,
+            sync: ['exception', 'clear_exception'].includes(priorMark), outboundNo: order.outboundNo
+          }
         }
-        return { duplicate: true, markType: request.markType, outboundNo: target.outboundNo }
       }
-    const order = await tx.outboundOrder.findUnique({ where: { id: BigInt(id) } })
-    if (!order) throw new NotFoundException('出库单不存在')
-    if (order.status === 'cancelled') throw new BadRequestException('已取消单不可变更标记')
+      if (order.status === 'cancelled') throw new BadRequestException('已取消单不可变更标记')
 
-    let markType = payload.markType
-    if (!markType && payload.isProblem === true) markType = 'problem'
-    if (!markType && payload.isProblem === false) {
-      markType = order.status === 'exception' ? 'clear_exception' : 'clear_problem'
-    }
-    if (!markType) throw new BadRequestException('请指定 markType')
+      let markType = payload.markType
+      if (!markType && payload.isProblem === true) markType = 'problem'
+      if (!markType && payload.isProblem === false) {
+        markType = order.status === 'exception' ? 'clear_exception' : 'clear_problem'
+      }
+      if (!markType) throw new BadRequestException('请选择问题件或异常标记类型')
 
-    const blocked = ['shipped', 'delivered', 'partial_delivered', 'delivery_failed', 'cancelled']
+      const blocked = ['shipped', 'delivered', 'partial_delivered', 'delivery_failed', 'cancelled']
 
-    switch (markType) {
-      case 'problem':
-        if (blocked.includes(order.status)) {
-          throw new BadRequestException('当前状态不可标记问题件')
-        }
-        if (!payload.problemType || !PICKING_PROBLEM_LABELS[payload.problemType]) {
-          throw new BadRequestException('请选择有效的拣货问题类型')
-        }
-        await tx.outboundOrder.update({
-          where: { id: BigInt(id) },
-          data: {
-            isProblem: true,
-            problemType: payload.problemType,
-            problemRemark: payload.problemRemark?.trim() || order.problemRemark,
-          },
-        })
-        break
-      case 'exception':
-        if (blocked.includes(order.status)) {
-          throw new BadRequestException('当前状态不可标记异常')
-        }
-        if (order.status === 'exception') {
-          throw new BadRequestException('出库单已处于异常状态')
-        }
-        if (!payload.exceptionType || !ORDER_EXCEPTION_LABELS[payload.exceptionType]) {
-          throw new BadRequestException('请选择有效的订单异常类型')
-        }
-        await tx.outboundOrder.update({
-          where: { id: BigInt(id) },
-          data: {
-            exceptionFromStatus: order.status,
-            exceptionType: payload.exceptionType,
-            status: 'exception',
-            problemRemark: payload.problemRemark?.trim() || order.problemRemark,
-          },
-        })
-        break
-      case 'clear_problem':
-        await tx.outboundOrder.update({
-          where: { id: BigInt(id) },
-          data: { isProblem: false, problemType: null, problemRemark: null },
-        })
-        break
-      case 'clear_exception':
-        if (order.status !== 'exception') {
-          throw new BadRequestException('仅异常状态可解除异常')
-        }
-        await tx.outboundOrder.update({
-          where: { id: BigInt(id) },
-          data: {
-            status: order.exceptionFromStatus || 'pending_pick',
-            exceptionFromStatus: null,
-            exceptionType: null,
-          },
-        })
-        break
-      default:
-        throw new BadRequestException('标记类型无效')
-    }
-    const actor = operatorId ? await tx.sysUser.findUnique({ where: { id: BigInt(operatorId) }, select: { realName: true, username: true } }) : null
-    await tx.operationLog.create({ data: {
-      operatorId: operatorId ? BigInt(operatorId) : undefined,
-      operatorName: actor?.realName || actor?.username || undefined,
-      module: 'outbound', action: 'set_problem', targetType: 'outbound_order', targetId: order.outboundNo,
-      detail: { markType, problemType: payload.problemType || null, exceptionType: payload.exceptionType || null,
-        problemRemark: payload.problemRemark?.trim() || null, clientRequestId: clientRequestId || null, requestFingerprint },
-    } })
-    return { duplicate: false, markType, outboundNo: order.outboundNo }
+      switch (markType) {
+        case 'problem':
+          if (blocked.includes(order.status)) {
+            throw new BadRequestException('当前状态不可标记问题件')
+          }
+          if (!payload.problemType || !PICKING_PROBLEM_LABELS[payload.problemType]) {
+            throw new BadRequestException('请选择有效的拣货问题类型')
+          }
+          await tx.outboundOrder.update({
+            where: { id: BigInt(id) },
+            data: {
+              isProblem: true,
+              problemType: payload.problemType,
+              problemRemark: payload.problemRemark?.trim() || order.problemRemark,
+            },
+          })
+          break
+        case 'exception':
+          if (blocked.includes(order.status)) {
+            throw new BadRequestException('当前状态不可标记异常')
+          }
+          if (order.status === 'exception') {
+            throw new BadRequestException('出库单已处于异常状态')
+          }
+          if (!payload.exceptionType || !ORDER_EXCEPTION_LABELS[payload.exceptionType]) {
+            throw new BadRequestException('请选择有效的订单异常类型')
+          }
+          await tx.outboundOrder.update({
+            where: { id: BigInt(id) },
+            data: {
+              exceptionFromStatus: order.status,
+              exceptionType: payload.exceptionType,
+              status: 'exception',
+              problemRemark: payload.problemRemark?.trim() || order.problemRemark,
+            },
+          })
+          break
+        case 'clear_problem':
+          await tx.outboundOrder.update({
+            where: { id: BigInt(id) },
+            data: { isProblem: false, problemType: null, problemRemark: null },
+          })
+          break
+        case 'clear_exception':
+          if (order.status !== 'exception') {
+            throw new BadRequestException('仅异常状态可解除异常')
+          }
+          await tx.outboundOrder.update({
+            where: { id: BigInt(id) },
+            data: {
+              status: order.exceptionFromStatus || 'pending_pick',
+              exceptionFromStatus: null,
+              exceptionType: null,
+            },
+          })
+          break
+        default:
+          throw new BadRequestException('标记类型无效')
+      }
+      await new OperationLogService(tx as PrismaService).log({
+        operatorId,
+        module: 'outbound',
+        action: 'set_problem',
+        targetType: 'outbound_order',
+        targetId: order.outboundNo,
+        detail: {
+          markType,
+          problemType: payload.problemType || null,
+          exceptionType: payload.exceptionType || null,
+          problemRemark: payload.problemRemark?.trim() || null,
+          clientRequestId: clientRequestId || null,
+          requestFingerprint: clientRequestId ? requestFingerprint : null,
+        },
+      })
+
+      return {
+        item: await this.detail(id, tx), duplicate: false,
+        sync: markType === 'exception' || markType === 'clear_exception', outboundNo: order.outboundNo
+      }
     })
-    if (result.markType === 'exception' || result.markType === 'clear_exception') {
-      await this.pushOutboundStatusToOms(result.outboundNo)
+    const syncPending = result.sync && !await this.pushOutboundStatusToOms(result.outboundNo)
+    return {
+      ...result.item, ...(result.duplicate ? { duplicate: true } : {}),
+      ...(syncPending ? { syncPending: true, message: '标记已保存，OMS 状态待同步；请核对原单，重试原请求不会重复修改标记' } : {})
     }
-    return { ...(await this.detail(id)), ...(result.duplicate ? { duplicate: true } : {}) }
   }
 
-  private suggestPickLocations(warehouseCode: string, sku: string, needQty: number) {
-    return this.prisma.inventoryLocation.findMany({
+  private suggestPickLocations(warehouseCode: string, sku: string, needQty: number, db: Prisma.TransactionClient = this.prisma) {
+    return db.inventoryLocation.findMany({
       where: { warehouseCode, sku, qty: { gt: 0 } },
       orderBy: [{ receivedAt: 'asc' }, { id: 'asc' }],
     }).then((locs) => {

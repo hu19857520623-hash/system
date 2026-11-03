@@ -8,11 +8,13 @@ describe('InventoryService.transferLogistics', () => {
 
   function createService() {
     const tx = {
+      $queryRaw:jest.fn(),warehouse:{findUnique:jest.fn()},product:{findFirst:jest.fn()},
+      sysUser:{findUnique:jest.fn().mockResolvedValue({realName:'库存验收员'})},operationLog:{create:jest.fn()},
       inventory: { findUnique: jest.fn() },
     }
     const prisma = {
-      warehouse: { findUnique: jest.fn() },
-      product: { findFirst: jest.fn() },
+      warehouse: tx.warehouse,
+      product: tx.product,
       $transaction: jest.fn(async (fn: (client: typeof tx) => unknown) => fn(tx)),
     }
     const opLog = { log: jest.fn().mockResolvedValue(undefined) }
@@ -51,10 +53,11 @@ describe('InventoryService.transferLogistics', () => {
       changeType: 'logistics_transfer',
       remark: '从 深圳集运物流仓 调入 · 集货',
     }))
-    expect(opLog.log).toHaveBeenCalledWith(expect.objectContaining({
+    expect(tx.operationLog.create).toHaveBeenCalledWith(expect.objectContaining({data:expect.objectContaining({
       action: 'logistics_transfer',
       targetId: 'TKL-HX6',
-    }), tx)
+    })}))
+    expect(opLog.log).not.toHaveBeenCalled()
   })
 
   it('rejects when available qty is insufficient', async () => {
@@ -82,5 +85,10 @@ describe('InventoryService.transferLogistics', () => {
       toWarehouseCode: 'LW-YW-01',
       qty: 1,
     }, 1)).rejects.toBeInstanceOf(NotFoundException)
+  })
+  it('审计失败使包含调出调入的事务拒绝，不调用独立日志连接',async()=>{
+    const {service,prisma,tx,opLog,inventoryMutation}=createService();prisma.warehouse.findUnique.mockResolvedValueOnce(sz).mockResolvedValueOnce(yw);prisma.product.findFirst.mockResolvedValue(product);tx.inventory.findUnique.mockResolvedValue({availableQty:10});tx.operationLog.create.mockRejectedValueOnce(new Error('库存日志失败'))
+    await expect(service.transferLogistics({sku:'TKL-HX6',fromWarehouseCode:'LW-SZ-01',toWarehouseCode:'LW-YW-01',qty:2},1)).rejects.toThrow('库存日志失败')
+    expect(inventoryMutation.applyWarehouseQtyDelta).toHaveBeenCalledTimes(2);expect(opLog.log).not.toHaveBeenCalled()
   })
 })

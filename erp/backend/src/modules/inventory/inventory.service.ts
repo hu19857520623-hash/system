@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client'
 import { billingSourceSnapshot } from '../billing/billing-snapshot.util'
 import { previewCatalogReclaim, reclaimCatalog } from './catalog-reclaim.util'
 import { catalogReclaimHistory, catalogReclaimSyncReceipt } from './catalog-reclaim-history.util'
@@ -767,134 +768,135 @@ export class InventoryService {
   }
 
   async updateSkuCatalogItem(id: number, body: Record<string, unknown>, operatorId?: number) {
-    const product = await this.prisma.product.findUnique({ where: { id: BigInt(id) } })
-    if (!product) throw new NotFoundException('产品不存在')
+    return this.prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM product WHERE id = ${BigInt(id)} FOR UPDATE`
 
-    const hasInventory = await this.skuHasInventory(product.sku)
-    const parsePosNum = (v: unknown, label: string) => {
-      if (v == null || v === '') return null
-      const n = Number(v)
-      if (!Number.isFinite(n) || n <= 0) throw new BadRequestException(`${label} 须为大于 0 的数字`)
-      return n
-    }
+      const product = await tx.product.findUnique({ where: { id: BigInt(id) } })
+      if (!product) throw new NotFoundException('产品不存在')
 
-    const data: Record<string, unknown> = {}
-    const lockedFields = ['productName', 'spec', 'barcode', 'brand', 'category', 'weightKg', 'lengthCm', 'widthCm', 'heightCm', 'costRmb', 'status', 'spu']
+      const hasInventory = await this.skuHasInventory(product.sku, tx)
+      const parsePosNum = (v: unknown, label: string) => {
+        if (v == null || v === '') return null
+        const n = Number(v)
+        if (!Number.isFinite(n) || n <= 0) throw new BadRequestException(`${label} 须为大于 0 的数字`)
+        return n
+      }
 
-    if (hasInventory) {
-      for (const k of lockedFields) {
-        if (body[k] !== undefined) throw new BadRequestException('该 SKU 已有库存，仅可修改仓库实测长宽高')
-      }
-      if (body.measuredLengthCm !== undefined) data.measuredLengthCm = parsePosNum(body.measuredLengthCm, '实测长')
-      if (body.measuredWidthCm !== undefined) data.measuredWidthCm = parsePosNum(body.measuredWidthCm, '实测宽')
-      if (body.measuredHeightCm !== undefined) data.measuredHeightCm = parsePosNum(body.measuredHeightCm, '实测高')
-      if (Object.keys(data).length) data.measuredAt = new Date()
-    } else {
-      if (body.productName !== undefined) {
-        const name = String(body.productName).trim()
-        if (!name) throw new BadRequestException('商品名不能为空')
-        data.productName = name
-      }
-      if (body.spec !== undefined) data.spec = String(body.spec).trim()
-      if (body.barcode !== undefined) data.barcode = String(body.barcode).trim()
-      if (body.brand !== undefined) data.brand = String(body.brand).trim()
-      if (body.category !== undefined) data.category = String(body.category).trim()
-      if (body.spu !== undefined) data.spu = String(body.spu).trim()
-      if (body.weightKg !== undefined) {
-        const w = Number(body.weightKg)
-        if (!Number.isFinite(w) || w < 0) throw new BadRequestException('重量无效')
-        data.weightKg = w
-      }
-      if (body.costRmb !== undefined) {
-        const c = Number(body.costRmb)
-        if (!Number.isFinite(c) || c < 0) throw new BadRequestException('申报成本无效')
-        data.costRmb = c
-      }
-      if (body.lengthCm !== undefined) data.lengthCm = parsePosNum(body.lengthCm, '客户申报长')
-      if (body.widthCm !== undefined) data.widthCm = parsePosNum(body.widthCm, '客户申报宽')
-      if (body.heightCm !== undefined) data.heightCm = parsePosNum(body.heightCm, '客户申报高')
-      if (body.measuredLengthCm !== undefined) data.measuredLengthCm = parsePosNum(body.measuredLengthCm, '实测长')
-      if (body.measuredWidthCm !== undefined) data.measuredWidthCm = parsePosNum(body.measuredWidthCm, '实测宽')
-      if (body.measuredHeightCm !== undefined) data.measuredHeightCm = parsePosNum(body.measuredHeightCm, '实测高')
-      if (
-        body.measuredLengthCm !== undefined
-        || body.measuredWidthCm !== undefined
-        || body.measuredHeightCm !== undefined
-      ) {
-        data.measuredAt = new Date()
-      }
-    }
+      const data: Record<string, unknown> = {}
+      const lockedFields = ['productName', 'spec', 'barcode', 'brand', 'category', 'weightKg', 'lengthCm', 'widthCm', 'heightCm', 'costRmb', 'status', 'spu']
 
-    if (!Object.keys(data).length) throw new BadRequestException('没有可更新的字段')
+      if (hasInventory) {
+        for (const k of lockedFields) {
+          if (body[k] !== undefined) throw new BadRequestException('该 SKU 已有库存，仅可修改仓库实测长宽高')
+        }
+        if (body.measuredLengthCm !== undefined) data.measuredLengthCm = parsePosNum(body.measuredLengthCm, '实测长')
+        if (body.measuredWidthCm !== undefined) data.measuredWidthCm = parsePosNum(body.measuredWidthCm, '实测宽')
+        if (body.measuredHeightCm !== undefined) data.measuredHeightCm = parsePosNum(body.measuredHeightCm, '实测高')
+        if (Object.keys(data).length) data.measuredAt = new Date()
+      } else {
+        if (body.productName !== undefined) {
+          const name = String(body.productName).trim()
+          if (!name) throw new BadRequestException('商品名不能为空')
+          data.productName = name
+        }
+        if (body.spec !== undefined) data.spec = String(body.spec).trim()
+        if (body.barcode !== undefined) data.barcode = String(body.barcode).trim()
+        if (body.brand !== undefined) data.brand = String(body.brand).trim()
+        if (body.category !== undefined) data.category = String(body.category).trim()
+        if (body.spu !== undefined) data.spu = String(body.spu).trim()
+        if (body.weightKg !== undefined) {
+          const w = Number(body.weightKg)
+          if (!Number.isFinite(w) || w < 0) throw new BadRequestException('重量无效')
+          data.weightKg = w
+        }
+        if (body.costRmb !== undefined) {
+          const c = Number(body.costRmb)
+          if (!Number.isFinite(c) || c < 0) throw new BadRequestException('申报成本无效')
+          data.costRmb = c
+        }
+        if (body.lengthCm !== undefined) data.lengthCm = parsePosNum(body.lengthCm, '客户申报长')
+        if (body.widthCm !== undefined) data.widthCm = parsePosNum(body.widthCm, '客户申报宽')
+        if (body.heightCm !== undefined) data.heightCm = parsePosNum(body.heightCm, '客户申报高')
+        if (body.measuredLengthCm !== undefined) data.measuredLengthCm = parsePosNum(body.measuredLengthCm, '实测长')
+        if (body.measuredWidthCm !== undefined) data.measuredWidthCm = parsePosNum(body.measuredWidthCm, '实测宽')
+        if (body.measuredHeightCm !== undefined) data.measuredHeightCm = parsePosNum(body.measuredHeightCm, '实测高')
+        if (
+          body.measuredLengthCm !== undefined
+          || body.measuredWidthCm !== undefined
+          || body.measuredHeightCm !== undefined
+        ) {
+          data.measuredAt = new Date()
+        }
+      }
 
-    const updated = await this.prisma.$transaction(async tx => {
-      const result = await tx.product.update({
+      if (!Object.keys(data).length) throw new BadRequestException('没有可更新的字段')
+
+      const updated = await tx.product.update({
         where: { id: BigInt(id) },
         data,
       })
 
-      await this.opLog.log({
+      await new OperationLogService(tx as PrismaService).log({
         operatorId,
         module: 'product',
         action: 'sku_catalog_update',
         targetType: 'product',
-        targetId: result.sku,
+        targetId: updated.sku,
         detail: { hasInventory, editMode: hasInventory ? 'measured_only' : 'full', changes: data },
-      }, tx)
-      return result
-    })
+      })
 
-    const invFlags = await this.loadSkuInventoryFlags([updated.sku])
-    const billing = resolveBillingDimensions({
-      lengthCm: numDim(updated.lengthCm),
-      widthCm: numDim(updated.widthCm),
-      heightCm: numDim(updated.heightCm),
-      measuredLengthCm: numDim(updated.measuredLengthCm),
-      measuredWidthCm: numDim(updated.measuredWidthCm),
-      measuredHeightCm: numDim(updated.measuredHeightCm),
-    })
+      const invFlags = await this.loadSkuInventoryFlags([updated.sku], tx)
+      const billing = resolveBillingDimensions({
+        lengthCm: numDim(updated.lengthCm),
+        widthCm: numDim(updated.widthCm),
+        heightCm: numDim(updated.heightCm),
+        measuredLengthCm: numDim(updated.measuredLengthCm),
+        measuredWidthCm: numDim(updated.measuredWidthCm),
+        measuredHeightCm: numDim(updated.measuredHeightCm),
+      })
 
-    return {
-      id: Number(updated.id),
-      erpProductId: Number(updated.id),
-      sku: updated.sku,
-      productName: updated.productName,
-      spec: updated.spec || '',
-      barcode: updated.barcode || '',
-      brand: updated.brand || '',
-      category: updated.category || '',
-      spu: updated.spu || '',
-      weightKg: numDim(updated.weightKg),
-      costRmb: updated.costRmb != null ? Number(updated.costRmb) : null,
-      lengthCm: numDim(updated.lengthCm),
-      widthCm: numDim(updated.widthCm),
-      heightCm: numDim(updated.heightCm),
-      measuredLengthCm: numDim(updated.measuredLengthCm),
-      measuredWidthCm: numDim(updated.measuredWidthCm),
-      measuredHeightCm: numDim(updated.measuredHeightCm),
-      measuredAt: updated.measuredAt,
-      customerDimLabel: formatDimLabel(numDim(updated.lengthCm), numDim(updated.widthCm), numDim(updated.heightCm)),
-      measuredDimLabel: formatDimLabel(numDim(updated.measuredLengthCm), numDim(updated.measuredWidthCm), numDim(updated.measuredHeightCm)),
-      billingDimLabel: formatDimLabel(billing.lengthCm, billing.widthCm, billing.heightCm),
-      billingDimSource: billing.source,
-      hasInventory: invFlags.get(updated.sku) ?? false,
-      editMode: invFlags.get(updated.sku) ? 'measured_only' : 'full',
-      editable: true,
-      dataSource: 'erp',
-    }
+      return {
+        id: Number(updated.id),
+        erpProductId: Number(updated.id),
+        sku: updated.sku,
+        productName: updated.productName,
+        spec: updated.spec || '',
+        barcode: updated.barcode || '',
+        brand: updated.brand || '',
+        category: updated.category || '',
+        spu: updated.spu || '',
+        weightKg: numDim(updated.weightKg),
+        costRmb: updated.costRmb != null ? Number(updated.costRmb) : null,
+        lengthCm: numDim(updated.lengthCm),
+        widthCm: numDim(updated.widthCm),
+        heightCm: numDim(updated.heightCm),
+        measuredLengthCm: numDim(updated.measuredLengthCm),
+        measuredWidthCm: numDim(updated.measuredWidthCm),
+        measuredHeightCm: numDim(updated.measuredHeightCm),
+        measuredAt: updated.measuredAt,
+        customerDimLabel: formatDimLabel(numDim(updated.lengthCm), numDim(updated.widthCm), numDim(updated.heightCm)),
+        measuredDimLabel: formatDimLabel(numDim(updated.measuredLengthCm), numDim(updated.measuredWidthCm), numDim(updated.measuredHeightCm)),
+        billingDimLabel: formatDimLabel(billing.lengthCm, billing.widthCm, billing.heightCm),
+        billingDimSource: billing.source,
+        hasInventory: invFlags.get(updated.sku) ?? false,
+        editMode: invFlags.get(updated.sku) ? 'measured_only' : 'full',
+        editable: true,
+        dataSource: 'erp',
+      }
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted })
   }
 
-  private async skuHasInventory(sku: string): Promise<boolean> {
-    const flags = await this.loadSkuInventoryFlags([sku])
+  private async skuHasInventory(sku: string, db: Tx = this.prisma): Promise<boolean> {
+    const flags = await this.loadSkuInventoryFlags([sku], db)
     return flags.get(sku) ?? false
   }
 
-  private async loadSkuInventoryFlags(skus: string[]): Promise<Map<string, boolean>> {
+  private async loadSkuInventoryFlags(skus: string[], db: Tx = this.prisma): Promise<Map<string, boolean>> {
     const map = new Map<string, boolean>()
     const unique = [...new Set(skus.filter(Boolean))]
     if (!unique.length) return map
 
-    const erpInv = await this.prisma.inventory.findMany({
+    const erpInv = await db.inventory.findMany({
       where: { sku: { in: unique } },
       select: { sku: true, totalQty: true, availableQty: true, lockedQty: true },
     })
@@ -903,7 +905,7 @@ export class InventoryService {
       if (qty > 0) map.set(r.sku, true)
     }
 
-    const locRows = await this.prisma.inventoryLocation.findMany({
+    const locRows = await db.inventoryLocation.findMany({
       where: { sku: { in: unique }, qty: { gt: 0 } },
       select: { sku: true },
       distinct: ['sku'],
@@ -912,7 +914,7 @@ export class InventoryService {
 
     try {
       const placeholders = unique.map(() => '?').join(',')
-      const omsRows = await this.prisma.$queryRawUnsafe<{ sku: string; available: unknown; locked: unknown }[]>(
+      const omsRows = await db.$queryRawUnsafe<{ sku: string; available: unknown; locked: unknown }[]>(
         `SELECT sku, available, locked FROM oms_inventoryitem WHERE sku IN (${placeholders})`,
         ...unique,
       )
@@ -1280,10 +1282,10 @@ export class InventoryService {
     return extra ? `${base} ${extra}` : base
   }
 
-  private async assertActiveCustomer(customerCode: string) {
+  private async assertActiveCustomer(customerCode: string, db: Tx = this.prisma) {
     const code = customerCode.trim()
     if (!code) throw new BadRequestException('请填写客户代码')
-    const customer = await this.prisma.customer.findUnique({ where: { customerCode: code } })
+    const customer = await db.customer.findUnique({ where: { customerCode: code } })
     if (!customer) throw new NotFoundException(`客户代码 ${code} 不存在`)
     if (customer.status !== 1) throw new BadRequestException(`客户 ${code} 已停用`)
     return customer
@@ -1407,41 +1409,46 @@ export class InventoryService {
     body: { qty?: number; locationCode?: string; remark?: string; customerCode?: string },
     operatorId?: number,
   ) {
-    const row = await this.prisma.inventoryLocation.findUnique({ where: { id: BigInt(id) } })
-    if (!row) throw new NotFoundException('库位库存不存在')
-    if (row.qty <= 0) throw new BadRequestException('该库位库存已为空')
+    return this.prisma.$transaction(async tx => {
+      const initial = await tx.inventoryLocation.findUnique({ where: { id: BigInt(id) } })
+      if (!initial) throw new NotFoundException('库位库存不存在')
+      await tx.$queryRaw`SELECT id FROM product WHERE id = ${initial.productId} FOR UPDATE`
+      await tx.$queryRaw`SELECT id FROM inventory_location WHERE id = ${BigInt(id)} FOR UPDATE`
 
-    const customerCode = body.customerCode?.trim()
-    if (!customerCode) throw new BadRequestException('请填写客户代码')
-    await this.assertActiveCustomer(customerCode)
+      const row = await tx.inventoryLocation.findUnique({ where: { id: BigInt(id) } })
+      if (!row) throw new NotFoundException('库位库存不存在')
+      if (row.qty <= 0) throw new BadRequestException('该库位库存已为空')
 
-    const oldQty = row.qty
-    const oldLocationCode = row.locationCode
-    const newQty = body.qty != null ? Number(body.qty) : oldQty
-    const newLocationCode = body.locationCode?.trim() || oldLocationCode
+      const customerCode = body.customerCode?.trim()
+      if (!customerCode) throw new BadRequestException('请填写客户代码')
+      await this.assertActiveCustomer(customerCode, tx)
 
-    if (!Number.isFinite(newQty) || newQty < 0 || !Number.isInteger(newQty)) {
-      throw new BadRequestException('数量须为非负整数')
-    }
+      const oldQty = row.qty
+      const oldLocationCode = row.locationCode
+      const newQty = body.qty != null ? Number(body.qty) : oldQty
+      const newLocationCode = body.locationCode?.trim() || oldLocationCode
 
-    const locationChanged = newLocationCode !== oldLocationCode
-    const qtyChanged = newQty !== oldQty
-    if (!locationChanged && !qtyChanged) {
-      return {
-        id: Number(row.id),
-        sku: row.sku,
-        warehouseCode: row.warehouseCode,
-        locationCode: row.locationCode,
-        qty: row.qty,
-        batchNo: row.batchNo,
-        inboundNo: row.inboundNo,
+      if (!Number.isFinite(newQty) || newQty < 0 || !Number.isInteger(newQty)) {
+        throw new BadRequestException('数量须为非负整数')
       }
-    }
 
-    const refNo = `ADJ-${Date.now()}`
-    const remark = this.formatCustomerRemark(customerCode, body.remark)
+      const locationChanged = newLocationCode !== oldLocationCode
+      const qtyChanged = newQty !== oldQty
+      if (!locationChanged && !qtyChanged) {
+        return {
+          id: Number(row.id),
+          sku: row.sku,
+          warehouseCode: row.warehouseCode,
+          locationCode: row.locationCode,
+          qty: row.qty,
+          batchNo: row.batchNo,
+          inboundNo: row.inboundNo,
+        }
+      }
 
-    return this.prisma.$transaction(async (tx) => {
+      const refNo = `ADJ-${Date.now()}`
+      const remark = this.formatCustomerRemark(customerCode, body.remark)
+
       const result = await (async () => {
         if (locationChanged) {
           const targetLoc = await tx.warehouseLocation.findFirst({
@@ -1551,7 +1558,8 @@ export class InventoryService {
           inboundNo: row.inboundNo,
         }
       })()
-      await this.opLog.log({
+
+      await new OperationLogService(tx as PrismaService).log({
         operatorId,
         module: 'inventory',
         action: locationChanged ? 'adjust_location' : 'adjust_qty',
@@ -1567,9 +1575,10 @@ export class InventoryService {
           customerCode,
           referenceNo: refNo,
         },
-      }, tx)
+      })
+
       return result
-    })
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted })
   }
 
   async addLocationStock(
@@ -1583,75 +1592,80 @@ export class InventoryService {
     },
     operatorId?: number,
   ) {
-    const customerCode = body.customerCode?.trim()
-    if (!customerCode) throw new BadRequestException('请填写客户代码')
-    await this.assertActiveCustomer(customerCode)
+    return this.prisma.$transaction(async tx => {
 
-    const sku = body.sku?.trim()
-    const warehouseCode = body.warehouseCode?.trim()
-    const locationCode = body.locationCode?.trim()
-    const qty = Number(body.qty)
+      const customerCode = body.customerCode?.trim()
+      if (!customerCode) throw new BadRequestException('请填写客户代码')
+      await this.assertActiveCustomer(customerCode, tx)
 
-    if (!sku || !warehouseCode || !locationCode) {
-      throw new BadRequestException('SKU、仓库、库位不能为空')
-    }
-    if (!Number.isFinite(qty) || qty <= 0 || !Number.isInteger(qty)) {
-      throw new BadRequestException('数量须为正整数')
-    }
+      const sku = body.sku?.trim()
+      const warehouseCode = body.warehouseCode?.trim()
+      const locationCode = body.locationCode?.trim()
+      const qty = Number(body.qty)
 
-    const product = await this.prisma.product.findFirst({ where: { sku } })
-    if (!product) throw new NotFoundException(`SKU ${sku} 不存在`)
+      if (!sku || !warehouseCode || !locationCode) {
+        throw new BadRequestException('SKU、仓库、库位不能为空')
+      }
+      if (!Number.isFinite(qty) || qty <= 0 || !Number.isInteger(qty)) {
+        throw new BadRequestException('数量须为正整数')
+      }
 
-    const locCodeUpper = locationCode.toUpperCase()
-    const loc = await this.prisma.warehouseLocation.findFirst({
-      where: {
-        warehouseCode,
-        locationCode: locCodeUpper,
-        status: 'available',
-      },
-    }) ?? (locationCode !== locCodeUpper
-      ? await this.prisma.warehouseLocation.findFirst({
+      const product = await tx.product.findFirst({ where: { sku } })
+      if (!product) throw new NotFoundException(`SKU ${sku} 不存在`)
+
+      await tx.$queryRaw`SELECT id FROM product WHERE id = ${product.id} FOR UPDATE`
+      const locCodeUpper = locationCode.toUpperCase()
+      const loc = await tx.warehouseLocation.findFirst({
+        where: {
+          warehouseCode,
+          locationCode: locCodeUpper,
+          status: 'available',
+        },
+      }) ?? (locationCode !== locCodeUpper
+        ? await tx.warehouseLocation.findFirst({
           where: { warehouseCode, locationCode, status: 'available' },
         })
-      : null)
-    if (!loc) throw new BadRequestException(`库位 ${locationCode} 不可用或不存在`)
+        : null)
+      if (!loc) throw new BadRequestException(`库位 ${locationCode} 不可用或不存在`)
 
-    const refNo = `ADJ-${Date.now()}`
-    const remark = this.formatCustomerRemark(customerCode, body.remark)
+      const refNo = `ADJ-${Date.now()}`
+      const remark = this.formatCustomerRemark(customerCode, body.remark)
 
-    return this.prisma.$transaction(async (tx) => {
-      await this.inventoryMutation.addLocationStock(
-        tx,
-        {
-          productId: product.id,
+      const result = await (async () => {
+        await this.inventoryMutation.addLocationStock(
+          tx,
+          {
+            productId: product.id,
+            sku,
+            warehouseCode,
+            locationId: loc.id,
+            locationCode: loc.locationCode,
+            qty,
+            batchNo: refNo,
+            inboundNo: null,
+            costRmb: product.costRmb != null ? Number(product.costRmb) : 0,
+            seaFreightPerUnit: product.seaFreightPerUnit != null ? Number(product.seaFreightPerUnit) : 0,
+            domesticFeePerUnit: product.domesticFeePerUnit != null ? Number(product.domesticFeePerUnit) : 0,
+          },
+          {
+            changeType: 'adjust',
+            operatorId,
+            referenceNo: refNo,
+            remark: remark || `库位 ${loc.locationCode} 增加库存 +${qty}`,
+          },
+        )
+
+        return {
           sku,
           warehouseCode,
-          locationId: loc.id,
           locationCode: loc.locationCode,
           qty,
           batchNo: refNo,
-          inboundNo: null,
-          costRmb: product.costRmb != null ? Number(product.costRmb) : 0,
-          seaFreightPerUnit: product.seaFreightPerUnit != null ? Number(product.seaFreightPerUnit) : 0,
-          domesticFeePerUnit: product.domesticFeePerUnit != null ? Number(product.domesticFeePerUnit) : 0,
-        },
-        {
-          changeType: 'adjust',
-          operatorId,
-          referenceNo: refNo,
-          remark: remark || `库位 ${loc.locationCode} 增加库存 +${qty}`,
-        },
-      )
+          inboundNo: null as string | null,
+        }
+      })()
 
-      const result = {
-        sku,
-        warehouseCode,
-        locationCode: loc.locationCode,
-        qty,
-        batchNo: refNo,
-        inboundNo: null as string | null,
-      }
-      await this.opLog.log({
+      await new OperationLogService(tx as PrismaService).log({
         operatorId,
         module: 'inventory',
         action: 'add_location',
@@ -1666,75 +1680,82 @@ export class InventoryService {
           customerCode,
           referenceNo: refNo,
         },
-      }, tx)
+      })
+
       return result
-    })
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted })
   }
 
   /** 中转仓之间调拨可发库存（深圳 → 义乌等） */
   async transferLogistics(body: Record<string, unknown>, operatorId?: number) {
-    const input = parseLogisticsTransferBody(body)
-    const [fromWh, toWh] = await Promise.all([
-      this.prisma.warehouse.findUnique({ where: { warehouseCode: input.fromWarehouseCode } }),
-      this.prisma.warehouse.findUnique({ where: { warehouseCode: input.toWarehouseCode } }),
-    ])
-    const fromWarehouse = assertLogisticsWarehouse(fromWh, '调出')
-    const toWarehouse = assertLogisticsWarehouse(toWh, '调入')
+    return this.prisma.$transaction(async tx => {
 
-    const product = await this.prisma.product.findFirst({ where: { sku: input.sku } })
-    if (!product) throw new NotFoundException(`SKU ${input.sku} 不存在`)
+      const input = parseLogisticsTransferBody(body)
+      const [fromWh, toWh] = await Promise.all([
+        tx.warehouse.findUnique({ where: { warehouseCode: input.fromWarehouseCode } }),
+        tx.warehouse.findUnique({ where: { warehouseCode: input.toWarehouseCode } }),
+      ])
+      const fromWarehouse = assertLogisticsWarehouse(fromWh, '调出')
+      const toWarehouse = assertLogisticsWarehouse(toWh, '调入')
 
-    const refNo = `LT-${Date.now()}`
-    const remarks = transferLogRemarks(fromWarehouse.warehouseName, toWarehouse.warehouseName, input.remark)
+      const product = await tx.product.findFirst({ where: { sku: input.sku } })
+      if (!product) throw new NotFoundException(`SKU ${input.sku} 不存在`)
 
-    return this.prisma.$transaction(async (tx) => {
-      const source = await tx.inventory.findUnique({
-        where: { productId_warehouseCode: { productId: product.id, warehouseCode: fromWarehouse.warehouseCode } },
-      })
-      const available = source?.availableQty ?? 0
-      if (!source || available < input.qty) {
-        throw new BadRequestException(`可发数量不足（可发 ${available}，需调拨 ${input.qty}）`)
-      }
+      await tx.$queryRaw`SELECT id FROM product WHERE id = ${product.id} FOR UPDATE`
+      const refNo = `LT-${Date.now()}`
+      const remarks = transferLogRemarks(fromWarehouse.warehouseName, toWarehouse.warehouseName, input.remark)
 
-      await this.inventoryMutation.applyWarehouseQtyDelta(tx, {
-        productId: product.id,
-        sku: product.sku,
-        warehouseCode: fromWarehouse.warehouseCode,
-        diff: -input.qty,
-        operatorId,
-        changeType: 'logistics_transfer',
-        referenceNo: refNo,
-        remark: remarks.outRemark,
-      })
-      await this.inventoryMutation.applyWarehouseQtyDelta(tx, {
-        productId: product.id,
-        sku: product.sku,
-        warehouseCode: toWarehouse.warehouseCode,
-        diff: input.qty,
-        operatorId,
-        changeType: 'logistics_transfer',
-        referenceNo: refNo,
-        remark: remarks.inRemark,
-      })
+      const result = await (async () => {
+        const source = await tx.inventory.findUnique({
+          where: { productId_warehouseCode: { productId: product.id, warehouseCode: fromWarehouse.warehouseCode } },
+        })
+        const available = source?.availableQty ?? 0
+        if (!source || available < input.qty) {
+          throw new BadRequestException(`可发数量不足（可发 ${available}，需调拨 ${input.qty}）`)
+        }
 
-      const result = {
-        sku: product.sku,
-        qty: input.qty,
-        fromWarehouseCode: fromWarehouse.warehouseCode,
-        fromWarehouseName: fromWarehouse.warehouseName,
-        toWarehouseCode: toWarehouse.warehouseCode,
-        toWarehouseName: toWarehouse.warehouseName,
-        referenceNo: refNo,
-      }
-      await this.opLog.log({
+        await this.inventoryMutation.applyWarehouseQtyDelta(tx, {
+          productId: product.id,
+          sku: product.sku,
+          warehouseCode: fromWarehouse.warehouseCode,
+          diff: -input.qty,
+          operatorId,
+          changeType: 'logistics_transfer',
+          referenceNo: refNo,
+          remark: remarks.outRemark,
+        })
+        await this.inventoryMutation.applyWarehouseQtyDelta(tx, {
+          productId: product.id,
+          sku: product.sku,
+          warehouseCode: toWarehouse.warehouseCode,
+          diff: input.qty,
+          operatorId,
+          changeType: 'logistics_transfer',
+          referenceNo: refNo,
+          remark: remarks.inRemark,
+        })
+
+        return {
+          sku: product.sku,
+          qty: input.qty,
+          fromWarehouseCode: fromWarehouse.warehouseCode,
+          fromWarehouseName: fromWarehouse.warehouseName,
+          toWarehouseCode: toWarehouse.warehouseCode,
+          toWarehouseName: toWarehouse.warehouseName,
+          referenceNo: refNo,
+        }
+      })()
+
+      await new OperationLogService(tx as PrismaService).log({
         operatorId,
         module: 'inventory',
         action: 'logistics_transfer',
         targetType: 'inventory',
         targetId: result.sku,
         detail: { ...result, remark: input.remark || '' },
-      }, tx)
+      })
+
       return result
-    })
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted })
   }
 }
