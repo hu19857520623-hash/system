@@ -178,7 +178,7 @@ class InboundViewModel : ViewModel() {
                 if (!enterPutawayIfReady()) feedback = Feedback(true, "已恢复 ${resume.orderNo} 的未完成作业")
             } catch (e: Exception) {
                 feedback = Feedback(false, e.message ?: "恢复作业失败，请重新扫描入库单号")
-                PdaApp.instance.workJournal.clearActive("inbound")
+                // Failed reads must not erase the saved task; the operator can retry from home.
             }
         }
     }

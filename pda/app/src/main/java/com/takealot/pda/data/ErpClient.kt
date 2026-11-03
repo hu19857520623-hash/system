@@ -286,26 +286,19 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
         val resp = try {
             http.newCall(request).execute()
         } catch (e: SocketTimeoutException) {
-            throw ErpException("连接 ERP 超时，已保存到待同步记录", retriable = true)
+            throw ErpException("连接 ERP 超时，请稍后重试；已提交操作请先核对待同步记录", retriable = true)
         } catch (e: IOException) {
-            throw ErpException("无法连接 ERP，已保存到待同步记录", retriable = true)
+            throw ErpException("无法连接 ERP，请检查网络后重试；已提交操作请先核对待同步记录", retriable = true)
         }
         resp.use {
-            val text = it.body?.string().orEmpty()
-            val root = try {
-                JsonParser.parseString(text).asJsonObject
-            } catch (_: Exception) {
-                throw ErpException(if (text.isBlank()) "服务器无响应 (${it.code})" else text.take(160))
+            try {
+                return parseErpResponse(it.body?.string().orEmpty(), it.code)
+            } catch (e: ErpException) {
+                if (e.code == 401 && requireAuth) session.invalidateAuth()
+                throw e
+            } catch (_: IOException) {
+                throw ErpException("读取 ERP 响应中断，请核对待同步记录后重试", retriable = true)
             }
-            val code = root.get("code")?.asInt ?: it.code
-            val message = root.get("message")?.asString ?: it.message
-            val unauthorized = it.code == 401 || code == 401 || message.equals("Unauthorized", ignoreCase = true)
-            if (unauthorized && requireAuth) {
-                session.invalidateAuth()
-                throw ErpException(friendly401(message), 401)
-            }
-            if (!it.isSuccessful || code != 0) throw ErpException(message.ifBlank { "请求失败 (${it.code})" }, code)
-            return root.get("data") ?: gson.toJsonTree(null)
         }
     }
 
