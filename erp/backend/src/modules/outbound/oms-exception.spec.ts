@@ -22,7 +22,7 @@ describe('outbound exception synchronization', () => {
     expect(prisma.outboundOrder.update).toHaveBeenCalledWith({ where: { id: 1n }, data: {
       exceptionFromStatus: 'picking', exceptionType: 'document_missing', status: 'exception', problemRemark: '缺少装箱清单\n请补充上传',
     } })
-    expect(push).toHaveBeenCalledWith('OUT-1')
+    expect(push).toHaveBeenCalledWith('OUT-1',true)
     expect(prisma.outboundOrder.update.mock.invocationCallOrder[0]).toBeLessThan(push.mock.invocationCallOrder[0])
   })
 
@@ -30,7 +30,7 @@ describe('outbound exception synchronization', () => {
     const { service, prisma, push } = setup('exception')
     await service.setProblem(1, { markType: 'clear_exception' })
     expect(prisma.outboundOrder.update).toHaveBeenCalledWith({ where: { id: 1n }, data: { status: 'picking', exceptionFromStatus: null, exceptionType: null } })
-    expect(push).toHaveBeenCalledWith('OUT-1')
+    expect(push).toHaveBeenCalledWith('OUT-1',true)
   })
 
   it('does not publish an invalid exception', async () => {

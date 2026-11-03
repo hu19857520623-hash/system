@@ -52,6 +52,7 @@ describe('问题标记原请求和事务',()=>{
     await expect(f.service.setProblem(1,body,21)).resolves.toMatchObject({syncPending:true})
     await expect(f.service.setProblem(1,body,21)).resolves.toMatchObject({duplicate:true})
     expect(f.push).toHaveBeenCalledTimes(2);expect(f.tx.outboundOrder.update).toHaveBeenCalledTimes(1);expect(f.logs).toHaveLength(1)
+    expect(f.push).toHaveBeenNthCalledWith(1,'OUT-1',true);expect(f.push).toHaveBeenNthCalledWith(2,'OUT-1',true)
   })
   it.each([{clientRequestId:'a'.repeat(101)},{problemRemark:{}},{markType:4}])('无效原标识或标记文本先中文拒绝 %p',async bad=>{
     const f=fixture();await expect(f.service.setProblem(1,{...f.body,...bad}as any,21)).rejects.toThrow(/操作标识|有效文本/);expect(f.db.$transaction).not.toHaveBeenCalled()

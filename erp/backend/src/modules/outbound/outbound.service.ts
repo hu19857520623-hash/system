@@ -1301,7 +1301,7 @@ export class OutboundService {
         sync: markType === 'exception' || markType === 'clear_exception', outboundNo: order.outboundNo
       }
     })
-    const syncPending = result.sync && !await this.pushOutboundStatusToOms(result.outboundNo)
+    const syncPending = result.sync && !await this.pushOutboundStatusToOms(result.outboundNo, true)
     return {
       ...result.item, ...(result.duplicate ? { duplicate: true } : {}),
       ...(syncPending ? { syncPending: true, message: '标记已保存，OMS 状态待同步；请核对原单，重试原请求不会重复修改标记' } : {})
