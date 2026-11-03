@@ -1,8 +1,10 @@
 <script setup lang="ts">
+import { createReturnReadGate } from '@/utils/returnReadGate'
+import { getAccessToken } from '@/auth/tokenStore'
 import { userFacingError } from '@erp/shared/user-facing-error'
 
 import { displaySku, displaySkuText, formatSku } from '@erp/shared/sku-display'
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onScopeDispose } from 'vue'
 import { ElMessage } from 'element-plus'
 import { erpConfirm } from '@/utils/messageBox'
 import { returnsApi, operationLogApi } from '@/api/client.js'
@@ -802,36 +804,42 @@ async function downloadAttachment(row: any, att: { id: number; fileName: string 
   }
 }
 
+const returnReadScope = computed(() => app.authenticatedUser && getAccessToken() ? JSON.stringify([getAccessToken(), app.authenticatedUser.id, app.authenticatedUser.roleCode, [...app.currentPermSet].sort()]) : null)
+const detailRead = createReturnReadGate(() => returnReadScope.value), logRead = createReturnReadGate(() => returnReadScope.value)
+const detailReadError = ref(''), logReadError = ref(''), detailTarget = ref<any>(null)
+watch(returnReadScope, () => { detailRead.invalidate(); logRead.invalidate(); detailVisible.value = false; logVisible.value = false; detailRow.value = null; logRows.value = []; detailLoading.value = false; logLoading.value = false })
+watch(detailVisible, () => { if (!detailVisible.value) detailRead.invalidate() }, { flush: 'sync' })
+watch(logVisible, () => { if (!logVisible.value) logRead.invalidate() }, { flush: 'sync' })
+onScopeDispose(() => { detailRead.invalidate(); logRead.invalidate() })
+
 async function openDetail(row: any) {
+  detailTarget.value = { id: row.id, returnNo: row.returnNo }
   detailVisible.value = true
   detailLoading.value = true
-  detailRow.value = row
+  detailRow.value = null
+  detailReadError.value = ''
+  const active = detailRead.begin(() => detailVisible.value)
   try {
-    detailRow.value = await returnsApi.detail(row.id)
-  } catch {
-    // 列表数据仍可展示
-  } finally {
-    detailLoading.value = false
-  }
+    const result = await returnsApi.detail(row.id)
+    if (active()) detailRow.value = result
+  } catch (e) {
+    if (active()) detailReadError.value = `退件详情加载失败。${userFacingError(e)} 请重试或返回列表。`
+  } finally { if (active()) detailLoading.value = false }
 }
 
 async function openLog(row: any) {
   logVisible.value = true
-  logTarget.value = row
+  logTarget.value = { id: row.id, returnNo: row.returnNo }
   logLoading.value = true
   logRows.value = []
+  logReadError.value = ''
+  const active = logRead.begin(() => logVisible.value)
   try {
-    const res = await operationLogApi.list({
-      module: 'returns',
-      targetId: row.returnNo,
-      pageSize: 50,
-    })
-    logRows.value = res.items || []
-  } catch (e: any) {
-    ElMessage.error(userFacingError(displaySkuText(e?.message || '加载日志失败')))
-  } finally {
-    logLoading.value = false
-  }
+    const res = await operationLogApi.list({ module: 'returns', targetId: row.returnNo, pageSize: 50 })
+    if (active()) logRows.value = res.items || []
+  } catch (e) {
+    if (active()) logReadError.value = `退件日志加载失败。${userFacingError(e)} 请重试或返回列表。`
+  } finally { if (active()) logLoading.value = false }
 }
 
 function exportCsv() {
@@ -1152,7 +1160,9 @@ void _removeExtraFeeLine
       :total="listTotal"
     />
 
-    <el-dialog v-model="detailVisible" :title="'退件详情 · ' + (detailRow?.returnNo || '')" width="760px" class="erp-detail">
+    <el-dialog v-model="detailVisible" :title="'退件详情 · ' + (detailTarget?.returnNo || '')" width="760px" class="erp-detail">
+      <el-alert v-if="detailReadError" :title="detailReadError" type="error" :closable="false" />
+      <el-button v-if="detailReadError && detailTarget" :loading="detailLoading" @click="openDetail(detailTarget)">重试加载退件详情</el-button>
       <div v-loading="detailLoading">
         <template v-if="detailRow">
           <DetailSheet
@@ -1265,6 +1275,8 @@ void _removeExtraFeeLine
     </el-dialog>
 
     <el-dialog v-model="logVisible" :title="'操作日志 · ' + (logTarget?.returnNo || '')" width="680px">
+      <el-alert v-if="logReadError" :title="logReadError" type="error" :closable="false" />
+      <el-button v-if="logReadError && logTarget" :loading="logLoading" @click="openLog(logTarget)">重试加载退件日志</el-button>
       <el-table v-loading="logLoading" :data="logRows" size="small" border max-height="360">
         <el-table-column prop="createdAt" label="时间" width="160">
           <template #default="{ row }">{{ formatTime(row.createdAt) }}</template>
