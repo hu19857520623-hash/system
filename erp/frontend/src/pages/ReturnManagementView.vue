@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useReturnInspectionPhotos } from '@/composables/useReturnInspectionPhotos'
 import { createReturnReadGate } from '@/utils/returnReadGate'
 import { getAccessToken } from '@/auth/tokenStore'
 import { userFacingError } from '@erp/shared/user-facing-error'
@@ -78,9 +79,16 @@ const inspectDialog = ref(false)
 const inspectTarget = ref<any>(null)
 const inspectResult = ref('unknown')
 const inspectRemark = ref('')
-const inspectPhotos = ref<{ fileName: string; contentBase64: string }[]>([])
 const inspectSubmitting = ref(false)
 const inspectFileRef = ref<HTMLInputElement | null>(null)
+function inspectionScope() {
+  const token = getAccessToken(), user = app.authenticatedUser
+  return token && user && app.hasPerm('return.receive')
+    ? JSON.stringify([token, user.id, user.roleCode, user.workstation, [...app.currentPermSet].sort()]) : null
+}
+const inspectionPhotos = useReturnInspectionPhotos(inspectionScope, inspectDialog, inspectSubmitting)
+const { photos: inspectPhotos, reading: inspectReadingPhotos, error: inspectPhotoError, ready: inspectPhotosReady } = inspectionPhotos
+watch(inspectionScope, () => { inspectDialog.value = false; inspectTarget.value = null }, { flush: 'sync' })
 
 const INSPECTION_OPTIONS = [
   { value: 'good', label: '良品' },
@@ -646,49 +654,43 @@ async function submitMeasure() {
 }
 
 function openInspect(row: any) {
+  if (!inspectionScope() || inspectSubmitting.value) return
+  inspectionPhotos.reset()
   inspectTarget.value = row
   inspectResult.value = row.inspectionResult || 'unknown'
   inspectRemark.value = row.inspectionRemark || ''
-  inspectPhotos.value = []
   inspectDialog.value = true
 }
 
-async function readFileAsBase64(file: File): Promise<string> {
-  const buf = await file.arrayBuffer()
-  let binary = ''
-  const bytes = new Uint8Array(buf)
-  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]!)
-  return btoa(binary)
-}
-
 async function onInspectFiles(files: FileList | null) {
-  if (!files?.length) return
-  for (const file of Array.from(files)) {
-    inspectPhotos.value.push({
-      fileName: file.name,
-      contentBase64: await readFileAsBase64(file),
-    })
-  }
+  const selected = files ? Array.from(files) : []
   if (inspectFileRef.value) inspectFileRef.value.value = ''
+  await inspectionPhotos.add(selected)
 }
 
 async function submitInspect() {
-  if (!inspectTarget.value) return
+  if (!inspectTarget.value || inspectSubmitting.value || !inspectionScope()) return
+  if (!inspectionPhotos.canSubmit()) { ElMessage.warning('请先完成照片读取，处理失败照片后再提交'); return }
   if (!inspectPhotos.value.length) {
     ElMessage.warning('请至少上传 1 张质检照片')
     return
   }
+  const targetId = inspectTarget.value.id, identity = inspectionScope()
+  const active = () => inspectDialog.value && inspectTarget.value?.id === targetId && identity === inspectionScope()
+  const attachments = inspectPhotos.value.map(photo => ({ ...photo }))
   inspectSubmitting.value = true
   try {
-    await returnsApi.submitInspection(inspectTarget.value.id, {
+    await returnsApi.submitInspection(targetId, {
       inspectionResult: inspectResult.value,
       inspectionRemark: inspectRemark.value.trim() || undefined,
-      attachments: inspectPhotos.value,
+      attachments,
     })
-    ElMessage.success('质检已提交，已推送客户确认')
+    if (!active()) return
+    ElMessage.success('质检已提交，等待客户确认')
     inspectDialog.value = false
     await loadList()
   } catch (e: any) {
+    if (!active()) return
     ElMessage.error(userFacingError(displaySkuText(e?.message || '提交失败')))
   } finally {
     inspectSubmitting.value = false
@@ -810,7 +812,7 @@ const detailReadError = ref(''), logReadError = ref(''), detailTarget = ref<any>
 watch(returnReadScope, () => { detailRead.invalidate(); logRead.invalidate(); detailVisible.value = false; logVisible.value = false; detailRow.value = null; logRows.value = []; detailLoading.value = false; logLoading.value = false })
 watch(detailVisible, () => { if (!detailVisible.value) detailRead.invalidate() }, { flush: 'sync' })
 watch(logVisible, () => { if (!logVisible.value) logRead.invalidate() }, { flush: 'sync' })
-onScopeDispose(() => { detailRead.invalidate(); logRead.invalidate() })
+onScopeDispose(() => { detailRead.invalidate(); logRead.invalidate(); inspectDialog.value = false; inspectTarget.value = null })
 
 async function openDetail(row: any) {
   detailTarget.value = { id: row.id, returnNo: row.returnNo }
@@ -1412,8 +1414,8 @@ void _removeExtraFeeLine
       </template>
     </el-dialog>
 
-    <el-dialog v-model="inspectDialog" :title="'质检拍照 · ' + (inspectTarget?.returnNo || '')" width="560px">
-      <el-form label-width="90px">
+    <el-dialog v-model="inspectDialog" :close-on-click-modal="!inspectSubmitting" :close-on-press-escape="!inspectSubmitting" :show-close="!inspectSubmitting" :title="'质检拍照 · ' + (inspectTarget?.returnNo || '')" width="560px">
+      <el-form label-width="90px" :disabled="inspectSubmitting">
         <el-form-item label="质检结论" required>
           <el-select v-model="inspectResult" style="width: 100%">
             <el-option v-for="o in INSPECTION_OPTIONS" :key="o.value" :label="o.label" :value="o.value" />
@@ -1423,17 +1425,23 @@ void _removeExtraFeeLine
           <el-input v-model="inspectRemark" type="textarea" :rows="3" placeholder="外观、破损、少件等说明" />
         </el-form-item>
         <el-form-item label="质检照片" required>
-          <input ref="inspectFileRef" type="file" accept="image/*" multiple class="hidden-input" @change="(e: Event) => void onInspectFiles((e.target as HTMLInputElement).files)">
-          <el-button size="small" @click="inspectFileRef?.click()">上传照片</el-button>
+          <input ref="inspectFileRef" type="file" accept="image/*" multiple :disabled="inspectReadingPhotos || inspectSubmitting" class="hidden-input" @change="(e: Event) => void onInspectFiles((e.target as HTMLInputElement).files)">
+          <el-button size="small" :loading="inspectReadingPhotos" :disabled="inspectSubmitting || inspectReadingPhotos" @click="inspectFileRef?.click()">选择照片</el-button>
+          <p v-if="inspectReadingPhotos" role="status">正在读取照片，请等待完成后提交。</p>
+          <el-alert v-if="inspectPhotoError" type="error" :closable="false" :title="inspectPhotoError" />
+          <template v-if="inspectPhotoError">
+            <el-button :disabled="inspectReadingPhotos || inspectSubmitting" @click="inspectionPhotos.retry()">重试读取照片</el-button>
+            <el-button :disabled="inspectReadingPhotos || inspectSubmitting" @click="inspectionPhotos.discardFailed()">放弃本次选取</el-button>
+          </template>
           <ul v-if="inspectPhotos.length" class="photo-list">
-            <li v-for="p in inspectPhotos" :key="p.fileName">{{ p.fileName }}</li>
+            <li v-for="(p, index) in inspectPhotos" :key="index">{{ p.fileName }} <el-button link type="danger" :disabled="inspectReadingPhotos || inspectSubmitting" @click="inspectionPhotos.remove(index)">移除此照片</el-button></li>
           </ul>
         </el-form-item>
       </el-form>
       <p class="measure-hint">提交后将推送至 OMS，客户确认留/不留及后续处理方式。</p>
       <template #footer>
-        <el-button @click="inspectDialog = false">取消</el-button>
-        <el-button type="primary" :loading="inspectSubmitting" @click="submitInspect">提交质检</el-button>
+        <el-button :disabled="inspectSubmitting" @click="inspectDialog = false">返回列表</el-button>
+        <el-button type="primary" :loading="inspectSubmitting" :disabled="!inspectPhotosReady || !inspectPhotos.length" @click="submitInspect">提交质检</el-button>
       </template>
     </el-dialog>
 
