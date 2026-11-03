@@ -9,6 +9,24 @@ import InboundSaveRecovery from '../inbound/InboundSaveRecovery'
 import { storeAuthSession } from '../../api/client'
 import { inboundSaveKey } from '../../data/inboundSaveWorkflow'
 import { InboundReceiptStatus } from '../inbound/InboundReceiptStatus'
+import { defaultInboundFilters, inboundListParams, inboundListReturn, readInboundListLocation } from '../../data/inboundListLocation'
+
+test('入库查询条件往返地址与详情返回时保留已应用条件和查询模式', () => {
+  const filters = { ...defaultInboundFilters, inboundNo: 'RV & 测试#1', inboundNoMode: 'exact' as const, referenceNo: 'PO-9', sku: 'A', warehouse: 'jhb1', dateFrom: '2026-11-01' }
+  const query = inboundListParams('shelved', filters)
+  assert.deepEqual(readInboundListLocation(new URLSearchParams(query.toString())), { tab: 'shelved', filters })
+  assert.equal(inboundListReturn('?' + query), '/inbound/records?' + query)
+})
+test('切到全部与重置筛选清除旧在途条件，刷新不会退回旧tab', () => {
+  assert.equal(inboundListParams('all', defaultInboundFilters).toString(), '')
+  assert.deepEqual(readInboundListLocation(new URLSearchParams()), { tab: 'all', filters: defaultInboundFilters })
+  assert.equal(inboundListReturn('?tab=all'), '/inbound/records')
+})
+test('非法tab回到全部，兼容旧submitted入口，返回链接不接受外部跳转参数', () => {
+  assert.equal(readInboundListLocation(new URLSearchParams('tab=submitted')).tab, 'on_the_way')
+  assert.equal(readInboundListLocation(new URLSearchParams('tab=garbage')).tab, 'all')
+  assert.equal(inboundListReturn('?returnTo=https://example.com&tab=garbage&skuMode=other&dateFrom=wrong'), '/inbound/records')
+})
 
 test('接受短收并上架完成后，状态和短收件数同时明确显示', () => {
   const html = renderToStaticMarkup(createElement(InboundReceiptStatus, { order: { status: 'shelved', totalQty: 3, receivedQty: 2 } }))

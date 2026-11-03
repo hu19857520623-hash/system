@@ -16,7 +16,7 @@ import InboundSaveRecovery from '../components/inbound/InboundSaveRecovery'
 import { useInboundConfirmation } from '../components/inbound/useInboundConfirmation'
 import { InboundPrintLabelMenu } from '../components/inbound/InboundPrintLabelMenu'
 import {
-  SearchField, FilterActions, DropdownBtn, inputCls, matchText, type SearchMode,
+  SearchField, FilterActions, DropdownBtn, inputCls, matchText,
 } from '../components/ui/filters'
 import {
   InboundOrder, DELIVERY_METHOD_LABELS, STOCK_SOURCE_LABELS, warehouseFilterOptions, warehouseLabel,
@@ -38,6 +38,7 @@ import {
   parseInboundOrders,
 } from '../data/importTemplates'
 import { ImportTemplateLegend } from '../components/ui/ImportTemplateLegend'
+import { defaultInboundFilters as defaultFilters, inboundListParams, readInboundListLocation, type InboundFilters } from '../data/inboundListLocation'
 import { notifyIfUserError, notifySuccess, notifyError, notifyInfo } from '../utils/userNotify'
 
 const statusTabs = [
@@ -50,28 +51,6 @@ const statusTabs = [
   { id: 'exception', label: '异常' },
   { id: 'voided', label: '作废' },
 ]
-
-interface InboundFilters {
-  inboundNo: string
-  inboundNoMode: SearchMode
-  referenceNo: string
-  referenceNoMode: SearchMode
-  sku: string
-  skuMode: SearchMode
-  trackingNo: string
-  warehouse: string
-  inboundType: string
-  dateFrom: string
-  dateTo: string
-}
-
-const defaultFilters: InboundFilters = {
-  inboundNo: '', inboundNoMode: 'fuzzy',
-  referenceNo: '', referenceNoMode: 'fuzzy',
-  sku: '', skuMode: 'fuzzy',
-  trackingNo: '', warehouse: 'all', inboundType: 'all',
-  dateFrom: '', dateTo: '',
-}
 
 function filterByTab(list: InboundOrder[], tab: string) {
   if (tab === 'all') return list
@@ -102,15 +81,22 @@ export default function InboundRecords() {
   const canWrite = can('inbound:write')
   const inboundOrders = useInboundOrders()
   const scopedInbound = useMemo(() => dataScope.scopeInbound(inboundOrders), [dataScope, inboundOrders])
-  const [searchParams] = useSearchParams()
-  const initialTab = searchParams.get('tab') ?? 'all'
-  const [tab, setTab] = useState(initialTab === 'submitted' ? 'on_the_way' : initialTab)
-  const [advancedOpen, setAdvancedOpen] = useState(false)
-  const [draft, setDraft] = useState<InboundFilters>(defaultFilters)
-  const [applied, setApplied] = useState<InboundFilters>(defaultFilters)
+  const [searchParams, setSearchParams] = useSearchParams()
+  const locationQuery = searchParams.toString()
+  const { tab, filters: applied } = useMemo(() => readInboundListLocation(new URLSearchParams(locationQuery)), [locationQuery])
+  const [advancedOpen, setAdvancedOpen] = useState(!!(applied.trackingNo || applied.dateFrom || applied.dateTo || applied.inboundType !== 'all'))
+  const [draft, setDraft] = useState<InboundFilters>(applied)
+  const setTab = (next: string) => setSearchParams(inboundListParams(next, applied))
+  const setApplied = (next: InboundFilters) => setSearchParams(inboundListParams(tab, next))
+  const detailQuery = inboundListParams(tab, applied).toString()
+  const detailUrl = (id: string) => `/inbound/records/${encodeURIComponent(id)}${detailQuery ? '?' + detailQuery : ''}`
   const [detail, setDetail] = useState<InboundOrder | null>(null)
   const [syncing, setSyncing] = useState(false)
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  useEffect(() => {
+    setDraft(applied); setSelected(new Set())
+    if (applied.trackingNo || applied.dateFrom || applied.dateTo || applied.inboundType !== 'all') setAdvancedOpen(true)
+  }, [applied])
   const [voiding, setVoiding] = useState(false)
   const [withdrawingId, setWithdrawingId] = useState<string | null>(null)
   const [importing, setImporting] = useState(false)
@@ -457,7 +443,7 @@ export default function InboundRecords() {
                   />
                 </td>
                 <td className="table-cell">
-                  <Link to={`/inbound/records/${encodeURIComponent(o.id)}`} className="hover:underline" aria-label={`查看 ${o.inboundNo} 详情`}>
+                  <Link to={detailUrl(o.id)} className="hover:underline" aria-label={`查看 ${o.inboundNo} 详情`}>
                     <MonoCode>{o.inboundNo}</MonoCode>
                   </Link>
                 </td>
@@ -479,7 +465,7 @@ export default function InboundRecords() {
                 <td className="table-cell text-xs text-text-muted">{o.createdAt}</td>
                 <td className="table-cell align-top">
                   <div className="flex min-w-[72px] flex-col gap-0.5">
-                    <Link to={`/inbound/records/${encodeURIComponent(o.id)}`} className={actionLinkClass()}>详情</Link>
+                    <Link to={detailUrl(o.id)} className={actionLinkClass()}>详情</Link>
                     <InboundPrintLabelMenu order={o} />
                     {canWrite && canEditInboundOrder(o.status) && (
                       <Link to={`/inbound?edit=${encodeURIComponent(o.id)}`} className={actionLinkClass()}>
