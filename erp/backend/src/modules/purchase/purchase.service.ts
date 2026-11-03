@@ -995,7 +995,7 @@ export class PurchaseService {
     for (const entry of productLines) {
       const { line } = entry
       const prefix = `C${po.id.toString(36)}-${line.id.toString(36)}`
-      const lineEntries = breakdown.entries.filter((e) => e.sku === line.sku)
+      const lineEntries = breakdown.entries.filter((e) => e.poItemId === String(line.id))
       for (const e of lineEntries) {
         if (e.amountRmb <= 0) continue
         const suffix = e.costType === '采购货款' ? 'P' : e.costType === '国内运费' ? 'F' : e.costType === '采购税费' ? 'T' : 'X'
@@ -1080,12 +1080,19 @@ export class PurchaseService {
     const { perLine: lineDomesticMap } = allocatePoDomesticFreight(po)
     const productLines: Array<{ line: any; product: any }> = []
 
-    for (const line of po.items) {
-      const qty = line.quantity
-      const unitPrice = Number(line.unitPrice)
-      const lineDomestic = lineDomesticMap.get(String(line.id)) ?? 0
+    const groups = new Map<string, any[]>()
+    for (const line of po.items) groups.set(line.sku, [...(groups.get(line.sku) || []), line])
+    for (const lines of groups.values()) {
+      const qty = lines.reduce((sum, line) => sum + line.quantity, 0)
+      const unitPrice = Math.round(lines.reduce((sum, line) => sum + line.quantity * Number(line.unitPrice), 0) * 100 / qty) / 100
+      const line = { ...lines[0], quantity: qty, unitPrice }
+      const lineDomestic = lines.reduce((sum, item) => sum + (lineDomesticMap.get(String(item.id)) ?? 0), 0)
       const domesticPerUnit = qty > 0 ? lineDomestic / qty : 0
       const product = await this.syncProductMasterFromLine(tx, po, line, domesticPerUnit)
+      for (const item of lines) {
+        if (item.id !== line.id) await tx.purchaseOrderItem.update({ where: { id: item.id }, data: { productId: product.id } })
+        item.productId = product.id
+      }
       productLines.push({ line, product })
 
       const catalogSku = toCatalogInternalSku(line.sku)
