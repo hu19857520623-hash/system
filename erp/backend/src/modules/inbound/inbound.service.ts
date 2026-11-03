@@ -841,7 +841,7 @@ export class InboundService {
       const order = await this.prisma.inboundOrder.findUnique({ where: { id: BigInt(id) }, include: { items: true } })
       if (!order) throw new Error('Original receipt unavailable')
       if (kind !== 'measure') await this.inboundFee.recordOperation(order, 'qc', pieceQty(result.items || order.items), true)
-      if (kind !== 'qc-submit' && result.measuredCount > 0) await this.inboundFee.recordOperation(order, 'measure', result.measuredCount, true)
+      if (kind !== 'qc-submit' && result.measuredCount > 0) await this.inboundFee.recordMeasuredSkus(order)
     } catch {
       feePending = true
     }

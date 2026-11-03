@@ -8,6 +8,7 @@ import {
   type InboundFeeRuleLike,
 } from './inbound-fee.util'
 import { UpsertInboundFeeRuleDto } from './dto/inbound-fee.dto'
+import { Prisma } from '@prisma/client'
 
 type InboundForFee = {
   inboundNo: string
@@ -127,6 +128,46 @@ export class InboundFeeService {
       if (throwOnFailure) throw err
       return null
     }
+  }
+
+  /** Distinct measured SKUs are cumulative; repeating one measurement is free.
+   * Keep existing billed quantities (including legacy order-wide charges) as
+   * credit, then append only the missing quantity under the customer/order locks. */
+  async recordMeasuredSkus(order: InboundForFee) {
+    const customerId = await this.resolveCustomerId(order.omsCustomerCode)
+    if (!customerId) return null
+    const result = await this.prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM customer WHERE id=${BigInt(customerId)} FOR UPDATE`
+      await tx.$queryRaw`SELECT id FROM inbound_order WHERE inbound_no=${order.inboundNo} FOR UPDATE`
+      const current = await tx.inboundOrder.findUnique({ where: { inboundNo: order.inboundNo }, include: { items: true } })
+      if (!current || current.omsCustomerCode !== order.omsCustomerCode || current.warehouseCode !== order.warehouseCode) throw new BadRequestException('测量原单归属或仓库已变化，请核对后重试')
+      const logs = await tx.operationLog.findMany({ where: { module: 'inbound', targetId: order.inboundNo, action: { in: ['measure_inbound', 'qc_measure'] } }, orderBy: { id: 'asc' } })
+      const skus = new Set<string>()
+      for (const log of logs) {
+        const detail = log.detail as any
+        const lines = log.action === 'measure_inbound' ? detail?.request?.measureItems : detail?.request?.items?.filter((line: any) => line.actualQty > 0)
+        if (!Array.isArray(lines)) throw new BadRequestException('历史测量凭据不完整，请核对原测量记录，勿重新计费')
+        for (const line of lines) {
+          const item = current.items.find(item => String(item.id) === String(line.id))
+          if (!item) throw new BadRequestException('测量凭据与商品明细不一致，请核对原单后重试')
+          skus.add(item.sku)
+        }
+      }
+      const key = `inbound:${order.inboundNo}:inbound_measure`
+      const charges = await tx.billingCharge.findMany({ where: { customerId: BigInt(customerId), bizRef: order.inboundNo, chargeType: 'inbound_measure', source: 'erp', OR: [{ idempotencyKey: key }, { idempotencyKey: { startsWith: key + ':' } }] } })
+      if (charges.some(row => row.status === 'cancelled')) throw new BadRequestException('测量费用存在已取消记录，请交财务核对后继续，勿重复收费')
+      const billed = charges.reduce((sum, row) => sum + row.quantity, 0)
+      if (billed >= skus.size) return { duplicate: true, measuredSkuCount: skus.size, billedSkuCount: billed }
+      const rules = await tx.inboundFeeRule.findMany({ where: { enabled: true } })
+      const rule = pickInboundFeeRule(rules.map(row => this.toRuleLike(row)), customerId, order.warehouseCode)
+      if (!rule) return null
+      const charge = buildInboundFeeCharge({ rule, operation: 'measure', quantity: skus.size - billed, inboundNo: order.inboundNo })
+      if (!charge) return null
+      return this.billing.createCharge({ ...charge, customerId, source: 'erp', bizRef: order.inboundNo, sourceRef: order.inboundNo, warehouseCode: order.warehouseCode,
+        idempotencyKey: key + ':skus:' + skus.size, calcBasis: { ...charge.calcBasis, measuredSkus: [...skus].sort(), measuredSkuCount: skus.size, previouslyBilledSkuCount: billed } }, tx, false)
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted, timeout: 15000 })
+    if (result && !await this.billing.pushCustomerBillingToOms(customerId)) throw new Error('入库测量费用已记录，OMS账单同步待核对')
+    return result
   }
 
   private async resolveCustomerId(customerCode?: string | null) {
