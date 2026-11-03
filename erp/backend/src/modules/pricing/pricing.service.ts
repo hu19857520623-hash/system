@@ -64,7 +64,9 @@ export class PricingService {
     const soldQty = row.soldQty ?? 0
     const catalogPool = catalogStockPool(row)
     const remainingStockQty = remainingCatalogStock(row)
-    const purchaseQty = (pipeline?.purchaseQty || 0) > 0 ? pipeline!.purchaseQty : (row.purchaseQty || 0)
+    const purchaseQty = pipeline?.hasPurchaseHistory || (pipeline?.purchaseQty || 0) > 0
+      ? pipeline!.purchaseQty
+      : (row.purchaseQty || 0)
     const inTransitQty = pipeline?.inTransitQty ?? catalogInTransitQty({
       purchaseTotal: purchaseQty,
       inboundExpectedTotal: pipeline?.inboundExpectedTotal ?? 0,
@@ -219,7 +221,7 @@ export class PricingService {
     const openRemaining = new Map<string, number>()
     const damagedPurchase = new Map<string, number>()
 
-    const [poItems, inboundItems] = await Promise.all([
+    const [poItems, inboundItems, purchaseHistory] = await Promise.all([
       this.prisma.purchaseOrderItem.findMany({
         where: {
           sku: { in: lookup },
@@ -233,6 +235,12 @@ export class PricingService {
           order: { status: { notIn: CATALOG_INBOUND_CANCELLED_STATUSES } },
         },
         select: { sku: true, expectedQty: true, actualQty: true, order: { select: { status: true } } },
+      }),
+      // An invalidated last PO must not revive its stale cached quantity. With no
+      // PO history at all, manually entered historical catalog quantities remain valid.
+      this.prisma.purchaseOrderItem.groupBy({
+        by: ['sku'],
+        where: { sku: { in: lookup } },
       }),
     ])
 
@@ -257,8 +265,12 @@ export class PricingService {
       )
     }
 
+    const historySkus = new Set(purchaseHistory.flatMap(item => index.get(item.sku) || []))
     for (const sku of skus) {
-      map.set(sku, finishCatalogPipelineQty(sku, purchase, inboundExpected, openRemaining, damagedPurchase))
+      map.set(sku, {
+        ...finishCatalogPipelineQty(sku, purchase, inboundExpected, openRemaining, damagedPurchase),
+        hasPurchaseHistory: historySkus.has(sku),
+      })
     }
     return map
   }

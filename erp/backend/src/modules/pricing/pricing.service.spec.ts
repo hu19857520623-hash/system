@@ -4,13 +4,13 @@ jest.mock('./oms-catalog-sync.util', () => ({ pushCatalogStockToOms: jest.fn().m
 describe('catalog damaged procurement pipeline', () => {
   it('scopes damage to eligible purchase orders, keeps original purchase totals and leaves actual open shipments in transit', async () => {
     const db:any={
-      purchaseOrderItem:{findMany:jest.fn().mockResolvedValue([{poId:301n,sku:'AUDIT-A',quantity:4},{poId:303n,sku:'AUDIT-A',quantity:1}])},
+      purchaseOrderItem:{findMany:jest.fn().mockResolvedValue([{poId:301n,sku:'AUDIT-A',quantity:4},{poId:303n,sku:'AUDIT-A',quantity:1}]),groupBy:jest.fn().mockResolvedValue([{sku:'AUDIT-A'}])},
       inboundOrderItem:{findMany:jest.fn().mockResolvedValue([{sku:'AUDIT-A',expectedQty:3,actualQty:3,order:{status:'completed'}},{sku:'AUDIT-A',expectedQty:1,actualQty:null,order:{status:'pending_receipt'}}])},
       logisticsReceiptItem:{findMany:jest.fn().mockResolvedValue([{sku:'AUDIT-A',damagedQty:1}])},
     }
     const service=new PricingService(db,{} as any,{} as any)
     const result=await (service as any).loadCatalogPipelineQtyBySku(['TKL-AUDIT-A'])
-    expect(result.get('TKL-AUDIT-A')).toEqual({purchaseQty:5,inboundExpectedTotal:4,openInboundRemaining:1,inTransitQty:1})
+    expect(result.get('TKL-AUDIT-A')).toEqual({purchaseQty:5,inboundExpectedTotal:4,openInboundRemaining:1,inTransitQty:1,hasPurchaseHistory:true})
     expect(db.purchaseOrderItem.findMany.mock.calls[0][0].where.order.status.notIn).toContain('cancelled')
     expect(db.logisticsReceiptItem.findMany).toHaveBeenCalledWith(expect.objectContaining({where:expect.objectContaining({damagedQty:{gt:0},receipt:{poId:{in:[301n,303n]}}})}))
     db.inboundOrderItem.findMany.mockResolvedValue([{sku:'AUDIT-A',expectedQty:4,actualQty:4,order:{status:'completed'}}])
@@ -19,9 +19,21 @@ describe('catalog damaged procurement pipeline', () => {
     expect((service as any).serialize({id:1n,sku:'TKL-AUDIT-A',purchaseQty:5},undefined,completed).inTransitQty).toBe(0)
   })
   it('does not read unrelated historical damage when there are no eligible purchases', async()=>{
-    const db:any={purchaseOrderItem:{findMany:async()=>[]},inboundOrderItem:{findMany:async()=>[]},logisticsReceiptItem:{findMany:jest.fn()}}
+    const db:any={purchaseOrderItem:{findMany:async()=>[],groupBy:async()=>[]},inboundOrderItem:{findMany:async()=>[]},logisticsReceiptItem:{findMany:jest.fn()}}
     const service=new PricingService(db,{} as any,{} as any)
     expect((await (service as any).loadCatalogPipelineQtyBySku(['TKL-A'])).get('TKL-A').inTransitQty).toBe(0)
+    expect(db.logisticsReceiptItem.findMany).not.toHaveBeenCalled()
+  })
+  it('shows zero after all purchases are invalidated, preserving manual quantities for SKUs without purchase history', async()=>{
+    const db:any={purchaseOrderItem:{findMany:jest.fn().mockResolvedValue([]),groupBy:jest.fn().mockResolvedValue([{sku:'AUDIT-VOID'}])},inboundOrderItem:{findMany:async()=>[]},logisticsReceiptItem:{findMany:jest.fn()}}
+    const service=new PricingService(db,{} as any,{} as any)
+    const result=await (service as any).loadCatalogPipelineQtyBySku(['TKL-AUDIT-VOID','AUDIT-VOID','TKL-MANUAL'])
+    for(const sku of ['TKL-AUDIT-VOID','AUDIT-VOID']) {
+      expect((service as any).serialize({id:1n,sku,purchaseQty:5},undefined,result.get(sku)).purchaseQty).toBe(0)
+    }
+    expect((service as any).serialize({id:2n,sku:'TKL-MANUAL',purchaseQty:25},undefined,result.get('TKL-MANUAL')).purchaseQty).toBe(25)
+    expect(db.purchaseOrderItem.findMany.mock.calls[0][0].where.order.status.notIn).toEqual(expect.arrayContaining(['draft','rejected','cancelled','voided','pending_actual_qty']))
+    expect(db.purchaseOrderItem.groupBy).toHaveBeenCalledWith({by:['sku'],where:{sku:{in:expect.arrayContaining(['TKL-AUDIT-VOID','AUDIT-VOID','TKL-MANUAL','MANUAL'])}}})
     expect(db.logisticsReceiptItem.findMany).not.toHaveBeenCalled()
   })
 })

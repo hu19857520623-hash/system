@@ -40,6 +40,7 @@ export function catalogInTransitQty(input: {
 
 export type CatalogPipelineQty = {
   purchaseQty: number
+  hasPurchaseHistory?: boolean
   inboundExpectedTotal: number
   openInboundRemaining: number
   inTransitQty: number
