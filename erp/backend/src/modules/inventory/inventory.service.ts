@@ -1407,10 +1407,23 @@ export class InventoryService {
 
   async updateLocationLine(
     id: number,
-    body: { qty?: number; locationCode?: string; remark?: string; customerCode?: string },
+    body: { clientRequestId?: string; qty?: number; locationCode?: string; remark?: string; customerCode?: string },
     operatorId?: number,
   ) {
+    const clientRequestId = String(body.clientRequestId || '').trim()
+    if (clientRequestId && (!operatorId || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(clientRequestId))) throw new BadRequestException('库存调整原请求标识无效，请核对原操作')
+    const requestFingerprint = createHash('sha256').update(JSON.stringify({ id, qty: body.qty ?? null, locationCode: body.locationCode?.trim() || null, customerCode: body.customerCode?.trim() || null, remark: body.remark?.trim() || null })).digest('hex')
     return this.prisma.$transaction(async tx => {
+      if (clientRequestId) {
+        await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(operatorId!)} FOR UPDATE`
+        const receipt = await tx.operationLog.findFirst({ where: { module: 'inventory', action: 'location_adjust_request', operatorId: BigInt(operatorId!), detail: { path: '$.clientRequestId', equals: clientRequestId } }, orderBy: { id: 'desc' } })
+        if (receipt) {
+          const detail = receipt.detail as any
+          if (detail.requestFingerprint !== requestFingerprint || !detail.result) throw new ConflictException('原库存调整请求内容不同，请核对原请求，勿修改后重复提交')
+          return { ...detail.result, duplicate: true }
+        }
+      }
+      const finalResult = await (async () => {
       const initial = await tx.inventoryLocation.findUnique({ where: { id: BigInt(id) } })
       if (!initial) throw new NotFoundException('库位库存不存在')
       await tx.$queryRaw`SELECT id FROM product WHERE id = ${initial.productId} FOR UPDATE`
@@ -1579,6 +1592,9 @@ export class InventoryService {
       })
 
       return result
+      })()
+      if (clientRequestId) await new OperationLogService(tx as PrismaService).log({ operatorId, module: 'inventory', action: 'location_adjust_request', targetType: 'inventory_location', targetId: String(id), detail: { clientRequestId, requestFingerprint, result: finalResult } })
+      return finalResult
     }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted })
   }
 

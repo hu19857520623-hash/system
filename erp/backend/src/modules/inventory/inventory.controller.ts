@@ -137,7 +137,7 @@ export class InventoryController {
   @Patch('by-location/:id')
   adjustLocation(
     @Param('id', ParseIntPipe) id: number,
-    @Body() body: { qty?: number; locationCode?: string; remark?: string; customerCode: string },
+    @Body() body: { clientRequestId?: string; qty?: number; locationCode?: string; remark?: string; customerCode: string },
     @CurrentUser('userId') userId: number,
   ) {
     return this.service.updateLocationLine(id, body, userId)
