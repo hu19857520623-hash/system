@@ -23,6 +23,9 @@ import {
   CUSTOMER_INBOUND_TYPES, customerInboundTypeLabel, customerInboundStockLabel,
 } from '../data/mockData'
 import { useInboundOrders } from '../data/entityStore'
+import { useProducts } from '../data/inventoryStore'
+import { displaySku } from '../data/skuDisplay'
+import { inboundOrderMatchesSku } from '../data/inboundSkuFilter'
 import { useDataScope } from '../auth/useDataScope'
 import { AdminCustomerFilter, AdminCustomerCell } from '../components/admin/AdminCustomerFilter'
 import { useRole } from '../auth/RoleContext'
@@ -67,7 +70,7 @@ function applyInboundFilters(list: InboundOrder[], f: InboundFilters, forCustome
     }
     if (!matchText(o.inboundNo, f.inboundNo, f.inboundNoMode)) return false
     if (!matchText(o.referenceNo ?? '', f.referenceNo, f.referenceNoMode)) return false
-    if (!matchText(o.skuHint ?? '', f.sku, f.skuMode)) return false
+    if (!inboundOrderMatchesSku(o, f.sku, f.skuMode, sku => displaySku(sku, o.customerId))) return false
     if (f.trackingNo && !(o.trackingNo ?? '').includes(f.trackingNo)) return false
     if (f.dateFrom && o.createdAt < f.dateFrom) return false
     if (f.dateTo && o.createdAt > f.dateTo) return false
@@ -80,6 +83,7 @@ export default function InboundRecords() {
   const { role, can } = useRole()
   const canWrite = can('inbound:write')
   const inboundOrders = useInboundOrders()
+  const products = useProducts()
   const scopedInbound = useMemo(() => dataScope.scopeInbound(inboundOrders), [dataScope, inboundOrders])
   const [searchParams, setSearchParams] = useSearchParams()
   const locationQuery = searchParams.toString()
@@ -157,18 +161,11 @@ export default function InboundRecords() {
     list = filterByTab(list, tab)
     list = applyInboundFilters(list, applied, !dataScope.isAdmin)
     return list
-  }, [tab, applied, scopedInbound, dataScope.isAdmin])
+  }, [tab, applied, scopedInbound, dataScope.isAdmin, products])
 
-  const tabCounts = useMemo(() => ({
-    all: scopedInbound.length,
-    draft: scopedInbound.filter(o => o.status === 'draft').length,
-    on_the_way: scopedInbound.filter(o => o.status === 'on_the_way').length,
-    receiving: scopedInbound.filter(o => ['receiving', 'partial'].includes(o.status)).length,
-    completed: scopedInbound.filter(o => ['partial', 'completed'].includes(o.status)).length,
-    shelved: scopedInbound.filter(o => o.status === 'shelved').length,
-    exception: scopedInbound.filter(o => o.status === 'exception').length,
-    voided: scopedInbound.filter(o => o.status === 'voided').length,
-  }), [scopedInbound])
+  const tabCounts = useMemo(() => Object.fromEntries(
+    statusTabs.map(t => [t.id, filterByTab(scopedInbound, t.id).length]),
+  ), [scopedInbound])
 
   const setDraftField = <K extends keyof InboundFilters>(key: K, value: InboundFilters[K]) => {
     setDraft(prev => ({ ...prev, [key]: value }))

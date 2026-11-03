@@ -10,6 +10,29 @@ import { storeAuthSession } from '../../api/client'
 import { inboundSaveKey } from '../../data/inboundSaveWorkflow'
 import { InboundReceiptStatus } from '../inbound/InboundReceiptStatus'
 import { defaultInboundFilters, inboundListParams, inboundListReturn, readInboundListLocation } from '../../data/inboundListLocation'
+import { inboundOrderMatchesSku } from '../../data/inboundSkuFilter'
+
+test('入库SKU查询覆盖全部货品明细和客户显示编码，不依赖旧skuHint', () => {
+  const order = { lineItems: [{ sku: 'TKL9069-A', name: 'A', qty: 1, boxNo: 1 }, { sku: 'TKL9069-B', name: 'B', qty: 2, boxNo: 2 }] }
+  const display = (sku: string) => ({ 'TKL9069-A': '自定义A', 'TKL9069-B': 'CUSTOM-B' })[sku] || sku
+  assert.equal(inboundOrderMatchesSku(order, 'TKL9069-B', 'exact', display), true)
+  assert.equal(inboundOrderMatchesSku(order, 'custom-b', 'exact', display), true)
+  assert.equal(inboundOrderMatchesSku(order, 'CUSTOM', 'exact', display), false)
+  assert.equal(inboundOrderMatchesSku(order, 'CUSTOM', 'fuzzy', display), true)
+  assert.equal(inboundOrderMatchesSku(order, '自定义A', 'exact', display), true)
+  assert.equal(inboundOrderMatchesSku(order, '不存在 CUSTOM-B', 'exact', display), true)
+  assert.equal(inboundOrderMatchesSku(order, 'OTHER', 'fuzzy', display), false)
+})
+
+test('旧入库摘要多SKU可分别精确查询，空查询不排除无明细单据', () => {
+  const display = (sku: string) => sku.replace(/^TKL9069-/, '')
+  const order = { skuHint: 'TKL9069-A, TKL9069-B' }
+  assert.equal(inboundOrderMatchesSku(order, 'B', 'exact', display), true)
+  assert.equal(inboundOrderMatchesSku(order, 'TKL9069-A', 'exact', display), true)
+  assert.equal(inboundOrderMatchesSku(order, 'C', 'exact', display), false)
+  assert.equal(inboundOrderMatchesSku({}, '  ', 'exact', display), true)
+  assert.equal(inboundOrderMatchesSku({}, 'A', 'fuzzy', display), false)
+})
 
 test('入库查询条件往返地址与详情返回时保留已应用条件和查询模式', () => {
   const filters = { ...defaultInboundFilters, inboundNo: 'RV & 测试#1', inboundNoMode: 'exact' as const, referenceNo: 'PO-9', sku: 'A', warehouse: 'jhb1', dateFrom: '2026-11-01' }
