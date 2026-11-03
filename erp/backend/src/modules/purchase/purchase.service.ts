@@ -1,5 +1,7 @@
 import { assertGlobalSkuAvailable } from '../../common/global-sku.util'
 import { randomUUID } from 'crypto'
+import { Prisma } from '@prisma/client'
+import { CATALOG_PO_EXCLUDED_STATUSES } from '../pricing/catalog-pipeline-qty.util'
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common'
 import { AuthUser } from '../../common/decorators/current-user.decorator'
 import { UpdatePurchasePackageDto } from './dto/purchase.dto'
@@ -822,7 +824,7 @@ export class PurchaseService {
       }
       await this.applyPostAuditEffects(tx, order, auditorId)
       return order
-    })
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted })
     const [item] = await this.enrichOrders([updated])
     await this.opLog.log({
       operatorId: auditorId,
@@ -1082,7 +1084,7 @@ export class PurchaseService {
 
     const groups = new Map<string, any[]>()
     for (const line of po.items) groups.set(line.sku, [...(groups.get(line.sku) || []), line])
-    for (const lines of groups.values()) {
+    for (const [, lines] of [...groups].sort(([a], [b]) => a.localeCompare(b))) {
       const qty = lines.reduce((sum, line) => sum + line.quantity, 0)
       const unitPrice = Math.round(lines.reduce((sum, line) => sum + line.quantity * Number(line.unitPrice), 0) * 100 / qty) / 100
       const line = { ...lines[0], quantity: qty, unitPrice }
@@ -1099,13 +1101,18 @@ export class PurchaseService {
       const existing = await tx.productPricing.findFirst({
         where: { sku: { in: catalogSkuLookupKeys(line.sku) } },
       })
-      const samePo = existing?.poNo === po.poNo
+      // The product write above serializes same-SKU approvals. Read committed
+      // callers now see all committed POs after any wait, plus this transaction.
+      const purchase = await tx.purchaseOrderItem.aggregate({
+        where: { sku: { in: catalogSkuLookupKeys(line.sku) }, order: { status: { notIn: CATALOG_PO_EXCLUDED_STATUSES } } },
+        _sum: { quantity: true },
+      })
+      const purchaseQty = Number(purchase._sum.quantity ?? 0)
+      if (!Number.isSafeInteger(purchaseQty) || purchaseQty < 0 || purchaseQty > 2147483647) throw new BadRequestException('累计采购数量超出支持范围，请核对采购明细后重试')
       const pricingData = {
         productName: line.productName || line.sku,
         costRmb: unitPrice,
-        purchaseQty: existing
-          ? (samePo ? qty : (existing.purchaseQty ?? 0) + qty)
-          : qty,
+        purchaseQty,
         poNo: po.poNo,
         domesticFee: domesticPerUnit,
       }
@@ -1159,7 +1166,7 @@ export class PurchaseService {
           include: { items: true },
         })
         await this.applyPostAuditEffects(tx, order, row.auditorId ? Number(row.auditorId) : undefined)
-      })
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted })
     }
   }
 
@@ -1298,7 +1305,7 @@ export class PurchaseService {
       })
       await this.applyPostAuditEffects(tx, po, financeId)
       return po
-    })
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted })
     const [item] = await this.enrichOrders([updated])
     return item
   }

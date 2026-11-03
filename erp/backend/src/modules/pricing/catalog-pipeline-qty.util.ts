@@ -1,7 +1,7 @@
 import { catalogSkuLookupKeys } from '../../common/catalog-customer.util'
 
 /** 未形成实际采购数量的单据，不计入货盘采购合计 */
-export const CATALOG_PO_EXCLUDED_STATUSES = ['draft', 'rejected', 'cancelled', 'pending_actual_qty']
+export const CATALOG_PO_EXCLUDED_STATUSES = ['draft', 'rejected', 'cancelled', 'voided', 'pending_actual_qty']
 
 export const CATALOG_INBOUND_CANCELLED_STATUSES = ['cancelled']
 
