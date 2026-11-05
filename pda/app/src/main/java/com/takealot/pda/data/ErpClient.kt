@@ -278,7 +278,7 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
         if (auth) builder.tag(AuthRequestScope::class.java, scope)
         if (auth) {
             if (token.isBlank() || SessionStore.isJwtExpired(token)) {
-                session.invalidateAuth(token, baseUrl)
+                session.invalidateAuth(scope)
                 throw ErpException("登录已过期，请重新登录", 401)
             }
             builder.header("Authorization", "Bearer $token")
@@ -290,17 +290,18 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
     private fun execute(request: Request, requireAuth: Boolean): JsonElement {
         val journalStarted = System.nanoTime()
         if (request.method != "GET" && requireAuth) journal?.flushBeforeRequest()
-        replayScope.get()?.let(::requireCurrentScope)
+        val scope = request.tag(AuthRequestScope::class.java) ?: replayScope.get()
+        scope?.let(::requireCurrentScope)
         val journalMs = ScanDiagnostics.millis(System.nanoTime() - journalStarted)
         val requestStarted = System.nanoTime()
         try {
-            return executeResponse(request, requireAuth)
+            return executeResponse(request, scope)
         } finally {
             ScanDiagnostics.recordRequest(request.url.encodedPath, journalMs, ScanDiagnostics.millis(System.nanoTime() - requestStarted))
         }
     }
 
-    private fun executeResponse(request: Request, requireAuth: Boolean): JsonElement {
+    private fun executeResponse(request: Request, scope: AuthRequestScope?): JsonElement {
         val resp = try {
             http.newCall(request).execute()
         } catch (e: SocketTimeoutException) {
@@ -310,12 +311,12 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
         }
         resp.use {
             try {
-                val result = parseErpResponse(it.body?.string().orEmpty(), it.code)
-                replayScope.get()?.let(::requireCurrentScope)
-                return result
+                val body = it.body?.string().orEmpty()
+                scope?.let(::requireCurrentScope)
+                return parseErpResponse(body, it.code)
             } catch (e: ErpException) {
-                if (e.code == 401 && requireAuth) {
-                    request.tag(AuthRequestScope::class.java)?.let { session.invalidateAuth(it.token, it.baseUrl) }
+                if (e.code == 401) {
+                    request.tag(AuthRequestScope::class.java)?.let(session::invalidateAuth)
                 }
                 throw e
             } catch (_: IOException) {

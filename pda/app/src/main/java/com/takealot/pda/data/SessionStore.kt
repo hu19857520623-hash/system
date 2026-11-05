@@ -85,8 +85,8 @@ class SessionStore(context: Context) {
 
     /** 登录过期时清 token，保留用户名方便重新登录。 */
     @Synchronized
-    fun invalidateAuth(expectedToken: String, expectedBaseUrl: String) {
-        if (token != expectedToken || baseUrl != expectedBaseUrl) return
+    internal fun invalidateAuth(expectedScope: AuthRequestScope) {
+        if (requestScope() != expectedScope) return
         prefs.edit().remove(KEY_TOKEN).remove(KEY_PERMS).apply()
         bumpAuth()
     }
