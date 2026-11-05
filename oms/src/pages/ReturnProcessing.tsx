@@ -17,7 +17,8 @@ import {
   RETURN_PROCESS_OPTIONS,
   refreshReturnsFromErp,
   removeReturnOrder,
-  withdrawReturnOrder,
+  replayReturnWithdrawal,
+  type ReturnWithdrawalIntent,
   replayReturnDecision,
 } from '../data/returnStore'
 import { formatDatetimeDisplay } from '../data/fileUtils'
@@ -75,6 +76,7 @@ export default function ReturnProcessing() {
   const decisionKey = authReady && authToken && userId && decisionCustomerId && decisionCustomerCode && can('returns:write')
     ? `oms.return.decision.${JSON.stringify([userId, decisionCustomerId, decisionCustomerCode])}` : ''
   const decisionScope = JSON.stringify([decisionKey, authToken, role, [...permissions].sort()])
+  const withdrawalKey = decisionKey && decisionKey.replace('oms.return.decision.', 'oms.return.withdrawal.')
   const confirmation = useInboundConfirmation(JSON.stringify([decisionScope, detailId, tab]))
   const actionLock = useRef(false)
   const decisionView = useRef(createAsyncViewScope()).current
@@ -84,6 +86,8 @@ export default function ReturnProcessing() {
   const decisionBusy = decisionRun?.scope === decisionScope
   const pendingDecision = decisionState?.scope === decisionScope ? decisionState.intent : undefined
   const decisionError = decisionState?.scope === decisionScope ? decisionState.error : undefined
+  const [withdrawalState, setWithdrawalState] = useState<{ scope: string; intent?: ReturnWithdrawalIntent; error?: string }>()
+  const withdrawal = withdrawalState?.scope === decisionScope ? withdrawalState : undefined
 
   useLayoutEffect(() => {
     decisionView.update(decisionScope)
@@ -98,11 +102,25 @@ export default function ReturnProcessing() {
         setDecisionState({ scope: decisionScope, intent })
       } catch { setDecisionState({ scope: decisionScope, error: '原退件决定无法读取，请保留记录并核对浏览器存储' }) }
     }
+    const readWithdrawal = () => {
+      try {
+        const raw = withdrawalKey && localStorage.getItem(withdrawalKey)
+        if (!raw) { setWithdrawalState(undefined); return }
+        const intent: ReturnWithdrawalIntent = JSON.parse(raw)
+        if (!intent.returnNo || intent.customerId !== decisionCustomerId || intent.customerCode !== decisionCustomerCode ||
+          !intent.expectedUpdatedAt || !intent.clientRequestId) throw Error()
+        setWithdrawalState({ scope: decisionScope, intent })
+      } catch { setWithdrawalState({ scope: decisionScope, error: '原撤回记录无法读取，请保留记录并核对浏览器存储' }) }
+    }
     read()
-    const changed = (event: StorageEvent) => { if (event.key === decisionKey || event.key === null) read() }
+    readWithdrawal()
+    const changed = (event: StorageEvent) => {
+      if (event.key === decisionKey || event.key === null) read()
+      if (event.key === withdrawalKey || event.key === null) readWithdrawal()
+    }
     window.addEventListener('storage', changed)
     return () => { decisionView.dispose(); window.removeEventListener('storage', changed) }
-  }, [decisionView, decisionScope, decisionKey, decisionCustomerId, decisionCustomerCode])
+  }, [decisionView, decisionScope, decisionKey, decisionCustomerId, decisionCustomerCode, withdrawalKey])
 
   const returns = useMemo(() => {
     let list = allReturns
@@ -118,6 +136,8 @@ export default function ReturnProcessing() {
 
   const handleSync = async () => {
     if (syncing) return
+    const session = authSessionScope(), viewCurrent = decisionView.capture()
+    const current = () => viewCurrent() && authSessionScope() === session
     const customerId = dataScope.bindingCustomerId
     if (!customerId) {
       notifyInfo('请先选择要同步退件的客户')
@@ -125,40 +145,59 @@ export default function ReturnProcessing() {
     }
     setSyncing(true)
     try {
-      const n = await refreshReturnsFromErp(customerId)
-      notifySuccess(`已从 ERP 同步 ${n} 条退件状态`)
+      const n = await refreshReturnsFromErp(customerId, current)
+      if (current()) notifySuccess(`已从 ERP 同步 ${n} 条退件状态`)
     } catch (err) {
-      notifyError(userFacingError(displaySkuText(err instanceof Error ? err.message : String(err))))
+      if (current()) notifyError(userFacingError(displaySkuText(err instanceof Error ? err.message : String(err))))
     } finally {
       setSyncing(false)
     }
   }
 
-  const handleWithdraw = async (r: typeof returns[0]) => {
-    await runRecordAction(r, '撤回')
-  }
-
-  const runRecordAction = async (r: typeof returns[0], action: '撤回' | '删除') => {
-    if (actionLock.current || !can('returns:write')) return
+  const handleWithdraw = async (r?: typeof returns[0]) => {
+    if (!withdrawalKey || !decisionCustomerId || !decisionCustomerCode || (r && r.customerId !== decisionCustomerId)) {
+      notifyError('请先选择退件所属客户并核对操作权限')
+      return
+    }
+    if (actionLock.current || withdrawal?.error) return
+    if (r && withdrawal?.intent) { notifyInfo('已有撤回待核对，请继续原撤回'); return }
+    if (r && !r.erpUpdatedAt) { notifyInfo('请先同步 ERP，核对最新状态后再撤回'); return }
     const session = authSessionScope(), viewCurrent = decisionView.capture()
     const current = () => viewCurrent() && authSessionScope() === session
     actionLock.current = true
     try {
-      const effect = action === '撤回' ? '撤回后仓库将不再等待到货。' : '删除后无法恢复。'
-      if (!await confirmation.confirm(`确认${action}退件单 ${r.returnNo}？${effect}`, `确认${action}`) || !current()) return
-      setActingId(r.id)
-      const result = action === '撤回' ? await withdrawReturnOrder(r, {
-        customerId: r.customerId,
-        customerCode: erpCustomer?.customerId === r.customerId ? erpCustomer?.customerCode : getCustomerCode(r.customerId),
-      }, current) : await removeReturnOrder(r)
+      if (r && !await confirmation.confirm(`确认撤回退件单 ${r.returnNo}？撤回后仓库将不再等待到货。`, '确认撤回')) return
       if (!current()) return
-      if (!result.ok) {
-        notifyError(userFacingError(displaySkuText(result.error)))
-        return
-      }
-      if ('warning' in result && typeof result.warning === 'string') notifyInfo(result.warning)
-      else notifySuccess(action === '撤回' ? '已撤回，可在「已撤回」标签页查看' : '退件记录已删除')
-      if (detailId === r.id) setDetailId(null)
+      if (!navigator.locks?.request) throw Error('当前浏览器无法协调退件撤回，请使用支持标签页锁的浏览器')
+      await navigator.locks.request(withdrawalKey, async () => {
+        if (!current()) return
+        const stored = localStorage.getItem(withdrawalKey)
+        if (r && stored) { notifyInfo('已有撤回待核对，请继续原撤回'); return }
+        const intent = r && r.erpUpdatedAt ? {
+          returnNo: r.returnNo, customerId: decisionCustomerId, customerCode: decisionCustomerCode,
+          expectedUpdatedAt: r.erpUpdatedAt, clientRequestId: crypto.randomUUID(),
+        } : withdrawal?.intent
+        if (!intent) return
+        const raw = JSON.stringify(intent)
+        if (r) localStorage.setItem(withdrawalKey, raw)
+        if (localStorage.getItem(withdrawalKey) !== raw) throw Error('原撤回记录已变化，请刷新页面核对')
+        setWithdrawalState({ scope: decisionScope, intent })
+        setActingId(r?.id || intent.returnNo)
+        const result = await replayReturnWithdrawal(intent, current)
+        if (!current()) return
+        if (!result.ok && result.uncertain) { notifyError(result.error); return }
+        if (localStorage.getItem(withdrawalKey) !== raw) return
+        localStorage.removeItem(withdrawalKey)
+        if (localStorage.getItem(withdrawalKey) !== null) throw Error('原撤回记录未能清理，请继续核对')
+        setWithdrawalState(undefined)
+        if (!result.ok) {
+          notifyError(result.error)
+          await handleSync()
+          return
+        }
+        notifySuccess(result.order.status === 'cancelled' ? '已撤回，可在「已撤回」标签页查看' : '原撤回已确认，退件状态已有更新，请核对当前记录')
+        if (detail?.returnNo === intent.returnNo) setDetailId(null)
+      })
     } catch (error) {
       if (current()) notifyError(userFacingError(error))
     } finally {
@@ -168,7 +207,28 @@ export default function ReturnProcessing() {
   }
 
   const handleDelete = async (r: typeof returns[0]) => {
-    await runRecordAction(r, '删除')
+    if (actionLock.current || !can('returns:write')) return
+    if (withdrawal?.intent?.returnNo === r.returnNo) { notifyInfo('请先核对该退件的原撤回，再删除'); return }
+    const session = authSessionScope(), viewCurrent = decisionView.capture()
+    const current = () => viewCurrent() && authSessionScope() === session
+    actionLock.current = true
+    try {
+      if (!await confirmation.confirm(`确认删除退件单 ${r.returnNo}？删除后无法恢复。`, '确认删除') || !current()) return
+      setActingId(r.id)
+      const result = await removeReturnOrder(r)
+      if (!current()) return
+      if (!result.ok) {
+        notifyError(userFacingError(displaySkuText(result.error)))
+        return
+      }
+      notifySuccess('退件记录已删除')
+      if (detailId === r.id) setDetailId(null)
+    } catch (error) {
+      if (current()) notifyError(userFacingError(error))
+    } finally {
+      actionLock.current = false
+      setActingId(null)
+    }
   }
 
   const canWrite = can('returns:write')
@@ -289,6 +349,12 @@ export default function ReturnProcessing() {
         <p role="status">{decisionError || `退件单 ${pendingDecision?.returnNo} 的原决定待核对`}</p>
         {pendingDecision && <Button size="sm" disabled={decisionBusy} onClick={() => void sendDecision()}>继续原决定</Button>}
         <Button size="sm" variant="secondary" disabled={syncing || decisionBusy} onClick={() => void handleSync()}>同步并核对状态</Button>
+      </Card>}
+
+      {withdrawal && <Card className="mb-4 p-4">
+        <p role="status">{withdrawal.error || `退件单 ${withdrawal.intent?.returnNo} 的原撤回待核对`}</p>
+        {withdrawal.intent && <Button size="sm" disabled={!!actingId} onClick={() => void handleWithdraw()}>继续原撤回</Button>}
+        <Button size="sm" variant="secondary" disabled={syncing || !!actingId} onClick={() => void handleSync()}>同步并核对状态</Button>
       </Card>}
 
       {dataScope.isAdmin && (

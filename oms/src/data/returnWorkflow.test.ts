@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test, { type TestContext } from 'node:test'
 import { hydrateAccounts } from '../auth/accountStore'
 import { getReturnOrdersSnapshot, setReturnOrders, cacheReturnOrder, upsertReturnOrderOrThrow, addReturnOrdersOrThrow } from './entityStore'
-import { submitReturnWorkflow, withdrawReturnOrder, decideReturnOrder, replayReturnDecision, refreshReturnsFromErp, removeReturnOrder, nextReturnNo, type ReturnOrder } from './returnStore'
+import { submitReturnWorkflow, replayReturnWithdrawal, decideReturnOrder, replayReturnDecision, refreshReturnsFromErp, removeReturnOrder, nextReturnNo, type ReturnOrder } from './returnStore'
 import { buildImportedReturnDrafts } from './returnDraftImport'
 import { parseReturnLines, parseReturnOrders } from './importTemplates'
 
@@ -87,29 +87,38 @@ test('保存失败不会覆盖等待期间同单据及其他单据的新状态',
  release(Response.json({error:'Storage unavailable'},{status:503}));await assert.rejects(saving)
  assert.equal(getReturnOrdersSnapshot().find(row=>row.id===draft.id)?.status,'received');assert.equal(getReturnOrdersSnapshot().length,2)
 })
-for(const action of ['withdraw','decide'] as const)test(`${action}等待OMS回写，失败后保留ERP确认状态`,async t=>{
- environment(t);const source={...draft,erpUpdatedAt:'2026-10-19T12:00:00.000Z',status:action==='withdraw'?'pending_arrival':'awaiting_customer'};setReturnOrders([source])
- globalThis.fetch=async input=>String(input)==='/api/return-orders'?Response.json({error:'Storage unavailable'},{status:503}):Response.json({...confirmed,status:action==='withdraw'?'cancelled':'accepted_pending'})
- const result=action==='withdraw'?await withdrawReturnOrder(source):await decideReturnOrder(source,'keep',{processChoice:'restock'})
+test('退件决定等待OMS回写，失败后保留ERP确认状态',async t=>{
+ environment(t);const source={...draft,status:'awaiting_customer'};setReturnOrders([source])
+ globalThis.fetch=async input=>String(input)==='/api/return-orders'?Response.json({error:'Storage unavailable'},{status:503}):Response.json({...confirmed,status:'accepted_pending'})
+ const result=await decideReturnOrder(source,'keep',{processChoice:'restock'})
  assert.equal(result.ok,true);if(result.ok)assert.match(result.warning||'',/OMS 回写失败/)
- assert.equal(getReturnOrdersSnapshot()[0].status,action==='withdraw'?'cancelled':'accepted_pending')
+ assert.equal(getReturnOrdersSnapshot()[0].status,'accepted_pending')
 })
-test('撤回使用用户核对的退件版本，旧快照被拒绝后不回写 OMS', async t => {
+test('撤回失败后可用原标识和版本继续，已重新提交时保留 ERP 当前状态', async t => {
  environment(t)
- const source = { ...draft, status: 'pending_arrival' }
- globalThis.fetch = async () => { assert.fail('旧记录没有版本时不能发出撤回请求') }
- const missing = await withdrawReturnOrder(source)
- assert.equal(missing.ok, false)
- if (!missing.ok) assert.match(missing.error, /从 ERP 同步/)
- const version = '2026-10-19T12:00:00.000Z'
+ const intent = { returnNo: draft.returnNo, customerId: 'c1', customerCode: 'TKL9001',
+  expectedUpdatedAt: '2026-10-19T12:00:00.000Z', clientRequestId: crypto.randomUUID() }
+ let calls = 0
  globalThis.fetch = async (input, init) => {
   assert.match(String(input), /\/cancel$/)
-  assert.equal(JSON.parse(String(init?.body)).expectedUpdatedAt, version)
+  assert.deepEqual(JSON.parse(String(init?.body)), {
+   customerCode: intent.customerCode, expectedUpdatedAt: intent.expectedUpdatedAt, clientRequestId: intent.clientRequestId,
+  })
+  if (++calls === 1) return Response.json({ error: '暂时无法连接 ERP' }, { status: 503 })
+  if (calls === 2) return Response.json({ ...confirmed, idempotent: true, updatedAt: '2026-10-19T12:05:00.000Z' })
   return Response.json({ error: '退件单已更新，请刷新核对后再发起撤回' }, { status: 409 })
  }
- const stale = await withdrawReturnOrder({ ...source, erpUpdatedAt: version })
+ const uncertain = await replayReturnWithdrawal(intent)
+ assert.equal(uncertain.ok, false)
+ if (!uncertain.ok) assert.equal(uncertain.uncertain, true)
+ setReturnOrders([])
+ const replay = await replayReturnWithdrawal(JSON.parse(JSON.stringify(intent)))
+ assert.equal(replay.ok, true)
+ assert.equal(getReturnOrdersSnapshot()[0].status, 'pending_arrival')
+ const stale = await replayReturnWithdrawal(intent)
  assert.equal(stale.ok, false)
  if (!stale.ok) assert.equal(stale.uncertain, false)
+ assert.equal(calls, 3)
 })
 test('ERP刷新仅更新读取到的退件状态，不要求写入权限或发送快照',async t=>{
  environment(t);let calls=0

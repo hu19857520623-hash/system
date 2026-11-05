@@ -310,43 +310,41 @@ export async function submitReturnWorkflow(order: ReturnOrder, opts?: { customer
   return result
 }
 
-export async function refreshReturnsFromErp(customerId: string): Promise<number> {
+export async function refreshReturnsFromErp(customerId: string, current = () => true): Promise<number> {
   const customerCode = getCustomerCode(customerId)
   if (!customerCode || customerCode === '—') return 0
   const data = await syncErpReturns(customerCode)
+  if (!current()) return 0
   for (const item of data.items || []) applyErpReturnToLocal(item, customerId, { persist: false })
   return data.total
 }
 
-/** 撤回已提交的退件（仅待到货） */
-export async function withdrawReturnOrder(
-  order: ReturnOrder,
-  opts?: { customerCode?: string; customerId?: string },
+export type ReturnWithdrawalIntent = {
+  returnNo: string
+  customerId: string
+  customerCode: string
+  expectedUpdatedAt: string
+  clientRequestId: string
+}
+
+export async function replayReturnWithdrawal(
+  { returnNo, customerId, ...body }: ReturnWithdrawalIntent,
   current = () => true,
 ): Promise<ReturnMutationResult> {
-  if (order.status !== 'pending_arrival') {
-    return { ok: false, error: '仅「待到货」状态的退件可撤回' }
-  }
-  const customerCode = opts?.customerCode?.trim() || getCustomerCode(opts?.customerId || order.customerId)
-  if (!customerCode || customerCode === '—') {
-    return { ok: false, error: '未绑定客户编码，无法撤回' }
-  }
-  if (!order.erpUpdatedAt) {
-    return { ok: false, error: '请先从 ERP 同步退件，核对最新状态后再发起撤回' }
-  }
   try {
-    const erp = await cancelErpReturn(order.returnNo, customerCode, order.erpUpdatedAt)
     if (!current()) return { ok: false, uncertain: true, error: '登录或客户范围已变化，请返回原账号核对' }
-    const merged = buildReturnOrderFromErp(erp, order.customerId)
-    const finalOrder = order.attachments?.length
-      ? { ...merged, attachments: order.attachments }
-      : merged
-    return await saveConfirmedReturn(finalOrder, '撤回')
+    const erp = await cancelErpReturn(returnNo, body)
+    if (!current()) return { ok: false, uncertain: true, error: '登录或客户范围已变化，请返回原账号核对' }
+    const latest = getReturnOrdersSnapshot().find(order => order.returnNo === returnNo && order.customerId === customerId)
+    // ERP persists its OMS synchronization in the same transaction as the withdrawal.
+    // A second browser write could overwrite a newer resubmission.
+    const order = latest?.erpUpdatedAt && latest.erpUpdatedAt > erp.updatedAt
+      ? latest : applyErpReturnToLocal(erp, customerId, { persist: false })
+    return { ok: true, order }
   } catch (err) {
-    if ((err as { status?: number } | null)?.status === 409) {
-      return { ok: false, uncertain: false, error: userFacingError(err) }
-    }
-    return uncertainReturnError(err, '撤回')
+    const status = (err as { status?: number } | null)?.status
+    if (status === 400 || status === 409 || status === 422) return { ok: false, uncertain: false, error: userFacingError(err) }
+    return { ok: false, uncertain: true, error: `撤回结果待核对，请继续原撤回。${userFacingError(err)}` }
   }
 }
 
