@@ -1694,9 +1694,12 @@ export class ReturnsService {
   }
 
   /** OMS：撤回退件（仅待到货） */
-  async cancelFromOms(returnNo: string, customerCode?: string) {
+  async cancelFromOms(returnNo: string, customerCode?: string, clientRequestId?: string) {
     const no = returnNo.trim()
     if (!no) throw new BadRequestException('缺少退件单号')
+    if (clientRequestId !== undefined && (typeof clientRequestId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(clientRequestId))) {
+      throw new BadRequestException('撤回操作标识无效，请核对原请求')
+    }
     const updated = await this.prisma.$transaction(async tx => {
       await tx.$queryRaw`SELECT id FROM return_order WHERE return_no = ${no} FOR UPDATE`
       const row = await tx.returnOrder.findUnique({
@@ -1709,7 +1712,16 @@ export class ReturnsService {
       if (!row.omsCustomerCode || row.omsCustomerCode !== code) {
         throw new BadRequestException('客户编码与退件单不匹配')
       }
+      if (clientRequestId) {
+        const receipt = await tx.operationLog.findFirst({ where: { module: 'returns', action: 'oms_return_cancel', targetId: no,
+          detail: { path: '$.clientRequestId', equals: clientRequestId } } })
+        if (receipt) return { row, idempotent: true }
+      }
       if (row.status === 'cancelled') {
+        if (clientRequestId) {
+          await this.opLog.log({ module: 'returns', action: 'oms_return_cancel', targetType: 'return_order', targetId: no,
+            detail: { customerCode: code, clientRequestId, alreadyCancelled: true } }, tx)
+        }
         await this.returnSync.enqueue(tx, no)
         return { row, idempotent: true }
       }
@@ -1726,7 +1738,7 @@ export class ReturnsService {
         action: 'oms_return_cancel',
         targetType: 'return_order',
         targetId: no,
-        detail: { customerCode: row.omsCustomerCode },
+        detail: { customerCode: row.omsCustomerCode, ...(clientRequestId ? { clientRequestId } : {}) },
       }, tx)
       return { row: updated, idempotent: false }
     }, { isolationLevel: 'ReadCommitted' })

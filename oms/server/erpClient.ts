@@ -593,10 +593,10 @@ export function fetchErpReturnByNo(returnNo: string) {
   return erpRequest<ErpReturnOrder>(`/returns/oms/by-no/${encodeURIComponent(returnNo)}`)
 }
 
-export function cancelErpReturn(returnNo: string, customerCode: string) {
+export function cancelErpReturn(returnNo: string, customerCode: string, clientRequestId?: string) {
   return erpRequest<ErpReturnOrder>(`/returns/oms/by-no/${encodeURIComponent(returnNo)}/cancel`, {
     method: 'POST',
-    body: JSON.stringify({ customerCode }),
+    body: JSON.stringify({ customerCode, clientRequestId }),
   })
 }
 
