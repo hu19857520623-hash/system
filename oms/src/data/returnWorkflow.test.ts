@@ -152,6 +152,32 @@ test('删除等待服务器确认，失败时保留原记录和并发刷新',asy
  assert.deepEqual(await deleting, { ok: false, error: '删除结果未确认，请刷新退件列表核对后再试' })
  assert.equal(getReturnOrdersSnapshot().length,2)
 })
+test('删除成功回执只移除提交时的退件快照', async t => {
+ environment(t)
+ let release!: (value: Response) => void
+ globalThis.fetch = async () => new Promise(resolve => { release = resolve })
+ const deleting = removeReturnOrder(draft)
+ const newer = { ...draft, status: 'cancelled' as const }
+ cacheReturnOrder(newer)
+ release(Response.json({ ok: true }))
+ assert.equal((await deleting).ok, true)
+ assert.deepEqual(getReturnOrdersSnapshot(), [newer])
+})
+test('切换账号后迟到的删除回执不修改当前列表', async t => {
+ environment(t)
+ let session = ''
+ Object.defineProperty(globalThis, 'localStorage', {
+  configurable: true, value: { getItem: () => session || null, removeItem: () => {} },
+ })
+ let release!: (value: Response) => void
+ globalThis.fetch = async () => new Promise(resolve => { release = resolve })
+ const deleting = removeReturnOrder(draft)
+ session = JSON.stringify({ token: 'test-session', user: { id: 'other', username: 'other', role: 'sys_admin', permissions: [] } })
+ release(Response.json({ ok: true }))
+ assert.deepEqual(getReturnOrdersSnapshot(), [draft])
+ assert.equal((await deleting).ok, false)
+ assert.deepEqual(getReturnOrdersSnapshot(), [draft])
+})
 test('提交后记录不可删除，不发出删除请求',async t=>{
  environment(t);globalThis.fetch=async()=>{throw new Error('Unexpected request')}
  assert.equal((await removeReturnOrder({...draft,status:'received'})).ok,false)
