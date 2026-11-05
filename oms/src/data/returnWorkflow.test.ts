@@ -142,12 +142,12 @@ test('同步退件不会沿用其他客户同号草稿的标识或备注', async
  assert.equal(synced?.remark, undefined)
 })
 
-test('删除等待服务器确认，失败后恢复记录且保留并发刷新',async t=>{
+test('删除等待服务器确认，失败时保留原记录和并发刷新',async t=>{
  environment(t);let release!:(value:Response)=>void;globalThis.fetch=async input=>{
    assert.match(String(input), /[?]expectedStatus=draft$/)
    return new Promise(resolve=>{release=resolve})
  }
- const deleting=removeReturnOrder(draft);cacheReturnOrder({...draft,id:'other',returnNo:'OTHER',status:'completed'})
+ const deleting=removeReturnOrder(draft);assert.equal(getReturnOrdersSnapshot().length,1);cacheReturnOrder({...draft,id:'other',returnNo:'OTHER',status:'completed'})
  release(Response.json({error:'Storage unavailable'},{status:503}));const result=await deleting;assert.equal(result.ok,false);assert.equal(getReturnOrdersSnapshot().length,2)
 })
 test('提交后记录不可删除，不发出删除请求',async t=>{

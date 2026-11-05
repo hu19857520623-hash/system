@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react'
-import { apiDelete, apiPatch, apiPut, type BootstrapData } from '../api/client'
+import { apiDelete, apiPatch, apiPut, authSessionScope, type BootstrapData } from '../api/client'
 import type {
   InboundOrder,
   Order,
@@ -227,17 +227,12 @@ export function getInboundOrdersSnapshot() {
 }
 
 export async function deleteReturnOrder(id: string, expectedStatus?: 'draft' | 'cancelled') {
+  const scope = authSessionScope()
   const before = state.returnOrders.find(order => order.id === id)
-  setReturnOrders(state.returnOrders.filter(o => o.id !== id))
-  try {
-    const query = expectedStatus ? `?expectedStatus=${expectedStatus}` : ''
-    await apiDelete(`/return-orders/${encodeURIComponent(id)}${query}`)
-  } catch (error) {
-    if (before && !state.returnOrders.some(order => order.id === before.id || order.returnNo === before.returnNo)) {
-      setReturnOrders([before, ...state.returnOrders])
-    }
-    throw error
-  }
+  const query = expectedStatus ? `?expectedStatus=${expectedStatus}` : ''
+  await apiDelete(`/return-orders/${encodeURIComponent(id)}${query}`)
+  if (scope !== authSessionScope()) return
+  if (before) setReturnOrders(state.returnOrders.filter(order => order !== before))
 }
 
 export function setReturnOrders(list: ReturnOrder[]) {
