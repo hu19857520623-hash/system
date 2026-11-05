@@ -258,9 +258,10 @@ class InboundViewModel : ViewModel() {
     }
 
     private fun blockUnconfirmedPutaway(): Boolean {
+        val orderId = order?.id ?: return false
         if (mode != InboundMode.Putaway || !PdaApp.instance.workJournal.pendingRecords().any {
-                it.module == "inbound" && it.state == "pending" && ((it.mode == "putaway" && it.retryEndpoint?.endsWith("/putaway") == true) ||
-                    (it.mode == "resolve_exception" && it.orderId == order?.id))
+                it.module == "inbound" && it.orderId == orderId &&
+                    (it.retryEndpoint?.endsWith("/putaway") == true || it.mode == "resolve_exception")
             }) return false
         feedback = Feedback(false, "有上架或异常放行结果待确认，请返回首页打开「待同步记录」，确认原请求后继续上架")
         return true

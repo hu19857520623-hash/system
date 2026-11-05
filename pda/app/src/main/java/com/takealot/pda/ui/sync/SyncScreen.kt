@@ -129,16 +129,22 @@ fun SyncScreen(onBack: () -> Unit, vm: SyncViewModel = viewModel()) {
             Text("待同步与异常记录", color = PdaText, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
             TextButton(onClick = onBack) { Text("返回", color = PdaAccent) }
         }
-        Text("待同步记录可以安全重试；业务校验失败的记录请核对后关闭。", color = PdaMuted, fontSize = 13.sp)
+        Text("有原请求且账号匹配时可安全重试。其余记录请按提示人工核对。", color = PdaMuted, fontSize = 13.sp)
         FeedbackBar(vm.feedback)
         if (records.isEmpty()) {
             Panel { Text("没有待处理记录", color = PdaMuted, fontSize = 14.sp) }
         }
         records.forEach { record ->
+            val canRetry = record.state == "pending" && record.retryAction != null && vm.canReplay(record)
             Panel {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(record.scanCode, color = PdaText, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-                    StatusChip(if (record.state == "pending") "待同步" else "失败", if (record.state == "pending") "warn" else "err")
+                    val status = when {
+                        record.state == "failed" -> "失败"
+                        canRetry -> "待同步"
+                        else -> "待人工核对"
+                    }
+                    StatusChip(status, if (record.state == "pending") "warn" else "err")
                 }
                 Text("${record.module} · ${record.mode} · ${record.orderNo.orEmpty().ifBlank { "未绑定单据" }}", color = PdaMuted, fontSize = 12.sp)
                 Text(SimpleDateFormat("MM-dd HH:mm:ss", Locale.getDefault()).format(Date(record.createdAt)), color = PdaMuted, fontSize = 12.sp)
@@ -146,8 +152,11 @@ fun SyncScreen(onBack: () -> Unit, vm: SyncViewModel = viewModel()) {
                 if (record.state == "pending" && record.retryAction != null && !vm.canReplay(record)) {
                     Text(if (record.ownerId == null) "历史记录缺少提交账号，请由主管在 ERP 核对原单与流水" else "请切回提交时的账号和服务器后重试", color = PdaWarn, fontSize = 13.sp)
                 }
+                if (record.state == "pending" && record.retryAction == null) {
+                    Text("缺少可重试的请求内容，请回原作业核对单据和实际进度后再关闭。", color = PdaWarn, fontSize = 13.sp)
+                }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    if (record.state == "pending" && record.retryAction != null && vm.canReplay(record)) {
+                    if (canRetry) {
                         TextButton(onClick = { vm.retry(record) }, enabled = vm.retryingId == null) {
                             Text("安全重试", color = PdaAccent)
                         }
