@@ -268,13 +268,13 @@ export async function persistReturnOrdersOrThrow(list: ReturnOrder[], changed = 
 }
 
 function nextReturnOrdersWithUpsert(order: ReturnOrder, base = state.returnOrders) {
-  const idx = base.findIndex(o => o.returnNo === order.returnNo || o.id === order.id)
+  const idx = base.findIndex(o => o.id === order.id || (o.returnNo === order.returnNo && o.customerId === order.customerId))
   if (idx >= 0) {
     const next = [...base]
     next[idx] = { ...next[idx], ...order }
     return next
   }
-  return [order, ...base.filter(o => o.id !== order.id && o.returnNo !== order.returnNo)]
+  return [order, ...base]
 }
 
 export function addReturnOrder(order: ReturnOrder) {

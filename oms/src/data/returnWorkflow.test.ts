@@ -129,6 +129,18 @@ test('ERP刷新仅更新读取到的退件状态，不要求写入权限或发�
  assert.equal(await refreshReturnsFromErp('c1'),1);assert.equal(calls,1)
  assert.equal(getReturnOrdersSnapshot()[0].status,'pending_arrival')
 })
+test('同步退件不会沿用其他客户同号草稿的标识或备注', async t => {
+ environment(t)
+ const other = { ...draft, id: 'other-customer-draft', customerId: 'c2', remark: '其他客户备注' }
+ setReturnOrders([other])
+ globalThis.fetch = async () => Response.json({ items: [confirmed], total: 1 })
+ await refreshReturnsFromErp('c1')
+ const rows = getReturnOrdersSnapshot()
+ assert.deepEqual(rows.find(order => order.customerId === 'c2'), other)
+ const synced = rows.find(order => order.customerId === 'c1')
+ assert.equal(synced?.id, 'erp-rt-31')
+ assert.equal(synced?.remark, undefined)
+})
 
 test('删除等待服务器确认，失败后恢复记录且保留并发刷新',async t=>{
  environment(t);let release!:(value:Response)=>void;globalThis.fetch=async()=>new Promise(resolve=>{release=resolve})

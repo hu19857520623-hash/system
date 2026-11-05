@@ -1705,7 +1705,11 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
     } else if (type === 'return.status') {
       const ret = data as unknown as ErpReturnOrder
       if (!ret.returnNo) return res.status(400).json({ error: '缺少退件单号' })
+      if (!customerId) return res.status(400).json({ error: '退件所属客户未绑定 OMS 账号' })
       const existing = await prisma.returnOrder.findFirst({ where: { returnNo: ret.returnNo } })
+      if (existing?.customerId && existing.customerId !== customerId) {
+        return res.status(409).json({ error: '退件单号已由其他客户使用，请核对归属后重试同步' })
+      }
       const lineItems = JSON.stringify(
         (ret.items || []).map(i => ({
           sku: i.sku,
@@ -1742,13 +1746,14 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
         remark: existing?.remark ?? null,
       }
       if (existing) {
-        await prisma.returnOrder.update({
-          where: { id: existing.id },
+        const updated = await prisma.returnOrder.updateMany({
+          where: { id: existing.id, OR: [{ customerId }, { customerId: null }] },
           data: {
             ...payload,
-            ...(customerId ? { customer: { connect: { id: customerId } } } : {}),
+            customerId,
           },
         })
+        if (!updated.count) return res.status(409).json({ error: '退件归属已变化，请核对后重试同步' })
       } else {
         await prisma.returnOrder.create({
           data: {
@@ -2208,7 +2213,12 @@ app.get('/api/erp/returns/:returnNo/attachment/:attachmentId', async (req, res) 
 
 app.get('/api/erp/returns/:returnNo', async (req, res) => {
   try {
-    res.json(await fetchErpReturnByNo(req.params.returnNo))
+    const order = await fetchErpReturnByNo(req.params.returnNo)
+    const scope = customerScope(req as AuthenticatedRequest)
+    if (scope && order.customerCode !== authenticatedCustomerCode(req, null)) {
+      return res.status(404).json({ error: '未找到该退件单' })
+    }
+    res.json(order)
   } catch (e) {
     sendErpError(res, e)
   }

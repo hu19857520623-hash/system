@@ -162,7 +162,7 @@ export function nextReturnNo(customerCode?: string, d = new Date(), existingNos 
 }
 
 export function buildReturnOrderFromErp(erp: ErpReturnOrder, customerId?: string): ReturnOrder {
-  const existing = getReturnOrdersSnapshot().find(o => o.returnNo === erp.returnNo)
+  const existing = getReturnOrdersSnapshot().find(o => o.returnNo === erp.returnNo && o.customerId === customerId)
   const order: ReturnOrder = {
     id: existing?.id || `erp-rt-${erp.id}`,
     erpUpdatedAt: erp.updatedAt,
