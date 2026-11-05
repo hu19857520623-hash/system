@@ -18,8 +18,29 @@ class ShipSyncAcknowledgementTest {
         }
     }
 
+    @Test fun pendingFlagsRequireOriginalRetryEvenWithoutWarning() {
+        for (flag in listOf("feePending", "syncPending")) {
+            val response = JsonParser.parseString("""{"id":12,"$flag":true}""")
+            val error = org.junit.Assert.assertThrows(ErpException::class.java) {
+                response.requireShipSyncAcknowledged(12)
+            }
+            assertTrue(error.retriable)
+        }
+    }
+
+    @Test fun missingOrDifferentReceiptIdRequiresOriginalRetry() {
+        for (body in listOf("null", "{}", """{"id":13}""")) {
+            val response = JsonParser.parseString(body)
+            val error = org.junit.Assert.assertThrows(ErpException::class.java) {
+                response.requireShipSyncAcknowledged(12)
+            }
+            assertTrue(error.retriable)
+            assertTrue(error.message.orEmpty().contains("核对原请求"))
+        }
+    }
+
     @Test fun confirmedShipmentKeepsItsResponse() {
-        val response = JsonParser.parseString("""{"status":"shipped","message":"OMS 同步已完成"}""")
-        assertSame(response, response.requireShipSyncAcknowledged())
+        val response = JsonParser.parseString("""{"id":12,"status":"shipped","feePending":false,"syncPending":false}""")
+        assertSame(response, response.requireShipSyncAcknowledged(12))
     }
 }
