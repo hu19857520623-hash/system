@@ -152,25 +152,47 @@ class OutboundViewModel : ViewModel() {
         }
     }
 
+    var listLoading by mutableStateOf(false)
+        private set
+    var listError by mutableStateOf<String?>(null)
+        private set
+    private var listRequest = 0
+
     fun loadList() {
+        val request = ++listRequest
+        val requestedMode = mode
+        val warehouse = session.warehouseCode
+        val userId = session.userId
+        val token = session.token
+        list = emptyList()
+        listError = null
+        listLoading = true
+        fun isCurrent() = request == listRequest && mode == requestedMode &&
+            warehouse == session.warehouseCode && userId == session.userId && token == session.token
         viewModelScope.launch {
             try {
-                val statuses = when (mode) {
+                if (warehouse.isBlank()) throw ErpException("请返回首页选择作业仓后重试")
+                val statuses = when (requestedMode) {
                     "pick" -> listOf("picking")
                     "review" -> listOf("picked", "reviewing")
                     else -> listOf("packed")
                 }
                 val rows = mutableListOf<OutboundOrder>()
-                for (st in statuses) {
+                for (status in statuses) {
+                    if (!isCurrent()) return@launch
                     rows += api.outboundList(
-                        status = st,
-                        pickerId = if (mode == "pick") session.userId else null,
-                        warehouseCode = session.warehouseCode.ifBlank { null },
+                        status = status,
+                        pickerId = if (requestedMode == "pick") userId else null,
+                        warehouseCode = warehouse,
                         pageSize = 50,
                     ).items.orEmpty()
                 }
-                list = rows.distinctBy { it.id }.filterNot { it.isProblem }
-            } catch (e: Exception) { feedback = Feedback(false, e.message ?: "加载任务失败") }
+                if (isCurrent()) list = rows.distinctBy { it.id }.filterNot { it.isProblem }
+            } catch (e: Exception) {
+                if (isCurrent()) listError = e.message ?: "加载待作业单据失败"
+            } finally {
+                if (request == listRequest) listLoading = false
+            }
         }
     }
 
@@ -626,7 +648,13 @@ fun OutboundScreen(modeKey: String, onBack: () -> Unit, vm: OutboundViewModel = 
             val order = vm.order
             if (order == null) {
                 Text("待作业", color = PdaMuted, fontSize = 13.sp)
-                if (vm.list.isEmpty()) Text(
+                val listError = vm.listError
+                if (vm.listLoading) {
+                    Text("正在读取待作业单据…", color = PdaMuted, fontSize = 13.sp)
+                } else if (listError != null) {
+                    FeedbackBar(Feedback(false, listError))
+                    TextButton(onClick = { vm.loadList() }) { Text("重试加载待作业单据") }
+                } else if (vm.list.isEmpty()) Text(
                     if (vm.mode == "pick") "没有分配给你的拣货任务，请先在电脑端分配拣货员" else "暂无任务，可直接扫描出库单号",
                     color = PdaMuted,
                     fontSize = 13.sp,
