@@ -375,6 +375,9 @@ class InboundViewModel : ViewModel() {
             }
             return
         }
+        if ((order?.receivedCartonCount ?: 0) <= 0) {
+            throw ErpException("请先确认本单实收箱数，再扫描 SKU 清点")
+        }
         if (order?.itemForScan(code) == null) throw ErpException("扫描码 $code 不属于当前货盘入库单，请扫描该单 SKU 或已绑定条码")
         applySkuScan(code, recordId, quantity)
     }
@@ -736,6 +739,15 @@ class InboundViewModel : ViewModel() {
     }
 
     fun confirmCartonCount(reason: String = "") {
+        if (busy || pendingScanCount > 0) return
+        if (!session.hasPerm("inbound.receive")) {
+            feedback = Feedback(false, "请由有入库收货权限的人员确认实收箱数，再继续清点")
+            return
+        }
+        if (PdaApp.instance.workJournal.pendingRecords().any { it.module == "inbound" && it.orderId == order?.id && it.mode == "carton_count_submit" }) {
+            feedback = Feedback(false, "本单箱数结果待确认，请在「待同步记录」核对原请求")
+            return
+        }
         if (hasPendingReduction()) { feedback = Feedback(false, "请先确认待同步的减少数量请求"); return }
         val id = order?.id ?: run { feedback = Feedback(false, "请先扫描单号绑定入库单"); return }
         if (cartonCount < scannedCartonCount) {
@@ -748,18 +760,23 @@ class InboundViewModel : ViewModel() {
             showCartonDifference = true
             return
         }
+        busy = true
+        feedback = null
         viewModelScope.launch {
-            busy = true; feedback = null
             val journal = PdaApp.instance.workJournal
             val recordId = journal.beginScan("inbound", "carton_count_submit", cartonCount.toString(), id, order?.no)
             try {
                 journal.preparePostRetry(recordId, "/inbound/$id/received-carton-count", mapOf("receivedCartonCount" to cartonCount, "differenceReason" to reason.trim()))
                 val res = api.recordReceivedCartonCount(id, cartonCount, reason, recordId)
                 journal.acknowledge(recordId, "箱数登记成功")
-                refreshOrder()
                 showCartonDifference = false
                 cartonDifferenceReason = ""
-                enterQcAfterReceive(res.message.orEmpty().ifBlank { "实收箱数已登记" })
+                if (!refreshAfterConfirmedWrite()) return@launch
+                if (mode == InboundMode.Catalog) {
+                    feedback = Feedback(true, "实收箱数已确认，请输入本次件数并扫描 SKU")
+                } else {
+                    enterQcAfterReceive(res.message.orEmpty().ifBlank { "实收箱数已登记" })
+                }
             } catch (e: Exception) {
                 feedback = Feedback(false, e.message ?: "登记箱数失败")
                 if (journal.isRetriable(e)) journal.retainForRetry(recordId, feedback?.message) else journal.fail(recordId, feedback?.message)
@@ -991,6 +1008,18 @@ fun InboundScreen(modeKey: String, onBack: () -> Unit, vm: InboundViewModel = vi
         var qtyDraft by remember { mutableStateOf("") }
         val putawayMax = (vm.selectedItem?.remainingPutaway ?: 0).coerceAtLeast(1)
         val cartonMin = vm.scannedCartonCount.coerceAtLeast(1)
+        if (vm.mode == InboundMode.Catalog && order != null &&
+            order.statusKey in setOf("arrived", "receiving") && (order.receivedCartonCount ?: 0) <= 0) {
+            Text("绑定后请先确认实收箱数，随后扫描 SKU 清点", color = PdaWarn, fontSize = 13.sp)
+            QtyRow(
+                label = "实收箱数（箱）",
+                value = vm.cartonCount,
+                onChange = { vm.cartonCount = it.coerceAtLeast(cartonMin) },
+                onNumberClick = { qtyDraft = vm.cartonCount.toString(); qtyDialog = "carton" },
+            )
+            BigButton("确认实收箱数", onClick = { vm.confirmCartonCount() },
+                enabled = !vm.busy && vm.pendingScanCount == 0, color = PdaAccent)
+        }
         when (vm.mode) {
             InboundMode.Receive -> QtyRow(
                 label = "实收箱数（箱）",
