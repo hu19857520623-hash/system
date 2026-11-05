@@ -367,7 +367,7 @@ export async function decideReturnOrder(
 
 export async function replayReturnDecision(intent: {
   returnNo: string; customerId?: string; customerCode: string; decision: 'keep' | 'discard'; processChoice?: string
-}, current = () => true): Promise<ReturnMutationResult | { ok: false; error: string; conflict: true }> {
+}, current = () => true): Promise<ReturnMutationResult | { ok: false; error: string; resolution: 'conflict' | 'rejected' }> {
   const { returnNo, customerId, customerCode, decision, processChoice } = intent
   if (!customerCode || customerCode === '—') {
     return { ok: false, error: '未绑定客户编码，无法确认' }
@@ -385,7 +385,9 @@ export async function replayReturnDecision(intent: {
     if (!current()) return { ok: false, uncertain: true, error: '登录或客户范围已变化，请返回原账号核对' }
     return await saveConfirmedReturn(buildReturnOrderFromErp(erp, customerId), '确认处理方式')
   } catch (err) {
-    if ((err as { status?: number } | null)?.status === 409) return { ok: false, conflict: true, error: userFacingError(err) }
+    const status = (err as { status?: number } | null)?.status
+    if (status === 409) return { ok: false, resolution: 'conflict', error: userFacingError(err) }
+    if (status === 400 || status === 422) return { ok: false, resolution: 'rejected', error: userFacingError(err) }
     return uncertainReturnError(err, '确认')
   }
 }

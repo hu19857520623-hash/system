@@ -219,12 +219,24 @@ export default function ReturnProcessing() {
         setDetailId(null)
         const result = await replayReturnDecision(intent, current)
         if (!current()) return
-        if (!result.ok && !('conflict' in result)) { notifyError(userFacingError(displaySkuText(result.error))); return }
+        if (!result.ok && !('resolution' in result)) { notifyError(userFacingError(displaySkuText(result.error))); return }
         if (localStorage.getItem(decisionKey) !== raw) return
         localStorage.removeItem(decisionKey)
         if (localStorage.getItem(decisionKey) !== null) throw Error('原退件决定记录未能清理，请继续核对')
         setDecisionState(undefined)
-        if (!result.ok) { notifyError(userFacingError(displaySkuText(result.error))); await handleSync(); return }
+        if (!result.ok) {
+          notifyError(userFacingError(displaySkuText(result.error)))
+          if ('resolution' in result && result.resolution === 'rejected') {
+            const order = allReturns.find(row => row.returnNo === intent.returnNo && row.customerId === intent.customerId)
+            if (order?.status === 'awaiting_customer') {
+              setDecideProcess(intent.processChoice || 'restock')
+              setDetailId(order.id)
+              return
+            }
+          }
+          await handleSync()
+          return
+        }
         if (result.warning) notifyInfo(result.warning)
         else notifySuccess('原退件决定已确认，请核对当前状态')
         setDetailId(null)
