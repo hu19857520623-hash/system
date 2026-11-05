@@ -4,6 +4,7 @@ import { displaySku, displaySkuText } from '../data/skuDisplay'
 import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { authSessionScope } from '../api/client'
 import { createAsyncViewScope } from '../utils/asyncViewScope'
+import { useInboundConfirmation } from '../components/inbound/useInboundConfirmation'
 import { Link, useSearchParams } from 'react-router-dom'
 import { RefreshCw, Plus } from 'lucide-react'
 import { Badge, Button, Card, MonoCode, PageHeader, Table, TableFooter } from '../components/ui'
@@ -74,6 +75,8 @@ export default function ReturnProcessing() {
   const decisionKey = authReady && authToken && userId && decisionCustomerId && decisionCustomerCode && can('returns:write')
     ? `oms.return.decision.${JSON.stringify([userId, decisionCustomerId, decisionCustomerCode])}` : ''
   const decisionScope = JSON.stringify([decisionKey, authToken, role, [...permissions].sort()])
+  const confirmation = useInboundConfirmation(JSON.stringify([decisionScope, detailId, tab]))
+  const actionLock = useRef(false)
   const decisionView = useRef(createAsyncViewScope()).current
   const [decisionState, setDecisionState] = useState<{ scope: string; intent?: DecisionIntent; error?: string }>()
   const [decisionReview, setDecisionReview] = useState<{ scope: string; intent: DecisionIntent }>()
@@ -132,37 +135,40 @@ export default function ReturnProcessing() {
   }
 
   const handleWithdraw = async (r: typeof returns[0]) => {
-    if (!window.confirm(`确认撤回退件单 ${r.returnNo}？撤回后仓库将不再等待到货。`)) return
-    setActingId(r.id)
+    await runRecordAction(r, '撤回')
+  }
+
+  const runRecordAction = async (r: typeof returns[0], action: '撤回' | '删除') => {
+    if (actionLock.current || !can('returns:write')) return
+    const session = authSessionScope(), viewCurrent = decisionView.capture()
+    const current = () => viewCurrent() && authSessionScope() === session
+    actionLock.current = true
     try {
-      const result = await withdrawReturnOrder(r, {
-        customerId: r.customerId || erpCustomer?.customerId,
-        customerCode: erpCustomer?.customerCode || getCustomerCode(r.customerId),
-      })
+      const effect = action === '撤回' ? '撤回后仓库将不再等待到货。' : '删除后无法恢复。'
+      if (!await confirmation.confirm(`确认${action}退件单 ${r.returnNo}？${effect}`, `确认${action}`) || !current()) return
+      setActingId(r.id)
+      const result = action === '撤回' ? await withdrawReturnOrder(r, {
+        customerId: r.customerId,
+        customerCode: erpCustomer?.customerId === r.customerId ? erpCustomer?.customerCode : getCustomerCode(r.customerId),
+      }) : await removeReturnOrder(r)
+      if (!current()) return
       if (!result.ok) {
-        window.alert(userFacingError(displaySkuText(result.error)))
+        notifyError(userFacingError(displaySkuText(result.error)))
         return
       }
-      if (result.warning) notifyInfo(result.warning)
-      else notifySuccess('已撤回；可在「已撤回」标签页查看该退件单')
+      if ('warning' in result && typeof result.warning === 'string') notifyInfo(result.warning)
+      else notifySuccess(action === '撤回' ? '已撤回，可在「已撤回」标签页查看' : '退件记录已删除')
       if (detailId === r.id) setDetailId(null)
+    } catch (error) {
+      if (current()) notifyError(userFacingError(error))
     } finally {
+      actionLock.current = false
       setActingId(null)
     }
   }
 
   const handleDelete = async (r: typeof returns[0]) => {
-    if (actingId) return
-    if (!window.confirm(`确认删除退件单 ${r.returnNo}？此操作不可恢复。`)) return
-    setActingId(r.id)
-    const result = await removeReturnOrder(r)
-    setActingId(null)
-    if (!result.ok) {
-      notifyError(userFacingError(displaySkuText(result.error)))
-      return
-    }
-    if (detailId === r.id) setDetailId(null)
-    notifySuccess('退件记录已删除')
+    await runRecordAction(r, '删除')
   }
 
   const canWrite = can('returns:write')
@@ -255,6 +261,7 @@ export default function ReturnProcessing() {
 
   return (
     <div className="page-shell">
+      {confirmation.dialog}
       <PageHeader
         title="退件处理"
         desc={dataScope.isAdmin ? '全平台退件单，查看仓库收货与处理结果' : '查看海外仓收货进度与 ERP 处理结果（重新上架 / 待检查 / 换标 / 等问题）'}
