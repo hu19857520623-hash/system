@@ -24,6 +24,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.takealot.pda.PdaApp
 import com.takealot.pda.data.ErpException
+import com.takealot.pda.data.PdaResumeWork
 import com.takealot.pda.data.PdaScanRecord
 import com.takealot.pda.data.resolveSkuScan
 import com.takealot.pda.ui.components.Feedback
@@ -43,6 +44,7 @@ import java.util.Locale
 class SyncViewModel : ViewModel() {
     private val journal get() = PdaApp.instance.workJournal
     private val api get() = PdaApp.instance.api
+    private val session get() = PdaApp.instance.session
     val records = journal.scanRecords
     var feedback by mutableStateOf<Feedback?>(null)
     var retryingId by mutableStateOf<String?>(null)
@@ -60,7 +62,19 @@ class SyncViewModel : ViewModel() {
             try {
                 api.replayAsOriginalOwner(record) {
                     when (record.retryAction) {
-                        "arrival" -> api.arrivalScan(record.scanCode, record.retryExtra.orEmpty())
+                        "arrival" -> {
+                            val receipt = api.arrivalScan(record.scanCode, record.retryExtra.orEmpty())
+                            val order = receipt.order ?: error("回执缺少入库单")
+                            val mode = when {
+                                order.statusKey == "pending_putaway" && session.hasPerm("inbound.putaway") -> "putaway"
+                                order.statusKey in setOf("arrived", "receiving") &&
+                                    (session.hasPerm("inbound.receive") || session.hasPerm("inbound.qc")) -> "receive"
+                                else -> null
+                            }
+                            if (mode != null && order.warehouseCode == session.warehouseCode) {
+                                journal.activateIfNoOtherWork(PdaResumeWork("inbound", mode, order.id, order.no))
+                            }
+                        }
                         "receive_box" -> {
                             val orderId = record.orderId ?: error("记录缺少入库单")
                             api.receiveBox(orderId, record.scanCode, record.id)

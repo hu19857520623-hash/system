@@ -131,6 +131,12 @@ class PdaWorkJournal(context: Context, private val session: SessionStore) {
     }
 
     @Synchronized
+    fun activateIfNoOtherWork(work: PdaResumeWork) {
+        if (resumes().any { it.module == work.module && owns(it.ownerId, it.serverUrl) }) return
+        activate(work)
+    }
+
+    @Synchronized
     fun active(module: String, mode: String): PdaResumeWork? = resumes().lastOrNull { it.module == module && it.mode == mode && owns(it.ownerId, it.serverUrl) }
 
     @Synchronized
