@@ -148,7 +148,9 @@ test('删除等待服务器确认，失败时保留原记录和并发刷新',asy
    return new Promise(resolve=>{release=resolve})
  }
  const deleting=removeReturnOrder(draft);assert.equal(getReturnOrdersSnapshot().length,1);cacheReturnOrder({...draft,id:'other',returnNo:'OTHER',status:'completed'})
- release(Response.json({error:'Storage unavailable'},{status:503}));const result=await deleting;assert.equal(result.ok,false);assert.equal(getReturnOrdersSnapshot().length,2)
+ release(Response.json({error:'退件删除结果暂无法确认，请刷新退件列表核对后再试'},{status:503}))
+ assert.deepEqual(await deleting, { ok: false, error: '删除结果未确认，请刷新退件列表核对后再试' })
+ assert.equal(getReturnOrdersSnapshot().length,2)
 })
 test('提交后记录不可删除，不发出删除请求',async t=>{
  environment(t);globalThis.fetch=async()=>{throw new Error('Unexpected request')}

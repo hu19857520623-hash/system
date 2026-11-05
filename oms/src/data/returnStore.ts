@@ -352,7 +352,12 @@ export async function replayReturnWithdrawal(
 export async function removeReturnOrder(order: ReturnOrder): Promise<{ ok: true } | { ok: false; error: string }> {
   if (order.status === 'draft' || order.status === 'cancelled') {
     try { await deleteReturnOrder(order.id, order.status); return { ok: true } }
-    catch (error) { return { ok: false, error: `删除结果未确认，请刷新退件处理核对。${userFacingError(error)}` } }
+    catch (error) {
+      const status = (error as { status?: number } | null)?.status
+      if (status === 400 || status === 403 || status === 409) return { ok: false, error: userFacingError(error) }
+      if (status === 404) return { ok: false, error: '退件单已不在当前列表，请刷新核对' }
+      return { ok: false, error: '删除结果未确认，请刷新退件列表核对后再试' }
+    }
   }
   if (order.status === 'pending_arrival') {
     return { ok: false, error: '请先撤回退件，再删除' }
