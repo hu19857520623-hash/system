@@ -178,6 +178,18 @@ test('切换账号后迟到的删除回执不修改当前列表', async t => {
  assert.equal((await deleting).ok, false)
  assert.deepEqual(getReturnOrdersSnapshot(), [draft])
 })
+test('退件删除区分状态冲突、记录缺失和结果未知', async t => {
+ environment(t)
+ for (const [status, serverError, expected] of [
+  [409, '退件单状态已变化，请刷新后核对', '退件单状态已变化，请刷新后核对'],
+  [404, '退件单不存在', '退件单已不在当前列表，请刷新核对'],
+  [503, 'Service unavailable', '删除结果未确认，请刷新退件列表核对后再试'],
+ ] as const) {
+  globalThis.fetch = async () => Response.json({ error: serverError }, { status })
+  assert.deepEqual(await removeReturnOrder(draft), { ok: false, error: expected })
+  assert.deepEqual(getReturnOrdersSnapshot(), [draft])
+ }
+})
 test('提交后记录不可删除，不发出删除请求',async t=>{
  environment(t);globalThis.fetch=async()=>{throw new Error('Unexpected request')}
  assert.equal((await removeReturnOrder({...draft,status:'received'})).ok,false)
