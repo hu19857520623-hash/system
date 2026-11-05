@@ -2,6 +2,15 @@ type StoragePort = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
 export type ReceiptAttempt = { payload: { poId: number; clientRequestId: string; [key: string]: any }; target: any; lines: any[] }
 const key = (userId: number) => `erp:logistics-receipt-attempts:${userId}`
 
+export function assertReceiptAcknowledgement(result: unknown, payload: ReceiptAttempt['payload']) {
+  const receipt = result as { receiptNo?: unknown; poId?: unknown; clientRequestId?: unknown; poStatus?: unknown } | null
+  if (!receipt || typeof receipt.receiptNo !== 'string' || !receipt.receiptNo.trim() ||
+    receipt.poId !== payload.poId || receipt.clientRequestId !== payload.clientRequestId ||
+    typeof receipt.poStatus !== 'string' || !receipt.poStatus.trim()) {
+    throw new Error('服务器未返回与本次操作匹配的收货回执')
+  }
+}
+
 export function readReceiptAttempts(storage: StoragePort, userId: number): ReceiptAttempt[] {
   try {
     const text = storage.getItem(key(userId))

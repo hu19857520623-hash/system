@@ -12,7 +12,7 @@ import { useRowActions } from '@/composables/useRowActions'
 import ListPagination from '@/components/ListPagination.vue'
 import StockFillBar from '@/components/ui/StockFillBar.vue'
 import { useAppStore } from '@/stores/app'
-import { clearReceiptAttempt, readReceiptAttempts, saveReceiptAttempt, type ReceiptAttempt } from '@/utils/logisticsReceiptAttempt'
+import { assertReceiptAcknowledgement, clearReceiptAttempt, readReceiptAttempts, saveReceiptAttempt, type ReceiptAttempt } from '@/utils/logisticsReceiptAttempt'
 
 const { confirmAction, showDetail } = useRowActions()
 const router = useRouter()
@@ -366,6 +366,7 @@ async function submitReceive(replay = false) {
     sent = true
     const result = await logisticsReceiptApi.create(payload)
     if (!current()) return
+    assertReceiptAcknowledgement(result, payload)
     receiveResult.value = result
     receiveUncertain.value = false
     receiveFeedback.value = `${result.duplicate ? '已核对原收货记录' : '本次收货已确认'}：${result.receiptNo}。${result.poStatus === 'received' ? '采购单已收齐，良品已入中转仓库存' : '仍有待收数量，可返回列表继续收货'}。破损件单独记录，不增加可用库存。`
