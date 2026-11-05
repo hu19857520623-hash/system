@@ -182,9 +182,9 @@ class StocktakeViewModel : ViewModel() {
                     return
                 }
                 locationCode = openLine.loc
-                selectedLineId = openLine.id
+                selectedLineId = null
                 qty = 1
-                feedback = Feedback(true, "库位 ${locationHit.loc}")
+                feedback = Feedback(true, "库位 ${locationHit.loc} 已确认，请扫描待盘点 SKU")
                 scan = ""
                 journal.acknowledge(recordId, feedback?.message)
                 return
@@ -265,8 +265,8 @@ class StocktakeViewModel : ViewModel() {
         }
         try { validateStocktakeWork(current, session.warehouseCode) }
         catch (e: ErpException) { feedback = Feedback(false, e.message.orEmpty()); return }
-        val line = selectedLine ?: run {
-            feedback = Feedback(false, "请先扫库位和 SKU")
+        val line = selectedLine?.takeIf { locationCode.isNotBlank() && it.loc.equals(locationCode, ignoreCase = true) } ?: run {
+            feedback = Feedback(false, "请先扫描库位，再扫描该库位的 SKU")
             return
         }
         if (!line.canCount()) {
@@ -285,7 +285,7 @@ class StocktakeViewModel : ViewModel() {
                 val refreshed = plan!!
                 PdaApp.instance.workJournal.activate(PdaResumeWork("stocktake", "count", refreshed.id, refreshed.no))
                 val next = refreshed.lineList.firstOrNull { it.id != line.id && it.loc.equals(locationCode, ignoreCase = true) && it.canCount() }
-                selectedLineId = next?.id
+                selectedLineId = null
                 if (refreshed.lineList.none { it.isOpen }) {
                     locationCode = ""
                     PdaApp.instance.workJournal.clearActive("stocktake")
@@ -325,6 +325,10 @@ class StocktakeViewModel : ViewModel() {
     }
 
     fun clearPlan() {
+        if (busy || pendingScanCount > 0) {
+            feedback = Feedback(false, "请等待扫码和提交完成后再换单")
+            return
+        }
         lastReadCode = ""
         plan = null
         locationCode = ""
@@ -415,7 +419,7 @@ fun StocktakeScreen(onBack: () -> Unit, vm: StocktakeViewModel = viewModel()) {
                     }
                     QtyButton("+") { vm.qty += 1 }
                 }
-                BigButton("提交实盘", onClick = { vm.submitCount() }, enabled = !vm.busy, color = PdaOk)
+                BigButton("提交实盘", onClick = { vm.submitCount() }, enabled = !vm.busy && vm.pendingScanCount == 0, color = PdaOk)
                 TextButton(onClick = { vm.showReduction = true }, enabled = !vm.busy && vm.pendingScanCount == 0 && vm.qty > 0 && vm.selectedLine?.isOpen == true, modifier = Modifier.fillMaxWidth()) { Text("减少实盘数量", color = PdaWarn) }
             }
         }
