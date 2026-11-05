@@ -3387,13 +3387,13 @@ app.delete('/api/return-orders/:id', async (req, res) => {
       return res.status(400).json({ error: '仅草稿或已撤回的退件可以删除，请先核对退件状态' })
     }
     const result = await prisma.returnOrder.deleteMany({
-      where: { id: target.id, status: { in: ['draft', 'cancelled'] }, ...(scope ? { customerId: scope } : {}) },
+      where: { id: target.id, status: target.status, ...(scope ? { customerId: scope } : {}) },
     })
     if (result.count === 0) return res.status(409).json({ error: '退件单状态已变化，请刷新后核对' })
     res.json({ ok: true })
   } catch (e) {
     console.error(e)
-    res.status(500).json({ error: String(e) })
+    res.status(500).json({ error: '退件删除结果暂无法确认，请刷新退件列表核对后再试' })
   }
 })
 
