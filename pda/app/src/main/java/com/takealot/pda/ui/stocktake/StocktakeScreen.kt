@@ -280,7 +280,7 @@ class StocktakeViewModel : ViewModel() {
             val recordId = journal.beginScan("stocktake", "count_submit", line.skuCode, current.id, current.no)
             try {
                 journal.preparePostRetry(recordId, "/management-loop/stocktakes/${current.id}/count", payload)
-                plan = api.stocktakeCount(current.id, payload, recordId)
+                plan = api.submitPrepared(recordId) { api.stocktakeCount(current.id, payload, recordId) }
                 journal.acknowledge(recordId, "盘点提交成功")
                 val refreshed = plan!!
                 PdaApp.instance.workJournal.activate(PdaResumeWork("stocktake", "count", refreshed.id, refreshed.no))

@@ -7,6 +7,8 @@ import com.takealot.pda.BuildConfig
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
+internal data class AuthRequestScope(val baseUrl: String, val token: String, val userId: Int, val generation: Int)
+
 class SessionStore(context: Context) {
     private val prefs = context.getSharedPreferences("pda_session", Context.MODE_PRIVATE)
     private val authTickState = MutableStateFlow(0)
@@ -16,15 +18,19 @@ class SessionStore(context: Context) {
         migrateLanUrlToProduction()
     }
 
+    @set:Synchronized
     var baseUrl: String
         get() = resolveBaseUrl(prefs.getString(KEY_BASE, DEFAULT_BASE) ?: DEFAULT_BASE)
-        set(value) { prefs.edit().putString(KEY_BASE, resolveBaseUrl(value)).apply() }
+        set(value) {
+            val next = resolveBaseUrl(value)
+            if (next != baseUrl) changeServer(next)
+        }
     var token: String
         get() = prefs.getString(KEY_TOKEN, "") ?: ""
-        set(value) { prefs.edit().putString(KEY_TOKEN, value.trim().removePrefix("Bearer ").trim()).apply() }
+        private set(value) { prefs.edit().putString(KEY_TOKEN, value.trim().removePrefix("Bearer ").trim()).apply() }
     var userId: Int
         get() = prefs.getInt(KEY_USER_ID, 0)
-        set(value) { prefs.edit().putInt(KEY_USER_ID, value).apply() }
+        private set(value) { prefs.edit().putInt(KEY_USER_ID, value).apply() }
     var username: String
         get() = prefs.getString(KEY_USERNAME, "") ?: ""
         set(value) { prefs.edit().putString(KEY_USERNAME, value).apply() }
@@ -55,7 +61,11 @@ class SessionStore(context: Context) {
     fun hasPerm(id: String) = permissionsCsv.split(',').any { it.trim() == id }
 
     @Synchronized
-    fun saveLogin(token: String, user: AuthUser) {
+    internal fun requestScope() = AuthRequestScope(baseUrl, token, userId, authTickState.value)
+
+    @Synchronized
+    internal fun saveLogin(scope: AuthRequestScope, token: String, user: AuthUser): Boolean {
+        if (scope != requestScope()) return false
         this.token = token
         userId = user.id
         username = user.username.orEmpty()
@@ -63,6 +73,7 @@ class SessionStore(context: Context) {
         userWorkstation = user.workstation.orEmpty().trim()
         permissionsCsv = user.permSet.joinToString(",")
         bumpAuth()
+        return true
     }
 
     @Synchronized
@@ -88,8 +99,15 @@ class SessionStore(context: Context) {
     private fun migrateLanUrlToProduction() {
         val stored = prefs.getString(KEY_BASE, null) ?: return
         if (looksLikeLanDev(stored)) {
-            prefs.edit().putString(KEY_BASE, PRODUCTION_API_BASE).apply()
+            changeServer(PRODUCTION_API_BASE)
         }
+    }
+
+    private fun changeServer(next: String) {
+        prefs.edit().putString(KEY_BASE, next)
+            .remove(KEY_TOKEN).remove(KEY_USER_ID).remove(KEY_REAL_NAME)
+            .remove(KEY_PERMS).remove(KEY_USER_STATION).remove(KEY_WH).remove(KEY_WH_NAME).apply()
+        bumpAuth()
     }
 
     companion object {

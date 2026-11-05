@@ -327,7 +327,7 @@ class InboundViewModel : ViewModel() {
         val wh = session.warehouseCode
         if (wh.isBlank()) throw ErpException("请先在首页选择作业仓库")
         PdaApp.instance.workJournal.prepareRetry(recordId, "arrival", extra = wh)
-        val res = api.arrivalScan(code, wh)
+        val res = api.submitPrepared(recordId) { api.arrivalScan(code, wh) }
         applyOrder(res.order)
         scan = ""
         if (order?.id != null) refreshOrder()
@@ -365,7 +365,7 @@ class InboundViewModel : ViewModel() {
             throw ErpException("这是 SKU，当前只确认箱数，不计件。请扫外箱箱唛，确认箱数后再进入清点数量")
         }
         PdaApp.instance.workJournal.prepareRetry(recordId, "receive_box")
-        val res = api.receiveBox(order!!.id, code, recordId)
+        val res = api.submitPrepared(recordId) { api.receiveBox(order!!.id, code, recordId) }
         feedback = Feedback(true, displayMessage(res.message.orEmpty().ifBlank { "箱唛已确认，请继续扫箱唛；全部确认后点击确认箱数" }))
         val updated = order?.withCartonSnapshot(res)
         if (updated != null) applyOrder(updated)
@@ -376,7 +376,7 @@ class InboundViewModel : ViewModel() {
     private suspend fun doCatalogScan(code: String, recordId: String, quantity: Int) {
         if (order == null) {
             PdaApp.instance.workJournal.preparePostRetry(recordId, "/inbound/catalog-bind", mapOf("scanCode" to code, "warehouseCode" to session.warehouseCode))
-            val detail = api.bindCatalogInbound(code, session.warehouseCode)
+            val detail = api.submitPrepared(recordId) { api.bindCatalogInbound(code, session.warehouseCode) }
             applyOrder(detail)
             PdaApp.instance.workJournal.activate(PdaResumeWork("inbound", mode.key, detail.id, detail.no))
             if (!enterPutawayIfReady()) {
@@ -422,7 +422,7 @@ class InboundViewModel : ViewModel() {
         val current = order ?: return
         val requestCode = current.resolveSkuScan(code)
         PdaApp.instance.workJournal.prepareRetry(recordId, "scan_qc", quantity = increment, extra = requestCode)
-        val res = api.scanQc(current.id, requestCode, increment, recordId)
+        val res = api.submitPrepared(recordId) { api.scanQc(current.id, requestCode, increment, recordId) }
         if (res.itemId > 0) selectedItemId = res.itemId
         val sku = res.sku.orEmpty().ifBlank { code }
         feedback = Feedback(
@@ -575,7 +575,7 @@ class InboundViewModel : ViewModel() {
             )),
         )
         PdaApp.instance.workJournal.preparePostRetry(requestId, "/inbound/${o.id}/putaway", payload)
-        val result = api.putaway(o.id, payload, requestId)
+        val result = api.submitPrepared(requestId) { api.putaway(o.id, payload, requestId) }
         locationCode = ""
         val updated = order?.withPutawaySnapshot(result)
         if (updated != null) applyOrder(updated)
@@ -645,7 +645,7 @@ class InboundViewModel : ViewModel() {
                 ) }
                 val payload = mapOf("expectedVersion" to version, "items" to items, "acceptDiff" to acceptDiff)
                 journal.preparePostRetry(recordId, "/inbound/${o.id}/qc", payload)
-                api.submitQc(o.id, payload, recordId)
+                api.submitPrepared(recordId) { api.submitQc(o.id, payload, recordId) }
                 journal.acknowledge(recordId, "清点提交成功")
                 if (!refreshAfterConfirmedWrite()) return@launch
                 if (enterPutawayIfReady()) return@launch
@@ -702,8 +702,10 @@ class InboundViewModel : ViewModel() {
             val recordId = journal.beginScan("inbound", "measure", item.skuCode, o.id, o.no)
             try {
                 journal.preparePostRetry(recordId, "/inbound/${o.id}/$endpoint", payload)
-                if (endpoint == "measure-dimensions") api.measureDimensions(o.id, payload, recordId)
-                else api.scanQc(o.id, item.skuCode, 0, recordId, l, w, h, weight)
+                api.submitPrepared(recordId) {
+                    if (endpoint == "measure-dimensions") api.measureDimensions(o.id, payload, recordId)
+                    else api.scanQc(o.id, item.skuCode, 0, recordId, l, w, h, weight)
+                }
                 journal.acknowledge(recordId, "尺寸已保存")
                 if (refreshAfterConfirmedWrite()) feedback = Feedback(true, "${displaySku(item.skuCode)} 长宽高重量已保存")
             } catch (e: Exception) {
@@ -761,7 +763,7 @@ class InboundViewModel : ViewModel() {
             val recordId = journal.beginScan("inbound", "resolve_exception", o.no, o.id, o.no)
             try {
                 journal.preparePostRetry(recordId, "/inbound/${o.id}/resolve-exception", body)
-                api.resolveException(o.id, body, recordId)
+                api.submitPrepared(recordId) { api.resolveException(o.id, body, recordId) }
                 journal.acknowledge(recordId, "异常已放行")
                 showExceptionRelease = false
                 exceptionReason = ""
@@ -832,7 +834,7 @@ class InboundViewModel : ViewModel() {
             val recordId = journal.beginScan("inbound", "carton_count_submit", cartonCount.toString(), id, order?.no)
             try {
                 journal.preparePostRetry(recordId, "/inbound/$id/received-carton-count", mapOf("receivedCartonCount" to cartonCount, "differenceReason" to reason.trim()))
-                val res = api.recordReceivedCartonCount(id, cartonCount, reason, recordId)
+                val res = api.submitPrepared(recordId) { api.recordReceivedCartonCount(id, cartonCount, reason, recordId) }
                 journal.acknowledge(recordId, "箱数登记成功")
                 showCartonDifference = false
                 cartonDifferenceReason = ""
@@ -960,7 +962,7 @@ class InboundViewModel : ViewModel() {
             val recordId = journal.beginScan("inbound", "reduce_$kind", itemId?.toString() ?: "箱数", current.id, current.no)
             try {
                 journal.preparePostRetry(recordId, "/inbound/${current.id}/reduce-$kind", body)
-                val res = api.reduceInbound(current.id, kind, body + ("clientRequestId" to recordId))
+                val res = api.submitPrepared(recordId) { api.reduceInbound(current.id, kind, body + ("clientRequestId" to recordId)) }
                 journal.acknowledge(recordId, res.message)
                 reductionMode = null
                 if (refreshAfterConfirmedWrite()) {

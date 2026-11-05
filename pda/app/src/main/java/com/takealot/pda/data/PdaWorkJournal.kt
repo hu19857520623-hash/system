@@ -80,9 +80,10 @@ class PdaWorkJournal(context: Context, private val session: SessionStore) {
 
     @Synchronized
     fun beginScan(module: String, mode: String, scanCode: String, orderId: Int? = null, orderNo: String? = null): String {
+        val scope = session.requestScope()
         val record = PdaScanRecord(
             module = module, mode = mode, scanCode = scanCode, orderId = orderId, orderNo = orderNo,
-            ownerId = session.userId.takeIf { it > 0 }, serverUrl = session.baseUrl,
+            ownerId = scope.userId.takeIf { it > 0 }, serverUrl = scope.baseUrl,
         )
         saveRecords(_scanRecords.value + record)
         return record.id
@@ -180,6 +181,8 @@ class PdaWorkJournal(context: Context, private val session: SessionStore) {
 
     private fun owns(ownerId: Int?, serverUrl: String?): Boolean =
         ownerId != null && ownerId == session.userId && serverUrl == session.baseUrl
+
+    internal fun pendingRecord(id: String): PdaScanRecord? = _scanRecords.value.firstOrNull { it.id == id && it.state == "pending" }
 
     fun canReplay(record: PdaScanRecord): Boolean = owns(record.ownerId, record.serverUrl)
 
