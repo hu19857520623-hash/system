@@ -107,12 +107,34 @@ export class ReturnsService {
     const prior = await tx.operationLog.findFirst({ where: { module: 'returns', operatorId: BigInt(actor), detail: { path: '$.clientRequestId', equals: intent.clientRequestId } }, orderBy: { id: 'desc' } })
     if (!prior) return false
     if ((prior.detail as any)?.actionFingerprint !== intent.actionFingerprint) throw new ConflictException('同一次退件操作的单据或内容已变化，请核对原请求后继续')
+    if ((prior.detail as any)?.cancelled) throw new ConflictException('原退件操作已核对结束，请刷新单据后重新操作')
     return true
   }
 
   private async logReturn(params: OperationLogInput, tx: Prisma.TransactionClient, intent?: { clientRequestId: string; actionFingerprint: string }) {
     await this.opLog.log({ ...params, ...(intent ? { detail: { ...params.detail, ...intent } } : {}) }, tx)
     if (params.targetType === 'return_order') await this.returnSync.enqueue(tx, String(params.targetId))
+  }
+
+  async closeWarehouseRequest(id: number, actor: number, input: { action: string; payload: Record<string, unknown> }, disposal = false) {
+    const actions: Record<string, string> = { receive: 'receive', reReceive: 're_receive', measure: 'return_measure', calculateFees: 'return_calc_fee', submitInspection: 'return_inspect', dispose: 'return_dispose' }
+    if (!input || !actions[input.action] || (input.action === 'dispose') !== disposal) throw new BadRequestException('请选择本岗位可核对的退件操作')
+    const intent = this.returnActionIntent(actions[input.action], id, actor, input.payload || {})
+    if (!intent) throw new BadRequestException('缺少原退件操作标识，不能结束未知请求')
+    return this.prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(actor)} FOR UPDATE`
+      await tx.$queryRaw`SELECT id FROM return_order WHERE id = ${BigInt(id)} FOR UPDATE`
+      const row = await tx.returnOrder.findUnique({ where: { id: BigInt(id) } })
+      if (!row) throw new NotFoundException('退件单不存在，请核对原单据')
+      const prior = await tx.operationLog.findFirst({ where: { module: 'returns', operatorId: BigInt(actor), detail: { path: '$.clientRequestId', equals: intent.clientRequestId } }, orderBy: { id: 'desc' } })
+      if (prior) {
+        const detail = prior.detail as any
+        if (detail?.actionFingerprint !== intent.actionFingerprint) throw new ConflictException('原操作内容不同，不能清除其它退件请求')
+        return { outcome: detail.cancelled ? 'cancelled' : 'confirmed', currentStatus: row.status }
+      }
+      await this.opLog.log({ module: 'returns', action: 'warehouse_request_closed', targetType: 'return_order', targetId: row.returnNo, operatorId: actor, detail: { ...intent, cancelled: true, originalAction: input.action } }, tx)
+      return { outcome: 'cancelled', currentStatus: row.status }
+    }, { isolationLevel: 'ReadCommitted' })
   }
 
   private writeAttachment(fileName: string, contentBase64: string) {

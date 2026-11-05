@@ -171,6 +171,18 @@ export class ReturnsController {
   }
 
   @RequirePerms('return.receive')
+  @Post(':id/warehouse-request/close')
+  closeWarehouseRequest(@Param('id', ParseIntPipe) id: number, @Body() body: { action: string; payload: Record<string, unknown> }, @CurrentUser('userId') userId: number) {
+    return this.service.closeWarehouseRequest(id, userId, body)
+  }
+
+  @RequirePerms('return.process')
+  @Post(':id/dispose-request/close')
+  closeDisposalRequest(@Param('id', ParseIntPipe) id: number, @Body() body: { action: string; payload: Record<string, unknown> }, @CurrentUser('userId') userId: number) {
+    return this.service.closeWarehouseRequest(id, userId, body, true)
+  }
+
+  @RequirePerms('return.receive')
   @Post(':id/receive')
   receive(
     @Param('id', ParseIntPipe) id: number,

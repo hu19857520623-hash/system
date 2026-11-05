@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useReturnMeasureAttempt, type ReturnMeasureResult } from '@/composables/useReturnMeasureAttempt'
+import { useReturnActionAttempt, type ReturnAction } from '@/composables/useReturnActionAttempt'
 import { useReturnInspectionPhotos } from '@/composables/useReturnInspectionPhotos'
 import { createReturnReadGate } from '@/utils/returnReadGate'
 import { getAccessToken } from '@/auth/tokenStore'
@@ -16,6 +17,25 @@ import ListPagination from '@/components/ListPagination.vue'
 import DetailSheet from '@/components/ui/DetailSheet.vue'
 
 const app = useAppStore()
+const returnActionScope = () => getAccessToken() && app.authenticatedUser ? JSON.stringify([getAccessToken(), app.authenticatedUser.id, app.authenticatedUser.roleCode, app.authenticatedUser.workstation, [...app.currentPermSet].sort()]) : null
+const returnActionAttempt = useReturnActionAttempt({
+  actor: () => app.authenticatedUser ? String(app.authenticatedUser.id) : '', scope: returnActionScope,
+  allowed: action => app.hasPerm(action === 'dispose' ? 'return.process' : 'return.receive'),
+  storage: { getItem: key => localStorage.getItem(key), setItem: (key, value) => localStorage.setItem(key, value), removeItem: key => localStorage.removeItem(key) },
+  request: (id, step) => returnsApi[step.action](id, { ...step.body, clientRequestId: step.clientRequestId }),
+  close: (id, step) => returnsApi.closeWarehouseRequest(id, step),
+})
+const { pending: pendingReturnAction, busy: returnActionBusy, feedback: returnActionFeedback, blocked: returnActionBlocked } = returnActionAttempt
+async function runReturnActions(row: any, steps: { action: ReturnAction; body: Record<string, unknown> }[]) {
+  const result: any = await returnActionAttempt.start({ id: Number(row.id), returnNo: row.returnNo, steps })
+  if (!result) throw Error(returnActionFeedback.value || '原退件操作待核对，请继续原请求')
+  return result
+}
+async function resumeReturnAction() {
+  const result = await returnActionAttempt.resume()
+  if (result) { receiveDialog.value = false; measureDialog.value = false; inspectDialog.value = false; await loadList(); ElMessage.success('原退件操作已确认完成，请核对列表当前状态') }
+}
+
 
 function returnListScope() {
   const token = getAccessToken(), user = app.authenticatedUser
@@ -377,9 +397,7 @@ async function submitReceive() {
       receivedCartonCount: Number(receiveCartons.value),
       remark: receiveRemark.value.trim() || undefined,
     }
-    const updated = receiveMode.value === 'reReceive'
-      ? await returnsApi.reReceive(receiveTarget.value.id, payload)
-      : await returnsApi.receive(receiveTarget.value.id, payload)
+    const updated = await runReturnActions(receiveTarget.value, [{ action: receiveMode.value, body: payload }])
     receiveDialog.value = false
     await loadList()
     if (receiveMode.value === 'reReceive') {
@@ -733,11 +751,11 @@ async function submitInspect() {
   const attachments = inspectPhotos.value.map(photo => ({ ...photo }))
   inspectSubmitting.value = true
   try {
-    await returnsApi.submitInspection(targetId, {
+    await runReturnActions(inspectTarget.value, [{ action: 'submitInspection', body: {
       inspectionResult: inspectResult.value,
       inspectionRemark: inspectRemark.value.trim() || undefined,
       attachments,
-    })
+    } }])
     if (!active()) return
     ElMessage.success('质检已提交，等待客户确认')
     inspectDialog.value = false
@@ -754,7 +772,7 @@ async function handleDispose(row: any) {
   if (!app.hasPerm('return.process')) return
   try {
     await erpConfirm(`确认退件单 ${row.returnNo} 已销毁？`, '确认销毁')
-    await returnsApi.dispose(row.id, { processRemark: '客户确认不留，仓库已销毁' })
+    await runReturnActions(row, [{ action: 'dispose', body: { processRemark: '客户确认不留，仓库已销毁' } }])
     ElMessage.success('已确认销毁')
     await loadList()
   } catch (e: any) {
@@ -938,6 +956,13 @@ void _removeExtraFeeLine
 
 <template>
   <div class="return-mgmt">
+    <el-alert v-if="pendingReturnAction || returnActionBlocked || returnActionFeedback" type="warning" :closable="false" show-icon style="margin-bottom: 12px">
+      <template #title>{{ pendingReturnAction ? '原退件操作待核对 · ' + pendingReturnAction.returnNo : '退件操作核对' }}</template>
+      <p>{{ returnActionFeedback }}</p>
+      <el-button v-if="pendingReturnAction" :loading="returnActionBusy" :disabled="returnActionBlocked" @click="resumeReturnAction">继续原请求</el-button>
+      <el-button v-if="pendingReturnAction" :disabled="returnActionBusy || returnActionBlocked" @click="returnActionAttempt.close()">核对并结束原操作</el-button>
+      <el-button :disabled="returnActionBusy" @click="loadList">刷新列表核对</el-button>
+    </el-alert>
     <div class="page-header">
       <div>
         <h1 class="page-title">退件管理</h1>

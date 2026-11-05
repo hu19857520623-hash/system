@@ -92,8 +92,9 @@ export function useReturnMeasureAttempt(options: {
     feedback.value = '正在保存本次测量请求，请稍候。'
     try {
       const intent = structuredClone(payload), epochKey = key(actor) + '.epoch', observed = options.storage.getItem(epochKey)
-      const prepared = await (options.lock || browserLock)(key(actor), () => {
+      const prepared = await (options.lock || browserLock)(`erp.returns.original.${actor}`, () => {
         if (!current()) return false
+        if (options.storage.getItem(`erp.returns.original.${actor}`)) { feedback.value = '请先核对并结束待处理的退件原请求'; return false }
         if (options.storage.getItem(key(actor))) { reload(); return false }
         if (options.storage.getItem(epochKey) !== observed) { feedback.value = '另一退件页面已发起操作，请先读取最新退件再继续'; return false }
         const p = { ...intent, clientRequestId: crypto.randomUUID() }
