@@ -74,13 +74,17 @@ class StocktakeViewModel : ViewModel() {
     var lastReadCode by mutableStateOf("")
     var showReduction by mutableStateOf(false)
     val selectedLine: StocktakeLine? get() = plan?.lineList?.find { it.id == selectedLineId }
-    private val scanQueue = Channel<QueuedScan>(64)
+    private val scanQueue = Channel<Pair<QueuedScan, Int?>>(64)
 
     init {
         viewModelScope.launch {
-            for (queued in scanQueue) {
+            for ((queued, queuedOrderId) in scanQueue) {
                 while (busy) delay(40)
                 pendingScanCount = (pendingScanCount - 1).coerceAtLeast(0)
+                if (queuedOrderId != plan?.id) {
+                    feedback = Feedback(false, "单据已切换，上一单据排队的扫码未录入，请核对后重新扫描")
+                    continue
+                }
                 val started = System.nanoTime()
                 try { runScan(queued.code) } finally { ScanDiagnostics.recordScan(queued, started, "stocktake", "count") }
             }
@@ -149,9 +153,13 @@ class StocktakeViewModel : ViewModel() {
         if (showReduction) { feedback = Feedback(false, "请先完成减少数量或取消后再扫码"); return }
         val code = raw.trim()
         if (code.isEmpty()) return
+        if (busy && plan == null) {
+            feedback = Feedback(false, "正在读取单据，本次扫码未录入，请等单据打开后重新扫描")
+            return
+        }
         scan = ""
         pendingScanCount += 1
-        if (!scanQueue.trySend(QueuedScan(code)).isSuccess) {
+        if (!scanQueue.trySend(QueuedScan(code) to plan?.id).isSuccess) {
             pendingScanCount = (pendingScanCount - 1).coerceAtLeast(0)
             feedback = Feedback(false, "扫码队列已满，请稍后重试")
         } else lastReadCode = code

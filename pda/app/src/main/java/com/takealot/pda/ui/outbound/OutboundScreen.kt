@@ -113,13 +113,17 @@ class OutboundViewModel : ViewModel() {
     var unknownScanCode by mutableStateOf<String?>(null)
     var unknownScanRemark by mutableStateOf("")
     var reductionTaskKey by mutableStateOf<String?>(null)
-    private val scanQueue = Channel<QueuedScan>(64)
+    private val scanQueue = Channel<Pair<QueuedScan, Int?>>(64)
 
     init {
         viewModelScope.launch {
-            for (queued in scanQueue) {
+            for ((queued, queuedOrderId) in scanQueue) {
                 while (busy) delay(40)
                 pendingScanCount = (pendingScanCount - 1).coerceAtLeast(0)
+                if (queuedOrderId != order?.id) {
+                    feedback = Feedback(false, "单据已切换，上一单据排队的扫码未录入，请核对后重新扫描")
+                    continue
+                }
                 val started = System.nanoTime()
                 val scanMode = mode
                 try { runScan(queued.code) } finally { ScanDiagnostics.recordScan(queued, started, "outbound", scanMode) }
@@ -223,9 +227,13 @@ class OutboundViewModel : ViewModel() {
         if (reductionTaskKey != null) { feedback = Feedback(false, "请先完成减少数量或取消后再扫码"); return }
         val code = raw.trim()
         if (code.isEmpty()) return
+        if (busy && order == null) {
+            feedback = Feedback(false, "正在读取单据，本次扫码未录入，请等单据打开后重新扫描")
+            return
+        }
         scan = ""
         pendingScanCount += 1
-        if (!scanQueue.trySend(QueuedScan(code)).isSuccess) {
+        if (!scanQueue.trySend(QueuedScan(code) to order?.id).isSuccess) {
             pendingScanCount = (pendingScanCount - 1).coerceAtLeast(0)
             lastRejectedScan = "未计数 · ${displaySku(code)}：扫码队列已满，请重新扫描"
             feedback = Feedback(false, lastRejectedScan!!)
