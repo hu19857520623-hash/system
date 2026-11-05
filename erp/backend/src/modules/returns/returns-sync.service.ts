@@ -38,7 +38,8 @@ export class ReturnsSyncService implements OnModuleInit, OnModuleDestroy {
       const logs = await this.prisma.syncLog.findMany({ where: { syncType: 'return_status', targetSystem: 'OMS', referenceNo: returnNo, status: { in: ['pending', 'failed'] } }, orderBy: { id: 'asc' }, take: 50 })
       const results: boolean[] = []
       for (const log of logs) results.push(await this.retry(log.id))
-      return results.every(Boolean)
+      const remaining = await this.prisma.syncLog.count({ where: { syncType: 'return_status', targetSystem: 'OMS', referenceNo: returnNo, status: { in: ['pending', 'failed'] } } })
+      return results.every(Boolean) && remaining === 0
     } catch { return false }
   }
   async drain() {
@@ -46,7 +47,10 @@ export class ReturnsSyncService implements OnModuleInit, OnModuleDestroy {
     this.running = true
     try {
       const logs = await this.prisma.syncLog.findMany({ where: { syncType: 'return_status', targetSystem: 'OMS', status: { in: ['pending', 'failed'] }, nextRetryAt: { lte: new Date() } }, orderBy: { id: 'asc' }, take: 20 })
-      for (const log of logs) await this.retry(log.id)
+      for (const log of logs) {
+        try { await this.retry(log.id) }
+        catch { /* Keep this task durable and continue other independent returns. */ }
+      }
     } catch { /* Pending records remain durable for the next pass. */ }
     finally { this.running = false }
   }

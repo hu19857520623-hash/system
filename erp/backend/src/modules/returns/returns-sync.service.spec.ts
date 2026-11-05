@@ -1,6 +1,25 @@
 import { ReturnsSyncService } from './returns-sync.service'
 
 describe('durable return notification recovery', () => {
+  it('does not report complete synchronization while tasks remain beyond the first page', async () => {
+    const jobs = Array.from({ length: 51 }, (_, index) => ({ id: BigInt(index + 1), status: 'pending' }))
+    const prisma: any = { syncLog: {
+      findMany: jest.fn(async () => jobs.filter(job => job.status !== 'success').slice(0, 50)),
+      count: jest.fn(async () => jobs.filter(job => job.status !== 'success').length),
+    } }
+    const service = new ReturnsSyncService(prisma)
+    jest.spyOn(service, 'retry').mockImplementation(async id => { jobs.find(job => job.id === id)!.status = 'success'; return true })
+    expect(await service.flush('RT-ONE')).toBe(false)
+    expect(jobs[50].status).toBe('pending')
+    expect(await service.flush('RT-ONE')).toBe(true)
+  })
+  it('continues the worker batch when one task cannot currently be processed', async () => {
+    const service = new ReturnsSyncService({ syncLog: { findMany: jest.fn().mockResolvedValue([{ id: 1n }, { id: 2n }]) } } as any)
+    service.setSender(jest.fn().mockResolvedValue(true))
+    const retry = jest.spyOn(service, 'retry').mockRejectedValueOnce(Error('数据库暂时不可用')).mockResolvedValueOnce(true)
+    await service.drain()
+    expect(retry.mock.calls).toEqual([[1n], [2n]])
+  })
   it('keeps failed work durable and a recreated worker sends current data without replaying business actions', async () => {
     const jobs: any[] = []
     const tx: any = { $queryRaw: jest.fn(), syncLog: {
