@@ -174,7 +174,7 @@ export class ReturnsController {
   @Post(':id/receive')
   receive(
     @Param('id', ParseIntPipe) id: number,
-    @Body() body: { receivedQty?: number; receivedCartonCount?: number; remark?: string },
+    @Body() body: { clientRequestId?: string; receivedQty?: number; receivedCartonCount?: number; remark?: string },
     @CurrentUser('userId') userId: number,
   ) {
     return this.service.receive(id, body, userId)
@@ -184,7 +184,7 @@ export class ReturnsController {
   @Post(':id/re-receive')
   reReceive(
     @Param('id', ParseIntPipe) id: number,
-    @Body() body: { receivedQty?: number; receivedCartonCount?: number; remark?: string },
+    @Body() body: { clientRequestId?: string; receivedQty?: number; receivedCartonCount?: number; remark?: string },
     @CurrentUser('userId') userId: number,
   ) {
     return this.service.reReceive(id, body, userId)
@@ -194,7 +194,7 @@ export class ReturnsController {
   @Post(':id/measure')
   measure(
     @Param('id', ParseIntPipe) id: number,
-    @Body() body: { cartons: { lengthCm: number; widthCm: number; heightCm: number; grossWeightKg: number }[] },
+    @Body() body: { clientRequestId?: string; cartons: { lengthCm: number; widthCm: number; heightCm: number; grossWeightKg: number }[] },
     @CurrentUser('userId') userId: number,
   ) {
     return this.service.measure(id, body, userId)
@@ -216,7 +216,7 @@ export class ReturnsController {
   @Post(':id/calculate-fees')
   calculateFees(
     @Param('id', ParseIntPipe) id: number,
-    @Body() body: { extraLines?: { description?: string; amount?: number; quantity?: number; unitPrice?: number }[] },
+    @Body() body: { clientRequestId?: string; extraLines?: { description?: string; amount?: number; quantity?: number; unitPrice?: number }[] },
     @CurrentUser('userId') userId: number,
   ) {
     return this.service.calculateFees(id, userId, body)
@@ -226,7 +226,7 @@ export class ReturnsController {
   @Post(':id/inspect')
   submitInspection(
     @Param('id', ParseIntPipe) id: number,
-    @Body() body: {
+    @Body() body: { clientRequestId?: string;
       inspectionResult: string
       inspectionRemark?: string
       attachments?: { fileName: string; contentBase64?: string; url?: string }[]
@@ -240,7 +240,7 @@ export class ReturnsController {
   @Post(':id/dispose')
   executeDispose(
     @Param('id', ParseIntPipe) id: number,
-    @Body() body: { processRemark?: string },
+    @Body() body: { clientRequestId?: string; processRemark?: string },
     @CurrentUser('userId') userId: number,
   ) {
     return this.service.executeDispose(id, body, userId)

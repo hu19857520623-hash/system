@@ -78,8 +78,25 @@ export class ReturnsService {
     })
   }
 
-  private async logReturn(params: OperationLogInput, tx: Prisma.TransactionClient) {
-    await this.opLog.log(params, tx)
+  private returnActionIntent(action: string, id: number, actor: number, body: Record<string, unknown>) {
+    const clientRequestId = String(body.clientRequestId || '').trim()
+    if (!clientRequestId) return undefined
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(clientRequestId)) throw new BadRequestException('操作标识无效，请刷新退件页面后重试')
+    const canonical = (value: any): any => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().filter(key => key !== 'clientRequestId').map(key => [key, canonical(value[key])])) : value
+    const actionFingerprint = createHash('sha256').update(JSON.stringify({ action, id, actor, body: canonical(body) })).digest('hex')
+    return { clientRequestId, actionFingerprint }
+  }
+
+  private async hasReturnActionReceipt(tx: Prisma.TransactionClient, actor: number, intent?: { clientRequestId: string; actionFingerprint: string }) {
+    if (!intent) return false
+    const prior = await tx.operationLog.findFirst({ where: { module: 'returns', operatorId: BigInt(actor), detail: { path: '$.clientRequestId', equals: intent.clientRequestId } }, orderBy: { id: 'desc' } })
+    if (!prior) return false
+    if ((prior.detail as any)?.actionFingerprint !== intent.actionFingerprint) throw new ConflictException('同一次退件操作的单据或内容已变化，请核对原请求后继续')
+    return true
+  }
+
+  private async logReturn(params: OperationLogInput, tx: Prisma.TransactionClient, intent?: { clientRequestId: string; actionFingerprint: string }) {
+    await this.opLog.log({ ...params, ...(intent ? { detail: { ...params.detail, ...intent } } : {}) }, tx)
     if (params.targetType === 'return_order') await this.returnSync.enqueue(tx, String(params.targetId))
   }
 
@@ -419,13 +436,16 @@ export class ReturnsService {
 
   async receive(
     id: number,
-    body: { receivedQty?: number; receivedCartonCount?: number; remark?: string },
+    body: { clientRequestId?: string; receivedQty?: number; receivedCartonCount?: number; remark?: string },
     userId: number,
   ) {
     const updated = await this.prisma.$transaction(async tx => {
+      const intent = this.returnActionIntent('receive', id, userId, body)
+      if (intent) await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(userId)} FOR UPDATE`
       await tx.$queryRaw`SELECT id FROM return_order WHERE id = ${BigInt(id)} FOR UPDATE`
       const row = await tx.returnOrder.findUnique({ where: { id: BigInt(id) } })
       if (!row) throw new NotFoundException('退件单不存在')
+      if (await this.hasReturnActionReceipt(tx, userId, intent)) return tx.returnOrder.findUniqueOrThrow({ where: { id: BigInt(id) }, include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } } })
       if (row.status !== 'pending_arrival') {
         throw new BadRequestException('当前状态不可收货，仅「在途」可收货')
       }
@@ -462,7 +482,7 @@ export class ReturnsService {
         targetId: row.returnNo,
         operatorId: userId,
         detail: { receivedQty, receivedCartonCount },
-      }, tx)
+      }, tx, intent)
       return updated
     }, { isolationLevel: 'ReadCommitted' })
     void this.pushReturnStatusToOms(updated.returnNo)
@@ -471,13 +491,16 @@ export class ReturnsService {
 
   async reReceive(
     id: number,
-    body: { receivedQty?: number; receivedCartonCount?: number; remark?: string },
+    body: { clientRequestId?: string; receivedQty?: number; receivedCartonCount?: number; remark?: string },
     userId: number,
   ) {
     const updated = await this.prisma.$transaction(async tx => {
+      const intent = this.returnActionIntent('re_receive', id, userId, body)
+      if (intent) await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(userId)} FOR UPDATE`
       await tx.$queryRaw`SELECT id FROM return_order WHERE id = ${BigInt(id)} FOR UPDATE`
       const row = await tx.returnOrder.findUnique({ where: { id: BigInt(id) } })
       if (!row) throw new NotFoundException('退件单不存在')
+      if (await this.hasReturnActionReceipt(tx, userId, intent)) return tx.returnOrder.findUniqueOrThrow({ where: { id: BigInt(id) }, include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } } })
       if (!(RETURN_RE_RECEIVE_STATUSES as readonly string[]).includes(row.status)) {
         throw new BadRequestException('当前状态不可重新收货，仅已收货/已测体积/已算费可修正')
       }
@@ -521,18 +544,21 @@ export class ReturnsService {
         targetId: row.returnNo,
         operatorId: userId,
         detail: { receivedQty, receivedCartonCount, previousStatus: row.status },
-      }, tx)
+      }, tx, intent)
       return updated
     }, { isolationLevel: 'ReadCommitted' })
     void this.pushReturnStatusToOms(updated.returnNo)
     return this.enrichRow(updated)
   }
 
-  async measure(id: number, body: { cartons: CartonInput[] }, userId: number) {
+  async measure(id: number, body: { clientRequestId?: string; cartons: CartonInput[] }, userId: number) {
     const updated = await this.prisma.$transaction(async tx => {
+      const intent = this.returnActionIntent('return_measure', id, userId, body)
+      if (intent) await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(userId)} FOR UPDATE`
       await tx.$queryRaw`SELECT id FROM return_order WHERE id = ${BigInt(id)} FOR UPDATE`
       const row = await tx.returnOrder.findUnique({ where: { id: BigInt(id) } })
       if (!row) throw new NotFoundException('退件单不存在')
+      if (await this.hasReturnActionReceipt(tx, userId, intent)) return tx.returnOrder.findUniqueOrThrow({ where: { id: BigInt(id) }, include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } } })
       if (!['received', 'arrived', 'measured', 'fee_calculated'].includes(row.status)) {
         throw new BadRequestException('当前状态不可测量，请先完成收货')
       }
@@ -586,7 +612,7 @@ export class ReturnsService {
         targetId: row.returnNo,
         operatorId: userId,
         detail: { cartonCount: computed.length, ...totals },
-      }, tx)
+      }, tx, intent)
       return updated
     }, { isolationLevel: 'ReadCommitted' })
     void this.pushReturnStatusToOms(updated.returnNo)
@@ -787,16 +813,19 @@ export class ReturnsService {
   async calculateFees(
     id: number,
     userId: number,
-    _body?: { extraLines?: { description?: string; amount?: number; quantity?: number; unitPrice?: number }[] },
+    _body?: { clientRequestId?: string; extraLines?: { description?: string; amount?: number; quantity?: number; unitPrice?: number }[] },
   ) {
     await this.ensureMissingWarehouseTemplates()
     const updated = await this.prisma.$transaction(async tx => {
+      const intent = this.returnActionIntent('return_calc_fee', id, userId, _body || {})
+      if (intent) await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(userId)} FOR UPDATE`
       await tx.$queryRaw`SELECT id FROM return_order WHERE id = ${BigInt(id)} FOR UPDATE`
       const row = await tx.returnOrder.findUnique({
         where: { id: BigInt(id) },
         include: { items: true, cartons: { orderBy: { cartonNo: 'asc' } } },
       })
       if (!row) throw new NotFoundException('退件单不存在')
+      if (await this.hasReturnActionReceipt(tx, userId, intent)) return tx.returnOrder.findUniqueOrThrow({ where: { id: BigInt(id) }, include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } } })
       if (row.status !== 'measured') {
         throw new BadRequestException('请先完成外箱体积测量，再生成费用')
       }
@@ -854,7 +883,7 @@ export class ReturnsService {
           autoLines,
           phase: 'measure_logistics_only',
         },
-      }, tx)
+      }, tx, intent)
       return updated
     }, { isolationLevel: 'ReadCommitted' })
     void this.billing.pushCustomerBillingToOms(Number(updated.customerId))
@@ -1042,7 +1071,7 @@ export class ReturnsService {
 
   async submitInspection(
     id: number,
-    body: {
+    body: { clientRequestId?: string;
       inspectionResult: string
       inspectionRemark?: string
       attachments?: { fileName: string; contentBase64?: string; url?: string }[]
@@ -1055,12 +1084,15 @@ export class ReturnsService {
     }
     const written: string[] = []
     const updated = await this.prisma.$transaction(async tx => {
+      const intent = this.returnActionIntent('return_inspect', id, userId, body)
+      if (intent) await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(userId)} FOR UPDATE`
       await tx.$queryRaw`SELECT id FROM return_order WHERE id = ${BigInt(id)} FOR UPDATE`
       const row = await tx.returnOrder.findUnique({
         where: { id: BigInt(id) },
         include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
       })
       if (!row) throw new NotFoundException('退件单不存在')
+      if (await this.hasReturnActionReceipt(tx, userId, intent)) return tx.returnOrder.findUniqueOrThrow({ where: { id: BigInt(id) }, include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } } })
       if (row.status !== 'fee_calculated') {
         throw new BadRequestException('请先完成测体积与算费，再提交质检')
       }
@@ -1110,7 +1142,7 @@ export class ReturnsService {
         targetId: row.returnNo,
         operatorId: userId,
         detail: { inspectionResult, photoCount: normalized.length },
-      }, tx)
+      }, tx, intent)
       return updated
     }, { isolationLevel: 'ReadCommitted' }).catch(error => {
       for (const path of written) this.files.remove(path)
@@ -1215,11 +1247,14 @@ export class ReturnsService {
     return { ...this.mapReturnForOms(updated), idempotent: false }
   }
 
-  async executeDispose(id: number, body: { processRemark?: string }, userId: number) {
+  async executeDispose(id: number, body: { clientRequestId?: string; processRemark?: string }, userId: number) {
     const updated = await this.prisma.$transaction(async tx => {
+      const intent = this.returnActionIntent('return_dispose', id, userId, body)
+      if (intent) await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(userId)} FOR UPDATE`
       await tx.$queryRaw`SELECT id FROM return_order WHERE id = ${BigInt(id)} FOR UPDATE`
       const row = await tx.returnOrder.findUnique({ where: { id: BigInt(id) } })
       if (!row) throw new NotFoundException('退件单不存在')
+      if (await this.hasReturnActionReceipt(tx, userId, intent)) return tx.returnOrder.findUniqueOrThrow({ where: { id: BigInt(id) }, include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } } })
       if (row.status !== 'dispose_pending') {
         throw new BadRequestException('当前状态不可销毁，仅「待销毁」可确认')
       }
@@ -1240,7 +1275,7 @@ export class ReturnsService {
         targetType: 'return_order',
         targetId: row.returnNo,
         operatorId: userId,
-      }, tx)
+      }, tx, intent)
       return updated
     }, { isolationLevel: 'ReadCommitted' })
     void this.pushReturnStatusToOms(updated.returnNo)
