@@ -182,11 +182,17 @@ function describeOmsNetworkError(err: unknown) {
 }
 
 export function storeAuthSession(session: AuthSession | null, remember = true) {
-  localStorage.removeItem(LOCAL_SESSION_KEY)
-  sessionStorage.removeItem(SESSION_SESSION_KEY)
-  if (!session) return
+  if (!session) {
+    localStorage.removeItem(LOCAL_SESSION_KEY)
+    sessionStorage.removeItem(SESSION_SESSION_KEY)
+    return
+  }
   const storage = remember ? localStorage : sessionStorage
-  storage.setItem(remember ? LOCAL_SESSION_KEY : SESSION_SESSION_KEY, JSON.stringify(session))
+  const key = remember ? LOCAL_SESSION_KEY : SESSION_SESSION_KEY
+  const value = JSON.stringify(session)
+  if (storage.getItem(key) !== value) storage.setItem(key, value)
+  if (remember) sessionStorage.removeItem(SESSION_SESSION_KEY)
+  else localStorage.removeItem(LOCAL_SESSION_KEY)
 }
 
 export function storeAdminReturnSession(session: AuthSession | null) {
