@@ -67,7 +67,11 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
     }
 
     suspend fun arrivalScan(scanCode: String, warehouseCode: String): ArrivalScanResult = withContext(Dispatchers.IO) {
-        gson.fromJson(postJson("/inbound/arrival-scan", mapOf("scanCode" to scanCode, "warehouseCode" to warehouseCode)), ArrivalScanResult::class.java)
+        val receipt = gson.fromJson(postJson("/inbound/arrival-scan", mapOf("scanCode" to scanCode, "warehouseCode" to warehouseCode)), ArrivalScanResult::class.java)
+        if (receipt?.order?.let { it.id > 0 && it.no.isNotBlank() && it.warehouseCode == warehouseCode } != true) {
+            throw ErpException("到仓回执缺少原单信息，请到「待同步记录」核对", retriable = true)
+        }
+        receipt
     }
 
     suspend fun bindCatalogInbound(scanCode: String, warehouseCode: String): InboundOrder = withContext(Dispatchers.IO) {

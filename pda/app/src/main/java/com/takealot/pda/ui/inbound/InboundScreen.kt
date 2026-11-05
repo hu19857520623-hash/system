@@ -333,12 +333,13 @@ class InboundViewModel : ViewModel() {
         if (wh.isBlank()) throw ErpException("请先在首页选择作业仓库")
         PdaApp.instance.workJournal.prepareRetry(recordId, "arrival", extra = wh)
         val res = api.submitPrepared(recordId) { api.arrivalScan(code, wh) }
+        val message = res.message.orEmpty().ifBlank { if (res.alreadyScanned) "已到仓" else "到仓成功" }
         applyOrder(res.order)
         scan = ""
-        if (order?.id != null) refreshOrder()
-        enterReceiveAfterArrival(
-            res.message.orEmpty().ifBlank { if (res.alreadyScanned) "已到仓" else "到仓成功" },
-        )
+        enterReceiveAfterArrival(message)
+        PdaApp.instance.workJournal.acknowledge(recordId, message)
+        if (!refreshAfterConfirmedWrite()) return
+        enterPutawayIfReady()
     }
 
     private fun enterReceiveAfterArrival(arrivalMessage: String) {
