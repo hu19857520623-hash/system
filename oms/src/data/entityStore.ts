@@ -226,11 +226,12 @@ export function getInboundOrdersSnapshot() {
   return state.inboundOrders
 }
 
-export async function deleteReturnOrder(id: string) {
+export async function deleteReturnOrder(id: string, expectedStatus?: 'draft' | 'cancelled') {
   const before = state.returnOrders.find(order => order.id === id)
   setReturnOrders(state.returnOrders.filter(o => o.id !== id))
   try {
-    await apiDelete(`/return-orders/${encodeURIComponent(id)}`)
+    const query = expectedStatus ? `?expectedStatus=${expectedStatus}` : ''
+    await apiDelete(`/return-orders/${encodeURIComponent(id)}${query}`)
   } catch (error) {
     if (before && !state.returnOrders.some(order => order.id === before.id || order.returnNo === before.returnNo)) {
       setReturnOrders([before, ...state.returnOrders])

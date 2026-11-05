@@ -351,7 +351,7 @@ export async function replayReturnWithdrawal(
 /** 删除退件：草稿 / 已撤回 */
 export async function removeReturnOrder(order: ReturnOrder): Promise<{ ok: true } | { ok: false; error: string }> {
   if (order.status === 'draft' || order.status === 'cancelled') {
-    try { await deleteReturnOrder(order.id); return { ok: true } }
+    try { await deleteReturnOrder(order.id, order.status); return { ok: true } }
     catch (error) { return { ok: false, error: `删除结果未确认，请刷新退件处理核对。${userFacingError(error)}` } }
   }
   if (order.status === 'pending_arrival') {

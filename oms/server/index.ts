@@ -3383,6 +3383,9 @@ app.delete('/api/return-orders/:id', async (req, res) => {
       select: { id: true, status: true },
     })
     if (!target) return res.status(404).json({ error: '退件单不存在' })
+    if (req.query.expectedStatus !== undefined && req.query.expectedStatus !== target.status) {
+      return res.status(409).json({ error: '退件单状态已变化，请刷新后核对' })
+    }
     if (!['draft', 'cancelled'].includes(target.status)) {
       return res.status(400).json({ error: '仅草稿或已撤回的退件可以删除，请先核对退件状态' })
     }
