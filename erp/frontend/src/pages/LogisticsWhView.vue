@@ -369,7 +369,7 @@ async function submitReceive(replay = false) {
     receiveResult.value = result
     receiveUncertain.value = false
     receiveFeedback.value = `${result.duplicate ? '已核对原收货记录' : '本次收货已确认'}：${result.receiptNo}。${result.poStatus === 'received' ? '采购单已收齐，良品已入中转仓库存' : '仍有待收数量，可返回列表继续收货'}。破损件单独记录，不增加可用库存。`
-    try { clearReceiptAttempt(localStorage, userId, payload.poId) } catch { receiveFeedback.value += ' 本地核对信息暂未清除，可使用原操作标识再次核对。' }
+    try { clearReceiptAttempt(localStorage, userId, payload.poId, payload.clientRequestId) } catch { receiveFeedback.value += ' 本地核对信息暂未清除，可使用原操作标识再次核对。' }
     refreshReceiptAttempts()
     await loadPendingPos()
     if (!current()) return
@@ -378,9 +378,9 @@ async function submitReceive(replay = false) {
   } catch (error) {
     if (!current()) return
     const status = Number((error as { status?: unknown })?.status)
-    receiveUncertain.value = (sent || replay) && !(status >= 400 && status < 500 && status !== 408 && status !== 409)
+    receiveUncertain.value = (sent || replay) && !(status === 400 || status === 422)
     receiveFeedback.value = receiveUncertain.value ? `收货结果暂无法确定，请核对并重试本次收货。${userFacingError(error)}` : userFacingError(error)
-    if (!receiveUncertain.value && receivePayload.value) { try { clearReceiptAttempt(localStorage, userId, receivePayload.value.poId) } catch { /* retain safe replay metadata */ } }
+    if (!receiveUncertain.value && receivePayload.value) { try { clearReceiptAttempt(localStorage, userId, receivePayload.value.poId, receivePayload.value.clientRequestId) } catch { /* retain safe replay metadata */ } }
     refreshReceiptAttempts()
   } finally { if (current()) receiveBusy.value = false }
 }

@@ -14,14 +14,20 @@ export function readReceiptAttempts(storage: StoragePort, userId: number): Recei
 
 export function saveReceiptAttempt(storage: StoragePort, userId: number, attempt: ReceiptAttempt) {
   const previous = readReceiptAttempts(storage, userId)
+  const existing = previous.find(row => row.payload.poId === attempt.payload.poId)
+  if (existing && existing.payload.clientRequestId !== attempt.payload.clientRequestId) {
+    throw new Error('该采购单已有收货待核对，请返回列表继续原收货')
+  }
   const next = previous.filter(row => row.payload.poId !== attempt.payload.poId)
   next.push(attempt)
   try { storage.setItem(key(userId), JSON.stringify(next)) }
   catch { throw new Error('无法保存收货核对信息，本次尚未提交，请检查浏览器存储后重试') }
 }
 
-export function clearReceiptAttempt(storage: StoragePort, userId: number, poId: number) {
-  const next = readReceiptAttempts(storage, userId).filter(row => row.payload.poId !== poId)
+export function clearReceiptAttempt(storage: StoragePort, userId: number, poId: number, clientRequestId: string) {
+  const previous = readReceiptAttempts(storage, userId)
+  const next = previous.filter(row => row.payload.poId !== poId || row.payload.clientRequestId !== clientRequestId)
+  if (next.length === previous.length) return
   if (next.length) storage.setItem(key(userId), JSON.stringify(next))
   else storage.removeItem(key(userId))
 }

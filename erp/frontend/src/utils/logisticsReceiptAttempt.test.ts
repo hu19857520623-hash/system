@@ -16,8 +16,16 @@ describe('收货待核对操作跨刷新恢复', () => {
   })
   it('核对成功只移除本单，不清除其他用户或其他采购单的未知操作', () => {
     const port = storage(); saveReceiptAttempt(port, 1, attempt()); saveReceiptAttempt(port, 1, attempt(2)); saveReceiptAttempt(port, 2, attempt())
-    clearReceiptAttempt(port, 1, 1)
+    clearReceiptAttempt(port, 1, 1, 'original-id')
     expect(readReceiptAttempts(port, 1).map(row => row.payload.poId)).toEqual([2]); expect(readReceiptAttempts(port, 2)).toHaveLength(1)
+  })
+  it('不同收货请求不能覆盖或清除原待核对记录', () => {
+    const port = storage(), original = attempt()
+    saveReceiptAttempt(port, 1, original)
+    const replacement = { ...original, payload: { ...original.payload, clientRequestId: 'replacement-id' } }
+    expect(() => saveReceiptAttempt(port, 1, replacement)).toThrow('继续原收货')
+    clearReceiptAttempt(port, 1, 1, 'replacement-id')
+    expect(readReceiptAttempts(port, 1)).toEqual([original])
   })
   it('存储失败阻止提交前保存，以中文说明本次尚未提交', () => {
     const port = storage(); port.setItem = () => { throw new Error('QuotaExceededError') }
