@@ -57,6 +57,8 @@ data class InboundOrder(
     val receivedCartonCount: Int? = null,
     val items: List<InboundItem>? = emptyList(),
     val cartons: List<InboundCarton>? = emptyList(),
+    val receivingVersion: String? = null,
+    val measurementVersion: String? = null,
 ) {
     val itemList get() = items.orEmpty()
     val cartonList get() = cartons.orEmpty()

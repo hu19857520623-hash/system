@@ -9,6 +9,7 @@ fun InboundOrder.withQcSnapshot(result: ScanActionResult): InboundOrder? {
     if (!item.skuCode.equals(previous.skuCode, ignoreCase = true) || item.actualQty == null || item.actualQty < 0 || item.expectedQty < 0) return null
     return copy(
         status = summary.status, displayStatus = summary.displayStatus,
+        receivingVersion = summary.receivingVersion, measurementVersion = summary.measurementVersion,
         receivedCartonCount = summary.receivedCartonCount ?: receivedCartonCount,
         items = itemList.map { old -> if (old.id != item.id) old else old.copy(
             actualQty = item.actualQty, expectedQty = item.expectedQty,
@@ -25,7 +26,8 @@ fun InboundOrder.withCartonSnapshot(result: ScanActionResult): InboundOrder? {
     val count = result.receivedCartonCount ?: return null
     if (result.duplicate || summary.id != id || summary.statusKey.isBlank() || count < 0 || carton.boxCode.isNullOrBlank()) return null
     if (cartonList.none { it.boxCode == carton.boxCode }) return null
-    return copy(status = summary.status, displayStatus = summary.displayStatus, receivedCartonCount = count,
+    return copy(status = summary.status, displayStatus = summary.displayStatus,
+        receivingVersion = summary.receivingVersion, measurementVersion = summary.measurementVersion, receivedCartonCount = count,
         cartons = cartonList.map { if (it.boxCode == carton.boxCode) it.copy(status = "received") else it })
 }
 
@@ -34,7 +36,7 @@ fun InboundOrder.withPutawaySnapshot(result: InboundOrder): InboundOrder? {
     if (result.itemList.size != itemList.size || result.itemList.any { it.putawayQty == null || it.putawayQty < 0 || (it.actualQty ?: 0) < 0 }) return null
     val byId = result.itemList.associateBy { it.id }
     if (itemList.any { !byId.getValue(it.id).skuCode.equals(it.skuCode, ignoreCase = true) }) return null
-    return copy(status = result.status, displayStatus = result.displayStatus, items = itemList.map {
+    return copy(status = result.status, displayStatus = result.displayStatus, receivingVersion = result.receivingVersion, measurementVersion = result.measurementVersion, items = itemList.map {
         val latest = byId.getValue(it.id)
         it.copy(putawayQty = latest.putawayQty, actualQty = latest.actualQty ?: it.actualQty)
     })

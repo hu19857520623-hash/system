@@ -107,12 +107,11 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
         if (widthCm != null && widthCm > 0) body["widthCm"] = widthCm
         if (heightCm != null && heightCm > 0) body["heightCm"] = heightCm
         if (weightKg != null && weightKg > 0) body["weightKg"] = weightKg
-        gson.fromJson(postJson("/inbound/$id/scan-qc", body), ScanActionResult::class.java)
+        gson.fromJson(postJson("/inbound/$id/scan-qc", body).requireInboundSyncAcknowledged(), ScanActionResult::class.java)
     }
 
-    suspend fun submitQc(id: Int, items: List<Map<String, Any?>>, acceptDiff: Boolean, clientRequestId: String = UUID.randomUUID().toString()): Unit = withContext(Dispatchers.IO) {
-        postJson("/inbound/$id/qc", mapOf("items" to items, "acceptDiff" to acceptDiff, "clientRequestId" to clientRequestId))
-        Unit
+    suspend fun submitQc(id: Int, body: Map<String, Any?>, clientRequestId: String) = withContext(Dispatchers.IO) {
+        postJson("/inbound/$id/qc", body + ("clientRequestId" to clientRequestId)).requireInboundSyncAcknowledged()
     }
 
     suspend fun reduceInbound(id: Int, mode: String, body: Map<String, Any?>): ScanActionResult = withContext(Dispatchers.IO) {
@@ -120,29 +119,13 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
         gson.fromJson(postJson("/inbound/$id/reduce-$mode", body), ScanActionResult::class.java)
     }
 
-    suspend fun measureDimensions(
-        id: Int,
-        inboundItemId: Int,
-        lengthCm: Double,
-        widthCm: Double,
-        heightCm: Double,
-        weightKg: Double? = null,
-    ) = withContext(Dispatchers.IO) {
-        val row = mutableMapOf<String, Any?>(
-            "inboundItemId" to inboundItemId,
-            "lengthCm" to lengthCm,
-            "widthCm" to widthCm,
-            "heightCm" to heightCm,
-        )
-        if (weightKg != null && weightKg > 0) row["weightKg"] = weightKg
-        postJson("/inbound/$id/measure-dimensions", mapOf("items" to listOf(row)))
+    suspend fun measureDimensions(id: Int, body: Map<String, Any?>, clientRequestId: String) = withContext(Dispatchers.IO) {
+        postJson("/inbound/$id/measure-dimensions", body + ("clientRequestId" to clientRequestId)).requireInboundSyncAcknowledged()
     }
 
-    suspend fun putaway(id: Int, inboundItemId: Int, locationCode: String, qty: Int, clientRequestId: String = UUID.randomUUID().toString()): InboundOrder = withContext(Dispatchers.IO) {
-        gson.fromJson(postJson("/inbound/$id/putaway", mapOf("items" to listOf(mapOf(
-            "inboundItemId" to inboundItemId,
-            "lines" to listOf(mapOf("locationCode" to locationCode, "qty" to qty)),
-        )), "clientRequestId" to clientRequestId)), InboundOrder::class.java)
+    suspend fun putaway(id: Int, body: Map<String, Any?>, clientRequestId: String): InboundOrder = withContext(Dispatchers.IO) {
+        val result = postJson("/inbound/$id/putaway", body + ("clientRequestId" to clientRequestId)).requireInboundSyncAcknowledged()
+        gson.fromJson(result, InboundOrder::class.java)
     }
 
     suspend fun resolveException(id: Int, reason: String) = withContext(Dispatchers.IO) {
@@ -246,6 +229,7 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
         if (endpoint.isBlank() || body.isBlank()) throw ErpException("待同步记录缺少请求内容")
         val result = postJson(endpoint, JsonParser.parseString(body))
         if (endpoint.startsWith("/outbound/") && endpoint.endsWith("/ship")) result.requireShipSyncAcknowledged()
+        if (endpoint.startsWith("/inbound/")) result.requireInboundSyncAcknowledged()
         result
     }
 
@@ -317,6 +301,16 @@ internal fun JsonElement.requireShipSyncAcknowledged(): JsonElement {
     val warning = takeIf { it.isJsonObject }?.asJsonObject?.get("warning")
     if (warning?.isJsonPrimitive == true && warning.asJsonPrimitive.isString && warning.asString.isNotBlank()) {
         throw ErpException("发运已保存，OMS 同步待确认。请在「待同步记录」重试原请求，勿重复发运", retriable = true)
+    }
+    return this
+}
+
+private fun JsonElement.requireInboundSyncAcknowledged(): JsonElement {
+    if (isJsonObject && listOf("syncPending", "feePending").any { key ->
+            val value = asJsonObject.get(key)
+            value?.isJsonPrimitive == true && value.asJsonPrimitive.isBoolean && value.asBoolean
+        }) {
+        throw ErpException("仓库作业已保存，同步待确认。请在「待同步记录」核对原请求", retriable = true)
     }
     return this
 }
