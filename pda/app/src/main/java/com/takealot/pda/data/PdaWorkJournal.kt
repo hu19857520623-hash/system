@@ -128,6 +128,13 @@ class PdaWorkJournal(context: Context) {
         writer.enqueue(KEY_RESUMES, resumeCache)
     }
 
+    /** Retire only the stage confirmed by this receipt, even if another job was opened later. */
+    @Synchronized
+    fun completeOutboundStage(orderId: Int, mode: String) {
+        if (active("outbound", mode)?.orderId == orderId) clearActive("outbound")
+        clearPickProgress(orderId, mode)
+    }
+
     @Synchronized
     fun savePickProgress(progress: PdaPickProgress) {
         val next = pickProgress().filterNot { it.orderId == progress.orderId && it.mode == progress.mode } + progress

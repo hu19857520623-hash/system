@@ -455,8 +455,9 @@ class OutboundViewModel : ViewModel() {
                 }
                 journal.preparePostRetry(recordId, "/outbound/${o.id}/pick", mapOf("pickSource" to "pda", "items" to items))
                 api.pick(o.id, items, recordId)
+                journal.completeOutboundStage(o.id, "pick")
                 journal.acknowledge(recordId, "拣货提交成功")
-                feedback = Feedback(true, "${o.no} 拣货完成；下一步：进入复核"); order = null; lines = emptyList(); PdaApp.instance.workJournal.clearPickProgress(o.id, mode); PdaApp.instance.workJournal.clearActive("outbound"); loadList()
+                feedback = Feedback(true, "${o.no} 拣货完成；下一步：进入复核"); order = null; lines = emptyList(); loadList()
             } catch (e: Exception) {
                 feedback = Feedback(false, e.message ?: "拣货失败")
                 if (journal.isRetriable(e)) journal.retainForRetry(recordId, feedback?.message) else journal.fail(recordId, feedback?.message)
@@ -481,10 +482,11 @@ class OutboundViewModel : ViewModel() {
                 val cartonPayload = if (o.omsPreDeduct != null) cartons.map { it.payload() } else emptyList()
                 journal.preparePostRetry(recordId, "/outbound/${o.id}/pack", mapOf("reviewSource" to "pda", "cartons" to cartonPayload))
                 api.pack(o.id, cartonPayload, recordId)
+                journal.completeOutboundStage(o.id, "review")
                 journal.acknowledge(recordId, "复核提交成功")
                 feedback = Feedback(true, "${o.no} 复核完成；外箱实测与实际费用已回写")
                 order = null; lines = emptyList(); cartons = listOf(OutboundCartonDraft())
-                PdaApp.instance.workJournal.clearPickProgress(o.id, mode); PdaApp.instance.workJournal.clearActive("outbound"); loadList()
+                loadList()
             }
             catch (e: Exception) {
                 feedback = Feedback(false, e.message ?: "复核失败")
@@ -566,6 +568,7 @@ class OutboundViewModel : ViewModel() {
                     "logisticsProduct" to logisticsProduct.trim(),
                 ))
                 api.ship(o.id, trackingNo, carrier, logisticsProduct, recordId)
+                journal.completeOutboundStage(o.id, "ship")
                 journal.acknowledge(recordId, "发运提交成功")
                 feedback = Feedback(true, "${o.no} 发运已确认，OMS 同步完成")
                 order = null; trackingNo = ""; carrier = ""; logisticsProduct = ""; loadList()

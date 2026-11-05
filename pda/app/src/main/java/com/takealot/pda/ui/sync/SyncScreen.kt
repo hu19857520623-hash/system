@@ -47,8 +47,8 @@ class SyncViewModel : ViewModel() {
 
     fun retry(record: PdaScanRecord) {
         if (retryingId != null || record.state != "pending") return
+        retryingId = record.id
         viewModelScope.launch {
-            retryingId = record.id
             feedback = Feedback(false, "正在重新确认 ${record.scanCode}…", processing = true)
             try {
                 when (record.retryAction) {
@@ -67,7 +67,19 @@ class SyncViewModel : ViewModel() {
                             ?: api.inboundDetail(orderId).resolveSkuScan(record.scanCode)
                         api.scanQc(orderId, requestCode, record.retryQuantity ?: 1, record.id)
                     }
-                    "post" -> api.retryPending(record)
+                    "post" -> {
+                        api.retryPending(record)
+                        val orderId = record.orderId
+                        if (record.module == "outbound" && orderId != null) {
+                            val completedMode = when (record.retryEndpoint) {
+                                "/outbound/$orderId/pick" -> "pick"
+                                "/outbound/$orderId/pack" -> "review"
+                                "/outbound/$orderId/ship" -> "ship"
+                                else -> null
+                            }
+                            if (completedMode != null) journal.completeOutboundStage(orderId, completedMode)
+                        }
+                    }
                     else -> error("该记录不能自动重试，请返回原任务核对后重新扫描")
                 }
                 journal.acknowledge(record.id, "重试成功，ERP 已确认")
