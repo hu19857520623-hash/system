@@ -137,7 +137,13 @@ class InboundViewModel : ViewModel() {
     val selectedItem: InboundItem? get() = order?.itemList?.find { it.id == selectedItemId }
     val scannedCartonCount: Int
         get() = order?.cartonList?.count { it.status == "received" } ?: 0
-    private data class InboundQueuedScan(val scan: QueuedScan, val quantity: Int)
+    private var workGeneration = 0
+    private data class InboundQueuedScan(
+        val scan: QueuedScan,
+        val quantity: Int,
+        val mode: InboundMode,
+        val generation: Int,
+    )
     private val scanQueue = Channel<InboundQueuedScan>(64)
 
     init {
@@ -145,6 +151,10 @@ class InboundViewModel : ViewModel() {
             for (queued in scanQueue) {
                 while (busy) delay(40)
                 pendingScanCount = (pendingScanCount - 1).coerceAtLeast(0)
+                if (queued.mode != mode || queued.generation != workGeneration) {
+                    feedback = Feedback(false, "作业已切换，上一作业排队的扫码未提交，请核对后重新扫描")
+                    continue
+                }
                 val started = System.nanoTime()
                 val scanMode = mode.key
                 try { runScan(queued.scan.code, queued.quantity) } finally { ScanDiagnostics.recordScan(queued.scan, started, "inbound", scanMode) }
@@ -157,6 +167,7 @@ class InboundViewModel : ViewModel() {
     fun displayMessage(value: String): String = inboundDisplayMessage(value, order?.omsCustomerCode)
 
     private fun applyOrder(detail: InboundOrder?) {
+        if (order != null && order?.id != detail?.id) workGeneration++
         order = detail
         if (detail != null) {
             cartonCount = maxOf(
@@ -168,38 +179,67 @@ class InboundViewModel : ViewModel() {
     }
 
     fun bindMode(key: String) {
+        workGeneration++
+        applyOrder(null)
+        selectedItemId = null
+        locationCode = ""
         lastReadCode = ""
         mode = InboundMode.from(key); feedback = null; scan = ""; stageNotice = null
         if (mode == InboundMode.Putaway) loadPendingPutaway()
         val resume = PdaApp.instance.workJournal.active("inbound", mode.key) ?: return
+        val generation = workGeneration
+        val restoreMode = mode
+        busy = true
         viewModelScope.launch {
             try {
-                applyOrder(if (mode == InboundMode.Catalog) api.bindCatalogInbound(resume.orderNo, session.warehouseCode) else api.inboundDetail(resume.orderId))
+                val detail = if (restoreMode == InboundMode.Catalog) api.bindCatalogInbound(resume.orderNo, session.warehouseCode) else api.inboundDetail(resume.orderId)
+                if (generation != workGeneration) return@launch
+                applyOrder(detail)
                 if (!enterPutawayIfReady()) feedback = Feedback(true, "已恢复 ${resume.orderNo} 的未完成作业")
             } catch (e: Exception) {
-                feedback = Feedback(false, e.message ?: "恢复作业失败，请重新扫描入库单号")
+                if (generation == workGeneration) feedback = Feedback(false, e.message ?: "恢复作业失败，请重新扫描入库单号")
                 // Failed reads must not erase the saved task; the operator can retry from home.
-            }
+            } finally { if (generation == workGeneration) busy = false }
         }
     }
 
+    var pendingPutawayLoading by mutableStateOf(false)
+        private set
+    var pendingPutawayError by mutableStateOf<String?>(null)
+        private set
+    private var pendingPutawayRequest = 0
+
     fun loadPendingPutaway() {
+        val request = ++pendingPutawayRequest
+        val warehouse = session.warehouseCode
+        pendingPutawayLoading = true
+        pendingPutawayError = null
+        pendingOrders = emptyList()
+        fun current() = request == pendingPutawayRequest && mode == InboundMode.Putaway && warehouse == session.warehouseCode
         viewModelScope.launch {
             try {
                 val page = api.inboundList(status = "pending_putaway", pageSize = 100)
-                val wh = session.warehouseCode
-                pendingOrders = page.items.orEmpty()
-                    .filter { row -> row.warehouseCode.isNullOrBlank() || row.warehouseCode == wh }
-                    .distinctBy { it.id }
+                if (current()) {
+                    pendingOrders = page.items.orEmpty()
+                        .filter { row -> row.warehouseCode.isNullOrBlank() || row.warehouseCode == warehouse }
+                        .distinctBy { it.id }
+                }
             } catch (e: Exception) {
-                if (order == null) feedback = Feedback(false, e.message ?: "加载待上架单据失败")
+                if (current()) pendingPutawayError = e.message ?: "加载待上架单据失败"
+            } finally {
+                if (request == pendingPutawayRequest) pendingPutawayLoading = false
             }
         }
     }
 
     fun openPendingOrder(id: Int) {
+        if (busy || pendingScanCount > 0) {
+            feedback = Feedback(false, "请等待扫码处理完成后再换单")
+            return
+        }
+        busy = true
+        feedback = null
         viewModelScope.launch {
-            busy = true; feedback = null
             try { bindPutawayOrder(api.inboundDetail(id)) }
             catch (e: Exception) { feedback = Feedback(false, e.message ?: "打开单据失败") }
             finally { busy = false }
@@ -233,7 +273,7 @@ class InboundViewModel : ViewModel() {
         }
         scan = ""
         pendingScanCount += 1
-        if (!scanQueue.trySend(InboundQueuedScan(QueuedScan(code), quantity)).isSuccess) {
+        if (!scanQueue.trySend(InboundQueuedScan(QueuedScan(code), quantity, mode, workGeneration)).isSuccess) {
             pendingScanCount = (pendingScanCount - 1).coerceAtLeast(0)
             feedback = Feedback(false, "扫码队列已满，请稍后重试")
         } else lastReadCode = code
@@ -720,6 +760,7 @@ class InboundViewModel : ViewModel() {
     }
 
     fun finishPutawayDone() {
+        if (busy || pendingScanCount > 0) return
         val no = putawayDoneNo
         putawayDoneNo = null
         clearOrder()
@@ -727,6 +768,11 @@ class InboundViewModel : ViewModel() {
     }
 
     fun clearOrder() {
+        if (busy || pendingScanCount > 0) {
+            feedback = Feedback(false, "请等待扫码处理完成后再换单")
+            return
+        }
+        workGeneration++
         lastReadCode = ""
         reductionMode = null; reductionItemId = null
         stageNotice = null
@@ -972,7 +1018,13 @@ fun InboundScreen(modeKey: String, onBack: () -> Unit, vm: InboundViewModel = vi
         if (order == null) {
             if (vm.mode == InboundMode.Putaway) {
                 Text("待上架入库单", color = PdaInbound, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                if (vm.pendingOrders.isEmpty()) {
+                val listError = vm.pendingPutawayError
+                if (vm.pendingPutawayLoading) {
+                    Text("正在读取待上架单据…", color = PdaMuted, fontSize = 13.sp)
+                } else if (listError != null) {
+                    FeedbackBar(Feedback(false, vm.displayMessage(listError)))
+                    TextButton(onClick = { vm.loadPendingPutaway() }) { Text("重试加载待上架单据") }
+                } else if (vm.pendingOrders.isEmpty()) {
                     Text("当前仓库暂无待上架单据，可直接扫描入库单号", color = PdaMuted, fontSize = 13.sp)
                 }
                 vm.pendingOrders.forEach { row ->
@@ -1005,7 +1057,7 @@ fun InboundScreen(modeKey: String, onBack: () -> Unit, vm: InboundViewModel = vi
                     KeyValue("实收箱数", "${order.receivedCartonCount}")
                 }
                 if (order.cartonList.isNotEmpty()) KeyValue("外箱", "${order.cartonList.count { it.status == "received" }} / ${order.cartonList.size}")
-                TextButton(onClick = { vm.clearOrder() }) { Text("换单", color = PdaAccent) }
+                TextButton(onClick = { vm.clearOrder() }, enabled = !vm.busy && vm.pendingScanCount == 0) { Text("换单", color = PdaAccent) }
             }
             if (vm.mode == InboundMode.Receive) {
                 if (order.cartonList.isNotEmpty()) {
