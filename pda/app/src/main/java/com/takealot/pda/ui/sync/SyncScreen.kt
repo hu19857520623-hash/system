@@ -68,8 +68,18 @@ class SyncViewModel : ViewModel() {
                         api.scanQc(orderId, requestCode, record.retryQuantity ?: 1, record.id)
                     }
                     "post" -> {
-                        api.retryPending(record)
+                        val result = api.retryPending(record)
                         val orderId = record.orderId
+                        if (record.module == "stocktake" && orderId != null &&
+                            record.retryEndpoint == "/management-loop/stocktakes/$orderId/count") {
+                            val order = result.takeIf { it.isJsonObject }?.asJsonObject
+                            val returnedId = order?.get("id")?.takeIf { it.isJsonPrimitive }?.asString
+                            val status = order?.get("status")?.takeIf { it.isJsonPrimitive }?.asString
+                            if (returnedId == orderId.toString() && status in setOf("pending_approval", "completed", "cancelled") &&
+                                journal.active("stocktake", "count")?.orderId == orderId) {
+                                journal.clearActive("stocktake")
+                            }
+                        }
                         if (record.module == "outbound" && orderId != null) {
                             val completedMode = when (record.retryEndpoint) {
                                 "/outbound/$orderId/pick" -> "pick"

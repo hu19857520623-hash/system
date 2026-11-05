@@ -247,6 +247,12 @@ class StocktakeViewModel : ViewModel() {
     fun submitCount() {
         if (busy || pendingScanCount > 0) { feedback = Feedback(false, "请等待扫码处理完成后再提交"); return }
         val current = plan ?: return
+        if (PdaApp.instance.workJournal.pendingRecords().any {
+                it.module == "stocktake" && it.orderId == current.id && it.mode == "count_submit"
+            }) {
+            feedback = Feedback(false, "本单有盘点结果待确认，请返回首页打开「待同步记录」，核对原请求后继续")
+            return
+        }
         try { validateStocktakeWork(current, session.warehouseCode) }
         catch (e: ErpException) { feedback = Feedback(false, e.message.orEmpty()); return }
         val line = selectedLine ?: run {
@@ -257,17 +263,18 @@ class StocktakeViewModel : ViewModel() {
             feedback = Feedback(false, "该明细已盘完")
             return
         }
+        val payload = mapOf("lineId" to line.id, "qty" to qty, "expectedStage" to line.statusKey)
         busy = true
         viewModelScope.launch {
             val journal = PdaApp.instance.workJournal
             val recordId = journal.beginScan("stocktake", "count_submit", line.skuCode, current.id, current.no)
             try {
-                journal.preparePostRetry(recordId, "/management-loop/stocktakes/${current.id}/count", mapOf("lineId" to line.id, "qty" to qty))
-                plan = api.stocktakeCount(current.id, line.id, qty, recordId)
+                journal.preparePostRetry(recordId, "/management-loop/stocktakes/${current.id}/count", payload)
+                plan = api.stocktakeCount(current.id, payload, recordId)
                 journal.acknowledge(recordId, "盘点提交成功")
                 val refreshed = plan!!
                 PdaApp.instance.workJournal.activate(PdaResumeWork("stocktake", "count", refreshed.id, refreshed.no))
-                val next = refreshed.lineList.firstOrNull { it.loc.equals(locationCode, ignoreCase = true) && it.isOpen }
+                val next = refreshed.lineList.firstOrNull { it.id != line.id && it.loc.equals(locationCode, ignoreCase = true) && it.isOpen }
                 selectedLineId = next?.id
                 if (refreshed.lineList.none { it.isOpen }) {
                     locationCode = ""
@@ -277,7 +284,11 @@ class StocktakeViewModel : ViewModel() {
                 } else if (next == null) {
                     locationCode = ""
                     qty = 1
-                    feedback = Feedback(true, "${customerSkuForScan(line.skuCode)} 已提交；当前库位完成，请扫描下一个库位")
+                    feedback = if (refreshed.lineList.any { it.id == line.id && it.statusKey == "recount" }) {
+                        Feedback(true, "初盘已保存，此明细须由另一名作业员复盘。可继续扫描其他库位")
+                    } else {
+                        Feedback(true, "盘点已保存，请扫描待盘点库位继续")
+                    }
                 } else {
                     qty = 1
                     feedback = Feedback(true, "${customerSkuForScan(line.skuCode)} 已提交；请扫描当前库位下一 SKU")

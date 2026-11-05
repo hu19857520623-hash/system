@@ -219,8 +219,8 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
         gson.fromJson(get("/management-loop/stocktakes/$id"), StocktakePlan::class.java)
     }
 
-    suspend fun stocktakeCount(id: Int, lineId: Int, qty: Int, clientRequestId: String = UUID.randomUUID().toString()): StocktakePlan = withContext(Dispatchers.IO) {
-        gson.fromJson(postJson("/management-loop/stocktakes/$id/count", mapOf("lineId" to lineId, "qty" to qty, "clientRequestId" to clientRequestId)), StocktakePlan::class.java)
+    suspend fun stocktakeCount(id: Int, body: Map<String, Any?>, clientRequestId: String = UUID.randomUUID().toString()): StocktakePlan = withContext(Dispatchers.IO) {
+        gson.fromJson(postJson("/management-loop/stocktakes/$id/count", body + ("clientRequestId" to clientRequestId)), StocktakePlan::class.java)
     }
 
     suspend fun retryPending(record: PdaScanRecord) = withContext(Dispatchers.IO) {
