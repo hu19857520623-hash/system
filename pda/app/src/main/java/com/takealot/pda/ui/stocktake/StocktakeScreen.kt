@@ -150,6 +150,11 @@ class StocktakeViewModel : ViewModel() {
         } else lastReadCode = code
     }
 
+    private fun StocktakeLine.requiresHandoff(): Boolean =
+        statusKey == "recount" && firstCountedBy == session.userId
+
+    private fun StocktakeLine.canCount(): Boolean = isOpen && !requiresHandoff()
+
     private suspend fun runScan(code: String) {
         busy = true
         feedback = Feedback(false, "正在处理 $code…", processing = true)
@@ -166,11 +171,12 @@ class StocktakeViewModel : ViewModel() {
             val normalized = code.trim()
             val locationHit = current.lineList.firstOrNull { it.loc.equals(normalized, ignoreCase = true) }
             if (locationHit != null) {
-                val openLine = current.lineList.firstOrNull { it.loc.equals(locationHit.loc, ignoreCase = true) && it.isOpen }
+                val openLine = current.lineList.firstOrNull { it.loc.equals(locationHit.loc, ignoreCase = true) && it.canCount() }
                 if (openLine == null) {
                     locationCode = ""
                     selectedLineId = null
-                    feedback = Feedback(false, "库位 ${locationHit.loc} 已盘完，请扫描下一库位")
+                    val needsHandoff = current.lineList.any { it.loc.equals(locationHit.loc, ignoreCase = true) && it.requiresHandoff() }
+                    feedback = Feedback(false, if (needsHandoff) "该库位剩余明细须交给另一名作业员复盘" else "库位 ${locationHit.loc} 已盘完，请扫描下一库位")
                     scan = ""
                     journal.acknowledge(recordId, feedback?.message)
                     return
@@ -193,6 +199,10 @@ class StocktakeViewModel : ViewModel() {
                 locationCode.isNotBlank() -> skuHits.firstOrNull { it.loc.equals(locationCode, ignoreCase = true) }
                 else -> null
             } ?: throw ErpException("盘点单中没有 $normalized")
+            if (!skuHit.canCount()) {
+                selectedLineId = null
+                throw ErpException(if (skuHit.requiresHandoff()) "此明细须由另一名作业员复盘，请交接后继续" else "该明细已盘完，请扫描下一 SKU")
+            }
             selectedLineId = skuHit.id
             qty = 1
             feedback = Feedback(true, "${customerSkuForScan(skuHit.skuCode)} · ${skuHit.loc}")
@@ -259,8 +269,8 @@ class StocktakeViewModel : ViewModel() {
             feedback = Feedback(false, "请先扫库位和 SKU")
             return
         }
-        if (!line.isOpen) {
-            feedback = Feedback(false, "该明细已盘完")
+        if (!line.canCount()) {
+            feedback = Feedback(false, if (line.requiresHandoff()) "此明细须由另一名作业员复盘，请交接后继续" else "该明细已盘完")
             return
         }
         val payload = mapOf("lineId" to line.id, "qty" to qty, "expectedStage" to line.statusKey)
@@ -274,7 +284,7 @@ class StocktakeViewModel : ViewModel() {
                 journal.acknowledge(recordId, "盘点提交成功")
                 val refreshed = plan!!
                 PdaApp.instance.workJournal.activate(PdaResumeWork("stocktake", "count", refreshed.id, refreshed.no))
-                val next = refreshed.lineList.firstOrNull { it.id != line.id && it.loc.equals(locationCode, ignoreCase = true) && it.isOpen }
+                val next = refreshed.lineList.firstOrNull { it.id != line.id && it.loc.equals(locationCode, ignoreCase = true) && it.canCount() }
                 selectedLineId = next?.id
                 if (refreshed.lineList.none { it.isOpen }) {
                     locationCode = ""
