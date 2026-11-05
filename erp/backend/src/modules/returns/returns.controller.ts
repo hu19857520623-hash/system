@@ -1,6 +1,6 @@
 import { Body, Controller, Delete, Get, Param, ParseIntPipe, Post, Put, Query, Res } from '@nestjs/common'
 import type { Response } from 'express'
-import { ReturnsService } from './returns.service'
+import { ReturnsService, type ReturnMeasureFeesInput } from './returns.service'
 import { PaginationDto } from '../../common/dto/pagination.dto'
 import { OmsBridge } from '../../common/decorators/oms-bridge.decorator'
 import { CreateOmsReturnDto } from './dto/oms-return.dto'
@@ -188,6 +188,24 @@ export class ReturnsController {
     @CurrentUser('userId') userId: number,
   ) {
     return this.service.reReceive(id, body, userId)
+  }
+
+  @RequirePerms('return.receive')
+  @Get(':id/measure-fees/snapshot')
+  measurementSnapshot(@Param('id', ParseIntPipe) id: number) {
+    return this.service.measurementSnapshot(id)
+  }
+
+  @RequirePerms('return.receive')
+  @Post(':id/measure-fees')
+  measureAndCalculate(@Param('id', ParseIntPipe) id: number, @Body() body: ReturnMeasureFeesInput, @CurrentUser('userId') userId: number) {
+    return this.service.measureAndCalculate(id, body, userId)
+  }
+
+  @RequirePerms('return.receive')
+  @Post(':id/measure-fees/close')
+  closeMeasureFees(@Param('id', ParseIntPipe) id: number, @Body() body: ReturnMeasureFeesInput, @CurrentUser('userId') userId: number) {
+    return this.service.measureAndCalculate(id, body, userId, true)
   }
 
   @RequirePerms('return.receive')

@@ -79,6 +79,7 @@ export const OPERATION_ACTION_LABELS: Record<string, string> = {
   oms_return_resubmit: 'OMS 重新提交退件',
   receive: '确认收货',
   return_measure: '外箱测量',
+  return_measure_fees_request: '测量与算费请求核对',
   return_calc_fee: '退件算费',
   return_fee_template_create: '创建退件收费模板',
   return_fee_template_update: '更新退件收费模板',

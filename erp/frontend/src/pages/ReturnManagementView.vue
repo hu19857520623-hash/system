@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useReturnMeasureAttempt, type ReturnMeasureResult } from '@/composables/useReturnMeasureAttempt'
 import { useReturnInspectionPhotos } from '@/composables/useReturnInspectionPhotos'
 import { createReturnReadGate } from '@/utils/returnReadGate'
 import { getAccessToken } from '@/auth/tokenStore'
@@ -80,7 +81,19 @@ const receiveSubmitting = ref(false)
 const measureDialog = ref(false)
 const measureTarget = ref<any>(null)
 const measureCartons = ref<CartonForm[]>([])
-const measureSubmitting = ref(false)
+const measureMode = ref<'replace' | 'existing'>('replace')
+const measureLoading = ref(false), measureReadError = ref(''), measureReadTarget = ref<any>(null)
+function measureScope() { try { return inspectionScope() } catch { return null } }
+let measurePageLive = true
+const measureRead = createReturnReadGate(measureScope), measurePreviewRead = createReturnReadGate(measureScope)
+const measureAttempt = useReturnMeasureAttempt({
+  actor: () => String(app.authenticatedUser?.id || ''), scope: measureScope,
+  storage: { getItem: key => localStorage.getItem(key), setItem: (key, value) => localStorage.setItem(key, value), removeItem: key => localStorage.removeItem(key) },
+  request: (payload, closeOnly) => closeOnly ? returnsApi.closeMeasureFees(payload.id, payload) : returnsApi.measureAndCalculate(payload.id, payload),
+})
+const { pending: measurePending, busy: measureSubmitting, blocked: measureBlocked, feedback: measureFeedback } = measureAttempt
+const measureFieldsLocked = computed(() => measureLoading.value || measureSubmitting.value || !!measurePending.value || measureBlocked.value || measureMode.value === 'existing')
+const feePreviewError = ref('')
 
 const inspectDialog = ref(false)
 const inspectTarget = ref<any>(null)
@@ -383,25 +396,45 @@ async function submitReceive() {
   }
 }
 
-function openMeasure(row: any) {
-  measureTarget.value = row
-  const count = Math.max(1, Number(row.receivedCartonCount) || 1)
-  if (row.cartons?.length) {
-    measureCartons.value = row.cartons.map((c: any) => ({
-      lengthCm: String(c.lengthCm ?? ''),
-      widthCm: String(c.widthCm ?? ''),
-      heightCm: String(c.heightCm ?? ''),
-      grossWeightKg: String(c.grossWeightKg ?? ''),
-    }))
-  } else {
-    measureCartons.value = Array.from({ length: count }, () => emptyCarton())
+async function openMeasure(row: any, mode: 'replace' | 'existing' = 'replace') {
+  if (!measureScope() || measureSubmitting.value || measurePending.value || measureBlocked.value) {
+    ElMessage.warning('请先核对并继续或结束原测量请求，再打开新的测量作业')
+    return
   }
-  extraFeeLines.value = (row.feeLines || [])
-    .filter((l: any) => l.chargeType === 'return_extra')
-    .map((l: any) => ({ description: l.description, amount: String(l.amount ?? '') }))
-  feePreview.value = null
+  measureReadTarget.value = { id: row.id, returnNo: row.returnNo }
+  measureMode.value = mode
   measureDialog.value = true
-  scheduleFeePreview()
+  measureLoading.value = true
+  measureReadError.value = ''
+  measureTarget.value = null
+  measureCartons.value = []
+  feePreview.value = null
+  const active = measureRead.begin(() => measureDialog.value)
+  try {
+    row = await returnsApi.measurementSnapshot(row.id)
+    if (!active()) return
+    if (!(mode === 'existing' ? ['measured'] : ['received', 'arrived', 'measured', 'fee_calculated']).includes(row.status)) throw Error('当前退件状态已变化，请返回列表读取最新状态')
+    if (!row.revision) throw Error('退件版本无法核对，请重试读取')
+    measureTarget.value = row
+    const count = Math.max(1, Number(row.receivedCartonCount) || 1)
+    if (row.cartons?.length) {
+      measureCartons.value = row.cartons.map((c: any) => ({
+        lengthCm: String(c.lengthCm ?? ''),
+        widthCm: String(c.widthCm ?? ''),
+        heightCm: String(c.heightCm ?? ''),
+        grossWeightKg: String(c.grossWeightKg ?? ''),
+      }))
+    } else {
+      measureCartons.value = Array.from({ length: count }, () => emptyCarton())
+    }
+    extraFeeLines.value = (row.feeLines || [])
+      .filter((l: any) => l.chargeType === 'return_extra')
+      .map((l: any) => ({ description: l.description, amount: String(l.amount ?? '') }))
+    feePreview.value = null
+    scheduleFeePreview()
+  } catch (error) {
+    if (active()) measureReadError.value = `读取原退件失败。${userFacingError(error)} 请重试或返回列表。`
+  } finally { if (active()) measureLoading.value = false }
 }
 
 function buildMeasureCartonPayload() {
@@ -420,29 +453,35 @@ function _buildExtraFeePayload() {
 }
 
 async function refreshFeePreview() {
-  if (!measureTarget.value) return
-  const cartons = buildMeasureCartonPayload()
+  if (!measureTarget.value || !measureDialog.value || !measureScope()) return
+  const cartons = buildMeasureCartonPayload(), targetId = measureTarget.value.id
   if (!cartons.length || cartons.some(c => ![c.lengthCm, c.widthCm, c.heightCm].every(value => Number.isFinite(value) && value > 0)
-    || !Number.isFinite(c.grossWeightKg) || c.grossWeightKg < 0)) {
-    feePreview.value = null
-    return
-  }
+    || !Number.isFinite(c.grossWeightKg) || c.grossWeightKg < 0)) { feePreview.value = null; return }
+  const active = measurePreviewRead.begin(() => measureDialog.value && measureTarget.value?.id === targetId && JSON.stringify(buildMeasureCartonPayload()) === JSON.stringify(cartons))
   feePreviewLoading.value = true
+  feePreviewError.value = ''
   try {
-    feePreview.value = await returnsApi.previewFees(measureTarget.value.id, {
-      cartons,
-    })
-  } catch {
-    feePreview.value = null
-  } finally {
-    feePreviewLoading.value = false
-  }
+    const result = await returnsApi.previewFees(targetId, { cartons })
+    if (active()) feePreview.value = result
+  } catch (error) {
+    if (active()) { feePreview.value = null; feePreviewError.value = `物流费预览读取失败。${userFacingError(error)} 可重试预览或返回列表。` }
+  } finally { if (active()) feePreviewLoading.value = false }
 }
 
 function scheduleFeePreview() {
+  measurePreviewRead.invalidate()
+  feePreview.value = null
+  feePreviewLoading.value = false
+  feePreviewError.value = ''
   if (feePreviewTimer) clearTimeout(feePreviewTimer)
-  feePreviewTimer = setTimeout(() => void refreshFeePreview(), 280)
+  if (measureDialog.value) feePreviewTimer = setTimeout(() => void refreshFeePreview(), 280)
 }
+
+watch(measureDialog, open => {
+  if (!open) { measureRead.invalidate(); measurePreviewRead.invalidate(); if (feePreviewTimer) clearTimeout(feePreviewTimer); measureLoading.value = false }
+}, { flush: 'sync' })
+watch(measureScope, () => { measureDialog.value = false; measureTarget.value = null }, { flush: 'sync' })
+onScopeDispose(() => { measurePageLive = false; measureRead.invalidate(); measurePreviewRead.invalidate(); if (feePreviewTimer) clearTimeout(feePreviewTimer) })
 
 function _addExtraFeeLine() {
   extraFeeLines.value.push({ description: '', amount: '' })
@@ -630,7 +669,7 @@ function removeMeasureCarton(index: number) {
 }
 
 async function submitMeasure() {
-  if (!measureTarget.value || measureSubmitting.value) return
+  if (!measureTarget.value || measureSubmitting.value || measureLoading.value || measurePending.value || measureBlocked.value || !measureScope()) return
   const cartons = buildMeasureCartonPayload()
   if (!cartons.length) { ElMessage.warning('请至少填写一箱外箱尺寸'); return }
   for (const [index, carton] of cartons.entries()) {
@@ -643,21 +682,28 @@ async function submitMeasure() {
       return
     }
   }
-  measureSubmitting.value = true
-  try {
-    await returnsApi.measure(measureTarget.value.id, {
-      cartons,
-    })
-    const feeResult = await returnsApi.calculateFees(measureTarget.value.id, {})
-    const feeTotal = feeResult?.estimatedFeeTotal ?? previewFeeTotal.value
-    ElMessage.success(`测量完成，退件物流费 ${formatFee(feeTotal)} 已生成；其余费用待客户确认后收取`)
-    measureDialog.value = false
-    await loadList()
-  } catch (e: any) {
-    ElMessage.error(userFacingError(displaySkuText(e?.message || '测量或算费失败')))
-  } finally {
-    measureSubmitting.value = false
-  }
+  const identity = measureScope()
+  const result = await measureAttempt.start({ id: measureTarget.value.id, returnNo: measureTarget.value.returnNo,
+    expectedRevision: measureTarget.value.revision, mode: measureMode.value, cartons })
+  await showMeasureOutcome(result, identity)
+}
+
+async function showMeasureOutcome(result: ReturnMeasureResult | null, identity: string | null) {
+  if (!result || !measurePageLive || !identity || identity !== measureScope()) return
+  ElMessage.success(result.outcome === 'applied'
+    ? `原请求已确认执行，回执物流费 ${formatFee(result.estimatedFeeTotal)}；请以最新退件状态继续` : '原请求已核对并结束，请读取最新退件后继续')
+  measureDialog.value = false
+  await loadList()
+}
+
+async function returnFromMeasure() {
+  measureDialog.value = false
+  await loadList()
+}
+
+async function resumeMeasure(closeOnly = false) {
+  const identity = measureScope()
+  await showMeasureOutcome(await (closeOnly ? measureAttempt.close() : measureAttempt.resume()), identity)
 }
 
 function openInspect(row: any) {
@@ -989,6 +1035,13 @@ void _removeExtraFeeLine
       </div>
     </div>
 
+    <el-alert v-if="measurePending || measureBlocked || measureFeedback" :type="measurePending || measureBlocked ? 'warning' : 'info'" :closable="false" :title="measureFeedback || '原测量请求待核对'" show-icon>
+      <p v-if="measurePending">退件单：{{ measurePending.returnNo }}</p>
+      <el-button v-if="measurePending" :loading="measureSubmitting" @click="resumeMeasure()">核对并继续原测量</el-button>
+      <el-button v-if="measurePending" :disabled="measureSubmitting" @click="resumeMeasure(true)">核对并结束原请求</el-button>
+      <el-button v-if="measureBlocked" @click="measureAttempt.reload()">重新读取原请求</el-button>
+    </el-alert>
+
     <div class="table-toolbar">
       <div class="toolbar-left">
         <el-button
@@ -1126,7 +1179,8 @@ void _removeExtraFeeLine
               type="button"
               class="op-link"
               @click="openMeasure(row)"
-            >测体积/算费</button>
+            >{{ ['measured', 'fee_calculated'].includes(row.status) ? '重新测量并算费' : '测量并算费' }}</button>
+            <button v-if="row.status === 'measured' && app.hasPerm('return.receive')" type="button" class="op-link" @click="openMeasure(row, 'existing')">继续生成物流费</button>
             <button
               v-if="row.status === 'fee_calculated' && app.hasPerm('return.receive')"
               type="button"
@@ -1340,10 +1394,18 @@ void _removeExtraFeeLine
 
     <el-dialog
       v-model="measureDialog"
-      :title="'测体积与费用 · ' + (measureTarget?.returnNo || '')"
+      :title="(measureMode === 'existing' ? '继续生成物流费 · ' : '测体积与费用 · ') + (measureReadTarget?.returnNo || '')"
       width="680px"
       class="measure-dialog"
     >
+      <p v-if="measureLoading" role="status">正在读取最新退件，请稍候。</p>
+      <el-alert v-if="measureReadError" type="error" :closable="false" :title="measureReadError" />
+      <el-button v-if="measureReadError && measureReadTarget" :loading="measureLoading" @click="openMeasure(measureReadTarget, measureMode)">重试读取退件</el-button>
+      <el-alert v-if="measurePending || measureBlocked" type="warning" :closable="false" :title="measureFeedback">
+        <el-button v-if="measurePending" :loading="measureSubmitting" @click="resumeMeasure()">核对并继续原测量</el-button>
+        <el-button v-if="measurePending" :disabled="measureSubmitting" @click="resumeMeasure(true)">核对并结束原请求</el-button>
+      </el-alert>
+      <p v-if="measureMode === 'existing'">按已保存的外箱测量生成物流费，不修改原测量。需要修改尺寸时，请返回列表选择重新测量。</p>
       <div v-if="measureTarget" class="measure-summary">
         <span>实收 <strong>{{ measureTarget.receivedQty ?? measureTarget.totalQty ?? '—' }}</strong> 件</span>
         <span>SKU <strong>{{ measureSkuQty }}</strong> 件</span>
@@ -1366,25 +1428,26 @@ void _removeExtraFeeLine
               link
               type="danger"
               size="small"
+              :disabled="measureFieldsLocked"
               @click="removeMeasureCarton(index)"
             >删除</el-button>
           </div>
           <div class="carton-fields">
             <label>
               <span>长 (cm)</span>
-              <el-input v-model="carton.lengthCm" type="number" min="0" placeholder="长" />
+              <el-input v-model="carton.lengthCm" :disabled="measureFieldsLocked" type="number" min="0" placeholder="长" />
             </label>
             <label>
               <span>宽 (cm)</span>
-              <el-input v-model="carton.widthCm" type="number" min="0" placeholder="宽" />
+              <el-input v-model="carton.widthCm" :disabled="measureFieldsLocked" type="number" min="0" placeholder="宽" />
             </label>
             <label>
               <span>高 (cm)</span>
-              <el-input v-model="carton.heightCm" type="number" min="0" placeholder="高" />
+              <el-input v-model="carton.heightCm" :disabled="measureFieldsLocked" type="number" min="0" placeholder="高" />
             </label>
             <label>
               <span>毛重 (kg)</span>
-              <el-input v-model="carton.grossWeightKg" type="number" min="0" placeholder="毛重" />
+              <el-input v-model="carton.grossWeightKg" :disabled="measureFieldsLocked" type="number" min="0" placeholder="毛重" />
             </label>
           </div>
           <p v-if="previewCartons[index]?.valid" class="carton-meta">
@@ -1395,8 +1458,11 @@ void _removeExtraFeeLine
         </div>
       </div>
 
-      <el-button size="small" class="add-carton-btn" @click="addMeasureCarton">+ 加一箱</el-button>
+      <el-button size="small" :disabled="measureFieldsLocked" class="add-carton-btn" @click="addMeasureCarton">+ 加一箱</el-button>
 
+      <el-alert v-if="feePreviewError" type="error" :closable="false" :title="feePreviewError">
+        <el-button :loading="feePreviewLoading" @click="refreshFeePreview()">重试物流费预览</el-button>
+      </el-alert>
       <div v-loading="feePreviewLoading" class="fee-preview-panel">
         <div class="fee-preview-title">{{ measureFeeTitle }}</div>
         <el-table v-if="feePreview?.autoLines?.length" :data="feePreview.autoLines" size="small" border>
@@ -1418,9 +1484,9 @@ void _removeExtraFeeLine
       </div>
 
       <template #footer>
-        <el-button @click="measureDialog = false">取消</el-button>
-        <el-button type="primary" :loading="measureSubmitting" :disabled="previewVolume <= 0" @click="submitMeasure">
-          确认测量并生成物流费
+        <el-button @click="returnFromMeasure">{{ measurePending ? '返回列表（保留原请求）' : '返回列表' }}</el-button>
+        <el-button type="primary" :loading="measureSubmitting" :disabled="!measureTarget || measureLoading || !!measurePending || measureBlocked || previewVolume <= 0" @click="submitMeasure">
+          {{ measureMode === 'existing' ? '按原测量生成物流费' : '确认测量并生成物流费' }}
         </el-button>
       </template>
     </el-dialog>

@@ -41,6 +41,21 @@ function round2Amount(n: number) {
   return Math.round(n * 100) / 100
 }
 
+export type ReturnMeasureFeesInput = {
+  clientRequestId: string
+  mode: 'replace' | 'existing'
+  cartons: CartonInput[]
+  expectedRevision: string
+}
+
+type MeasureFeesReceipt = {
+  outcome: 'applied' | 'closed'
+  id: number
+  returnNo: string
+  estimatedFeeTotal: number | null
+  customerId?: number
+}
+
 export type OmsCreateReturnInput = {
   returnNo?: string
   customerCode: string
@@ -551,72 +566,140 @@ export class ReturnsService {
     return this.enrichRow(updated)
   }
 
-  async measure(id: number, body: { clientRequestId?: string; cartons: CartonInput[] }, userId: number) {
-    const updated = await this.prisma.$transaction(async tx => {
-      const intent = this.returnActionIntent('return_measure', id, userId, body)
-      if (intent) await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(userId)} FOR UPDATE`
-      await tx.$queryRaw`SELECT id FROM return_order WHERE id = ${BigInt(id)} FOR UPDATE`
-      const row = await tx.returnOrder.findUnique({ where: { id: BigInt(id) } })
-      if (!row) throw new NotFoundException('退件单不存在')
-      if (await this.hasReturnActionReceipt(tx, userId, intent)) return tx.returnOrder.findUniqueOrThrow({ where: { id: BigInt(id) }, include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } } })
-      if (!['received', 'arrived', 'measured', 'fee_calculated'].includes(row.status)) {
-        throw new BadRequestException('当前状态不可测量，请先完成收货')
-      }
-      const cartons = Array.isArray(body.cartons) ? body.cartons : []
-      if (!cartons.length) throw new BadRequestException('请至少录入 1 箱外箱尺寸')
+  private async measureInTransaction(tx: Prisma.TransactionClient, id: number, body: { clientRequestId?: string; cartons: CartonInput[] }, userId: number) {
+    const intent = this.returnActionIntent('return_measure', id, userId, body)
+    if (intent) await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(userId)} FOR UPDATE`
+    await tx.$queryRaw`SELECT id FROM return_order WHERE id = ${BigInt(id)} FOR UPDATE`
+    const row = await tx.returnOrder.findUnique({ where: { id: BigInt(id) } })
+    if (!row) throw new NotFoundException('退件单不存在')
+    if (await this.hasReturnActionReceipt(tx, userId, intent)) return tx.returnOrder.findUniqueOrThrow({ where: { id: BigInt(id) }, include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } } })
+    if (!['received', 'arrived', 'measured', 'fee_calculated'].includes(row.status)) {
+      throw new BadRequestException('当前状态不可测量，请先完成收货')
+    }
+    const cartons = Array.isArray(body.cartons) ? body.cartons : []
+    if (!cartons.length) throw new BadRequestException('请至少录入 1 箱外箱尺寸')
 
-      let computed
-      try {
-        computed = computeCartonMeasures(cartons)
-      } catch (err) {
-        throw new BadRequestException(err instanceof Error ? err.message : '外箱尺寸无效')
-      }
-      const totals = sumCartonTotals(computed)
+    let computed
+    try {
+      computed = computeCartonMeasures(cartons)
+    } catch (err) {
+      throw new BadRequestException(err instanceof Error ? err.message : '外箱尺寸无效')
+    }
+    const totals = sumCartonTotals(computed)
 
-      await tx.returnCartonMeasure.deleteMany({ where: { returnId: row.id } })
-      for (const c of computed) {
-        await tx.returnCartonMeasure.create({
-          data: {
-            returnId: row.id,
-            cartonNo: c.cartonNo,
-            lengthCm: c.lengthCm,
-            widthCm: c.widthCm,
-            heightCm: c.heightCm,
-            grossWeightKg: c.grossWeightKg,
-            volumeCbm: c.volumeCbm,
-            volumetricWeightKg: c.volumetricWeightKg,
-            chargeableWeightKg: c.chargeableWeightKg,
-          },
-        })
-      }
-      const updated = await tx.returnOrder.update({
-        where: { id: row.id },
+    await tx.returnCartonMeasure.deleteMany({ where: { returnId: row.id } })
+    for (const c of computed) {
+      await tx.returnCartonMeasure.create({
         data: {
-          status: 'measured',
-          measuredAt: new Date(),
-          totalVolumeCbm: totals.totalVolumeCbm,
-          totalGrossWeightKg: totals.totalGrossWeightKg,
-          totalChargeableWeightKg: totals.totalChargeableWeightKg,
-          feeStatus: 'none',
-          estimatedFeeTotal: null,
-          feeCalculatedAt: null,
+          returnId: row.id,
+          cartonNo: c.cartonNo,
+          lengthCm: c.lengthCm,
+          widthCm: c.widthCm,
+          heightCm: c.heightCm,
+          grossWeightKg: c.grossWeightKg,
+          volumeCbm: c.volumeCbm,
+          volumetricWeightKg: c.volumetricWeightKg,
+          chargeableWeightKg: c.chargeableWeightKg,
         },
-        include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
       })
+    }
+    const updated = await tx.returnOrder.update({
+      where: { id: row.id },
+      data: {
+        status: 'measured',
+        measuredAt: new Date(),
+        totalVolumeCbm: totals.totalVolumeCbm,
+        totalGrossWeightKg: totals.totalGrossWeightKg,
+        totalChargeableWeightKg: totals.totalChargeableWeightKg,
+        feeStatus: 'none',
+        estimatedFeeTotal: null,
+        feeCalculatedAt: null,
+      },
+      include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
+    })
 
-      await new ReturnsChargeService(tx as PrismaService, this.billing).clearPendingAutoReturnCharges(row.returnNo)
-      await this.logReturn({
-        module: 'returns',
-        action: 'return_measure',
-        targetType: 'return_order',
-        targetId: row.returnNo,
-        operatorId: userId,
-        detail: { cartonCount: computed.length, ...totals },
-      }, tx, intent)
-      return updated
-    }, { isolationLevel: 'ReadCommitted' })
+    await new ReturnsChargeService(tx as PrismaService, this.billing).clearPendingAutoReturnCharges(row.returnNo)
+    await this.logReturn({
+      module: 'returns',
+      action: 'return_measure',
+      targetType: 'return_order',
+      targetId: row.returnNo,
+      operatorId: userId,
+      detail: { cartonCount: computed.length, ...totals },
+    }, tx, intent)
+    return updated
+  }
+
+  async measure(id: number, body: { clientRequestId?: string; cartons: CartonInput[] }, userId: number) {
+    const updated = await this.prisma.$transaction(tx => this.measureInTransaction(tx, id, body, userId), { isolationLevel: 'ReadCommitted' })
     void this.pushReturnStatusToOms(updated.returnNo)
     return this.enrichRow(updated)
+  }
+
+  private async measurementVersion(tx: Prisma.TransactionClient, row: {
+    id: bigint; returnNo: string; status: string; receivedQty: number | null; receivedCartonCount: number | null; measuredAt: Date | null
+    cartons: { lengthCm: unknown; widthCm: unknown; heightCm: unknown; grossWeightKg: unknown }[]
+  }) {
+    const latest = await tx.operationLog.findFirst({ where: { module: 'returns', targetId: row.returnNo, action: { not: 'return_measure_fees_request' } }, orderBy: { id: 'desc' }, select: { id: true } })
+    return createHash('sha256').update(JSON.stringify([String(row.id), row.status, row.receivedQty, row.receivedCartonCount, row.measuredAt, String(latest?.id || ''), row.cartons.map(c => [Number(c.lengthCm), Number(c.widthCm), Number(c.heightCm), Number(c.grossWeightKg)])])).digest('hex')
+  }
+
+  async measurementSnapshot(id: number) {
+    return this.prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM return_order WHERE id = ${BigInt(id)} FOR UPDATE`
+      const row = await tx.returnOrder.findUnique({ where: { id: BigInt(id) }, include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } } })
+      if (!row) throw new NotFoundException('退件单不存在')
+      return { ...this.enrichRow(row), revision: await this.measurementVersion(tx, row) }
+    }, { isolationLevel: 'ReadCommitted' })
+  }
+
+  async measureAndCalculate(id: number, body: ReturnMeasureFeesInput, userId: number, closeOnly = false) {
+    if (!Number.isSafeInteger(id) || id < 1 || !body || typeof body !== 'object' || Array.isArray(body)) throw new BadRequestException('测量请求资料无效，请重新读取退件')
+    const clientRequestId = String(body.clientRequestId || '').trim().toLowerCase()
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(clientRequestId)) throw new BadRequestException('缺少有效的原测量操作标识，请重新读取原请求')
+    if (!['replace', 'existing'].includes(body.mode)) throw new BadRequestException('测量操作类型无效，请重新读取原请求')
+    let cartons: ReturnType<typeof computeCartonMeasures>
+    try {
+      if (!Array.isArray(body.cartons) || !body.cartons.length) throw Error('请至少录入 1 箱外箱尺寸')
+      cartons = computeCartonMeasures(body.cartons)
+    } catch (error) { throw new BadRequestException(error instanceof Error ? error.message : '外箱资料无效') }
+    const expectedRevision = String(body.expectedRevision || '').toLowerCase()
+    if (!/^[0-9a-f]{64}$/.test(expectedRevision)) throw new BadRequestException('缺少原退件版本，请重新读取退件后再提交')
+    const fingerprint = createHash('sha256').update(JSON.stringify([id, body.mode, expectedRevision, cartons])).digest('hex')
+    const receipt = await this.prisma.$transaction(async tx => {
+      // Serialize receipt lookup and close against delayed submissions from the same actor.
+      await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(userId)} FOR UPDATE`
+      const previous = await tx.operationLog.findFirst({ where: { module: 'returns', operatorId: BigInt(userId), detail: { path: '$.clientRequestId', equals: clientRequestId } }, select: { detail: true } })
+      if (previous) {
+        const detail = previous.detail as { requestFingerprint?: string; result?: MeasureFeesReceipt } | null
+        if (detail?.requestFingerprint !== fingerprint || !detail.result || detail.result.id !== id || !['applied', 'closed'].includes(detail.result.outcome)) throw new ConflictException('原测量请求的内容或单号已变化，请核对原请求，不要重新提交')
+        return { ...detail.result, duplicate: true }
+      }
+      await tx.$queryRaw`SELECT id FROM return_order WHERE id = ${BigInt(id)} FOR UPDATE`
+      const row = await tx.returnOrder.findUnique({ where: { id: BigInt(id) }, include: { cartons: { orderBy: { cartonNo: 'asc' } } } })
+      let result: MeasureFeesReceipt
+      if (closeOnly) {
+        result = { outcome: 'closed', id, returnNo: row?.returnNo || String(id), estimatedFeeTotal: null }
+      } else {
+        if (!row) throw new NotFoundException('退件单不存在')
+        if (await this.measurementVersion(tx, row) !== expectedRevision) throw new ConflictException('退件记录已变化，请先核对并结束原请求，再读取最新退件')
+        if (body.mode === 'existing') {
+          const current = computeCartonMeasures(row.cartons.map(c => ({ lengthCm: Number(c.lengthCm), widthCm: Number(c.widthCm), heightCm: Number(c.heightCm), grossWeightKg: Number(c.grossWeightKg) })))
+          if (JSON.stringify(current) !== JSON.stringify(cartons)) throw new ConflictException('测量记录已变化，请先核对并结束原请求，再读取最新退件')
+        } else {
+          await this.measureInTransaction(tx, id, { cartons }, userId)
+        }
+        const updated = await this.calculateFeesInTransaction(tx, id, userId)
+        result = { outcome: 'applied', id, returnNo: updated.returnNo, estimatedFeeTotal: Number(updated.estimatedFeeTotal || 0), customerId: Number(updated.customerId) }
+      }
+      await this.opLog.log({ module: 'returns', action: 'return_measure_fees_request', targetType: 'return_order', targetId: result.returnNo, operatorId: userId, detail: { clientRequestId, requestFingerprint: fingerprint, mode: body.mode, result } }, tx)
+      return { ...result, duplicate: false }
+    }, { isolationLevel: 'ReadCommitted', timeout: 20000 })
+    if (receipt.outcome === 'applied' && !receipt.duplicate) {
+      void this.pushReturnStatusToOms(receipt.returnNo)
+      if (receipt.customerId) void this.billing.pushCustomerBillingToOms(receipt.customerId)
+    }
+    return receipt
   }
 
   async listFeeTemplates() {
@@ -810,87 +893,88 @@ export class ReturnsService {
     }
   }
 
-  async calculateFees(
-    id: number,
-    userId: number,
+  private async calculateFeesInTransaction(tx: Prisma.TransactionClient, id: number, userId: number,
+    _body?: { clientRequestId?: string; extraLines?: { description?: string; amount?: number; quantity?: number; unitPrice?: number }[] },
+  ) {
+    const intent = this.returnActionIntent('return_calc_fee', id, userId, _body || {})
+    if (intent) await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(userId)} FOR UPDATE`
+    await tx.$queryRaw`SELECT id FROM return_order WHERE id = ${BigInt(id)} FOR UPDATE`
+    const row = await tx.returnOrder.findUnique({
+      where: { id: BigInt(id) },
+      include: { items: true, cartons: { orderBy: { cartonNo: 'asc' } } },
+    })
+    if (!row) throw new NotFoundException('退件单不存在')
+    if (await this.hasReturnActionReceipt(tx, userId, intent)) return tx.returnOrder.findUniqueOrThrow({ where: { id: BigInt(id) }, include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } } })
+    if (row.status !== 'measured') {
+      throw new BadRequestException('请先完成外箱体积测量，再生成费用')
+    }
+    if (!row.cartons.length) {
+      throw new BadRequestException('缺少外箱测量数据')
+    }
+
+    const totalVolumeCbm = Number(row.totalVolumeCbm || 0)
+    const template = await this.resolveWarehouseFeeTemplate(row.returnWarehouse, tx as PrismaService)
+    const rules = mapDbTemplateRules(template.rules || [])
+    const ctx = buildFeePreviewContext({
+      cartonCount: row.cartons.length,
+      totalVolumeCbm,
+      totalChargeableWeightKg: Number(row.totalChargeableWeightKg || 0),
+      receivedQty: row.receivedQty,
+      items: row.items,
+    })
+    const autoLines = buildMeasurePhaseFeeLines(ctx, rules)
+    const estimatedFeeTotal = autoLines.reduce((s, l) => s + l.amount, 0)
+
+    await tx.$queryRaw`SELECT id FROM customer WHERE id = ${row.customerId} FOR UPDATE`
+    const charges = new ReturnsChargeService(tx as PrismaService, this.billing)
+    await charges.clearPendingAutoReturnCharges(row.returnNo)
+    await charges.clearPendingManualExtraCharges(row.returnNo)
+    for (const line of autoLines) {
+      await charges.createReturnCharge({
+        customerId: Number(row.customerId),
+        returnNo: row.returnNo,
+        warehouseCode: row.returnWarehouse || undefined,
+        source: 'wms',
+        ...line,
+      }, false)
+    }
+
+    const updated = await tx.returnOrder.update({
+      where: { id: row.id },
+      data: {
+        status: 'fee_calculated',
+        feeCalculatedAt: new Date(),
+        estimatedFeeTotal,
+        feeStatus: 'estimated',
+      },
+      include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
+    })
+
+    await this.logReturn({
+      module: 'returns',
+      action: 'return_calc_fee',
+      targetType: 'return_order',
+      targetId: row.returnNo,
+      operatorId: userId,
+      detail: {
+        estimatedFeeTotal,
+        templateCode: template.templateCode,
+        autoLines,
+        phase: 'measure_logistics_only',
+      },
+    }, tx, intent)
+    return updated
+  }
+
+  async calculateFees(id: number, userId: number,
     _body?: { clientRequestId?: string; extraLines?: { description?: string; amount?: number; quantity?: number; unitPrice?: number }[] },
   ) {
     await this.ensureMissingWarehouseTemplates()
-    const updated = await this.prisma.$transaction(async tx => {
-      const intent = this.returnActionIntent('return_calc_fee', id, userId, _body || {})
-      if (intent) await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(userId)} FOR UPDATE`
-      await tx.$queryRaw`SELECT id FROM return_order WHERE id = ${BigInt(id)} FOR UPDATE`
-      const row = await tx.returnOrder.findUnique({
-        where: { id: BigInt(id) },
-        include: { items: true, cartons: { orderBy: { cartonNo: 'asc' } } },
-      })
-      if (!row) throw new NotFoundException('退件单不存在')
-      if (await this.hasReturnActionReceipt(tx, userId, intent)) return tx.returnOrder.findUniqueOrThrow({ where: { id: BigInt(id) }, include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } } })
-      if (row.status !== 'measured') {
-        throw new BadRequestException('请先完成外箱体积测量，再生成费用')
-      }
-      if (!row.cartons.length) {
-        throw new BadRequestException('缺少外箱测量数据')
-      }
-
-      const totalVolumeCbm = Number(row.totalVolumeCbm || 0)
-      const template = await this.resolveWarehouseFeeTemplate(row.returnWarehouse, tx as PrismaService)
-      const rules = mapDbTemplateRules(template.rules || [])
-      const ctx = buildFeePreviewContext({
-        cartonCount: row.cartons.length,
-        totalVolumeCbm,
-        totalChargeableWeightKg: Number(row.totalChargeableWeightKg || 0),
-        receivedQty: row.receivedQty,
-        items: row.items,
-      })
-      const autoLines = buildMeasurePhaseFeeLines(ctx, rules)
-      const estimatedFeeTotal = autoLines.reduce((s, l) => s + l.amount, 0)
-
-      await tx.$queryRaw`SELECT id FROM customer WHERE id = ${row.customerId} FOR UPDATE`
-      const charges = new ReturnsChargeService(tx as PrismaService, this.billing)
-      await charges.clearPendingAutoReturnCharges(row.returnNo)
-      await charges.clearPendingManualExtraCharges(row.returnNo)
-      for (const line of autoLines) {
-        await charges.createReturnCharge({
-          customerId: Number(row.customerId),
-          returnNo: row.returnNo,
-          warehouseCode: row.returnWarehouse || undefined,
-          source: 'wms',
-          ...line,
-        }, false)
-      }
-
-      const updated = await tx.returnOrder.update({
-        where: { id: row.id },
-        data: {
-          status: 'fee_calculated',
-          feeCalculatedAt: new Date(),
-          estimatedFeeTotal,
-          feeStatus: 'estimated',
-        },
-        include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
-      })
-
-      await this.logReturn({
-        module: 'returns',
-        action: 'return_calc_fee',
-        targetType: 'return_order',
-        targetId: row.returnNo,
-        operatorId: userId,
-        detail: {
-          estimatedFeeTotal,
-          templateCode: template.templateCode,
-          autoLines,
-          phase: 'measure_logistics_only',
-        },
-      }, tx, intent)
-      return updated
-    }, { isolationLevel: 'ReadCommitted' })
+    const updated = await this.prisma.$transaction(tx => this.calculateFeesInTransaction(tx, id, userId, _body), { isolationLevel: 'ReadCommitted' })
     void this.billing.pushCustomerBillingToOms(Number(updated.customerId))
     void this.pushReturnStatusToOms(updated.returnNo)
-    const enriched = this.enrichRow(updated)
     const loadedFeeLines = await this.returnCharges.loadFeeLines(updated.returnNo)
-    return { ...enriched, feeLines: loadedFeeLines }
+    return { ...this.enrichRow(updated), feeLines: loadedFeeLines }
   }
 
   async updateFeeTemplate(
