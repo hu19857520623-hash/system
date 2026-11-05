@@ -32,8 +32,8 @@ export class ReturnsController {
 
   @OmsBridge()
   @Post('oms/by-no/:returnNo/cancel')
-  omsCancel(@Param('returnNo') returnNo: string, @Body() body: { customerCode?: string; clientRequestId?: string }) {
-    return this.service.cancelFromOms(returnNo, body?.customerCode, body?.clientRequestId)
+  omsCancel(@Param('returnNo') returnNo: string, @Body() body: { customerCode?: string; clientRequestId?: string; expectedUpdatedAt?: string }) {
+    return this.service.cancelFromOms(returnNo, body?.customerCode, body?.clientRequestId, body?.expectedUpdatedAt)
   }
 
   @OmsBridge()

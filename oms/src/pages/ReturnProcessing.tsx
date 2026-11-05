@@ -150,7 +150,7 @@ export default function ReturnProcessing() {
       const result = action === '撤回' ? await withdrawReturnOrder(r, {
         customerId: r.customerId,
         customerCode: erpCustomer?.customerId === r.customerId ? erpCustomer?.customerCode : getCustomerCode(r.customerId),
-      }) : await removeReturnOrder(r)
+      }, current) : await removeReturnOrder(r)
       if (!current()) return
       if (!result.ok) {
         notifyError(userFacingError(displaySkuText(result.error)))

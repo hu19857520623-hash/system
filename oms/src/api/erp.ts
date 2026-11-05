@@ -408,8 +408,8 @@ export function syncErpReturns(customerCode: string) {
   )
 }
 
-export function cancelErpReturn(returnNo: string, customerCode: string) {
-  return apiPost<ErpReturnOrder>(`/erp/returns/${encodeURIComponent(returnNo)}/cancel`, { customerCode })
+export function cancelErpReturn(returnNo: string, customerCode: string, expectedUpdatedAt: string) {
+  return apiPost<ErpReturnOrder>(`/erp/returns/${encodeURIComponent(returnNo)}/cancel`, { customerCode, expectedUpdatedAt })
 }
 
 export function decideErpReturn(

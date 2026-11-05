@@ -422,6 +422,7 @@ export class ReturnsService {
           where: { id: existing.id },
           data: {
             ...returnData,
+            updatedAt: new Date(Math.max(Date.now(), existing.updatedAt.getTime() + 1)),
             omsCustomerCode: customerCode,
             items: { create: parsedItems },
           },
@@ -1694,7 +1695,7 @@ export class ReturnsService {
   }
 
   /** OMS：撤回退件（仅待到货） */
-  async cancelFromOms(returnNo: string, customerCode?: string, clientRequestId?: string) {
+  async cancelFromOms(returnNo: string, customerCode?: string, clientRequestId?: string, expectedUpdatedAt?: string) {
     const no = returnNo.trim()
     if (!no) throw new BadRequestException('缺少退件单号')
     if (clientRequestId !== undefined && (typeof clientRequestId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(clientRequestId))) {
@@ -1717,6 +1718,9 @@ export class ReturnsService {
           detail: { path: '$.clientRequestId', equals: clientRequestId } } })
         if (receipt) return { row, idempotent: true }
       }
+      if (expectedUpdatedAt !== undefined && row.updatedAt.toISOString() !== expectedUpdatedAt) {
+        throw new ConflictException('退件单已更新，请刷新核对后再发起撤回')
+      }
       if (row.status === 'cancelled') {
         if (clientRequestId) {
           await this.opLog.log({ module: 'returns', action: 'oms_return_cancel', targetType: 'return_order', targetId: no,
@@ -1730,7 +1734,7 @@ export class ReturnsService {
       }
       const updated = await tx.returnOrder.update({
         where: { id: row.id },
-        data: { status: 'cancelled' },
+        data: { status: 'cancelled', updatedAt: new Date(Math.max(Date.now(), row.updatedAt.getTime() + 1)) },
         include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
       })
       await this.logReturn({

@@ -37,6 +37,7 @@ export type TakealotReturnDetails = {
 
 export type ReturnOrder = {
   id: string
+  erpUpdatedAt?: string
   customerId?: string
   returnPlatform?: 'takealot' | 'other'
   takealotReturnDetails?: TakealotReturnDetails
@@ -164,6 +165,7 @@ export function buildReturnOrderFromErp(erp: ErpReturnOrder, customerId?: string
   const existing = getReturnOrdersSnapshot().find(o => o.returnNo === erp.returnNo)
   const order: ReturnOrder = {
     id: existing?.id || `erp-rt-${erp.id}`,
+    erpUpdatedAt: erp.updatedAt,
     customerId: customerId || existing?.customerId,
     returnPlatform: existing?.returnPlatform,
     takealotReturnDetails: existing?.takealotReturnDetails,
@@ -320,6 +322,7 @@ export async function refreshReturnsFromErp(customerId: string): Promise<number>
 export async function withdrawReturnOrder(
   order: ReturnOrder,
   opts?: { customerCode?: string; customerId?: string },
+  current = () => true,
 ): Promise<ReturnMutationResult> {
   if (order.status !== 'pending_arrival') {
     return { ok: false, error: '仅「待到货」状态的退件可撤回' }
@@ -328,14 +331,21 @@ export async function withdrawReturnOrder(
   if (!customerCode || customerCode === '—') {
     return { ok: false, error: '未绑定客户编码，无法撤回' }
   }
+  if (!order.erpUpdatedAt) {
+    return { ok: false, error: '请先从 ERP 同步退件，核对最新状态后再发起撤回' }
+  }
   try {
-    const erp = await cancelErpReturn(order.returnNo, customerCode)
+    const erp = await cancelErpReturn(order.returnNo, customerCode, order.erpUpdatedAt)
+    if (!current()) return { ok: false, uncertain: true, error: '登录或客户范围已变化，请返回原账号核对' }
     const merged = buildReturnOrderFromErp(erp, order.customerId)
     const finalOrder = order.attachments?.length
       ? { ...merged, attachments: order.attachments }
       : merged
     return await saveConfirmedReturn(finalOrder, '撤回')
   } catch (err) {
+    if ((err as { status?: number } | null)?.status === 409) {
+      return { ok: false, uncertain: false, error: userFacingError(err) }
+    }
     return uncertainReturnError(err, '撤回')
   }
 }

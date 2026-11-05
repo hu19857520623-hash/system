@@ -2146,14 +2146,14 @@ app.get('/api/erp/returns/by-customer/:customerCode', async (req, res) => {
 app.post('/api/erp/returns/:returnNo/cancel', async (req, res) => {
   try {
     const returnNo = String(req.params.returnNo || '').trim()
-    const body = req.body as { customerCode?: string; customerId?: string; clientRequestId?: string }
+    const body = req.body as { customerCode?: string; customerId?: string; clientRequestId?: string; expectedUpdatedAt?: string }
     let customerCode = authenticatedCustomerCode(req, body.customerCode)
     if (!customerCode && body.customerId) {
       const account = await prisma.customerAccount.findUnique({ where: { id: String(body.customerId) } })
       customerCode = account?.code?.trim() || ''
     }
     if (!customerCode) return res.status(400).json({ error: '缺少客户代码' })
-    res.json(await cancelErpReturnApi(returnNo, customerCode, body.clientRequestId))
+    res.json(await cancelErpReturnApi(returnNo, customerCode, body.clientRequestId, body.expectedUpdatedAt))
   } catch (e) {
     sendErpError(res, e)
   }
