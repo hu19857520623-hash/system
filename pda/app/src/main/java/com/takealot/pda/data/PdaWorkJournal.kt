@@ -5,6 +5,7 @@ import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import java.io.IOException
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
@@ -116,7 +117,7 @@ class PdaWorkJournal(context: Context, private val session: SessionStore) {
     }
 
     fun isRetriable(error: Throwable): Boolean =
-        error is IOException || (error is ErpException && error.retriable)
+        error is IOException || error is CancellationException || (error is ErpException && error.retriable)
 
     @Synchronized
     fun activate(work: PdaResumeWork) {

@@ -63,11 +63,7 @@ class SyncViewModel : ViewModel() {
                         "arrival" -> api.arrivalScan(record.scanCode, record.retryExtra.orEmpty())
                         "receive_box" -> {
                             val orderId = record.orderId ?: error("记录缺少入库单")
-                            try {
-                                api.receiveBox(orderId, record.scanCode, record.id)
-                            } catch (e: Exception) {
-                                if (!e.message.orEmpty().contains("已确认")) throw e
-                            }
+                            api.receiveBox(orderId, record.scanCode, record.id)
                         }
                         "scan_qc" -> {
                             val orderId = record.orderId ?: error("记录缺少入库单")

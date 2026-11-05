@@ -289,7 +289,7 @@ class InboundViewModel : ViewModel() {
     }
 
     private suspend fun runScan(code: String, quantity: Int) {
-        if (blockUnconfirmedPutaway()) return
+        if (blockUnconfirmedPutaway() || blockUnconfirmedCartons()) return
         val currentId = order?.id
         if (currentId != null && PdaApp.instance.workJournal.pendingRecords().any {
                 it.module == "inbound" && it.orderId == currentId && (it.mode == "measure" || it.mode == "qc_submit" || it.retryAction == "scan_qc")
@@ -664,6 +664,7 @@ class InboundViewModel : ViewModel() {
     }
 
     fun saveMeasure() {
+        if (blockUnconfirmedCartons()) return
         val o = order ?: return
         val item = selectedItem ?: run { feedback = Feedback(false, "请先点选 SKU"); return }
         val l = lengthCm.toDoubleOrNull() ?: 0.0
@@ -781,14 +782,35 @@ class InboundViewModel : ViewModel() {
         }
     }
 
+    fun continueAfterCartons() {
+        if (busy || pendingScanCount > 0 || mode != InboundMode.Receive ||
+            !session.hasPerm("inbound.qc") || blockUnconfirmedCartons() || hasPendingReduction()) return
+        busy = true
+        viewModelScope.launch {
+            try {
+                refreshOrder()
+                val current = order ?: return@launch
+                when {
+                    enterPutawayIfReady() -> Unit
+                    current.statusKey !in setOf("arrived", "receiving") ->
+                        feedback = Feedback(false, "当前状态「${current.statusText}」不可继续清点")
+                    current.cartonBlockMessage != null -> feedback = Feedback(false, current.cartonBlockMessage.orEmpty())
+                    else -> enterQcAfterReceive("实收箱数已确认")
+                }
+            } catch (e: Exception) {
+                feedback = Feedback(false, e.message ?: "读取箱数失败，请刷新后重试")
+            } finally { busy = false }
+        }
+    }
+
     fun confirmCartonCount(reason: String = "") {
         if (busy || pendingScanCount > 0) return
         if (!session.hasPerm("inbound.receive")) {
             feedback = Feedback(false, "请由有入库收货权限的人员确认实收箱数，再继续清点")
             return
         }
-        if (PdaApp.instance.workJournal.pendingRecords().any { it.module == "inbound" && it.orderId == order?.id && it.mode == "carton_count_submit" }) {
-            feedback = Feedback(false, "本单箱数结果待确认，请在「待同步记录」核对原请求")
+        if (blockUnconfirmedCartons()) {
+            showCartonDifference = false
             return
         }
         if (hasPendingReduction()) { feedback = Feedback(false, "请先确认待同步的减少数量请求"); return }
@@ -822,7 +844,11 @@ class InboundViewModel : ViewModel() {
                 }
             } catch (e: Exception) {
                 feedback = Feedback(false, e.message ?: "登记箱数失败")
-                if (journal.isRetriable(e)) journal.retainForRetry(recordId, feedback?.message) else journal.fail(recordId, feedback?.message)
+                if (journal.isRetriable(e)) {
+                    showCartonDifference = false
+                    journal.retainForRetry(recordId, feedback?.message)
+                    blockUnconfirmedCartons()
+                } else journal.fail(recordId, feedback?.message)
             } finally { busy = false }
         }
     }
@@ -953,6 +979,16 @@ class InboundViewModel : ViewModel() {
                 }
             } finally { busy = false }
         }
+    }
+
+    private fun blockUnconfirmedCartons(): Boolean {
+        val orderId = order?.id ?: return false
+        if (PdaApp.instance.workJournal.pendingRecords().none {
+                it.module == "inbound" && it.orderId == orderId &&
+                    (it.mode == "carton_count_submit" || it.retryAction == "receive_box")
+            }) return false
+        feedback = Feedback(false, "本单收箱结果待确认，请到「待同步记录」核对原请求后刷新单据")
+        return true
     }
 
     private fun hasPendingReduction(): Boolean = PdaApp.instance.workJournal.pendingRecords().any {
@@ -1208,6 +1244,12 @@ fun InboundScreen(modeKey: String, onBack: () -> Unit, vm: InboundViewModel = vi
                     )
                 }
                 BigButton("确认箱数 → 清点数量", onClick = { vm.confirmCartonCount() }, enabled = !vm.busy && order.statusKey in setOf("arrived", "receiving"), color = PdaAccent)
+                if (order.cartonConfirmation?.ready == true && order.statusKey in setOf("arrived", "receiving") &&
+                    PdaApp.instance.session.hasPerm("inbound.qc")) {
+                    TextButton(onClick = { vm.continueAfterCartons() }, enabled = !vm.busy && vm.pendingScanCount == 0) {
+                        Text("使用已确认箱数，继续清点", color = PdaAccent)
+                    }
+                }
                 TextButton(onClick = { vm.openReduction("carton") }, enabled = !vm.busy && vm.pendingScanCount == 0 && maxOf(order.receivedCartonCount ?: 0, vm.scannedCartonCount) > 0 && order.statusKey in setOf("arrived", "receiving"), modifier = Modifier.fillMaxWidth()) { Text("减少已确认箱数", color = PdaWarn) }
             }
             if (order.statusKey == "exception") {

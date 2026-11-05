@@ -72,12 +72,12 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
     }
 
     suspend fun receiveBox(id: Int, scanCode: String, clientRequestId: String = UUID.randomUUID().toString()): ScanActionResult = withContext(Dispatchers.IO) {
-        gson.fromJson(postJson("/inbound/$id/receive-box", mapOf("scanCode" to scanCode, "clientRequestId" to clientRequestId)), ScanActionResult::class.java)
+        gson.fromJson(postJson("/inbound/$id/receive-box", mapOf("scanCode" to scanCode, "clientRequestId" to clientRequestId)).requireInboundSyncAcknowledged(), ScanActionResult::class.java)
     }
 
     suspend fun recordReceivedCartonCount(id: Int, receivedCartonCount: Int, differenceReason: String = "", clientRequestId: String = UUID.randomUUID().toString()): ScanActionResult = withContext(Dispatchers.IO) {
         gson.fromJson(
-            postJson("/inbound/$id/received-carton-count", mapOf("receivedCartonCount" to receivedCartonCount, "differenceReason" to differenceReason.trim(), "clientRequestId" to clientRequestId)),
+            postJson("/inbound/$id/received-carton-count", mapOf("receivedCartonCount" to receivedCartonCount, "differenceReason" to differenceReason.trim(), "clientRequestId" to clientRequestId)).requireInboundSyncAcknowledged(),
             ScanActionResult::class.java,
         )
     }
