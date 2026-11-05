@@ -270,7 +270,7 @@ export function assertCustomerCode(req: AuthenticatedRequest, res: Response, req
   if (req.auth?.role === 'sys_admin') return true
   const code = String(requested || '').trim()
   if (!code || code !== req.auth?.customerCode) {
-    res.status(403).json({ error: 'Cross-customer access denied' })
+    res.status(403).json({ error: '无权访问其他客户的资料，请核对当前客户' })
     return false
   }
   return true
@@ -280,7 +280,7 @@ export function assertCustomerId(req: AuthenticatedRequest, res: Response, reque
   if (req.auth?.role === 'sys_admin') return true
   const id = String(requested || '').trim()
   if (!id || id !== req.auth?.customerId) {
-    res.status(403).json({ error: 'Cross-customer access denied' })
+    res.status(403).json({ error: '无权访问其他客户的资料，请核对当前客户' })
     return false
   }
   return true

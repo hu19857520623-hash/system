@@ -901,7 +901,7 @@ app.use('/api', (req: AuthenticatedRequest, res, next) => {
                   select: { customerId: true },
                 })
           if (!owner || owner.customerId !== req.auth!.customerId) {
-            res.status(404).json({ error: 'Resource not found' })
+            res.status(404).json({ error: '未找到该单据，请核对单号及当前客户' })
             return
           }
         }
@@ -910,7 +910,7 @@ app.use('/api', (req: AuthenticatedRequest, res, next) => {
     } catch (error) {
       console.error('[api authorization]', error)
       if (!res.headersSent) {
-        res.status(503).json({ error: 'Authorization service unavailable' })
+        res.status(503).json({ error: '暂时无法核对访问权限，请稍后重试' })
       }
     }
   })
