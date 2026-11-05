@@ -142,13 +142,26 @@ class OutboundViewModel : ViewModel() {
         trackingNo = ""; carrier = ""; logisticsProduct = ""
         loadList()
         val resume = PdaApp.instance.workJournal.active("outbound", mode) ?: return
+        busy = true
         viewModelScope.launch {
             try {
-                loadOrder(resume.orderId)
-                feedback = Feedback(true, "已恢复 ${resume.orderNo} 的未完成作业")
+                val detail = api.outboundDetail(resume.orderId)
+                verifyWorkWarehouse(detail)
+                val finished = when (resume.mode) {
+                    "pick" -> detail.statusKey in setOf("picked", "reviewing", "packed", "shipped", "completed", "cancelled")
+                    "review" -> detail.statusKey in setOf("packed", "shipped", "completed", "cancelled")
+                    else -> detail.statusKey in setOf("shipped", "completed", "cancelled")
+                }
+                if (finished) {
+                    PdaApp.instance.workJournal.completeOutboundStage(resume.orderId, resume.mode)
+                    feedback = Feedback(true, "${resume.orderNo} 当前为「${outboundStatusLabel(detail.statusKey)}」，请返回首页选择对应作业")
+                    return@launch
+                }
+                applyOrderDetail(detail)
+                if (feedback == null) feedback = Feedback(true, "已恢复 ${resume.orderNo} 的未完成作业")
             } catch (e: Exception) {
                 feedback = Feedback(false, e.message ?: "恢复作业失败，请返回首页重试，未完成作业已保留")
-            }
+            } finally { busy = false }
         }
     }
 
@@ -316,12 +329,17 @@ class OutboundViewModel : ViewModel() {
         }
     }
 
-    private suspend fun loadOrder(id: Int) {
-        val detail = api.outboundDetail(id)
+    private suspend fun loadOrder(id: Int) = applyOrderDetail(api.outboundDetail(id))
+
+    private fun verifyWorkWarehouse(detail: OutboundOrder) {
         if (session.warehouseCode.isBlank()) throw ErpException("请先在首页选择作业仓")
         if (!detail.warehouseCode.isNullOrBlank() && detail.warehouseCode != session.warehouseCode) {
             throw ErpException("该出库单属于 ${detail.warehouseCode}，当前作业仓为 ${session.warehouseCode}")
         }
+    }
+
+    private suspend fun applyOrderDetail(detail: OutboundOrder) {
+        verifyWorkWarehouse(detail)
         val nextOrder: OutboundOrder
         val nextLines: List<LocalPickLine>
         var shortageNotice: String? = null
@@ -329,7 +347,7 @@ class OutboundViewModel : ViewModel() {
             assertPickerAssigned(detail)
             if (detail.statusKey != "picking") throw ErpException("当前状态「${outboundStatusLabel(detail.statusKey)}」不可拣货")
             nextOrder = detail
-            val suggestions = api.pickSuggestions(id).itemList
+            val suggestions = api.pickSuggestions(detail.id).itemList
             val shortages = suggestions.filter { it.uncovered > 0 }
             if (shortages.isNotEmpty()) {
                 shortageNotice = "库位库存不足：${shortages.joinToString("、") { "${displaySku(it.sku.orEmpty(), detail.customerCode)} 缺 ${it.uncovered}" }}；可先拣有库存数量，再登记短拣"

@@ -95,7 +95,14 @@ class StocktakeViewModel : ViewModel() {
         busy = true
         viewModelScope.launch {
             try {
-                applyPlan(api.stocktake(resume.orderId))
+                val detail = api.stocktake(resume.orderId)
+                if (detail.warehouseCode == session.warehouseCode && session.warehouseCode.isNotBlank() &&
+                    detail.statusKey in setOf("pending_approval", "completed", "cancelled")) {
+                    PdaApp.instance.workJournal.clearActive("stocktake")
+                    feedback = Feedback(true, "${detail.no} 已离开盘点阶段，请选择其他盘点单")
+                    return@launch
+                }
+                applyPlan(detail)
                 feedback = Feedback(true, "已恢复 ${resume.orderNo} 的未完成作业")
             } catch (e: Exception) {
                 feedback = Feedback(false, e.message ?: "恢复盘点失败，请返回首页重试，未完成作业已保留")
