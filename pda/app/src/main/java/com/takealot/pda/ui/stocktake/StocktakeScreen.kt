@@ -184,12 +184,13 @@ class StocktakeViewModel : ViewModel() {
             }
             val current = plan!!
             val normalized = code.trim()
+            selectedLineId = null
+            qty = 1
             val locationHit = current.lineList.firstOrNull { it.loc.equals(normalized, ignoreCase = true) }
             if (locationHit != null) {
                 val openLine = current.lineList.firstOrNull { it.loc.equals(locationHit.loc, ignoreCase = true) && it.canCount() }
                 if (openLine == null) {
                     locationCode = ""
-                    selectedLineId = null
                     val needsHandoff = current.lineList.any { it.loc.equals(locationHit.loc, ignoreCase = true) && it.requiresHandoff() }
                     feedback = Feedback(false, if (needsHandoff) "该库位剩余明细须交给另一名作业员复盘" else "库位 ${locationHit.loc} 已盘完，请扫描下一库位")
                     scan = ""
@@ -197,8 +198,6 @@ class StocktakeViewModel : ViewModel() {
                     return
                 }
                 locationCode = openLine.loc
-                selectedLineId = null
-                qty = 1
                 feedback = Feedback(true, "库位 ${locationHit.loc} 已确认，请扫描待盘点 SKU")
                 scan = ""
                 journal.acknowledge(recordId, feedback?.message)
@@ -213,13 +212,11 @@ class StocktakeViewModel : ViewModel() {
             val skuHit = when {
                 locationCode.isNotBlank() -> skuHits.firstOrNull { it.loc.equals(locationCode, ignoreCase = true) }
                 else -> null
-            } ?: throw ErpException("盘点单中没有 $normalized")
+            } ?: throw ErpException("当前库位没有匹配的 SKU，请核对库位后重新扫描")
             if (!skuHit.canCount()) {
-                selectedLineId = null
                 throw ErpException(if (skuHit.requiresHandoff()) "此明细须由另一名作业员复盘，请交接后继续" else "该明细已盘完，请扫描下一 SKU")
             }
             selectedLineId = skuHit.id
-            qty = 1
             feedback = Feedback(true, "${customerSkuForScan(skuHit.skuCode)} · ${skuHit.loc}")
             scan = ""
             journal.acknowledge(recordId, feedback?.message)
@@ -349,6 +346,9 @@ class StocktakeViewModel : ViewModel() {
         locationCode = ""
         selectedLineId = null
         scan = ""
+        qty = 1
+        showReduction = false
+        feedback = null
         PdaApp.instance.workJournal.clearActive("stocktake")
         loadList()
     }
