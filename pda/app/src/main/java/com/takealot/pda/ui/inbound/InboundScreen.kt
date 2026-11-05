@@ -567,15 +567,15 @@ class InboundViewModel : ViewModel() {
         }
     }
 
-    private suspend fun doPutaway(recordId: String? = null) {
+    private suspend fun doPutaway(recordId: String) {
+        val loc = locationCode.trim().uppercase()
+        locationCode = ""
         val o = order ?: throw ErpException("请先扫描或点选待上架入库单")
         val item = selectedItem ?: throw ErpException("请先扫描待上架 SKU")
-        if (locationCode.isBlank()) throw ErpException("请扫描库位")
+        if (loc.isBlank()) throw ErpException("请扫描或输入本次上架库位")
         if (!item.hasMeasuredDims()) throw ErpException("${displaySku(item.skuCode)} 请先填写并保存体积")
         if (putawayQty !in 1..item.remainingPutaway) throw ErpException("本次件数超出待上架数量，请核对剩余件数后重试")
         val qty = putawayQty
-        val loc = locationCode
-        val requestId = recordId ?: java.util.UUID.randomUUID().toString()
         val version = o.measurementVersion ?: throw ErpException("请先刷新单据并核对最新测量与待上架件数")
         val payload = mapOf(
             "expectedVersion" to version,
@@ -584,9 +584,8 @@ class InboundViewModel : ViewModel() {
                 "lines" to listOf(mapOf("locationCode" to loc, "qty" to qty)),
             )),
         )
-        PdaApp.instance.workJournal.preparePostRetry(requestId, "/inbound/${o.id}/putaway", payload)
-        val result = api.submitPrepared(requestId) { api.putaway(o.id, payload, requestId) }
-        locationCode = ""
+        PdaApp.instance.workJournal.preparePostRetry(recordId, "/inbound/${o.id}/putaway", payload)
+        val result = api.submitPrepared(recordId) { api.putaway(o.id, payload, recordId) }
         val updated = order?.withPutawaySnapshot(result)
         if (updated != null) applyOrder(updated)
         if (!refreshAfterConfirmedWrite()) return
@@ -1517,7 +1516,7 @@ private fun PutawayEditor(vm: InboundViewModel) {
                 TextButton(onClick = { vm.putawayQty = item.remainingPutaway.coerceAtLeast(1) }, modifier = Modifier.weight(1f)) { Text("上架全部剩余", color = PdaAccent) }
             }
         }
-        OutlinedTextField(value = vm.locationCode, onValueChange = { vm.locationCode = it.uppercase() }, label = { Text("库位") }, singleLine = true, colors = fieldColors())
+        OutlinedTextField(value = vm.locationCode, onValueChange = { vm.locationCode = it.uppercase() }, label = { Text("库位") }, enabled = !vm.busy && vm.pendingScanCount == 0, singleLine = true, colors = fieldColors())
         if (item != null && !item.hasMeasuredDims()) {
             Text("需先测体积（cm）", color = PdaWarn, fontSize = 13.sp)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
