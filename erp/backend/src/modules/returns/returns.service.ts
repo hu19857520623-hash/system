@@ -117,9 +117,10 @@ export class ReturnsService {
   }
 
   async closeWarehouseRequest(id: number, actor: number, input: { action: string; payload: Record<string, unknown> }, disposal = false) {
-    const actions: Record<string, string> = { receive: 'receive', reReceive: 're_receive', measure: 'return_measure', calculateFees: 'return_calc_fee', submitInspection: 'return_inspect', dispose: 'return_dispose' }
-    if (!input || !actions[input.action] || (input.action === 'dispose') !== disposal) throw new BadRequestException('请选择本岗位可核对的退件操作')
-    const intent = this.returnActionIntent(actions[input.action], id, actor, input.payload || {})
+    const actions = new Map(Object.entries({ receive: 'receive', reReceive: 're_receive', measure: 'return_measure', calculateFees: 'return_calc_fee', submitInspection: 'return_inspect', dispose: 'return_dispose', process: 'process' }))
+    const action = actions.get(input?.action)
+    if (!action || (action === 'return_dispose' || action === 'process') !== disposal) throw new BadRequestException('请选择本岗位可核对的退件操作')
+    const intent = this.returnActionIntent(action, id, actor, input.payload || {})
     if (!intent) throw new BadRequestException('缺少原退件操作标识，不能结束未知请求')
     return this.prisma.$transaction(async tx => {
       await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(actor)} FOR UPDATE`
@@ -129,6 +130,7 @@ export class ReturnsService {
       const prior = await tx.operationLog.findFirst({ where: { module: 'returns', operatorId: BigInt(actor), detail: { path: '$.clientRequestId', equals: intent.clientRequestId } }, orderBy: { id: 'desc' } })
       if (prior) {
         const detail = prior.detail as any
+        if (action === 'process' && prior.action === 'process' && prior.targetId === row.returnNo && detail?.requestFingerprint === returnProcessFingerprint(input.payload, String(input.payload.processResult || '').trim())) return { outcome: 'confirmed', currentStatus: row.status }
         if (detail?.actionFingerprint !== intent.actionFingerprint) throw new ConflictException('原操作内容不同，不能清除其它退件请求')
         return { outcome: detail.cancelled ? 'cancelled' : 'confirmed', currentStatus: row.status }
       }
@@ -1408,6 +1410,8 @@ export class ReturnsService {
       if (!isValidProcessMethod(processResult) || processResult === 'destroy') throw new BadRequestException('请选择有效的处理结果')
       const fingerprint = returnProcessFingerprint(body, processResult)
       if (clientRequestId) {
+        const closed = await tx.operationLog.findFirst({ where: { module: 'returns', action: 'warehouse_request_closed', targetId: row.returnNo, operatorId: BigInt(userId), detail: { path: '$.clientRequestId', equals: clientRequestId } } })
+        if (closed) throw new ConflictException('原退件处理已核对结束，请刷新单据后重新操作')
         const previous = await tx.operationLog.findFirst({ where: { module: 'returns', action: 'process', targetId: row.returnNo, detail: { path: '$.clientRequestId', equals: clientRequestId } }, select: { detail: true } })
         if (previous) {
           if ((previous.detail as { requestFingerprint?: string } | null)?.requestFingerprint !== fingerprint) throw new ConflictException('同一次操作的内容已变化，请刷新退件记录核对后再继续')

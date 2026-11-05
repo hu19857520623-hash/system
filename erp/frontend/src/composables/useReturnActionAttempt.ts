@@ -1,6 +1,6 @@
 import { onScopeDispose, ref, shallowRef, watch } from 'vue'
 import { userFacingError } from '@erp/shared/user-facing-error'
-export type ReturnAction = 'receive' | 'reReceive' | 'measure' | 'calculateFees' | 'submitInspection' | 'dispose'
+export type ReturnAction = 'receive' | 'reReceive' | 'measure' | 'calculateFees' | 'submitInspection' | 'dispose' | 'process'
 export type ReturnStep = { action: ReturnAction; body: Record<string, unknown>; clientRequestId: string }
 export type ReturnIntent = { id: number; returnNo: string; index: number; steps: ReturnStep[] }
 type Lock = (name: string, run: () => Promise<unknown>) => Promise<unknown>
@@ -13,7 +13,7 @@ export function useReturnActionAttempt(options: {
   const pending = shallowRef<ReturnIntent | null>(null), busy = ref(false), feedback = ref(''), blocked = ref(false)
   let revision = 0, stopped = false
   const key = (actor: string) => `erp.returns.original.${actor}`
-  const actions = ['receive', 'reReceive', 'measure', 'calculateFees', 'submitInspection', 'dispose']
+  const actions = ['receive', 'reReceive', 'measure', 'calculateFees', 'submitInspection', 'dispose', 'process']
   const lock: Lock = options.lock || (async (name, run) => {
     if (typeof navigator === 'undefined' || !navigator.locks?.request) throw Error('浏览器无法协调退件页面，本次尚未提交，请使用支持标签页锁的浏览器')
     return navigator.locks.request(name, run)

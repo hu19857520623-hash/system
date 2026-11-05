@@ -363,7 +363,7 @@ export const returnsApi = {
   updateFeeTemplate: (id, data) => api.put(`/returns/fee-templates/${id}`, data),
   deleteFeeTemplate: (id) => api.delete(`/returns/fee-templates/${id}`),
   receive: (id, data) => api.post(`/returns/${id}/receive`, data),
-  closeWarehouseRequest: (id, step) => api.post(`/returns/${id}/${step.action === 'dispose' ? 'dispose-request' : 'warehouse-request'}/close`, { action: step.action, payload: { ...step.body, clientRequestId: step.clientRequestId } }),
+  closeWarehouseRequest: (id, step) => api.post(`/returns/${id}/${['dispose', 'process'].includes(step.action) ? 'dispose-request' : 'warehouse-request'}/close`, { action: step.action, payload: { ...step.body, clientRequestId: step.clientRequestId } }),
   reReceive: (id, data) => api.post(`/returns/${id}/re-receive`, data),
   measure: (id, data) => api.post(`/returns/${id}/measure`, data),
   measurementSnapshot: (id) => api.get(`/returns/${id}/measure-fees/snapshot`),

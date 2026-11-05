@@ -20,7 +20,7 @@ const app = useAppStore()
 const returnActionScope = () => getAccessToken() && app.authenticatedUser ? JSON.stringify([getAccessToken(), app.authenticatedUser.id, app.authenticatedUser.roleCode, app.authenticatedUser.workstation, [...app.currentPermSet].sort()]) : null
 const returnActionAttempt = useReturnActionAttempt({
   actor: () => app.authenticatedUser ? String(app.authenticatedUser.id) : '', scope: returnActionScope,
-  allowed: action => app.hasPerm(action === 'dispose' ? 'return.process' : 'return.receive'),
+  allowed: action => app.hasPerm(action === 'dispose' || action === 'process' ? 'return.process' : 'return.receive'),
   storage: { getItem: key => localStorage.getItem(key), setItem: (key, value) => localStorage.setItem(key, value), removeItem: key => localStorage.removeItem(key) },
   request: (id, step) => returnsApi[step.action](id, { ...step.body, clientRequestId: step.clientRequestId }),
   close: (id, step) => returnsApi.closeWarehouseRequest(id, step),
@@ -33,7 +33,7 @@ async function runReturnActions(row: any, steps: { action: ReturnAction; body: R
 }
 async function resumeReturnAction() {
   const result = await returnActionAttempt.resume()
-  if (result) { receiveDialog.value = false; measureDialog.value = false; inspectDialog.value = false; await loadList(); ElMessage.success('原退件操作已确认完成，请核对列表当前状态') }
+  if (result) { receiveDialog.value = false; measureDialog.value = false; inspectDialog.value = false; processDialog.value = false; await loadList(); ElMessage.success('原退件操作已确认完成，请核对列表当前状态') }
 }
 
 
@@ -77,7 +77,6 @@ const processSubmitting = ref(false)
 const processLoading = ref(false)
 const processFeedback = ref('')
 const processUncertain = ref(false)
-const processRequestId = ref('')
 const processStockRows = ref<{ sku: string; name: string; remaining: number; qty: string; locationCode: string }[]>([])
 const processNeedsStock = computed(() => ['restock', 'relabel'].includes(processResultForm.value))
 
@@ -799,7 +798,6 @@ async function refreshProcessTarget() {
     processTarget.value = await returnsApi.detail(processTarget.value.id)
     processResultForm.value = processTarget.value.customerProcessChoice || processTarget.value.processResult || processTarget.value.requestedProcess || 'restock'
     prepareProcessStockRows(processTarget.value)
-    processRequestId.value = crypto.randomUUID()
     processUncertain.value = false
     processFeedback.value = processTarget.value.status === 'completed' ? '该退件已处理完成，可关闭并返回列表查看结果。' : ''
   } catch (error: any) {
@@ -843,12 +841,11 @@ async function submitProcess() {
   }
   processSubmitting.value = true
   try {
-    const result = await returnsApi.process(processTarget.value.id, {
+    const result = await runReturnActions(processTarget.value, [{ action: 'process', body: {
       processResult: processResultForm.value,
       processRemark: processRemark.value.trim() || undefined,
-      clientRequestId: processRequestId.value,
       ...(processNeedsStock.value ? { warehouseCode: 'WMS-JHB-01', stockLines } : {}),
-    })
+    } }])
     processTarget.value = result
     if (result.warning) ElMessage.warning(result.warning)
     if (result.status === 'completed') {
@@ -857,7 +854,6 @@ async function submitProcess() {
     } else {
       processFeedback.value = `本次上架已保存，累计入库 ${result.restockedQty} 件，剩余 ${result.remainingRestockQty} 件；请继续填写实际库位和数量。`
       prepareProcessStockRows(result)
-      processRequestId.value = crypto.randomUUID()
     }
     await loadList().catch(() => ElMessage.warning('处理结果已保存，但列表刷新失败，请重新查询核对'))
   } catch (e: any) {
@@ -1752,6 +1748,7 @@ void _removeExtraFeeLine
       <template #footer>
         <el-button :disabled="processSubmitting" @click="processDialog = false">返回列表</el-button>
         <el-button :disabled="processSubmitting || processLoading" @click="refreshProcessTarget">刷新核对结果</el-button>
+        <el-button v-if="pendingReturnAction?.id === processTarget?.id" :loading="returnActionBusy" @click="resumeReturnAction">继续原请求</el-button>
         <el-button type="primary" :loading="processSubmitting || processLoading" :disabled="processUncertain || processTarget?.status === 'completed'" @click="submitProcess">{{ processNeedsStock ? '确认本次上架' : '确认处理' }}</el-button>
       </template>
     </el-dialog>
