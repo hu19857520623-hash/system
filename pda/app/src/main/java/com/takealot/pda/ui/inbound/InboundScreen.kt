@@ -515,6 +515,8 @@ class InboundViewModel : ViewModel() {
             return
         }
         if (skuHit != null) {
+            selectedItemId = null
+            locationCode = ""
             if ((skuHit.actualQty ?: 0) <= 0) {
                 feedback = Feedback(false, "${displaySku(skuHit.skuCode)} 清点实收为 0，不可上架")
                 scan = ""; return
@@ -525,13 +527,17 @@ class InboundViewModel : ViewModel() {
             }
             selectedItemId = skuHit.id
             putawayQty = skuHit.remainingPutaway.coerceAtLeast(1)
-            locationCode = ""
             lengthCm = skuHit.lengthCm?.takeIf { it > 0 }?.toString().orEmpty()
             widthCm = skuHit.widthCm?.takeIf { it > 0 }?.toString().orEmpty()
             heightCm = skuHit.heightCm?.takeIf { it > 0 }?.toString().orEmpty()
             weightKg = skuHit.weightKg?.takeIf { it > 0 }?.toString().orEmpty()
             feedback = Feedback(true, "已选 ${displaySku(skuHit.skuCode)}，待上架 ${skuHit.remainingPutaway}，可改每次件数后扫库位")
             scan = ""; return
+        }
+        if (guess !in setOf("location", "unknown")) {
+            selectedItemId = null
+            locationCode = ""
+            throw ErpException("扫码内容与本单 SKU 或上架库位不匹配，请重新扫描本单待上架 SKU")
         }
         if (selectedItemId == null) { feedback = Feedback(false, "请先扫描待上架 SKU"); return }
         locationCode = code.trim().uppercase(); scan = ""; doPutaway(recordId)
@@ -1308,6 +1314,7 @@ fun InboundScreen(modeKey: String, onBack: () -> Unit, vm: InboundViewModel = vi
                         selected = selected,
                         onClick = {
                             vm.selectedItemId = item.id
+                            vm.locationCode = ""
                             vm.putawayQty = item.remainingPutaway.coerceAtLeast(1)
                             vm.lengthCm = item.lengthCm?.takeIf { it > 0 }?.toString().orEmpty()
                             vm.widthCm = item.widthCm?.takeIf { it > 0 }?.toString().orEmpty()
