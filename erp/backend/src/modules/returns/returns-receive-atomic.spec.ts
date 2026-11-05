@@ -7,7 +7,7 @@ describe('return receipt and correction atomicity', () => {
     const root: any = { $transaction: jest.fn(async (work: any) => {
       const draft = { ...state }
       const tx: any = {
-        $queryRaw: jest.fn(),
+        $queryRaw: jest.fn(), syncLog: { create: jest.fn().mockResolvedValue({ id: 1n }) },
         $executeRawUnsafe: jest.fn(async () => { draft.charges = 0 }),
         returnOrder: {
           findUnique: jest.fn(async () => ({ id: 1n, returnNo: 'RT-ONE', ...draft })),

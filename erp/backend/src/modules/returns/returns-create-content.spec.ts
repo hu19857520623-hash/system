@@ -5,7 +5,7 @@ describe('return creation content binding', () => {
     let row: any = null
     let receipt: any = null
     const tx: any = {
-      $queryRaw: jest.fn(), customer: { findUnique: jest.fn().mockResolvedValue({ id: 1n, status: 1 }) },
+      $queryRaw: jest.fn(), syncLog: { create: jest.fn().mockResolvedValue({ id: 1n }) }, customer: { findUnique: jest.fn().mockResolvedValue({ id: 1n, status: 1 }) },
       operationLog: { findFirst: jest.fn(async () => receipt) },
       returnOrder: {
         findUnique: jest.fn(async () => row),

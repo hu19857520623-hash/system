@@ -2,10 +2,11 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
 import { AnnouncementService } from '../announcement/announcement.service'
+import { ReturnsSyncService } from '../returns/returns-sync.service'
 
 @Injectable()
 export class SyncLogService {
-  constructor(private prisma: PrismaService, private announcements: AnnouncementService) {}
+  constructor(private prisma: PrismaService, private announcements: AnnouncementService, private returnsSync?: ReturnsSyncService) {}
 
   async list(q: PaginationDto & { status?: string; syncType?: string; includeLegacy?: string }) {
     const { page, pageSize } = getPagination(q)
@@ -35,6 +36,7 @@ export class SyncLogService {
       await tx.$queryRaw`SELECT id FROM sync_log WHERE id = ${BigInt(id)} FOR UPDATE`
       const row = await tx.syncLog.findUnique({ where: { id: BigInt(id) } })
       if (!row) throw new NotFoundException('同步日志不存在，请刷新列表核对')
+      if (row.syncType === 'return_status' && row.targetSystem === 'OMS' && this.returnsSync) return this.returnsSync.deliver(tx, row)
       if (row.syncType !== 'announcement_push' || row.targetSystem !== 'OMS') {
         throw new BadRequestException('此类记录不能从同步日志直接重试，请返回对应业务单据使用原操作核对或恢复同步')
       }

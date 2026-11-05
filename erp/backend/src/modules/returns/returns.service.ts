@@ -1,8 +1,10 @@
+import { Prisma } from '@prisma/client'
+import { ReturnsSyncService } from './returns-sync.service'
 import { createHash, randomUUID } from 'crypto'
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
-import { OperationLogService } from '../operation-log/operation-log.service'
+import { OperationLogService, type OperationLogInput } from '../operation-log/operation-log.service'
 import { BillingService } from '../billing/billing.service'
 import { notifyOms } from '../../common/oms-notify.util'
 import { FileStoreService } from '../../common/file-store.service'
@@ -66,7 +68,20 @@ export class ReturnsService {
     private billing: BillingService,
     private returnCharges: ReturnsChargeService,
     private inventoryMutation: InventoryMutationService,
-  ) {}
+    private returnSync: ReturnsSyncService = new ReturnsSyncService(prisma),
+  ) {
+    this.returnSync.setSender(async (returnNo, warehouseCode) => {
+      const row = await this.prisma.returnOrder.findUnique({ where: { returnNo } })
+      if (!row) return false
+      const results = await Promise.all([this.sendReturnStatusToOms(returnNo), warehouseCode ? this.pushReturnStockToOms(Number(row.id), warehouseCode) : Promise.resolve(true)])
+      return results.every(Boolean)
+    })
+  }
+
+  private async logReturn(params: OperationLogInput, tx: Prisma.TransactionClient) {
+    await this.opLog.log(params, tx)
+    if (params.targetType === 'return_order') await this.returnSync.enqueue(tx, String(params.targetId))
+  }
 
   private writeAttachment(fileName: string, contentBase64: string) {
     const buf = Buffer.from(contentBase64, 'base64')
@@ -336,6 +351,7 @@ export class ReturnsService {
           const sameFiles = requestedAttachments.every(file => detail.attachments.some(saved => saved.fileName === file.fileName && saved.fileType === file.fileType && this.files.read(saved.filePath).equals(Buffer.from(file.contentBase64, 'base64'))))
           if (!sameFields || !sameItems || !sameFiles) throw new ConflictException('退件单内容与原单不同，请核对原单；修改后请先撤回再重新提交')
         }
+        await this.returnSync.enqueue(tx, returnNo)
         return { row: detail!, idempotent: true, reactivated: false }
       }
 
@@ -379,7 +395,7 @@ export class ReturnsService {
       }
       if (!row) throw new NotFoundException('退件单创建失败')
 
-      await this.opLog.log({
+      await this.logReturn({
         module: 'returns',
         action: existing?.status === 'cancelled' ? 'oms_return_resubmit' : 'oms_return_create',
         targetType: 'return_order',
@@ -439,7 +455,7 @@ export class ReturnsService {
         },
         include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
       })
-      await this.opLog.log({
+      await this.logReturn({
         module: 'returns',
         action: 'receive',
         targetType: 'return_order',
@@ -498,7 +514,7 @@ export class ReturnsService {
         include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
       })
 
-      await this.opLog.log({
+      await this.logReturn({
         module: 'returns',
         action: 're_receive',
         targetType: 'return_order',
@@ -563,7 +579,7 @@ export class ReturnsService {
       })
 
       await new ReturnsChargeService(tx as PrismaService, this.billing).clearPendingAutoReturnCharges(row.returnNo)
-      await this.opLog.log({
+      await this.logReturn({
         module: 'returns',
         action: 'return_measure',
         targetType: 'return_order',
@@ -655,7 +671,7 @@ export class ReturnsService {
             data: { templateName, status: 'active', customerId: null },
             include: { rules: { orderBy: { sortOrder: 'asc' } } },
           })
-        await this.opLog.log({
+        await this.logReturn({
           module: 'returns',
           action: 'return_fee_template_create',
           targetType: 'return_fee_template',
@@ -691,7 +707,7 @@ export class ReturnsService {
         include: { rules: { orderBy: { sortOrder: 'asc' } } },
       })
 
-      await this.opLog.log({
+      await this.logReturn({
         module: 'returns',
         action: 'return_fee_template_create',
         targetType: 'return_fee_template',
@@ -716,7 +732,7 @@ export class ReturnsService {
         data: { status: 'inactive' },
       })
 
-      await this.opLog.log({
+      await this.logReturn({
         module: 'returns',
         action: 'return_fee_template_delete',
         targetType: 'return_fee_template',
@@ -826,7 +842,7 @@ export class ReturnsService {
         include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
       })
 
-      await this.opLog.log({
+      await this.logReturn({
         module: 'returns',
         action: 'return_calc_fee',
         targetType: 'return_order',
@@ -923,7 +939,7 @@ export class ReturnsService {
           include: { rules: { orderBy: { sortOrder: 'asc' } } },
         })
 
-      await this.opLog.log({
+      await this.logReturn({
         module: 'returns',
         action: 'return_fee_template_update',
         targetType: 'return_fee_template',
@@ -1087,7 +1103,7 @@ export class ReturnsService {
         include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
       })
 
-      await this.opLog.log({
+      await this.logReturn({
         module: 'returns',
         action: 'return_inspect',
         targetType: 'return_order',
@@ -1185,7 +1201,7 @@ export class ReturnsService {
         include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
       })
 
-      await this.opLog.log({
+      await this.logReturn({
         module: 'returns',
         action: 'return_customer_decide',
         targetType: 'return_order',
@@ -1218,7 +1234,7 @@ export class ReturnsService {
         },
         include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
       })
-      await this.opLog.log({
+      await this.logReturn({
         module: 'returns',
         action: 'return_dispose',
         targetType: 'return_order',
@@ -1254,6 +1270,7 @@ export class ReturnsService {
         const previous = await tx.operationLog.findFirst({ where: { module: 'returns', action: 'process', targetId: row.returnNo, detail: { path: '$.clientRequestId', equals: clientRequestId } }, select: { detail: true } })
         if (previous) {
           if ((previous.detail as { requestFingerprint?: string } | null)?.requestFingerprint !== fingerprint) throw new ConflictException('同一次操作的内容已变化，请刷新退件记录核对后再继续')
+          await this.returnSync.enqueue(tx, row.returnNo, ['restock', 'relabel'].includes(processResult) ? String(body.warehouseCode || '').trim() : undefined)
           return { duplicate: true, returnNo: row.returnNo, needsStock: ['restock', 'relabel'].includes(processResult), warehouseCode: String(body.warehouseCode || '').trim() }
         }
       }
@@ -1275,11 +1292,11 @@ export class ReturnsService {
         detail: { processResult, processRemark: body.processRemark || null, clientRequestId: clientRequestId || null,
           requestFingerprint: fingerprint, ...(stock ? { warehouseCode: body.warehouseCode, ...stock } : {}) },
       } })
+      await this.returnSync.enqueue(tx, row.returnNo, needsStock ? String(body.warehouseCode || '').trim() : undefined)
       return { duplicate: false, returnNo: row.returnNo, needsStock, warehouseCode: String(body.warehouseCode || '').trim() }
     }, { timeout: 20000 })
     const statusPushed = await this.pushReturnStatusToOms(result.returnNo)
-    const inventoryPushed = result.needsStock
-      ? await this.pushReturnStockToOms(id, result.warehouseCode) : true
+    const inventoryPushed = true // The durable task includes inventory publication when required.
     return { ...(await this.detail(id)), duplicate: result.duplicate,
       ...(!statusPushed || !inventoryPushed ? { warning: '处理结果已保存，但 OMS 同步未完成，请在 OMS 刷新核对，请勿重复入库。' } : {}) }
   }
@@ -1542,6 +1559,7 @@ export class ReturnsService {
         throw new BadRequestException('客户编码与退件单不匹配')
       }
       if (row.status === 'cancelled') {
+        await this.returnSync.enqueue(tx, no)
         return { row, idempotent: true }
       }
       if (row.status !== 'pending_arrival') {
@@ -1552,7 +1570,7 @@ export class ReturnsService {
         data: { status: 'cancelled' },
         include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
       })
-      await this.opLog.log({
+      await this.logReturn({
         module: 'returns',
         action: 'oms_return_cancel',
         targetType: 'return_order',
@@ -1578,6 +1596,10 @@ export class ReturnsService {
   }
 
   private async pushReturnStatusToOms(returnNo: string) {
+    return this.returnSync.flush(returnNo)
+  }
+
+  private async sendReturnStatusToOms(returnNo: string) {
     try {
       const row = await this.prisma.returnOrder.findUnique({
         where: { returnNo },

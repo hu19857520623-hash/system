@@ -7,7 +7,7 @@ describe('inspection upload rollback', () => {
       remove: jest.fn(),
     }
     const tx = {
-      $queryRaw: jest.fn(),
+      $queryRaw: jest.fn(), syncLog: { create: jest.fn().mockResolvedValue({ id: 1n }) },
       returnOrder: {
         findUnique: jest.fn().mockResolvedValue({ id: 1n, returnNo: 'RT-ONE', status: 'fee_calculated' }),
         update: jest.fn().mockResolvedValue({ returnNo: 'RT-ONE' }),

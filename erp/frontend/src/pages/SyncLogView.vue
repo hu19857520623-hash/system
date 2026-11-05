@@ -114,7 +114,7 @@ onMounted(load)
       <el-table-column prop="time" label="时间" width="130" />
       <el-table-column label="操作" width="100" fixed="right">
         <template #default="{ row }">
-          <el-button v-if="row.tone === 'err' && canRetry" link type="primary" size="small" @click="retry(row)">重试</el-button>
+          <el-button v-if="canRetry && (row.tone === 'err' || (row._raw.syncType === 'return_status' && row._raw.status === 'pending'))" link type="primary" size="small" @click="retry(row)">重试</el-button>
           <el-button link type="primary" size="small" @click="detail(row)">详情</el-button>
         </template>
       </el-table-column>
