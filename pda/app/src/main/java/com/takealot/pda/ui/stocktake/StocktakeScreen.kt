@@ -105,12 +105,29 @@ class StocktakeViewModel : ViewModel() {
         }
     }
 
+    var listLoading by mutableStateOf(false)
+        private set
+    var listError by mutableStateOf<String?>(null)
+        private set
+    private var listRequest = 0
+
     fun loadList() {
+        val request = ++listRequest
+        val warehouse = session.warehouseCode
+        val token = session.token
+        fun current() = request == listRequest && warehouse == session.warehouseCode && token == session.token
+        list = emptyList()
+        listError = null
+        listLoading = true
         viewModelScope.launch {
             try {
-                list = api.stocktakes(warehouseCode = session.warehouseCode.ifBlank { null }, status = "counting")
+                if (warehouse.isBlank()) throw ErpException("请返回首页选择作业仓库")
+                val result = api.stocktakes(warehouseCode = warehouse, status = "counting")
+                if (current()) list = result
             } catch (e: Exception) {
-                feedback = Feedback(false, e.message ?: "加载盘点任务失败")
+                if (current()) listError = e.message ?: "加载盘点任务失败"
+            } finally {
+                if (request == listRequest) listLoading = false
             }
         }
     }
@@ -306,14 +323,22 @@ fun StocktakeScreen(onBack: () -> Unit, vm: StocktakeViewModel = viewModel()) {
             Text(tr("stocktake"), color = PdaText, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
             TextButton(onClick = onBack) { Text(tr("back"), color = PdaAccent) }
         }
-        ScanField(vm.scan, { vm.scan = it }, { vm.submitScan() }, if (vm.locationCode.isBlank()) "先扫盘点库位" else "扫当前库位 SKU", enabled = !vm.busy)
+        ScanField(vm.scan, { vm.scan = it }, { vm.submitScan() }, when { vm.plan == null -> "扫描盘点单号"; vm.locationCode.isBlank() -> "先扫盘点库位"; else -> "扫当前库位 SKU" }, enabled = !vm.busy)
         ScanReceiptStatus(customerSkuForScan(vm.lastReadCode), vm.busy, vm.pendingScanCount)
         ScanQueueStatus(vm.pendingScanCount, vm.busy)
         FeedbackBar(vm.feedback)
         val plan = vm.plan
         if (plan == null) {
             Text("待作业", color = PdaMuted, fontSize = 13.sp)
-            if (vm.list.isEmpty()) Text("暂无盘点任务，可直接扫描盘点单号", color = PdaMuted, fontSize = 13.sp)
+            val listError = vm.listError
+            if (vm.listLoading) {
+                Text("正在读取盘点任务…", color = PdaMuted, fontSize = 13.sp)
+            } else if (listError != null) {
+                FeedbackBar(Feedback(false, listError))
+                TextButton(onClick = { vm.loadList() }) { Text("重试加载盘点任务") }
+            } else if (vm.list.isEmpty()) {
+                Text("暂无盘点任务，可直接扫描盘点单号", color = PdaMuted, fontSize = 13.sp)
+            }
             vm.list.forEach { row ->
                 DocumentCard(
                     typeLabel = "盘点单",
