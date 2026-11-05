@@ -1,7 +1,9 @@
 
 import { userFacingError } from '../utils/userFacingError'
 import { displaySku, displaySkuText } from '../data/skuDisplay'
-import { useMemo, useState } from 'react'
+import { useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { authSessionScope } from '../api/client'
+import { createAsyncViewScope } from '../utils/asyncViewScope'
 import { Link, useSearchParams } from 'react-router-dom'
 import { RefreshCw, Plus } from 'lucide-react'
 import { Badge, Button, Card, MonoCode, PageHeader, Table, TableFooter } from '../components/ui'
@@ -15,7 +17,7 @@ import {
   refreshReturnsFromErp,
   removeReturnOrder,
   withdrawReturnOrder,
-  decideReturnOrder,
+  replayReturnDecision,
 } from '../data/returnStore'
 import { formatDatetimeDisplay } from '../data/fileUtils'
 import { importCsvFile } from '../data/csvImportExport'
@@ -32,6 +34,7 @@ import { AdminCustomerFilter } from '../components/admin/AdminCustomerFilter'
 import { notifyIfUserError, notifySuccess, notifyInfo, notifyError } from '../utils/userNotify'
 
 type Tab = 'all' | 'draft' | 'pending_arrival' | 'awaiting_customer' | 'arrived' | 'completed' | 'cancelled'
+type DecisionIntent = Parameters<typeof replayReturnDecision>[0]
 
 function formatReturnFee(v?: number | null) {
   if (v == null) return '—'
@@ -49,7 +52,7 @@ const tabLabels: Record<Tab, string> = {
 }
 
 export default function ReturnProcessing() {
-  const { role, can } = useRole()
+  const { role, can, userId, authToken, permissions, authReady } = useRole()
   const dataScope = useDataScope()
   const [searchParams] = useSearchParams()
   const allReturns = useReturnOrders()
@@ -66,6 +69,35 @@ export default function ReturnProcessing() {
     adminCustomerFilter: dataScope.customerFilter,
     accounts: dataScope.customerOptions,
   })
+  const decisionCustomerId = erpCustomer?.customerId
+  const decisionCustomerCode = erpCustomer?.customerCode
+  const decisionKey = authReady && authToken && userId && decisionCustomerId && decisionCustomerCode && can('returns:write')
+    ? `oms.return.decision.${JSON.stringify([userId, decisionCustomerId, decisionCustomerCode])}` : ''
+  const decisionScope = JSON.stringify([decisionKey, authToken, role, [...permissions].sort()])
+  const decisionView = useRef(createAsyncViewScope()).current
+  const [decisionState, setDecisionState] = useState<{ scope: string; intent?: DecisionIntent; error?: string }>()
+  const [decisionRun, setDecisionRun] = useState<{ scope: string }>()
+  const decisionBusy = decisionRun?.scope === decisionScope
+  const pendingDecision = decisionState?.scope === decisionScope ? decisionState.intent : undefined
+  const decisionError = decisionState?.scope === decisionScope ? decisionState.error : undefined
+
+  useLayoutEffect(() => {
+    decisionView.update(decisionScope)
+    const read = () => {
+      try {
+        const raw = decisionKey && localStorage.getItem(decisionKey)
+        if (!raw) { setDecisionState(undefined); return }
+        const intent: DecisionIntent = JSON.parse(raw)
+        if (!intent.returnNo || intent.customerId !== decisionCustomerId || intent.customerCode !== decisionCustomerCode ||
+          !['keep', 'discard'].includes(intent.decision) || (intent.decision === 'keep' && !intent.processChoice)) throw Error()
+        setDecisionState({ scope: decisionScope, intent })
+      } catch { setDecisionState({ scope: decisionScope, error: '原退件决定无法读取，请保留记录并核对浏览器存储' }) }
+    }
+    read()
+    const changed = (event: StorageEvent) => { if (event.key === decisionKey || event.key === null) read() }
+    window.addEventListener('storage', changed)
+    return () => { decisionView.dispose(); window.removeEventListener('storage', changed) }
+  }, [decisionView, decisionScope, decisionKey, decisionCustomerId, decisionCustomerCode])
 
   const returns = useMemo(() => {
     let list = allReturns
@@ -160,28 +192,52 @@ export default function ReturnProcessing() {
     }
   }
 
+  const sendDecision = async (newIntent?: DecisionIntent) => {
+    if (!decisionKey || decisionBusy || decisionError) return
+    const viewCurrent = decisionView.capture(), session = authSessionScope()
+    const current = () => viewCurrent() && authSessionScope() === session
+    const run = { scope: decisionScope }
+    setDecisionRun(run)
+    try {
+      if (!navigator.locks?.request) throw Error('当前浏览器无法协调退件确认，请使用支持标签页锁的浏览器')
+      await navigator.locks.request(decisionKey, async () => {
+        if (!current()) return
+        let raw = localStorage.getItem(decisionKey)
+        if (newIntent && raw) { notifyInfo('已有原退件决定待核对，请继续原决定'); return }
+        const intent = newIntent || pendingDecision
+        if (!intent) return
+        if (newIntent) {
+          raw = JSON.stringify(intent)
+          localStorage.setItem(decisionKey, raw)
+        }
+        if (!raw || localStorage.getItem(decisionKey) !== JSON.stringify(intent)) throw Error('原退件决定保存或核对失败，请刷新页面核对')
+        setDecisionState({ scope: decisionScope, intent })
+        const result = await replayReturnDecision(intent, current)
+        if (!current()) return
+        if (!result.ok && !('conflict' in result)) { notifyError(userFacingError(displaySkuText(result.error))); return }
+        if (localStorage.getItem(decisionKey) !== raw) return
+        localStorage.removeItem(decisionKey)
+        if (localStorage.getItem(decisionKey) !== null) throw Error('原退件决定记录未能清理，请继续核对')
+        setDecisionState(undefined)
+        if (!result.ok) { notifyError(userFacingError(displaySkuText(result.error))); await handleSync(); return }
+        if (result.warning) notifyInfo(result.warning)
+        else notifySuccess('原退件决定已确认，请核对当前状态')
+        setDetailId(null)
+      })
+    } catch (error) { if (current()) notifyError(userFacingError(error)) }
+    finally { setDecisionRun(active => active === run ? undefined : active) }
+  }
+
   const handleDecide = async (r: typeof returns[0], decision: 'keep' | 'discard') => {
+    if (!decisionKey || r.customerId !== decisionCustomerId || !decisionCustomerCode) {
+      notifyError('请先核对退件所属客户与当前账号权限'); return
+    }
     const msg = decision === 'discard'
       ? `确认不留货并销毁退件单 ${r.returnNo}？将产生销毁相关费用。`
       : `确认留货并授权处理退件单 ${r.returnNo}？将按所选方式追加费用。`
     if (!window.confirm(msg)) return
-    setActingId(r.id)
-    try {
-      const result = await decideReturnOrder(r, decision, {
-        customerId: r.customerId || erpCustomer?.customerId,
-        customerCode: erpCustomer?.customerCode || getCustomerCode(r.customerId),
-        processChoice: decision === 'keep' ? decideProcess : undefined,
-      })
-      if (!result.ok) {
-        window.alert(userFacingError(displaySkuText(result.error)))
-        return
-      }
-      if (result.warning) notifyInfo(result.warning)
-      else notifySuccess(decision === 'discard' ? '已确认不留，仓库将销毁' : '已确认留货，仓库将安排作业')
-      if (detailId === r.id) setDetailId(null)
-    } finally {
-      setActingId(null)
-    }
+    await sendDecision({ returnNo: r.returnNo, customerId: decisionCustomerId, customerCode: decisionCustomerCode,
+      decision, ...(decision === 'keep' ? { processChoice: decideProcess } : {}) })
   }
 
   return (
@@ -208,6 +264,12 @@ export default function ReturnProcessing() {
           </div>
         )}
       />
+
+      {(pendingDecision || decisionError) && <Card className="mb-4 p-4">
+        <p role="status">{decisionError || `退件单 ${pendingDecision?.returnNo} 的原决定待核对`}</p>
+        {pendingDecision && <Button size="sm" disabled={decisionBusy} onClick={() => void sendDecision()}>继续原决定</Button>}
+        <Button size="sm" variant="secondary" disabled={syncing || decisionBusy} onClick={() => void handleSync()}>同步并核对状态</Button>
+      </Card>}
 
       {dataScope.isAdmin && (
         <Card className="mb-4 p-4">
@@ -483,14 +545,14 @@ export default function ReturnProcessing() {
                       <Button
                         variant="secondary"
                         size="sm"
-                        disabled={actingId === detail.id}
+                        disabled={decisionBusy || !!pendingDecision || !!decisionError}
                         onClick={() => void handleDecide(detail, 'discard')}
                       >
                         不留，销毁
                       </Button>
                       <Button
                         size="sm"
-                        disabled={actingId === detail.id}
+                        disabled={decisionBusy || !!pendingDecision || !!decisionError}
                         onClick={() => void handleDecide(detail, 'keep')}
                       >
                         留货并授权处理

@@ -2,12 +2,31 @@ import assert from 'node:assert/strict'
 import test, { type TestContext } from 'node:test'
 import { hydrateAccounts } from '../auth/accountStore'
 import { getReturnOrdersSnapshot, setReturnOrders, cacheReturnOrder, upsertReturnOrderOrThrow, addReturnOrdersOrThrow } from './entityStore'
-import { submitReturnWorkflow, withdrawReturnOrder, decideReturnOrder, refreshReturnsFromErp, removeReturnOrder, nextReturnNo, type ReturnOrder } from './returnStore'
+import { submitReturnWorkflow, withdrawReturnOrder, decideReturnOrder, replayReturnDecision, refreshReturnsFromErp, removeReturnOrder, nextReturnNo, type ReturnOrder } from './returnStore'
 import { buildImportedReturnDrafts } from './returnDraftImport'
 import { parseReturnLines, parseReturnOrders } from './importTemplates'
 
 const draft:ReturnOrder={id:'rt-original',customerId:'c1',returnNo:'RT-TKL9001-20261019001',orderNo:'AUDIT-ORDER',returnWarehouse:'JHB3',returnReason:'平台退货',requestedProcess:'pending_inspection',status:'draft',createdAt:'2026-10-19',lineItems:[{sku:'TKL9001-A',name:'商品',qty:2}]}
 const confirmed={...draft,id:31,status:'pending_arrival',statusLabel:'在途',items:[{sku:'TKL9001-A',productName:'商品',quantity:2}]}
+test('原退件决定可在本地状态更新后重放，身份切换后丢弃迟到结果', async t => {
+ environment(t)
+ let current = true, writes = 0
+ const intent = { returnNo: draft.returnNo, customerId: 'c1', customerCode: 'TKL9001', decision: 'keep' as const, processChoice: 'restock' }
+ globalThis.fetch = async (input, init) => {
+  if (String(input).endsWith('/decide')) {
+   assert.deepEqual(JSON.parse(String(init?.body)), { customerCode: 'TKL9001', decision: 'keep', processChoice: 'restock' })
+   return Response.json({ ...confirmed, status: 'completed' })
+  }
+  writes++; return Response.json({ ok: true })
+ }
+ const replay = replayReturnDecision(intent, () => current)
+ current = false
+ assert.equal((await replay).ok, false)
+ assert.equal(writes, 0)
+ current = true
+ assert.equal((await replayReturnDecision(intent, () => current)).ok, true)
+ assert.equal(writes, 1)
+})
 function environment(t:TestContext){
  const original=globalThis.fetch
  const descriptors=['localStorage','sessionStorage'].map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)] as const)

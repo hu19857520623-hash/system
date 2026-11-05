@@ -362,20 +362,30 @@ export async function decideReturnOrder(
     return { ok: false, error: '仅「待您确认」状态的退件可决策' }
   }
   const customerCode = opts?.customerCode?.trim() || getCustomerCode(opts?.customerId || order.customerId)
+  return replayReturnDecision({ returnNo: order.returnNo, customerId: order.customerId, customerCode, decision, processChoice: opts?.processChoice })
+}
+
+export async function replayReturnDecision(intent: {
+  returnNo: string; customerId?: string; customerCode: string; decision: 'keep' | 'discard'; processChoice?: string
+}, current = () => true): Promise<ReturnMutationResult | { ok: false; error: string; conflict: true }> {
+  const { returnNo, customerId, customerCode, decision, processChoice } = intent
   if (!customerCode || customerCode === '—') {
     return { ok: false, error: '未绑定客户编码，无法确认' }
   }
-  if (decision === 'keep' && !opts?.processChoice) {
+  if (decision === 'keep' && !processChoice) {
     return { ok: false, error: '留货请选择后续处理方式' }
   }
   try {
-    const erp = await decideErpReturn(order.returnNo, {
+    if (!current()) return { ok: false, uncertain: true, error: '登录或客户范围已变化，请返回原账号核对' }
+    const erp = await decideErpReturn(returnNo, {
       customerCode,
       decision,
-      processChoice: opts?.processChoice,
+      processChoice,
     })
-    return await saveConfirmedReturn(buildReturnOrderFromErp(erp, order.customerId), '确认处理方式')
+    if (!current()) return { ok: false, uncertain: true, error: '登录或客户范围已变化，请返回原账号核对' }
+    return await saveConfirmedReturn(buildReturnOrderFromErp(erp, customerId), '确认处理方式')
   } catch (err) {
+    if ((err as { status?: number } | null)?.status === 409) return { ok: false, conflict: true, error: userFacingError(err) }
     return uncertainReturnError(err, '确认')
   }
 }
