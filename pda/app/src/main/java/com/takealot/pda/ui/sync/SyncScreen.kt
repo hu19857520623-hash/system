@@ -84,6 +84,21 @@ class SyncViewModel : ViewModel() {
                                     journal.clearActive("stocktake")
                                 }
                             }
+                            if (record.module == "inbound" && orderId != null &&
+                                record.retryEndpoint == "/inbound/$orderId/putaway" &&
+                                journal.active("inbound", "putaway")?.orderId == orderId) {
+                                val current = try {
+                                    api.inboundDetail(orderId)
+                                } catch (e: kotlinx.coroutines.CancellationException) {
+                                    throw e
+                                } catch (_: Exception) {
+                                    null
+                                }
+                                if (current?.id == orderId && current.statusKey in setOf("completed", "confirmed", "cancelled") &&
+                                    journal.active("inbound", "putaway")?.orderId == orderId) {
+                                    journal.clearActive("inbound")
+                                }
+                            }
                             if (record.module == "outbound" && orderId != null) {
                                 val completedMode = when (record.retryEndpoint) {
                                     "/outbound/$orderId/pick" -> "pick"
