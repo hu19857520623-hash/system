@@ -3313,23 +3313,17 @@ app.delete('/api/inbound-orders/:id', async (req, res) => {
   }
 })
 
+class ReturnSnapshotScopeError extends Error {}
+
 app.put('/api/return-orders', async (req, res) => {
   try {
     const list = req.body as Record<string, unknown>[]
     const scope = customerScope(req as AuthenticatedRequest)
-    if (scope) {
-      const existing = await prisma.returnOrder.findMany({
-        where: { id: { in: list.map(item => String(item.id)) } },
-        select: { customerId: true },
-      })
-      if (existing.some(item => item.customerId !== scope)) {
-        return res.status(403).json({ error: 'Cross-customer mutation denied' })
-      }
-    }
     await prisma.$transaction(async tx => {
       for (const o of list) {
         const id = String(o.id)
-        const previousForm = await tx.returnOrder.findUnique({ where: { id }, select: { remark: true } })
+        const previousForm = await tx.returnOrder.findUnique({ where: { id }, select: { remark: true, customerId: true } })
+        if (scope && previousForm && previousForm.customerId !== scope) throw new ReturnSnapshotScopeError()
         const data = {
           customerId: scope ?? (o.customerId as string | null | undefined) ?? null,
           returnNo: String(o.returnNo),
@@ -3360,18 +3354,24 @@ app.put('/api/return-orders', async (req, res) => {
           customerDecidedAt: (o.customerDecidedAt as string | null | undefined) ?? null,
           customerProcessChoice: (o.customerProcessChoice as string | null | undefined) ?? null,
         }
-        await tx.returnOrder.upsert({
-          where: { id },
-          create: { id, ...data },
-          update: data,
+        if (!previousForm) {
+          await tx.returnOrder.create({ data: { id, ...data } })
+          continue
+        }
+        const updated = await tx.returnOrder.updateMany({
+          where: { id, ...(scope ? { customerId: scope } : {}) },
+          data,
         })
+        if (!updated.count) throw new ReturnSnapshotScopeError()
       }
     })
     res.json({ ok: true })
   } catch (e) {
+    if (e instanceof ReturnSnapshotScopeError) return res.status(403).json({ error: '无法保存其他客户或归属已变化的退件，请刷新后核对' })
+    if ((e as { code?: string }).code === 'P2002') return res.status(409).json({ error: '退件单号或记录标识已存在，请刷新后核对' })
     if (e instanceof ReturnFormValidationError) return res.status(400).json({ error: e.message })
     console.error(e)
-    res.status(500).json({ error: String(e) })
+    res.status(500).json({ error: '退件保存失败，请刷新核对当前记录后重试' })
   }
 })
 
