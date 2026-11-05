@@ -59,13 +59,22 @@ data class InboundOrder(
     val cartons: List<InboundCarton>? = emptyList(),
     val receivingVersion: String? = null,
     val measurementVersion: String? = null,
+    val cartonConfirmation: InboundCartonConfirmation? = null,
 ) {
+    val cartonBlockMessage: String?
+        get() = when {
+            cartonConfirmation?.ready == false -> cartonConfirmation.message.orEmpty().ifBlank { "请先确认实收箱数，再继续清点" }
+            (receivedCartonCount ?: 0) <= 0 -> "请先确认实收箱数，再继续清点"
+            else -> null
+        }
     val itemList get() = items.orEmpty()
     val cartonList get() = cartons.orEmpty()
     val no get() = inboundNo.orEmpty()
     val statusKey get() = status.orEmpty()
     val statusText get() = inboundStatusLabel(displayStatus.orEmpty().ifBlank { statusKey })
 }
+
+data class InboundCartonConfirmation(val ready: Boolean, val message: String?)
 
 data class InboundItem(
     val id: Int = 0,
