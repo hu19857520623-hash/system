@@ -191,12 +191,16 @@ class InboundViewModel : ViewModel() {
         if (mode == InboundMode.Putaway) loadPendingPutaway()
         val resume = PdaApp.instance.workJournal.active("inbound", mode.key) ?: return
         val generation = workGeneration
-        val restoreMode = mode
         busy = true
         viewModelScope.launch {
             try {
-                val detail = if (restoreMode == InboundMode.Catalog) api.bindCatalogInbound(resume.orderNo, session.warehouseCode) else api.inboundDetail(resume.orderId)
+                val detail = api.inboundDetail(resume.orderId)
                 if (generation != workGeneration) return@launch
+                if (detail.warehouseCode != session.warehouseCode || session.warehouseCode.isBlank()) {
+                    feedback = Feedback(false, "本单属于 ${detail.warehouseCode.orEmpty()}，请返回首页切换作业仓库后继续")
+                    return@launch
+                }
+                if (retireClosedOrder(detail)) return@launch
                 applyOrder(detail)
                 if (!enterPutawayIfReady()) feedback = Feedback(true, "已恢复 ${resume.orderNo} 的未完成作业")
             } catch (e: Exception) {
@@ -732,6 +736,8 @@ class InboundViewModel : ViewModel() {
         viewModelScope.launch {
             try {
                 refreshOrder()
+                val current = order ?: return@launch
+                if (retireClosedOrder(current)) return@launch
                 if (!enterPutawayIfReady()) feedback = Feedback(true, "已刷新单据，请核对当前进度")
             } catch (e: Exception) {
                 feedback = Feedback(false, e.message ?: "刷新单据失败，请重试")
@@ -997,10 +1003,25 @@ class InboundViewModel : ViewModel() {
         it.module == "inbound" && it.orderId == order?.id && it.state == "pending" && it.mode.startsWith("reduce_")
     }
 
+    private fun retireClosedOrder(detail: InboundOrder): Boolean {
+        if (detail.statusKey !in setOf("completed", "confirmed", "cancelled")) return false
+        PdaApp.instance.workJournal.clearActive("inbound")
+        applyOrder(null)
+        selectedItemId = null
+        locationCode = ""
+        stageNotice = null
+        feedback = Feedback(true, "${detail.no} 已${detail.statusText}，请选择其他单据")
+        if (mode == InboundMode.Putaway) loadPendingPutaway()
+        return true
+    }
+
     private suspend fun refreshOrder() {
         val id = order?.id ?: return
         applyOrder(api.inboundDetail(id))
-        order?.let { PdaApp.instance.workJournal.activate(PdaResumeWork("inbound", mode.key, it.id, it.no)) }
+        order?.let {
+            if (it.statusKey in setOf("completed", "confirmed", "cancelled")) PdaApp.instance.workJournal.clearActive("inbound")
+            else PdaApp.instance.workJournal.activate(PdaResumeWork("inbound", mode.key, it.id, it.no))
+        }
         val still = order?.itemList?.find { it.id == selectedItemId }
         if (still == null) {
             selectedItemId = order?.itemList?.firstOrNull {
