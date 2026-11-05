@@ -1283,7 +1283,17 @@ export class ReturnsService {
       if (!row.omsCustomerCode || row.omsCustomerCode !== code) {
         throw new BadRequestException('客户编码与退件单不匹配')
       }
+      const processChoice = decision === 'keep' ? String(body.processChoice || row.requestedProcess || 'restock').trim() : null
+      if (processChoice !== null && (!isValidProcessMethod(processChoice) || processChoice === 'destroy')) {
+        throw new BadRequestException('留货时请选择有效的处理方式')
+      }
       if (row.status !== 'awaiting_customer') {
+        if (row.customerDecidedAt && (row.customerDecision === 'keep' || row.customerDecision === 'discard')) {
+          if (row.customerDecision !== decision || row.customerProcessChoice !== processChoice) {
+            throw new ConflictException('退件处理决定已确认，请刷新核对原决定')
+          }
+          return { row, duplicate: true }
+        }
         throw new BadRequestException('当前状态不可确认，仅「待客户确认」可操作')
       }
 
@@ -1309,10 +1319,6 @@ export class ReturnsService {
           }, false)
         }
       } else {
-        const processChoice = String(body.processChoice || row.requestedProcess || 'restock').trim()
-        if (!isValidProcessMethod(processChoice) || processChoice === 'destroy') {
-          throw new BadRequestException('留货时请选择有效的处理方式')
-        }
         customerProcessChoice = processChoice
         nextStatus = 'accepted_pending'
         const feeLines = buildKeepFeeLines(processChoice as ReturnProcessMethod, totalQty)
@@ -1348,11 +1354,11 @@ export class ReturnsService {
         targetId: no,
         detail: { decision, processChoice: customerProcessChoice, estimatedFeeTotal },
       }, tx)
-      return updated
+      return { row: updated, duplicate: false }
     }, { isolationLevel: 'ReadCommitted' })
-    void this.billing.pushCustomerBillingToOms(Number(updated.customerId))
+    void this.billing.pushCustomerBillingToOms(Number(updated.row.customerId))
     void this.pushReturnStatusToOms(no)
-    return { ...this.mapReturnForOms(updated), idempotent: false }
+    return { ...this.mapReturnForOms(updated.row), idempotent: updated.duplicate }
   }
 
   async executeDispose(id: number, body: { clientRequestId?: string; processRemark?: string }, userId: number) {
