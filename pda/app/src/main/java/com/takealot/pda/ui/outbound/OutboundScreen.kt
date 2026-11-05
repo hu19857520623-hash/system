@@ -604,6 +604,9 @@ class OutboundViewModel : ViewModel() {
         val o = order ?: return
         if (!canWriteOutbound(o.id)) return
         if (mode != "ship" || o.statusKey != "packed") return
+        val originalTrackingNo = trackingNo.trim()
+        val originalCarrier = carrier.trim()
+        val originalProduct = logisticsProduct.trim()
         busy = true
         feedback = null
         viewModelScope.launch {
@@ -611,11 +614,11 @@ class OutboundViewModel : ViewModel() {
             val recordId = journal.beginScan("outbound", "ship_submit", o.no, o.id, o.no)
             try {
                 journal.preparePostRetry(recordId, "/outbound/${o.id}/ship", mapOf(
-                    "trackingNo" to trackingNo.trim(),
-                    "carrier" to carrier.trim(),
-                    "logisticsProduct" to logisticsProduct.trim(),
+                    "trackingNo" to originalTrackingNo,
+                    "carrier" to originalCarrier,
+                    "logisticsProduct" to originalProduct,
                 ))
-                api.submitPrepared(recordId) { api.ship(o.id, trackingNo, carrier, logisticsProduct, recordId) }
+                api.submitPrepared(recordId) { api.ship(o.id, originalTrackingNo, originalCarrier, originalProduct, recordId) }
                 journal.completeOutboundStage(o.id, "ship")
                 journal.acknowledge(recordId, "发运提交成功")
                 feedback = Feedback(true, "${o.no} 发运已确认，OMS 同步完成")
