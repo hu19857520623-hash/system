@@ -76,6 +76,7 @@ export default function ReturnProcessing() {
   const decisionScope = JSON.stringify([decisionKey, authToken, role, [...permissions].sort()])
   const decisionView = useRef(createAsyncViewScope()).current
   const [decisionState, setDecisionState] = useState<{ scope: string; intent?: DecisionIntent; error?: string }>()
+  const [decisionReview, setDecisionReview] = useState<{ scope: string; intent: DecisionIntent }>()
   const [decisionRun, setDecisionRun] = useState<{ scope: string }>()
   const decisionBusy = decisionRun?.scope === decisionScope
   const pendingDecision = decisionState?.scope === decisionScope ? decisionState.intent : undefined
@@ -83,6 +84,7 @@ export default function ReturnProcessing() {
 
   useLayoutEffect(() => {
     decisionView.update(decisionScope)
+    setDecisionReview(undefined)
     const read = () => {
       try {
         const raw = decisionKey && localStorage.getItem(decisionKey)
@@ -109,6 +111,7 @@ export default function ReturnProcessing() {
   }, [allReturns, dataScope, tab])
 
   const detail = returns.find(r => r.id === detailId) || allReturns.find(r => r.id === detailId)
+  const reviewedDecision = decisionReview?.scope === decisionScope && decisionReview.intent.returnNo === detail?.returnNo ? decisionReview.intent : undefined
 
   const handleSync = async () => {
     if (syncing) return
@@ -212,6 +215,8 @@ export default function ReturnProcessing() {
         }
         if (!raw || localStorage.getItem(decisionKey) !== JSON.stringify(intent)) throw Error('原退件决定保存或核对失败，请刷新页面核对')
         setDecisionState({ scope: decisionScope, intent })
+        setDecisionReview(undefined)
+        setDetailId(null)
         const result = await replayReturnDecision(intent, current)
         if (!current()) return
         if (!result.ok && !('conflict' in result)) { notifyError(userFacingError(displaySkuText(result.error))); return }
@@ -228,16 +233,12 @@ export default function ReturnProcessing() {
     finally { setDecisionRun(active => active === run ? undefined : active) }
   }
 
-  const handleDecide = async (r: typeof returns[0], decision: 'keep' | 'discard') => {
+  const handleDecide = (r: typeof returns[0], decision: 'keep' | 'discard') => {
     if (!decisionKey || r.customerId !== decisionCustomerId || !decisionCustomerCode) {
       notifyError('请先核对退件所属客户与当前账号权限'); return
     }
-    const msg = decision === 'discard'
-      ? `确认不留货并销毁退件单 ${r.returnNo}？将产生销毁相关费用。`
-      : `确认留货并授权处理退件单 ${r.returnNo}？将按所选方式追加费用。`
-    if (!window.confirm(msg)) return
-    await sendDecision({ returnNo: r.returnNo, customerId: decisionCustomerId, customerCode: decisionCustomerCode,
-      decision, ...(decision === 'keep' ? { processChoice: decideProcess } : {}) })
+    setDecisionReview({ scope: decisionScope, intent: { returnNo: r.returnNo, customerId: decisionCustomerId,
+      customerCode: decisionCustomerCode, decision, ...(decision === 'keep' ? { processChoice: decideProcess } : {}) } })
   }
 
   return (
@@ -538,7 +539,13 @@ export default function ReturnProcessing() {
                         ))}
                       </select>
                     </label>
-                    <div className="flex flex-wrap justify-end gap-2">
+                    {reviewedDecision ? <div role="group" aria-label="核对退件决定" className="flex flex-wrap items-center justify-end gap-2">
+                      <p className="w-full text-sm">{reviewedDecision.decision === 'discard'
+                        ? `确认不留货并销毁 ${reviewedDecision.returnNo}？将产生销毁相关费用。`
+                        : `确认留货并按「${returnProcessLabel(reviewedDecision.processChoice || '')}」处理 ${reviewedDecision.returnNo}？将按所选方式追加费用。`}</p>
+                      <Button variant="ghost" size="sm" disabled={decisionBusy} onClick={() => setDecisionReview(undefined)}>返回修改</Button>
+                      <Button size="sm" disabled={decisionBusy || !!pendingDecision || !!decisionError} onClick={() => void sendDecision(reviewedDecision)}>确认提交决定</Button>
+                    </div> : <div className="flex flex-wrap justify-end gap-2">
                       <Button variant="ghost" size="sm" onClick={() => setDetailId(null)}>
                         取消
                       </Button>
@@ -557,7 +564,7 @@ export default function ReturnProcessing() {
                       >
                         留货并授权处理
                       </Button>
-                    </div>
+                    </div>}
                   </div>
                 )}
               </div>
