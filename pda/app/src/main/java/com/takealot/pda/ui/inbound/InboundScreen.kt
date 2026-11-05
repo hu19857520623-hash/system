@@ -255,9 +255,10 @@ class InboundViewModel : ViewModel() {
 
     private fun blockUnconfirmedPutaway(): Boolean {
         if (mode != InboundMode.Putaway || !PdaApp.instance.workJournal.pendingRecords().any {
-                it.module == "inbound" && it.state == "pending" && it.mode == "putaway" && it.retryEndpoint?.endsWith("/putaway") == true
+                it.module == "inbound" && it.state == "pending" && ((it.mode == "putaway" && it.retryEndpoint?.endsWith("/putaway") == true) ||
+                    (it.mode == "resolve_exception" && it.orderId == order?.id))
             }) return false
-        feedback = Feedback(false, "有上架结果待确认，请返回首页打开「待同步记录」，确认原请求后重新进入上架")
+        feedback = Feedback(false, "有上架或异常放行结果待确认，请返回首页打开「待同步记录」，确认原请求后继续上架")
         return true
     }
 
@@ -266,11 +267,16 @@ class InboundViewModel : ViewModel() {
         if (hasPendingReduction()) { feedback = Feedback(false, "有减少数量请求待确认，请先到待同步页面处理后继续作业"); return }
         val code = raw.trim()
         if (code.isEmpty()) return
+        if (mode == InboundMode.Catalog && order?.statusKey == "exception") {
+            feedback = Feedback(false, "本单等待主管异常放行，放行后请刷新单据继续上架")
+            return
+        }
+        catalogCartonBlock?.let { feedback = Feedback(false, it); return }
         val quantity = if (mode == InboundMode.Catalog && order != null) {
             catalogQuantity.toIntOrNull()?.takeIf { it in 1..999999 }
                 ?: run { feedback = Feedback(false, "请先输入 1～999999 的整数件数，再扫描 SKU"); return }
         } else qcIncrement
-        if (showQcDifference || showCartonDifference || reductionMode != null) {
+        if (showQcDifference || showCartonDifference || showExceptionRelease || reductionMode != null) {
             feedback = Feedback(false, "请先处理差异弹窗，或返回核对后继续扫码")
             return
         }
@@ -732,12 +738,46 @@ class InboundViewModel : ViewModel() {
 
     fun resolveException(reason: String) {
         val o = order ?: return
-        if (reason.trim().length < 2) { feedback = Feedback(false, "请填写异常放行原因"); return }
+        if (busy || pendingScanCount > 0 || o.statusKey != "exception" || !session.hasPerm("inbound.handle_exception")) return
+        val journal = PdaApp.instance.workJournal
+        if (journal.pendingRecords().any { it.module == "inbound" && it.orderId == o.id }) {
+            showExceptionRelease = false
+            feedback = Feedback(false, "本单有结果待确认，请到「待同步记录」核对原请求")
+            return
+        }
+        val version = o.receivingVersion ?: run {
+            showExceptionRelease = false
+            feedback = Feedback(false, "请先刷新单据再放行")
+            return
+        }
+        if (reason.trim().length !in 2..500) {
+            feedback = Feedback(false, "请填写 2～500 字的异常放行原因")
+            return
+        }
+        val body = mapOf("reason" to reason.trim(), "expectedVersion" to version)
+        busy = true
         viewModelScope.launch {
-            busy = true
-            try { api.resolveException(o.id, reason); refreshOrder(); feedback = Feedback(true, "已放行，可继续上架"); showExceptionRelease = false; exceptionReason = "" }
-            catch (e: Exception) { feedback = Feedback(false, e.message ?: "放行失败") }
-            finally { busy = false }
+            val recordId = journal.beginScan("inbound", "resolve_exception", o.no, o.id, o.no)
+            try {
+                journal.preparePostRetry(recordId, "/inbound/${o.id}/resolve-exception", body)
+                api.resolveException(o.id, body, recordId)
+                journal.acknowledge(recordId, "异常已放行")
+                showExceptionRelease = false
+                exceptionReason = ""
+                if (refreshAfterConfirmedWrite() && !enterPutawayIfReady()) {
+                    feedback = Feedback(true, "异常已放行，请核对最新作业进度")
+                }
+            } catch (e: Exception) {
+                showExceptionRelease = false
+                val message = e.message ?: "异常放行失败"
+                if (journal.isRetriable(e)) {
+                    journal.retainForRetry(recordId, message)
+                    feedback = Feedback(false, "放行结果待确认，请到「待同步记录」核对原请求")
+                } else {
+                    journal.fail(recordId, message)
+                    feedback = Feedback(false, message)
+                }
+            } finally { busy = false }
         }
     }
 
@@ -881,7 +921,13 @@ class InboundViewModel : ViewModel() {
         val kind = reductionMode ?: return
         if (busy || pendingScanCount > 0 || quantity !in 1..reductionCurrent || reason.trim().length < 2) return
         val itemId = reductionItemId
-        val body = mapOf("inboundItemId" to itemId, "quantity" to quantity, "expectedCurrent" to reductionCurrent, "reason" to reason.trim())
+        val version = current.receivingVersion ?: run {
+            reductionMode = null
+            feedback = Feedback(false, "请先刷新单据并核对当前数量")
+            return
+        }
+        val body = mapOf("inboundItemId" to itemId, "quantity" to quantity, "expectedCurrent" to reductionCurrent,
+            "reason" to reason.trim(), "expectedVersion" to version)
         viewModelScope.launch {
             busy = true
             val journal = PdaApp.instance.workJournal
@@ -891,8 +937,9 @@ class InboundViewModel : ViewModel() {
                 val res = api.reduceInbound(current.id, kind, body + ("clientRequestId" to recordId))
                 journal.acknowledge(recordId, res.message)
                 reductionMode = null
-                refreshOrder()
-                feedback = Feedback(true, displayMessage(res.message.orEmpty().ifBlank { "数量已减少" }))
+                if (refreshAfterConfirmedWrite()) {
+                    feedback = Feedback(true, displayMessage(res.message.orEmpty().ifBlank { "数量已减少" }))
+                }
             } catch (e: Exception) {
                 feedback = Feedback(false, displayMessage(e.message ?: "减少失败"))
                 if (journal.isRetriable(e)) {
@@ -1357,7 +1404,7 @@ private fun ExceptionReleaseDialog(vm: InboundViewModel) {
             }
         },
         confirmButton = {
-            TextButton(enabled = !vm.busy && vm.exceptionReason.trim().length >= 2, onClick = { vm.resolveException(vm.exceptionReason) }) { Text("确认放行", color = PdaWarn) }
+            TextButton(enabled = !vm.busy && vm.exceptionReason.trim().length in 2..500, onClick = { vm.resolveException(vm.exceptionReason) }) { Text("确认放行", color = PdaWarn) }
         },
         dismissButton = { TextButton(enabled = !vm.busy, onClick = { vm.showExceptionRelease = false }) { Text("取消") } },
     )

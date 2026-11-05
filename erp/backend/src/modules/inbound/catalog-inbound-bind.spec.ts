@@ -17,13 +17,13 @@ describe('catalog inbound binding', () => {
     expect(arrival).toHaveBeenCalledWith(input, 7)
     expect(detail).toHaveBeenCalledWith(11)
   })
-  it.each(['arrived', 'receiving', 'pending_putaway'])('resumes %s without repeating arrival', async status => {
+  it.each(['arrived', 'receiving', 'pending_putaway', 'exception'])('resumes %s without repeating arrival', async status => {
     const { service, arrival, detail } = fixture({ ...row, status })
     detail.mockResolvedValue({ ...row, status } as any)
     await expect(service.bindCatalogInbound(input)).resolves.toMatchObject({ status })
     expect(arrival).not.toHaveBeenCalled()
   })
-  it.each(['completed', 'confirmed', 'cancelled', 'exception'])('rejects %s without mutation', async status => {
+  it.each(['completed', 'confirmed', 'cancelled'])('rejects %s without mutation', async status => {
     const { service, arrival, detail } = fixture({ ...row, status })
     await expect(service.bindCatalogInbound(input)).rejects.toThrow('不可绑定')
     expect(arrival).not.toHaveBeenCalled()

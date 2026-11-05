@@ -117,7 +117,7 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
 
     suspend fun reduceInbound(id: Int, mode: String, body: Map<String, Any?>): ScanActionResult = withContext(Dispatchers.IO) {
         require(mode in setOf("qc", "carton", "putaway"))
-        gson.fromJson(postJson("/inbound/$id/reduce-$mode", body), ScanActionResult::class.java)
+        gson.fromJson(postJson("/inbound/$id/reduce-$mode", body).requireInboundSyncAcknowledged(), ScanActionResult::class.java)
     }
 
     suspend fun measureDimensions(id: Int, body: Map<String, Any?>, clientRequestId: String) = withContext(Dispatchers.IO) {
@@ -129,8 +129,8 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
         gson.fromJson(result, InboundOrder::class.java)
     }
 
-    suspend fun resolveException(id: Int, reason: String) = withContext(Dispatchers.IO) {
-        postJson("/inbound/$id/resolve-exception", mapOf("reason" to reason.trim()))
+    suspend fun resolveException(id: Int, body: Map<String, Any?>, clientRequestId: String) = withContext(Dispatchers.IO) {
+        postJson("/inbound/$id/resolve-exception", body + ("clientRequestId" to clientRequestId)).requireInboundSyncAcknowledged()
     }
 
     suspend fun outboundList(
