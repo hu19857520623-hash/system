@@ -210,7 +210,16 @@ class InboundViewModel : ViewModel() {
         enqueueScan(scan)
     }
 
+    private fun blockUnconfirmedPutaway(): Boolean {
+        if (mode != InboundMode.Putaway || !PdaApp.instance.workJournal.scanRecords.value.any {
+                it.module == "inbound" && it.state == "pending" && it.mode == "putaway" && it.retryEndpoint?.endsWith("/putaway") == true
+            }) return false
+        feedback = Feedback(false, "有上架结果待确认，请返回首页打开「待同步记录」，确认原请求后重新进入上架")
+        return true
+    }
+
     private fun enqueueScan(raw: String) {
+        if (blockUnconfirmedPutaway()) return
         if (hasPendingReduction()) { feedback = Feedback(false, "有减少数量请求待确认，请先到待同步页面处理后继续作业"); return }
         val code = raw.trim()
         if (code.isEmpty()) return
@@ -231,6 +240,7 @@ class InboundViewModel : ViewModel() {
     }
 
     private suspend fun runScan(code: String, quantity: Int) {
+        if (blockUnconfirmedPutaway()) return
         busy = true; feedback = Feedback(false, "正在处理 ${displaySku(code)}…", processing = true)
         val journal = PdaApp.instance.workJournal
         val recordId = journal.beginScan("inbound", mode.key, code, order?.id, order?.no)
@@ -464,9 +474,14 @@ class InboundViewModel : ViewModel() {
     }
 
     fun submitPutaway() {
+        if (blockUnconfirmedPutaway()) return
+        if (busy || pendingScanCount > 0) {
+            feedback = Feedback(false, "请等待扫码处理完成后再确认上架")
+            return
+        }
         if (hasPendingReduction()) { feedback = Feedback(false, "请先确认待同步的减少数量请求"); return }
+        busy = true
         viewModelScope.launch {
-            busy = true
             val o = order
             val recordId = PdaApp.instance.workJournal.beginScan("inbound", "putaway", locationCode, o?.id, o?.no)
             try {
@@ -483,11 +498,12 @@ class InboundViewModel : ViewModel() {
     }
 
     private suspend fun doPutaway(recordId: String? = null) {
-        val o = order ?: return
-        val item = selectedItem ?: run { feedback = Feedback(false, "请先扫描 SKU"); return }
-        if (locationCode.isBlank()) { feedback = Feedback(false, "请扫描库位"); return }
-        if (!item.hasMeasuredDims()) { feedback = Feedback(false, "${displaySku(item.skuCode)} 请先填写并保存体积"); return }
-        val qty = putawayQty.coerceIn(1, item.remainingPutaway.coerceAtLeast(1))
+        val o = order ?: throw ErpException("请先扫描或点选待上架入库单")
+        val item = selectedItem ?: throw ErpException("请先扫描待上架 SKU")
+        if (locationCode.isBlank()) throw ErpException("请扫描库位")
+        if (!item.hasMeasuredDims()) throw ErpException("${displaySku(item.skuCode)} 请先填写并保存体积")
+        if (putawayQty !in 1..item.remainingPutaway) throw ErpException("本次件数超出待上架数量，请核对剩余件数后重试")
+        val qty = putawayQty
         val loc = locationCode
         val requestId = recordId ?: java.util.UUID.randomUUID().toString()
         PdaApp.instance.workJournal.preparePostRetry(
@@ -1258,7 +1274,7 @@ private fun PutawayEditor(vm: InboundViewModel) {
             )
             BigButton("保存尺寸", onClick = { vm.saveMeasure() }, enabled = !vm.busy)
         }
-        BigButton("确认上架", onClick = { vm.submitPutaway() }, enabled = !vm.busy && item != null, color = PdaOk)
+        BigButton("确认上架", onClick = { vm.submitPutaway() }, enabled = !vm.busy && vm.pendingScanCount == 0 && item != null, color = PdaOk)
     }
 }
 
