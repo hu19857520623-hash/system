@@ -214,7 +214,7 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
                     "logisticsProduct" to logisticsProduct.trim(),
                     "clientRequestId" to clientRequestId,
                 ),
-            ),
+            ).requireShipSyncAcknowledged(),
             OutboundOrder::class.java,
         )
     }
@@ -244,7 +244,9 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
         val endpoint = record.retryEndpoint.orEmpty()
         val body = record.retryBodyJson.orEmpty()
         if (endpoint.isBlank() || body.isBlank()) throw ErpException("待同步记录缺少请求内容")
-        postJson(endpoint, JsonParser.parseString(body))
+        val result = postJson(endpoint, JsonParser.parseString(body))
+        if (endpoint.startsWith("/outbound/") && endpoint.endsWith("/ship")) result.requireShipSyncAcknowledged()
+        result
     }
 
     private fun get(path: String): JsonElement = execute(request(path).get().build(), requireAuth = true)
@@ -309,4 +311,12 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
     }
 
     private fun String.encodeUrl() = java.net.URLEncoder.encode(this, "UTF-8")
+}
+
+internal fun JsonElement.requireShipSyncAcknowledged(): JsonElement {
+    val warning = takeIf { it.isJsonObject }?.asJsonObject?.get("warning")
+    if (warning?.isJsonPrimitive == true && warning.asJsonPrimitive.isString && warning.asString.isNotBlank()) {
+        throw ErpException("发运已保存，OMS 同步待确认。请在「待同步记录」重试原请求，勿重复发运", retriable = true)
+    }
+    return this
 }

@@ -284,8 +284,10 @@ class OutboundViewModel : ViewModel() {
     }
 
     fun openOrder(id: Int) {
+        if (busy || pendingScanCount > 0) return
+        busy = true
+        feedback = null
         viewModelScope.launch {
-            busy = true; feedback = null
             try { loadOrder(id) }
             catch (e: Exception) { feedback = Feedback(false, e.message ?: "打开单据失败"); order = null; lines = emptyList() }
             finally { busy = false }
@@ -384,9 +386,10 @@ class OutboundViewModel : ViewModel() {
 
     fun startReview() {
         val current = order ?: return
-        if (mode != "review" || current.statusKey != "picked") return
+        if (mode != "review" || current.statusKey != "picked" || !canWriteOutbound(current.id)) return
+        busy = true
+        feedback = null
         viewModelScope.launch {
-            busy = true; feedback = null
             try {
                 order = api.startReview(current.id)
                 feedback = Feedback(true, "已开始复核，请逐件扫描 SKU 或条码")
@@ -420,12 +423,27 @@ class OutboundViewModel : ViewModel() {
         }
     }
 
+    private fun canWriteOutbound(orderId: Int): Boolean {
+        if (busy || pendingScanCount > 0) {
+            feedback = Feedback(false, "请等待当前扫码或操作完成")
+            return false
+        }
+        if (PdaApp.instance.workJournal.scanRecords.value.any {
+                it.module == "outbound" && it.orderId == orderId && it.state == "pending" && it.retryAction == "post"
+            }) {
+            feedback = Feedback(false, "本单有原操作待确认，请返回首页打开「待同步记录」，核对原请求后继续")
+            return false
+        }
+        return true
+    }
+
     fun submitPick() {
         val o = order ?: return
+        if (!canWriteOutbound(o.id)) return
         if (lines.any { it.locationCode.isBlank() }) { feedback = Feedback(false, "存在未填库位的 SKU"); return }
         if (lines.any { !it.done }) { feedback = Feedback(false, "仍有未完成的库位任务；短拣请标记库存短缺异常"); return }
+        busy = true
         viewModelScope.launch {
-            busy = true
             val journal = PdaApp.instance.workJournal
             val recordId = journal.beginScan("outbound", "pick_submit", o.no, o.id, o.no)
             try {
@@ -449,13 +467,14 @@ class OutboundViewModel : ViewModel() {
 
     fun submitReview() {
         val o = order ?: return
+        if (!canWriteOutbound(o.id)) return
         if (lines.any { !it.done }) { feedback = Feedback(false, "请先扫完所有 SKU"); return }
         if (o.omsPreDeduct != null && (cartons.isEmpty() || cartons.any { !it.valid() })) {
             feedback = Feedback(false, "OMS 单请逐箱填写有效长宽高和毛重")
             return
         }
+        busy = true
         viewModelScope.launch {
-            busy = true
             val journal = PdaApp.instance.workJournal
             val recordId = journal.beginScan("outbound", "pack_submit", o.no, o.id, o.no)
             try {
@@ -499,8 +518,9 @@ class OutboundViewModel : ViewModel() {
 
     private fun reportProblem(problemType: String, remark: String, onSuccess: () -> Unit) {
         val o = order ?: return
+        if (!canWriteOutbound(o.id)) return
+        busy = true
         viewModelScope.launch {
-            busy = true
             val journal = PdaApp.instance.workJournal
             val recordId = journal.beginScan("outbound", "problem_$problemType", o.no, o.id, o.no)
             try {
@@ -532,9 +552,11 @@ class OutboundViewModel : ViewModel() {
 
     fun submitShip() {
         val o = order ?: return
+        if (!canWriteOutbound(o.id)) return
         if (mode != "ship" || o.statusKey != "packed") return
+        busy = true
+        feedback = null
         viewModelScope.launch {
-            busy = true; feedback = null
             val journal = PdaApp.instance.workJournal
             val recordId = journal.beginScan("outbound", "ship_submit", o.no, o.id, o.no)
             try {
@@ -545,7 +567,7 @@ class OutboundViewModel : ViewModel() {
                 ))
                 api.ship(o.id, trackingNo, carrier, logisticsProduct, recordId)
                 journal.acknowledge(recordId, "发运提交成功")
-                feedback = Feedback(true, "${o.no} 已发运；库存、OMS 状态和实际费用已同步")
+                feedback = Feedback(true, "${o.no} 发运已确认，OMS 同步完成")
                 order = null; trackingNo = ""; carrier = ""; logisticsProduct = ""; loadList()
             } catch (e: Exception) {
                 feedback = Feedback(false, e.message ?: "发运失败")
@@ -626,7 +648,7 @@ fun OutboundScreen(modeKey: String, onBack: () -> Unit, vm: OutboundViewModel = 
                 ) {
                     KeyValue("客户", order.customerName.orEmpty())
                     KeyValue("仓库", order.warehouseCode.orEmpty())
-                    TextButton(onClick = { vm.clearOrder() }) { Text("换单", color = PdaAccent) }
+                    TextButton(onClick = { vm.clearOrder() }, enabled = !vm.busy && vm.pendingScanCount == 0) { Text("换单", color = PdaAccent) }
                 }
                 if (reviewAwaitingStart) {
                     Text("该单已拣货。确认实物与单据一致后，再开始复核；开始后会记录复核人。", color = PdaWarn, fontSize = 13.sp)
