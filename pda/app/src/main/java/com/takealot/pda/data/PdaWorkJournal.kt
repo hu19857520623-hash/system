@@ -37,6 +37,8 @@ data class PdaScanRecord(
     val retryExtra: String? = null,
     val retryEndpoint: String? = null,
     val retryBodyJson: String? = null,
+    val ownerId: Int? = null,
+    val serverUrl: String? = null,
 )
 
 data class PdaPickProgressLine(
@@ -54,7 +56,7 @@ data class PdaPickProgress(
     val updatedAt: Long = System.currentTimeMillis(),
 )
 
-class PdaWorkJournal(context: Context) {
+class PdaWorkJournal(context: Context, private val session: SessionStore) {
     private val prefs = context.getSharedPreferences("pda_work_journal", Context.MODE_PRIVATE)
     private val gson = Gson()
     private val recordsType = object : TypeToken<List<PdaScanRecord>>() {}.type
@@ -73,7 +75,10 @@ class PdaWorkJournal(context: Context) {
 
     @Synchronized
     fun beginScan(module: String, mode: String, scanCode: String, orderId: Int? = null, orderNo: String? = null): String {
-        val record = PdaScanRecord(module = module, mode = mode, scanCode = scanCode, orderId = orderId, orderNo = orderNo)
+        val record = PdaScanRecord(
+            module = module, mode = mode, scanCode = scanCode, orderId = orderId, orderNo = orderNo,
+            ownerId = session.userId.takeIf { it > 0 }, serverUrl = session.baseUrl,
+        )
         saveRecords(_scanRecords.value + record)
         return record.id
     }
@@ -157,6 +162,9 @@ class PdaWorkJournal(context: Context) {
     private fun update(id: String, state: String, message: String?) {
         saveRecords(_scanRecords.value.map { if (it.id == id) it.copy(state = state, message = message) else it })
     }
+
+    fun canReplay(record: PdaScanRecord): Boolean =
+        record.ownerId != null && record.ownerId == session.userId && record.serverUrl == session.baseUrl
 
     fun pendingRecords(): List<PdaScanRecord> = _scanRecords.value.filter { it.state == "pending" }
     fun recentProblemRecords(): List<PdaScanRecord> = _scanRecords.value

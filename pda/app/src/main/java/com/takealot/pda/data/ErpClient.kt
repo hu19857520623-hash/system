@@ -5,6 +5,7 @@ import com.google.gson.JsonElement
 import com.google.gson.JsonParser
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.asContextElement
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -223,6 +224,16 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
         gson.fromJson(postJson("/management-loop/stocktakes/$id/count", body + ("clientRequestId" to clientRequestId)), StocktakePlan::class.java)
     }
 
+    private val replayScope = ThreadLocal<AuthRequestScope>()
+
+    suspend fun <T> replayAsOriginalOwner(record: PdaScanRecord, action: suspend () -> T): T {
+        val scope = AuthRequestScope(session.baseUrl, bearerToken())
+        if (journal?.canReplay(record) != true || scope.token.isBlank()) {
+            throw ErpException("请使用原账号和原服务器核对待同步请求", retriable = true)
+        }
+        return withContext(replayScope.asContextElement(scope)) { action() }
+    }
+
     suspend fun retryPending(record: PdaScanRecord) = withContext(Dispatchers.IO) {
         val endpoint = record.retryEndpoint.orEmpty()
         val body = record.retryBodyJson.orEmpty()
@@ -243,9 +254,13 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
     private fun bearerToken(): String = session.token.trim().removePrefix("Bearer ").trim()
 
     private fun request(path: String, auth: Boolean = true): Request.Builder {
-        val baseUrl = session.baseUrl
+        val replay = replayScope.get()
+        if (replay != null && (replay.token != bearerToken() || replay.baseUrl != session.baseUrl)) {
+            throw ErpException("登录或服务器已切换，原请求已保留，请使用原账号继续", retriable = true)
+        }
+        val baseUrl = replay?.baseUrl ?: session.baseUrl
         val builder = Request.Builder().url("$baseUrl$path")
-        val token = bearerToken()
+        val token = replay?.token ?: bearerToken()
         if (auth) builder.tag(AuthRequestScope::class.java, AuthRequestScope(baseUrl, token))
         if (auth) {
             if (token.isBlank() || SessionStore.isJwtExpired(token)) {
@@ -280,7 +295,12 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
         }
         resp.use {
             try {
-                return parseErpResponse(it.body?.string().orEmpty(), it.code)
+                val result = parseErpResponse(it.body?.string().orEmpty(), it.code)
+                val replay = replayScope.get()
+                if (replay != null && (replay.token != bearerToken() || replay.baseUrl != session.baseUrl)) {
+                    throw ErpException("登录或服务器已切换，请切回原账号核对结果", retriable = true)
+                }
+                return result
             } catch (e: ErpException) {
                 if (e.code == 401 && requireAuth) {
                     request.tag(AuthRequestScope::class.java)?.let { session.invalidateAuth(it.token, it.baseUrl) }

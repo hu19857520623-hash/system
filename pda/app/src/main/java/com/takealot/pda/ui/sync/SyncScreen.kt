@@ -33,6 +33,7 @@ import com.takealot.pda.ui.components.StatusChip
 import com.takealot.pda.ui.theme.PdaAccent
 import com.takealot.pda.ui.theme.PdaErr
 import com.takealot.pda.ui.theme.PdaMuted
+import com.takealot.pda.ui.theme.PdaWarn
 import com.takealot.pda.ui.theme.PdaText
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -46,52 +47,57 @@ class SyncViewModel : ViewModel() {
     var feedback by mutableStateOf<Feedback?>(null)
     var retryingId by mutableStateOf<String?>(null)
 
+    fun canReplay(record: PdaScanRecord) = journal.canReplay(record)
+
     fun retry(record: PdaScanRecord) {
         if (retryingId != null || journal.pendingRecords().none { it.id == record.id && it.retryAction != null }) return
+        if (!canReplay(record)) return
         retryingId = record.id
         viewModelScope.launch {
             feedback = Feedback(false, "正在重新确认 ${record.scanCode}…", processing = true)
             try {
-                when (record.retryAction) {
-                    "arrival" -> api.arrivalScan(record.scanCode, record.retryExtra.orEmpty())
-                    "receive_box" -> {
-                        val orderId = record.orderId ?: error("记录缺少入库单")
-                        try {
-                            api.receiveBox(orderId, record.scanCode, record.id)
-                        } catch (e: Exception) {
-                            if (!e.message.orEmpty().contains("已确认")) throw e
-                        }
-                    }
-                    "scan_qc" -> {
-                        val orderId = record.orderId ?: error("记录缺少入库单")
-                        val requestCode = record.retryExtra?.takeIf { it.isNotBlank() }
-                            ?: api.inboundDetail(orderId).resolveSkuScan(record.scanCode)
-                        api.scanQc(orderId, requestCode, record.retryQuantity ?: 1, record.id)
-                    }
-                    "post" -> {
-                        val result = api.retryPending(record)
-                        val orderId = record.orderId
-                        if (record.module == "stocktake" && orderId != null &&
-                            record.retryEndpoint == "/management-loop/stocktakes/$orderId/count") {
-                            val order = result.takeIf { it.isJsonObject }?.asJsonObject
-                            val returnedId = order?.get("id")?.takeIf { it.isJsonPrimitive }?.asString
-                            val status = order?.get("status")?.takeIf { it.isJsonPrimitive }?.asString
-                            if (returnedId == orderId.toString() && status in setOf("pending_approval", "completed", "cancelled") &&
-                                journal.active("stocktake", "count")?.orderId == orderId) {
-                                journal.clearActive("stocktake")
+                api.replayAsOriginalOwner(record) {
+                    when (record.retryAction) {
+                        "arrival" -> api.arrivalScan(record.scanCode, record.retryExtra.orEmpty())
+                        "receive_box" -> {
+                            val orderId = record.orderId ?: error("记录缺少入库单")
+                            try {
+                                api.receiveBox(orderId, record.scanCode, record.id)
+                            } catch (e: Exception) {
+                                if (!e.message.orEmpty().contains("已确认")) throw e
                             }
                         }
-                        if (record.module == "outbound" && orderId != null) {
-                            val completedMode = when (record.retryEndpoint) {
-                                "/outbound/$orderId/pick" -> "pick"
-                                "/outbound/$orderId/pack" -> "review"
-                                "/outbound/$orderId/ship" -> "ship"
-                                else -> null
-                            }
-                            if (completedMode != null) journal.completeOutboundStage(orderId, completedMode)
+                        "scan_qc" -> {
+                            val orderId = record.orderId ?: error("记录缺少入库单")
+                            val requestCode = record.retryExtra?.takeIf { it.isNotBlank() }
+                                ?: api.inboundDetail(orderId).resolveSkuScan(record.scanCode)
+                            api.scanQc(orderId, requestCode, record.retryQuantity ?: 1, record.id)
                         }
+                        "post" -> {
+                            val result = api.retryPending(record)
+                            val orderId = record.orderId
+                            if (record.module == "stocktake" && orderId != null &&
+                                record.retryEndpoint == "/management-loop/stocktakes/$orderId/count") {
+                                val order = result.takeIf { it.isJsonObject }?.asJsonObject
+                                val returnedId = order?.get("id")?.takeIf { it.isJsonPrimitive }?.asString
+                                val status = order?.get("status")?.takeIf { it.isJsonPrimitive }?.asString
+                                if (returnedId == orderId.toString() && status in setOf("pending_approval", "completed", "cancelled") &&
+                                    journal.active("stocktake", "count")?.orderId == orderId) {
+                                    journal.clearActive("stocktake")
+                                }
+                            }
+                            if (record.module == "outbound" && orderId != null) {
+                                val completedMode = when (record.retryEndpoint) {
+                                    "/outbound/$orderId/pick" -> "pick"
+                                    "/outbound/$orderId/pack" -> "review"
+                                    "/outbound/$orderId/ship" -> "ship"
+                                    else -> null
+                                }
+                                if (completedMode != null) journal.completeOutboundStage(orderId, completedMode)
+                            }
+                        }
+                        else -> error("该记录不能自动重试，请返回原任务核对后重新扫描")
                     }
-                    else -> error("该记录不能自动重试，请返回原任务核对后重新扫描")
                 }
                 journal.acknowledge(record.id, "重试成功，ERP 已确认")
                 feedback = Feedback(true, "${record.scanCode} 已与 ERP 确认")
@@ -139,8 +145,11 @@ fun SyncScreen(onBack: () -> Unit, vm: SyncViewModel = viewModel()) {
                 Text("${record.module} · ${record.mode} · ${record.orderNo.orEmpty().ifBlank { "未绑定单据" }}", color = PdaMuted, fontSize = 12.sp)
                 Text(SimpleDateFormat("MM-dd HH:mm:ss", Locale.getDefault()).format(Date(record.createdAt)), color = PdaMuted, fontSize = 12.sp)
                 record.message?.takeIf { it.isNotBlank() }?.let { Text(it, color = PdaErr, fontSize = 13.sp) }
+                if (record.state == "pending" && record.retryAction != null && !vm.canReplay(record)) {
+                    Text(if (record.ownerId == null) "历史记录缺少提交账号，请由主管在 ERP 核对原单与流水" else "请切回提交时的账号和服务器后重试", color = PdaWarn, fontSize = 13.sp)
+                }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    if (record.state == "pending" && record.retryAction != null) {
+                    if (record.state == "pending" && record.retryAction != null && vm.canReplay(record)) {
                         TextButton(onClick = { vm.retry(record) }, enabled = vm.retryingId == null) {
                             Text("安全重试", color = PdaAccent)
                         }
