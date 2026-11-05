@@ -23,6 +23,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.takealot.pda.PdaApp
+import com.takealot.pda.data.ErpException
 import com.takealot.pda.data.PdaScanRecord
 import com.takealot.pda.data.resolveSkuScan
 import com.takealot.pda.ui.components.Feedback
@@ -46,7 +47,7 @@ class SyncViewModel : ViewModel() {
     var retryingId by mutableStateOf<String?>(null)
 
     fun retry(record: PdaScanRecord) {
-        if (retryingId != null || record.state != "pending") return
+        if (retryingId != null || journal.pendingRecords().none { it.id == record.id && it.retryAction != null }) return
         retryingId = record.id
         viewModelScope.launch {
             feedback = Feedback(false, "正在重新确认 ${record.scanCode}…", processing = true)
@@ -95,9 +96,11 @@ class SyncViewModel : ViewModel() {
                 journal.acknowledge(record.id, "重试成功，ERP 已确认")
                 feedback = Feedback(true, "${record.scanCode} 已与 ERP 确认")
             } catch (e: Exception) {
-                if (journal.isRetriable(e)) journal.retainForRetry(record.id, e.message)
-                else journal.fail(record.id, e.message)
-                feedback = Feedback(false, e.message ?: "重试失败")
+                val message = if (e is ErpException) e.message.orEmpty() else "暂时无法核对原请求，请检查网络后重试"
+                val retryable = journal.isRetriable(e) || (e is ErpException && e.code in setOf(401, 403))
+                if (retryable) journal.retainForRetry(record.id, message)
+                else journal.fail(record.id, message)
+                feedback = Feedback(false, message)
             } finally {
                 retryingId = null
             }
@@ -105,7 +108,8 @@ class SyncViewModel : ViewModel() {
     }
 
     fun dismiss(record: PdaScanRecord) {
-        journal.dismiss(record.id)
+        if (retryingId != null) return
+        if (!journal.dismiss(record.id)) feedback = Feedback(false, "原请求结果待确认，请安全重试后继续")
     }
 }
 
@@ -141,8 +145,10 @@ fun SyncScreen(onBack: () -> Unit, vm: SyncViewModel = viewModel()) {
                             Text("安全重试", color = PdaAccent)
                         }
                     }
-                    TextButton(onClick = { vm.dismiss(record) }, enabled = vm.retryingId == null) {
-                        Text("人工确认关闭", color = PdaMuted)
+                    if (record.state == "failed" || record.retryAction == null) {
+                        TextButton(onClick = { vm.dismiss(record) }, enabled = vm.retryingId == null) {
+                            Text("人工确认关闭", color = PdaMuted)
+                        }
                     }
                 }
             }

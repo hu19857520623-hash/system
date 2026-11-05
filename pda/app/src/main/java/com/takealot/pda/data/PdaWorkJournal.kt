@@ -164,7 +164,12 @@ class PdaWorkJournal(context: Context) {
         .sortedByDescending { it.createdAt }
 
     @Synchronized
-    fun dismiss(id: String) = update(id, "dismissed", "已人工确认")
+    fun dismiss(id: String): Boolean {
+        val record = _scanRecords.value.firstOrNull { it.id == id } ?: return false
+        if (record.state != "failed" && !(record.state == "pending" && record.retryAction == null)) return false
+        update(id, "dismissed", "已人工确认")
+        return true
+    }
 
     private fun loadRecords(): List<PdaScanRecord> = gson.fromJson<List<PdaScanRecord>>(prefs.getString(KEY_RECORDS, null), recordsType).orEmpty()
     private fun resumes(): List<PdaResumeWork> = resumeCache
