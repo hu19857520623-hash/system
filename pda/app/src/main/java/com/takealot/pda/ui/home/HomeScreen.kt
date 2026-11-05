@@ -63,7 +63,7 @@ fun HomeScreen(onInbound: (String) -> Unit, onOutbound: (String) -> Unit, onStoc
     val scannerReady by ScanBus.receiverActive.collectAsState()
     val scannerHealth by ScanBus.health.collectAsState()
     val scanRecords by PdaApp.instance.workJournal.scanRecords.collectAsState()
-    val pendingSync = scanRecords.count { it.state == "pending" }
+    val pendingSync = scanRecords.count { it.state == "pending" && PdaApp.instance.workJournal.canSeeRecord(it) }
 
     LaunchedEffect(Unit) {
         runCatching { api.warehouses("overseas") }.onSuccess { list ->
@@ -127,6 +127,9 @@ fun HomeScreen(onInbound: (String) -> Unit, onOutbound: (String) -> Unit, onStoc
         val active = PdaApp.instance.workJournal.latestActive()
         if (pendingSync > 0) {
             WorkTile("待同步记录", "$pendingSync 条操作尚未得到 ERP 确认，点击处理", PdaErr, true, onClick = onSync)
+        }
+        if (active == null && PdaApp.instance.workJournal.hasUnassignedResume()) {
+            Text("历史作业缺少提交账号，请核对 ERP 单据后，从对应作业入口重新绑定。", color = PdaMuted, fontSize = 13.sp)
         }
         if (active != null) {
             WorkTile(tr("resume"), "${active.orderNo} · ${active.mode}", PdaAccent, true) {

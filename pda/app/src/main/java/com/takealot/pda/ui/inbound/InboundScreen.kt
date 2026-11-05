@@ -251,7 +251,7 @@ class InboundViewModel : ViewModel() {
     }
 
     private fun blockUnconfirmedPutaway(): Boolean {
-        if (mode != InboundMode.Putaway || !PdaApp.instance.workJournal.scanRecords.value.any {
+        if (mode != InboundMode.Putaway || !PdaApp.instance.workJournal.pendingRecords().any {
                 it.module == "inbound" && it.state == "pending" && it.mode == "putaway" && it.retryEndpoint?.endsWith("/putaway") == true
             }) return false
         feedback = Feedback(false, "有上架结果待确认，请返回首页打开「待同步记录」，确认原请求后重新进入上架")
@@ -601,7 +601,7 @@ class InboundViewModel : ViewModel() {
 
     fun submitQc(differenceConfirmed: Boolean = false) {
         if (busy || pendingScanCount > 0) { feedback = Feedback(false, "请等待所有扫码录入完成后再提交清点"); return }
-        if (PdaApp.instance.workJournal.scanRecords.value.any { it.module == "inbound" && it.orderId == order?.id && it.state == "pending" }) {
+        if (PdaApp.instance.workJournal.pendingRecords().any { it.module == "inbound" && it.orderId == order?.id && it.state == "pending" }) {
             feedback = Feedback(false, "当前单据有待同步操作，请先确认后再提交清点"); return
         }
         if (hasPendingReduction()) { feedback = Feedback(false, "请先确认待同步的减少数量请求"); return }
@@ -857,7 +857,7 @@ class InboundViewModel : ViewModel() {
     fun openReduction(kind: String, item: InboundItem? = null) {
         if (busy || pendingScanCount > 0) return
         val current = order ?: return
-        if (PdaApp.instance.workJournal.scanRecords.value.any { it.module == "inbound" && it.orderId == current.id && it.state == "pending" }) {
+        if (PdaApp.instance.workJournal.pendingRecords().any { it.module == "inbound" && it.orderId == current.id && it.state == "pending" }) {
             feedback = Feedback(false, "本单有请求结果待确认，请先到待同步页面处理，勿重复减少")
             return
         }
@@ -905,7 +905,7 @@ class InboundViewModel : ViewModel() {
         }
     }
 
-    private fun hasPendingReduction(): Boolean = PdaApp.instance.workJournal.scanRecords.value.any {
+    private fun hasPendingReduction(): Boolean = PdaApp.instance.workJournal.pendingRecords().any {
         it.module == "inbound" && it.orderId == order?.id && it.state == "pending" && it.mode.startsWith("reduce_")
     }
 

@@ -47,6 +47,8 @@ class SyncViewModel : ViewModel() {
     var feedback by mutableStateOf<Feedback?>(null)
     var retryingId by mutableStateOf<String?>(null)
 
+    fun canSee(record: PdaScanRecord) = journal.canSeeRecord(record)
+
     fun canReplay(record: PdaScanRecord) = journal.canReplay(record)
 
     fun retry(record: PdaScanRecord) {
@@ -122,7 +124,7 @@ class SyncViewModel : ViewModel() {
 @Composable
 fun SyncScreen(onBack: () -> Unit, vm: SyncViewModel = viewModel()) {
     val all by vm.records.collectAsState()
-    val records = all.filter { it.state == "pending" || it.state == "failed" }.sortedByDescending { it.createdAt }
+    val records = all.filter { vm.canSee(it) && (it.state == "pending" || it.state == "failed") }.sortedByDescending { it.createdAt }
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),

@@ -450,7 +450,7 @@ class OutboundViewModel : ViewModel() {
             feedback = Feedback(false, "请等待当前扫码或操作完成")
             return false
         }
-        if (PdaApp.instance.workJournal.scanRecords.value.any {
+        if (PdaApp.instance.workJournal.pendingRecords().any {
                 it.module == "outbound" && it.orderId == orderId && it.state == "pending" && it.retryAction == "post"
             }) {
             feedback = Feedback(false, "本单有原操作待确认，请返回首页打开「待同步记录」，核对原请求后继续")

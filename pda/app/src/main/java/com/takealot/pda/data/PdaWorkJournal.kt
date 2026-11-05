@@ -20,6 +20,8 @@ data class PdaResumeWork(
     val orderId: Int,
     val orderNo: String,
     val updatedAt: Long = System.currentTimeMillis(),
+    val ownerId: Int? = null,
+    val serverUrl: String? = null,
 )
 
 data class PdaScanRecord(
@@ -54,6 +56,8 @@ data class PdaPickProgress(
     val lines: List<PdaPickProgressLine>,
     val selectedSku: String? = null,
     val updatedAt: Long = System.currentTimeMillis(),
+    val ownerId: Int? = null,
+    val serverUrl: String? = null,
 )
 
 class PdaWorkJournal(context: Context, private val session: SessionStore) {
@@ -116,20 +120,26 @@ class PdaWorkJournal(context: Context, private val session: SessionStore) {
 
     @Synchronized
     fun activate(work: PdaResumeWork) {
-        val next = resumes().filterNot { it.module == work.module } + work
+        val owner = session.userId.takeIf { it > 0 } ?: return
+        val server = session.baseUrl
+        val next = resumes().filterNot { it.module == work.module && it.ownerId == owner && it.serverUrl == server } +
+            work.copy(ownerId = owner, serverUrl = server)
         resumeCache = next
         writer.enqueue(KEY_RESUMES, next)
     }
 
     @Synchronized
-    fun active(module: String, mode: String): PdaResumeWork? = resumes().lastOrNull { it.module == module && it.mode == mode }
+    fun active(module: String, mode: String): PdaResumeWork? = resumes().lastOrNull { it.module == module && it.mode == mode && owns(it.ownerId, it.serverUrl) }
 
     @Synchronized
-    fun latestActive(): PdaResumeWork? = resumes().maxByOrNull { it.updatedAt }
+    fun latestActive(): PdaResumeWork? = resumes().filter { owns(it.ownerId, it.serverUrl) }.maxByOrNull { it.updatedAt }
+
+    @Synchronized
+    fun hasUnassignedResume(): Boolean = resumes().any { it.ownerId == null || it.serverUrl == null }
 
     @Synchronized
     fun clearActive(module: String) {
-        resumeCache = resumes().filterNot { it.module == module }
+        resumeCache = resumes().filterNot { it.module == module && owns(it.ownerId, it.serverUrl) }
         writer.enqueue(KEY_RESUMES, resumeCache)
     }
 
@@ -142,18 +152,22 @@ class PdaWorkJournal(context: Context, private val session: SessionStore) {
 
     @Synchronized
     fun savePickProgress(progress: PdaPickProgress) {
-        val next = pickProgress().filterNot { it.orderId == progress.orderId && it.mode == progress.mode } + progress
+        val owner = session.userId.takeIf { it > 0 } ?: return
+        val server = session.baseUrl
+        val next = pickProgress().filterNot {
+            it.orderId == progress.orderId && it.mode == progress.mode && it.ownerId == owner && it.serverUrl == server
+        } + progress.copy(ownerId = owner, serverUrl = server)
         pickCache = next
         writer.enqueue(KEY_PICK_PROGRESS, next)
     }
 
     @Synchronized
-    fun pickProgress(orderId: Int, mode: String): PdaPickProgress? = pickProgress().lastOrNull { it.orderId == orderId && it.mode == mode }
+    fun pickProgress(orderId: Int, mode: String): PdaPickProgress? = pickProgress().lastOrNull { it.orderId == orderId && it.mode == mode && owns(it.ownerId, it.serverUrl) }
 
     @Synchronized
     fun clearPickProgress(orderId: Int? = null, mode: String? = null) {
         val next = pickProgress().filterNot { progress ->
-            (orderId == null || progress.orderId == orderId) && (mode == null || progress.mode == mode)
+            owns(progress.ownerId, progress.serverUrl) && (orderId == null || progress.orderId == orderId) && (mode == null || progress.mode == mode)
         }
         pickCache = next
         writer.enqueue(KEY_PICK_PROGRESS, next)
@@ -163,17 +177,19 @@ class PdaWorkJournal(context: Context, private val session: SessionStore) {
         saveRecords(_scanRecords.value.map { if (it.id == id) it.copy(state = state, message = message) else it })
     }
 
-    fun canReplay(record: PdaScanRecord): Boolean =
-        record.ownerId != null && record.ownerId == session.userId && record.serverUrl == session.baseUrl
+    private fun owns(ownerId: Int?, serverUrl: String?): Boolean =
+        ownerId != null && ownerId == session.userId && serverUrl == session.baseUrl
 
-    fun pendingRecords(): List<PdaScanRecord> = _scanRecords.value.filter { it.state == "pending" }
-    fun recentProblemRecords(): List<PdaScanRecord> = _scanRecords.value
-        .filter { it.state == "pending" || it.state == "failed" }
-        .sortedByDescending { it.createdAt }
+    fun canReplay(record: PdaScanRecord): Boolean = owns(record.ownerId, record.serverUrl)
+
+    fun canSeeRecord(record: PdaScanRecord): Boolean = record.ownerId == null || canReplay(record)
+
+    fun pendingRecords(): List<PdaScanRecord> = _scanRecords.value.filter { it.state == "pending" && canSeeRecord(it) }
 
     @Synchronized
     fun dismiss(id: String): Boolean {
         val record = _scanRecords.value.firstOrNull { it.id == id } ?: return false
+        if (!canSeeRecord(record)) return false
         if (record.state != "failed" && !(record.state == "pending" && record.retryAction == null)) return false
         update(id, "dismissed", "已人工确认")
         return true
