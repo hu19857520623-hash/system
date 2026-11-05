@@ -54,6 +54,7 @@ class SessionStore(context: Context) {
     val isLoggedIn: Boolean get() = token.isNotBlank() && !isJwtExpired(token)
     fun hasPerm(id: String) = permissionsCsv.split(',').any { it.trim() == id }
 
+    @Synchronized
     fun saveLogin(token: String, user: AuthUser) {
         this.token = token
         userId = user.id
@@ -64,6 +65,7 @@ class SessionStore(context: Context) {
         bumpAuth()
     }
 
+    @Synchronized
     fun logout() {
         prefs.edit().remove(KEY_TOKEN).remove(KEY_USER_ID)
             .remove(KEY_REAL_NAME).remove(KEY_PERMS).remove(KEY_USER_STATION).apply()
@@ -71,7 +73,9 @@ class SessionStore(context: Context) {
     }
 
     /** 登录过期时清 token，保留用户名方便重新登录。 */
-    fun invalidateAuth() {
+    @Synchronized
+    fun invalidateAuth(expectedToken: String, expectedBaseUrl: String) {
+        if (token != expectedToken || baseUrl != expectedBaseUrl) return
         prefs.edit().remove(KEY_TOKEN).remove(KEY_PERMS).apply()
         bumpAuth()
     }

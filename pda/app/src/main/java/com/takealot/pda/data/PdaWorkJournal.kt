@@ -175,7 +175,7 @@ class PdaWorkJournal(context: Context) {
     private fun resumes(): List<PdaResumeWork> = resumeCache
     private fun pickProgress(): List<PdaPickProgress> = pickCache
     private fun saveRecords(value: List<PdaScanRecord>) {
-        val pending = value.filter { it.state == "pending" }.takeLast(MAX_PENDING_RECORDS)
+        val pending = value.filter { it.state == "pending" }
         val completed = value.filter { it.state != "pending" }.takeLast(MAX_RECORDS)
         val next = (pending + completed).sortedBy { it.createdAt }
         _scanRecords.value = next
@@ -187,6 +187,5 @@ class PdaWorkJournal(context: Context) {
         private const val KEY_RESUMES = "resumes"
         private const val KEY_PICK_PROGRESS = "pick_progress"
         private const val MAX_RECORDS = 120
-        private const val MAX_PENDING_RECORDS = 500
     }
 }

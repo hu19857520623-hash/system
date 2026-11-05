@@ -243,11 +243,13 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
     private fun bearerToken(): String = session.token.trim().removePrefix("Bearer ").trim()
 
     private fun request(path: String, auth: Boolean = true): Request.Builder {
-        val builder = Request.Builder().url("${SessionStore.resolveBaseUrl(session.baseUrl)}$path")
+        val baseUrl = session.baseUrl
+        val builder = Request.Builder().url("$baseUrl$path")
+        val token = bearerToken()
+        if (auth) builder.tag(AuthRequestScope::class.java, AuthRequestScope(baseUrl, token))
         if (auth) {
-            val token = bearerToken()
             if (token.isBlank() || SessionStore.isJwtExpired(token)) {
-                session.invalidateAuth()
+                session.invalidateAuth(token, baseUrl)
                 throw ErpException("登录已过期，请重新登录", 401)
             }
             builder.header("Authorization", "Bearer $token")
@@ -280,7 +282,9 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
             try {
                 return parseErpResponse(it.body?.string().orEmpty(), it.code)
             } catch (e: ErpException) {
-                if (e.code == 401 && requireAuth) session.invalidateAuth()
+                if (e.code == 401 && requireAuth) {
+                    request.tag(AuthRequestScope::class.java)?.let { session.invalidateAuth(it.token, it.baseUrl) }
+                }
                 throw e
             } catch (_: IOException) {
                 throw ErpException("读取 ERP 响应中断，请核对待同步记录后重试", retriable = true)
@@ -314,3 +318,5 @@ private fun JsonElement.requireInboundSyncAcknowledged(): JsonElement {
     }
     return this
 }
+
+private data class AuthRequestScope(val baseUrl: String, val token: String)
