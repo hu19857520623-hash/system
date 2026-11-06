@@ -241,11 +241,7 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
 
     internal fun stocktakeCountReceipt(result: JsonElement, expectedId: Int): StocktakePlan {
         val plan = runCatching { gson.fromJson(result, StocktakePlan::class.java) }.getOrNull()
-        if (plan == null || plan.id != expectedId || plan.no.isBlank() ||
-            plan.statusKey !in setOf("counting", "pending_approval", "completed", "cancelled") || plan.lineList.isEmpty()) {
-            throw ErpException("盘点回执不完整或与原单不匹配，请到「待同步记录」核对原请求", retriable = true)
-        }
-        return plan
+        return requireStocktakeCountReceipt(plan, expectedId)
     }
 
     private val replayScope = ThreadLocal<AuthRequestScope>()
