@@ -688,8 +688,59 @@ export class InboundService {
   }
 
   async reportException(id: number, payload: any, operatorId?: number) {
+    const clientRequestId = String(payload?.clientRequestId || '').trim()
+    if (clientRequestId) return this.reportExceptionOnce(id, payload, operatorId, clientRequestId)
     const order = await this.detail(id)
-    if (TERMINAL_STATUSES.has(order.status)) throw new BadRequestException('该入库单已完结，不能登记现场异常')
+    const report = this.normalizeExceptionReport(order.status, payload)
+    await this.opLog.log({
+      operatorId,
+      module: 'inbound',
+      action: 'report_exception',
+      targetType: 'inbound_order',
+      targetId: order.inboundNo,
+      detail: { ...report.detail, workStatus: order.status },
+    })
+    return { message: report.message }
+  }
+
+  /** 带原请求标识的登记与回执在同一事务内提交，重放不重复写日志。 */
+  private async reportExceptionOnce(id: number, payload: any, operatorId: number | undefined, clientRequestId: string) {
+    if (!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(clientRequestId)) {
+      throw new BadRequestException('请提供有效的仓库操作标识，重新打开作业页面后重试')
+    }
+    if (!Number.isSafeInteger(operatorId) || Number(operatorId) <= 0) throw new BadRequestException('请使用原账号登记现场异常')
+    const report = this.normalizeExceptionReport('receiving', payload, false)
+    const fingerprint = createHash('sha256').update(JSON.stringify({ id, ...report.detail })).digest('hex')
+    return this.prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(operatorId!)} FOR UPDATE`
+      await tx.$queryRaw`SELECT id FROM inbound_order WHERE id = ${BigInt(id)} FOR UPDATE`
+      const order = await tx.inboundOrder.findUnique({ where: { id: BigInt(id) }, select: { id: true, inboundNo: true, status: true } })
+      if (!order) throw new NotFoundException('入库单不存在')
+      const previous = await tx.operationLog.findFirst({
+        where: { operatorId: BigInt(operatorId!), module: 'inbound', action: 'report_exception', detail: { path: '$.clientRequestId', equals: clientRequestId } },
+      })
+      if (previous) {
+        const detail = previous.detail as { requestFingerprint?: string; inboundId?: number } | null
+        if (detail?.requestFingerprint !== fingerprint || detail?.inboundId !== Number(order.id)) {
+          throw new ConflictException('原异常登记内容已变化，请核对后重新登记')
+        }
+        return { message: report.message, duplicate: true }
+      }
+      if (TERMINAL_STATUSES.has(order.status)) throw new BadRequestException('该入库单已完结，不能登记现场异常')
+      await this.opLog.log({
+        operatorId,
+        module: 'inbound',
+        action: 'report_exception',
+        targetType: 'inbound_order',
+        targetId: order.inboundNo,
+        detail: { ...report.detail, workStatus: order.status, clientRequestId, requestFingerprint: fingerprint, inboundId: Number(order.id) },
+      }, tx)
+      return { message: report.message, duplicate: false }
+    })
+  }
+
+  private normalizeExceptionReport(status: string, payload: any, rejectTerminal = true) {
+    if (rejectTerminal && TERMINAL_STATUSES.has(status)) throw new BadRequestException('该入库单已完结，不能登记现场异常')
     const exceptionTypes: Record<string, string> = {
       unknown_barcode: '未知条码',
       missing_carton: '少箱',
@@ -705,21 +756,15 @@ export class InboundService {
     const scanCode = String(payload?.scanCode || '').trim().slice(0, 100)
     const remark = String(payload?.remark || '').trim().slice(0, 500)
     if (!scanCode && remark.length < 2) throw new BadRequestException('请填写异常条码或异常说明')
-    await this.opLog.log({
-      operatorId,
-      module: 'inbound',
-      action: 'report_exception',
-      targetType: 'inbound_order',
-      targetId: order.inboundNo,
+    return {
+      message: `${exceptionTypes[exceptionType]}已登记，主管可在操作日志中核对`,
       detail: {
         exceptionType,
         exceptionTypeLabel: exceptionTypes[exceptionType],
         scanCode: scanCode || null,
         remark: remark || null,
-        workStatus: order.status,
       },
-    })
-    return { message: `${exceptionTypes[exceptionType]}已登记，主管可在操作日志中核对` }
+    }
   }
 
   /** 海外仓到仓扫描：pending_receipt → arrived */

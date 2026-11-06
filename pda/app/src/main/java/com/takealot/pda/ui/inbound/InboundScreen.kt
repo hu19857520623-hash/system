@@ -919,15 +919,35 @@ class InboundViewModel : ViewModel() {
     fun reportUnknownBarcode() {
         val o = order ?: return
         val code = unknownScanCode ?: return
+        if (busy || pendingScanCount > 0) return
+        val journal = PdaApp.instance.workJournal
+        if (journal.pendingRecords().any { it.module == "inbound" && it.orderId == o.id && it.mode == "report_exception" }) {
+            unknownScanCode = null
+            feedback = Feedback(false, "本单异常登记结果待确认，请到「待同步记录」核对原请求，勿重复登记")
+            return
+        }
+        val remark = unknownScanRemark.trim()
+        busy = true
         viewModelScope.launch {
-            busy = true
+            val recordId = journal.beginScan("inbound", "report_exception", code, o.id, o.no)
             try {
-                val res = api.reportInboundException(o.id, "unknown_barcode", code, unknownScanRemark)
-                feedback = Feedback(true, res.message.orEmpty().ifBlank { "未知条码已登记" })
+                val body = mapOf("exceptionType" to "unknown_barcode", "scanCode" to code, "remark" to remark)
+                journal.preparePostRetry(recordId, "/inbound/${o.id}/report-exception", body)
+                val res = api.submitPrepared(recordId) { api.reportInboundException(o.id, "unknown_barcode", code, remark, recordId) }
+                journal.acknowledge(recordId, res.message)
                 unknownScanCode = null
                 unknownScanRemark = ""
+                feedback = Feedback(true, displayMessage(res.message.orEmpty().ifBlank { "未知条码已登记，请返回继续清点" }))
             } catch (e: Exception) {
-                feedback = Feedback(false, e.message ?: "异常登记失败")
+                val message = e.message ?: "异常登记失败"
+                if (journal.isRetriable(e)) {
+                    journal.retainForRetry(recordId, message)
+                    unknownScanCode = null
+                    feedback = Feedback(false, "异常登记结果待确认，请到「待同步记录」核对原请求，勿重复登记")
+                } else {
+                    journal.fail(recordId, message)
+                    feedback = Feedback(false, message)
+                }
             } finally { busy = false }
         }
     }

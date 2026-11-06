@@ -1,4 +1,4 @@
-import { BadRequestException } from '@nestjs/common'
+import { BadRequestException, ConflictException } from '@nestjs/common'
 import { InboundService } from '../inbound/inbound.service'
 import { OutboundService } from '../outbound/outbound.service'
 import { ManagementLoopService } from './management-loop.service'
@@ -63,6 +63,32 @@ describe('PDA phase 2 warehouse exception flows', () => {
       action: 'report_exception',
       detail: expect.objectContaining({ exceptionType: 'unknown_barcode', scanCode: 'UNKNOWN-990' }),
     }))
+  })
+
+  it('replays the same inbound exception request and rejects a changed report', async () => {
+    const logs: any[] = []
+    const prisma: any = {
+      inboundOrder: { findUnique: jest.fn().mockResolvedValue({ id: 7n, inboundNo: 'IN-7', status: 'receiving' }) },
+      operationLog: {
+        findFirst: jest.fn(async ({ where }: any) => logs.find(row => row.detail?.clientRequestId === where.detail.equals) || null),
+        create: jest.fn(async ({ data }: any) => { logs.push(data); return data }),
+      },
+      sysUser: { findUnique: jest.fn().mockResolvedValue({ realName: '仓库验收员' }) },
+      $queryRaw: jest.fn(),
+    }
+    prisma.$transaction = (callback: any) => callback(prisma)
+    const opLog = { log: jest.fn(async (params: any) => prisma.operationLog.create({ data: { ...params, detail: params.detail } })) }
+    const service = new InboundService(prisma, {} as any, opLog as any, {} as any, {} as any, {} as any)
+    const request = { exceptionType: 'unknown_barcode', scanCode: 'UNKNOWN-990', remark: '放异常区', clientRequestId: '8edaf540-168b-489c-b6a9-dce602503815' }
+
+    await expect(service.reportException(7, request, 12)).resolves.toEqual(expect.objectContaining({ duplicate: false, message: expect.stringContaining('未知条码已登记') }))
+    await expect(service.reportException(7, request, 12)).resolves.toEqual(expect.objectContaining({ duplicate: true }))
+    expect(logs).toHaveLength(1)
+    await expect(service.reportException(7, { ...request, remark: '改了说明' }, 12)).rejects.toBeInstanceOf(ConflictException)
+    expect(logs).toHaveLength(1)
+    prisma.operationLog.create.mockRejectedValueOnce(new Error('audit down'))
+    await expect(service.reportException(7, { ...request, clientRequestId: '4b9f78d8-4688-47a3-a46d-222222222222' }, 12)).rejects.toThrow('audit down')
+    expect(logs).toHaveLength(1)
   })
 
   it('marks a short pick as a problem and writes an audit entry', async () => {

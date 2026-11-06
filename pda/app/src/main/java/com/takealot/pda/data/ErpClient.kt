@@ -96,9 +96,14 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
         )
     }
 
-    suspend fun reportInboundException(id: Int, exceptionType: String, scanCode: String = "", remark: String = ""): ScanActionResult = withContext(Dispatchers.IO) {
+    suspend fun reportInboundException(id: Int, exceptionType: String, scanCode: String = "", remark: String = "", clientRequestId: String = UUID.randomUUID().toString()): ScanActionResult = withContext(Dispatchers.IO) {
         gson.fromJson(
-            postJson("/inbound/$id/report-exception", mapOf("exceptionType" to exceptionType, "scanCode" to scanCode.trim(), "remark" to remark.trim())),
+            postJson("/inbound/$id/report-exception", mapOf(
+                "exceptionType" to exceptionType,
+                "scanCode" to scanCode.trim(),
+                "remark" to remark.trim(),
+                "clientRequestId" to clientRequestId,
+            )).requireInboundSyncAcknowledged(),
             ScanActionResult::class.java,
         )
     }

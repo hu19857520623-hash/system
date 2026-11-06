@@ -132,6 +132,9 @@ class SyncViewModel : ViewModel() {
                                     nextStep = "原上架请求已确认，请返回首页打开「继续未完成作业」，按最新单据继续。"
                                 }
                             }
+                            if (record.module == "inbound" && record.retryEndpoint?.endsWith("/report-exception") == true) {
+                                nextStep = "未知条码登记已确认。请返回原清点继续作业，勿重复登记同一条码。"
+                            }
                             if (record.module == "outbound" && orderId != null) {
                                 val completedMode = when (record.retryEndpoint) {
                                     "/outbound/$orderId/pick" -> "pick"
