@@ -12,6 +12,23 @@ class InboundScanSnapshotTest {
     private fun result() = ScanActionResult(itemId = 330, actualQty = 16, expectedQty = 16,
         order = InboundOrder(id = 61, status = "receiving"), item = InboundItem(id = 330, sku = "TKL005-710515-2", expectedQty = 16, actualQty = 16))
 
+    @Test fun putawayReceiptConfirmsPartialAndCompletedWork() {
+        for (status in listOf("pending_putaway", "completed")) {
+            val receipt = original.copy(status = status)
+            assertSame(receipt, requirePutawayReceipt(receipt, original.id))
+        }
+    }
+
+    @Test fun incompletePutawayReceiptLeavesTheRequestPending() {
+        val receipt = original.copy(status = "pending_putaway")
+        for (invalid in listOf(null, receipt.copy(id = 62), receipt.copy(items = emptyList()),
+            receipt.copy(items = receipt.itemList.map { it.copy(putawayQty = null) }))) {
+            val error = assertThrows(ErpException::class.java) { requirePutawayReceipt(invalid, original.id) }
+            assertTrue(error.retriable)
+            assertTrue(error.message.orEmpty().contains("核对原请求"))
+        }
+    }
+
     @Test fun updatesServerCountWithoutLosingAliasesRemarksOrCustomerIdentity() {
         val updated = original.withQcSnapshot(result())!!
         val item = updated.itemList.single()

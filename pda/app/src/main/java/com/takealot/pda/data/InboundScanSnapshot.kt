@@ -1,5 +1,15 @@
 package com.takealot.pda.data
 
+internal fun requirePutawayReceipt(order: InboundOrder?, orderId: Int?): InboundOrder {
+    if (order == null || orderId == null || order.id != orderId || order.no.isBlank() ||
+        order.statusKey !in setOf("pending_putaway", "completed") || order.itemList.isEmpty() ||
+        order.itemList.any { it.id <= 0 || it.putawayQty == null || it.putawayQty < 0 }
+    ) {
+        throw ErpException("上架回执不完整，请在「待同步与异常记录」核对原请求", retriable = true)
+    }
+    return order
+}
+
 /** Apply only authoritative response quantities, preserving aliases and unsent local remarks. */
 fun InboundOrder.withQcSnapshot(result: ScanActionResult): InboundOrder? {
     val summary = result.order ?: return null

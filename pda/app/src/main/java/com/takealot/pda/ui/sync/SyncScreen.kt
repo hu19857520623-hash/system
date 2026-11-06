@@ -124,6 +124,9 @@ class SyncViewModel : ViewModel() {
                                 if (current?.id == orderId && current.statusKey in setOf("completed", "confirmed", "cancelled") &&
                                     journal.active("inbound", "putaway")?.orderId == orderId) {
                                     journal.clearActive("inbound")
+                                    nextStep = "上架结果已核对，请返回首页选择下一项作业。"
+                                } else if (journal.active("inbound", "putaway")?.orderId == orderId) {
+                                    nextStep = "原上架请求已确认，请返回首页打开「继续未完成作业」，按最新单据继续。"
                                 }
                             }
                             if (record.module == "outbound" && orderId != null) {

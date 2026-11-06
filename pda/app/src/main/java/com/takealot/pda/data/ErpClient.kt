@@ -140,7 +140,12 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
 
     suspend fun putaway(id: Int, body: Map<String, Any?>, clientRequestId: String): InboundOrder = withContext(Dispatchers.IO) {
         val result = postJson("/inbound/$id/putaway", body + ("clientRequestId" to clientRequestId)).requireInboundSyncAcknowledged()
-        gson.fromJson(result, InboundOrder::class.java)
+        putawayReceipt(result, id)
+    }
+
+    private fun putawayReceipt(result: JsonElement, orderId: Int?): InboundOrder {
+        val order = runCatching { gson.fromJson(result, InboundOrder::class.java) }.getOrNull()
+        return requirePutawayReceipt(order, orderId)
     }
 
     suspend fun resolveException(id: Int, body: Map<String, Any?>, clientRequestId: String) = withContext(Dispatchers.IO) {
@@ -279,6 +284,7 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
             }
         }
         if (endpoint.startsWith("/inbound/")) result.requireInboundSyncAcknowledged()
+        if (endpoint.startsWith("/inbound/") && endpoint.endsWith("/putaway")) putawayReceipt(result, record.orderId)
         result
     }
 
