@@ -70,6 +70,22 @@ test('delete response loss preserves the card and explicit retry reconciles the 
   globalThis.fetch=async()=>Response.json({error:'商品已删除或不存在，请刷新商品列表核对'},{status:404})
   assert.equal(await permanentlyDeleteLocalProduct('p1'),true);assert.equal(getProductsSnapshot().length,0)
 })
+
+test('deleting a historical card retains the stock mirror shared by a sibling SKU card', async t => {
+  environment(t)
+  const discarded = { ...product, productStatus: 'discarded' as const, availableQty: 0, lockedQty: 0 }
+  const sibling = { ...discarded, id: 'p2' }
+  const mirror = { ...row, sku: product.internalSku, available: 0, locked: 0, inTransit: 0, pendingShelving: 0 }
+  hydrateInventory({ inventory: [mirror], products: [discarded, sibling], purchases: [] })
+  globalThis.fetch = async () => new Response(null, { status: 204 })
+
+  assert.equal(await permanentlyDeleteLocalProduct(discarded.id), true)
+  assert.deepEqual(getProductsSnapshot().map(item => item.id), [sibling.id])
+  assert.deepEqual(getInventorySnapshot().map(item => item.id), [mirror.id])
+
+  assert.equal(await permanentlyDeleteLocalProduct(sibling.id), true)
+  assert.deepEqual(getInventorySnapshot(), [])
+})
 test('bulk metadata save sends selected cards once, omits stock and applies canonical records only after success',async t=>{
   environment(t);hydrateInventory({inventory:[row],products:[product,{...product,id:'p2',customerSku:'B',internalSku:'TKL9001-B'}],purchases:[]})
   let release!:(r:Response)=>void,calls=0
