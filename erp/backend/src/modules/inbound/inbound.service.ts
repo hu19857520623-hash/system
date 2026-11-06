@@ -400,7 +400,7 @@ export class InboundService {
         const order = await tx.inboundOrder.findUnique({ where: Number.isSafeInteger(originalId) && originalId > 0 ? { id: BigInt(originalId) } : { inboundNo: previous.targetId || '' }, include: { items: true, cartons: { include: { items: true }, orderBy: { boxSeq: 'asc' } } } })
         if (!order) throw new ConflictException('原发运单已删除或无法核对，请返回入库管理核对，请勿重复提交原操作')
         if (!originalId && previous.createdAt && order.createdAt > previous.createdAt) throw new ConflictException('原发运单身份无法核对，请联系主管查看历史操作，请勿重复发运')
-        return { ...order, id: Number(order.id), duplicate: true }
+        return { ...order, id: Number(order.id), duplicate: true, requestId: operationKey }
       }
       if (request.inboundNo && await tx.inboundOrder.findUnique({ where: { inboundNo: request.inboundNo } })) throw new ConflictException('入库单号已存在，请核对原单或填写新单号')
       if (request.inboundNo && await tx.operationLog.findFirst({ where: { module: 'inbound', targetId: request.inboundNo } })) throw new ConflictException('此入库单号曾经使用，不能重复使用历史单号，请填写新单号或留空自动生成')
@@ -458,7 +458,7 @@ export class InboundService {
       await tx.operationLog.create({ data: { operatorId: BigInt(operatorId), module: 'inbound', action: 'create', targetType: 'inbound_order', targetId: order.inboundNo,
         detail: { clientRequestId: operationKey, requestFingerprint: fingerprint, inboundId: Number(order.id), draftNo: request.draftNo, sourceWarehouseCode: request.sourceWarehouseCode, destWarehouseCode: request.warehouseCode, itemCount: resolved.length } } })
       const completed = await tx.inboundOrder.findUniqueOrThrow({ where: { id: order.id }, include: { items: true, cartons: { include: { items: true }, orderBy: { boxSeq: 'asc' } } } })
-      return { ...completed, id: Number(completed.id), duplicate: false }
+      return { ...completed, id: Number(completed.id), duplicate: false, requestId: operationKey }
     }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted, timeout: 15000 })
   }
 

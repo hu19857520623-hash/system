@@ -453,6 +453,9 @@ async function postShipment(attempt: ShipmentAttempt) {
   shipmentError.value = ''
   try {
     await frame.run(attempt,owner=>readShipmentAttempt(localStorage,owner),original=>inboundApi.create(original.payload),async result=>{
+      validateShipmentOutcome(attempt.payload.clientRequestId, {
+        requestId: result?.requestId, status: 'confirmed', inboundId: result?.id, inboundNo: result?.inboundNo,
+      })
       shipmentResult.value = result
       try { clearShipmentAttempt(localStorage,frame.owner,attempt);shipmentAttempt.value=null }
       catch { ElMessage.warning('发运已完成，但本机核对信息未能清除；刷新后可核对原单，请勿重复新建') }
