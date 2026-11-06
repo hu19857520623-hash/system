@@ -88,6 +88,13 @@ class SyncViewModel : ViewModel() {
                         "post" -> {
                             val result = api.retryPending(record)
                             val orderId = record.orderId
+                            if (record.retryEndpoint == "/inbound/catalog-bind") {
+                                val order = api.catalogBindingReceipt(result, record.scanCode)
+                                if (order.warehouseCode == session.warehouseCode &&
+                                    session.hasPerm("inbound.arrival_scan") && session.hasPerm("inbound.qc")) {
+                                    journal.activateIfNoOtherWork(PdaResumeWork("inbound", "catalog", order.id, order.no))
+                                }
+                            }
                             if (record.module == "stocktake" && orderId != null &&
                                 record.retryEndpoint == "/management-loop/stocktakes/$orderId/count") {
                                 val order = result.takeIf { it.isJsonObject }?.asJsonObject
