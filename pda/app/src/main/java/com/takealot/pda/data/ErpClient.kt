@@ -126,7 +126,8 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
     }
 
     suspend fun submitQc(id: Int, body: Map<String, Any?>, clientRequestId: String) = withContext(Dispatchers.IO) {
-        postJson("/inbound/$id/qc", body + ("clientRequestId" to clientRequestId)).requireInboundSyncAcknowledged()
+        postJson("/inbound/$id/qc", body + ("clientRequestId" to clientRequestId))
+            .requireInboundSyncAcknowledged().requireQcSubmitReceipt(id, gson)
     }
 
     suspend fun reduceInbound(id: Int, mode: String, body: Map<String, Any?>): ScanActionResult = withContext(Dispatchers.IO) {
@@ -285,6 +286,7 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
         }
         if (endpoint.startsWith("/inbound/")) result.requireInboundSyncAcknowledged()
         if (endpoint.startsWith("/inbound/") && endpoint.endsWith("/putaway")) putawayReceipt(result, record.orderId)
+        if (endpoint.startsWith("/inbound/") && endpoint.endsWith("/qc")) result.requireQcSubmitReceipt(record.orderId, gson)
         result
     }
 

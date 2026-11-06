@@ -1,5 +1,21 @@
 package com.takealot.pda.data
 
+import com.google.gson.Gson
+import com.google.gson.JsonElement
+
+internal fun JsonElement.requireQcSubmitReceipt(orderId: Int?, gson: Gson): JsonElement {
+    val order = runCatching { gson.fromJson(this, InboundOrder::class.java) }.getOrNull()
+    val syncPending = takeIf { it.isJsonObject }?.asJsonObject?.get("syncPending")
+    val syncConfirmed = syncPending?.isJsonPrimitive == true && syncPending.asJsonPrimitive.isBoolean && !syncPending.asBoolean
+    if (!syncConfirmed || order == null || orderId == null || order.id != orderId || order.no.isBlank() ||
+        order.statusKey !in setOf("pending_putaway", "exception") || order.itemList.isEmpty() ||
+        order.itemList.any { it.id <= 0 || it.actualQty == null || it.actualQty < 0 }
+    ) {
+        throw ErpException("清点回执不完整，请在「待同步与异常记录」核对原请求", retriable = true)
+    }
+    return this
+}
+
 internal fun requirePutawayReceipt(order: InboundOrder?, orderId: Int?): InboundOrder {
     if (order == null || orderId == null || order.id != orderId || order.no.isBlank() ||
         order.statusKey !in setOf("pending_putaway", "completed") || order.itemList.isEmpty() ||

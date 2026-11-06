@@ -1,10 +1,27 @@
 package com.takealot.pda.data
 
 import com.google.gson.Gson
+import com.google.gson.JsonParser
 import org.junit.Assert.*
 import org.junit.Test
 
 class InboundScanSnapshotTest {
+    @Test fun qcReceiptRequiresMatchingCountAndExplicitSyncConfirmation() {
+        val gson = Gson()
+        for (status in listOf("pending_putaway", "exception")) {
+            val body = """{"id":61,"inboundNo":"RVTEST","status":"$status","syncPending":false,"items":[{"id":330,"actualQty":0}]}"""
+            val receipt = JsonParser.parseString(body)
+            assertSame(receipt, receipt.requireQcSubmitReceipt(61, gson))
+            for (invalid in listOf(body.replace("false", "\"false\""), body.replace("\"actualQty\":0", "\"actualQty\":null"),
+                body.replace("\"id\":61", "\"id\":62"))) {
+                val error = assertThrows(ErpException::class.java) {
+                    JsonParser.parseString(invalid).requireQcSubmitReceipt(61, gson)
+                }
+                assertTrue(error.retriable)
+            }
+        }
+    }
+
     private val original = InboundOrder(id = 61, omsCustomerCode = "TKL005", inboundNo = "RVTEST", warehouseCode = "W",
         status = "receiving", items = listOf(InboundItem(id = 330, sku = "TKL005-710515-2", expectedQty = 16, actualQty = 1, putawayQty = 0,
             barcode = "BAR", platformBarcode = "99012345", qcRemark = "人工核对", weightKg = 2.0)),

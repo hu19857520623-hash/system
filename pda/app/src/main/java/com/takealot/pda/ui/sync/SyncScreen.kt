@@ -90,6 +90,9 @@ class SyncViewModel : ViewModel() {
                         "post" -> {
                             val result = api.retryPending(record)
                             val orderId = record.orderId
+                            if (record.module == "inbound" && orderId != null && record.retryEndpoint == "/inbound/$orderId/qc") {
+                                nextStep = "原清点请求已确认。请返回首页，从原作业核对最新状态后继续。"
+                            }
                             if (record.retryEndpoint == "/inbound/catalog-bind") {
                                 val order = api.catalogBindingReceipt(result, record)
                                 val canContinue = session.hasPerm("inbound.arrival_scan") && session.hasPerm("inbound.qc")
