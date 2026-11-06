@@ -100,12 +100,7 @@ class StocktakeViewModel : ViewModel() {
         viewModelScope.launch {
             try {
                 val detail = api.stocktake(resume.orderId)
-                if (detail.warehouseCode == session.warehouseCode && session.warehouseCode.isNotBlank() &&
-                    detail.statusKey in setOf("pending_approval", "completed", "cancelled")) {
-                    PdaApp.instance.workJournal.clearActive("stocktake")
-                    feedback = Feedback(true, "${detail.no} 已离开盘点阶段，请选择其他盘点单")
-                    return@launch
-                }
+                if (retireClosedPlan(detail)) return@launch
                 applyPlan(detail)
                 feedback = Feedback(true, "已恢复 ${resume.orderNo} 的未完成作业")
             } catch (e: Exception) {
@@ -234,14 +229,27 @@ class StocktakeViewModel : ViewModel() {
         busy = true
         viewModelScope.launch {
             try {
-                applyPlan(api.stocktake(id))
-                feedback = Feedback(true, "${plan!!.no} 已打开，请扫描库位")
+                val detail = api.stocktake(id)
+                if (retireClosedPlan(detail)) return@launch
+                applyPlan(detail)
+                feedback = Feedback(true, "${detail.no} 已打开，请扫描库位")
             } catch (e: Exception) {
                 feedback = Feedback(false, e.message ?: "打开盘点单失败")
             } finally {
                 busy = false
             }
         }
+    }
+
+    private fun retireClosedPlan(detail: StocktakePlan): Boolean {
+        if (detail.warehouseCode != session.warehouseCode || session.warehouseCode.isBlank() ||
+            detail.statusKey !in setOf("pending_approval", "completed", "cancelled")) return false
+        val journal = PdaApp.instance.workJournal
+        if (journal.active("stocktake", "count")?.orderId == detail.id) journal.clearActive("stocktake")
+        if (plan?.id == detail.id) resetPlan()
+        feedback = Feedback(true, "${detail.no} 当前为「${stocktakeStatusLabel(detail.statusKey)}」，请选择其他盘点单")
+        loadList()
+        return true
     }
 
     private fun applyPlan(detail: StocktakePlan) {
@@ -347,6 +355,13 @@ class StocktakeViewModel : ViewModel() {
             feedback = Feedback(false, "请等待扫码和提交完成后再换单")
             return
         }
+        resetPlan()
+        feedback = null
+        PdaApp.instance.workJournal.clearActive("stocktake")
+        loadList()
+    }
+
+    private fun resetPlan() {
         lastReadCode = ""
         plan = null
         locationCode = ""
@@ -354,9 +369,6 @@ class StocktakeViewModel : ViewModel() {
         scan = ""
         qty = 1
         showReduction = false
-        feedback = null
-        PdaApp.instance.workJournal.clearActive("stocktake")
-        loadList()
     }
 }
 
