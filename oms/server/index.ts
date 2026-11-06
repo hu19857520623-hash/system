@@ -3314,6 +3314,7 @@ app.delete('/api/inbound-orders/:id', async (req, res) => {
 })
 
 class ReturnSnapshotScopeError extends Error {}
+class ReturnSnapshotStateError extends Error {}
 
 app.put('/api/return-orders', async (req, res) => {
   try {
@@ -3322,8 +3323,11 @@ app.put('/api/return-orders', async (req, res) => {
     await prisma.$transaction(async tx => {
       for (const o of list) {
         const id = String(o.id)
-        const previousForm = await tx.returnOrder.findUnique({ where: { id }, select: { remark: true, customerId: true } })
+        const previousForm = await tx.returnOrder.findUnique({ where: { id }, select: { remark: true, customerId: true, status: true } })
         if (scope && previousForm && previousForm.customerId !== scope) throw new ReturnSnapshotScopeError()
+        if (o.status === 'draft' && previousForm && !['draft', 'cancelled', 'submission_pending'].includes(previousForm.status)) {
+          throw new ReturnSnapshotStateError()
+        }
         const data = {
           customerId: scope ?? (o.customerId as string | null | undefined) ?? null,
           returnNo: String(o.returnNo),
@@ -3359,14 +3363,15 @@ app.put('/api/return-orders', async (req, res) => {
           continue
         }
         const updated = await tx.returnOrder.updateMany({
-          where: { id, ...(scope ? { customerId: scope } : {}) },
+          where: { id, status: previousForm.status, ...(scope ? { customerId: scope } : {}) },
           data,
         })
-        if (!updated.count) throw new ReturnSnapshotScopeError()
+        if (!updated.count) throw new ReturnSnapshotStateError()
       }
     })
     res.json({ ok: true })
   } catch (e) {
+    if (e instanceof ReturnSnapshotStateError) return res.status(409).json({ error: '退件状态已变化，保存未完成，请返回退件处理刷新核对' })
     if (e instanceof ReturnSnapshotScopeError) return res.status(403).json({ error: '无法保存其他客户或归属已变化的退件，请刷新后核对' })
     if ((e as { code?: string }).code === 'P2002') return res.status(409).json({ error: '退件单号或记录标识已存在，请刷新后核对' })
     if (e instanceof ReturnFormValidationError) return res.status(400).json({ error: e.message })
