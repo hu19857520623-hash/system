@@ -79,10 +79,18 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
         catalogBindingReceipt(result, scanCode, warehouseCode)
     }
 
-    internal fun catalogBindingReceipt(result: JsonElement, scanCode: String, warehouseCode: String? = null): InboundOrder {
+    internal fun catalogBindingReceipt(result: JsonElement, record: PdaScanRecord): InboundOrder {
+        val warehouseCode = runCatching {
+            JsonParser.parseString(record.retryBodyJson.orEmpty()).asJsonObject.get("warehouseCode").asString
+        }.getOrNull()?.takeIf { it.isNotBlank() }
+            ?: throw ErpException("原货盘绑定请求缺少仓库，请由主管核对原记录", retriable = true)
+        return catalogBindingReceipt(result, record.scanCode, warehouseCode)
+    }
+
+    private fun catalogBindingReceipt(result: JsonElement, scanCode: String, warehouseCode: String): InboundOrder {
         val order = runCatching { gson.fromJson(result, InboundOrder::class.java) }.getOrNull()
         if (order == null || order.id <= 0 || !order.no.equals(scanCode.trim(), ignoreCase = true) ||
-            order.warehouseCode.isNullOrBlank() || (warehouseCode != null && order.warehouseCode != warehouseCode)) {
+            order.warehouseCode != warehouseCode) {
             throw ErpException("货盘绑定回执与原单不匹配，请到「待同步记录」核对", retriable = true)
         }
         return order

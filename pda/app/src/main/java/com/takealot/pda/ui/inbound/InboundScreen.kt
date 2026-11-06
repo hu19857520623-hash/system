@@ -381,8 +381,9 @@ class InboundViewModel : ViewModel() {
 
     private suspend fun doCatalogScan(code: String, recordId: String, quantity: Int) {
         if (order == null) {
-            PdaApp.instance.workJournal.preparePostRetry(recordId, "/inbound/catalog-bind", mapOf("scanCode" to code, "warehouseCode" to session.warehouseCode))
-            val detail = api.submitPrepared(recordId) { api.bindCatalogInbound(code, session.warehouseCode) }
+            val warehouseCode = session.warehouseCode
+            PdaApp.instance.workJournal.preparePostRetry(recordId, "/inbound/catalog-bind", mapOf("scanCode" to code, "warehouseCode" to warehouseCode))
+            val detail = api.submitPrepared(recordId) { api.bindCatalogInbound(code, warehouseCode) }
             applyOrder(detail)
             PdaApp.instance.workJournal.activate(PdaResumeWork("inbound", mode.key, detail.id, detail.no))
             if (!enterPutawayIfReady()) {
