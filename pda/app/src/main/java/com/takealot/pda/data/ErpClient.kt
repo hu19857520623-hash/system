@@ -171,6 +171,7 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
 
     suspend fun pick(id: Int, items: List<Map<String, Any?>>, clientRequestId: String = UUID.randomUUID().toString()) = withContext(Dispatchers.IO) {
         postJson("/outbound/$id/pick", mapOf("pickSource" to "pda", "items" to items, "clientRequestId" to clientRequestId))
+            .requireOutboundStageReceipt(id, OutboundReceiptStage.PICK)
     }
 
     suspend fun startReview(id: Int): OutboundOrder = withContext(Dispatchers.IO) {
@@ -181,7 +182,7 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
         postJson(
             "/outbound/$id/pack",
             mapOf("reviewSource" to "pda", "cartons" to cartons, "clientRequestId" to clientRequestId),
-        )
+        ).requireOutboundStageReceipt(id, OutboundReceiptStage.PACK)
     }
 
     suspend fun setOutboundProblem(id: Int, problemType: String, remark: String, clientRequestId: String = UUID.randomUUID().toString()): OutboundOrder = withContext(Dispatchers.IO) {
@@ -269,7 +270,13 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
         val body = record.retryBodyJson.orEmpty()
         if (endpoint.isBlank() || body.isBlank()) throw ErpException("待同步记录缺少请求内容")
         val result = postJson(endpoint, JsonParser.parseString(body))
-        if (endpoint.startsWith("/outbound/") && endpoint.endsWith("/ship")) result.requireShipSyncAcknowledged(record.orderId)
+        if (endpoint.startsWith("/outbound/")) {
+            when (endpoint.substringAfterLast('/')) {
+                "pick" -> result.requireOutboundStageReceipt(record.orderId, OutboundReceiptStage.PICK)
+                "pack" -> result.requireOutboundStageReceipt(record.orderId, OutboundReceiptStage.PACK)
+                "ship" -> result.requireShipSyncAcknowledged(record.orderId)
+            }
+        }
         if (endpoint.startsWith("/inbound/")) result.requireInboundSyncAcknowledged()
         result
     }
