@@ -104,10 +104,8 @@ class SyncViewModel : ViewModel() {
                             }
                             if (record.module == "stocktake" && orderId != null &&
                                 record.retryEndpoint == "/management-loop/stocktakes/$orderId/count") {
-                                val order = result.takeIf { it.isJsonObject }?.asJsonObject
-                                val returnedId = order?.get("id")?.takeIf { it.isJsonPrimitive }?.asString
-                                val status = order?.get("status")?.takeIf { it.isJsonPrimitive }?.asString
-                                if (returnedId == orderId.toString() && status in setOf("pending_approval", "completed", "cancelled") &&
+                                val plan = api.stocktakeCountReceipt(result, orderId)
+                                if (plan.statusKey in setOf("pending_approval", "completed", "cancelled") &&
                                     journal.active("stocktake", "count")?.orderId == orderId) {
                                     journal.clearActive("stocktake")
                                 }
