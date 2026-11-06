@@ -351,19 +351,19 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
     private fun String.encodeUrl() = java.net.URLEncoder.encode(this, "UTF-8")
 }
 
-internal fun JsonElement.requireShipSyncAcknowledged(expectedOrderId: Int? = null): JsonElement {
+internal fun JsonElement.requireShipSyncAcknowledged(expectedOrderId: Int?): JsonElement {
     val response = takeIf { it.isJsonObject }?.asJsonObject
-    val warning = response?.get("warning")
-    val syncPending = listOf("syncPending", "feePending").any { key ->
-        val flag = response?.get(key)
-        flag?.isJsonPrimitive == true && flag.asJsonPrimitive.isBoolean && flag.asBoolean
-    }
-    if (syncPending || (warning?.isJsonPrimitive == true && warning.asJsonPrimitive.isString && warning.asString.isNotBlank())) {
-        throw ErpException("发运已保存，OMS 同步待确认。请在「待同步记录」重试原请求，勿重复发运", retriable = true)
-    }
     val returnedId = response?.get("id")?.takeIf { it.isJsonPrimitive }?.asString?.toIntOrNull()
-    if (expectedOrderId != null && returnedId != expectedOrderId) {
-        throw ErpException("发运回执缺少对应单号，请在「待同步记录」核对原请求", retriable = true)
+    val shippedAt = response?.get("shippedAt")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString
+    if (expectedOrderId == null || returnedId != expectedOrderId || shippedAt.isNullOrBlank()) {
+        throw ErpException("发运回执缺少对应单号或发运时间，请在「待同步与异常记录」核对原请求", retriable = true)
+    }
+    val warning = response?.get("warning")
+    val syncFlags = listOf("syncPending", "feePending").map { key ->
+        response?.get(key)?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isBoolean }?.asBoolean
+    }
+    if (syncFlags.any { it != false } || (warning?.isJsonPrimitive == true && warning.asJsonPrimitive.isString && warning.asString.isNotBlank())) {
+        throw ErpException("发运已保存，OMS 同步待确认。请在「待同步与异常记录」重试原请求，勿重复发运", retriable = true)
     }
     return this
 }
