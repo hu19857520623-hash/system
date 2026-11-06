@@ -12,7 +12,7 @@ import { useRowActions } from '@/composables/useRowActions'
 import ListPagination from '@/components/ListPagination.vue'
 import StockFillBar from '@/components/ui/StockFillBar.vue'
 import { useAppStore } from '@/stores/app'
-import { assertReceiptAcknowledgement, clearReceiptAttempt, readReceiptAttempts, saveReceiptAttempt, type ReceiptAttempt } from '@/utils/logisticsReceiptAttempt'
+import { assertReceiptAcknowledgement, clearReceiptAttempt, readReceiptAttempts, saveReceiptAttempt, withReceiptAttemptLock, type ReceiptAttempt } from '@/utils/logisticsReceiptAttempt'
 
 const { confirmAction, showDetail } = useRowActions()
 const router = useRouter()
@@ -343,47 +343,58 @@ async function submitReceive(replay = false) {
     }
   }
   receiveBusy.value = true
-  let sent = false
   try {
-    const payload = replay ? receivePayload.value : {
-      poId: receiveTarget.value.id,
-      warehouseCode: receiveTarget.value.warehouseCode,
-      remark: receiveRemark.value,
-      clientRequestId: receiveRequestId.value,
-      items: items.map((l) => ({
-        poItemId: l.id,
-        sku: l.sku,
-        actualQty: l.actualQty,
-        damagedQty: l.damagedQty || 0,
-        qcStatus: l.qcStatus,
-        qcRemark: l.qcRemark || undefined,
-      })),
-    }
-    if (!payload) throw new Error('本次收货核对信息缺失，请重新读取单据')
-    // Persist before sending so reload and return-to-list keep the same idempotency key.
-    saveReceiptAttempt(localStorage, userId, { payload, target: receiveTarget.value, lines: receiveLines.value })
-    receivePayload.value = JSON.parse(JSON.stringify(payload))
-    sent = true
-    const result = await logisticsReceiptApi.create(payload)
-    if (!current()) return
-    assertReceiptAcknowledgement(result, payload)
-    receiveResult.value = result
-    receiveUncertain.value = false
-    receiveFeedback.value = `${result.duplicate ? '已核对原收货记录' : '本次收货已确认'}：${result.receiptNo}。${result.poStatus === 'received' ? '采购单已收齐，良品已入中转仓库存' : '仍有待收数量，可返回列表继续收货'}。破损件单独记录，不增加可用库存。`
-    try { clearReceiptAttempt(localStorage, userId, payload.poId, payload.clientRequestId) } catch { receiveFeedback.value += ' 本地核对信息暂未清除，可使用原操作标识再次核对。' }
-    refreshReceiptAttempts()
-    await loadPendingPos()
-    if (!current()) return
-    void loadStock()
-    void loadReceipts()
+    await withReceiptAttemptLock(userId, async () => {
+      if (!current()) return
+      await sendReceipt(userId)
+    })
   } catch (error) {
-    if (!current()) return
-    const status = Number((error as { status?: unknown })?.status)
-    receiveUncertain.value = (sent || replay) && !(status === 400 || status === 422)
-    receiveFeedback.value = receiveUncertain.value ? `收货结果暂无法确定，请核对并重试本次收货。${userFacingError(error)}` : userFacingError(error)
-    if (!receiveUncertain.value && receivePayload.value) { try { clearReceiptAttempt(localStorage, userId, receivePayload.value.poId, receivePayload.value.clientRequestId) } catch { /* retain safe replay metadata */ } }
-    refreshReceiptAttempts()
+    if (current()) { receiveFeedback.value = userFacingError(error); refreshReceiptAttempts() }
   } finally { if (current()) receiveBusy.value = false }
+
+  async function sendReceipt(userId: number) {
+    let sent = false
+    try {
+      const payload = replay ? receivePayload.value : {
+        poId: receiveTarget.value.id,
+        warehouseCode: receiveTarget.value.warehouseCode,
+        remark: receiveRemark.value,
+        clientRequestId: receiveRequestId.value,
+        items: items.map((l) => ({
+          poItemId: l.id,
+          sku: l.sku,
+          actualQty: l.actualQty,
+          damagedQty: l.damagedQty || 0,
+          qcStatus: l.qcStatus,
+          qcRemark: l.qcRemark || undefined,
+        })),
+      }
+      if (!payload) throw new Error('本次收货核对信息缺失，请重新读取单据')
+      // Persist before sending so reload and return-to-list keep the same idempotency key.
+      saveReceiptAttempt(localStorage, userId, { payload, target: receiveTarget.value, lines: receiveLines.value })
+      receivePayload.value = JSON.parse(JSON.stringify(payload))
+      sent = true
+      const result = await logisticsReceiptApi.create(payload)
+      if (!current()) return
+      assertReceiptAcknowledgement(result, payload)
+      receiveResult.value = result
+      receiveUncertain.value = false
+      receiveFeedback.value = `${result.duplicate ? '已核对原收货记录' : '本次收货已确认'}：${result.receiptNo}。${result.poStatus === 'received' ? '采购单已收齐，良品已入中转仓库存' : '仍有待收数量，可返回列表继续收货'}。破损件单独记录，不增加可用库存。`
+      try { clearReceiptAttempt(localStorage, userId, payload.poId, payload.clientRequestId) } catch { receiveFeedback.value += ' 本地核对信息暂未清除，可使用原操作标识再次核对。' }
+      refreshReceiptAttempts()
+      await loadPendingPos()
+      if (!current()) return
+      void loadStock()
+      void loadReceipts()
+    } catch (error) {
+      if (!current()) return
+      const status = Number((error as { status?: unknown })?.status)
+      receiveUncertain.value = (sent || replay) && !(status === 400 || status === 422)
+      receiveFeedback.value = receiveUncertain.value ? `收货结果暂无法确定，请核对并重试本次收货。${userFacingError(error)}` : userFacingError(error)
+      if (!receiveUncertain.value && receivePayload.value) { try { clearReceiptAttempt(localStorage, userId, receivePayload.value.poId, receivePayload.value.clientRequestId) } catch { /* retain safe replay metadata */ } }
+      refreshReceiptAttempts()
+    }
+  }
 }
 
 function receiptDetail(row: any) {

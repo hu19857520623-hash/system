@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { assertReceiptAcknowledgement, clearReceiptAttempt, readReceiptAttempts, saveReceiptAttempt, type ReceiptAttempt } from './logisticsReceiptAttempt'
+import { assertReceiptAcknowledgement, clearReceiptAttempt, readReceiptAttempts, saveReceiptAttempt, withReceiptAttemptLock, type ReceiptAttempt } from './logisticsReceiptAttempt'
 
 function storage() {
   const data = new Map<string, string>()
@@ -8,6 +8,19 @@ function storage() {
 const attempt = (poId = 1): ReceiptAttempt => ({ payload: { poId, clientRequestId: 'original-id', items: [{ actualQty: 1 }] }, target: { id: poId, poNo: 'PO-TEST' }, lines: [{ actualQty: 1 }] })
 
 describe('收货待核对操作跨刷新恢复', () => {
+  it('同一账号的另一个页面在收货期间无法开始提交', async () => {
+    let enter!: () => void
+    let release!: () => void
+    const entered = new Promise<void>(resolve => { enter = resolve })
+    const wait = new Promise<void>(resolve => { release = resolve })
+    const first = withReceiptAttemptLock(1, async () => { enter(); await wait })
+    await entered
+    try {
+      await expect(withReceiptAttemptLock(1, async () => { throw new Error('不应开始第二次提交') })).rejects.toThrow('另一个页面正在处理收货')
+      await expect(withReceiptAttemptLock(2, async () => 'ok')).resolves.toBe('ok')
+    } finally { release(); await first }
+    await expect(withReceiptAttemptLock(1, async () => 'ok')).resolves.toBe('ok')
+  })
   it('仅接受带有原采购单和操作编号的完整收货回执', () => {
     const payload = attempt().payload
     const receipt = { receiptNo: 'LR-1', poId: 1, clientRequestId: 'original-id', poStatus: 'received' }
