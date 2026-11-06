@@ -367,6 +367,9 @@ class InboundViewModel : ViewModel() {
             scan = ""
             return
         }
+        if (!canConfirmCarton) {
+            throw ErpException("当前账号只能清点。请由收货人员确认箱数，再刷新本单继续")
+        }
         if (matchesCurrentSku(code)) {
             throw ErpException("这是 SKU，当前只确认箱数，不计件。请扫外箱箱唛，确认箱数后再进入清点数量")
         }
@@ -1097,7 +1100,12 @@ fun InboundScreen(modeKey: String, onBack: () -> Unit, vm: InboundViewModel = vi
         ScanReceiptStatus(vm.displaySku(vm.lastReadCode), vm.busy, vm.pendingScanCount)
         ScanQueueStatus(vm.pendingScanCount, vm.busy)
         if (vm.mode == InboundMode.Receive) {
-            Text("只扫外箱箱唛，只记箱数。确认箱数后再进入清点数量，扫 SKU 计件。", color = PdaAccent, fontSize = 12.sp)
+            Text(
+                if (vm.canConfirmCarton) "只扫外箱箱唛，只记箱数。确认箱数后再进入清点数量，扫 SKU 计件。"
+                else "当前账号只能清点。收货人员确认箱数后，请刷新单据并继续清点。",
+                color = PdaAccent,
+                fontSize = 12.sp,
+            )
         }
         if (vm.mode == InboundMode.Qc) {
             Text("扫 SKU、商品条码或已绑 990，每扫一次按下方件数累加", color = PdaMuted, fontSize = 12.sp)
@@ -1142,7 +1150,7 @@ fun InboundScreen(modeKey: String, onBack: () -> Unit, vm: InboundViewModel = vi
             }
         }
         when (vm.mode) {
-            InboundMode.Receive -> QtyRow(
+            InboundMode.Receive -> if (vm.canConfirmCarton) QtyRow(
                 label = "实收箱数（箱）",
                 value = vm.cartonCount,
                 onChange = { vm.cartonCount = it.coerceAtLeast(cartonMin) },
@@ -1274,14 +1282,14 @@ fun InboundScreen(modeKey: String, onBack: () -> Unit, vm: InboundViewModel = vi
                         fontWeight = FontWeight.SemiBold,
                     )
                 }
-                BigButton("确认箱数 → 清点数量", onClick = { vm.confirmCartonCount() }, enabled = !vm.busy && order.statusKey in setOf("arrived", "receiving"), color = PdaAccent)
+                if (vm.canConfirmCarton) BigButton("确认箱数 → 清点数量", onClick = { vm.confirmCartonCount() }, enabled = !vm.busy && order.statusKey in setOf("arrived", "receiving"), color = PdaAccent)
                 if (order.cartonConfirmation?.ready == true && order.statusKey in setOf("arrived", "receiving") &&
                     PdaApp.instance.session.hasPerm("inbound.qc")) {
                     TextButton(onClick = { vm.continueAfterCartons() }, enabled = !vm.busy && vm.pendingScanCount == 0) {
                         Text("使用已确认箱数，继续清点", color = PdaAccent)
                     }
                 }
-                TextButton(onClick = { vm.openReduction("carton") }, enabled = !vm.busy && vm.pendingScanCount == 0 && maxOf(order.receivedCartonCount ?: 0, vm.scannedCartonCount) > 0 && order.statusKey in setOf("arrived", "receiving"), modifier = Modifier.fillMaxWidth()) { Text("减少已确认箱数", color = PdaWarn) }
+                if (vm.canConfirmCarton) TextButton(onClick = { vm.openReduction("carton") }, enabled = !vm.busy && vm.pendingScanCount == 0 && maxOf(order.receivedCartonCount ?: 0, vm.scannedCartonCount) > 0 && order.statusKey in setOf("arrived", "receiving"), modifier = Modifier.fillMaxWidth()) { Text("减少已确认箱数", color = PdaWarn) }
             }
             if (order.statusKey == "exception") {
                 if (PdaApp.instance.session.hasPerm("inbound.handle_exception")) {
