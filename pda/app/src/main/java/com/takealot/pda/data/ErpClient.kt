@@ -76,7 +76,7 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
 
     suspend fun bindCatalogInbound(scanCode: String, warehouseCode: String): InboundOrder = withContext(Dispatchers.IO) {
         val result = postJson("/inbound/catalog-bind", mapOf("scanCode" to scanCode, "warehouseCode" to warehouseCode))
-        catalogBindingReceipt(result, scanCode, warehouseCode)
+        catalogBindingReceipt(result, scanCode, warehouseCode, gson)
     }
 
     internal fun catalogBindingReceipt(result: JsonElement, record: PdaScanRecord): InboundOrder {
@@ -84,16 +84,7 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
             JsonParser.parseString(record.retryBodyJson.orEmpty()).asJsonObject.get("warehouseCode").asString
         }.getOrNull()?.takeIf { it.isNotBlank() }
             ?: throw ErpException("原货盘绑定请求缺少仓库，请由主管核对原记录", retriable = true)
-        return catalogBindingReceipt(result, record.scanCode, warehouseCode)
-    }
-
-    private fun catalogBindingReceipt(result: JsonElement, scanCode: String, warehouseCode: String): InboundOrder {
-        val order = runCatching { gson.fromJson(result, InboundOrder::class.java) }.getOrNull()
-        if (order == null || order.id <= 0 || !order.no.equals(scanCode.trim(), ignoreCase = true) ||
-            order.warehouseCode != warehouseCode) {
-            throw ErpException("货盘绑定回执与原单不匹配，请到「待同步记录」核对", retriable = true)
-        }
-        return order
+        return catalogBindingReceipt(result, record.scanCode, warehouseCode, gson)
     }
 
     suspend fun receiveBox(id: Int, scanCode: String, clientRequestId: String = UUID.randomUUID().toString()): ScanActionResult = withContext(Dispatchers.IO) {
@@ -381,4 +372,13 @@ private fun JsonElement.requireInboundSyncAcknowledged(): JsonElement {
         throw ErpException("仓库作业已保存，同步待确认。请在「待同步记录」核对原请求", retriable = true)
     }
     return this
+}
+
+internal fun catalogBindingReceipt(result: JsonElement, scanCode: String, warehouseCode: String, gson: Gson): InboundOrder {
+    val order = runCatching { gson.fromJson(result, InboundOrder::class.java) }.getOrNull()
+    if (order == null || order.id <= 0 || !order.no.equals(scanCode.trim(), ignoreCase = true) ||
+        order.warehouseCode != warehouseCode) {
+        throw ErpException("货盘绑定回执与原单不匹配，请到「待同步记录」核对", retriable = true)
+    }
+    return order
 }
