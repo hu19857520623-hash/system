@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common'
+import { BadRequestException, ConflictException, Injectable, NotFoundException, PreconditionFailedException } from '@nestjs/common'
 import { Prisma } from '@prisma/client'
 import { CreateLogisticsReceiptDto } from './logistics-receipt.dto'
 import { logisticsReceiptNumber, logisticsReceiptRequest, receiptRequestMetadata, receiptStoredRemark } from './logistics-receipt-request.util'
@@ -184,6 +184,9 @@ export class LogisticsReceiptService {
         const poItem = po.items.find(item => Number(item.id) === line.poItemId)
         if (!poItem || (line.sku && line.sku !== poItem.sku)) throw new BadRequestException('收货明细与采购单商品不一致，请刷新核对')
         const pending = progress.items.find(item => item.id === poItem.id)!.pendingQty
+        if (line.expectedPendingQty !== undefined && line.expectedPendingQty !== pending) {
+          throw new PreconditionFailedException('采购单待收数量已变化，请重新读取单据，核对后再登记收货')
+        }
         if (line.actualQty + line.damagedQty > pending) throw new BadRequestException(`${poItem.sku} 良品与破损合计超过待收数量 ${pending}`)
         return { ...line, poItem, pending }
       })

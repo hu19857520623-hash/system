@@ -364,6 +364,7 @@ async function submitReceive(replay = false) {
           poItemId: l.id,
           sku: l.sku,
           actualQty: l.actualQty,
+          expectedPendingQty: l.pendingQty,
           damagedQty: l.damagedQty || 0,
           qcStatus: l.qcStatus,
           qcRemark: l.qcRemark || undefined,
@@ -389,10 +390,11 @@ async function submitReceive(replay = false) {
     } catch (error) {
       if (!current()) return
       const status = Number((error as { status?: unknown })?.status)
-      receiveUncertain.value = (sent || replay) && !(status === 400 || status === 422)
+      receiveUncertain.value = (sent || replay) && !(status === 400 || status === 412 || status === 422)
       receiveFeedback.value = receiveUncertain.value ? `收货结果暂无法确定，请核对并重试本次收货。${userFacingError(error)}` : userFacingError(error)
       if (!receiveUncertain.value && receivePayload.value) { try { clearReceiptAttempt(localStorage, userId, receivePayload.value.poId, receivePayload.value.clientRequestId) } catch { /* retain safe replay metadata */ } }
       refreshReceiptAttempts()
+      if (status === 412) receiveTarget.value = null
     }
   }
 }

@@ -41,6 +41,18 @@ function setup(quantity = 10) {
 }
 
 describe('中转仓收货规范', () => {
+  it('旧页面的新操作被拒绝，但已确认的原请求仍可核对', async () => {
+    const f = setup()
+    const original = f.body(2, 0)
+    original.items[0].expectedPendingQty = 10
+    const first = await f.service.create(original)
+    const stale = f.body(2, 0, 'b9d75ac7-f78c-4d2d-9bdb-7b39bfb1d008')
+    stale.items[0].expectedPendingQty = 10
+    await expect(f.service.create(stale)).rejects.toMatchObject({ status: 412 })
+    await expect(f.service.create(original)).resolves.toMatchObject({ duplicate: true, receiptNo: first.receiptNo })
+    expect(f.receipts).toHaveLength(1)
+    expect(f.inventories[0].totalQty).toBe(2)
+  })
   it('审计写入失败必须由收货事务拒绝，不能在事务提交后报错', async () => {
     const f = setup()
     f.tx.operationLog.create.mockRejectedValue(new Error('audit write failed'))

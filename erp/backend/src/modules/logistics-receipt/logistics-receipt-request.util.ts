@@ -15,8 +15,13 @@ export function logisticsReceiptRequest(data: CreateLogisticsReceiptDto, warehou
     if (![actualQty, damagedQty].every(qty => Number.isSafeInteger(qty) && qty >= 0 && qty <= 2147483647)) throw new BadRequestException('良品实收及破损数量须为 0 至 2147483647 的整数')
     if (actualQty + damagedQty <= 0) throw new BadRequestException('每项收货明细须填写良品实收或破损数量')
     if (line.qcStatus && !['pass', 'fail'].includes(line.qcStatus)) throw new BadRequestException('质检结论须为通过或异常')
+    const expected = line.expectedPendingQty
+    if (expected !== undefined && (!Number.isSafeInteger(expected) || expected < 0 || expected > 2147483647)) {
+      throw new BadRequestException('待收数量无效，请重新读取采购单')
+    }
     return { poItemId: line.poItemId, sku: String(line.sku || '').trim(), actualQty, damagedQty,
-      qcStatus: damagedQty > 0 ? 'fail' : line.qcStatus || 'pass', qcRemark: String(line.qcRemark || '').trim() }
+      qcStatus: damagedQty > 0 ? 'fail' : line.qcStatus || 'pass', qcRemark: String(line.qcRemark || '').trim(),
+      ...(expected === undefined ? {} : { expectedPendingQty: expected }) }
   }).sort((a, b) => a.poItemId - b.poItemId)
   return { poId: data.poId, warehouseCode, remark: String(data.remark || '').trim(), items }
 }
