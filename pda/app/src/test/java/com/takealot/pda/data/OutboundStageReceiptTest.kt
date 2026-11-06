@@ -2,11 +2,26 @@ package com.takealot.pda.data
 
 import com.google.gson.JsonParser
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class OutboundStageReceiptTest {
+    @Test fun onlyTheCurrentMatchingShortPickEndsLocalPicking() {
+        val original = PdaScanRecord(
+            module = "outbound", mode = "problem_stock_short", scanCode = "DO-12",
+            retryBodyJson = """{"problemRemark":"缺一件"}""",
+        )
+        val active = JsonParser.parseString("""{"isProblem":true,"problemType":"stock_short","problemRemark":"缺一件","duplicate":true}""")
+        val replaced = JsonParser.parseString("""{"isProblem":true,"problemType":"stock_short","problemRemark":"缺两件","duplicate":true}""")
+        val cleared = JsonParser.parseString("""{"isProblem":false,"duplicate":true}""")
+        assertTrue(active.confirmsCurrentShortPick(original))
+        assertFalse(replaced.confirmsCurrentShortPick(original))
+        assertFalse(cleared.confirmsCurrentShortPick(original))
+        assertFalse(active.confirmsCurrentShortPick(original.copy(mode = "problem_barcode_issue")))
+    }
+
     @Test fun problemReceiptRequiresTheRequestedMarkOrExplicitReplay() {
         val marked = JsonParser.parseString("""{"id":12,"outboundNo":"DO-12","isProblem":true,"problemType":"stock_short"}""")
         assertSame(marked, marked.requireOutboundProblemReceipt(12, "stock_short"))

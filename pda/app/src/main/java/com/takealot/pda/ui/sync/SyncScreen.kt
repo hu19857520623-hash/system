@@ -26,6 +26,7 @@ import com.takealot.pda.PdaApp
 import com.takealot.pda.data.ErpException
 import com.takealot.pda.data.PdaResumeWork
 import com.takealot.pda.data.PdaScanRecord
+import com.takealot.pda.data.confirmsCurrentShortPick
 import com.takealot.pda.data.resolveSkuScan
 import com.takealot.pda.ui.components.Feedback
 import com.takealot.pda.ui.components.FeedbackBar
@@ -133,6 +134,10 @@ class SyncViewModel : ViewModel() {
                                     else -> null
                                 }
                                 if (completedMode != null) journal.completeOutboundStage(orderId, completedMode)
+                                if (record.retryEndpoint == "/outbound/$orderId/problem" && result.confirmsCurrentShortPick(record)) {
+                                    journal.completeOutboundStage(orderId, "pick")
+                                    nextStep = "短拣已登记并转交主管处理，请返回首页选择下一项作业。"
+                                }
                             }
                         }
                         else -> error("该记录不能自动重试，请返回原任务核对后重新扫描")

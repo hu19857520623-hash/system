@@ -2,6 +2,7 @@ package com.takealot.pda.data
 
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
+import com.google.gson.JsonParser
 
 internal enum class OutboundReceiptStage(val label: String, val acceptedStatuses: Set<String>) {
     PICK("拣货", setOf("picked")),
@@ -35,6 +36,17 @@ internal fun JsonElement.requireOutboundProblemReceipt(orderId: Int?, problemTyp
         throw ErpException("问题登记回执不完整，请在「待同步与异常记录」核对原请求", retriable = true)
     }
     return this
+}
+
+/** The original shortage may have been cleared or superseded since it was saved. */
+internal fun JsonElement.confirmsCurrentShortPick(record: PdaScanRecord): Boolean {
+    if (record.mode != "problem_stock_short") return false
+    val request = runCatching { JsonParser.parseString(record.retryBodyJson.orEmpty()).asJsonObject }.getOrNull()
+    val remark = request?.get("problemRemark")?.stringValue()?.takeIf { it.isNotBlank() } ?: return false
+    val receipt = takeIf { it.isJsonObject }?.asJsonObject ?: return false
+    return receipt.hasTrueFlag("isProblem") &&
+        receipt.get("problemType")?.stringValue() == "stock_short" &&
+        receipt.get("problemRemark")?.stringValue() == remark
 }
 
 private fun JsonObject.hasTrueFlag(key: String): Boolean =
