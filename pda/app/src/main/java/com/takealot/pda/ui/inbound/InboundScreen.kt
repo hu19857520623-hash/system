@@ -16,6 +16,8 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -1046,6 +1048,7 @@ class InboundViewModel : ViewModel() {
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun InboundScreen(modeKey: String, onBack: () -> Unit, vm: InboundViewModel = viewModel()) {
     LaunchedEffect(modeKey) { vm.bindMode(modeKey) }
@@ -1103,6 +1106,14 @@ fun InboundScreen(modeKey: String, onBack: () -> Unit, vm: InboundViewModel = vi
         ScanField(vm.scan, { vm.scan = it }, { vm.submitScan() }, scanLabel, enabled = !vm.showQcDifference && !vm.showCartonDifference && vm.reductionMode == null, focusNonce = "${vm.mode.key}-${vm.busy}")
         ScanReceiptStatus(vm.displaySku(vm.lastReadCode), vm.busy, vm.pendingScanCount)
         ScanQueueStatus(vm.pendingScanCount, vm.busy)
+        val feedback = vm.feedback
+        val feedbackRequester = remember { BringIntoViewRequester() }
+        LaunchedEffect(feedback?.eventId) {
+            if (feedback != null && !feedback.ok && !feedback.processing) feedbackRequester.bringIntoView()
+        }
+        Column(Modifier.bringIntoViewRequester(feedbackRequester)) {
+            FeedbackBar(feedback?.let { it.copy(message = vm.displayMessage(it.message)) })
+        }
         if (vm.mode == InboundMode.Receive) {
             Text(
                 if (vm.canConfirmCarton) "只扫外箱箱唛，只记箱数。确认箱数后再进入清点数量，扫 SKU 计件。"
@@ -1236,7 +1247,6 @@ fun InboundScreen(modeKey: String, onBack: () -> Unit, vm: InboundViewModel = vi
                 dismissButton = { TextButton(onClick = { qtyDialog = null }) { Text("取消") } },
             )
         }
-        FeedbackBar(vm.feedback?.let { it.copy(message = vm.displayMessage(it.message)) })
         if (order == null) {
             if (vm.mode == InboundMode.Putaway) {
                 Text("待上架入库单", color = PdaInbound, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
