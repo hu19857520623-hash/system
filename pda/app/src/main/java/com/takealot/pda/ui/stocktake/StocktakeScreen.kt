@@ -65,6 +65,7 @@ class StocktakeViewModel : ViewModel() {
     var scan by mutableStateOf("")
     var list by mutableStateOf<List<StocktakePlan>>(emptyList())
     var plan by mutableStateOf<StocktakePlan?>(null)
+    private var refreshRequired = false
     var locationCode by mutableStateOf("")
     var selectedLineId by mutableStateOf<Int?>(null)
     var qty by mutableIntStateOf(1)
@@ -145,6 +146,7 @@ class StocktakeViewModel : ViewModel() {
     }
 
     private fun enqueueScan(raw: String) {
+        if (blockStalePlan()) return
         if (showReduction) { feedback = Feedback(false, "请先完成减少数量或取消后再扫码"); return }
         val code = raw.trim()
         if (code.isEmpty()) return
@@ -254,6 +256,7 @@ class StocktakeViewModel : ViewModel() {
 
     private fun applyPlan(detail: StocktakePlan) {
         validateStocktakeWork(detail, session.warehouseCode)
+        refreshRequired = false
         plan = detail
         locationCode = ""
         selectedLineId = null
@@ -274,7 +277,14 @@ class StocktakeViewModel : ViewModel() {
         feedback = Feedback(true, "${plan!!.no} 已打开")
     }
 
+    private fun blockStalePlan(): Boolean {
+        if (!refreshRequired) return false
+        feedback = Feedback(false, "盘点进度已变化，请点击「刷新盘点单」，核对后重新扫描库位和 SKU")
+        return true
+    }
+
     fun submitCount() {
+        if (blockStalePlan()) return
         if (busy || pendingScanCount > 0) { feedback = Feedback(false, "请等待扫码处理完成后再提交"); return }
         val current = plan ?: return
         if (PdaApp.instance.workJournal.pendingRecords().any {
@@ -325,9 +335,10 @@ class StocktakeViewModel : ViewModel() {
                 }
             } catch (e: Exception) {
                 if (e is ErpException && e.code == 409) {
+                    refreshRequired = true
                     selectedLineId = null
                     qty = 1
-                    feedback = Feedback(false, "盘点进度已变化，请点击「刷新盘点单」，核对后重新扫描库位和 SKU")
+                    blockStalePlan()
                 } else {
                     feedback = Feedback(false, e.message ?: "提交失败")
                 }
@@ -362,6 +373,7 @@ class StocktakeViewModel : ViewModel() {
     }
 
     private fun resetPlan() {
+        refreshRequired = false
         lastReadCode = ""
         plan = null
         locationCode = ""
