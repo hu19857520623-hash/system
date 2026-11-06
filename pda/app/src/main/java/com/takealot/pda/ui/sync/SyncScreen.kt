@@ -60,6 +60,7 @@ class SyncViewModel : ViewModel() {
         viewModelScope.launch {
             feedback = Feedback(false, "正在重新确认 ${record.scanCode}…", processing = true)
             try {
+                var nextStep: String? = null
                 api.replayAsOriginalOwner(record) {
                     when (record.retryAction) {
                         "arrival" -> {
@@ -90,10 +91,16 @@ class SyncViewModel : ViewModel() {
                             val orderId = record.orderId
                             if (record.retryEndpoint == "/inbound/catalog-bind") {
                                 val order = api.catalogBindingReceipt(result, record)
-                                if (order.warehouseCode == session.warehouseCode &&
-                                    session.hasPerm("inbound.arrival_scan") && session.hasPerm("inbound.qc")) {
+                                val canContinue = session.hasPerm("inbound.arrival_scan") && session.hasPerm("inbound.qc")
+                                if (canContinue) {
                                     journal.activateIfNoOtherWork(PdaResumeWork("inbound", "catalog", order.id, order.no))
                                 }
+                                val saved = journal.active("inbound", "catalog")?.orderId == order.id
+                                val continueHint = if (saved) "打开「继续未完成作业」" else "进入「货盘入库」扫描原单"
+                                val warehouseHint = if (order.warehouseCode == session.warehouseCode) ""
+                                    else "切换到 ${order.warehouseCode.orEmpty()} 仓后"
+                                nextStep = if (canContinue) "货盘绑定已确认。请返回首页，$warehouseHint$continueHint。"
+                                    else "货盘绑定已确认。当前账号缺少续作权限，请交接给有权限的人员。"
                             }
                             if (record.module == "stocktake" && orderId != null &&
                                 record.retryEndpoint == "/management-loop/stocktakes/$orderId/count") {
@@ -134,7 +141,7 @@ class SyncViewModel : ViewModel() {
                     }
                 }
                 journal.acknowledge(record.id, "重试成功，ERP 已确认")
-                feedback = Feedback(true, "${record.scanCode} 已与 ERP 确认")
+                feedback = Feedback(true, nextStep ?: "${record.scanCode} 已与 ERP 确认")
             } catch (e: Exception) {
                 val message = if (e is ErpException) e.message.orEmpty() else "暂时无法核对原请求，请检查网络后重试"
                 val retryable = journal.isRetriable(e) || (e is ErpException && e.code in setOf(401, 403))
