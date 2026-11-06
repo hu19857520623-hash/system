@@ -162,7 +162,9 @@ class InboundViewModel : ViewModel() {
         }
     }
 
-    val catalogCartonBlock get() = order?.cartonBlockMessage?.takeIf { mode == InboundMode.Catalog }
+    val countingCartonBlock get() = order
+        ?.takeIf { it.statusKey in setOf("arrived", "receiving") && mode in setOf(InboundMode.Catalog, InboundMode.Qc) }
+        ?.cartonBlockMessage
     val canConfirmCarton get() = session.hasPerm("inbound.receive")
 
     fun displaySku(value: String): String = inboundDisplaySku(value, order?.omsCustomerCode)
@@ -276,7 +278,7 @@ class InboundViewModel : ViewModel() {
             feedback = Feedback(false, "本单等待主管异常放行，放行后请刷新单据继续上架")
             return
         }
-        catalogCartonBlock?.let { feedback = Feedback(false, it); return }
+        countingCartonBlock?.let { feedback = Feedback(false, it); return }
         val quantity = if (mode == InboundMode.Catalog && order != null) {
             catalogQuantity.toIntOrNull()?.takeIf { it in 1..999999 }
                 ?: run { feedback = Feedback(false, "请先输入 1～999999 的整数件数，再扫描 SKU"); return }
@@ -390,12 +392,12 @@ class InboundViewModel : ViewModel() {
             applyOrder(detail)
             PdaApp.instance.workJournal.activate(PdaResumeWork("inbound", mode.key, detail.id, detail.no))
             if (!enterPutawayIfReady()) {
-                val next = catalogCartonBlock ?: "输入本次件数后扫描 SKU，数量自动累加"
+                val next = countingCartonBlock ?: "输入本次件数后扫描 SKU，数量自动累加"
                 feedback = Feedback(true, "已绑定货盘入库单 ${detail.no}。$next")
             }
             return
         }
-        catalogCartonBlock?.let { throw ErpException(it) }
+        countingCartonBlock?.let { throw ErpException(it) }
         if (order?.itemForScan(code) == null) throw ErpException("扫描码 $code 不属于当前货盘入库单，请扫描该单 SKU 或已绑定条码")
         applySkuScan(code, recordId, quantity)
     }
@@ -406,7 +408,8 @@ class InboundViewModel : ViewModel() {
             if (guess == "inbound_no" || guess == "carton") {
                 ensureOrder(code) ?: return
                 scan = ""
-                feedback = Feedback(true, "已绑定 ${order?.no.orEmpty()}，请扫 SKU 或条码清点")
+                val next = countingCartonBlock ?: "请扫 SKU 或条码清点"
+                feedback = Feedback(true, "已绑定 ${order?.no.orEmpty()}。$next")
                 return
             }
             throw ErpException("请先扫描入库单号绑定作业单，再扫 SKU")
@@ -633,7 +636,7 @@ class InboundViewModel : ViewModel() {
             feedback = Feedback(false, "当前状态「${o.statusText}」无需重复提交清点")
             return
         }
-        catalogCartonBlock?.let { feedback = Feedback(false, it); return }
+        countingCartonBlock?.let { feedback = Feedback(false, it); return }
         val version = o.receivingVersion
         if (version.isNullOrBlank()) {
             feedback = Feedback(false, "请先刷新单据并核对最新清点数量后提交")
@@ -680,6 +683,7 @@ class InboundViewModel : ViewModel() {
 
     fun saveMeasure() {
         if (blockUnconfirmedCartons()) return
+        countingCartonBlock?.let { feedback = Feedback(false, it); return }
         val o = order ?: return
         val item = selectedItem ?: run { feedback = Feedback(false, "请先点选 SKU"); return }
         val l = lengthCm.toDoubleOrNull() ?: 0.0
@@ -1108,9 +1112,15 @@ fun InboundScreen(modeKey: String, onBack: () -> Unit, vm: InboundViewModel = vi
             )
         }
         if (vm.mode == InboundMode.Qc) {
-            Text("扫 SKU、商品条码或已绑 990，每扫一次按下方件数累加", color = PdaMuted, fontSize = 12.sp)
+            val blocked = vm.countingCartonBlock
+            if (blocked == null) {
+                Text("扫 SKU、商品条码或已绑 990，每扫一次按下方件数累加", color = PdaMuted, fontSize = 12.sp)
+            } else {
+                Text(blocked, color = PdaWarn, fontSize = 13.sp)
+                Text("请返回首页进入「确认箱数」，或请收货人员确认后刷新本单。", color = PdaWarn, fontSize = 13.sp)
+            }
         }
-        if (vm.mode == InboundMode.Catalog && order != null && vm.catalogCartonBlock == null) {
+        if (vm.mode == InboundMode.Catalog && order != null && vm.countingCartonBlock == null) {
             OutlinedTextField(
                 value = vm.catalogQuantity,
                 onValueChange = { vm.catalogQuantity = it.filter(Char::isDigit).take(6) },
@@ -1134,8 +1144,8 @@ fun InboundScreen(modeKey: String, onBack: () -> Unit, vm: InboundViewModel = vi
         val putawayMax = (vm.selectedItem?.remainingPutaway ?: 0).coerceAtLeast(1)
         val cartonMin = vm.scannedCartonCount.coerceAtLeast(1)
         if (vm.mode == InboundMode.Catalog && order != null &&
-            order.statusKey in setOf("arrived", "receiving") && vm.catalogCartonBlock != null) {
-            Text(vm.catalogCartonBlock.orEmpty(), color = PdaWarn, fontSize = 13.sp)
+            order.statusKey in setOf("arrived", "receiving") && vm.countingCartonBlock != null) {
+            Text(vm.countingCartonBlock.orEmpty(), color = PdaWarn, fontSize = 13.sp)
             if (!vm.canConfirmCarton) {
                 Text("请由有入库收货权限的人员确认，然后刷新本单继续清点", color = PdaWarn, fontSize = 13.sp)
             } else {
@@ -1298,7 +1308,7 @@ fun InboundScreen(modeKey: String, onBack: () -> Unit, vm: InboundViewModel = vi
                     Text("此异常单需由具备「异常放行」权限的主管处理", color = PdaWarn, fontSize = 13.sp)
                 }
             }
-            if (vm.mode == InboundMode.Qc || vm.mode == InboundMode.Catalog) BigButton("提交清点 → 上架", onClick = { vm.submitQc() }, enabled = !vm.busy && vm.pendingScanCount == 0 && order.statusKey in setOf("arrived", "receiving") && order.itemList.isNotEmpty() && vm.catalogCartonBlock == null && PdaApp.instance.session.hasPerm("inbound.qc"), color = PdaInbound)
+            if (vm.mode == InboundMode.Qc || vm.mode == InboundMode.Catalog) BigButton("提交清点 → 上架", onClick = { vm.submitQc() }, enabled = !vm.busy && vm.pendingScanCount == 0 && order.statusKey in setOf("arrived", "receiving") && order.itemList.isNotEmpty() && vm.countingCartonBlock == null && PdaApp.instance.session.hasPerm("inbound.qc"), color = PdaInbound)
             if ((vm.mode == InboundMode.Qc || vm.mode == InboundMode.Catalog) && order.itemList.any { (it.actualQty ?: 0) != it.expectedQty }) {
                 Text("数量尚未一致；提交清点时将弹出收货差异核对窗口", color = PdaWarn, fontSize = 13.sp)
             }
