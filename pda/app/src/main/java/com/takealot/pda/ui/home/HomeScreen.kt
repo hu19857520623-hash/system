@@ -155,7 +155,21 @@ fun HomeScreen(onInbound: (String) -> Unit, onOutbound: (String) -> Unit, onStoc
             Text("历史作业缺少提交账号，请核对 ERP 单据后，从对应作业入口重新绑定。", color = PdaMuted, fontSize = 13.sp)
         }
         if (active != null) {
-            WorkTile(tr("resume"), "${active.orderNo} · ${active.mode}", PdaAccent, true) {
+            val permitted = when (active.module to active.mode) {
+                "inbound" to "catalog" -> session.hasPerm("inbound.arrival_scan") && session.hasPerm("inbound.qc")
+                "inbound" to "arrival" -> session.hasPerm("inbound.arrival_scan")
+                "inbound" to "receive" -> session.hasPerm("inbound.receive") || session.hasPerm("inbound.qc")
+                "inbound" to "qc" -> session.hasPerm("inbound.qc")
+                "inbound" to "putaway" -> session.hasPerm("inbound.putaway")
+                "outbound" to "pick" -> session.hasPerm("outbound.pick")
+                "outbound" to "review" -> session.hasPerm("outbound.pack")
+                "outbound" to "ship" -> session.hasPerm("outbound.ship")
+                "stocktake" to "count" -> session.hasPerm("stocktake.count")
+                else -> false
+            }
+            val subtitle = if (permitted) "${active.orderNo} · ${active.mode}"
+                else "当前账号缺少此作业权限，请联系主管核对"
+            WorkTile(tr("resume"), subtitle, PdaAccent, permitted && warehouseCode.isNotBlank(), permitted && warehouseCode.isBlank()) {
                 when (active.module) {
                     "inbound" -> onInbound(active.mode)
                     "outbound" -> onOutbound(active.mode)
