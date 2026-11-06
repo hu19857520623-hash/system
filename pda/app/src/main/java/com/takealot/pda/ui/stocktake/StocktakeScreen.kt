@@ -316,7 +316,13 @@ class StocktakeViewModel : ViewModel() {
                     feedback = Feedback(true, "${customerSkuForScan(line.skuCode)} 已提交；请扫描当前库位下一 SKU")
                 }
             } catch (e: Exception) {
-                feedback = Feedback(false, e.message ?: "提交失败")
+                if (e is ErpException && e.code == 409) {
+                    selectedLineId = null
+                    qty = 1
+                    feedback = Feedback(false, "盘点进度已变化，请点击「刷新盘点单」，核对后重新扫描库位和 SKU")
+                } else {
+                    feedback = Feedback(false, e.message ?: "提交失败")
+                }
                 if (journal.isRetriable(e)) journal.retainForRetry(recordId, feedback?.message) else journal.fail(recordId, feedback?.message)
             } finally {
                 busy = false
@@ -401,7 +407,12 @@ fun StocktakeScreen(onBack: () -> Unit, vm: StocktakeViewModel = viewModel()) {
                 KeyValue("范围", plan.scopeLabel.orEmpty().ifBlank { "全范围" })
                 KeyValue("待盘", "${plan.pendingCount} / ${plan.lineList.size}")
                 if (plan.blindCount) Text("盲盘：不显示账面数量", color = PdaWarn, fontSize = 12.sp)
-                TextButton(onClick = { vm.clearPlan() }) { Text("换单", color = PdaAccent) }
+                TextButton(onClick = { vm.openPlan(plan.id) }, enabled = !vm.busy && vm.pendingScanCount == 0) {
+                    Text("刷新盘点单", color = PdaAccent)
+                }
+                TextButton(onClick = { vm.clearPlan() }, enabled = !vm.busy && vm.pendingScanCount == 0) {
+                    Text("换单", color = PdaAccent)
+                }
             }
             if (vm.locationCode.isNotBlank()) Text("当前库位 ${vm.locationCode}", color = PdaStocktake, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
             val visible = plan.lineList.filter { vm.locationCode.isBlank() || it.loc.equals(vm.locationCode, ignoreCase = true) }
