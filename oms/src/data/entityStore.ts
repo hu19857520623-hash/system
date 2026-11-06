@@ -293,8 +293,13 @@ export function updateReturnOrder(id: string, patch: Partial<ReturnOrder>) {
 }
 
 export async function updateReturnOrderOrThrow(id: string, patch: Partial<ReturnOrder>) {
-  const next = state.returnOrders.map(o => (o.id === id ? { ...o, ...patch } : o))
-  await persistReturnOrdersOrThrow(next, next.filter(order => order.id === id))
+  const current = state.returnOrders.find(order => order.id === id)
+  if (!current || (current.status !== 'draft' && current.status !== 'cancelled')) {
+    throw new Error('退件已不存在或状态已变化，请返回退件处理核对')
+  }
+  const updated = { ...current, ...patch }
+  const next = state.returnOrders.map(order => order.id === id ? updated : order)
+  await persistReturnOrdersOrThrow(next, [updated])
 }
 
 export function upsertReturnOrder(order: ReturnOrder) {

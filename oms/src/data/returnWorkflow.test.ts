@@ -1,13 +1,25 @@
 import assert from 'node:assert/strict'
 import test, { type TestContext } from 'node:test'
 import { hydrateAccounts } from '../auth/accountStore'
-import { getReturnOrdersSnapshot, setReturnOrders, cacheReturnOrder, upsertReturnOrderOrThrow, addReturnOrdersOrThrow } from './entityStore'
+import { getReturnOrdersSnapshot, setReturnOrders, cacheReturnOrder, upsertReturnOrderOrThrow, addReturnOrdersOrThrow, updateReturnOrderOrThrow } from './entityStore'
 import { submitReturnWorkflow, replayReturnWithdrawal, decideReturnOrder, replayReturnDecision, refreshReturnsFromErp, removeReturnOrder, nextReturnNo, type ReturnOrder } from './returnStore'
 import { buildImportedReturnDrafts } from './returnDraftImport'
 import { parseReturnLines, parseReturnOrders } from './importTemplates'
 
 const draft:ReturnOrder={id:'rt-original',customerId:'c1',returnNo:'RT-TKL9001-20261019001',orderNo:'AUDIT-ORDER',returnWarehouse:'JHB3',returnReason:'平台退货',requestedProcess:'pending_inspection',status:'draft',createdAt:'2026-10-19',lineItems:[{sku:'TKL9001-A',name:'商品',qty:2}]}
 const confirmed={...draft,id:31,status:'pending_arrival',statusLabel:'在途',items:[{sku:'TKL9001-A',productName:'商品',quantity:2}]}
+test('编辑期间退件消失或进入后续状态时，保存草稿明确失败且不发送写入', async t => {
+ environment(t)
+ let writes = 0
+ globalThis.fetch = async () => { writes++; return Response.json({ ok: true }) }
+ setReturnOrders([])
+ await assert.rejects(updateReturnOrderOrThrow(draft.id, draft), /返回退件处理核对/)
+ const submitted = { ...draft, status: 'pending_arrival' as const }
+ setReturnOrders([submitted])
+ await assert.rejects(updateReturnOrderOrThrow(draft.id, draft), /状态已变化/)
+ assert.deepEqual(getReturnOrdersSnapshot(), [submitted])
+ assert.equal(writes, 0)
+})
 test('退件决定仅在明确拒绝或已确认冲突时结束原请求', async t => {
  environment(t)
  const intent = { returnNo: draft.returnNo, customerCode: 'TKL9001', customerId: 'c1', decision: 'keep' as const, processChoice: 'restock' }
