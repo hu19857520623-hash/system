@@ -192,7 +192,7 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
                 "problemType" to problemType,
                 "problemRemark" to remark.trim(),
                 "clientRequestId" to clientRequestId,
-            )),
+            )).requireOutboundProblemReceipt(id, problemType),
             OutboundOrder::class.java,
         )
     }
@@ -274,6 +274,7 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
             when (endpoint.substringAfterLast('/')) {
                 "pick" -> result.requireOutboundStageReceipt(record.orderId, OutboundReceiptStage.PICK)
                 "pack" -> result.requireOutboundStageReceipt(record.orderId, OutboundReceiptStage.PACK)
+                "problem" -> result.requireOutboundProblemReceipt(record.orderId, record.mode.removePrefix("problem_"))
                 "ship" -> result.requireShipSyncAcknowledged(record.orderId)
             }
         }

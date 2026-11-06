@@ -7,6 +7,17 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class OutboundStageReceiptTest {
+    @Test fun problemReceiptRequiresTheRequestedMarkOrExplicitReplay() {
+        val marked = JsonParser.parseString("""{"id":12,"outboundNo":"DO-12","isProblem":true,"problemType":"stock_short"}""")
+        assertSame(marked, marked.requireOutboundProblemReceipt(12, "stock_short"))
+        val clearedAfterSubmission = JsonParser.parseString("""{"id":12,"outboundNo":"DO-12","isProblem":false,"duplicate":true}""")
+        assertSame(clearedAfterSubmission, clearedAfterSubmission.requireOutboundProblemReceipt(12, "stock_short"))
+        val error = assertThrows(ErpException::class.java) {
+            marked.requireOutboundProblemReceipt(12, "barcode_issue")
+        }
+        assertTrue(error.retriable)
+    }
+
     @Test fun acceptsFreshPickPackAndRelabelReceipts() {
         val cases = listOf(
             OutboundReceiptStage.PICK to "picked",
