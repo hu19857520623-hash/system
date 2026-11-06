@@ -2,6 +2,7 @@ package com.takealot.pda.data
 
 import android.content.Context
 import com.google.gson.Gson
+import com.google.gson.JsonParser
 import com.google.gson.reflect.TypeToken
 import java.io.IOException
 import java.util.UUID
@@ -43,6 +44,11 @@ data class PdaScanRecord(
     val ownerId: Int? = null,
     val serverUrl: String? = null,
 )
+
+internal val PdaScanRecord.catalogBindingWarehouse: String?
+    get() = runCatching {
+        JsonParser.parseString(retryBodyJson.orEmpty()).asJsonObject.get("warehouseCode").asString
+    }.getOrNull()?.takeIf { it.isNotBlank() }
 
 data class PdaPickProgressLine(
     val id: Int,

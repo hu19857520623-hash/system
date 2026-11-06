@@ -57,6 +57,7 @@ import com.takealot.pda.data.withQcSnapshot
 import com.takealot.pda.data.withCartonSnapshot
 import com.takealot.pda.data.withPutawaySnapshot
 import com.takealot.pda.data.PdaResumeWork
+import com.takealot.pda.data.catalogBindingWarehouse
 import com.takealot.pda.scan.ScanCodeClassifier
 import com.takealot.pda.scan.ScanBus
 import com.takealot.pda.scan.QueuedScan
@@ -306,8 +307,15 @@ class InboundViewModel : ViewModel() {
             feedback = Feedback(false, "本单有清点或测量结果待确认，请返回首页处理「待同步记录」后重新扫描")
             return
         }
-        busy = true; feedback = Feedback(false, "正在处理 ${displaySku(code)}…", processing = true)
         val journal = PdaApp.instance.workJournal
+        if (mode == InboundMode.Catalog && order == null && journal.pendingRecords().any {
+                it.retryEndpoint == "/inbound/catalog-bind" && journal.canReplay(it) &&
+                    it.scanCode.equals(code, ignoreCase = true) && it.catalogBindingWarehouse == session.warehouseCode
+            }) {
+            feedback = Feedback(false, "本单货盘绑定结果待确认，请返回首页到「待同步记录」重试原请求")
+            return
+        }
+        busy = true; feedback = Feedback(false, "正在处理 ${displaySku(code)}…", processing = true)
         val recordId = journal.beginScan("inbound", mode.key, code, order?.id, order?.no)
         try {
             when (mode) {

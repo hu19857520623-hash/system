@@ -80,9 +80,7 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
     }
 
     internal fun catalogBindingReceipt(result: JsonElement, record: PdaScanRecord): InboundOrder {
-        val warehouseCode = runCatching {
-            JsonParser.parseString(record.retryBodyJson.orEmpty()).asJsonObject.get("warehouseCode").asString
-        }.getOrNull()?.takeIf { it.isNotBlank() }
+        val warehouseCode = record.catalogBindingWarehouse
             ?: throw ErpException("原货盘绑定请求缺少仓库，请由主管核对原记录", retriable = true)
         return catalogBindingReceipt(result, record.scanCode, warehouseCode, gson)
     }
