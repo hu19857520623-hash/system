@@ -201,7 +201,7 @@ fun SyncScreen(onBack: () -> Unit, vm: SyncViewModel = viewModel()) {
                     }
                     StatusChip(status, if (record.state == "pending") "warn" else "err")
                 }
-                Text("${record.module} · ${record.mode} · ${record.orderNo.orEmpty().ifBlank { "未绑定单据" }}", color = PdaMuted, fontSize = 12.sp)
+                Text("${record.workLabel()} · ${record.orderNo.orEmpty().ifBlank { "未绑定单据" }}", color = PdaMuted, fontSize = 12.sp)
                 Text(SimpleDateFormat("MM-dd HH:mm:ss", Locale.getDefault()).format(Date(record.createdAt)), color = PdaMuted, fontSize = 12.sp)
                 record.message?.takeIf { it.isNotBlank() }?.let { Text(it, color = PdaErr, fontSize = 13.sp) }
                 if (record.state == "pending" && record.retryAction != null && !vm.canReplay(record)) {
@@ -225,4 +225,41 @@ fun SyncScreen(onBack: () -> Unit, vm: SyncViewModel = viewModel()) {
             }
         }
     }
+}
+
+private fun PdaScanRecord.workLabel(): String = when (module) {
+    "inbound" -> when (mode) {
+        "arrival" -> "到仓扫描"
+        "receive", "carton_count_submit" -> "确认箱数"
+        "qc" -> "清点数量"
+        "qc_submit" -> "提交清点"
+        "catalog" -> "货盘入库"
+        "putaway" -> "上架"
+        "measure" -> "测量商品"
+        "report_exception" -> "登记入库异常"
+        "resolve_exception" -> "处理入库异常"
+        "reduce_carton" -> "减少箱数"
+        "reduce_qc" -> "减少实收数量"
+        "reduce_putaway" -> "减少上架数量"
+        else -> "入库作业"
+    }
+    "outbound" -> when (mode) {
+        "pick" -> "拣货"
+        "pick_submit" -> "提交拣货"
+        "review" -> "复核"
+        "pack_submit" -> "提交复核"
+        "ship" -> "发运"
+        "ship_submit" -> "确认发运"
+        "reduce_pick" -> "减少拣货数量"
+        "reduce_review" -> "减少复核数量"
+        "problem_stock_short" -> "登记短拣"
+        "problem_barcode_issue" -> "登记条码异常"
+        else -> "出库作业"
+    }
+    "stocktake" -> when (mode) {
+        "count_submit" -> "提交盘点数量"
+        "reduce_count" -> "减少盘点数量"
+        else -> "盘点"
+    }
+    else -> "仓库作业"
 }
