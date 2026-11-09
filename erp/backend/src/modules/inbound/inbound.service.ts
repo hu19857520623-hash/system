@@ -126,9 +126,13 @@ export class InboundService {
     return listInboundWorkOrders(this.prisma, q)
   }
 
-  async list(q: PaginationDto & { status?: string; source?: string }) {
+  async list(q: PaginationDto & { status?: string; source?: string; warehouseCode?: string }) {
     const { page, pageSize } = getPagination(q)
     const where: any = {}
+    if (q.warehouseCode !== undefined) {
+      if (typeof q.warehouseCode !== 'string' || !q.warehouseCode.trim()) throw new BadRequestException('请提供有效的作业仓库')
+      where.warehouseCode = q.warehouseCode.trim()
+    }
     if (q.source && !['all', 'erp_shipment', 'oms_customer'].includes(q.source)) {
       throw new BadRequestException('无效的入库单来源')
     }

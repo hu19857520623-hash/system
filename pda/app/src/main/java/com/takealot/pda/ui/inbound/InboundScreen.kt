@@ -228,14 +228,18 @@ class InboundViewModel : ViewModel() {
         fun current() = request == pendingPutawayRequest && mode == InboundMode.Putaway && warehouse == session.warehouseCode
         viewModelScope.launch {
             try {
-                val page = api.inboundList(status = "pending_putaway", pageSize = 100)
+                if (warehouse.isBlank()) throw ErpException("请先在首页选择作业仓库", code = 400)
+                val page = api.inboundList(status = "pending_putaway", pageSize = 100, warehouseCode = warehouse)
                 if (current()) {
                     pendingOrders = page.items.orEmpty()
-                        .filter { row -> row.warehouseCode.isNullOrBlank() || row.warehouseCode == warehouse }
+                        .filter { row -> row.warehouseCode == warehouse }
                         .distinctBy { it.id }
                 }
             } catch (e: Exception) {
-                if (current()) pendingPutawayError = e.message ?: "加载待上架单据失败"
+                if (current()) {
+                    pendingPutawayError = if (e is ErpException && e.code in 400..499) e.message
+                    else "无法读取待上架单据，请检查网络后重试"
+                }
             } finally {
                 if (request == pendingPutawayRequest) pendingPutawayLoading = false
             }

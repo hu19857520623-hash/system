@@ -52,12 +52,13 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
         }
     }
 
-    suspend fun inboundList(keyword: String? = null, status: String? = null, pageSize: Int = 20): PageResult<InboundOrder> =
+    suspend fun inboundList(keyword: String? = null, status: String? = null, pageSize: Int = 20, warehouseCode: String? = null): PageResult<InboundOrder> =
         withContext(Dispatchers.IO) {
             val q = buildString {
                 append("/inbound?page=1&pageSize=$pageSize")
                 if (!keyword.isNullOrBlank()) append("&keyword=${keyword.encodeUrl()}")
                 if (!status.isNullOrBlank()) append("&status=$status")
+                if (!warehouseCode.isNullOrBlank()) append("&warehouseCode=${warehouseCode.encodeUrl()}")
             }
             parseOperationalInboundPage(get(q), gson)
         }

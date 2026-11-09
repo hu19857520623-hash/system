@@ -127,7 +127,7 @@ export class InboundController {
     'inbound.putaway',
   )
   @Get()
-  list(@Query() q: PaginationDto & { status?: string; source?: string }) {
+  list(@Query() q: PaginationDto & { status?: string; source?: string; warehouseCode?: string }) {
     return this.service.list(q)
   }
 
