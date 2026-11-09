@@ -63,6 +63,13 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
             parseOperationalInboundPage(get(q), gson)
         }
 
+    suspend fun lookupInboundId(code: String, warehouse: String): Int = withContext(Dispatchers.IO) {
+        val result = get("/inbound/scan-lookup?scanCode=${code.encodeUrl()}&warehouseCode=${warehouse.encodeUrl()}")
+        val id = result.takeIf { it.isJsonObject }?.asJsonObject?.get("id")
+            ?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }?.asString?.toIntOrNull()
+        id?.takeIf { it > 0 } ?: throw ErpException("无法核对入库单，请重新扫描")
+    }
+
     suspend fun inboundDetail(id: Int): InboundOrder = withContext(Dispatchers.IO) {
         gson.fromJson(get("/inbound/$id"), InboundOrder::class.java)
     }

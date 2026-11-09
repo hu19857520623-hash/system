@@ -131,6 +131,12 @@ export class InboundController {
     return this.service.list(q)
   }
 
+  @RequireAnyPerm('inbound.view', 'inbound.arrival_scan', 'inbound.receive', 'inbound.qc', 'inbound.putaway')
+  @Get('scan-lookup')
+  scanLookup(@Query('scanCode') scanCode: string, @Query('warehouseCode') warehouseCode: string) {
+    return this.service.scanLookup(scanCode, warehouseCode)
+  }
+
   @RequireAnyPerm('inbound.arrival_scan', 'inbound.view')
   @Get('arrival-scans')
   listArrivalScans(@Query() q: { warehouseCode?: string; limit?: string }) {

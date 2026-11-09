@@ -184,7 +184,7 @@ export class InboundService {
       items: order.items.map((item: any) => this.enrichInboundItem(item, prodMap, platformBySku)),
     }))
 
-    const omsItems = q.source === 'erp_shipment' ? [] : await fetchOmsInboundRows(this.prisma, {
+    const omsItems = q.source === 'erp_shipment' || q.warehouseCode ? [] : await fetchOmsInboundRows(this.prisma, {
       keyword: q.keyword,
       status: q.status,
     })
@@ -204,6 +204,27 @@ export class InboundService {
 
     const { items, total } = mergeInboundPaginate([erpItems, omsOnly], page, pageSize)
     return { items, total, page, pageSize }
+  }
+
+  async scanLookup(scanCode: string, warehouseCode: string) {
+    if (typeof scanCode !== 'string' || !scanCode.trim() || typeof warehouseCode !== 'string' || !warehouseCode.trim()) {
+      throw new BadRequestException('请先选择作业仓库并扫描入库单号')
+    }
+    const code = scanCode.trim()
+    const warehouse = warehouseCode.trim()
+    const exact = await this.prisma.inboundOrder.findFirst({
+      where: { warehouseCode: warehouse, inboundNo: code },
+      select: { id: true },
+    })
+    if (exact) return { id: Number(exact.id) }
+    const aliases = await this.prisma.inboundOrder.findMany({
+      where: { warehouseCode: warehouse, OR: [{ warehouseNo: code }, { trackingNo: code }] },
+      select: { id: true },
+      take: 2,
+    })
+    if (aliases.length > 1) throw new ConflictException('该仓单号或跟踪号匹配多张入库单，请扫描完整入库单号')
+    if (!aliases.length) throw new NotFoundException('当前仓库未找到匹配的入库单，请核对单号和作业仓')
+    return { id: Number(aliases[0].id) }
   }
 
   async detail(id: number, options?: { reconcileCatalog?: boolean }) {
