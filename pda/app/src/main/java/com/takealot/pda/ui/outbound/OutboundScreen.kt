@@ -36,6 +36,7 @@ import com.takealot.pda.data.OutboundOrder
 import com.takealot.pda.data.PdaPickProgress
 import com.takealot.pda.data.PdaPickProgressLine
 import com.takealot.pda.data.PdaResumeWork
+import com.takealot.pda.data.requireMatchingDetail
 import com.takealot.pda.data.outboundStatusLabel
 import com.takealot.pda.data.pickTaskAtLocation
 import com.takealot.pda.data.requireUniqueScanSku
@@ -150,7 +151,7 @@ class OutboundViewModel : ViewModel() {
         viewModelScope.launch {
             try {
                 val detail = api.outboundDetail(resume.orderId)
-                verifyWorkWarehouse(detail)
+                resume.requireMatchingDetail(detail.id, detail.warehouseCode, session.warehouseCode)
                 val finished = when (resume.mode) {
                     "pick" -> detail.statusKey in setOf("picked", "reviewing", "pending_relabel", "packed", "shipped", "delivered", "partial_delivered", "delivery_failed", "completed", "cancelled")
                     "review" -> detail.statusKey in setOf("pending_relabel", "packed", "shipped", "delivered", "partial_delivered", "delivery_failed", "completed", "cancelled")

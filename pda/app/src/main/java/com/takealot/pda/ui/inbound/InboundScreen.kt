@@ -57,6 +57,7 @@ import com.takealot.pda.data.withQcSnapshot
 import com.takealot.pda.data.withCartonSnapshot
 import com.takealot.pda.data.withPutawaySnapshot
 import com.takealot.pda.data.PdaResumeWork
+import com.takealot.pda.data.requireMatchingDetail
 import com.takealot.pda.data.catalogBindingWarehouse
 import com.takealot.pda.scan.ScanCodeClassifier
 import com.takealot.pda.scan.ScanBus
@@ -201,10 +202,7 @@ class InboundViewModel : ViewModel() {
             try {
                 val detail = api.inboundDetail(resume.orderId)
                 if (generation != workGeneration) return@launch
-                if (detail.warehouseCode != session.warehouseCode || session.warehouseCode.isBlank()) {
-                    feedback = Feedback(false, "本单属于 ${detail.warehouseCode.orEmpty()}，请返回首页切换作业仓库后继续")
-                    return@launch
-                }
+                resume.requireMatchingDetail(detail.id, detail.warehouseCode, session.warehouseCode)
                 if (retireClosedOrder(detail)) return@launch
                 applyOrder(detail)
                 if (!enterPutawayIfReady()) feedback = Feedback(true, "已恢复 ${resume.orderNo} 的未完成作业")

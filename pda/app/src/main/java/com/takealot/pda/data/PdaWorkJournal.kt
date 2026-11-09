@@ -26,6 +26,15 @@ data class PdaResumeWork(
     val serverUrl: String? = null,
 )
 
+internal fun PdaResumeWork.requireMatchingDetail(detailId: Int, detailWarehouse: String?, workWarehouse: String) {
+    if (detailId != orderId || detailWarehouse.isNullOrBlank()) {
+        throw ErpException("无法核对原单或所属仓库，请返回首页重试，未完成作业已保留")
+    }
+    if (detailWarehouse != workWarehouse) {
+        throw ErpException("本单属于 $detailWarehouse，请返回首页切换作业仓库后继续")
+    }
+}
+
 data class PdaScanRecord(
     val id: String = UUID.randomUUID().toString(),
     val module: String,

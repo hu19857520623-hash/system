@@ -27,6 +27,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.takealot.pda.PdaApp
 import com.takealot.pda.data.ErpException
 import com.takealot.pda.data.PdaResumeWork
+import com.takealot.pda.data.requireMatchingDetail
 import com.takealot.pda.data.StocktakeLine
 import com.takealot.pda.data.StocktakePlan
 import com.takealot.pda.data.validateStocktakeWork
@@ -101,6 +102,7 @@ class StocktakeViewModel : ViewModel() {
         viewModelScope.launch {
             try {
                 val detail = api.stocktake(resume.orderId)
+                resume.requireMatchingDetail(detail.id, detail.warehouseCode, session.warehouseCode)
                 if (retireClosedPlan(detail)) return@launch
                 applyPlan(detail)
                 feedback = Feedback(true, "已恢复 ${resume.orderNo} 的未完成作业")
