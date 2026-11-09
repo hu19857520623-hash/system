@@ -491,11 +491,16 @@ class InboundViewModel : ViewModel() {
 
     private suspend fun ensureOrder(code: String, allowedStatuses: Set<String>? = null, replace: Boolean = false): InboundOrder? {
         if (order != null && !replace) return order
-        val page = api.inboundList(keyword = code, pageSize = 20)
-        val match = page.items.orEmpty().firstOrNull { row ->
-            listOfNotNull(row.inboundNo, row.warehouseNo, row.trackingNo).any { it.equals(code, true) }
+        val warehouse = session.warehouseCode
+        if (warehouse.isBlank()) throw ErpException("请先在首页选择作业仓库")
+        val page = api.inboundList(keyword = code, pageSize = 20, warehouseCode = warehouse)
+        val rows = page.items.orEmpty().filter { it.warehouseCode == warehouse }
+        val match = rows.firstOrNull { it.inboundNo.equals(code, true) } ?: run {
+            val aliases = rows.filter { it.warehouseNo.equals(code, true) || it.trackingNo.equals(code, true) }
+            if (aliases.size > 1) throw ErpException("该仓单号或跟踪号匹配多张入库单，请扫描完整入库单号")
+            aliases.singleOrNull()
         }
-        if (match == null) { feedback = Feedback(false, "未找到精确匹配的入库单 $code，请核对单号/仓单号/跟踪号"); return null }
+        if (match == null) { feedback = Feedback(false, "当前仓库未找到匹配的入库单 $code，请核对单号和作业仓"); return null }
         val detail = api.inboundDetail(match.id)
         if (detail.id != match.id) throw ErpException("入库单详情与扫码匹配的单据不一致，请重新扫描")
         verifyInboundWarehouse(detail)
