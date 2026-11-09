@@ -381,7 +381,7 @@ class InboundViewModel : ViewModel() {
 
     private suspend fun doReceiveScan(code: String, recordId: String) {
         if (order == null) {
-            ensureOrder(code) ?: return
+            ensureOrder(code)
             scan = ""
             return
         }
@@ -421,14 +421,11 @@ class InboundViewModel : ViewModel() {
     private suspend fun doQcScan(code: String, recordId: String, quantity: Int) {
         val guess = ScanCodeClassifier.classify(code).typeKey
         if (order == null) {
-            if (guess == "inbound_no" || guess == "carton") {
-                ensureOrder(code) ?: return
-                scan = ""
-                val next = countingCartonBlock ?: "请扫 SKU 或条码清点"
-                feedback = Feedback(true, "已绑定 ${order?.no.orEmpty()}。$next")
-                return
-            }
-            throw ErpException("请先扫描入库单号绑定作业单，再扫 SKU")
+            val bound = ensureOrder(code)
+            scan = ""
+            val next = countingCartonBlock ?: "请扫 SKU 或条码清点"
+            feedback = Feedback(true, "已绑定 ${bound.no}。$next")
+            return
         }
         if (guess == "inbound_no" && !matchesCurrentSku(code)) {
             scan = ""
@@ -489,8 +486,7 @@ class InboundViewModel : ViewModel() {
         return true
     }
 
-    private suspend fun ensureOrder(code: String, allowedStatuses: Set<String>? = null, replace: Boolean = false): InboundOrder? {
-        if (order != null && !replace) return order
+    private suspend fun ensureOrder(code: String, allowedStatuses: Set<String>? = null): InboundOrder {
         val warehouse = session.warehouseCode
         if (warehouse.isBlank()) throw ErpException("请先在首页选择作业仓库")
         val id = api.lookupInboundId(code, warehouse)
@@ -502,7 +498,7 @@ class InboundViewModel : ViewModel() {
         }
         applyOrder(detail)
         PdaApp.instance.workJournal.activate(PdaResumeWork("inbound", mode.key, detail.id, detail.no))
-        return order
+        return detail
     }
 
     private fun verifyInboundWarehouse(detail: InboundOrder) {
@@ -533,10 +529,7 @@ class InboundViewModel : ViewModel() {
         val guess = ScanCodeClassifier.classify(code).typeKey
         val skuHit = order?.itemForScan(code)
         if (order == null || (guess == "inbound_no" && skuHit == null)) {
-            if (order == null && (guess == "sku" || guess == "barcode" || guess == "location")) {
-                throw ErpException("请先扫描或点选待上架入库单")
-            }
-            val bound = ensureOrder(code, setOf("pending_putaway"), replace = true) ?: return
+            val bound = ensureOrder(code, setOf("pending_putaway"))
             bindPutawayOrder(bound)
             scan = ""
             return
@@ -1099,10 +1092,10 @@ fun InboundScreen(modeKey: String, onBack: () -> Unit, vm: InboundViewModel = vi
     }
     val scanLabel = when (vm.mode) {
         InboundMode.Arrival -> tr("scan_inbound")
-        InboundMode.Receive -> tr("scan_carton")
-        InboundMode.Qc -> tr("scan_sku")
+        InboundMode.Receive -> if (order == null) "扫入库单号 / 仓单号 / 跟踪号" else tr("scan_carton")
+        InboundMode.Qc -> if (order == null) "扫入库单号 / 仓单号 / 跟踪号" else tr("scan_sku")
         InboundMode.Catalog -> if (order == null) "扫入库单号绑定作业" else "扫 SKU 录入本次件数"
-        InboundMode.Putaway -> if (order == null) tr("scan_inbound") else tr("scan_sku_location")
+        InboundMode.Putaway -> if (order == null) "扫入库单号 / 仓单号 / 跟踪号" else tr("scan_sku_location")
     }
     val contentScroll = rememberScrollState()
     LaunchedEffect(vm.mode) { contentScroll.scrollTo(0) }
