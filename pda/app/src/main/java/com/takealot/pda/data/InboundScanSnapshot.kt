@@ -3,6 +3,18 @@ package com.takealot.pda.data
 import com.google.gson.Gson
 import com.google.gson.JsonElement
 
+internal fun JsonElement.requireExceptionReportReceipt(): JsonElement {
+    val receipt = takeIf { it.isJsonObject }?.asJsonObject
+    val duplicate = receipt?.get("duplicate")
+    val message = receipt?.get("message")
+    if (duplicate?.isJsonPrimitive != true || !duplicate.asJsonPrimitive.isBoolean ||
+        message?.isJsonPrimitive != true || !message.asJsonPrimitive.isString || message.asString.isBlank()
+    ) {
+        throw ErpException("异常登记回执不完整，请在「待同步与异常记录」核对原请求", retriable = true)
+    }
+    return this
+}
+
 internal fun JsonElement.requireQcSubmitReceipt(orderId: Int?, gson: Gson): JsonElement {
     val order = runCatching { gson.fromJson(this, InboundOrder::class.java) }.getOrNull()
     val syncPending = takeIf { it.isJsonObject }?.asJsonObject?.get("syncPending")

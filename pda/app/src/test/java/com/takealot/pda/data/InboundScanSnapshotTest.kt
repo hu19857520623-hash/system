@@ -6,6 +6,20 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class InboundScanSnapshotTest {
+    @Test fun exceptionReportRequiresAnExplicitReceiptOnInitialAndRepeatedRequests() {
+        for (duplicate in listOf(false, true)) {
+            val receipt = JsonParser.parseString("""{"message":"未知条码已登记","duplicate":$duplicate}""")
+            assertSame(receipt, receipt.requireExceptionReportReceipt())
+        }
+        for (body in listOf("null", "{}", """{"message":"未知条码已登记"}""",
+            """{"message":"未知条码已登记","duplicate":"false"}""")) {
+            val error = assertThrows(ErpException::class.java) {
+                JsonParser.parseString(body).requireExceptionReportReceipt()
+            }
+            assertTrue(error.retriable)
+        }
+    }
+
     @Test fun qcReceiptRequiresMatchingCountAndExplicitSyncConfirmation() {
         val gson = Gson()
         for (status in listOf("pending_putaway", "exception")) {

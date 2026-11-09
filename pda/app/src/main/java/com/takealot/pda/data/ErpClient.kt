@@ -103,7 +103,7 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
                 "scanCode" to scanCode.trim(),
                 "remark" to remark.trim(),
                 "clientRequestId" to clientRequestId,
-            )).requireInboundSyncAcknowledged(),
+            )).requireInboundSyncAcknowledged().requireExceptionReportReceipt(),
             ScanActionResult::class.java,
         )
     }
@@ -292,6 +292,7 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
         if (endpoint.startsWith("/inbound/")) result.requireInboundSyncAcknowledged()
         if (endpoint.startsWith("/inbound/") && endpoint.endsWith("/putaway")) putawayReceipt(result, record.orderId)
         if (endpoint.startsWith("/inbound/") && endpoint.endsWith("/qc")) result.requireQcSubmitReceipt(record.orderId, gson)
+        if (endpoint.startsWith("/inbound/") && endpoint.endsWith("/report-exception")) result.requireExceptionReportReceipt()
         result
     }
 
