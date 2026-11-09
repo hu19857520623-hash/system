@@ -152,9 +152,9 @@ class OutboundViewModel : ViewModel() {
                 val detail = api.outboundDetail(resume.orderId)
                 verifyWorkWarehouse(detail)
                 val finished = when (resume.mode) {
-                    "pick" -> detail.statusKey in setOf("picked", "reviewing", "packed", "shipped", "completed", "cancelled")
-                    "review" -> detail.statusKey in setOf("packed", "shipped", "completed", "cancelled")
-                    else -> detail.statusKey in setOf("shipped", "completed", "cancelled")
+                    "pick" -> detail.statusKey in setOf("picked", "reviewing", "pending_relabel", "packed", "shipped", "delivered", "partial_delivered", "delivery_failed", "completed", "cancelled")
+                    "review" -> detail.statusKey in setOf("pending_relabel", "packed", "shipped", "delivered", "partial_delivered", "delivery_failed", "completed", "cancelled")
+                    else -> detail.statusKey in setOf("shipped", "delivered", "partial_delivered", "delivery_failed", "completed", "cancelled")
                 }
                 if (finished) {
                     PdaApp.instance.workJournal.completeOutboundStage(resume.orderId, resume.mode)
