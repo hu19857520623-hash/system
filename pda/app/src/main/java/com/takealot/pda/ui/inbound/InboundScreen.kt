@@ -250,7 +250,11 @@ class InboundViewModel : ViewModel() {
         busy = true
         feedback = null
         viewModelScope.launch {
-            try { bindPutawayOrder(api.inboundDetail(id)) }
+            try {
+                val detail = api.inboundDetail(id)
+                if (detail.id != id) throw ErpException("入库单详情与所选单据不一致，请返回列表刷新后重试")
+                bindPutawayOrder(detail)
+            }
             catch (e: Exception) { feedback = Feedback(false, e.message ?: "打开单据失败") }
             finally { busy = false }
         }
@@ -489,9 +493,8 @@ class InboundViewModel : ViewModel() {
         }
         if (match == null) { feedback = Feedback(false, "未找到精确匹配的入库单 $code，请核对单号/仓单号/跟踪号"); return null }
         val detail = api.inboundDetail(match.id)
-        if (!detail.warehouseCode.isNullOrBlank() && detail.warehouseCode != session.warehouseCode) {
-            throw ErpException("该入库单属于 ${detail.warehouseCode}，当前作业仓为 ${session.warehouseCode}")
-        }
+        if (detail.id != match.id) throw ErpException("入库单详情与扫码匹配的单据不一致，请重新扫描")
+        verifyInboundWarehouse(detail)
         if (allowedStatuses != null && detail.statusKey !in allowedStatuses) {
             throw ErpException("当前状态「${detail.statusText}」不可上架，请选择待上架单据")
         }
@@ -500,11 +503,16 @@ class InboundViewModel : ViewModel() {
         return order
     }
 
-    private suspend fun bindPutawayOrder(detail: InboundOrder) {
+    private fun verifyInboundWarehouse(detail: InboundOrder) {
         if (session.warehouseCode.isBlank()) throw ErpException("请先在首页选择作业仓库")
-        if (!detail.warehouseCode.isNullOrBlank() && detail.warehouseCode != session.warehouseCode) {
+        if (detail.warehouseCode.isNullOrBlank()) throw ErpException("入库单详情缺少所属仓库，请刷新单据后重试")
+        if (detail.warehouseCode != session.warehouseCode) {
             throw ErpException("该入库单属于 ${detail.warehouseCode}，当前作业仓为 ${session.warehouseCode}")
         }
+    }
+
+    private suspend fun bindPutawayOrder(detail: InboundOrder) {
+        verifyInboundWarehouse(detail)
         if (detail.statusKey != "pending_putaway" && detail.statusKey != "exception") {
             throw ErpException("当前状态「${detail.statusText}」不可上架，仅待上架单据可进入")
         }

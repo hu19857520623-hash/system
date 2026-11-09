@@ -338,11 +338,16 @@ class OutboundViewModel : ViewModel() {
         }
     }
 
-    private suspend fun loadOrder(id: Int) = applyOrderDetail(api.outboundDetail(id))
+    private suspend fun loadOrder(id: Int) {
+        val detail = api.outboundDetail(id)
+        if (detail.id != id) throw ErpException("出库单详情与所选单据不一致，请返回列表刷新后重试")
+        applyOrderDetail(detail)
+    }
 
     private fun verifyWorkWarehouse(detail: OutboundOrder) {
         if (session.warehouseCode.isBlank()) throw ErpException("请先在首页选择作业仓")
-        if (!detail.warehouseCode.isNullOrBlank() && detail.warehouseCode != session.warehouseCode) {
+        if (detail.warehouseCode.isNullOrBlank()) throw ErpException("出库单详情缺少所属仓库，请返回列表刷新后重试")
+        if (detail.warehouseCode != session.warehouseCode) {
             throw ErpException("该出库单属于 ${detail.warehouseCode}，当前作业仓为 ${session.warehouseCode}")
         }
     }
