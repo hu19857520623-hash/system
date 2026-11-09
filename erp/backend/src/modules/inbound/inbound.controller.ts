@@ -220,8 +220,8 @@ export class InboundController {
     'inbound.putaway',
   )
   @Get(':id')
-  detail(@Param('id', ParseIntPipe) id: number) {
-    return this.service.detail(id)
+  detail(@Param('id', ParseIntPipe) id: number, @Query('reconcileCatalog') reconcileCatalog?: string) {
+    return this.service.detail(id, { reconcileCatalog: reconcileCatalog !== 'false' })
   }
 
   @RequirePerms('create_inbound.create')

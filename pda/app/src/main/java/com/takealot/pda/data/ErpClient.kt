@@ -71,7 +71,7 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
     }
 
     suspend fun inboundDetail(id: Int): InboundOrder = withContext(Dispatchers.IO) {
-        gson.fromJson(get("/inbound/$id"), InboundOrder::class.java)
+        gson.fromJson(get("/inbound/$id?reconcileCatalog=false"), InboundOrder::class.java)
     }
 
     suspend fun arrivalScan(scanCode: String, warehouseCode: String): ArrivalScanResult = withContext(Dispatchers.IO) {

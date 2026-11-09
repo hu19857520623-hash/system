@@ -486,15 +486,21 @@ class InboundViewModel : ViewModel() {
         return true
     }
 
-    private suspend fun ensureOrder(code: String, allowedStatuses: Set<String>? = null): InboundOrder {
+    private suspend fun ensureOrder(code: String): InboundOrder {
         val warehouse = session.warehouseCode
         if (warehouse.isBlank()) throw ErpException("请先在首页选择作业仓库")
         val id = api.lookupInboundId(code, warehouse)
         val detail = api.inboundDetail(id)
         if (detail.id != id) throw ErpException("入库单详情与扫码匹配的单据不一致，请重新扫描")
         verifyInboundWarehouse(detail)
-        if (allowedStatuses != null && detail.statusKey !in allowedStatuses) {
-            throw ErpException("当前状态「${detail.statusText}」不可上架，请选择待上架单据")
+        val allowedStatuses = when (mode) {
+            InboundMode.Receive -> setOf("arrived", "receiving")
+            InboundMode.Qc -> setOf("arrived", "receiving", "pending_putaway", "exception")
+            InboundMode.Putaway -> setOf("pending_putaway")
+            else -> emptySet()
+        }
+        if (detail.statusKey !in allowedStatuses) {
+            throw ErpException("当前状态「${detail.statusText}」不可进行${mode.title}，请选择可作业的入库单")
         }
         applyOrder(detail)
         PdaApp.instance.workJournal.activate(PdaResumeWork("inbound", mode.key, detail.id, detail.no))
@@ -529,7 +535,7 @@ class InboundViewModel : ViewModel() {
         val guess = ScanCodeClassifier.classify(code).typeKey
         val skuHit = order?.itemForScan(code)
         if (order == null || (guess == "inbound_no" && skuHit == null)) {
-            val bound = ensureOrder(code, setOf("pending_putaway"))
+            val bound = ensureOrder(code)
             bindPutawayOrder(bound)
             scan = ""
             return
