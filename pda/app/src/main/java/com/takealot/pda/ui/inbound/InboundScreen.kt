@@ -1062,7 +1062,7 @@ class InboundViewModel : ViewModel() {
         selectedItemId = null
         locationCode = ""
         stageNotice = null
-        feedback = Feedback(true, "${detail.no} 已${detail.statusText}，请选择其他单据")
+        feedback = Feedback(true, "${detail.no} 当前为「${detail.statusText}」，请选择其他单据")
         if (mode == InboundMode.Putaway) loadPendingPutaway()
         return true
     }
