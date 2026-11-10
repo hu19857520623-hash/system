@@ -162,8 +162,8 @@ export function matchCartonByScan<T extends { boxCode: string; boxSeq: number }>
   if (byGenerated) return byGenerated
 
   const parsed = parseWmsScan(token)
-  if (parsed?.kind === 'carton' && parsed.inboundNo === orderNo) {
-    return cartons.find((c) => c.boxSeq === parsed.boxSeq) || null
+  if (parsed?.kind === 'carton') {
+    return parsed.inboundNo === orderNo ? cartons.find((c) => c.boxSeq === parsed.boxSeq) || null : null
   }
 
   const scanPrefix = rvDocPrefix(token)
@@ -173,10 +173,10 @@ export function matchCartonByScan<T extends { boxCode: string; boxSeq: number }>
     if (Number.isFinite(seq)) return cartons.find((c) => c.boxSeq === seq) || null
   }
 
-  const cSuffix = token.match(/-C(\d{3,})$/)
-  if (cSuffix) {
-    const seq = Number(cSuffix[1])
-    return cartons.find((c) => c.boxSeq === seq || String(c.boxCode || '').toUpperCase().endsWith(cSuffix[0])) || null
+  // A legacy suffix identifies a sequence only within the named inbound order.
+  const legacy = token.match(/^(.+)-C(\d{3,})$/)
+  if (legacy && legacy[1] === orderNo) {
+    return cartons.find((c) => c.boxSeq === Number(legacy[2])) || null
   }
   return null
 }

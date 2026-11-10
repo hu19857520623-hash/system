@@ -15,6 +15,35 @@ internal fun JsonElement.requireExceptionReportReceipt(): JsonElement {
     return this
 }
 
+internal fun JsonElement.requireBoxScanReceipt(
+    orderId: Int, orderNo: String?, expectedBox: String?, gson: Gson,
+): ScanActionResult {
+    val failure = ErpException("箱唛回执与原收箱请求不一致，请在「待同步记录」核对原请求", retriable = true)
+    val body = takeIf { it.isJsonObject }?.asJsonObject ?: throw failure
+    val summary = body.get("order")?.takeIf { it.isJsonObject }?.asJsonObject ?: throw failure
+    fun JsonElement?.number() = this?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }?.asString?.toIntOrNull()
+    fun JsonElement?.text() = this?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString
+    fun JsonElement?.flag() = this?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isBoolean }?.asBoolean
+    val receipt = runCatching { gson.fromJson(this, ScanActionResult::class.java) }.getOrNull() ?: throw failure
+    val no = summary.get("inboundNo").text()
+    val box = receipt.carton?.boxCode
+    val duplicate = body.get("duplicate").flag() ?: throw failure
+    val alreadyConfirmed = body.get("alreadyConfirmed").flag() ?: throw failure
+    val count = body.get("receivedCartonCount")
+    val summaryCount = summary.get("receivedCartonCount")
+    if (body.get("id").number() != orderId || summary.get("id").number() != orderId ||
+        no.isNullOrBlank() || body.get("inboundNo").text() != no || (!orderNo.isNullOrBlank() && no != orderNo) ||
+        summary.get("status").text() !in setOf("arrived", "receiving") ||
+        body.get("scanType").text() != "outer_box" || box.isNullOrBlank() ||
+        (expectedBox != null && !box.equals(expectedBox, ignoreCase = true)) ||
+        body.get("increment").number() != (if (duplicate || alreadyConfirmed) 0 else 1)
+    ) throw failure
+    if (count == null || count != summaryCount || (!(alreadyConfirmed && count.isJsonNull) && (count.number() ?: 0) <= 0) ||
+        body.get("syncPending").flag() != false
+    ) throw failure
+    return receipt
+}
+
 internal fun JsonElement.requireCartonCountReceipt(orderId: Int, orderNo: String?, count: Int): JsonElement {
     val failure = ErpException("实收箱数回执与原请求不一致，请在「待同步记录」核对原请求", retriable = true)
     val body = takeIf { it.isJsonObject }?.asJsonObject ?: throw failure

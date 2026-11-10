@@ -388,7 +388,8 @@ class InboundViewModel : ViewModel() {
     }
 
     private suspend fun doReceiveScan(code: String, recordId: String) {
-        if (order == null) {
+        val current = order
+        if (current == null) {
             ensureOrder(code)
             scan = ""
             return
@@ -399,8 +400,9 @@ class InboundViewModel : ViewModel() {
         if (matchesCurrentSku(code)) {
             throw ErpException("这是 SKU，当前只确认箱数，不计件。请扫外箱箱唛，确认箱数后再进入清点数量")
         }
-        PdaApp.instance.workJournal.prepareRetry(recordId, "receive_box")
-        val res = api.submitPrepared(recordId) { api.receiveBox(order!!.id, code, recordId) }
+        val expectedBox = current.cartonList.firstOrNull { it.boxCode.equals(code.trim(), ignoreCase = true) }?.boxCode
+        PdaApp.instance.workJournal.prepareRetry(recordId, "receive_box", extra = expectedBox)
+        val res = api.submitPrepared(recordId) { api.receiveBox(current.id, code, recordId, current.no, expectedBox) }
         feedback = Feedback(true, displayMessage(res.message.orEmpty().ifBlank { "箱唛已确认，请继续扫箱唛；全部确认后点击确认箱数" }))
         val updated = order?.withCartonSnapshot(res)
         if (updated != null) applyOrder(updated)

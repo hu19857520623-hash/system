@@ -51,7 +51,12 @@ describe('wms-doc-no', () => {
     ]
     expect(matchCartonByScan(cartons, 'RVAFU0430-260910-0002-1', 'RVAFU0430-260910-0002')?.boxSeq).toBe(1)
     expect(matchCartonByScan(cartons, 'RVAFU0430-260910-0001', 'RVAFU0430-260910-0002')?.boxSeq).toBe(1)
+    expect(matchCartonByScan(cartons, 'RVAFU0430-260910-0001-1', 'RVAFU0430-260910-0002')).toBeNull()
     expect(matchCartonByScan(cartons, 'IN-OLD-C002', 'IN-OLD')?.boxSeq).toBe(2)
+    expect(matchCartonByScan(cartons, 'IN-OTHER-C001', 'IN-OLD')).toBeNull()
+    expect(matchCartonByScan(cartons, 'IN-OTHER-C002', 'IN-OLD')).toBeNull()
+    expect(matchCartonByScan(cartons, 'IN-OLD-C001', 'IN-OLD')?.boxSeq).toBe(1)
+    expect(matchCartonByScan(cartons, 'OLD-ALIAS-C001', 'OLD-ALIAS')?.boxSeq).toBe(1)
     expect(matchCartonByScan(cartons, 'RVAFU9999-260910-0001-1', 'RVAFU0430-260910-0002')).toBeNull()
   })
 

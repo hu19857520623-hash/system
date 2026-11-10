@@ -86,9 +86,11 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
         return catalogBindingReceipt(result, record.scanCode, warehouseCode, gson)
     }
 
-    suspend fun receiveBox(id: Int, scanCode: String, clientRequestId: String = UUID.randomUUID().toString()): ScanActionResult = withContext(Dispatchers.IO) {
-        gson.fromJson(postJson("/inbound/$id/receive-box", mapOf("scanCode" to scanCode, "clientRequestId" to clientRequestId)).requireInboundSyncAcknowledged(), ScanActionResult::class.java)
-    }
+    suspend fun receiveBox(id: Int, scanCode: String, clientRequestId: String, orderNo: String?, expectedBox: String?): ScanActionResult =
+        withContext(Dispatchers.IO) {
+            postJson("/inbound/$id/receive-box", mapOf("scanCode" to scanCode, "clientRequestId" to clientRequestId))
+                .requireInboundSyncAcknowledged().requireBoxScanReceipt(id, orderNo, expectedBox, gson)
+        }
 
     suspend fun recordReceivedCartonCount(order: InboundOrder, receivedCartonCount: Int, differenceReason: String, clientRequestId: String) =
         withContext(Dispatchers.IO) {

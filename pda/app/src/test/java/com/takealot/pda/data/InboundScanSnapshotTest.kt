@@ -20,6 +20,29 @@ class InboundScanSnapshotTest {
         }
     }
 
+    @Test fun boxReceiptDistinguishesNewScanRepeatedBoxAndReplay() {
+        val body = JsonParser.parseString("""
+            {"id":61,"inboundNo":"RVTEST","scanType":"outer_box","alreadyConfirmed":false,"duplicate":false,
+             "receivedCartonCount":1,"increment":1,"syncPending":false,"carton":{"boxCode":"BOX-1"},
+             "order":{"id":61,"inboundNo":"RVTEST","status":"receiving","receivedCartonCount":1}}
+        """).asJsonObject
+        val gson = Gson()
+        assertEquals(1, body.requireBoxScanReceipt(61, "RVTEST", "BOX-1", gson).increment)
+        for (key in listOf("duplicate", "alreadyConfirmed")) {
+            val repeated = body.deepCopy().apply { addProperty(key, true); addProperty("increment", 0) }
+            assertEquals(0, repeated.requireBoxScanReceipt(61, "RVTEST", "BOX-1", gson).increment)
+        }
+        for (bad in listOf(
+            body.deepCopy().apply { getAsJsonObject("carton").addProperty("boxCode", "BOX-2") },
+            body.deepCopy().apply { getAsJsonObject("order").addProperty("id", 62) },
+            body.deepCopy().apply { addProperty("duplicate", true) },
+            body.deepCopy().apply { remove("syncPending") },
+        )) {
+            val error = assertThrows(ErpException::class.java) { bad.requireBoxScanReceipt(61, "RVTEST", "BOX-1", gson) }
+            assertTrue(error.retriable)
+        }
+    }
+
     @Test fun cartonCountRequiresOriginalOrderAndExactBoxCount() {
         val body = JsonParser.parseString("""
             {"id":61,"inboundNo":"RVTEST","receivedCartonCount":2,"syncPending":false,
