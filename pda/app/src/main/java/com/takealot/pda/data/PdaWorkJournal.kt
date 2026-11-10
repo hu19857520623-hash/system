@@ -187,6 +187,15 @@ class PdaWorkJournal(context: Context, private val session: SessionStore) {
     }
 
     @Synchronized
+    fun advanceOutboundStage(orderId: Int, orderNo: String, completedMode: String, nextMode: String): Boolean {
+        completeOutboundStage(orderId, completedMode)
+        val current = resumes().lastOrNull { it.module == "outbound" && owns(it.ownerId, it.serverUrl) }
+        if (current != null && current.orderId != orderId) return false
+        activate(PdaResumeWork("outbound", nextMode, orderId, orderNo))
+        return true
+    }
+
+    @Synchronized
     fun savePickProgress(progress: PdaPickProgress) {
         val owner = session.userId.takeIf { it > 0 } ?: return
         val server = session.baseUrl
