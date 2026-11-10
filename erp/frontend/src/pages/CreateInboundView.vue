@@ -1533,12 +1533,20 @@ async function submitFreight() {
 async function clearFreight() {
   const frame=shipmentRequests.capture()
   if (!canBeginMaintenance() || !detailCanEditFreight.value) return
-  const id = inboundNumericId(detailOrder.value)
+  const snapshot = detailOrder.value
+  const id = inboundNumericId(snapshot)
   if (!id) return
-  if (!await confirmAction('确认清除本单海运费？本单批次成本的海运费将清零，关联本单的货盘费用一并更新；入库单仍保留。', '清除海运费')) return
-  if(!frame.active())return
-  await startMaintenance({ kind: 'freight', inboundId: id, inboundNo: detailOrder.value.inboundNo, clear: true,
-    payload: { clientRequestId: crypto.randomUUID(), expectedVersion: detailOrder.value.seaFreightVersion }, snapshot: detailOrder.value })
+  const version = detailReadVersion
+  const inboundNo = snapshot.inboundNo
+  const expectedVersion = snapshot.seaFreightVersion
+  if (!await confirmAction(`确认清除入库单 ${inboundNo} 的海运费？该单批次成本中的海运费将清零，关联货盘费用一并更新。入库单仍保留。`, '清除海运费')) return
+  if (!frame.active()) return
+  if (version !== detailReadVersion || detailOrder.value !== snapshot || !detailVisible.value || !detailCanEditFreight.value) {
+    ElMessage.warning('入库单详情已变化，请打开原单核对后重新确认')
+    return
+  }
+  await startMaintenance({ kind: 'freight', inboundId: id, inboundNo, clear: true,
+    payload: { clientRequestId: crypto.randomUUID(), expectedVersion }, snapshot })
 }
 
 async function handleInboundDownload(command: string, row: any) {
