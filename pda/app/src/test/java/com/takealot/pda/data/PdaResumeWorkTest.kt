@@ -64,4 +64,27 @@ class PdaResumeWorkTest {
         assertNull(ResumeWorkScope(8, "server", "CPT").active(migrated))
         assertNull(ResumeWorkScope(7, "other-server", "CPT").active(migrated))
     }
+    @Test fun restrictedNewestWorkDoesNotHideAnAllowedOrder() {
+        val scope = ResumeWorkScope(7, "server", "JHB")
+        val allowed = PdaResumeWork("outbound", "review", 61, "DO-61", updatedAt = 1)
+        val restricted = PdaResumeWork("stocktake", "count", 62, "PD-62", updatedAt = 2)
+        val records = scope.activate(scope.activate(emptyList(), allowed), restricted)
+
+        val reviewOnly = scope.forHome(records) { it == "outbound.pack" }
+        assertEquals(61, reviewOnly.work?.orderId)
+        assertTrue(reviewOnly.hasRestrictedWork)
+        assertEquals(62, scope.forHome(records) { true }.work?.orderId)
+        assertNull(scope.forHome(records) { false }.work)
+        assertEquals(2, records.size)
+    }
+
+    @Test fun catalogNeedsBothPermissionsAndFallsBackToAResumableLegacyModule() {
+        val scope = ResumeWorkScope(7, "server", "JHB")
+        val catalog = work.copy(updatedAt = 2)
+        val legacy = PdaResumeWork("outbound", "review", 61, "DO-61", updatedAt = 1, ownerId = 7, serverUrl = "server")
+        val records = scope.activate(listOf(legacy), catalog)
+        val allowed = setOf("inbound.qc", "outbound.pack")
+        assertEquals(61, scope.forHome(records, allowed::contains).work?.orderId)
+        assertEquals(42, scope.forHome(records) { it in allowed || it == "inbound.arrival_scan" }.work?.orderId)
+    }
 }

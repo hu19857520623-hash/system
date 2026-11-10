@@ -186,7 +186,7 @@ class PdaWorkJournal(context: Context, private val session: SessionStore) {
     }
 
     @Synchronized
-    fun latestActive(): PdaResumeWork? = resumeScope().active(resumes())
+    internal fun resumeForHome(): ResumeHomeWork = resumeScope().forHome(resumes(), session::hasPerm)
 
     @Synchronized
     fun hasResumeInOtherWarehouse(): Boolean = resumeScope().hasOtherWarehouse(resumes())

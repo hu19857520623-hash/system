@@ -147,7 +147,8 @@ fun HomeScreen(onInbound: (String) -> Unit, onOutbound: (String) -> Unit, onStoc
                 }
             }
         }
-        val active = PdaApp.instance.workJournal.latestActive()
+        val resume = PdaApp.instance.workJournal.resumeForHome()
+        val active = resume.work
         if (pendingSync > 0 || failedScans > 0) {
             WorkTile("待同步与异常记录", "待确认 $pendingSync 条 · 失败 $failedScans 条", PdaErr, true, onClick = onSync)
         }
@@ -157,27 +158,16 @@ fun HomeScreen(onInbound: (String) -> Unit, onOutbound: (String) -> Unit, onStoc
         if (active == null && PdaApp.instance.workJournal.hasUnassignedResume()) {
             Text("历史作业缺少提交账号，请核对 ERP 单据后，从对应作业入口重新绑定。", color = PdaMuted, fontSize = 13.sp)
         }
+        if (resume.hasRestrictedWork) {
+            Text("部分未完成作业需要相应权限，请联系主管核对。", color = PdaMuted, fontSize = 13.sp)
+        }
         if (active != null) {
-            val permitted = when (active.module to active.mode) {
-                "inbound" to "catalog" -> session.hasPerm("inbound.arrival_scan") && session.hasPerm("inbound.qc")
-                "inbound" to "arrival" -> session.hasPerm("inbound.arrival_scan")
-                "inbound" to "receive" -> session.hasPerm("inbound.receive") || session.hasPerm("inbound.qc")
-                "inbound" to "qc" -> session.hasPerm("inbound.qc")
-                "inbound" to "putaway" -> session.hasPerm("inbound.putaway")
-                "outbound" to "pick" -> session.hasPerm("outbound.pick")
-                "outbound" to "review" -> session.hasPerm("outbound.pack")
-                "outbound" to "ship" -> session.hasPerm("outbound.ship")
-                "stocktake" to "count" -> session.hasPerm("stocktake.count")
-                else -> false
-            }
             val stageKey = when (active.mode) {
                 "catalog" -> "catalog_inbound"
                 "count" -> "stocktake"
                 else -> active.mode
             }
-            val subtitle = if (permitted) "${active.orderNo} · ${tr(stageKey)}"
-                else "当前账号缺少此作业权限，请联系主管核对"
-            WorkTile(tr("resume"), subtitle, PdaAccent, permitted && warehouseCode.isNotBlank(), permitted && warehouseCode.isBlank()) {
+            WorkTile(tr("resume"), "${active.orderNo} · ${tr(stageKey)}", PdaAccent, true) {
                 when (active.module) {
                     "inbound" -> onInbound(active.mode)
                     "outbound" -> onOutbound(active.mode)

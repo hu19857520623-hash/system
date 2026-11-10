@@ -20,6 +20,16 @@ internal class ResumeWorkScope(
             .maxByOrNull { it.updatedAt }
     }
 
+    /** Match the same records that the destination screens can actually reopen. */
+    fun forHome(works: List<PdaResumeWork>, hasPermission: (String) -> Boolean): ResumeHomeWork {
+        val candidates = listOf("inbound", "outbound", "stocktake").mapNotNull { active(works, it) }
+        val allowed = candidates.filter { it.canResume(hasPermission) }
+        return ResumeHomeWork(
+            work = allowed.maxWithOrNull(compareBy<PdaResumeWork> { it.warehouseCode == warehouseCode }.thenBy { it.updatedAt }),
+            hasRestrictedWork = allowed.size < candidates.size,
+        )
+    }
+
     fun hasOtherWarehouse(works: List<PdaResumeWork>) =
         valid && works.any { owns(it) && !it.warehouseCode.isNullOrBlank() && it.warehouseCode != warehouseCode }
 
@@ -42,3 +52,20 @@ internal class ResumeWorkScope(
             owns(it) && it.module == module && it.orderId == orderId && (mode == null || it.mode == mode)
         }
 }
+
+
+internal data class ResumeHomeWork(val work: PdaResumeWork?, val hasRestrictedWork: Boolean)
+
+private fun PdaResumeWork.canResume(hasPermission: (String) -> Boolean): Boolean =
+    when (module to mode) {
+        "inbound" to "catalog" -> hasPermission("inbound.arrival_scan") && hasPermission("inbound.qc")
+        "inbound" to "arrival" -> hasPermission("inbound.arrival_scan")
+        "inbound" to "receive" -> hasPermission("inbound.receive") || hasPermission("inbound.qc")
+        "inbound" to "qc" -> hasPermission("inbound.qc")
+        "inbound" to "putaway" -> hasPermission("inbound.putaway")
+        "outbound" to "pick" -> hasPermission("outbound.pick")
+        "outbound" to "review" -> hasPermission("outbound.pack")
+        "outbound" to "ship" -> hasPermission("outbound.ship")
+        "stocktake" to "count" -> hasPermission("stocktake.count")
+        else -> false
+    }
