@@ -134,7 +134,7 @@ class OutboundViewModel : ViewModel() {
 
     fun bindMode(key: String) {
         lastReadCode = ""
-        reductionTaskKey = null
+        resetOrderInputs()
         mode = when (key) {
             "review" -> "review"
             "ship" -> "ship"
@@ -143,8 +143,6 @@ class OutboundViewModel : ViewModel() {
         pickScanMode = session.pickScanMode
         feedback = null; scan = ""; order = null; lines = emptyList()
         selectedSku = null; scannedPickLocation = null
-        cartons = listOf(OutboundCartonDraft())
-        trackingNo = ""; carrier = ""; logisticsProduct = ""
         loadList()
         val resume = PdaApp.instance.workJournal.active("outbound", mode) ?: return
         busy = true
@@ -393,6 +391,7 @@ class OutboundViewModel : ViewModel() {
             nextLines = emptyList()
         }
         val saved = PdaApp.instance.workJournal.pickProgress(nextOrder.id, mode)
+        if (order?.id != nextOrder.id) resetOrderInputs()
         order = nextOrder
         lines = nextLines.map { it.copy(customerCode = nextOrder.customerCode) }.map { line ->
             saved?.lines?.firstOrNull { it.taskKey == line.taskKey || (it.taskKey.isNullOrBlank() && it.id == line.id) }?.let { progress ->
@@ -641,7 +640,30 @@ class OutboundViewModel : ViewModel() {
         }
     }
 
-    fun clearOrder() { order?.let { PdaApp.instance.workJournal.clearPickProgress(it.id, mode) }; order = null; lines = emptyList(); selectedSku = null; scannedPickLocation = null; scan = ""; lastReadCode = ""; unknownScanCode = null; PdaApp.instance.workJournal.clearActive("outbound") }
+    private fun resetOrderInputs() {
+        cartons = listOf(OutboundCartonDraft())
+        trackingNo = ""
+        carrier = ""
+        logisticsProduct = ""
+        lastRejectedScan = null
+        showShortPickDialog = false
+        shortPickReason = ""
+        unknownScanCode = null
+        unknownScanRemark = ""
+        reductionTaskKey = null
+    }
+
+    fun clearOrder() {
+        order?.let { PdaApp.instance.workJournal.completeOutboundStage(it.id, mode) }
+        order = null
+        lines = emptyList()
+        selectedSku = null
+        scannedPickLocation = null
+        scan = ""
+        lastReadCode = ""
+        feedback = null
+        resetOrderInputs()
+    }
 }
 
 @Composable
