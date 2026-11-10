@@ -94,6 +94,20 @@ internal fun JsonElement.requireQcScanReceipt(
     return receipt
 }
 
+internal fun JsonElement.requireExceptionReleaseReceipt(orderId: Int, orderNo: String?): JsonElement {
+    val failure = ErpException("异常放行回执与原单或操作不一致，请到「待同步记录」核对原请求", retriable = true)
+    val body = takeIf { it.isJsonObject }?.asJsonObject ?: throw failure
+    fun JsonElement?.text() = this?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString
+    val id = body.get("id")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }?.asString?.toIntOrNull()
+    val no = body.get("inboundNo").text()
+    val sync = body.get("syncPending")
+    if (id != orderId || no.isNullOrBlank() || (!orderNo.isNullOrBlank() && no != orderNo) ||
+        body.get("kind").text() != "resolve-exception" || body.get("status").text() != "pending_putaway" ||
+        (sync != null && !(sync.isJsonPrimitive && sync.asJsonPrimitive.isBoolean && !sync.asBoolean))
+    ) throw failure
+    return this
+}
+
 internal fun JsonElement.requireQcSubmitReceipt(orderId: Int?, gson: Gson): JsonElement {
     val order = runCatching { gson.fromJson(this, InboundOrder::class.java) }.getOrNull()
     val syncPending = takeIf { it.isJsonObject }?.asJsonObject?.get("syncPending")

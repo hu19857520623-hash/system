@@ -166,9 +166,11 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
             expected.copy(expectedSkus = selectedSkus).verifyReceipt(result, gson)
         }
 
-    suspend fun resolveException(id: Int, body: Map<String, Any?>, clientRequestId: String) = withContext(Dispatchers.IO) {
-        postJson("/inbound/$id/resolve-exception", body + ("clientRequestId" to clientRequestId)).requireInboundSyncAcknowledged()
-    }
+    suspend fun resolveException(order: InboundOrder, body: Map<String, Any?>, clientRequestId: String) =
+        withContext(Dispatchers.IO) {
+            postJson("/inbound/${order.id}/resolve-exception", body + ("clientRequestId" to clientRequestId))
+                .requireInboundSyncAcknowledged().requireExceptionReleaseReceipt(order.id, order.no)
+        }
 
     suspend fun outboundList(
         keyword: String? = null, status: String? = null, pickerId: Int? = null,
@@ -318,6 +320,10 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
         if (reduction != null && (record.orderId == null || endpoint != "/inbound/${record.orderId}/reduce-$reduction")) {
             throw ErpException("待同步记录与原减少数量单据不一致，请由主管核对", retriable = true)
         }
+        val release = endpoint.startsWith("/inbound/") && endpoint.endsWith("/resolve-exception")
+        val releaseId = if (release) record.orderId?.takeIf { endpoint == "/inbound/$it/resolve-exception" }
+            ?: throw ErpException("待同步记录与原异常放行单不一致，请由主管核对", retriable = true)
+            else null
         val result = postJson(endpoint, payload)
         if (endpoint.startsWith("/outbound/")) {
             when (endpoint.substringAfterLast('/')) {
@@ -329,6 +335,7 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
         shipment?.let { result.requireShipSyncAcknowledged(it) }
         if (endpoint.startsWith("/inbound/")) result.requireInboundSyncAcknowledged()
         putaway?.verifyReceipt(result, gson)
+        if (releaseId != null) result.requireExceptionReleaseReceipt(releaseId, record.orderNo)
         if (reduction != null && record.orderId != null) {
             result.verifyReductionReceipt(record.orderId, record.orderNo, reduction, payload, record.retrySku)
         }

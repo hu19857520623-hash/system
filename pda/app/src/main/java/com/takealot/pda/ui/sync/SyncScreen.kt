@@ -102,7 +102,8 @@ class SyncViewModel : ViewModel() {
                             val orderId = record.orderId
                             if (record.module == "inbound" && orderId != null) {
                                 when (record.retryEndpoint) {
-                                    "/inbound/$orderId/qc" -> nextStep = continueAfterInboundReceipt(record, orderId)
+                                    "/inbound/$orderId/qc", "/inbound/$orderId/resolve-exception" ->
+                                        nextStep = continueAfterInboundReceipt(record, orderId)
                                     "/inbound/$orderId/received-carton-count" ->
                                         nextStep = continueAfterInboundReceipt(record, orderId, cartonCount = true)
                                     "/inbound/$orderId/reduce-carton", "/inbound/$orderId/reduce-qc", "/inbound/$orderId/reduce-putaway" ->
@@ -213,6 +214,7 @@ class SyncViewModel : ViewModel() {
         record: PdaScanRecord, orderId: Int, cartonCount: Boolean = false, skuScanMode: String? = null, boxScan: Boolean = false, reduction: String? = null,
     ): String {
         val confirmed = when {
+            record.mode == "resolve_exception" -> "原异常放行已确认"
             reduction != null -> "原减少数量请求已确认"
             boxScan -> "原箱唛收货已确认"
             cartonCount -> "原实收箱数请求已确认"

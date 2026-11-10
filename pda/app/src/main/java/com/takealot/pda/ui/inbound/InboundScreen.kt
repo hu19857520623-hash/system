@@ -823,12 +823,14 @@ class InboundViewModel : ViewModel() {
             val recordId = journal.beginScan("inbound", "resolve_exception", o.no, o.id, o.no)
             try {
                 journal.preparePostRetry(recordId, "/inbound/${o.id}/resolve-exception", body)
-                api.submitPrepared(recordId) { api.resolveException(o.id, body, recordId) }
+                api.submitPrepared(recordId) { api.resolveException(o, body, recordId) }
                 journal.acknowledge(recordId, "异常已放行")
                 showExceptionRelease = false
                 exceptionReason = ""
-                if (refreshAfterConfirmedWrite() && !enterPutawayIfReady()) {
-                    feedback = Feedback(true, "异常已放行，请核对最新作业进度")
+                if (!refreshAfterConfirmedWrite()) return@launch
+                val latest = order ?: return@launch
+                if (!retireClosedOrder(latest) && !enterPutawayIfReady()) {
+                    feedback = Feedback(true, "原放行已确认，单据当前为「${latest.statusText}」，请按最新状态处理")
                 }
             } catch (e: Exception) {
                 showExceptionRelease = false

@@ -6,6 +6,23 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class InboundScanSnapshotTest {
+    @Test fun exceptionReleaseRequiresOriginalOrderOperationAndHandoffStatus() {
+        val receipt = JsonParser.parseString("""
+            {"id":42,"inboundNo":"RV-42","kind":"resolve-exception","status":"pending_putaway","duplicate":true}
+        """).asJsonObject
+        assertSame(receipt, receipt.requireExceptionReleaseReceipt(42, "RV-42"))
+        for (invalid in listOf(
+            receipt.deepCopy().apply { addProperty("inboundNo", "RV-43") },
+            receipt.deepCopy().apply { addProperty("kind", "reduce-qc") },
+            receipt.deepCopy().apply { addProperty("status", "exception") },
+            receipt.deepCopy().apply { addProperty("syncPending", true) },
+        )) {
+            assertTrue(assertThrows(ErpException::class.java) {
+                invalid.requireExceptionReleaseReceipt(42, "RV-42")
+            }.retriable)
+        }
+    }
+
     @Test fun exceptionReportRequiresAnExplicitReceiptOnInitialAndRepeatedRequests() {
         for (duplicate in listOf(false, true)) {
             val receipt = JsonParser.parseString("""{"message":"未知条码已登记","duplicate":$duplicate}""")
