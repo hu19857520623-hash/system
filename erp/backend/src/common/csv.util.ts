@@ -8,8 +8,9 @@ export function toCsv(headers: string[], rows: unknown[][]) {
   return bom + [headers.join(','), ...rows.map((r) => r.map(escapeCsv).join(','))].join('\n')
 }
 
-export function parseCsv(text: string): string[][] {
-  const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/).filter((l) => l.trim())
+export function parseCsv(text: string, options?: { preserveBlankLines?: boolean }): string[][] {
+  const physicalLines = text.replace(/^\uFEFF/, '').split(/\r?\n/)
+  const lines = options?.preserveBlankLines ? physicalLines : physicalLines.filter(line => line.trim())
   const result: string[][] = []
   for (const line of lines) {
     const row: string[] = []

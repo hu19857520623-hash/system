@@ -1,11 +1,13 @@
 
 import { userFacingError } from '@erp/shared/user-facing-error'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ref } from 'vue'
+import { onScopeDispose, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { asyncIoApi, triggerBrowserDownload } from '@/api/client.js'
 import { normalizeImportFileText } from '@/utils/csv'
 import { showImportResultFeedback } from '@/utils/importResultFeedback.ts'
+import { getAccessToken } from '@/auth/tokenStore'
+import { useAppStore } from '@/stores/app'
 
 export function triggerBlobDownload(blob: Blob, fileName: string) {
   triggerBrowserDownload(blob, fileName)
@@ -25,7 +27,11 @@ export function pickFile(accept = '.csv,.xls'): Promise<File | null> {
 export function useAsyncIo() {
   const route = useRoute()
   const router = useRouter()
+  const app = useAppStore()
   const exportBusy = ref(false)
+  const importBusy = ref(false)
+  let disposed = false
+  onScopeDispose(() => { disposed = true })
   async function exportModule(module: string, params?: Record<string, unknown>) {
     if (exportBusy.value) return null
     exportBusy.value = true
@@ -50,17 +56,40 @@ export function useAsyncIo() {
   }
 
   async function importCsv(module: string, file?: File) {
-    const f = file ?? (await pickFile())
-    if (!f) return null
+    if (importBusy.value) return null
+    const token = getAccessToken(), owner = app.authenticatedUser?.id, returnTo = route.fullPath
+    const permissions = JSON.stringify([...app.currentPermSet].sort())
+    if (!token || !owner) return null
+    const active = () => !disposed && token === getAccessToken() && owner === app.authenticatedUser?.id &&
+      returnTo === route.fullPath && permissions === JSON.stringify([...app.currentPermSet].sort())
+    importBusy.value = true
+    let submitted = false
     try {
+      const f = file ?? (await pickFile())
+      if (!f || !active()) return null
       const content = normalizeImportFileText(await f.text())
+      if (!active()) return null
+      submitted = true
       const job = await asyncIoApi.import({ module, fileName: f.name, content })
-      await showImportResultFeedback(job)
-      return job
+      submitted = false
+      if (!active()) return null
+      await showImportResultFeedback(job, active)
+      return active() ? job : null
     } catch (e: any) {
-      ElMessage.error(userFacingError(e.message || '导入失败'))
+      if (!active()) return null
+      const status = Number(e?.status)
+      const uncertain = submitted && (!Number.isFinite(status) || status < 100 || status >= 500 || status === 408 || status === 409)
+      const message = userFacingError(e?.message || '导入失败')
+      if (uncertain) {
+        try {
+          await ElMessageBox.confirm(`导入结果待核对，请按文件名查看导入任务，确认前请勿重复上传。${message}`, '导入结果待核对', {
+            confirmButtonText: '查看导入任务', cancelButtonText: '返回当前页面', type: 'warning',
+          })
+          if (active()) await router.push({ path: '/async-io', query: { tab: 'import', ...(route.path !== '/async-io' ? { returnTo } : {}) } })
+        } catch { /* Keep the current page when the user cancels. */ }
+      } else ElMessage.error(message)
       return null
-    }
+    } finally { importBusy.value = false }
   }
 
   async function downloadJob(jobId: number | string, fileName?: string) {
@@ -73,5 +102,5 @@ export function useAsyncIo() {
     }
   }
 
-  return { exportModule, exportBusy, importCsv, downloadJob, pickFile, triggerBlobDownload }
+  return { exportModule, exportBusy, importCsv, importBusy, downloadJob, pickFile, triggerBlobDownload }
 }

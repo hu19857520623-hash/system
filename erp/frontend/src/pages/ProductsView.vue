@@ -21,7 +21,7 @@ import { getAccessToken } from '@/auth/tokenStore'
 
 const app = useAppStore()
 const canPrintLabel = computed(() => app.hasPerm('products.print_label'))
-const { importCsv } = useAsyncIo()
+const { importCsv, importBusy } = useAsyncIo()
 const route = useRoute()
 
 function productImageSrc(url: string | undefined | null) {
@@ -630,7 +630,7 @@ async function printSkuLabels(items: Array<{ sku?: string; name?: string; barcod
             <el-button v-if="app.hasPerm('products.edit')" type="primary" size="small" @click="openCreate">+ 创建商品</el-button>
             <template v-if="app.hasPerm('products.edit')">
               <el-button size="small" link type="primary" @click="downloadProductImportTemplate">下载模板</el-button>
-              <el-button size="small" @click="importProducts">批量导入</el-button>
+              <el-button size="small" :loading="importBusy" @click="importProducts">批量导入</el-button>
             </template>
             <el-button size="small" @click="selectAll">全选</el-button>
             <el-button size="small" :disabled="!selectedRows.length" @click="clearSelection">取消选择</el-button>

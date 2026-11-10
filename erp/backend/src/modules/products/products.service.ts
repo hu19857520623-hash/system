@@ -393,6 +393,10 @@ export class ProductsService {
     }
 
     for (const row of parsed) {
+      if (!row.sku || !row.productName) {
+        recordFail(row.lineNo, !row.sku ? '请填写 SKU' : '请填写商品名称', row.sku)
+        continue
+      }
       try {
         let developerId: number | undefined
         if (row.developerKey) {
