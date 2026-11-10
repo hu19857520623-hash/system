@@ -148,6 +148,9 @@ const stockError = ref('')
 const draftsError = ref('')
 const shipmentBusy = ref(false)
 const draftBusy = ref(false)
+const pendingDraftSave = ref<{ draftNo: string; form: Record<string, any> } | null>(null)
+const draftSaveFeedback = ref('')
+const draftSaveCanCopy = ref(false)
 const attachmentBusy = ref(false)
 const importBusy = ref(false)
 const maintenanceBusy = ref(false)
@@ -161,7 +164,7 @@ const shipmentError = ref('')
 const shipmentResult = ref<any>(null)
 const deletedShipment = ref<{attempt:ShipmentAttempt;inboundNo:string}|null>(null)
 const formBusy = computed(() => shipmentBusy.value || draftBusy.value || attachmentBusy.value || importBusy.value || maintenanceBusy.value)
-const formLocked = computed(() => formBusy.value || !!shipmentAttempt.value || !!shipmentResult.value || !!shipmentAttemptError.value || !!maintenanceAttempt.value || !!maintenanceStorageError.value)
+const formLocked = computed(() => formBusy.value || !!pendingDraftSave.value || !!shipmentAttempt.value || !!shipmentResult.value || !!shipmentAttemptError.value || !!maintenanceAttempt.value || !!maintenanceStorageError.value)
 let stockLoadVersion = 0
 let draftLoadVersion = 0
 let detailReadVersion=0
@@ -858,6 +861,7 @@ async function copyDeletedInbound(snapshot: any) {
   if (formBusy.value || shipmentAttempt.value || shipmentAttemptError.value || maintenanceAttempt.value || maintenanceStorageError.value) return
   shipmentResult.value = null
   shipmentError.value = ''
+  draftSaveFeedback.value = ''
   editingDraftId.value = null
   fillFormFromOrder(snapshot)
   tab.value = 'form'
@@ -1118,6 +1122,7 @@ async function onSourceWarehouseChange(code: string) {
 }
 
 function openCreate() {
+  if (pendingDraftSave.value) { tab.value = 'form'; return }
   refreshShipmentAttempt()
   refreshMaintenanceAttempt()
   if (formBusy.value || shipmentAttempt.value || shipmentAttemptError.value || maintenanceAttempt.value || maintenanceStorageError.value) return
@@ -1135,6 +1140,7 @@ function openCreate() {
 
 function cancelForm() {
   if (formBusy.value) return
+  if (pendingDraftSave.value) { tab.value = 'list'; return }
   if (shipmentAttempt.value || shipmentResult.value) { returnShipmentList(); return }
   editingDraftId.value = null
   createForm.value = emptyForm()
@@ -1153,24 +1159,91 @@ function buildRemark() {
   return parts.join(' ')
 }
 
-async function persistDraft(frame=shipmentRequests.capture()) {
+async function persistDraft(frame=shipmentRequests.capture(), snapshot?: { draftNo: string; form: Record<string, any> }) {
   if(!frame.active())return
-  const draftNo=editingDraftId.value || `DRF-${crypto.randomUUID().replace(/-/g,'').slice(0,26)}`
-  const form=JSON.parse(JSON.stringify(createForm.value))
+  const { draftNo, form } = snapshot || captureDraftSave()
   editingDraftId.value=draftNo
-  await frame.step(()=>inboundApi.saveDraft({draftNo,form}))
+  const receipt = await frame.step(()=>inboundApi.saveDraft({draftNo,form}))
+  if (receipt?.draftNo !== draftNo) throw Error('草稿保存回执与原草稿号不一致')
   return draftNo
 }
+
+function captureDraftSave() {
+  return {
+    draftNo: editingDraftId.value || `DRF-${crypto.randomUUID().replace(/-/g,'').slice(0,26)}`,
+    form: JSON.parse(JSON.stringify(createForm.value)),
+  }
+}
+
+function comparableDraft(form: Record<string, any>) {
+  // The list endpoint rebuilds attachments from their separate upload records.
+  const { attachments: _attachments, ...fields } = form
+  return JSON.stringify(fields, (_key, value) => {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      return Object.fromEntries(Object.keys(value).sort().map(key => [key, value[key]]))
+    }
+    return value
+  })
+}
+
 async function saveDraft() {
   if(formLocked.value || !canCreateInbound.value)return
   const frame=shipmentRequests.capture();draftBusy.value=true
+  const snapshot = captureDraftSave()
+  draftSaveFeedback.value = ''
   try {
-    await persistDraft(frame)
+    await persistDraft(frame, snapshot)
     await frame.step(()=>loadDrafts())
     if(!frame.active())return
     toast('草稿已保存');tab.value='drafts'
-  } catch(error) {if(frame.active())ElMessage.error(userFacingError(error))}
+  } catch(error: any) {
+    if (!frame.active()) return
+    const status = Number(error?.status)
+    if (!Number.isFinite(status) || status < 100 || status >= 500 || status === 408 || status === 409) {
+      pendingDraftSave.value = snapshot
+      draftSaveCanCopy.value = false
+      draftSaveFeedback.value = `草稿保存结果待核对，原资料已保留。${userFacingError(error)}`
+    } else draftSaveFeedback.value = userFacingError(error)
+  }
   finally {if(frame.active())draftBusy.value=false}
+}
+
+async function verifyDraftSave() {
+  const attempt = pendingDraftSave.value
+  if (!attempt || formBusy.value || !canCreateInbound.value) return
+  const frame = shipmentRequests.captureRead()
+  draftBusy.value = true
+  draftSaveCanCopy.value = false
+  try {
+    const rows = await frame.step(() => inboundApi.listDrafts())
+    if (!frame.active()) return
+    if (!Array.isArray(rows)) throw Error('草稿箱回执不完整，请重新读取')
+    const original = rows.find(row => row.draftNo === attempt.draftNo)
+    drafts.value = rows.map(mapDraftRow)
+    if (original?._form && comparableDraft(original._form) === comparableDraft(attempt.form)) {
+      pendingDraftSave.value = null
+      draftSaveFeedback.value = ''
+      toast('已核对，原草稿已保存')
+      tab.value = 'drafts'
+    } else {
+      draftSaveCanCopy.value = true
+      draftSaveFeedback.value = original
+        ? '草稿箱资料与本次输入不一致。原输入已保留，可再次核对或复制为新草稿。'
+        : '暂未在草稿箱找到原单。原输入已保留，可再次核对或复制为新草稿。'
+    }
+  } catch(error) { if (frame.active()) draftSaveFeedback.value = `读取原草稿失败，请重试核对。${userFacingError(error)}` }
+  finally { if (frame.active()) draftBusy.value = false }
+}
+
+function copyUnconfirmedDraft() {
+  const attempt = pendingDraftSave.value
+  if (!attempt || !draftSaveCanCopy.value || formBusy.value) return
+  createForm.value = { ...emptyForm(), ...JSON.parse(JSON.stringify(attempt.form)), attachments: [] }
+  editingDraftId.value = null
+  pendingDraftSave.value = null
+  draftSaveCanCopy.value = false
+  draftSaveFeedback.value = '原输入已复制。附件仍属于原草稿，请在新草稿中重新上传。'
+  tab.value = 'form'
 }
 
 function normalizeCarton(carton: CartonForm) {
@@ -1432,7 +1505,7 @@ async function downloadReceivingList(row: any) {
 
 function editDraft(row: any) {
   refreshShipmentAttempt()
-  if (formBusy.value || shipmentAttempt.value || shipmentAttemptError.value || maintenanceAttempt.value || maintenanceStorageError.value) return
+  if (formBusy.value || pendingDraftSave.value || shipmentAttempt.value || shipmentAttemptError.value || maintenanceAttempt.value || maintenanceStorageError.value) return
   shipmentResult.value = null
   shipmentError.value = ''
   editingDraftId.value = row.id
@@ -1448,7 +1521,7 @@ function editDraft(row: any) {
 }
 
 async function deleteDraft(row:any) {
-  if(formBusy.value || !canCreateInbound.value || shipmentAttempt.value || shipmentAttemptError.value || maintenanceAttempt.value || maintenanceStorageError.value)return
+  if(formBusy.value || pendingDraftSave.value || !canCreateInbound.value || shipmentAttempt.value || shipmentAttemptError.value || maintenanceAttempt.value || maintenanceStorageError.value)return
   const frame=shipmentRequests.capture(),id=row.id
   if(!await confirmAction(`确认删除草稿 ${id}？`,'删除草稿') || !frame.active())return
   draftBusy.value=true
@@ -1501,6 +1574,7 @@ function resetShipmentSession(){
   createForm.value=emptyForm();editingDraftId.value=null;warehouseSkus.value=[];drafts.value=[]
   ++stockLoadVersion;++draftLoadVersion;++detailReadVersion;detailLoading.value=false
   draftBusy.value=false;attachmentBusy.value=false;importBusy.value=false;createLoading.value=false;skuLoading.value=false
+  pendingDraftSave.value=null;draftSaveFeedback.value='';draftSaveCanCopy.value=false
   productDimMap.value=new Map();productDimMapLoaded.value=false;logisticsWarehouses.value=[];overseasWarehouses.value=[]
   refsError.value='';stockError.value='';draftsError.value='';detailMutationWarning.value='';tab.value='list'
   refreshShipmentAttempt();refreshMaintenanceAttempt()
@@ -1544,6 +1618,11 @@ onScopeDispose(()=>window.removeEventListener('storage',onShipmentStorage))
     <el-alert v-if="shipmentError && tab !== 'form'" :title="shipmentError" type="error" :closable="false" />
     <el-alert v-if="refsError" :title="refsError" type="error" :closable="false"><el-button :loading="createLoading" @click="loadRefs">重新读取资料</el-button></el-alert>
     <el-alert v-if="draftsError" :title="draftsError" type="error" :closable="false"><el-button @click="loadDrafts">重新读取草稿箱</el-button></el-alert>
+    <el-alert v-if="draftSaveFeedback" :title="draftSaveFeedback" type="warning" :closable="false">
+      <el-button v-if="pendingDraftSave" :loading="draftBusy" @click="verifyDraftSave">核对草稿保存结果</el-button>
+      <el-button v-if="pendingDraftSave && tab !== 'form'" :disabled="formBusy" @click="tab = 'form'">查看原输入</el-button>
+      <el-button v-if="draftSaveCanCopy" :disabled="formBusy || !canCreateInbound" @click="copyUnconfirmedDraft">复制为新草稿</el-button>
+    </el-alert>
     <el-alert v-if="maintenanceAttempt || maintenanceStorageError" type="warning" :closable="false" style="margin:12px 0">
       <template #title>{{ maintenanceStorageError || `上次${maintenanceAttempt?.kind === 'delete' ? '删除发运单' : maintenanceAttempt?.clear ? '清除海运费' : '补录海运费'}结果待核对：${maintenanceAttempt?.inboundNo}` }}</template>
       <el-button v-if="maintenanceAttempt" :disabled="!canCreateInbound" :loading="maintenanceBusy" @click="retryMaintenance">核对并重试原操作</el-button>
@@ -1994,12 +2073,12 @@ onScopeDispose(()=>window.removeEventListener('storage',onShipmentStorage))
         <el-table-column prop="savedAt" label="保存时间" width="150" />
         <el-table-column label="操作" width="140" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" size="small" @click="editDraft(row)">继续编辑</el-button>
-            <el-button link type="danger" size="small" @click="deleteDraft(row)">删除</el-button>
+            <el-button link type="primary" size="small" :disabled="formBusy || !!pendingDraftSave" @click="editDraft(row)">继续编辑</el-button>
+            <el-button link type="danger" size="small" :disabled="formBusy || !!pendingDraftSave || !canCreateInbound" @click="deleteDraft(row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
-      <el-empty v-if="!drafts.length" description="暂无草稿，填写信息后点击「保存草稿」" />
+      <el-empty v-if="!drafts.length && !draftsError" description="暂无草稿，填写信息后点击「保存草稿」" />
       <ListPagination v-model:page="draftPage" v-model:page-size="draftPageSize" :total="draftTotal" />
       <p class="text-muted footer-note">草稿按当前账号保存在服务端，提交成功后转为正式入库单，附件同时关联正式单据</p>
     </template>
