@@ -3,7 +3,6 @@ package com.takealot.pda.data
 import com.google.gson.Gson
 import com.google.gson.JsonElement
 import com.google.gson.JsonParser
-import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.asContextElement
 import kotlinx.coroutines.withContext
@@ -43,13 +42,7 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
     }
 
     suspend fun warehouses(type: String = "overseas"): List<Warehouse> = withContext(Dispatchers.IO) {
-        val data = get("/warehouses?type=$type")
-        if (data.isJsonArray) gson.fromJson(data, object : TypeToken<List<Warehouse>>() {}.type)
-        else {
-            val items = data.asJsonObject.get("items")
-            if (items != null && items.isJsonArray) gson.fromJson(items, object : TypeToken<List<Warehouse>>() {}.type)
-            else emptyList()
-        }
+        parseWarehouseList(get("/warehouses?type=$type"), gson)
     }
 
     suspend fun inboundList(keyword: String? = null, status: String? = null, pageSize: Int = 20, warehouseCode: String? = null): PageResult<InboundOrder> =
@@ -179,7 +172,7 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
             if (pickerId != null && pickerId > 0) append("&pickerId=$pickerId")
             if (!warehouseCode.isNullOrBlank()) append("&warehouseCode=$warehouseCode")
         }
-        gson.fromJson(get(q), object : TypeToken<PageResult<OutboundOrder>>() {}.type)
+        parseOutboundPage(get(q), gson)
     }
 
     suspend fun outboundDetail(id: Int): OutboundOrder = withContext(Dispatchers.IO) {
@@ -247,9 +240,7 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
                 if (!status.isNullOrBlank()) append("status=$status&")
                 if (!stocktakeNo.isNullOrBlank()) append("stocktakeNo=${stocktakeNo.encodeUrl()}&")
             }.trimEnd('&', '?')
-            val data = get(q)
-            if (data.isJsonArray) gson.fromJson(data, object : TypeToken<List<StocktakePlan>>() {}.type)
-            else emptyList()
+            parseStocktakeList(get(q), gson)
         }
 
     suspend fun stocktake(id: Int): StocktakePlan = withContext(Dispatchers.IO) {

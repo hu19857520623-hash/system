@@ -3,9 +3,22 @@ package com.takealot.pda.data
 import com.google.gson.Gson
 import com.google.gson.JsonParser
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class InboundListParserTest {
+    @Test
+    fun missingOrInvalidRowsMustReportAChineseReadFailure() {
+        for (json in listOf("{}", """{"items":null}""", """{"items":{}}""", """{"items":[null]}""")) {
+            val error = assertThrows(ErpException::class.java) {
+                parseOperationalInboundPage(JsonParser.parseString(json), Gson())
+            }
+            assertTrue(error.retriable)
+            assertTrue(error.message.orEmpty().contains("请重试"))
+        }
+    }
+
     @Test
     fun mixedOmsRowsDoNotBreakOperationalInboundList() {
         val response = JsonParser.parseString("""
