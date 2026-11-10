@@ -269,7 +269,9 @@ class PdaWorkJournal(context: Context, private val session: SessionStore) {
         return true
     }
 
-    private fun loadRecords(): List<PdaScanRecord> = gson.fromJson<List<PdaScanRecord>>(prefs.getString(KEY_RECORDS, null), recordsType).orEmpty()
+    private fun loadRecords(): List<PdaScanRecord> =
+        gson.fromJson<List<PdaScanRecord>>(prefs.getString(KEY_RECORDS, null), recordsType).orEmpty()
+            .map { it.restoreLegacyAuthorizationFailure() }
     private fun resumes(): List<PdaResumeWork> = resumeCache
     private fun pickProgress(): List<PdaPickProgress> = pickCache
     private fun saveRecords(value: List<PdaScanRecord>) {
