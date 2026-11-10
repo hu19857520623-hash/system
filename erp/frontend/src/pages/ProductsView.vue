@@ -2,7 +2,7 @@
 import { userFacingError } from '@erp/shared/user-facing-error'
 
 import { displaySku, displaySkuText } from '@erp/shared/sku-display'
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onScopeDispose, shallowRef, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { erpConfirm } from '@/utils/messageBox'
@@ -17,6 +17,7 @@ import DetailSheet from '@/components/ui/DetailSheet.vue'
 import { useAsyncIo } from '@/composables/useAsyncIo'
 import { downloadProductImportTemplate } from '@/constants/importTemplates.ts'
 import { printProductSkuLabels } from '@/features/labels/productLabelPrint.ts'
+import { getAccessToken } from '@/auth/tokenStore'
 
 const app = useAppStore()
 const canPrintLabel = computed(() => app.hasPerm('products.print_label'))
@@ -143,6 +144,31 @@ const createSaving = ref(false)
 const detailVisible = ref(false)
 const editingProduct = ref<any>(null)
 const detailProduct = ref<any>(null)
+const productDialogId = ref<number | null>(null)
+const productReading = ref(false)
+const productReadError = ref('')
+const productSaving = ref(false)
+const productSaveFeedback = ref('')
+const pendingProductSave = shallowRef<Record<string, unknown> | null>(null)
+const checkedProduct = shallowRef<any>(null)
+const productSavesToCheck = new Map<number, { payload: Record<string, unknown>; draft: ReturnType<typeof mapEditableProduct> }>()
+const productScope = () => app.authenticatedUser && getAccessToken()
+  ? JSON.stringify([app.authenticatedUser.id, getAccessToken(), [...app.currentPermSet].sort()]) : null
+let productDialogVersion = 0
+watch([detailVisible, dialogVisible], ([detail, edit]) => {
+  if (!detail && !edit) {
+    ++productDialogVersion
+    productReading.value = false
+    productSaving.value = false
+  }
+}, { flush: 'sync' })
+watch(productScope, () => {
+  ++productDialogVersion
+  productSavesToCheck.clear()
+  detailVisible.value = false
+  dialogVisible.value = false
+}, { flush: 'sync' })
+onScopeDispose(() => { ++productDialogVersion })
 const imageUploading = ref(false)
 
 const MAX_PRODUCT_IMAGES = 20
@@ -263,29 +289,58 @@ function openEdit(id: number) {
   loadProductDialog(id, 'edit')
 }
 
+function mapEditableProduct(res: any) {
+  return { ...mapProduct(res), developerId: res.developerId ?? null, purchaserId: res.purchaserId ?? null, supplierId: res.supplierId ?? null }
+}
+
 async function loadProductDialog(id: number, mode: 'detail' | 'edit') {
+  if (!Number.isSafeInteger(id) || id <= 0 || productSaving.value) return
+  const version = ++productDialogVersion
+  const scope = productScope()
+  if (!scope) return
+  productDialogId.value = id
+  productReadError.value = ''
+  productSaveFeedback.value = ''
+  pendingProductSave.value = null
+  checkedProduct.value = null
+  productReading.value = true
+  if (mode === 'detail') {
+    detailProduct.value = null
+    detailVisible.value = true
+    dialogVisible.value = false
+  } else {
+    editingProduct.value = null
+    dialogVisible.value = true
+    detailVisible.value = false
+  }
+  const active = () => version === productDialogVersion && scope === productScope()
+  const retained = mode === 'edit' ? productSavesToCheck.get(id) : undefined
+  if (retained) {
+    editingProduct.value = retained.draft
+    pendingProductSave.value = retained.payload
+    productSaveFeedback.value = '上次保存结果待确认，已保留原输入，请先核对保存结果。'
+    productReading.value = false
+    return
+  }
   try {
     const res = await productApi.detail(id)
-    const mapped = mapProduct(res)
-    mapped.developerId = res.developerId ?? null
-    mapped.purchaserId = res.purchaserId ?? null
-    mapped.supplierId = res.supplierId ?? null
-    if (mode === 'detail') {
-      detailProduct.value = mapped
-      detailVisible.value = true
-    } else {
-      editingProduct.value = mapped
-      dialogVisible.value = true
-    }
+    if (!active()) return
+    if (Number(res?.id) !== id) throw Error('商品详情与所选商品不一致')
+    if (mode === 'detail') detailProduct.value = mapEditableProduct(res)
+    else editingProduct.value = mapEditableProduct(res)
   } catch (err: any) {
-    ElMessage.error(userFacingError(displaySkuText(err.message || '加载商品失败')))
-  }
+    if (active()) productReadError.value = userFacingError(displaySkuText(err.message || '加载商品失败'))
+  } finally { if (active()) productReading.value = false }
 }
 
 async function saveProduct() {
-  if (!editingProduct.value?.id) return
-  const ok = await withAction(async () => {
-    await productApi.update(editingProduct.value.id, {
+  if (!editingProduct.value?.id || productSaving.value || productReading.value || pendingProductSave.value) return
+  const version = productDialogVersion
+  const scope = productScope()
+  if (!scope) return
+  const active = () => version === productDialogVersion && scope === productScope() && dialogVisible.value
+  const id = Number(editingProduct.value.id)
+  const payload = {
       productName: editingProduct.value.name,
       spu: editingProduct.value.spu,
       spec: editingProduct.value.spec,
@@ -301,12 +356,74 @@ async function saveProduct() {
       developerId: editingProduct.value.developerId || undefined,
       purchaserId: editingProduct.value.purchaserId || undefined,
       supplierId: editingProduct.value.supplierId || undefined,
-    })
-  }, '商品已更新')
-  if (ok) {
-    dialogVisible.value = false
-    load()
   }
+  productSaving.value = true
+  productSaveFeedback.value = ''
+  try {
+    const result = await productApi.update(id, payload)
+    if (!active()) return
+    if (Number(result?.id) !== id) throw Error('商品保存回执与原单不一致')
+    dialogVisible.value = false
+    ElMessage.success('商品已更新')
+    load()
+  } catch (err: any) {
+    if (!active()) return
+    const status = Number(err?.status)
+    const uncertain = !Number.isFinite(status) || status < 100 || status >= 500 || status === 408 || status === 409
+    if (uncertain) {
+      pendingProductSave.value = payload
+      productSavesToCheck.set(id, { payload, draft: { ...editingProduct.value } })
+    }
+    const reason = userFacingError(displaySkuText(err?.message || '保存商品失败'))
+    productSaveFeedback.value = uncertain ? `保存结果待确认，已保留本次输入。请先核对保存结果。${reason}` : reason
+  } finally { if (active()) productSaving.value = false }
+}
+
+function productMatchesSave(row: any, payload: Record<string, unknown>) {
+  return Object.entries(payload).every(([key, expected]) => {
+    if (expected === undefined) return true
+    const actual = row[key]
+    if (key === 'marketPrice') return (Number(actual) || null) === (Number(expected) || null)
+    if (typeof expected === 'number') return actual != null && Number(actual) === expected
+    return String(actual ?? '').trim() === String(expected ?? '').trim()
+  })
+}
+
+async function verifyProductSave() {
+  const id = productDialogId.value
+  const payload = pendingProductSave.value
+  const version = productDialogVersion
+  const scope = productScope()
+  if (!id || !payload || !scope || productSaving.value || productReading.value) return
+  const active = () => version === productDialogVersion && scope === productScope() && dialogVisible.value
+  productReading.value = true
+  checkedProduct.value = null
+  try {
+    const result = await productApi.detail(id)
+    if (!active()) return
+    if (Number(result?.id) !== id) throw Error('商品详情与原单不一致')
+    if (productMatchesSave(result, payload)) {
+      productSavesToCheck.delete(id)
+      pendingProductSave.value = null
+      dialogVisible.value = false
+      ElMessage.success('已核对，当前商品资料与本次保存一致')
+      load()
+    } else {
+      checkedProduct.value = mapEditableProduct(result)
+      productSaveFeedback.value = '当前商品资料与本次输入不一致，原输入仍在表单中。可再次核对，或载入最新资料后重新编辑。'
+    }
+  } catch (err: any) {
+    if (active()) productSaveFeedback.value = `暂未读到商品最新资料，请重试核对。${userFacingError(err)}`
+  } finally { if (active()) productReading.value = false }
+}
+
+function loadCheckedProduct() {
+  if (!checkedProduct.value || productReading.value) return
+  if (productDialogId.value) productSavesToCheck.delete(productDialogId.value)
+  editingProduct.value = checkedProduct.value
+  checkedProduct.value = null
+  pendingProductSave.value = null
+  productSaveFeedback.value = '已载入最新商品资料，请核对后重新编辑。'
 }
 
 function openDetail(id: number) {
@@ -588,6 +705,9 @@ async function printSkuLabels(items: Array<{ sku?: string; name?: string; barcod
 
   <!-- Product Detail Dialog -->
   <el-dialog v-model="detailVisible" :title="'商品详情 · ' + (detailProduct?.sku || '')" width="860px" top="4vh" destroy-on-close class="erp-detail">
+    <p v-if="productReading">正在读取商品详情…</p>
+    <p v-if="productReadError" role="alert">{{ productReadError }}</p>
+    <el-button v-if="productReadError && productDialogId" @click="loadProductDialog(productDialogId, 'detail')">重试读取</el-button>
     <div v-if="detailProduct" class="product-detail">
       <div class="product-image-panel">
         <div v-if="detailProduct.images?.length" class="image-gallery">
@@ -688,14 +808,17 @@ async function printSkuLabels(items: Array<{ sku?: string; name?: string; barcod
 
     <template #footer>
       <el-button @click="detailVisible = false">关闭</el-button>
-      <el-button v-if="canPrintLabel" type="success" plain @click="printSkuLabels([detailProduct])">打印 SKU 标签</el-button>
-      <el-button type="primary" @click="detailVisible = false; openEdit(detailProduct.id)">编辑</el-button>
+      <el-button v-if="canPrintLabel && detailProduct" type="success" plain @click="printSkuLabels([detailProduct])">打印 SKU 标签</el-button>
+      <el-button v-if="detailProduct && app.hasPerm('products.edit')" type="primary" @click="detailVisible = false; openEdit(detailProduct.id)">编辑</el-button>
     </template>
   </el-dialog>
 
   <!-- Edit Product Dialog -->
-  <el-dialog v-model="dialogVisible" :title="'编辑商品 · ' + (editingProduct?.sku || '')" width="680px">
-    <el-form v-if="editingProduct" label-width="90px">
+  <el-dialog v-model="dialogVisible" :title="'编辑商品 · ' + (editingProduct?.sku || '')" width="680px" :close-on-click-modal="!productSaving" :close-on-press-escape="!productSaving" :show-close="!productSaving">
+    <p v-if="productReading && !editingProduct">正在读取商品资料…</p>
+    <p v-if="productReadError" role="alert">{{ productReadError }}</p>
+    <p v-if="productSaveFeedback" role="alert">{{ productSaveFeedback }}</p>
+    <el-form v-if="editingProduct" label-width="90px" :disabled="productSaving || productReading || !!pendingProductSave">
       <el-form-item label="商品图片">
         <div class="edit-image-section">
           <div v-if="editingProduct.images?.length" class="image-gallery edit">
@@ -774,8 +897,11 @@ async function printSkuLabels(items: Array<{ sku?: string; name?: string; barcod
       <el-form-item label="条码"><el-input v-model="editingProduct.barcode" /></el-form-item>
     </el-form>
     <template #footer>
-      <el-button @click="dialogVisible = false">取消</el-button>
-      <el-button type="primary" @click="saveProduct">保存</el-button>
+      <el-button :disabled="productSaving" @click="dialogVisible = false">返回列表</el-button>
+      <el-button v-if="productReadError && productDialogId" @click="loadProductDialog(productDialogId, 'edit')">重试读取</el-button>
+      <el-button v-if="checkedProduct" :disabled="productReading" @click="loadCheckedProduct">放弃本次输入并载入最新资料</el-button>
+      <el-button v-if="pendingProductSave" type="primary" :loading="productReading" @click="verifyProductSave">核对保存结果</el-button>
+      <el-button v-else type="primary" :loading="productSaving" :disabled="productReading || !editingProduct" @click="saveProduct">保存</el-button>
     </template>
   </el-dialog>
 </template>
