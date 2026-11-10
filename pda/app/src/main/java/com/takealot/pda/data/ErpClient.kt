@@ -263,7 +263,9 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
     suspend fun <T> submitPrepared(recordId: String, action: suspend () -> T): T {
         val record = journal?.pendingRecord(recordId)
             ?: throw ErpException("未找到原作业请求，请返回单据核对后重试", retriable = true)
-        return replayAsOriginalOwner(record, action)
+        return replayAsOriginalOwner(record) {
+            withSavedRequestAuthRecovery(action)
+        }
     }
 
     suspend fun <T> replayAsOriginalOwner(record: PdaScanRecord, action: suspend () -> T): T {

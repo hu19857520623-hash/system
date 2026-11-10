@@ -24,6 +24,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.takealot.pda.PdaApp
 import com.takealot.pda.data.ErpException
+import com.takealot.pda.data.isAuthorizationFailure
 import com.takealot.pda.data.PdaResumeWork
 import com.takealot.pda.data.PdaScanRecord
 import com.takealot.pda.data.confirmsCurrentShortPick
@@ -200,7 +201,7 @@ class SyncViewModel : ViewModel() {
                 feedback = Feedback(true, nextStep ?: "${record.scanCode} 已与 ERP 确认")
             } catch (e: Exception) {
                 val message = if (e is ErpException) e.message.orEmpty() else "暂时无法核对原请求，请检查网络后重试"
-                val retryable = journal.isRetriable(e) || (e is ErpException && e.code in setOf(401, 403))
+                val retryable = journal.isRetriable(e) || (e is ErpException && e.isAuthorizationFailure)
                 if (retryable) journal.retainForRetry(record.id, message)
                 else journal.fail(record.id, message)
                 feedback = Feedback(false, message)
