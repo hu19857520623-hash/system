@@ -36,6 +36,7 @@ import com.takealot.pda.data.OutboundOrder
 import com.takealot.pda.data.PdaPickProgress
 import com.takealot.pda.data.PdaPickProgressLine
 import com.takealot.pda.data.PdaResumeWork
+import com.takealot.pda.data.readReviewStartOutcome
 import com.takealot.pda.data.requireMatchingDetail
 import com.takealot.pda.data.outboundStatusLabel
 import com.takealot.pda.data.pickTaskAtLocation
@@ -66,6 +67,7 @@ import com.takealot.pda.ui.theme.PdaSurface2
 import com.takealot.pda.ui.theme.PdaText
 import com.takealot.pda.ui.theme.PdaWarn
 import com.takealot.pda.ui.i18n.tr
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
@@ -152,7 +154,7 @@ class OutboundViewModel : ViewModel() {
                 resume.requireMatchingDetail(detail.id, detail.warehouseCode, session.warehouseCode)
                 val finished = when (resume.mode) {
                     "pick" -> detail.statusKey in setOf("picked", "reviewing", "pending_relabel", "packed", "shipped", "delivered", "partial_delivered", "delivery_failed", "completed", "cancelled")
-                    "review" -> detail.statusKey in setOf("pending_relabel", "packed", "shipped", "delivered", "partial_delivered", "delivery_failed", "completed", "cancelled")
+                    "review" -> isReviewFinished(detail.statusKey)
                     else -> detail.statusKey in setOf("shipped", "delivered", "partial_delivered", "delivery_failed", "completed", "cancelled")
                 }
                 if (finished) {
@@ -437,18 +439,54 @@ class OutboundViewModel : ViewModel() {
         )
     }
 
+    private fun isReviewFinished(status: String) = status in setOf(
+        "pending_relabel", "packed", "shipped", "delivered", "partial_delivered", "delivery_failed", "completed", "cancelled",
+    )
+
+    var reviewStartNeedsCheck by mutableStateOf(false)
+        private set
+
     fun startReview() {
         val current = order ?: return
         if (mode != "review" || current.statusKey != "picked" || !canWriteOutbound(current.id)) return
         busy = true
         feedback = null
+        val checkOnly = reviewStartNeedsCheck
+        reviewStartNeedsCheck = true
         viewModelScope.launch {
             try {
-                order = api.startReview(current.id)
-                feedback = Feedback(true, "已开始复核，请逐件扫描 SKU 或条码")
-                order?.let { PdaApp.instance.workJournal.activate(PdaResumeWork("outbound", mode, it.id, it.no)) }
-            } catch (e: Exception) { feedback = Feedback(false, e.message ?: "开始复核失败") }
-            finally { busy = false }
+                val latest = readReviewStartOutcome(current, checkOnly,
+                    submit = { api.startReview(current.id) },
+                    read = { api.outboundDetail(current.id) },
+                )
+                verifyWorkWarehouse(latest)
+                when (latest.statusKey) {
+                    "reviewing" -> {
+                        applyOrderDetail(latest)
+                        feedback = Feedback(true, "已开始复核，请逐件扫描 SKU 或条码")
+                    }
+                    "picked" -> {
+                        order = latest
+                        feedback = Feedback(false, "已核对：单据仍为已拣货，可以再次点击「开始复核」")
+                    }
+                    else -> {
+                        val statusLabel = outboundStatusLabel(latest.statusKey)
+                        if (isReviewFinished(latest.statusKey)) {
+                            clearOrder()
+                            loadList()
+                            feedback = Feedback(false, "单据当前为「$statusLabel」，请从待作业列表选择可复核单据")
+                        } else {
+                            feedback = Feedback(false, "单据当前为「$statusLabel」，请返回首页，待单据恢复后继续原作业")
+                            return@launch
+                        }
+                    }
+                }
+                reviewStartNeedsCheck = false
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                feedback = Feedback(false, (e as? ErpException)?.message ?: "暂时无法核对复核状态，请重试")
+            } finally { busy = false }
         }
     }
 
@@ -641,6 +679,7 @@ class OutboundViewModel : ViewModel() {
     }
 
     private fun resetOrderInputs() {
+        reviewStartNeedsCheck = false
         cartons = listOf(OutboundCartonDraft())
         trackingNo = ""
         carrier = ""
@@ -745,7 +784,7 @@ fun OutboundScreen(modeKey: String, onBack: () -> Unit, vm: OutboundViewModel = 
                 }
                 if (reviewAwaitingStart) {
                     Text("该单已拣货。确认实物与单据一致后，再开始复核；开始后会记录复核人。", color = PdaWarn, fontSize = 13.sp)
-                    BigButton("开始复核", onClick = { vm.startReview() }, enabled = !vm.busy, color = PdaWarn)
+                    BigButton(if (vm.reviewStartNeedsCheck) "核对复核状态" else "开始复核", onClick = { vm.startReview() }, enabled = !vm.busy, color = PdaWarn)
                 }
                 if (vm.mode == "pick") {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
