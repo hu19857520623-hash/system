@@ -30,6 +30,7 @@ import com.takealot.pda.data.PdaResumeWork
 import com.takealot.pda.data.requireMatchingDetail
 import com.takealot.pda.data.StocktakeLine
 import com.takealot.pda.data.StocktakePlan
+import com.takealot.pda.data.countExitMessage
 import com.takealot.pda.data.validateStocktakeWork
 import com.takealot.pda.data.customerSkuForScan
 import com.takealot.pda.data.stocktakeStatusLabel
@@ -103,7 +104,7 @@ class StocktakeViewModel : ViewModel() {
             try {
                 val detail = api.stocktake(resume.orderId)
                 resume.requireMatchingDetail(detail.id, detail.warehouseCode, session.warehouseCode)
-                if (retireClosedPlan(detail)) return@launch
+                if (returnToListIfDone(detail)) return@launch
                 applyPlan(detail)
                 feedback = Feedback(true, "已恢复 ${resume.orderNo} 的未完成作业")
             } catch (e: Exception) {
@@ -234,7 +235,8 @@ class StocktakeViewModel : ViewModel() {
         viewModelScope.launch {
             try {
                 val detail = api.stocktake(id)
-                if (retireClosedPlan(detail)) return@launch
+                if (detail.id != id) throw ErpException("盘点单详情与所选单据不一致，请刷新列表后重试")
+                if (returnToListIfDone(detail)) return@launch
                 applyPlan(detail)
                 feedback = Feedback(true, "${detail.no} 已打开，请扫描库位")
             } catch (e: Exception) {
@@ -245,13 +247,13 @@ class StocktakeViewModel : ViewModel() {
         }
     }
 
-    private fun retireClosedPlan(detail: StocktakePlan): Boolean {
-        if (detail.warehouseCode != session.warehouseCode || session.warehouseCode.isBlank() ||
-            detail.statusKey !in setOf("pending_approval", "completed", "cancelled")) return false
+    private fun returnToListIfDone(detail: StocktakePlan): Boolean {
+        if (session.warehouseCode.isBlank() || detail.warehouseCode != session.warehouseCode) return false
+        val message = detail.countExitMessage(session.userId) ?: return false
         val journal = PdaApp.instance.workJournal
         if (journal.active("stocktake", "count")?.orderId == detail.id) journal.clearActive("stocktake")
         if (plan?.id == detail.id) resetPlan()
-        feedback = Feedback(true, "${detail.no} 当前为「${stocktakeStatusLabel(detail.statusKey)}」，请选择其他盘点单")
+        feedback = Feedback(true, "${detail.no} $message。请选择其他盘点单。")
         loadList()
         return true
     }
@@ -275,7 +277,10 @@ class StocktakeViewModel : ViewModel() {
         val hit = rows.firstOrNull { it.no.equals(code, ignoreCase = true) }
             ?: list.firstOrNull { it.no.equals(code, ignoreCase = true) }
             ?: throw ErpException("未找到盘点单 $code")
-        applyPlan(api.stocktake(hit.id))
+        val detail = api.stocktake(hit.id)
+        if (detail.id != hit.id) throw ErpException("盘点单详情与扫码匹配的单据不一致，请重新扫描")
+        if (returnToListIfDone(detail)) return
+        applyPlan(detail)
         feedback = Feedback(true, "${plan!!.no} 已打开")
     }
 
@@ -312,18 +317,16 @@ class StocktakeViewModel : ViewModel() {
             val recordId = journal.beginScan("stocktake", "count_submit", line.skuCode, current.id, current.no)
             try {
                 journal.preparePostRetry(recordId, "/management-loop/stocktakes/${current.id}/count", payload)
-                plan = api.submitPrepared(recordId) { api.stocktakeCount(current.id, payload, recordId) }
+                val refreshed = api.submitPrepared(recordId) { api.stocktakeCount(current.id, payload, recordId) }
+                if (refreshed.warehouseCode != current.warehouseCode) {
+                    throw ErpException("盘点回执与原单仓库不一致，请到「待同步记录」核对原请求", retriable = true)
+                }
                 journal.acknowledge(recordId, "盘点提交成功")
-                val refreshed = plan!!
-                PdaApp.instance.workJournal.activate(PdaResumeWork("stocktake", "count", refreshed.id, refreshed.no))
+                if (returnToListIfDone(refreshed)) return@launch
+                plan = refreshed
                 val next = refreshed.lineList.firstOrNull { it.id != line.id && it.loc.equals(locationCode, ignoreCase = true) && it.canCount() }
                 selectedLineId = null
-                if (refreshed.lineList.none { it.isOpen }) {
-                    locationCode = ""
-                    PdaApp.instance.workJournal.clearActive("stocktake")
-                    feedback = Feedback(true, if (refreshed.statusKey == "pending_approval") "盘点完成，等待审批" else "本单已盘完")
-                    loadList()
-                } else if (next == null) {
+                if (next == null) {
                     locationCode = ""
                     qty = 1
                     feedback = if (refreshed.lineList.any { it.id == line.id && it.statusKey == "recount" }) {

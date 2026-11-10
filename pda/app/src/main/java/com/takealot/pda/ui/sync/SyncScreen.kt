@@ -27,6 +27,7 @@ import com.takealot.pda.data.ErpException
 import com.takealot.pda.data.PdaResumeWork
 import com.takealot.pda.data.PdaScanRecord
 import com.takealot.pda.data.confirmsCurrentShortPick
+import com.takealot.pda.data.countExitMessage
 import com.takealot.pda.data.resolveSkuScan
 import com.takealot.pda.ui.components.Feedback
 import com.takealot.pda.ui.components.FeedbackBar
@@ -112,9 +113,24 @@ class SyncViewModel : ViewModel() {
                             if (record.module == "stocktake" && orderId != null &&
                                 record.retryEndpoint == "/management-loop/stocktakes/$orderId/count") {
                                 val plan = api.stocktakeCountReceipt(result, orderId)
-                                if (plan.statusKey in setOf("pending_approval", "completed", "cancelled") &&
-                                    journal.active("stocktake", "count")?.orderId == orderId) {
-                                    journal.clearActive("stocktake")
+                                val message = plan.countExitMessage(session.userId)
+                                nextStep = when {
+                                    plan.warehouseCode != session.warehouseCode ->
+                                        "原盘点请求已确认。请返回首页切换到 ${plan.warehouseCode}，再核对原单。"
+                                    message != null -> {
+                                        if (journal.active("stocktake", "count")?.orderId == orderId) {
+                                            journal.clearActive("stocktake")
+                                        }
+                                        "原盘点请求已确认。$message。"
+                                    }
+                                    !session.hasPerm("stocktake.count") ->
+                                        "原盘点请求已确认。请交接给有盘点权限的人员继续。"
+                                    else -> {
+                                        journal.activateIfNoOtherWork(PdaResumeWork("stocktake", "count", orderId, plan.no))
+                                        if (journal.active("stocktake", "count")?.orderId == orderId)
+                                            "原盘点请求已确认。请返回首页打开「继续未完成作业」。"
+                                        else "原盘点请求已确认。请从「盘点」列表重新打开原单。"
+                                    }
                                 }
                             }
                             if (record.module == "inbound" && orderId != null &&
