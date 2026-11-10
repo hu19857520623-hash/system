@@ -111,9 +111,9 @@ class SyncViewModel : ViewModel() {
                                 val order = api.catalogBindingReceipt(result, record)
                                 val canContinue = session.hasPerm("inbound.arrival_scan") && session.hasPerm("inbound.qc")
                                 if (canContinue) {
-                                    journal.activateIfNoOtherWork(PdaResumeWork("inbound", "catalog", order.id, order.no))
+                                    journal.activateIfNoOtherWork(PdaResumeWork("inbound", "catalog", order.id, order.no, warehouseCode = order.warehouseCode))
                                 }
-                                val saved = journal.active("inbound", "catalog")?.orderId == order.id
+                                val saved = journal.active("inbound", "catalog", order.warehouseCode.orEmpty())?.orderId == order.id
                                 val continueHint = if (saved) "打开「继续未完成作业」" else "进入「货盘入库」扫描原单"
                                 val warehouseHint = if (order.warehouseCode == session.warehouseCode) ""
                                     else "切换到 ${order.warehouseCode.orEmpty()} 仓后"
@@ -129,7 +129,7 @@ class SyncViewModel : ViewModel() {
                                         "原盘点请求已确认。请返回首页切换到 ${plan.warehouseCode}，再核对原单。"
                                     message != null -> {
                                         if (journal.active("stocktake", "count")?.orderId == orderId) {
-                                            journal.clearActive("stocktake")
+                                            journal.clearActive("stocktake", orderId)
                                         }
                                         "原盘点请求已确认。$message。"
                                     }
@@ -155,7 +155,7 @@ class SyncViewModel : ViewModel() {
                                 }
                                 if (current?.id == orderId && current.statusKey in setOf("completed", "confirmed", "cancelled") &&
                                     journal.active("inbound", "putaway")?.orderId == orderId) {
-                                    journal.clearActive("inbound")
+                                    journal.clearActive("inbound", orderId)
                                     nextStep = "上架结果已核对，请返回首页选择下一项作业。"
                                 } else if (journal.active("inbound", "putaway")?.orderId == orderId) {
                                     nextStep = "原上架请求已确认，请返回首页打开「继续未完成作业」，按最新单据继续。"

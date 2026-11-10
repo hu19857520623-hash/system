@@ -151,6 +151,9 @@ fun HomeScreen(onInbound: (String) -> Unit, onOutbound: (String) -> Unit, onStoc
         if (pendingSync > 0 || failedScans > 0) {
             WorkTile("待同步与异常记录", "待确认 $pendingSync 条 · 失败 $failedScans 条", PdaErr, true, onClick = onSync)
         }
+        if (active == null && PdaApp.instance.workJournal.hasResumeInOtherWarehouse()) {
+            Text("其他仓库有未完成作业，请切换到对应仓库继续。", color = PdaMuted, fontSize = 13.sp)
+        }
         if (active == null && PdaApp.instance.workJournal.hasUnassignedResume()) {
             Text("历史作业缺少提交账号，请核对 ERP 单据后，从对应作业入口重新绑定。", color = PdaMuted, fontSize = 13.sp)
         }

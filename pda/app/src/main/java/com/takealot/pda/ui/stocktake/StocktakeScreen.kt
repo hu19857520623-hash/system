@@ -27,7 +27,6 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.takealot.pda.PdaApp
 import com.takealot.pda.data.ErpException
 import com.takealot.pda.data.PdaResumeWork
-import com.takealot.pda.data.requireMatchingDetail
 import com.takealot.pda.data.StocktakeLine
 import com.takealot.pda.data.StocktakePlan
 import com.takealot.pda.data.countExitMessage
@@ -103,7 +102,7 @@ class StocktakeViewModel : ViewModel() {
         viewModelScope.launch {
             try {
                 val detail = api.stocktake(resume.orderId)
-                resume.requireMatchingDetail(detail.id, detail.warehouseCode, session.warehouseCode)
+                PdaApp.instance.workJournal.verifyResumeDetail(resume, detail.id, detail.no, detail.warehouseCode)
                 if (returnToListIfDone(detail)) return@launch
                 applyPlan(detail)
                 feedback = Feedback(true, "已恢复 ${resume.orderNo} 的未完成作业")
@@ -251,7 +250,7 @@ class StocktakeViewModel : ViewModel() {
         if (session.warehouseCode.isBlank() || detail.warehouseCode != session.warehouseCode) return false
         val message = detail.countExitMessage(session.userId) ?: return false
         val journal = PdaApp.instance.workJournal
-        if (journal.active("stocktake", "count")?.orderId == detail.id) journal.clearActive("stocktake")
+        journal.clearActive("stocktake", detail.id)
         if (plan?.id == detail.id) resetPlan()
         feedback = Feedback(true, "${detail.no} $message。请选择其他盘点单。")
         loadList()
@@ -368,9 +367,9 @@ class StocktakeViewModel : ViewModel() {
             feedback = Feedback(false, "请等待扫码和提交完成后再换单")
             return
         }
+        plan?.let { PdaApp.instance.workJournal.clearActive("stocktake", it.id) }
         resetPlan()
         feedback = null
-        PdaApp.instance.workJournal.clearActive("stocktake")
         loadList()
     }
 

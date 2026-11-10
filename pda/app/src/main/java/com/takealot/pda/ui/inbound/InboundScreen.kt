@@ -59,7 +59,6 @@ import com.takealot.pda.data.withCartonSnapshot
 import com.takealot.pda.data.withPutawaySnapshot
 import com.takealot.pda.data.PutawayIdentity
 import com.takealot.pda.data.PdaResumeWork
-import com.takealot.pda.data.requireMatchingDetail
 import com.takealot.pda.data.catalogBindingWarehouse
 import com.takealot.pda.scan.ScanCodeClassifier
 import com.takealot.pda.scan.ScanBus
@@ -205,7 +204,7 @@ class InboundViewModel : ViewModel() {
             try {
                 val detail = api.inboundDetail(resume.orderId)
                 if (generation != workGeneration) return@launch
-                resume.requireMatchingDetail(detail.id, detail.warehouseCode, session.warehouseCode)
+                PdaApp.instance.workJournal.verifyResumeDetail(resume, detail.id, detail.no, detail.warehouseCode)
                 if (retireClosedOrder(detail)) return@launch
                 applyOrder(detail)
                 if (!enterPutawayIfReady()) feedback = Feedback(true, "已恢复 ${resume.orderNo} 的未完成作业")
@@ -491,7 +490,7 @@ class InboundViewModel : ViewModel() {
         val current = order ?: return false
         if (current.statusKey != "pending_putaway") return false
         if (!session.hasPerm("inbound.putaway")) {
-            PdaApp.instance.workJournal.clearActive("inbound")
+            PdaApp.instance.workJournal.clearActive("inbound", current.id)
             stageNotice = "清点已完成，待上架：请交接给上架人员"
             feedback = Feedback(true, "${current.no} 清点完成，等待上架人员处理")
             return true
@@ -1011,9 +1010,10 @@ class InboundViewModel : ViewModel() {
         reductionMode = null; reductionItemId = null
         stageNotice = null
         showQcDifference = false; qcDifferenceReason = ""; acceptDiff = false
+        val clearedOrderId = order?.id
         order = null; selectedItemId = null; locationCode = ""; feedback = null; scan = ""
         unknownScanCode = null; qcIssueItemId = null; showCartonDifference = false
-        PdaApp.instance.workJournal.clearActive("inbound")
+        if (clearedOrderId != null) PdaApp.instance.workJournal.clearActive("inbound", clearedOrderId)
         if (mode == InboundMode.Putaway) loadPendingPutaway()
     }
 
@@ -1091,7 +1091,7 @@ class InboundViewModel : ViewModel() {
 
     private fun retireClosedOrder(detail: InboundOrder): Boolean {
         if (detail.statusKey !in setOf("completed", "confirmed", "cancelled")) return false
-        PdaApp.instance.workJournal.clearActive("inbound")
+        PdaApp.instance.workJournal.clearActive("inbound", detail.id)
         applyOrder(null)
         selectedItemId = null
         locationCode = ""
@@ -1109,7 +1109,7 @@ class InboundViewModel : ViewModel() {
         }
         applyOrder(latest)
         order?.let {
-            if (it.statusKey in setOf("completed", "confirmed", "cancelled")) PdaApp.instance.workJournal.clearActive("inbound")
+            if (it.statusKey in setOf("completed", "confirmed", "cancelled")) PdaApp.instance.workJournal.clearActive("inbound", it.id)
             else PdaApp.instance.workJournal.activate(PdaResumeWork("inbound", mode.key, it.id, it.no))
         }
         val still = order?.itemList?.find { it.id == selectedItemId }

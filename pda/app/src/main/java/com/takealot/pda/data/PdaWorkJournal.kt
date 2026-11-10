@@ -24,6 +24,7 @@ data class PdaResumeWork(
     val updatedAt: Long = System.currentTimeMillis(),
     val ownerId: Int? = null,
     val serverUrl: String? = null,
+    val warehouseCode: String? = null,
 )
 
 internal fun PdaResumeWork.requireMatchingDetail(detailId: Int, detailWarehouse: String?, workWarehouse: String) {
@@ -138,32 +139,46 @@ class PdaWorkJournal(context: Context, private val session: SessionStore) {
     fun isRetriable(error: Throwable): Boolean =
         error is IOException || error is CancellationException || (error is ErpException && error.retriable)
 
+    private fun resumeScope(warehouse: String = session.warehouseCode) =
+        ResumeWorkScope(session.userId, session.baseUrl, warehouse)
+
     @Synchronized
     fun activate(work: PdaResumeWork) {
-        val owner = session.userId.takeIf { it > 0 } ?: return
-        val server = session.baseUrl
-        val next = resumes().filterNot { it.module == work.module && it.ownerId == owner && it.serverUrl == server } +
-            work.copy(ownerId = owner, serverUrl = server)
-        resumeCache = next
-        writer.enqueue(KEY_RESUMES, next)
+        val scope = resumeScope(work.warehouseCode ?: session.warehouseCode)
+        if (!scope.valid) return
+        saveResumes(scope.activate(resumes(), work))
     }
 
     @Synchronized
     fun activateIfNoOtherWork(work: PdaResumeWork) {
-        if (resumes().any { it.module == work.module && owns(it.ownerId, it.serverUrl) }) return
+        val scope = resumeScope(work.warehouseCode ?: session.warehouseCode)
+        if (scope.scoped(resumes(), work.module) != null) return
         activate(work)
     }
 
     @Synchronized
-    fun active(module: String, mode: String): PdaResumeWork? = resumes().lastOrNull { it.module == module && it.mode == mode && owns(it.ownerId, it.serverUrl) }
+    fun active(module: String, mode: String, warehouse: String = session.warehouseCode): PdaResumeWork? =
+        resumeScope(warehouse).active(resumes(), module, mode)
+
+    /** Resolve an owned legacy record using the ERP detail, even if the user is in another warehouse. */
+    @Synchronized
+    fun verifyResumeDetail(work: PdaResumeWork, detailId: Int, detailNo: String, detailWarehouse: String?) {
+        val scope = resumeScope()
+        val resolved = scope.resolveLegacy(resumes(), work, detailId, detailNo, detailWarehouse)
+        if (resolved != resumes()) saveResumes(resolved)
+        if (detailNo != work.orderNo || (!work.warehouseCode.isNullOrBlank() && work.warehouseCode != detailWarehouse)) {
+            throw ErpException("无法核对原单或所属仓库，请返回首页重试，未完成作业已保留")
+        }
+        work.requireMatchingDetail(detailId, detailWarehouse, session.warehouseCode)
+    }
 
     /** A confirmed request can advance its own order, but cannot replace a different order. */
     @Synchronized
     fun reconcileInboundResume(orderId: Int, orderNo: String, nextMode: String?): Boolean {
-        val current = resumes().lastOrNull { it.module == "inbound" && owns(it.ownerId, it.serverUrl) }
+        val current = resumeScope().scoped(resumes(), "inbound")
         if (current != null && current.orderId != orderId) return false
         if (nextMode == null) {
-            if (current != null) clearActive("inbound")
+            clearActive("inbound", orderId)
             return false
         }
         activate(PdaResumeWork("inbound", nextMode, orderId, orderNo))
@@ -171,31 +186,39 @@ class PdaWorkJournal(context: Context, private val session: SessionStore) {
     }
 
     @Synchronized
-    fun latestActive(): PdaResumeWork? = resumes().filter { owns(it.ownerId, it.serverUrl) }.maxByOrNull { it.updatedAt }
+    fun latestActive(): PdaResumeWork? = resumeScope().active(resumes())
+
+    @Synchronized
+    fun hasResumeInOtherWarehouse(): Boolean = resumeScope().hasOtherWarehouse(resumes())
 
     @Synchronized
     fun hasUnassignedResume(): Boolean = resumes().any { it.ownerId == null || it.serverUrl == null }
 
     @Synchronized
-    fun clearActive(module: String) {
-        resumeCache = resumes().filterNot { it.module == module && owns(it.ownerId, it.serverUrl) }
-        writer.enqueue(KEY_RESUMES, resumeCache)
+    fun clearActive(module: String, orderId: Int) {
+        saveResumes(resumeScope().clear(resumes(), module, orderId))
     }
 
     /** Retire only the stage confirmed by this receipt, even if another job was opened later. */
     @Synchronized
     fun completeOutboundStage(orderId: Int, mode: String) {
-        if (active("outbound", mode)?.orderId == orderId) clearActive("outbound")
+        saveResumes(resumeScope().clear(resumes(), "outbound", orderId, mode))
         clearPickProgress(orderId, mode)
     }
 
     @Synchronized
     fun advanceOutboundStage(orderId: Int, orderNo: String, completedMode: String, nextMode: String): Boolean {
         completeOutboundStage(orderId, completedMode)
-        val current = resumes().lastOrNull { it.module == "outbound" && owns(it.ownerId, it.serverUrl) }
+        val current = resumeScope().scoped(resumes(), "outbound")
         if (current != null && current.orderId != orderId) return false
         activate(PdaResumeWork("outbound", nextMode, orderId, orderNo))
         return true
+    }
+
+    private fun saveResumes(value: List<PdaResumeWork>) {
+        if (value == resumeCache) return
+        resumeCache = value
+        writer.enqueue(KEY_RESUMES, value)
     }
 
     @Synchronized
