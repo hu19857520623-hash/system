@@ -928,6 +928,12 @@ async function postMaintenance(attempt: ShipmentMaintenanceAttempt) {
     if ([400, 404, 409, 422].includes(error.status)) {
       try { clearShipmentMaintenance(localStorage,frame.owner,attempt); maintenanceAttempt.value = null }
       catch { maintenanceError.value += '；本机核对信息未能清除，请先核对原操作' }
+      if (error.status === 409 && attempt.kind === 'freight' && !maintenanceAttempt.value) {
+        freightVisible.value = false
+        if (inboundNumericId(detailOrder.value) === attempt.inboundId) {
+          detailMutationWarning.value = '请重新读取最新详情，核对海运费后再操作'
+        }
+      }
     } else maintenanceError.value = `操作结果待核对，请点击「核对并重试原操作」，不要重新建立操作。${maintenanceError.value}`
   } finally { if(frame.active()){maintenanceBusy.value = false; freightSubmitting.value = false} }
 }
