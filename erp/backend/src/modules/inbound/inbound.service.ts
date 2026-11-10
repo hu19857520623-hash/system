@@ -227,7 +227,7 @@ export class InboundService {
     return { id: Number(aliases[0].id) }
   }
 
-  async detail(id: number, options?: { reconcileCatalog?: boolean }) {
+  async detail(id: number, options?: { reconcileCatalog?: boolean; backfillClosedCartons?: boolean }) {
     const row = await this.prisma.inboundOrder.findUnique({ where: { id: BigInt(id) }, include: { items: true, putawayItems: { orderBy: { id: 'desc' } } } })
     if (!row) throw new NotFoundException('入库单不存在')
     await attachInboundWorkflowRevision(this.prisma, row)
@@ -239,7 +239,8 @@ export class InboundService {
     const prodMap = new Map(products.map((p) => [Number(p.id), p]))
     const platformBySku = await this.loadPlatformScanIndex(row.items, prodMap)
 
-    const cartons = await this.loadCartons(Number(row.id), row.inboundNo, row.items)
+    const backfillCartons = options?.backfillClosedCartons !== false || !TERMINAL_STATUSES.has(row.status)
+    const cartons = await this.loadCartons(Number(row.id), row.inboundNo, row.items, backfillCartons)
 
     const displayStatus = normalizeInboundStatus(row.status)
     if (displayStatus === 'completed' && options?.reconcileCatalog !== false) {
@@ -311,13 +312,14 @@ export class InboundService {
     inboundId: number,
     inboundNo: string,
     items: { id: bigint; productId: bigint; sku: string; expectedQty: number }[],
+    backfill: boolean,
   ) {
     let rows = await this.prisma.inboundCarton.findMany({
       where: { inboundId: BigInt(inboundId) },
       include: { items: true },
       orderBy: { boxSeq: 'asc' },
     })
-    if (!rows.length && items.length) {
+    if (backfill && !rows.length && items.length) {
       await this.persistCartons(this.prisma, { id: BigInt(inboundId), inboundNo, items })
       rows = await this.prisma.inboundCarton.findMany({
         where: { inboundId: BigInt(inboundId) },

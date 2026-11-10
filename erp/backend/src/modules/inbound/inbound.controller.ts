@@ -221,7 +221,8 @@ export class InboundController {
   )
   @Get(':id')
   detail(@Param('id', ParseIntPipe) id: number, @Query('reconcileCatalog') reconcileCatalog?: string) {
-    return this.service.detail(id, { reconcileCatalog: reconcileCatalog !== 'false' })
+    const reconcile = reconcileCatalog !== 'false'
+    return this.service.detail(id, { reconcileCatalog: reconcile, backfillClosedCartons: reconcile })
   }
 
   @RequirePerms('create_inbound.create')
