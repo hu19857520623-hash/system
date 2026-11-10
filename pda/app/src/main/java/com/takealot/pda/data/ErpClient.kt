@@ -217,25 +217,10 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
         )
     }
 
-    suspend fun ship(
-        id: Int,
-        trackingNo: String = "",
-        carrier: String = "",
-        logisticsProduct: String = "",
-        clientRequestId: String = UUID.randomUUID().toString(),
-    ): OutboundOrder = withContext(Dispatchers.IO) {
-        gson.fromJson(
-            postJson(
-                "/outbound/$id/ship",
-                mapOf(
-                    "trackingNo" to trackingNo.trim(),
-                    "carrier" to carrier.trim(),
-                    "logisticsProduct" to logisticsProduct.trim(),
-                    "clientRequestId" to clientRequestId,
-                ),
-            ).requireShipSyncAcknowledged(id),
-            OutboundOrder::class.java,
-        )
+    suspend fun ship(order: OutboundOrder, body: Map<String, Any?>, clientRequestId: String) = withContext(Dispatchers.IO) {
+        val payload = gson.toJsonTree(body + ("clientRequestId" to clientRequestId))
+        val request = payload.readShipmentRequest(order.id, order.no, order.warehouseCode)
+        postJson("/outbound/${order.id}/ship", payload).requireShipSyncAcknowledged(request)
     }
 
     suspend fun stocktakes(warehouseCode: String? = null, status: String? = null, stocktakeNo: String? = null): List<StocktakePlan> =
@@ -306,15 +291,22 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
             }
             count
         } else null
+        val shipment = if (endpoint.startsWith("/outbound/") && endpoint.endsWith("/ship")) {
+            val id = record.orderId
+            if (id == null || endpoint != "/outbound/$id/ship") {
+                throw ErpException("待同步记录与原发运单不一致，请由主管核对", retriable = true)
+            }
+            payload.readShipmentRequest(id, record.orderNo)
+        } else null
         val result = postJson(endpoint, payload)
         if (endpoint.startsWith("/outbound/")) {
             when (endpoint.substringAfterLast('/')) {
                 "pick" -> result.requireOutboundStageReceipt(record.orderId, OutboundReceiptStage.PICK)
                 "pack" -> result.requireOutboundStageReceipt(record.orderId, OutboundReceiptStage.PACK)
                 "problem" -> result.requireOutboundProblemReceipt(record.orderId, record.mode.removePrefix("problem_"))
-                "ship" -> result.requireShipSyncAcknowledged(record.orderId)
             }
         }
+        shipment?.let { result.requireShipSyncAcknowledged(it) }
         if (endpoint.startsWith("/inbound/")) result.requireInboundSyncAcknowledged()
         putaway?.verifyReceipt(result, gson)
         if (cartonCount != null && cartonOrderId != null) {
@@ -403,23 +395,6 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
     }
 
     private fun String.encodeUrl() = java.net.URLEncoder.encode(this, "UTF-8")
-}
-
-internal fun JsonElement.requireShipSyncAcknowledged(expectedOrderId: Int?): JsonElement {
-    val response = takeIf { it.isJsonObject }?.asJsonObject
-    val returnedId = response?.get("id")?.takeIf { it.isJsonPrimitive }?.asString?.toIntOrNull()
-    val shippedAt = response?.get("shippedAt")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString
-    if (expectedOrderId == null || returnedId != expectedOrderId || shippedAt.isNullOrBlank()) {
-        throw ErpException("发运回执缺少对应单号或发运时间，请在「待同步与异常记录」核对原请求", retriable = true)
-    }
-    val warning = response?.get("warning")
-    val syncFlags = listOf("syncPending", "feePending").map { key ->
-        response?.get(key)?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isBoolean }?.asBoolean
-    }
-    if (syncFlags.any { it != false } || (warning?.isJsonPrimitive == true && warning.asJsonPrimitive.isString && warning.asString.isNotBlank())) {
-        throw ErpException("发运已保存，OMS 同步待确认。请在「待同步与异常记录」重试原请求，勿重复发运", retriable = true)
-    }
-    return this
 }
 
 private fun JsonElement.requireInboundSyncAcknowledged(): JsonElement {

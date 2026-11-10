@@ -1,57 +1,56 @@
 package com.takealot.pda.data
 
 import com.google.gson.JsonParser
-import org.junit.Assert.assertSame
-import org.junit.Assert.assertTrue
-import org.junit.Assert.fail
+import org.junit.Assert.*
 import org.junit.Test
 
 class ShipSyncAcknowledgementTest {
-    @Test fun savedShipmentWithSyncWarningStillRequiresOriginalRetry() {
-        val response = JsonParser.parseString("""{"id":12,"shippedAt":"2026-11-06 12:00","feePending":false,"syncPending":false,"warning":"OMS 同步未完成"}""")
-        try {
-            response.requireShipSyncAcknowledged(12)
-            fail("未同步的发运不能确认")
-        } catch (error: ErpException) {
-            assertTrue(error.retriable)
-            assertTrue(error.message.orEmpty().contains("发运已保存"))
-        }
-    }
+    private val request = JsonParser.parseString(
+        """{"trackingNo":"AUD-12","carrier":"审计承运商","logisticsProduct":"卡派"}""",
+    ).readShipmentRequest(12, "DO-AUD-12", "JHB")
 
-    @Test fun pendingFlagsRequireOriginalRetryEvenWithoutWarning() {
-        for (flag in listOf("feePending", "syncPending")) {
-            val response = JsonParser.parseString("""{"id":12,"shippedAt":"2026-11-06 12:00","$flag":true}""")
-            val error = org.junit.Assert.assertThrows(ErpException::class.java) {
-                response.requireShipSyncAcknowledged(12)
-            }
-            assertTrue(error.retriable)
-        }
-    }
+    private fun receipt() = JsonParser.parseString("""
+        {"id":12,"outboundNo":"DO-AUD-12","warehouseCode":"JHB","status":"shipped","shippedAt":"2026-11-06 12:00",
+         "trackingNo":"AUD-12","carrier":"审计承运商","logisticsProduct":"卡派","feePending":false,"syncPending":false}
+    """).asJsonObject
 
-    @Test fun missingOrDifferentReceiptIdRequiresOriginalRetry() {
-        for (body in listOf("null", "{}", """{"id":13,"shippedAt":"2026-11-06 12:00"}""", """{"id":12,"feePending":false,"syncPending":false}""")) {
-            val response = JsonParser.parseString(body)
-            val error = org.junit.Assert.assertThrows(ErpException::class.java) {
-                response.requireShipSyncAcknowledged(12)
-            }
-            assertTrue(error.retriable)
-            assertTrue(error.message.orEmpty().contains("核对原请求"))
-        }
-    }
-
-    @Test fun matchingShipmentStillRequiresExplicitBooleanSyncConfirmation() {
-        for (flags in listOf("", ",\"feePending\":false", ",\"feePending\":false,\"syncPending\":\"false\"")) {
-            val response = JsonParser.parseString("""{"id":12,"shippedAt":"2026-11-06 12:00"$flags}""")
-            val error = org.junit.Assert.assertThrows(ErpException::class.java) {
-                response.requireShipSyncAcknowledged(12)
-            }
+    @Test fun pendingFlagsOrWarningKeepOriginalRequest() {
+        val uncertain = listOf(
+            receipt().apply { addProperty("warning", "OMS 同步未完成") },
+            receipt().apply { addProperty("feePending", true) },
+            receipt().apply { addProperty("syncPending", true) },
+            receipt().apply { remove("feePending") },
+            receipt().apply { addProperty("syncPending", "false") },
+        )
+        for (body in uncertain) {
+            val error = assertThrows(ErpException::class.java) { body.requireShipSyncAcknowledged(request) }
             assertTrue(error.retriable)
             assertTrue(error.message.orEmpty().contains("同步待确认"))
         }
     }
 
-    @Test fun confirmedShipmentKeepsItsResponse() {
-        val response = JsonParser.parseString("""{"id":12,"status":"shipped","shippedAt":"2026-11-06 12:00","feePending":false,"syncPending":false}""")
-        assertSame(response, response.requireShipSyncAcknowledged(12))
+    @Test fun wrongOrderLogisticsOrStageCannotConfirmShipment() {
+        for (field in listOf("id", "outboundNo", "warehouseCode", "status", "shippedAt", "trackingNo", "carrier", "logisticsProduct")) {
+            val body = receipt().apply { addProperty(field, "wrong") }
+            if (field == "shippedAt") body.remove(field)
+            val error = assertThrows(ErpException::class.java) { body.requireShipSyncAcknowledged(request) }
+            assertTrue(error.retriable)
+            assertTrue(error.message.orEmpty().contains("核对原请求"))
+        }
+    }
+
+    @Test fun acceptsLaterDeliveryStagesAndAllowsUnspecifiedLogisticsToBeInherited() {
+        val unspecified = JsonParser.parseString("""{"trackingNo":"","carrier":"  "}""").readShipmentRequest(12, "DO-AUD-12")
+        for (status in listOf("shipped", "delivered", "partial_delivered", "delivery_failed", "exception")) {
+            val body = receipt().apply { addProperty("status", status) }
+            assertSame(body, body.requireShipSyncAcknowledged(request))
+            assertSame(body, body.requireShipSyncAcknowledged(unspecified))
+        }
+    }
+
+    @Test fun rejectsCorruptSavedLogisticsBeforeRetry() {
+        assertThrows(ErpException::class.java) {
+            JsonParser.parseString("""{"trackingNo":123}""").readShipmentRequest(12, "DO-AUD-12")
+        }
     }
 }

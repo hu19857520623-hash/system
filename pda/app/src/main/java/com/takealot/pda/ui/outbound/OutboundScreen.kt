@@ -652,25 +652,24 @@ class OutboundViewModel : ViewModel() {
         val o = order ?: return
         if (!canWriteOutbound(o.id)) return
         if (mode != "ship" || o.statusKey != "packed") return
-        val originalTrackingNo = trackingNo.trim()
-        val originalCarrier = carrier.trim()
-        val originalProduct = logisticsProduct.trim()
+        val payload = mapOf(
+            "trackingNo" to trackingNo.trim(),
+            "carrier" to carrier.trim(),
+            "logisticsProduct" to logisticsProduct.trim(),
+        )
         busy = true
         feedback = null
         viewModelScope.launch {
             val journal = PdaApp.instance.workJournal
             val recordId = journal.beginScan("outbound", "ship_submit", o.no, o.id, o.no)
             try {
-                journal.preparePostRetry(recordId, "/outbound/${o.id}/ship", mapOf(
-                    "trackingNo" to originalTrackingNo,
-                    "carrier" to originalCarrier,
-                    "logisticsProduct" to originalProduct,
-                ))
-                api.submitPrepared(recordId) { api.ship(o.id, originalTrackingNo, originalCarrier, originalProduct, recordId) }
-                journal.completeOutboundStage(o.id, "ship")
+                journal.preparePostRetry(recordId, "/outbound/${o.id}/ship", payload)
+                val receipt = api.submitPrepared(recordId) { api.ship(o, payload, recordId) }
+                clearOrder()
                 journal.acknowledge(recordId, "发运提交成功")
-                feedback = Feedback(true, "${o.no} 发运已确认，OMS 同步完成")
-                order = null; trackingNo = ""; carrier = ""; logisticsProduct = ""; loadList()
+                val next = if (receipt.asJsonObject.get("status").asString == "exception") "；单据存在异常，请联系主管核对" else ""
+                feedback = Feedback(true, "${o.no} 发运已确认，OMS 同步完成$next")
+                loadList()
             } catch (e: Exception) {
                 feedback = Feedback(false, e.message ?: "发运失败")
                 if (journal.isRetriable(e)) journal.retainForRetry(recordId, feedback?.message) else journal.fail(recordId, feedback?.message)

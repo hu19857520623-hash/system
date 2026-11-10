@@ -171,11 +171,16 @@ class SyncViewModel : ViewModel() {
                                     "/outbound/$orderId/ship" -> "ship"
                                     else -> null
                                 }
-                                if (completedMode != null) {
+                                if (completedMode == "ship") {
+                                    journal.completeOutboundStage(orderId, "ship")
+                                    val exception = result.asJsonObject.get("status").asString == "exception"
+                                    nextStep = if (exception) "原发运已确认，OMS 同步完成。单据存在异常，请联系主管核对。"
+                                    else "原发运已确认，OMS 同步完成。请返回首页选择下一项作业。"
+                                } else if (completedMode != null) {
                                     val confirmed = when (completedMode) {
                                         "pick" -> "原拣货请求已确认"
                                         "review" -> "原复核请求已确认"
-                                        else -> "原发运请求已确认"
+                                        else -> "原出库作业已确认"
                                     }
                                     nextStep = continueAfterOutbound(orderId, completedMode, confirmed)
                                 }
