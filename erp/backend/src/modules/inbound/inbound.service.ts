@@ -1021,13 +1021,37 @@ export class InboundService {
     if (!encoded || encoded.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) throw new BadRequestException('附件内容无效，请重新选择文件')
     const buf = Buffer.from(encoded, 'base64')
     if (!buf.length || buf.toString('base64') !== encoded) throw new BadRequestException('附件不能为空或已损坏，请重新选择文件')
-    return this.prisma.$transaction(async tx => {
-      await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(ownerId)} FOR UPDATE`
-      await this.requireOwnedDraft(tx, data.draftNo!, ownerId)
-      const { relativePath } = this.files.write('inbound-attachments', `${randomUUID()}_${data.fileName}`, buf)
-      await tx.$executeRawUnsafe('INSERT INTO inbound_attachment (inbound_id, draft_no, file_name, file_path) VALUES (NULL, ?, ?, ?)', data.draftNo, data.fileName, relativePath)
-      return { fileName: data.fileName }
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted })
+    let writtenPath: string | undefined
+    try {
+      return await this.prisma.$transaction(async tx => {
+        await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(ownerId)} FOR UPDATE`
+        await this.requireOwnedDraft(tx, data.draftNo!, ownerId)
+        const sameName = await tx.$queryRawUnsafe<{ id: bigint; fileName: string; filePath: string }[]>(
+          'SELECT id, file_name AS fileName, file_path AS filePath FROM inbound_attachment WHERE draft_no = ? AND inbound_id IS NULL AND file_name = ? ORDER BY id',
+          data.draftNo, data.fileName,
+        )
+        const existing = sameName.find(row => row.fileName === data.fileName && this.files.exists(row.filePath) && this.files.read(row.filePath).equals(buf))
+        if (existing) return { id: Number(existing.id), fileName: existing.fileName, duplicate: true }
+        const { relativePath } = this.files.write('inbound-attachments', `${randomUUID()}`, buf)
+        writtenPath = relativePath
+        await tx.$executeRawUnsafe('INSERT INTO inbound_attachment (inbound_id, draft_no, file_name, file_path) VALUES (NULL, ?, ?, ?)', data.draftNo, data.fileName, relativePath)
+        const [row] = await tx.$queryRawUnsafe<{ id: bigint }[]>('SELECT LAST_INSERT_ID() AS id')
+        return { id: Number(row.id), fileName: data.fileName, duplicate: false }
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted })
+    } catch (error) {
+      if (writtenPath) await this.cleanUnreferencedAsnFiles([writtenPath])
+      throw error
+    }
+  }
+
+  async downloadDraftAttachment(draftNo: string, attachmentId: number, operatorId?: number) {
+    const ownerId = this.requireDraftOperator(operatorId)
+    const [row] = await this.prisma.$queryRawUnsafe<{ fileName: string; filePath: string }[]>(
+      'SELECT a.file_name AS fileName, a.file_path AS filePath FROM inbound_attachment a JOIN inbound_draft d ON d.draft_no = a.draft_no WHERE a.id = ? AND a.draft_no = ? AND a.inbound_id IS NULL AND d.operator_id = ?',
+      attachmentId, draftNo, ownerId,
+    )
+    if (!row) throw new NotFoundException('未找到本人草稿中的此附件，请刷新草稿箱核对')
+    return { fileName: row.fileName, content: this.files.read(row.filePath) }
   }
 
   async downloadAttachment(id: number) {

@@ -342,6 +342,7 @@ export const inboundApi = {
   saveDraft: (data) => api.post('/inbound/drafts', data),
   deleteDraft: (draftNo) => api.delete(`/inbound/drafts/${encodeURIComponent(draftNo)}`),
   uploadAttachment: (data) => api.post('/inbound/attachments', data),
+  downloadDraftAttachment: (draftNo, attachmentId) => downloadRequest(`/inbound/drafts/${encodeURIComponent(draftNo)}/attachments/${attachmentId}`),
   downloadSkuLabel: (id, sku) => downloadRequest(`/inbound/${id}/labels/sku${sku ? `?sku=${encodeURIComponent(sku)}` : ''}`),
   downloadOuterLabel: (id) => downloadRequest(`/inbound/${id}/labels/outer`),
   downloadReceivingList: (id) => openHtmlPrint(`/inbound/${id}/receiving-list`),

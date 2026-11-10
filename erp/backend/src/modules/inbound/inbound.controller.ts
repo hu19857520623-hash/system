@@ -118,6 +118,15 @@ export class InboundController {
     return this.service.uploadAttachment(body, userId)
   }
 
+  @RequirePerms('create_inbound.view')
+  @Get('drafts/:draftNo/attachments/:attachmentId')
+  async downloadDraftAttachment(@Param('draftNo') draftNo: string, @Param('attachmentId', ParseIntPipe) attachmentId: number,
+    @CurrentUser('userId') userId: number, @Res() res: Response) {
+    const file = await this.service.downloadDraftAttachment(draftNo, attachmentId, userId)
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(file.fileName)}"`)
+    res.type('application/octet-stream').send(file.content)
+  }
+
   @RequireAnyPerm(
     'create_inbound.view',
     'inbound.view',

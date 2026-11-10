@@ -153,6 +153,8 @@ const draftSaveFeedback = ref('')
 const draftSaveCanCopy = ref(false)
 const draftSaveStorageBlocked = ref(false)
 const attachmentBusy = ref(false)
+const pendingAttachment = ref<{ draftNo: string; fileName: string; contentBase64: string } | null>(null)
+const attachmentFeedback = ref('')
 const importBusy = ref(false)
 const maintenanceBusy = ref(false)
 const maintenanceAttempt = ref<ShipmentMaintenanceAttempt | null>(null)
@@ -165,7 +167,7 @@ const shipmentError = ref('')
 const shipmentResult = ref<any>(null)
 const deletedShipment = ref<{attempt:ShipmentAttempt;inboundNo:string}|null>(null)
 const formBusy = computed(() => shipmentBusy.value || draftBusy.value || attachmentBusy.value || importBusy.value || maintenanceBusy.value)
-const formLocked = computed(() => formBusy.value || draftSaveStorageBlocked.value || !!pendingDraftSave.value || !!shipmentAttempt.value || !!shipmentResult.value || !!shipmentAttemptError.value || !!maintenanceAttempt.value || !!maintenanceStorageError.value)
+const formLocked = computed(() => formBusy.value || !!pendingAttachment.value || draftSaveStorageBlocked.value || !!pendingDraftSave.value || !!shipmentAttempt.value || !!shipmentResult.value || !!shipmentAttemptError.value || !!maintenanceAttempt.value || !!maintenanceStorageError.value)
 let stockLoadVersion = 0
 let draftLoadVersion = 0
 let detailReadVersion=0
@@ -1125,6 +1127,7 @@ async function onSourceWarehouseChange(code: string) {
 
 function openCreate() {
   if (pendingDraftSave.value) { viewOriginalDraftSave(); return }
+  if (pendingAttachment.value) { tab.value = 'form'; return }
   refreshShipmentAttempt()
   refreshMaintenanceAttempt()
   if (formBusy.value || shipmentAttempt.value || shipmentAttemptError.value || maintenanceAttempt.value || maintenanceStorageError.value) return
@@ -1142,7 +1145,7 @@ function openCreate() {
 
 function cancelForm() {
   if (formBusy.value) return
-  if (pendingDraftSave.value) { tab.value = 'list'; return }
+  if (pendingDraftSave.value || pendingAttachment.value) { tab.value = 'list'; return }
   if (shipmentAttempt.value || shipmentResult.value) { returnShipmentList(); return }
   editingDraftId.value = null
   createForm.value = emptyForm()
@@ -1574,7 +1577,7 @@ async function downloadReceivingList(row: any) {
 
 function editDraft(row: any) {
   refreshShipmentAttempt()
-  if (formBusy.value || pendingDraftSave.value || shipmentAttempt.value || shipmentAttemptError.value || maintenanceAttempt.value || maintenanceStorageError.value) return
+  if (formBusy.value || pendingAttachment.value || pendingDraftSave.value || shipmentAttempt.value || shipmentAttemptError.value || maintenanceAttempt.value || maintenanceStorageError.value) return
   shipmentResult.value = null
   shipmentError.value = ''
   editingDraftId.value = row.id
@@ -1590,7 +1593,7 @@ function editDraft(row: any) {
 }
 
 async function deleteDraft(row:any) {
-  if(formBusy.value || pendingDraftSave.value || !canCreateInbound.value || shipmentAttempt.value || shipmentAttemptError.value || maintenanceAttempt.value || maintenanceStorageError.value)return
+  if(formBusy.value || pendingAttachment.value || pendingDraftSave.value || !canCreateInbound.value || shipmentAttempt.value || shipmentAttemptError.value || maintenanceAttempt.value || maintenanceStorageError.value)return
   const frame=shipmentRequests.capture(),id=row.id
   if(!await confirmAction(`确认删除草稿 ${id}？`,'删除草稿') || !frame.active())return
   draftBusy.value=true
@@ -1621,21 +1624,56 @@ async function handleAttachmentFile(e: Event) {
     let binary = ''
     bytes.forEach((b) => { binary += String.fromCharCode(b) })
     const contentBase64 = btoa(binary)
-    await frame.step(()=>inboundApi.uploadAttachment({
-      draftNo,
-      fileName: file.name,
-      contentBase64,
-    }))
-    if(!frame.active())return
-    createForm.value.attachments.push({ fileName: file.name })
-    await frame.step(()=>loadDrafts())
-    if(!frame.active())return
-    toast(`附件「${file.name}」已上传并关联本草稿`)
+    pendingAttachment.value = { draftNo, fileName: file.name, contentBase64 }
+    await confirmAttachmentUpload(frame)
   } catch (err: any) {
     if(!frame.active())return
     ElMessage.error(userFacingError(displaySkuText(err.message || '附件上传失败')))
   } finally {if(frame.active())attachmentBusy.value=false}
 }
+
+async function confirmAttachmentUpload(frame: ReturnType<typeof shipmentRequests.capture>) {
+  const attempt = pendingAttachment.value
+  if (!attempt || !frame.active()) return
+  attachmentFeedback.value = ''
+  try {
+    const receipt = await frame.step(() => inboundApi.uploadAttachment(attempt))
+    const id = Number(receipt?.id)
+    if (!Number.isSafeInteger(id) || id <= 0 || receipt.fileName !== attempt.fileName.trim()) throw Error('附件回执与原文件不一致')
+    if (!createForm.value.attachments.some(file => file.id === id)) {
+      createForm.value.attachments.push({ id, fileName: receipt.fileName })
+    }
+    pendingAttachment.value = null
+    toast(`附件「${receipt.fileName}」已关联本草稿`)
+    void loadDrafts()
+  } catch (error: any) {
+    if (!frame.active()) return
+    const status = Number(error?.status)
+    if (status === 400 || status === 404 || status === 413 || status === 422) {
+      pendingAttachment.value = null
+      attachmentFeedback.value = userFacingError(error)
+    } else attachmentFeedback.value = `附件上传结果待核对，可继续原上传。${userFacingError(error)}`
+  }
+}
+
+async function retryAttachmentUpload() {
+  if (!pendingAttachment.value || formBusy.value || !canCreateInbound.value) return
+  const frame = shipmentRequests.capture()
+  attachmentBusy.value = true
+  try { await confirmAttachmentUpload(frame) }
+  finally { if (frame.active()) attachmentBusy.value = false }
+}
+
+async function downloadDraftFile(file: { id?: number; fileName: string }) {
+  const draftNo = editingDraftId.value
+  if (!draftNo || !file.id) return
+  const frame = shipmentRequests.captureRead()
+  try {
+    const { blob, fileName } = await frame.step(() => inboundApi.downloadDraftAttachment(draftNo, file.id))
+    if (frame.active() && draftNo === editingDraftId.value) triggerBlobDownload(blob, fileName || file.fileName)
+  } catch (error) { if (frame.active()) ElMessage.error(userFacingError(error)) }
+}
+
 function resetShipmentSession(){
   shipmentBusy.value=false;maintenanceBusy.value=false;freightSubmitting.value=false
   shipmentResult.value=null;deletedShipment.value=null;maintenanceResult.value=null;shipmentError.value='';maintenanceError.value=''
@@ -1644,6 +1682,7 @@ function resetShipmentSession(){
   ++stockLoadVersion;++draftLoadVersion;++detailReadVersion;detailLoading.value=false
   draftBusy.value=false;attachmentBusy.value=false;importBusy.value=false;createLoading.value=false;skuLoading.value=false
   pendingDraftSave.value=null;draftSaveFeedback.value='';draftSaveCanCopy.value=false;draftSaveStorageBlocked.value=false
+  pendingAttachment.value=null;attachmentFeedback.value=''
   productDimMap.value=new Map();productDimMapLoaded.value=false;logisticsWarehouses.value=[];overseasWarehouses.value=[]
   refsError.value='';stockError.value='';draftsError.value='';detailMutationWarning.value='';tab.value='list'
   refreshShipmentAttempt();refreshMaintenanceAttempt();restoreDraftSaveCheckpoint()
@@ -1692,6 +1731,10 @@ onScopeDispose(()=>window.removeEventListener('storage',onShipmentStorage))
       <el-button v-if="draftSaveStorageBlocked" :disabled="formBusy" @click="restoreDraftSaveCheckpoint">重新读取原草稿记录</el-button>
       <el-button v-if="pendingDraftSave" :disabled="formBusy" @click="viewOriginalDraftSave">查看原输入</el-button>
       <el-button v-if="draftSaveCanCopy" :disabled="formBusy || !canCreateInbound" @click="copyUnconfirmedDraft">复制为新草稿</el-button>
+    </el-alert>
+    <el-alert v-if="attachmentFeedback" :title="attachmentFeedback" type="warning" :closable="false">
+      <el-button v-if="pendingAttachment" :loading="attachmentBusy" @click="retryAttachmentUpload">继续原附件上传</el-button>
+      <el-button v-if="pendingAttachment && tab !== 'form'" :disabled="formBusy" @click="tab = 'form'">返回原草稿</el-button>
     </el-alert>
     <el-alert v-if="maintenanceAttempt || maintenanceStorageError" type="warning" :closable="false" style="margin:12px 0">
       <template #title>{{ maintenanceStorageError || `上次${maintenanceAttempt?.kind === 'delete' ? '删除发运单' : maintenanceAttempt?.clear ? '清除海运费' : '补录海运费'}结果待核对：${maintenanceAttempt?.inboundNo}` }}</template>
@@ -2099,7 +2142,10 @@ onScopeDispose(()=>window.removeEventListener('storage',onShipmentStorage))
           <el-form-item label="附件">
             <div class="upload-zone" @click="onAttachmentPick">
               {{ attachmentBusy ? '正在上传附件…' : '点击上传装箱单或质检报告（上传前自动保存草稿）' }}            </div>
-            <ul v-if="createForm.attachments.length"><li v-for="(file, index) in createForm.attachments" :key="index">{{ file.fileName }}</li></ul>
+            <ul v-if="createForm.attachments.length"><li v-for="(file, index) in createForm.attachments" :key="file.id || index">
+              {{ file.fileName }}
+              <el-button v-if="file.id" link type="primary" @click="downloadDraftFile(file)">下载附件</el-button>
+            </li></ul>
           </el-form-item>
         </section>
 
@@ -2143,8 +2189,8 @@ onScopeDispose(()=>window.removeEventListener('storage',onShipmentStorage))
         <el-table-column prop="savedAt" label="保存时间" width="150" />
         <el-table-column label="操作" width="140" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" size="small" :disabled="formBusy || !!pendingDraftSave" @click="editDraft(row)">继续编辑</el-button>
-            <el-button link type="danger" size="small" :disabled="formBusy || !!pendingDraftSave || !canCreateInbound" @click="deleteDraft(row)">删除</el-button>
+            <el-button link type="primary" size="small" :disabled="formBusy || !!pendingAttachment || !!pendingDraftSave" @click="editDraft(row)">继续编辑</el-button>
+            <el-button link type="danger" size="small" :disabled="formBusy || !!pendingAttachment || !!pendingDraftSave || !canCreateInbound" @click="deleteDraft(row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
