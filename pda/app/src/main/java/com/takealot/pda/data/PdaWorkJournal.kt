@@ -50,6 +50,7 @@ data class PdaScanRecord(
     val retryExtra: String? = null,
     val retryEndpoint: String? = null,
     val retryBodyJson: String? = null,
+    val putawayIdentity: PutawayIdentity? = null,
     val ownerId: Int? = null,
     val serverUrl: String? = null,
 )
@@ -121,13 +122,14 @@ class PdaWorkJournal(context: Context, private val session: SessionStore) {
     }
 
     @Synchronized
-    fun preparePostRetry(id: String, endpoint: String, body: Map<String, Any?>) {
+    fun preparePostRetry(id: String, endpoint: String, body: Map<String, Any?>, putawayIdentity: PutawayIdentity? = null) {
         val payload = body + ("clientRequestId" to id)
         saveRecords(_scanRecords.value.map {
             if (it.id == id) it.copy(
                 retryAction = "post",
                 retryEndpoint = endpoint,
                 retryBodyJson = gson.toJson(payload),
+                putawayIdentity = putawayIdentity,
             ) else it
         })
     }

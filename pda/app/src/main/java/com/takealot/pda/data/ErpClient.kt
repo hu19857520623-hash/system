@@ -147,15 +147,14 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
         postJson("/inbound/$id/measure-dimensions", body + ("clientRequestId" to clientRequestId)).requireInboundSyncAcknowledged()
     }
 
-    suspend fun putaway(id: Int, body: Map<String, Any?>, clientRequestId: String): InboundOrder = withContext(Dispatchers.IO) {
-        val result = postJson("/inbound/$id/putaway", body + ("clientRequestId" to clientRequestId)).requireInboundSyncAcknowledged()
-        putawayReceipt(result, id)
-    }
-
-    private fun putawayReceipt(result: JsonElement, orderId: Int?): InboundOrder {
-        val order = runCatching { gson.fromJson(result, InboundOrder::class.java) }.getOrNull()
-        return requirePutawayReceipt(order, orderId)
-    }
+    suspend fun putaway(order: InboundOrder, body: Map<String, Any?>, clientRequestId: String): InboundOrder =
+        withContext(Dispatchers.IO) {
+            val payload = gson.toJsonTree(body + ("clientRequestId" to clientRequestId))
+            val expected = payload.readPutawayRequest(order.id, order.no, order.warehouseCode)
+            val selectedSkus = order.itemList.filter { it.id in expected.itemQuantities }.associate { it.id to it.skuCode }
+            val result = postJson("/inbound/${order.id}/putaway", payload).requireInboundSyncAcknowledged()
+            expected.copy(expectedSkus = selectedSkus).verifyReceipt(result, gson)
+        }
 
     suspend fun resolveException(id: Int, body: Map<String, Any?>, clientRequestId: String) = withContext(Dispatchers.IO) {
         postJson("/inbound/$id/resolve-exception", body + ("clientRequestId" to clientRequestId)).requireInboundSyncAcknowledged()
@@ -281,7 +280,17 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
         val endpoint = record.retryEndpoint.orEmpty()
         val body = record.retryBodyJson.orEmpty()
         if (endpoint.isBlank() || body.isBlank()) throw ErpException("待同步记录缺少请求内容")
-        val result = postJson(endpoint, JsonParser.parseString(body))
+        val payload = JsonParser.parseString(body)
+        val putaway = if (endpoint.startsWith("/inbound/") && endpoint.endsWith("/putaway")) {
+            val id = record.orderId
+            if (id == null || endpoint != "/inbound/$id/putaway") {
+                throw ErpException("待同步记录与原上架单不一致，请由主管核对", retriable = true)
+            }
+            val identity = record.putawayIdentity
+            payload.readPutawayRequest(id, record.orderNo, identity?.warehouse)
+                .copy(expectedSkus = identity?.skus.orEmpty())
+        } else null
+        val result = postJson(endpoint, payload)
         if (endpoint.startsWith("/outbound/")) {
             when (endpoint.substringAfterLast('/')) {
                 "pick" -> result.requireOutboundStageReceipt(record.orderId, OutboundReceiptStage.PICK)
@@ -291,7 +300,7 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
             }
         }
         if (endpoint.startsWith("/inbound/")) result.requireInboundSyncAcknowledged()
-        if (endpoint.startsWith("/inbound/") && endpoint.endsWith("/putaway")) putawayReceipt(result, record.orderId)
+        putaway?.verifyReceipt(result, gson)
         if (endpoint.startsWith("/inbound/") && endpoint.endsWith("/qc")) result.requireQcSubmitReceipt(record.orderId, gson)
         if (endpoint.startsWith("/inbound/") && endpoint.endsWith("/report-exception")) result.requireExceptionReportReceipt()
         result

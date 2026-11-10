@@ -56,6 +56,7 @@ import com.takealot.pda.data.resolveSkuScan
 import com.takealot.pda.data.withQcSnapshot
 import com.takealot.pda.data.withCartonSnapshot
 import com.takealot.pda.data.withPutawaySnapshot
+import com.takealot.pda.data.PutawayIdentity
 import com.takealot.pda.data.PdaResumeWork
 import com.takealot.pda.data.requireMatchingDetail
 import com.takealot.pda.data.catalogBindingWarehouse
@@ -618,8 +619,10 @@ class InboundViewModel : ViewModel() {
                 "lines" to listOf(mapOf("locationCode" to loc, "qty" to qty)),
             )),
         )
-        PdaApp.instance.workJournal.preparePostRetry(recordId, "/inbound/${o.id}/putaway", payload)
-        val result = api.submitPrepared(recordId) { api.putaway(o.id, payload, recordId) }
+        PdaApp.instance.workJournal.preparePostRetry(
+            recordId, "/inbound/${o.id}/putaway", payload, PutawayIdentity(o.warehouseCode, mapOf(item.id to item.skuCode)),
+        )
+        val result = api.submitPrepared(recordId) { api.putaway(o, payload, recordId) }
         val updated = order?.withPutawaySnapshot(result)
         if (updated != null) applyOrder(updated)
         if (!refreshAfterConfirmedWrite()) return
@@ -1082,8 +1085,12 @@ class InboundViewModel : ViewModel() {
     }
 
     private suspend fun refreshOrder() {
-        val id = order?.id ?: return
-        applyOrder(api.inboundDetail(id))
+        val current = order ?: return
+        val latest = api.inboundDetail(current.id)
+        if (latest.id != current.id || latest.no != current.no || latest.warehouseCode != current.warehouseCode) {
+            throw ErpException("读取的单据与原单不一致，请刷新重试")
+        }
+        applyOrder(latest)
         order?.let {
             if (it.statusKey in setOf("completed", "confirmed", "cancelled")) PdaApp.instance.workJournal.clearActive("inbound")
             else PdaApp.instance.workJournal.activate(PdaResumeWork("inbound", mode.key, it.id, it.no))
