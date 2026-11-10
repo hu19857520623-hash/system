@@ -124,7 +124,7 @@ class PdaWorkJournal(context: Context, private val session: SessionStore) {
     }
 
     @Synchronized
-    fun preparePostRetry(id: String, endpoint: String, body: Map<String, Any?>, putawayIdentity: PutawayIdentity? = null) {
+    fun preparePostRetry(id: String, endpoint: String, body: Map<String, Any?>, putawayIdentity: PutawayIdentity? = null, sku: String? = null) {
         val payload = body + ("clientRequestId" to id)
         saveRecords(_scanRecords.value.map {
             if (it.id == id) it.copy(
@@ -132,6 +132,7 @@ class PdaWorkJournal(context: Context, private val session: SessionStore) {
                 retryEndpoint = endpoint,
                 retryBodyJson = gson.toJson(payload),
                 putawayIdentity = putawayIdentity,
+                retrySku = sku,
             ) else it
         })
     }

@@ -145,10 +145,13 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
             .requireInboundSyncAcknowledged().requireQcSubmitReceipt(id, gson)
     }
 
-    suspend fun reduceInbound(id: Int, mode: String, body: Map<String, Any?>): ScanActionResult = withContext(Dispatchers.IO) {
-        require(mode in setOf("qc", "carton", "putaway"))
-        gson.fromJson(postJson("/inbound/$id/reduce-$mode", body).requireInboundSyncAcknowledged(), ScanActionResult::class.java)
-    }
+    suspend fun reduceInbound(order: InboundOrder, kind: String, body: Map<String, Any?>, sku: String?) =
+        withContext(Dispatchers.IO) {
+            require(kind in setOf("qc", "carton", "putaway"))
+            val request = gson.toJsonTree(body)
+            postJson("/inbound/${order.id}/reduce-$kind", request).requireInboundSyncAcknowledged()
+                .verifyReductionReceipt(order.id, order.no, kind, request, sku)
+        }
 
     suspend fun measureDimensions(id: Int, body: Map<String, Any?>, clientRequestId: String) = withContext(Dispatchers.IO) {
         postJson("/inbound/$id/measure-dimensions", body + ("clientRequestId" to clientRequestId)).requireInboundSyncAcknowledged()
@@ -309,6 +312,12 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
             }
             payload.readStocktakeCountRequest()
         }
+        val reduction = endpoint.substringAfterLast('/').removePrefix("reduce-").takeIf {
+            record.module == "inbound" && endpoint.substringAfterLast('/') == "reduce-$it" && it in setOf("carton", "qc", "putaway")
+        }
+        if (reduction != null && (record.orderId == null || endpoint != "/inbound/${record.orderId}/reduce-$reduction")) {
+            throw ErpException("待同步记录与原减少数量单据不一致，请由主管核对", retriable = true)
+        }
         val result = postJson(endpoint, payload)
         if (endpoint.startsWith("/outbound/")) {
             when (endpoint.substringAfterLast('/')) {
@@ -320,6 +329,9 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
         shipment?.let { result.requireShipSyncAcknowledged(it) }
         if (endpoint.startsWith("/inbound/")) result.requireInboundSyncAcknowledged()
         putaway?.verifyReceipt(result, gson)
+        if (reduction != null && record.orderId != null) {
+            result.verifyReductionReceipt(record.orderId, record.orderNo, reduction, payload, record.retrySku)
+        }
         if (cartonCount != null && cartonOrderId != null) {
             result.requireCartonCountReceipt(cartonOrderId, record.orderNo, cartonCount)
         }

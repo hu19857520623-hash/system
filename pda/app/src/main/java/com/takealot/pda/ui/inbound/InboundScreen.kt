@@ -1046,6 +1046,7 @@ class InboundViewModel : ViewModel() {
             feedback = Feedback(false, "请先刷新单据并核对当前数量")
             return
         }
+        val sku = current.itemList.find { it.id == itemId }?.skuCode
         val body = mapOf("inboundItemId" to itemId, "quantity" to quantity, "expectedCurrent" to reductionCurrent,
             "reason" to reason.trim(), "expectedVersion" to version)
         viewModelScope.launch {
@@ -1053,12 +1054,14 @@ class InboundViewModel : ViewModel() {
             val journal = PdaApp.instance.workJournal
             val recordId = journal.beginScan("inbound", "reduce_$kind", itemId?.toString() ?: "箱数", current.id, current.no)
             try {
-                journal.preparePostRetry(recordId, "/inbound/${current.id}/reduce-$kind", body)
-                val res = api.submitPrepared(recordId) { api.reduceInbound(current.id, kind, body + ("clientRequestId" to recordId)) }
-                journal.acknowledge(recordId, res.message)
+                journal.preparePostRetry(recordId, "/inbound/${current.id}/reduce-$kind", body, sku = sku)
+                api.submitPrepared(recordId) { api.reduceInbound(current, kind, body + ("clientRequestId" to recordId), sku) }
+                journal.acknowledge(recordId, "原减少数量请求已确认")
                 reductionMode = null
-                if (refreshAfterConfirmedWrite()) {
-                    feedback = Feedback(true, displayMessage(res.message.orEmpty().ifBlank { "数量已减少" }))
+                if (!refreshAfterConfirmedWrite()) return@launch
+                val latest = order ?: return@launch
+                if (!retireClosedOrder(latest) && (mode == InboundMode.Putaway || !enterPutawayIfReady())) {
+                    feedback = Feedback(true, "原减少数量请求已确认，请按最新单据继续")
                 }
             } catch (e: Exception) {
                 feedback = Feedback(false, displayMessage(e.message ?: "减少失败"))

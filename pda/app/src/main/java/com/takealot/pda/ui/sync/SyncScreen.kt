@@ -105,6 +105,8 @@ class SyncViewModel : ViewModel() {
                                     "/inbound/$orderId/qc" -> nextStep = continueAfterInboundReceipt(record, orderId)
                                     "/inbound/$orderId/received-carton-count" ->
                                         nextStep = continueAfterInboundReceipt(record, orderId, cartonCount = true)
+                                    "/inbound/$orderId/reduce-carton", "/inbound/$orderId/reduce-qc", "/inbound/$orderId/reduce-putaway" ->
+                                        nextStep = continueAfterInboundReceipt(record, orderId, reduction = record.retryEndpoint.substringAfterLast('-'))
                                 }
                             }
                             if (record.retryEndpoint == "/inbound/catalog-bind") {
@@ -208,9 +210,10 @@ class SyncViewModel : ViewModel() {
     }
 
     private suspend fun continueAfterInboundReceipt(
-        record: PdaScanRecord, orderId: Int, cartonCount: Boolean = false, skuScanMode: String? = null, boxScan: Boolean = false,
+        record: PdaScanRecord, orderId: Int, cartonCount: Boolean = false, skuScanMode: String? = null, boxScan: Boolean = false, reduction: String? = null,
     ): String {
         val confirmed = when {
+            reduction != null -> "原减少数量请求已确认"
             boxScan -> "原箱唛收货已确认"
             cartonCount -> "原实收箱数请求已确认"
             skuScanMode != null -> "原扫码件数已确认"
@@ -231,7 +234,7 @@ class SyncViewModel : ViewModel() {
         if (warehouse != session.warehouseCode) {
             return "$confirmed。请返回首页切换到 $warehouse，再核对单据最新进度。"
         }
-        if (boxScan && order.statusKey in setOf("arrived", "receiving")) {
+        if ((boxScan || reduction == "carton") && order.statusKey in setOf("arrived", "receiving")) {
             if (!session.hasPerm("inbound.receive") && !session.hasPerm("inbound.qc")) {
                 return "$confirmed。请交接给有相应入库权限的人员。"
             }
@@ -239,8 +242,9 @@ class SyncViewModel : ViewModel() {
             return if (saved) "$confirmed。请返回首页打开「继续未完成作业」，核对实收箱数。"
             else "$confirmed。请从首页进入「确认箱数」并扫描原单。"
         }
-        if ((cartonCount || skuScanMode != null) && order.statusKey in setOf("arrived", "receiving")) {
-            val catalog = skuScanMode == "catalog" || (cartonCount && journal.active("inbound", "catalog")?.orderId == orderId)
+        if ((cartonCount || skuScanMode != null || reduction == "qc") && order.statusKey in setOf("arrived", "receiving")) {
+            val catalog = skuScanMode == "catalog" || ((cartonCount || reduction == "qc") &&
+                journal.active("inbound", "catalog")?.orderId == orderId)
             if (!session.hasPerm("inbound.qc") || (catalog && !session.hasPerm("inbound.arrival_scan"))) {
                 return "$confirmed。请交接给有相应入库权限的人员。"
             }
