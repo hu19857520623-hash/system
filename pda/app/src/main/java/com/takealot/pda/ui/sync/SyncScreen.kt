@@ -37,6 +37,7 @@ import com.takealot.pda.ui.theme.PdaErr
 import com.takealot.pda.ui.theme.PdaMuted
 import com.takealot.pda.ui.theme.PdaWarn
 import com.takealot.pda.ui.theme.PdaText
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -92,7 +93,7 @@ class SyncViewModel : ViewModel() {
                             val result = api.retryPending(record)
                             val orderId = record.orderId
                             if (record.module == "inbound" && orderId != null && record.retryEndpoint == "/inbound/$orderId/qc") {
-                                nextStep = "原清点请求已确认。请返回首页，从原作业核对最新状态后继续。"
+                                nextStep = continueAfterQc(orderId)
                             }
                             if (record.retryEndpoint == "/inbound/catalog-bind") {
                                 val order = api.catalogBindingReceipt(result, record)
@@ -164,6 +165,40 @@ class SyncViewModel : ViewModel() {
             } finally {
                 retryingId = null
             }
+        }
+    }
+
+    private suspend fun continueAfterQc(orderId: Int): String {
+        val confirmed = "原清点请求已确认"
+        val order = try {
+            api.inboundDetail(orderId)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            return "$confirmed。暂未读到单据最新状态，请返回首页，从原作业刷新单据后继续。"
+        }
+        val warehouse = order.warehouseCode
+        if (order.id != orderId || warehouse.isNullOrBlank()) {
+            return "$confirmed。暂无法核对原单及所属仓库，请返回首页，从原作业刷新单据。"
+        }
+        if (warehouse != session.warehouseCode) {
+            return "$confirmed。请返回首页切换到 $warehouse，再核对单据最新进度。"
+        }
+        return when (order.statusKey) {
+            "pending_putaway" -> if (session.hasPerm("inbound.putaway")) {
+                val saved = journal.reconcileInboundResume(orderId, order.no, "putaway")
+                if (saved) "$confirmed。请返回首页打开「继续未完成作业」，进入上架。"
+                else "$confirmed。请从首页进入「上架」并选择原单。"
+            } else {
+                journal.reconcileInboundResume(orderId, order.no, null)
+                "$confirmed。单据已待上架，请交接给有上架权限的人员。"
+            }
+            "completed", "confirmed", "cancelled" -> {
+                journal.reconcileInboundResume(orderId, order.no, null)
+                "$confirmed。单据当前为「${order.statusText}」，请返回首页选择下一项作业。"
+            }
+            "exception" -> "$confirmed。单据存在异常，请联系主管核对放行，再进入上架。"
+            else -> "$confirmed。请返回首页，从原作业核对最新状态后继续。"
         }
     }
 

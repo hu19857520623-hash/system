@@ -154,6 +154,19 @@ class PdaWorkJournal(context: Context, private val session: SessionStore) {
     @Synchronized
     fun active(module: String, mode: String): PdaResumeWork? = resumes().lastOrNull { it.module == module && it.mode == mode && owns(it.ownerId, it.serverUrl) }
 
+    /** A confirmed request can advance its own order, but cannot replace a different order. */
+    @Synchronized
+    fun reconcileInboundResume(orderId: Int, orderNo: String, nextMode: String?): Boolean {
+        val current = resumes().lastOrNull { it.module == "inbound" && owns(it.ownerId, it.serverUrl) }
+        if (current != null && current.orderId != orderId) return false
+        if (nextMode == null) {
+            if (current != null) clearActive("inbound")
+            return false
+        }
+        activate(PdaResumeWork("inbound", nextMode, orderId, orderNo))
+        return true
+    }
+
     @Synchronized
     fun latestActive(): PdaResumeWork? = resumes().filter { owns(it.ownerId, it.serverUrl) }.maxByOrNull { it.updatedAt }
 
