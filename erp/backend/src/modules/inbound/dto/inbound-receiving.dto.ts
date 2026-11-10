@@ -18,6 +18,8 @@ export class ScanInboundCartonDto extends InboundReceivingRequestDto {
   scanCode!: string
 }
 export class ScanInboundQcDto extends InboundReceivingRequestDto {
+  @IsOptional() @IsBoolean({ message: '货盘清点标记须为有效选择' })
+  catalogCount?: boolean
   @Transform(trim) @IsString() @MinLength(1) @MaxLength(4000)
   scanCode!: string
   @IsOptional() @Transform(numeric) @IsInt() @Min(0) @Max(2147483647)
@@ -54,6 +56,8 @@ export class InboundQcLineDto {
 }
 
 export class SubmitInboundQcDto extends InboundReceivingRequestDto {
+  @IsOptional() @IsBoolean({ message: '货盘清点标记须为有效选择' })
+  catalogCount?: boolean
   @IsString() @Matches(/^[a-f0-9]{64}$/, { message: '请重新读取最新清点进度后提交' })
   expectedVersion!: string
   @IsOptional() @IsBoolean({ message: '是否接受数量差异须为有效选择' })

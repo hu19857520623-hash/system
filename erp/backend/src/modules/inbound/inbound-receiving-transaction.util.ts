@@ -8,6 +8,7 @@ import { matchCartonByScan } from '@erp/shared/wms-doc-no'
 import { parseInboundQcScanInput } from './inbound-qc-scan.util'
 import { inboundMeasurementVersion, inboundReceivingVersion } from './inbound-receiving-version.util'
 import { inboundCartonReadiness } from './inbound-carton-readiness.util'
+import { isCatalogPurchaseInbound } from './catalog-inbound.util'
 import { attachInboundWorkflowRevision, INBOUND_WAREHOUSE_ACTIONS } from './inbound-workflow-revision.util'
 import type { MeasureInboundDto, RecordInboundCartonsDto, ScanInboundCartonDto, ScanInboundQcDto, SubmitInboundQcDto } from './dto/inbound-receiving.dto'
 
@@ -67,12 +68,14 @@ export function normalizeReceivingInput(id: number, kind: ReceivingOperation, in
       return { id: line.id, sku: line.sku.trim(), actualQty: line.actualQty, qcStatus: line.qcStatus, qcRemark,
         ...(kind === 'qc-measure-submit' ? { lengthCm: dimensions.lengthCm, widthCm: dimensions.widthCm, heightCm: dimensions.heightCm, weightKg: dimensions.weightKg } : {}) }
     }).sort((a, b) => a.id - b.id)
-    return { id, kind, expectedVersion: body.expectedVersion, acceptDiff: body.acceptDiff === true, items }
+    return { id, kind, expectedVersion: body.expectedVersion, acceptDiff: body.acceptDiff === true, items,
+      ...(kind === 'qc-submit' && body.catalogCount === true ? { catalogCount: true } : {}) }
   }
   const body = input as ScanInboundQcDto
   if (typeof body.scanCode !== 'string' || !body.scanCode.trim()) throw new BadRequestException('请扫描有效的外箱标或 SKU')
   if (kind === 'carton-scan') return { id, kind, scanCode: body.scanCode.trim().toUpperCase() }
-  try { return { id, kind, ...parseInboundQcScanInput(body.scanCode, body.increment, body) } }
+  try { return { id, kind, ...parseInboundQcScanInput(body.scanCode, body.increment, body),
+    ...(body.catalogCount === true ? { catalogCount: true } : {}) } }
   catch (error) { throw new BadRequestException(error instanceof Error ? error.message : '扫描内容无效') }
 }
 
@@ -120,6 +123,8 @@ export async function runInboundReceiving(prisma: PrismaService, id: number, kin
     const warehouse = await tx.warehouse.findUnique({ where: { warehouseCode: order.warehouseCode } })
     if (!warehouse || warehouse.status !== 1 || warehouse.warehouseType !== 'wms') throw new BadRequestException('目的海外仓已停用或无效，请联系主管核对')
     if (!order.items.length) throw new BadRequestException('入库单没有商品明细，请联系主管核对后再作业')
+    const catalogCount = 'catalogCount' in request && request.catalogCount === true
+    if (catalogCount && !isCatalogPurchaseInbound(order)) throw new BadRequestException('货盘清点只接受 ERP 货盘采购入库单')
     let response: any, action: string = actionByKind[kind]
     if (kind === 'carton-count') {
       const body = request as Extract<typeof request, { receivedCartonCount: number }>
@@ -147,8 +152,10 @@ export async function runInboundReceiving(prisma: PrismaService, id: number, kin
         alreadyConfirmed, receivedCartonCount: order.receivedCartonCount, carton: { boxCode: carton.boxCode, items: carton.items.map(line => ({ sku: line.sku, qty: line.qty })) }, order: summary(order) }
     } else if (kind === 'qc-submit' || kind === 'qc-measure-submit') {
       const body = request as Extract<typeof request, { acceptDiff: boolean }>
-      const readiness = await inboundCartonReadiness(tx, order)
-      if (!readiness.ready) throw new BadRequestException(readiness.message)
+      if (!catalogCount) {
+        const readiness = await inboundCartonReadiness(tx, order)
+        if (!readiness.ready) throw new BadRequestException(readiness.message)
+      }
       const productIds = [...new Set(order.items.map(line => line.productId))].sort((a, b) => a < b ? -1 : a > b ? 1 : 0)
       if (kind === 'qc-measure-submit') for (const productId of productIds) await tx.$queryRaw`SELECT id FROM product WHERE id = ${productId} FOR UPDATE`
       const products = kind === 'qc-measure-submit' ? await tx.product.findMany({ where: { id: { in: productIds } } }) : []
@@ -193,7 +200,7 @@ export async function runInboundReceiving(prisma: PrismaService, id: number, kin
     } else {
       const body = request as Extract<typeof request, { skuToken: string }>
       if (body.increment > 0 && measureOnly) throw new BadRequestException('该入库单已提交清点，不能再累加实收；请进入测量与上架')
-      if (body.increment > 0) {
+      if (body.increment > 0 && !catalogCount) {
         const readiness = await inboundCartonReadiness(tx, order)
         if (!readiness.ready) throw new BadRequestException(readiness.message)
       }

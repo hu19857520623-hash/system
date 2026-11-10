@@ -125,12 +125,14 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
         widthCm: Double? = null,
         heightCm: Double? = null,
         weightKg: Double? = null,
+        catalogCount: Boolean = false,
     ): ScanActionResult = withContext(Dispatchers.IO) {
         val body = mutableMapOf<String, Any?>(
             "scanCode" to scanCode,
             "increment" to increment,
             "clientRequestId" to clientRequestId,
         )
+        if (catalogCount) body["catalogCount"] = true
         if (lengthCm != null && lengthCm > 0) body["lengthCm"] = lengthCm
         if (widthCm != null && widthCm > 0) body["widthCm"] = widthCm
         if (heightCm != null && heightCm > 0) body["heightCm"] = heightCm

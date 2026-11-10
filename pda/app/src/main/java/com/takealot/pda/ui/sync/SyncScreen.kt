@@ -81,11 +81,12 @@ class SyncViewModel : ViewModel() {
                             val orderId = record.orderId ?: error("记录缺少入库单")
                             api.receiveBox(orderId, record.scanCode, record.id)
                         }
-                        "scan_qc" -> {
+                        "scan_qc", "scan_catalog_qc" -> {
                             val orderId = record.orderId ?: error("记录缺少入库单")
                             val requestCode = record.retryExtra?.takeIf { it.isNotBlank() }
                                 ?: api.inboundDetail(orderId).resolveSkuScan(record.scanCode)
-                            api.scanQc(orderId, requestCode, record.retryQuantity ?: 1, record.id)
+                            api.scanQc(orderId, requestCode, record.retryQuantity ?: 1, record.id,
+                                catalogCount = record.retryAction == "scan_catalog_qc")
                         }
                         "post" -> {
                             val result = api.retryPending(record)

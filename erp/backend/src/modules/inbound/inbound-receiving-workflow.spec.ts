@@ -41,6 +41,39 @@ function fixture(cartonCount = 1) {
 }
 
 describe('仓库收箱、清点和测量的一致性', () => {
+  it('货盘不登记箱数也可累加同一 SKU 并交接原上架流程，重放不重复计件', async () => {
+    const f = fixture()
+    const sku = 'TK-901'
+    f.state().order.sourceWarehouseCode = 'CN01'
+    f.state().order.items[0].sku = sku
+    f.state().order.items[0].expectedQty = 15
+    f.state().order.items[1].sku = 'TK-902'
+    const first = { clientRequestId: randomUUID(), scanCode: sku, increment: 10, catalogCount: true }
+    const second = { ...first, clientRequestId: randomUUID(), increment: 5 }
+    await expect(runInboundReceiving(f.prisma, 1, 'qc-scan', { ...first, catalogCount: false }, 1)).rejects.toThrow('确认实收箱数')
+    await expect(runInboundReceiving(f.prisma, 1, 'qc-scan', first, 1)).resolves.toMatchObject({ actualQty: 10 })
+    await expect(runInboundReceiving(f.prisma, 1, 'qc-scan', second, 1)).resolves.toMatchObject({ actualQty: 15 })
+    await expect(runInboundReceiving(f.prisma, 1, 'qc-scan', second, 1)).resolves.toMatchObject({ duplicate: true })
+    const submit = f.qc()
+    submit.items[0].actualQty = 15
+    await expect(runInboundReceiving(f.prisma, 1, 'qc-submit', submit as any, 1)).rejects.toThrow('确认实收箱数')
+    await expect(runInboundReceiving(f.prisma, 1, 'qc-submit', { ...submit, catalogCount: true } as any, 1))
+      .resolves.toMatchObject({ status: 'pending_putaway' })
+    expect(f.state().order).toMatchObject({ receivedCartonCount: null, items: [{ actualQty: 15 }, { actualQty: 2 }] })
+  })
+
+  it('普通客户单不能用货盘标记绕过收箱', async () => {
+    const f = fixture()
+    f.state().order.sourceWarehouseCode = 'CN01'
+    f.state().order.omsCustomerCode = 'TKL9001'
+    await expect(runInboundReceiving(f.prisma, 1, 'qc-scan', {
+      clientRequestId: randomUUID(), scanCode: 'TKL9001-A1', increment: 1, catalogCount: true,
+    }, 1)).rejects.toThrow('只接受 ERP 货盘采购入库单')
+    await expect(runInboundReceiving(f.prisma, 1, 'qc-submit', { ...f.qc(), catalogCount: true } as any, 1))
+      .rejects.toThrow('只接受 ERP 货盘采购入库单')
+    expect(f.state().logs).toHaveLength(0)
+  })
+
   const identityKinds = ['carton-count', 'carton-scan', 'qc-scan'] as const
   async function identityFixture(kind: typeof identityKinds[number]) {
     const f = fixture()
