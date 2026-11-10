@@ -356,6 +356,7 @@ const detailMutationWarning = ref('')
 const freightVisible = ref(false)
 const freightSubmitting = ref(false)
 const freightForm = ref({ mode: 'lcl' as 'lcl' | 'fcl', amount: '' })
+const freightFormTarget = ref<{ id: number; inboundNo: string; expectedVersion: string; readVersion: number } | null>(null)
 
 const seaFreightTotal = computed(() => {
   const mode = createForm.value.seaFreightMode
@@ -1513,21 +1514,32 @@ async function openDetail(row:any) {
 
 function openFreightDialog() {
   if (!canBeginMaintenance() || !detailCanEditFreight.value) return
+  const order = detailOrder.value
+  const id = inboundNumericId(order)
+  if (!id) return
+  freightFormTarget.value = { id, inboundNo: order.inboundNo, expectedVersion: order.seaFreightVersion, readVersion: detailReadVersion }
   maintenanceError.value = ''
-  const current = inboundSeaFreight(detailOrder.value)
+  const current = inboundSeaFreight(order)
   freightForm.value = { mode: current?.mode === 'fcl' ? 'fcl' : 'lcl', amount: current?.total ? String(current.total) : '' }
   freightVisible.value = true
 }
 
 async function submitFreight() {
-  if (!canBeginMaintenance() || !detailCanEditFreight.value) return
-  const id = inboundNumericId(detailOrder.value)
+  if (!canBeginMaintenance() || !freightVisible.value) return
+  const target = freightFormTarget.value
+  const order = detailOrder.value
+  if (!target || !detailVisible.value || target.readVersion !== detailReadVersion ||
+    target.id !== inboundNumericId(order) || target.inboundNo !== order?.inboundNo ||
+    target.expectedVersion !== order?.seaFreightVersion || !detailCanEditFreight.value) {
+    freightVisible.value = false
+    ElMessage.warning('入库单详情已变化，请打开原单核对后重新补录海运费')
+    return
+  }
   const total = Number(freightForm.value.amount)
-  if (!id) return
   if (!Number.isFinite(total) || total <= 0 || total > 9999999999.99 || Math.abs(total * 100 - Math.round(total * 100)) > 0.0001) { ElMessage.warning('海运费总额须大于零，最多保留两位小数'); return }
   if (detailMissingDimSkus.value.length) { ElMessage.warning(displaySkuText(`请先补齐尺寸：${detailMissingDimSkus.value.join('、')}`)); return }
-  await startMaintenance({ kind: 'freight', inboundId: id, inboundNo: detailOrder.value.inboundNo, clear: false,
-    payload: { clientRequestId: crypto.randomUUID(), expectedVersion: detailOrder.value.seaFreightVersion, mode: freightForm.value.mode, totalAmount: total }, snapshot: detailOrder.value })
+  await startMaintenance({ kind: 'freight', inboundId: target.id, inboundNo: target.inboundNo, clear: false,
+    payload: { clientRequestId: crypto.randomUUID(), expectedVersion: target.expectedVersion, mode: freightForm.value.mode, totalAmount: total }, snapshot: order })
 }
 
 async function clearFreight() {
@@ -2391,7 +2403,7 @@ onScopeDispose(()=>window.removeEventListener('storage',onShipmentStorage))
     :close-on-click-modal="!maintenanceBusy"
     :close-on-press-escape="!maintenanceBusy"
     :show-close="!maintenanceBusy"
-    :title="`补录海运费 · ${detailOrder?.inboundNo || ''}`"
+    :title="`补录海运费 · ${freightFormTarget?.inboundNo || ''}`"
     width="720px"
     class="create-inbound-freight"
     destroy-on-close
