@@ -106,7 +106,7 @@ class InboundViewModel : ViewModel() {
     var scan by mutableStateOf("")
     var cartonCount by mutableIntStateOf(1)
     var qcIncrement by mutableIntStateOf(1)
-    var catalogQuantity by mutableStateOf("1")
+    var catalogQuantity by mutableStateOf("")
     var order by mutableStateOf<InboundOrder?>(null)
     var feedback by mutableStateOf<Feedback?>(null)
     var busy by mutableStateOf(false)
@@ -193,6 +193,7 @@ class InboundViewModel : ViewModel() {
         selectedItemId = null
         locationCode = ""
         lastReadCode = ""
+        catalogQuantity = ""
         mode = InboundMode.from(key); feedback = null; scan = ""; stageNotice = null
         if (mode == InboundMode.Putaway) loadPendingPutaway()
         val resume = PdaApp.instance.workJournal.active("inbound", mode.key) ?: return
@@ -283,15 +284,19 @@ class InboundViewModel : ViewModel() {
         if (hasPendingReduction()) { feedback = Feedback(false, "有减少数量请求待确认，请先到待同步页面处理后继续作业"); return }
         val code = raw.trim()
         if (code.isEmpty()) return
+        if (mode == InboundMode.Catalog && order == null && (busy || pendingScanCount > 0)) {
+            feedback = Feedback(false, "正在核对货盘入库单，请等单据绑定后输入件数，再重新扫描 SKU")
+            return
+        }
         if (mode == InboundMode.Catalog && order?.statusKey == "exception") {
             feedback = Feedback(false, "本单等待主管异常放行，放行后请刷新单据继续上架")
             return
         }
         countingCartonBlock?.let { feedback = Feedback(false, it); return }
-        val quantity = if (mode == InboundMode.Catalog && order != null) {
+        val quantity = if (mode != InboundMode.Catalog) qcIncrement else if (order == null) 0 else {
             catalogQuantity.toIntOrNull()?.takeIf { it in 1..999999 }
                 ?: run { feedback = Feedback(false, "请先输入 1～999999 的整数件数，再扫描 SKU"); return }
-        } else qcIncrement
+        }
         if (showQcDifference || showCartonDifference || showExceptionRelease || reductionMode != null) {
             feedback = Feedback(false, "请先处理差异弹窗，或返回核对后继续扫码")
             return
@@ -414,6 +419,7 @@ class InboundViewModel : ViewModel() {
             }
             return
         }
+        if (quantity !in 1..999999) throw ErpException("请先输入 1～999999 的整数件数，再扫描 SKU")
         if (order?.itemForScan(code) == null) throw ErpException("扫描码 $code 不属于当前货盘入库单，请扫描该单 SKU 或已绑定条码")
         applySkuScan(code, recordId, quantity)
     }
@@ -981,6 +987,7 @@ class InboundViewModel : ViewModel() {
         }
         workGeneration++
         lastReadCode = ""
+        catalogQuantity = ""
         reductionMode = null; reductionItemId = null
         stageNotice = null
         showQcDifference = false; qcDifferenceReason = ""; acceptDiff = false
