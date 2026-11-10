@@ -33,7 +33,7 @@ import { reportPartialImportResult, type ImportRowFailure } from '@/utils/import
 
 import { clearShipmentAttempt, readShipmentAttempt, saveShipmentAttempt, type ShipmentAttempt } from '@/utils/erpShipmentAttempt'
 import { inboundListStats } from '@/features/inbound/listStats'
-import { clearShipmentMaintenance, readShipmentMaintenance, saveShipmentMaintenance, type ShipmentMaintenanceAttempt } from '@/utils/shipmentMaintenanceAttempt'
+import { assertShipmentMaintenanceReceipt, clearShipmentMaintenance, readShipmentMaintenance, saveShipmentMaintenance, type ShipmentMaintenanceAttempt } from '@/utils/shipmentMaintenanceAttempt'
 
 const app = useAppStore()
 const route = useRoute()
@@ -905,6 +905,7 @@ async function postMaintenance(attempt: ShipmentMaintenanceAttempt) {
   maintenanceResult.value = null
   try {
     await frame.run(attempt,owner=>readShipmentMaintenance(localStorage,owner),original=>original.kind==='delete'?inboundApi.remove(original.inboundId):original.clear?inboundApi.clearSeaFreight(original.inboundId,original.payload):inboundApi.applySeaFreight(original.inboundId,original.payload),async result=>{
+      assertShipmentMaintenanceReceipt(attempt, result)
       try { clearShipmentMaintenance(localStorage,frame.owner,attempt);maintenanceAttempt.value=null }
       catch { ElMessage.warning('操作已完成，但本机核对信息未能清除；刷新后请核对原操作') }
       maintenanceResult.value = { ...result, kind: attempt.kind, inboundNo: attempt.inboundNo, clear: attempt.clear }

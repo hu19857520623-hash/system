@@ -29,7 +29,7 @@ export async function removeErpShipment(prisma: PrismaService, id: number, opera
     const order = await tx.inboundOrder.findUnique({ where: { id: BigInt(id) }, include: { items: true, cartons: { include: { items: true } } } })
     if (!order) {
       const previous = await tx.operationLog.findFirst({ where: { module: 'inbound', action: 'delete', detail: { path: '$.inboundId', equals: id } } })
-      if (previous) return { ok: true, inboundNo: previous.targetId, duplicate: true, deletedOrder: (previous.detail as any)?.deletedOrder }
+      if (previous) return { ok: true, id, inboundNo: previous.targetId, duplicate: true, deletedOrder: (previous.detail as any)?.deletedOrder }
       throw new NotFoundException('入库单不存在，请返回列表重新读取')
     }
     assertErpShipment(order)
@@ -77,7 +77,7 @@ export async function removeErpShipment(prisma: PrismaService, id: number, opera
     await tx.inboundOrder.delete({ where: { id: order.id } })
     await tx.operationLog.create({ data: { operatorId: BigInt(ownerId), module: 'inbound', action: 'delete', targetType: 'inbound_order', targetId: order.inboundNo,
       detail: { inboundId: id, sourceWarehouseCode: order.sourceWarehouseCode, destWarehouseCode: order.warehouseCode, restoredQty: order.items.reduce((sum, item) => sum + item.expectedQty, 0), deletedOrder } } })
-    return { ok: true, inboundNo: order.inboundNo, duplicate: false, deletedOrder }
+    return { ok: true, id, inboundNo: order.inboundNo, duplicate: false, deletedOrder }
   }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted, timeout: 15000 })
 }
 
@@ -93,7 +93,7 @@ export async function writeErpShipmentFreight(prisma: PrismaService, id: number,
     const previous = await tx.operationLog.findFirst({ where: { operatorId: BigInt(ownerId), module: 'inbound', action: { in: ['sea_freight_backfill', 'sea_freight_clear'] }, detail: { path: '$.clientRequestId', equals: input.clientRequestId } } })
     if (previous) {
       if ((previous.detail as any)?.requestFingerprint !== fingerprint) throw new ConflictException('本次海运费操作已用于其他内容，请先核对原操作，请勿重复修改')
-      return { id, inboundNo: previous.targetId!, duplicate: true, committed: true }
+      return { id, inboundNo: previous.targetId!, duplicate: true, committed: true, requestId: input.clientRequestId }
     }
     await tx.$queryRaw`SELECT id FROM inbound_order WHERE id = ${BigInt(id)} FOR UPDATE`
     const order = await tx.inboundOrder.findUnique({ where: { id: BigInt(id) }, include: { items: true } })
@@ -120,6 +120,6 @@ export async function writeErpShipmentFreight(prisma: PrismaService, id: number,
     await writeInboundSeaFreightToCatalog(tx, { inboundNo: order.inboundNo, action: clear ? '入库海运费清除' : '入库海运费补录', lines: allocated.map(line => ({ sku: line.sku, seaFreightPerUnit: line.unitFreight })) })
     await tx.operationLog.create({ data: { operatorId: BigInt(ownerId), module: 'inbound', action: clear ? 'sea_freight_clear' : 'sea_freight_backfill', targetType: 'inbound_order', targetId: order.inboundNo,
       detail: { clientRequestId: input.clientRequestId, requestFingerprint: fingerprint, inboundId: id, mode: next?.mode || null, totalAmount: next?.totalAmount || 0, skuCount: allocated.length } } })
-    return { id, inboundNo: order.inboundNo, duplicate: false, committed: true }
+    return { id, inboundNo: order.inboundNo, duplicate: false, committed: true, requestId: input.clientRequestId }
   }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted, timeout: 15000 })
 }

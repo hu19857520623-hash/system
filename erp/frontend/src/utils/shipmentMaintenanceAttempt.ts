@@ -1,6 +1,13 @@
 type StoragePort = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
 export type ShipmentMaintenanceAttempt = { kind: 'delete' | 'freight'; inboundId: number; inboundNo: string; clear?: boolean; payload?: any; snapshot: any }
 const key = (userId: number) => `erp:shipment-maintenance:${userId}`
+export function assertShipmentMaintenanceReceipt(attempt: ShipmentMaintenanceAttempt, result: unknown) {
+  const receipt = result as { id?: unknown; inboundNo?: unknown; ok?: unknown; committed?: unknown; requestId?: unknown } | null
+  if (receipt?.id !== attempt.inboundId || receipt.inboundNo !== attempt.inboundNo ||
+    (attempt.kind === 'delete' ? receipt.ok !== true : receipt.committed !== true || receipt.requestId !== attempt.payload?.clientRequestId)) {
+    throw new Error('发运维护回执未能匹配原操作，请保留原请求继续核对')
+  }
+}
 export function readShipmentMaintenance(storage: StoragePort, userId: number): ShipmentMaintenanceAttempt | null {
   try {
     const text = storage.getItem(key(userId)); if (!text) return null

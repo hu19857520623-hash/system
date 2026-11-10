@@ -1,8 +1,19 @@
 import { describe, expect, it } from 'vitest'
-import { clearShipmentMaintenance, readShipmentMaintenance, saveShipmentMaintenance, type ShipmentMaintenanceAttempt } from './shipmentMaintenanceAttempt'
+import { assertShipmentMaintenanceReceipt, clearShipmentMaintenance, readShipmentMaintenance, saveShipmentMaintenance, type ShipmentMaintenanceAttempt } from './shipmentMaintenanceAttempt'
 function storage() { const data = new Map<string, string>(); return { getItem: (key: string) => data.get(key) ?? null, setItem: (key: string, value: string) => { data.set(key, value) }, removeItem: (key: string) => { data.delete(key) } } }
 const attempt = (): ShipmentMaintenanceAttempt => ({ kind: 'freight', inboundId: 1, inboundNo: 'RV-TEST', clear: false, payload: { clientRequestId: 'same-id', expectedVersion: 'old-version', totalAmount: 12 }, snapshot: { items: [] } })
 describe('发运维护未知结果核对', () => {
+  it('仅接受匹配原单和原操作的维护回执', () => {
+    const original = attempt()
+    const freight = { id: 1, inboundNo: 'RV-TEST', committed: true, requestId: 'same-id', refreshRequired: true }
+    expect(() => assertShipmentMaintenanceReceipt(original, freight)).not.toThrow()
+    for (const invalid of [null, {}, { ...freight, id: 2 }, { ...freight, requestId: 'other' }, { ...freight, committed: false }]) {
+      expect(() => assertShipmentMaintenanceReceipt(original, invalid)).toThrow('保留原请求')
+    }
+    const deletion = { ...original, kind: 'delete' as const }
+    expect(() => assertShipmentMaintenanceReceipt(deletion, { id: 1, inboundNo: 'RV-TEST', ok: true })).not.toThrow()
+    expect(() => assertShipmentMaintenanceReceipt(deletion, { id: 1, inboundNo: 'RV-OTHER', ok: true })).toThrow('保留原请求')
+  })
   it('刷新恢复原始费用、版本和操作标识，当前表单修改不会污染原请求', () => {
     const port = storage(), original = attempt(); saveShipmentMaintenance(port, 1, original); original.payload.totalAmount = 99
     expect(readShipmentMaintenance(port, 1)?.payload).toEqual({ clientRequestId: 'same-id', expectedVersion: 'old-version', totalAmount: 12 })
