@@ -508,10 +508,13 @@ class OutboundViewModel : ViewModel() {
                     )
                 }
                 journal.preparePostRetry(recordId, "/outbound/${o.id}/pick", mapOf("pickSource" to "pda", "items" to items))
-                api.submitPrepared(recordId) { api.pick(o.id, items, recordId) }
-                journal.completeOutboundStage(o.id, "pick")
+                val nextStep = api.submitPrepared(recordId) {
+                    api.pick(o.id, items, recordId)
+                    continueAfterOutbound(o.id, "pick", "${o.no} 拣货完成")
+                }
                 journal.acknowledge(recordId, "拣货提交成功")
-                feedback = Feedback(true, "${o.no} 拣货完成；下一步：进入复核"); order = null; lines = emptyList(); loadList()
+                feedback = Feedback(true, nextStep)
+                order = null; lines = emptyList(); loadList()
             } catch (e: Exception) {
                 feedback = Feedback(false, e.message ?: "拣货失败")
                 if (journal.isRetriable(e)) journal.retainForRetry(recordId, feedback?.message) else journal.fail(recordId, feedback?.message)
@@ -535,10 +538,12 @@ class OutboundViewModel : ViewModel() {
             try {
                 val cartonPayload = if (o.omsPreDeduct != null) cartons.map { it.payload() } else emptyList()
                 journal.preparePostRetry(recordId, "/outbound/${o.id}/pack", mapOf("reviewSource" to "pda", "cartons" to cartonPayload))
-                api.submitPrepared(recordId) { api.pack(o.id, cartonPayload, recordId) }
-                journal.completeOutboundStage(o.id, "review")
+                val nextStep = api.submitPrepared(recordId) {
+                    api.pack(o.id, cartonPayload, recordId)
+                    continueAfterOutbound(o.id, "review", "${o.no} 复核完成")
+                }
                 journal.acknowledge(recordId, "复核提交成功")
-                feedback = Feedback(true, "${o.no} 复核完成；外箱实测与实际费用已回写")
+                feedback = Feedback(true, nextStep)
                 order = null; lines = emptyList(); cartons = listOf(OutboundCartonDraft())
                 loadList()
             }

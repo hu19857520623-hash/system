@@ -167,7 +167,12 @@ fun HomeScreen(onInbound: (String) -> Unit, onOutbound: (String) -> Unit, onStoc
                 "stocktake" to "count" -> session.hasPerm("stocktake.count")
                 else -> false
             }
-            val subtitle = if (permitted) "${active.orderNo} · ${active.mode}"
+            val stageKey = when (active.mode) {
+                "catalog" -> "catalog_inbound"
+                "count" -> "stocktake"
+                else -> active.mode
+            }
+            val subtitle = if (permitted) "${active.orderNo} · ${tr(stageKey)}"
                 else "当前账号缺少此作业权限，请联系主管核对"
             WorkTile(tr("resume"), subtitle, PdaAccent, permitted && warehouseCode.isNotBlank(), permitted && warehouseCode.isBlank()) {
                 when (active.module) {
