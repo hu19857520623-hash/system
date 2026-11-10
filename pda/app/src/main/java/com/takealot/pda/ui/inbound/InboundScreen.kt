@@ -53,6 +53,7 @@ import com.takealot.pda.data.inboundDisplaySku
 import com.takealot.pda.data.inboundDisplayMessage
 import com.takealot.pda.data.itemForScan
 import com.takealot.pda.data.resolveSkuScan
+import com.takealot.pda.data.skuInResolvedQcScan
 import com.takealot.pda.data.withQcSnapshot
 import com.takealot.pda.data.withCartonSnapshot
 import com.takealot.pda.data.withPutawaySnapshot
@@ -456,8 +457,12 @@ class InboundViewModel : ViewModel() {
         val requestCode = current.resolveSkuScan(code)
         val catalogCount = mode == InboundMode.Catalog
         val action = if (catalogCount) "scan_catalog_qc" else "scan_qc"
-        PdaApp.instance.workJournal.prepareRetry(recordId, action, quantity = increment, extra = requestCode)
-        val res = api.submitPrepared(recordId) { api.scanQc(current.id, requestCode, increment, recordId, catalogCount = catalogCount) }
+        val expectedSku = current.skuInResolvedQcScan(requestCode)
+        PdaApp.instance.workJournal.prepareRetry(recordId, action, quantity = increment, extra = requestCode, sku = expectedSku)
+        val res = api.submitPrepared(recordId) {
+            api.scanQc(current.id, requestCode, increment, recordId,
+                catalogCount = catalogCount, orderNo = current.no, expectedSku = expectedSku)
+        }
         if (res.itemId > 0) selectedItemId = res.itemId
         val sku = res.sku.orEmpty().ifBlank { code }
         feedback = Feedback(
@@ -756,7 +761,7 @@ class InboundViewModel : ViewModel() {
                 journal.preparePostRetry(recordId, "/inbound/${o.id}/$endpoint", payload)
                 api.submitPrepared(recordId) {
                     if (endpoint == "measure-dimensions") api.measureDimensions(o.id, payload, recordId)
-                    else api.scanQc(o.id, item.skuCode, 0, recordId, l, w, h, weight)
+                    else api.scanQc(o.id, item.skuCode, 0, recordId, l, w, h, weight, orderNo = o.no, expectedSku = item.skuCode)
                 }
                 journal.acknowledge(recordId, "尺寸已保存")
                 if (refreshAfterConfirmedWrite()) feedback = Feedback(true, "${displaySku(item.skuCode)} 长宽高重量已保存")

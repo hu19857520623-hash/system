@@ -48,6 +48,7 @@ data class PdaScanRecord(
     val retryAction: String? = null,
     val retryQuantity: Int? = null,
     val retryExtra: String? = null,
+    val retrySku: String? = null,
     val retryEndpoint: String? = null,
     val retryBodyJson: String? = null,
     val putawayIdentity: PutawayIdentity? = null,
@@ -115,9 +116,9 @@ class PdaWorkJournal(context: Context, private val session: SessionStore) {
     fun fail(id: String, message: String? = null) = update(id, "failed", message)
 
     @Synchronized
-    fun prepareRetry(id: String, action: String, quantity: Int? = null, extra: String? = null) {
+    fun prepareRetry(id: String, action: String, quantity: Int? = null, extra: String? = null, sku: String? = null) {
         saveRecords(_scanRecords.value.map {
-            if (it.id == id) it.copy(retryAction = action, retryQuantity = quantity, retryExtra = extra) else it
+            if (it.id == id) it.copy(retryAction = action, retryQuantity = quantity, retryExtra = extra, retrySku = sku) else it
         })
     }
 

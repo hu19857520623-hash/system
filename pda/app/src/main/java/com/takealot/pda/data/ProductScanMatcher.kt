@@ -62,3 +62,18 @@ fun InboundOrder.resolveSkuScan(code: String): String {
     }
     return itemForScan(value)?.skuCode ?: value
 }
+
+
+/** The resolved request may retain a measurement-machine wrapper around the SKU. */
+fun InboundOrder.skuInResolvedQcScan(requestCode: String): String? {
+    val token = if (requestCode.startsWith("{")) {
+        val obj = runCatching { JsonParser.parseString(requestCode).asJsonObject }.getOrNull() ?: return null
+        listOf("sku", "SKU", "scanCode", "barcode").firstNotNullOfOrNull { key ->
+            obj.get(key)?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString
+        } ?: return null
+    } else {
+        val parts = requestCode.split('|', ';', ',')
+        if (parts.size >= 4) parts.first() else requestCode
+    }
+    return itemList.firstOrNull { it.skuCode.equals(token.trim(), ignoreCase = true) }?.skuCode
+}

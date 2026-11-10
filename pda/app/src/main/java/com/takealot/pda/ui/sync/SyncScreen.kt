@@ -86,10 +86,15 @@ class SyncViewModel : ViewModel() {
                         }
                         "scan_qc", "scan_catalog_qc" -> {
                             val orderId = record.orderId ?: error("记录缺少入库单")
-                            val requestCode = record.retryExtra?.takeIf { it.isNotBlank() }
-                                ?: api.inboundDetail(orderId).resolveSkuScan(record.scanCode)
+                            val catalogCount = record.retryAction == "scan_catalog_qc"
+                            val storedCode = record.retryExtra?.takeIf { it.isNotBlank() }
+                            if (catalogCount && (storedCode == null || (record.retryQuantity ?: 0) <= 0)) {
+                                throw ErpException("原货盘清点请求缺少 SKU 或件数，请由主管核对", retriable = true)
+                            }
+                            val requestCode = storedCode ?: api.inboundDetail(orderId).resolveSkuScan(record.scanCode)
                             api.scanQc(orderId, requestCode, record.retryQuantity ?: 1, record.id,
-                                catalogCount = record.retryAction == "scan_catalog_qc")
+                                catalogCount = catalogCount, orderNo = record.orderNo, expectedSku = record.retrySku)
+                            nextStep = continueAfterInboundReceipt(record, orderId, skuScanMode = if (catalogCount) "catalog" else "qc")
                         }
                         "post" -> {
                             val result = api.retryPending(record)
@@ -196,8 +201,14 @@ class SyncViewModel : ViewModel() {
         }
     }
 
-    private suspend fun continueAfterInboundReceipt(record: PdaScanRecord, orderId: Int, cartonCount: Boolean = false): String {
-        val confirmed = if (cartonCount) "原实收箱数请求已确认" else "原清点请求已确认"
+    private suspend fun continueAfterInboundReceipt(
+        record: PdaScanRecord, orderId: Int, cartonCount: Boolean = false, skuScanMode: String? = null,
+    ): String {
+        val confirmed = when {
+            cartonCount -> "原实收箱数请求已确认"
+            skuScanMode != null -> "原扫码件数已确认"
+            else -> "原清点请求已确认"
+        }
         val order = try {
             api.inboundDetail(orderId)
         } catch (e: CancellationException) {
@@ -213,15 +224,17 @@ class SyncViewModel : ViewModel() {
         if (warehouse != session.warehouseCode) {
             return "$confirmed。请返回首页切换到 $warehouse，再核对单据最新进度。"
         }
-        if (cartonCount && order.statusKey in setOf("arrived", "receiving")) {
-            if (!session.hasPerm("inbound.qc")) return "$confirmed。请交接给有清点权限的人员。"
-            val catalog = journal.active("inbound", "catalog")?.orderId == orderId
+        if ((cartonCount || skuScanMode != null) && order.statusKey in setOf("arrived", "receiving")) {
+            val catalog = skuScanMode == "catalog" || (cartonCount && journal.active("inbound", "catalog")?.orderId == orderId)
+            if (!session.hasPerm("inbound.qc") || (catalog && !session.hasPerm("inbound.arrival_scan"))) {
+                return "$confirmed。请交接给有相应入库权限的人员。"
+            }
             if (!catalog && order.cartonBlockMessage != null) {
                 return "$confirmed。请从首页返回「确认箱数」核对最新进度：${order.cartonBlockMessage}"
             }
             val saved = journal.reconcileInboundResume(orderId, order.no, if (catalog) "catalog" else "qc")
             return if (saved) "$confirmed。请返回首页打开「继续未完成作业」进入清点。"
-            else "$confirmed。请从首页进入「清点」并扫描原单。"
+            else "$confirmed。请从首页进入「${if (catalog) "货盘入库" else "清点"}」并扫描原单。"
         }
         return when (order.statusKey) {
             "pending_putaway" -> if (session.hasPerm("inbound.putaway")) {

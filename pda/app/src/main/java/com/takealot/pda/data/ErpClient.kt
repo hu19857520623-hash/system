@@ -121,6 +121,8 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
         heightCm: Double? = null,
         weightKg: Double? = null,
         catalogCount: Boolean = false,
+        orderNo: String? = null,
+        expectedSku: String? = null,
     ): ScanActionResult = withContext(Dispatchers.IO) {
         val body = mutableMapOf<String, Any?>(
             "scanCode" to scanCode,
@@ -132,7 +134,8 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
         if (widthCm != null && widthCm > 0) body["widthCm"] = widthCm
         if (heightCm != null && heightCm > 0) body["heightCm"] = heightCm
         if (weightKg != null && weightKg > 0) body["weightKg"] = weightKg
-        gson.fromJson(postJson("/inbound/$id/scan-qc", body).requireInboundSyncAcknowledged(), ScanActionResult::class.java)
+        postJson("/inbound/$id/scan-qc", body).requireInboundSyncAcknowledged()
+            .requireQcScanReceipt(id, orderNo, increment, expectedSku, gson)
     }
 
     suspend fun submitQc(id: Int, body: Map<String, Any?>, clientRequestId: String) = withContext(Dispatchers.IO) {
@@ -314,6 +317,9 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
         putaway?.verifyReceipt(result, gson)
         if (cartonCount != null && cartonOrderId != null) {
             result.requireCartonCountReceipt(cartonOrderId, record.orderNo, cartonCount)
+        }
+        if (record.mode == "measure" && endpoint == "/inbound/${record.orderId}/scan-qc" && record.orderId != null) {
+            result.requireQcScanReceipt(record.orderId, record.orderNo, 0, record.scanCode, gson)
         }
         if (endpoint.startsWith("/inbound/") && endpoint.endsWith("/qc")) result.requireQcSubmitReceipt(record.orderId, gson)
         if (endpoint.startsWith("/inbound/") && endpoint.endsWith("/report-exception")) result.requireExceptionReportReceipt()

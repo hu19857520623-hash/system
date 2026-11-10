@@ -44,6 +44,30 @@ class InboundScanSnapshotTest {
         assertThrows(ErpException::class.java) { body.requireCartonCountReceipt(61, "RVTEST", 3) }
     }
 
+    @Test fun scanReceiptChecksOriginalSkuAndIncrementWithoutTreatingReplayAsNewCount() {
+        val body = JsonParser.parseString("""
+            {"id":61,"inboundNo":"RVTEST","sku":"SKU-1","increment":5,"duplicate":false,"syncPending":false,
+             "itemId":330,"actualQty":15,"expectedQty":15,"remaining":0,
+             "order":{"id":61,"inboundNo":"RVTEST","status":"receiving"}}
+        """).asJsonObject
+        val gson = Gson()
+        assertEquals(15, body.requireQcScanReceipt(61, "RVTEST", 5, "SKU-1", gson).actualQty)
+        val replay = body.deepCopy().apply { addProperty("duplicate", true); addProperty("increment", 0) }
+        assertTrue(replay.requireQcScanReceipt(61, "RVTEST", 5, "SKU-1", gson).duplicate)
+        for (bad in listOf(
+            body.deepCopy().apply { addProperty("sku", "OTHER") },
+            body.deepCopy().apply { addProperty("increment", 1) },
+            body.deepCopy().apply { addProperty("inboundNo", "OTHER") },
+            body.deepCopy().apply { remove("duplicate") },
+            body.deepCopy().apply { addProperty("syncPending", true) },
+            body.deepCopy().apply { remove("actualQty") },
+            replay.deepCopy().apply { addProperty("increment", 5) },
+        )) {
+            val error = assertThrows(ErpException::class.java) { bad.requireQcScanReceipt(61, "RVTEST", 5, "SKU-1", gson) }
+            assertTrue(error.retriable)
+        }
+    }
+
     @Test fun qcReceiptRequiresMatchingCountAndExplicitSyncConfirmation() {
         val gson = Gson()
         for (status in listOf("pending_putaway", "exception")) {

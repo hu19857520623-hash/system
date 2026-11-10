@@ -33,6 +33,38 @@ internal fun JsonElement.requireCartonCountReceipt(orderId: Int, orderNo: String
     return this
 }
 
+internal fun JsonElement.requireQcScanReceipt(
+    orderId: Int,
+    orderNo: String?,
+    increment: Int,
+    expectedSku: String?,
+    gson: Gson,
+): ScanActionResult {
+    val failure = ErpException("清点或测量回执与原请求不一致，请在「待同步记录」核对原请求", retriable = true)
+    val body = takeIf { it.isJsonObject }?.asJsonObject ?: throw failure
+    val summary = body.get("order")?.takeIf { it.isJsonObject }?.asJsonObject ?: throw failure
+    fun JsonElement?.number() = this?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }?.asString?.toIntOrNull()
+    fun JsonElement?.text() = this?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString
+    fun JsonElement?.flag() = this?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isBoolean }?.asBoolean
+    val receipt = runCatching { gson.fromJson(this, ScanActionResult::class.java) }.getOrNull() ?: throw failure
+    val order = receipt.order ?: throw failure
+    val sku = receipt.sku.orEmpty()
+    val replay = body.get("duplicate").flag() ?: throw failure
+    val actual = body.get("actualQty").number() ?: throw failure
+    val expected = body.get("expectedQty").number() ?: throw failure
+    val expectedDelta = if (replay) 0 else increment
+    if (body.get("id").number() != orderId || summary.get("id").number() != orderId ||
+        order.no.isBlank() || body.get("inboundNo").text() != order.no ||
+        (!orderNo.isNullOrBlank() && order.no != orderNo) ||
+        order.statusKey !in setOf("arrived", "receiving", "pending_putaway") ||
+        body.get("sku").text().isNullOrBlank() || (expectedSku != null && !sku.equals(expectedSku, ignoreCase = true)) ||
+        (body.get("itemId").number() ?: 0) <= 0 || actual < increment || expected < 0 ||
+        body.get("increment").number() != expectedDelta || body.get("remaining").number() != (expected - actual).coerceAtLeast(0) ||
+        body.get("syncPending").flag() != false
+    ) throw failure
+    return receipt
+}
+
 internal fun JsonElement.requireQcSubmitReceipt(orderId: Int?, gson: Gson): JsonElement {
     val order = runCatching { gson.fromJson(this, InboundOrder::class.java) }.getOrNull()
     val syncPending = takeIf { it.isJsonObject }?.asJsonObject?.get("syncPending")
