@@ -978,20 +978,40 @@ async function clearException(row: any) {
   }, `${row.outboundNo} 已解除异常，恢复为「${restoreLabel}」`)
 }
 
-async function doExport() {
-  if (!canExport.value) return
+const exportBusy = ref(false)
+const exportError = ref('')
+const failedExport = ref<ReturnType<typeof buildQueryParams> | null>(null)
+const exportScope = () => app.authenticatedUser && getAccessToken() && canExport.value
+  ? JSON.stringify([app.authenticatedUser.id, getAccessToken(), [...app.currentPermSet].sort()]) : null
+let exportVersion = 0
+watch(exportScope, () => {
+  ++exportVersion
+  exportBusy.value = false
+  exportError.value = ''
+  failedExport.value = null
+}, { flush: 'sync' })
+onBeforeUnmount(() => { ++exportVersion })
+
+async function doExport(params = buildQueryParams()) {
+  if (exportBusy.value) return
+  const scope = exportScope()
+  if (!scope) return
+  const version = ++exportVersion
+  const active = () => version === exportVersion && scope === exportScope()
+  const original = { ...params }
+  exportBusy.value = true
+  exportError.value = ''
+  failedExport.value = null
   try {
-    const { blob, fileName } = await outboundApi.exportCsv(buildQueryParams())
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = fileName || 'outbound-export.csv'
-    a.click()
-    URL.revokeObjectURL(url)
-    ElMessage.success('导出成功')
+    const { blob, fileName } = await outboundApi.exportCsv(original)
+    if (!active()) return
+    triggerBrowserDownload(blob, fileName || 'outbound-export.csv')
+    ElMessage.success('已下载出库 CSV')
   } catch (err: any) {
-    ElMessage.error(userFacingError(displaySkuText(err.message || '导出失败')))
-  }
+    if (!active()) return
+    failedExport.value = original
+    exportError.value = `出库 CSV 下载失败，可按原筛选重试。${userFacingError(displaySkuText(err?.message || '导出失败'))}`
+  } finally { if (active()) exportBusy.value = false }
 }
 
 function printPickList() {
@@ -1212,9 +1232,13 @@ function statusTag(status: string) {
           </el-radio-group>
         </div>
         <div class="status-bar-actions">
-          <el-button v-if="canExport" size="small" text @click="doExport">导出</el-button>
+          <el-button v-if="canExport" size="small" text :loading="exportBusy" @click="doExport()">导出</el-button>
         </div>
       </div>
+      <el-alert v-if="exportError && failedExport && canExport" type="error" :title="exportError" :closable="false">
+        <el-button size="small" :disabled="exportBusy" @click="doExport(failedExport)">按原筛选重试导出</el-button>
+        <el-button size="small" text @click="exportError = ''; failedExport = null">返回列表</el-button>
+      </el-alert>
 
       <div class="table-toolbar">
         <div class="toolbar-left">
