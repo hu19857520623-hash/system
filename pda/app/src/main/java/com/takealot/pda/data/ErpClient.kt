@@ -238,14 +238,19 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
         gson.fromJson(get("/management-loop/stocktakes/$id"), StocktakePlan::class.java)
     }
 
-    suspend fun stocktakeCount(id: Int, body: Map<String, Any?>, clientRequestId: String = UUID.randomUUID().toString()): StocktakePlan = withContext(Dispatchers.IO) {
-        val result = postJson("/management-loop/stocktakes/$id/count", body + ("clientRequestId" to clientRequestId))
-        stocktakeCountReceipt(result, id)
-    }
+    suspend fun stocktakeCount(plan: StocktakePlan, sku: String, body: Map<String, Any?>, clientRequestId: String): StocktakePlan =
+        withContext(Dispatchers.IO) {
+            val payload = gson.toJsonTree(body + ("clientRequestId" to clientRequestId))
+            val request = payload.readStocktakeCountRequest()
+            val result = postJson("/management-loop/stocktakes/${plan.id}/count", payload)
+            val refreshed = runCatching { gson.fromJson(result, StocktakePlan::class.java) }.getOrNull()
+            requireStocktakeCountReceipt(refreshed, plan.id, plan.no, request, session.userId, sku, plan.warehouseCode)
+        }
 
-    internal fun stocktakeCountReceipt(result: JsonElement, expectedId: Int): StocktakePlan {
+    internal fun stocktakeCountReceipt(result: JsonElement, record: PdaScanRecord, orderId: Int): StocktakePlan {
+        val request = JsonParser.parseString(record.retryBodyJson.orEmpty()).readStocktakeCountRequest()
         val plan = runCatching { gson.fromJson(result, StocktakePlan::class.java) }.getOrNull()
-        return requireStocktakeCountReceipt(plan, expectedId)
+        return requireStocktakeCountReceipt(plan, orderId, record.orderNo, request, session.userId, record.scanCode)
     }
 
     private val replayScope = ThreadLocal<AuthRequestScope>()
@@ -298,6 +303,12 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
             }
             payload.readShipmentRequest(id, record.orderNo)
         } else null
+        if (endpoint.startsWith("/management-loop/stocktakes/") && endpoint.endsWith("/count")) {
+            if (record.orderId == null || endpoint != "/management-loop/stocktakes/${record.orderId}/count") {
+                throw ErpException("待同步记录与原盘点单不一致，请由主管核对", retriable = true)
+            }
+            payload.readStocktakeCountRequest()
+        }
         val result = postJson(endpoint, payload)
         if (endpoint.startsWith("/outbound/")) {
             when (endpoint.substringAfterLast('/')) {

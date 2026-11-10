@@ -122,7 +122,7 @@ class SyncViewModel : ViewModel() {
                             }
                             if (record.module == "stocktake" && orderId != null &&
                                 record.retryEndpoint == "/management-loop/stocktakes/$orderId/count") {
-                                val plan = api.stocktakeCountReceipt(result, orderId)
+                                val plan = api.stocktakeCountReceipt(result, record, orderId)
                                 val message = plan.countExitMessage(session.userId)
                                 nextStep = when {
                                     plan.warehouseCode != session.warehouseCode ->

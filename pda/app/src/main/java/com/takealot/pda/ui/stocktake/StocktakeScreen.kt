@@ -317,10 +317,7 @@ class StocktakeViewModel : ViewModel() {
             val recordId = journal.beginScan("stocktake", "count_submit", line.skuCode, current.id, current.no)
             try {
                 journal.preparePostRetry(recordId, "/management-loop/stocktakes/${current.id}/count", payload)
-                val refreshed = api.submitPrepared(recordId) { api.stocktakeCount(current.id, payload, recordId) }
-                if (refreshed.warehouseCode != current.warehouseCode) {
-                    throw ErpException("盘点回执与原单仓库不一致，请到「待同步记录」核对原请求", retriable = true)
-                }
+                val refreshed = api.submitPrepared(recordId) { api.stocktakeCount(current, line.skuCode, payload, recordId) }
                 journal.acknowledge(recordId, "盘点提交成功")
                 if (returnToListIfDone(refreshed)) return@launch
                 plan = refreshed
