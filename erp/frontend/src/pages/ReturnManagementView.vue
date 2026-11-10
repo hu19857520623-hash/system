@@ -22,7 +22,13 @@ const returnActionAttempt = useReturnActionAttempt({
   actor: () => app.authenticatedUser ? String(app.authenticatedUser.id) : '', scope: returnActionScope,
   allowed: action => app.hasPerm(action === 'dispose' || action === 'process' ? 'return.process' : 'return.receive'),
   storage: { getItem: key => localStorage.getItem(key), setItem: (key, value) => localStorage.setItem(key, value), removeItem: key => localStorage.removeItem(key) },
-  request: (id, step) => returnsApi[step.action](id, { ...step.body, clientRequestId: step.clientRequestId }),
+  request: async (id, step) => {
+    const result = await returnsApi[step.action](id, { ...step.body, clientRequestId: step.clientRequestId })
+    if (step.action === 'process' && (Number(result?.id) !== id || !result.status)) {
+      throw Error('退件处理回执与原单不一致，请继续核对原请求')
+    }
+    return result
+  },
   close: (id, step) => returnsApi.closeWarehouseRequest(id, step),
 })
 const { pending: pendingReturnAction, busy: returnActionBusy, feedback: returnActionFeedback, blocked: returnActionBlocked } = returnActionAttempt
@@ -32,8 +38,17 @@ async function runReturnActions(row: any, steps: { action: ReturnAction; body: R
   return result
 }
 async function resumeReturnAction() {
+  const pending = pendingReturnAction.value
   const result = await returnActionAttempt.resume()
-  if (result) { receiveDialog.value = false; measureDialog.value = false; inspectDialog.value = false; processDialog.value = false; await loadList(); ElMessage.success('原退件操作已确认完成，请核对列表当前状态') }
+  if (!result) return
+  const resumedProcess = pending?.steps[pending.index]?.action === 'process'
+  if (resumedProcess && processDialog.value && Number(processTarget.value?.id) === pending.id) {
+    applyProcessResult(result)
+  } else if (!resumedProcess) {
+    receiveDialog.value = false; measureDialog.value = false; inspectDialog.value = false
+  }
+  await loadList()
+  ElMessage.success('原退件操作已确认，请核对当前进度')
 }
 
 
@@ -77,6 +92,20 @@ const processSubmitting = ref(false)
 const processLoading = ref(false)
 const processFeedback = ref('')
 const processUncertain = ref(false)
+const processRead = createReturnReadGate(returnActionScope)
+watch(processDialog, visible => {
+  if (!visible) {
+    processRead.invalidate()
+    processLoading.value = false
+  }
+}, { flush: 'sync' })
+watch(returnActionScope, () => {
+  processRead.invalidate()
+  processDialog.value = false
+  processTarget.value = null
+  processLoading.value = false
+}, { flush: 'sync' })
+onScopeDispose(() => processRead.invalidate())
 const processStockRows = ref<{ sku: string; name: string; remaining: number; qty: string; locationCode: string }[]>([])
 const processNeedsStock = computed(() => ['restock', 'relabel'].includes(processResultForm.value))
 
@@ -792,18 +821,39 @@ function prepareProcessStockRows(row: any) {
 }
 
 async function refreshProcessTarget() {
-  if (!processTarget.value || processSubmitting.value) return
+  if (!processTarget.value || !processDialog.value || processSubmitting.value || returnActionBusy.value) return
+  const id = Number(processTarget.value.id)
+  const active = processRead.begin(() => processDialog.value && Number(processTarget.value?.id) === id)
   processLoading.value = true
   try {
-    processTarget.value = await returnsApi.detail(processTarget.value.id)
+    const result = await returnsApi.detail(id)
+    if (!active()) return
+    if (Number(result?.id) !== id) throw Error('退件详情与原单不一致，请重试读取')
+    processTarget.value = result
     processResultForm.value = processTarget.value.customerProcessChoice || processTarget.value.processResult || processTarget.value.requestedProcess || 'restock'
     prepareProcessStockRows(processTarget.value)
     processUncertain.value = false
     processFeedback.value = processTarget.value.status === 'completed' ? '该退件已处理完成，可关闭并返回列表查看结果。' : ''
   } catch (error: any) {
+    if (!active()) return
     processUncertain.value = true
     processFeedback.value = `读取退件最新状态失败，请刷新核对后再继续。${userFacingError(error)}`
-  } finally { processLoading.value = false }
+  } finally { if (active()) processLoading.value = false }
+}
+
+function applyProcessResult(result: any) {
+  processRead.invalidate()
+  processLoading.value = false
+  processTarget.value = result
+  processUncertain.value = false
+  if (result.warning) ElMessage.warning(result.warning)
+  if (result.status === 'completed') {
+    ElMessage.success(processNeedsStock.value ? `退件返库完成，累计入库 ${result.restockedQty} 件` : '处理完成')
+    processDialog.value = false
+  } else {
+    processFeedback.value = `本次上架已保存，累计入库 ${result.restockedQty} 件，剩余 ${result.remainingRestockQty} 件；请继续填写实际库位和数量。`
+    prepareProcessStockRows(result)
+  }
 }
 
 async function openProcess(row: any) {
@@ -819,7 +869,8 @@ async function openProcess(row: any) {
 }
 
 async function submitProcess() {
-  if (!processTarget.value || processSubmitting.value || processLoading.value || processUncertain.value || processTarget.value.status === 'completed') return
+  if (!processTarget.value || processSubmitting.value || processLoading.value || processUncertain.value ||
+      pendingReturnAction.value || returnActionBlocked.value || processTarget.value.status === 'completed') return
   processFeedback.value = ''
   const stockLines = []
   if (processNeedsStock.value) {
@@ -846,15 +897,7 @@ async function submitProcess() {
       processRemark: processRemark.value.trim() || undefined,
       ...(processNeedsStock.value ? { warehouseCode: 'WMS-JHB-01', stockLines } : {}),
     } }])
-    processTarget.value = result
-    if (result.warning) ElMessage.warning(result.warning)
-    if (result.status === 'completed') {
-      ElMessage.success(processNeedsStock.value ? `退件返库完成，累计入库 ${result.restockedQty} 件` : '处理完成')
-      processDialog.value = false
-    } else {
-      processFeedback.value = `本次上架已保存，累计入库 ${result.restockedQty} 件，剩余 ${result.remainingRestockQty} 件；请继续填写实际库位和数量。`
-      prepareProcessStockRows(result)
-    }
+    applyProcessResult(result)
     await loadList().catch(() => ElMessage.warning('处理结果已保存，但列表刷新失败，请重新查询核对'))
   } catch (e: any) {
     const status = Number(e?.status)
@@ -1748,8 +1791,8 @@ void _removeExtraFeeLine
       <template #footer>
         <el-button :disabled="processSubmitting" @click="processDialog = false">返回列表</el-button>
         <el-button :disabled="processSubmitting || processLoading" @click="refreshProcessTarget">刷新核对结果</el-button>
-        <el-button v-if="pendingReturnAction?.id === processTarget?.id" :loading="returnActionBusy" @click="resumeReturnAction">继续原请求</el-button>
-        <el-button type="primary" :loading="processSubmitting || processLoading" :disabled="processUncertain || processTarget?.status === 'completed'" @click="submitProcess">{{ processNeedsStock ? '确认本次上架' : '确认处理' }}</el-button>
+        <el-button v-if="pendingReturnAction?.id === processTarget?.id" :loading="returnActionBusy" :disabled="returnActionBlocked || processLoading" @click="resumeReturnAction">继续原请求</el-button>
+        <el-button type="primary" :loading="processSubmitting || processLoading" :disabled="processUncertain || !!pendingReturnAction || returnActionBlocked || processTarget?.status === 'completed'" @click="submitProcess">{{ processNeedsStock ? '确认本次上架' : '确认处理' }}</el-button>
       </template>
     </el-dialog>
   </div>
