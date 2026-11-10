@@ -20,6 +20,30 @@ class InboundScanSnapshotTest {
         }
     }
 
+    @Test fun cartonCountRequiresOriginalOrderAndExactBoxCount() {
+        val body = JsonParser.parseString("""
+            {"id":61,"inboundNo":"RVTEST","receivedCartonCount":2,"syncPending":false,
+             "order":{"id":61,"inboundNo":"RVTEST","status":"receiving","receivedCartonCount":2}}
+        """).asJsonObject
+        for (duplicate in listOf(false, true)) {
+            body.addProperty("duplicate", duplicate)
+            assertSame(body, body.requireCartonCountReceipt(61, "RVTEST", 2))
+        }
+        val badReceipts = listOf(
+            body.deepCopy().apply { addProperty("inboundNo", "OTHER") },
+            body.deepCopy().apply { addProperty("receivedCartonCount", "2") },
+            body.deepCopy().apply { remove("syncPending") },
+            body.deepCopy().apply { addProperty("syncPending", true) },
+            body.deepCopy().apply { getAsJsonObject("order").addProperty("receivedCartonCount", 3) },
+            body.deepCopy().apply { getAsJsonObject("order").addProperty("id", 62) },
+        )
+        for (bad in badReceipts) {
+            val error = assertThrows(ErpException::class.java) { bad.requireCartonCountReceipt(61, "RVTEST", 2) }
+            assertTrue(error.retriable)
+        }
+        assertThrows(ErpException::class.java) { body.requireCartonCountReceipt(61, "RVTEST", 3) }
+    }
+
     @Test fun qcReceiptRequiresMatchingCountAndExplicitSyncConfirmation() {
         val gson = Gson()
         for (status in listOf("pending_putaway", "exception")) {

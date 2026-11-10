@@ -870,7 +870,7 @@ class InboundViewModel : ViewModel() {
             return
         }
         if (hasPendingReduction()) { feedback = Feedback(false, "请先确认待同步的减少数量请求"); return }
-        val id = order?.id ?: run { feedback = Feedback(false, "请先扫描单号绑定入库单"); return }
+        val original = order ?: run { feedback = Feedback(false, "请先扫描单号绑定入库单"); return }
         if (cartonCount < scannedCartonCount) {
             feedback = Feedback(false, "已扫码确认 $scannedCartonCount 箱，实收箱数不能改小")
             cartonCount = scannedCartonCount
@@ -881,22 +881,32 @@ class InboundViewModel : ViewModel() {
             showCartonDifference = true
             return
         }
+        val count = cartonCount
+        val id = original.id
         busy = true
         feedback = null
         viewModelScope.launch {
             val journal = PdaApp.instance.workJournal
-            val recordId = journal.beginScan("inbound", "carton_count_submit", cartonCount.toString(), id, order?.no)
+            val recordId = journal.beginScan("inbound", "carton_count_submit", count.toString(), id, original.no)
             try {
-                journal.preparePostRetry(recordId, "/inbound/$id/received-carton-count", mapOf("receivedCartonCount" to cartonCount, "differenceReason" to reason.trim()))
-                val res = api.submitPrepared(recordId) { api.recordReceivedCartonCount(id, cartonCount, reason, recordId) }
+                journal.preparePostRetry(recordId, "/inbound/$id/received-carton-count", mapOf("receivedCartonCount" to count, "differenceReason" to reason.trim()))
+                api.submitPrepared(recordId) { api.recordReceivedCartonCount(original, count, reason, recordId) }
                 journal.acknowledge(recordId, "箱数登记成功")
                 showCartonDifference = false
                 cartonDifferenceReason = ""
                 if (!refreshAfterConfirmedWrite()) return@launch
-                if (mode == InboundMode.Catalog) {
-                    feedback = Feedback(true, "实收箱数已确认，请输入本次件数并扫描 SKU")
-                } else {
-                    enterQcAfterReceive(res.message.orEmpty().ifBlank { "实收箱数已登记" })
+                val latest = order ?: return@launch
+                when {
+                    retireClosedOrder(latest) || enterPutawayIfReady() -> Unit
+                    latest.statusKey !in setOf("arrived", "receiving") ->
+                        feedback = Feedback(false, "实收箱数已登记，当前状态「${latest.statusText}」不可继续清点")
+                    mode == InboundMode.Catalog ->
+                        feedback = Feedback(true, "实收箱数已确认，请输入本次件数并扫描 SKU")
+                    latest.cartonBlockMessage != null ->
+                        feedback = Feedback(false, latest.cartonBlockMessage.orEmpty())
+                    !session.hasPerm("inbound.qc") ->
+                        feedback = Feedback(true, "实收箱数已确认，请交接给有清点权限的人员")
+                    else -> enterQcAfterReceive("实收箱数已确认")
                 }
             } catch (e: Exception) {
                 feedback = Feedback(false, e.message ?: "登记箱数失败")

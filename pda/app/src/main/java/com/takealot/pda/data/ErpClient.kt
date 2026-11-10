@@ -90,12 +90,14 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
         gson.fromJson(postJson("/inbound/$id/receive-box", mapOf("scanCode" to scanCode, "clientRequestId" to clientRequestId)).requireInboundSyncAcknowledged(), ScanActionResult::class.java)
     }
 
-    suspend fun recordReceivedCartonCount(id: Int, receivedCartonCount: Int, differenceReason: String = "", clientRequestId: String = UUID.randomUUID().toString()): ScanActionResult = withContext(Dispatchers.IO) {
-        gson.fromJson(
-            postJson("/inbound/$id/received-carton-count", mapOf("receivedCartonCount" to receivedCartonCount, "differenceReason" to differenceReason.trim(), "clientRequestId" to clientRequestId)).requireInboundSyncAcknowledged(),
-            ScanActionResult::class.java,
-        )
-    }
+    suspend fun recordReceivedCartonCount(order: InboundOrder, receivedCartonCount: Int, differenceReason: String, clientRequestId: String) =
+        withContext(Dispatchers.IO) {
+            postJson("/inbound/${order.id}/received-carton-count", mapOf(
+                "receivedCartonCount" to receivedCartonCount,
+                "differenceReason" to differenceReason.trim(),
+                "clientRequestId" to clientRequestId,
+            )).requireInboundSyncAcknowledged().requireCartonCountReceipt(order.id, order.no, receivedCartonCount)
+        }
 
     suspend fun reportInboundException(id: Int, exceptionType: String, scanCode: String = "", remark: String = "", clientRequestId: String = UUID.randomUUID().toString()): ScanActionResult = withContext(Dispatchers.IO) {
         gson.fromJson(
@@ -290,6 +292,15 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
             payload.readPutawayRequest(id, record.orderNo, identity?.warehouse)
                 .copy(expectedSkus = identity?.skus.orEmpty())
         } else null
+        val cartonOrderId = record.orderId
+        val cartonCount = if (endpoint.startsWith("/inbound/") && endpoint.endsWith("/received-carton-count")) {
+            val count = payload.takeIf { it.isJsonObject }?.asJsonObject?.get("receivedCartonCount")
+                ?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }?.asString?.toIntOrNull()
+            if (cartonOrderId == null || endpoint != "/inbound/$cartonOrderId/received-carton-count" || count == null || count <= 0) {
+                throw ErpException("待同步记录缺少原收货单或实收箱数，请由主管核对", retriable = true)
+            }
+            count
+        } else null
         val result = postJson(endpoint, payload)
         if (endpoint.startsWith("/outbound/")) {
             when (endpoint.substringAfterLast('/')) {
@@ -301,6 +312,9 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
         }
         if (endpoint.startsWith("/inbound/")) result.requireInboundSyncAcknowledged()
         putaway?.verifyReceipt(result, gson)
+        if (cartonCount != null && cartonOrderId != null) {
+            result.requireCartonCountReceipt(cartonOrderId, record.orderNo, cartonCount)
+        }
         if (endpoint.startsWith("/inbound/") && endpoint.endsWith("/qc")) result.requireQcSubmitReceipt(record.orderId, gson)
         if (endpoint.startsWith("/inbound/") && endpoint.endsWith("/report-exception")) result.requireExceptionReportReceipt()
         result

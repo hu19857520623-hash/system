@@ -15,6 +15,24 @@ internal fun JsonElement.requireExceptionReportReceipt(): JsonElement {
     return this
 }
 
+internal fun JsonElement.requireCartonCountReceipt(orderId: Int, orderNo: String?, count: Int): JsonElement {
+    val failure = ErpException("实收箱数回执与原请求不一致，请在「待同步记录」核对原请求", retriable = true)
+    val body = takeIf { it.isJsonObject }?.asJsonObject ?: throw failure
+    val order = body.get("order")?.takeIf { it.isJsonObject }?.asJsonObject ?: throw failure
+    fun JsonElement?.intValue() = this?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }
+        ?.asString?.toIntOrNull()
+    fun JsonElement?.textValue() = this?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString
+    val no = order.get("inboundNo").textValue()
+    val sync = body.get("syncPending")
+    if (count <= 0 || body.get("id").intValue() != orderId || order.get("id").intValue() != orderId ||
+        no.isNullOrBlank() || body.get("inboundNo").textValue() != no || (!orderNo.isNullOrBlank() && no != orderNo) ||
+        body.get("receivedCartonCount").intValue() != count || order.get("receivedCartonCount").intValue() != count ||
+        order.get("status").textValue() != "receiving" ||
+        sync?.isJsonPrimitive != true || !sync.asJsonPrimitive.isBoolean || sync.asBoolean
+    ) throw failure
+    return this
+}
+
 internal fun JsonElement.requireQcSubmitReceipt(orderId: Int?, gson: Gson): JsonElement {
     val order = runCatching { gson.fromJson(this, InboundOrder::class.java) }.getOrNull()
     val syncPending = takeIf { it.isJsonObject }?.asJsonObject?.get("syncPending")

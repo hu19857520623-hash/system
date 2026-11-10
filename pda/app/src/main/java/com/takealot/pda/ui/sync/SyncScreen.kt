@@ -94,8 +94,12 @@ class SyncViewModel : ViewModel() {
                         "post" -> {
                             val result = api.retryPending(record)
                             val orderId = record.orderId
-                            if (record.module == "inbound" && orderId != null && record.retryEndpoint == "/inbound/$orderId/qc") {
-                                nextStep = continueAfterQc(orderId)
+                            if (record.module == "inbound" && orderId != null) {
+                                when (record.retryEndpoint) {
+                                    "/inbound/$orderId/qc" -> nextStep = continueAfterInboundReceipt(record, orderId)
+                                    "/inbound/$orderId/received-carton-count" ->
+                                        nextStep = continueAfterInboundReceipt(record, orderId, cartonCount = true)
+                                }
                             }
                             if (record.retryEndpoint == "/inbound/catalog-bind") {
                                 val order = api.catalogBindingReceipt(result, record)
@@ -192,8 +196,8 @@ class SyncViewModel : ViewModel() {
         }
     }
 
-    private suspend fun continueAfterQc(orderId: Int): String {
-        val confirmed = "原清点请求已确认"
+    private suspend fun continueAfterInboundReceipt(record: PdaScanRecord, orderId: Int, cartonCount: Boolean = false): String {
+        val confirmed = if (cartonCount) "原实收箱数请求已确认" else "原清点请求已确认"
         val order = try {
             api.inboundDetail(orderId)
         } catch (e: CancellationException) {
@@ -202,11 +206,22 @@ class SyncViewModel : ViewModel() {
             return "$confirmed。暂未读到单据最新状态，请返回首页，从原作业刷新单据后继续。"
         }
         val warehouse = order.warehouseCode
-        if (order.id != orderId || warehouse.isNullOrBlank()) {
+        if (order.id != orderId || order.no.isBlank() ||
+            (!record.orderNo.isNullOrBlank() && order.no != record.orderNo) || warehouse.isNullOrBlank()) {
             return "$confirmed。暂无法核对原单及所属仓库，请返回首页，从原作业刷新单据。"
         }
         if (warehouse != session.warehouseCode) {
             return "$confirmed。请返回首页切换到 $warehouse，再核对单据最新进度。"
+        }
+        if (cartonCount && order.statusKey in setOf("arrived", "receiving")) {
+            if (!session.hasPerm("inbound.qc")) return "$confirmed。请交接给有清点权限的人员。"
+            val catalog = journal.active("inbound", "catalog")?.orderId == orderId
+            if (!catalog && order.cartonBlockMessage != null) {
+                return "$confirmed。请从首页返回「确认箱数」核对最新进度：${order.cartonBlockMessage}"
+            }
+            val saved = journal.reconcileInboundResume(orderId, order.no, if (catalog) "catalog" else "qc")
+            return if (saved) "$confirmed。请返回首页打开「继续未完成作业」进入清点。"
+            else "$confirmed。请从首页进入「清点」并扫描原单。"
         }
         return when (order.statusKey) {
             "pending_putaway" -> if (session.hasPerm("inbound.putaway")) {
