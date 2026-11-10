@@ -141,6 +141,11 @@ async function exportSelected() {
 const dialogVisible = ref(false)
 const createVisible = ref(false)
 const createSaving = ref(false)
+const createFeedback = ref('')
+const pendingCreate = shallowRef<Record<string, unknown> | null>(null)
+const createNotFound = ref(false)
+const createConflict = ref(false)
+let createVersion = 0
 const detailVisible = ref(false)
 const editingProduct = ref<any>(null)
 const detailProduct = ref<any>(null)
@@ -164,11 +169,15 @@ watch([detailVisible, dialogVisible], ([detail, edit]) => {
 }, { flush: 'sync' })
 watch(productScope, () => {
   ++productDialogVersion
+  ++createVersion
   productSavesToCheck.clear()
+  pendingCreate.value = null
+  createVisible.value = false
+  createSaving.value = false
   detailVisible.value = false
   dialogVisible.value = false
 }, { flush: 'sync' })
-onScopeDispose(() => { ++productDialogVersion })
+onScopeDispose(() => { ++productDialogVersion; ++createVersion })
 const imageUploading = ref(false)
 
 const MAX_PRODUCT_IMAGES = 20
@@ -233,12 +242,17 @@ async function loadCreateOptions() {
 }
 
 function openCreate() {
-  createForm.value = emptyCreateForm()
+  if (createSaving.value) return
+  if (!pendingCreate.value) {
+    createForm.value = emptyCreateForm()
+    createFeedback.value = ''
+  }
   if (!supplierOptions.value.length) loadCreateOptions()
   createVisible.value = true
 }
 
 async function saveCreate() {
+  if (createSaving.value || pendingCreate.value) return
   const f = createForm.value
   if (!f.sku.trim()) {
     ElMessage.warning('请填写 SKU')
@@ -248,9 +262,7 @@ async function saveCreate() {
     ElMessage.warning('请填写商品名称')
     return
   }
-  createSaving.value = true
-  try {
-    const created = await productApi.create({
+  const payload = {
       sku: f.sku.trim(),
       spu: f.spu.trim() || undefined,
       productName: f.productName.trim(),
@@ -265,16 +277,92 @@ async function saveCreate() {
       purchaserId: f.purchaserId || undefined,
       supplierId: f.supplierId || undefined,
       status: f.status,
-    })
-    createVisible.value = false
-    ElMessage.success(displaySkuText(`商品 ${displaySku(created)} 已创建，可在编辑中上传图片`))
-    await load()
-    if (created.id) openEdit(created.id)
-  } catch (err: any) {
-    ElMessage.error(userFacingError(displaySkuText(err.message || '创建失败')))
-  } finally {
-    createSaving.value = false
   }
+  if (Object.values(payload).some(value => typeof value === 'number' && !Number.isFinite(value))) {
+    createFeedback.value = '成本、尺寸和重量须填写有效数字，请核对后重新提交。'
+    return
+  }
+  await sendCreate(payload)
+}
+
+async function sendCreate(payload: Record<string, unknown>) {
+  const scope = productScope(), version = ++createVersion
+  if (!scope) return
+  const active = () => version === createVersion && scope === productScope() && createVisible.value
+  createSaving.value = true
+  createFeedback.value = ''
+  createNotFound.value = false
+  createConflict.value = false
+  try {
+    const created = await productApi.create(payload)
+    if (!active()) return
+    if (!Number.isSafeInteger(Number(created?.id)) || Number(created.id) <= 0 || created.sku !== payload.sku) {
+      throw Error('创建商品回执与原 SKU 不一致')
+    }
+    finishCreate(created, false)
+  } catch (err: any) {
+    if (!active()) return
+    const reason = userFacingError(displaySkuText(err?.message || '创建商品失败'))
+    if (productWriteIsUncertain(err) || pendingCreate.value) {
+      pendingCreate.value = payload
+      createFeedback.value = `创建结果待核对，原输入已保留。${reason}`
+    } else createFeedback.value = reason
+  } finally { if (version === createVersion) createSaving.value = false }
+}
+
+function finishCreate(created: any, verified: boolean) {
+  pendingCreate.value = null
+  createNotFound.value = false
+  createConflict.value = false
+  createVisible.value = false
+  ElMessage.success(displaySkuText(verified ? `已核对，商品 ${displaySku(created)} 与本次输入一致` : `商品 ${displaySku(created)} 已创建，可在编辑中上传图片`))
+  void load()
+  openEdit(Number(created.id))
+}
+
+async function verifyCreate() {
+  const payload = pendingCreate.value, scope = productScope()
+  if (!payload || !scope || createSaving.value) return
+  const version = ++createVersion
+  const active = () => version === createVersion && scope === productScope() && createVisible.value
+  createSaving.value = true
+  createNotFound.value = false
+  createConflict.value = false
+  try {
+    const result = await productApi.list({ exactSku: payload.sku, pageSize: 2 })
+    if (!active()) return
+    if (!Array.isArray(result?.items)) throw Error('SKU 核对回执不完整')
+    if (result.items.length === 0) {
+      createNotFound.value = true
+      createFeedback.value = '暂未查到原 SKU。可以再次核对，或按原资料重试创建。'
+    } else if (result.items.length === 1 && Number(result.items[0]?.id) > 0 && productMatchesSave(result.items[0], payload)) {
+      finishCreate(result.items[0], true)
+    } else {
+      createConflict.value = true
+      createFeedback.value = '已有同 SKU 商品，但资料与原输入不一致。请返回列表核对，原输入仍保留。'
+    }
+  } catch (err) {
+    if (active()) createFeedback.value = `读取原 SKU 失败，请重试核对。${userFacingError(err)}`
+  } finally { if (version === createVersion) createSaving.value = false }
+}
+
+function productWriteIsUncertain(error: any) {
+  const status = Number(error?.status)
+  return !Number.isFinite(status) || status < 100 || status >= 500 || status === 408 || status === 409
+}
+
+function retryOriginalCreate() {
+  if (!createSaving.value && createNotFound.value && pendingCreate.value) {
+    void sendCreate(pendingCreate.value)
+  }
+}
+
+function discardCheckedCreate() {
+  if (createSaving.value || !createConflict.value) return
+  pendingCreate.value = null
+  createConflict.value = false
+  createFeedback.value = ''
+  createForm.value = emptyCreateForm()
 }
 
 function applyProductImages(target: any, product: any) {
@@ -368,8 +456,7 @@ async function saveProduct() {
     load()
   } catch (err: any) {
     if (!active()) return
-    const status = Number(err?.status)
-    const uncertain = !Number.isFinite(status) || status < 100 || status >= 500 || status === 408 || status === 409
+    const uncertain = productWriteIsUncertain(err)
     if (uncertain) {
       pendingProductSave.value = payload
       productSavesToCheck.set(id, { payload, draft: { ...editingProduct.value } })
@@ -645,8 +732,9 @@ async function printSkuLabels(items: Array<{ sku?: string; name?: string; barcod
   </div>
 
   <!-- Create Product Dialog -->
-  <el-dialog v-model="createVisible" title="创建商品" width="680px" destroy-on-close>
-    <el-form label-width="96px">
+  <el-dialog v-model="createVisible" title="创建商品" width="680px" destroy-on-close :close-on-click-modal="!createSaving" :close-on-press-escape="!createSaving" :show-close="!createSaving">
+    <p v-if="createFeedback" role="alert">{{ createFeedback }}</p>
+    <el-form label-width="96px" :disabled="createSaving || !!pendingCreate">
       <el-form-item label="SKU" required>
         <el-input v-model="createForm.sku" placeholder="如 TK-00123" maxlength="30" />
       </el-form-item>
@@ -698,8 +786,11 @@ async function printSkuLabels(items: Array<{ sku?: string; name?: string; barcod
       <p class="create-hint">图片可在创建成功后于「编辑」中上传；同步状态默认为「未同步」。</p>
     </el-form>
     <template #footer>
-      <el-button @click="createVisible = false">取消</el-button>
-      <el-button type="primary" :loading="createSaving" @click="saveCreate">创建</el-button>
+      <el-button :disabled="createSaving" @click="createVisible = false">返回列表</el-button>
+      <el-button v-if="createNotFound" :disabled="createSaving" @click="retryOriginalCreate">按原资料重试创建</el-button>
+      <el-button v-if="createConflict" :disabled="createSaving" @click="discardCheckedCreate">放弃原资料并新建</el-button>
+      <el-button v-if="pendingCreate" type="primary" :loading="createSaving" @click="verifyCreate">核对原 SKU</el-button>
+      <el-button v-else type="primary" :loading="createSaving" @click="saveCreate">创建</el-button>
     </template>
   </el-dialog>
 

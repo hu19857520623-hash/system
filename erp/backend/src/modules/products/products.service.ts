@@ -314,9 +314,15 @@ export class ProductsService {
     })
   }
 
-  async list(q: PaginationDto & { status?: string }) {
+  async list(q: PaginationDto & { status?: string; exactSku?: string }) {
     const { page, pageSize } = getPagination(q)
     const where: any = { AND: [ERP_MASTER_PRODUCT_WHERE] }
+    if (q.exactSku !== undefined) {
+      if (typeof q.exactSku !== 'string' || !q.exactSku.trim() || q.exactSku.trim().length > 30) {
+        throw new BadRequestException('请输入有效的完整 SKU')
+      }
+      where.sku = q.exactSku.trim()
+    }
     if (q.keyword) {
       where.OR = [{ sku: { contains: q.keyword } }, { productName: { contains: q.keyword } }]
     }
