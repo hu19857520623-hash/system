@@ -933,16 +933,21 @@ async function postMaintenance(attempt: ShipmentMaintenanceAttempt) {
 
 function retryMaintenance() { if (maintenanceAttempt.value) postMaintenance(maintenanceAttempt.value) }
 
-async function refreshMutationDetail() {
-  const id=inboundNumericId(detailOrder.value)
+async function refreshMutationDetail(target = detailOrder.value) {
+  const id=inboundNumericId(target)
   if(!id || maintenanceBusy.value || maintenanceAttempt.value)return
   const frame=shipmentRequests.captureRead(),version=++detailReadVersion
+  detailOrder.value = target
+  detailMutationWarning.value = '正在核对最新详情，请稍候'
   detailLoading.value=true;detailVisible.value=true
   try {
     const result=await frame.step(()=>inboundApi.detail(id))
     if(!frame.active() || version!==detailReadVersion)return
+    if (inboundNumericId(result) !== id || result.inboundNo !== target.inboundNo) throw new Error('返回的入库单与待核对单据不一致')
     detailOrder.value=result;detailMutationWarning.value='';maintenanceError.value=''
-    if(maintenanceResult.value)maintenanceResult.value.refreshRequired=false
+    if(maintenanceResult.value?.id === id && maintenanceResult.value.inboundNo === result.inboundNo) {
+      maintenanceResult.value.refreshRequired=false
+    }
   } catch(error) {if(frame.active() && version===detailReadVersion)detailMutationWarning.value=`详情未能读取，请重试或返回列表。${userFacingError(error)}`}
   finally {if(frame.active() && version===detailReadVersion)detailLoading.value=false}
 }
@@ -1742,7 +1747,7 @@ onScopeDispose(()=>window.removeEventListener('storage',onShipmentStorage))
       <el-button v-if="maintenanceAttempt" :disabled="!canCreateInbound" :loading="maintenanceBusy" @click="retryMaintenance">核对并重试原操作</el-button>
     </el-alert>
     <el-alert v-if="maintenanceError" :title="maintenanceError" type="error" :closable="false" style="margin:12px 0" />
-    <el-alert v-if="maintenanceResult?.refreshRequired" :title="maintenanceResult.warning" type="warning" :closable="false"><el-button :loading="detailLoading" @click="refreshMutationDetail">重新读取最新详情</el-button></el-alert>
+    <el-alert v-if="maintenanceResult?.refreshRequired" :title="maintenanceResult.warning" type="warning" :closable="false"><el-button :loading="detailLoading" @click="refreshMutationDetail(maintenanceResult)">重新读取最新详情</el-button></el-alert>
     <el-alert v-if="maintenanceResult" type="success" :closable="false" style="margin:12px 0" :title="maintenanceResult.kind === 'delete' ? `已删除 ${maintenanceResult.inboundNo}，原中转仓良品库存已返还` : `海运费操作已完成：${maintenanceResult.inboundNo}`">
       <el-button v-if="maintenanceResult.kind === 'delete' && maintenanceResult.deletedOrder" :disabled="formBusy" @click="copyMaintenanceDeleted">按已删除单复制新建</el-button>
       <el-button :disabled="formBusy" @click="tab = 'list'">返回入库单管理</el-button>
@@ -2345,10 +2350,10 @@ onScopeDispose(()=>window.removeEventListener('storage',onShipmentStorage))
         <el-empty v-if="!detailItems.length" description="该入库单没有 SKU 明细" :image-size="64" />
       </template>
     </div>
-    <el-alert v-if="detailMutationWarning" :title="detailMutationWarning" type="warning" :closable="false"><el-button :loading="detailLoading" @click="refreshMutationDetail">重新读取最新详情</el-button></el-alert>
+    <el-alert v-if="detailMutationWarning" :title="detailMutationWarning" type="warning" :closable="false"><el-button :loading="detailLoading" @click="refreshMutationDetail()">重新读取最新详情</el-button></el-alert>
     <el-alert v-if="maintenanceError" :title="maintenanceError" type="error" :closable="false">
       <el-button v-if="maintenanceAttempt" :disabled="!canCreateInbound" :loading="maintenanceBusy" @click="retryMaintenance">核对并重试原操作</el-button>
-      <el-button :disabled="maintenanceBusy || !!maintenanceAttempt" @click="refreshMutationDetail">重新读取最新详情</el-button>
+      <el-button :disabled="maintenanceBusy || !!maintenanceAttempt" @click="refreshMutationDetail()">重新读取最新详情</el-button>
     </el-alert>
     <template #footer>
       <el-button
