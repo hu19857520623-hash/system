@@ -33,6 +33,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.takealot.pda.PdaApp
 import com.takealot.pda.data.ErpException
+import com.takealot.pda.data.outboundOpenFailureMessage
 import com.takealot.pda.data.LocalPickLine
 import com.takealot.pda.data.OutboundOrder
 import com.takealot.pda.data.PdaPickProgress
@@ -347,7 +348,9 @@ class OutboundViewModel : ViewModel() {
         feedback = null
         viewModelScope.launch {
             try { loadOrder(id) }
-            catch (e: Exception) { feedback = Feedback(false, e.message ?: "打开单据失败"); order = null; lines = emptyList() }
+            catch (e: Exception) {
+                feedback = Feedback(false, outboundOpenFailureMessage(order != null, e.message))
+            }
             finally { busy = false }
         }
     }
