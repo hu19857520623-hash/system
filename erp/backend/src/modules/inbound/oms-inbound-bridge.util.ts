@@ -1,3 +1,4 @@
+import { ServiceUnavailableException } from '@nestjs/common'
 import { PrismaService } from '../../common/prisma/prisma.service'
 
 type OmsLineItem = { sku?: string; name?: string; qty?: number; boxNo?: number }
@@ -94,7 +95,7 @@ function mapOmsInboundRow(r: Record<string, unknown>) {
 
 export async function fetchOmsInboundRows(
   prisma: PrismaService,
-  filters: { keyword?: string; status?: string },
+  filters: { keyword?: string; status?: string; identityOnly?: boolean; ids?: string[] },
 ) {
   // 未提交草稿留在 OMS，不能进入 ERP 仓库作业列表或统计。
   const excludedStatuses = ['draft', 'oms_draft']
@@ -102,6 +103,11 @@ export async function fetchOmsInboundRows(
   if (excludedStatuses.includes(String(selectedStatus || '').toLowerCase())) return []
   const conditions: string[] = ['LOWER(TRIM(i.status)) NOT IN (?, ?)']
   const params: unknown[] = [...excludedStatuses]
+  if (filters.ids) {
+    if (!filters.ids.length) return []
+    conditions.push(`i.id IN (${filters.ids.map(() => '?').join(', ')})`)
+    params.push(...filters.ids)
+  }
 
   const omsStatuses = omsStatusesForErpFilter(selectedStatus)
   if (omsStatuses !== null) {
@@ -118,18 +124,18 @@ export async function fetchOmsInboundRows(
   }
 
   const sql = `
-    SELECT i.*, c.code AS customerCode, c.name AS customerName
+    SELECT ${filters.identityOnly ? 'i.id, i.inboundNo, i.status, i.createdAt' : 'i.*, c.code AS customerCode, c.name AS customerName'}
     FROM oms_inboundorder i
     LEFT JOIN oms_customeraccount c ON c.id = i.customerId
     WHERE ${conditions.join(' AND ')}
-    ORDER BY i.createdAt DESC
-    LIMIT 5000
+    ORDER BY i.createdAt DESC, i.id DESC
   `
   try {
     const rows = await prisma.$queryRawUnsafe<Record<string, unknown>[]>(sql, ...params)
     return rows.filter(r => !excludedStatuses.includes(String(r.status || '').trim().toLowerCase())).map(mapOmsInboundRow)
-  } catch {
-    return []
+  } catch (err) {
+    if (err instanceof ServiceUnavailableException) throw err
+    throw new ServiceUnavailableException('无法读取 OMS 入库预报，请稍后重试')
   }
 }
 
@@ -138,7 +144,8 @@ export function mergeInboundPaginate(
   page: number,
   pageSize: number,
 ) {
-  const merged = lists.flat().sort((a, b) => (b.sortKey ?? 0) - (a.sortKey ?? 0))
+  const merged = lists.flat().sort((a, b) => (b.sortKey ?? 0) - (a.sortKey ?? 0)
+    || (a.inboundNo || '').localeCompare(b.inboundNo || '', 'en'))
   const total = merged.length
   const items = merged.slice((page - 1) * pageSize, page * pageSize)
   return { items, total }

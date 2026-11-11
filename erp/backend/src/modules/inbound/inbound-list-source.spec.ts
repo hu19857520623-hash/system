@@ -3,7 +3,10 @@ import { InboundService } from './inbound.service'
 describe('inbound list ERP authority', () => {
   function fixture(linked: string[]) {
     const prisma = {
-      inboundOrder: { findMany: jest.fn().mockResolvedValueOnce([]).mockResolvedValueOnce(linked.map(inboundNo => ({ inboundNo }))) },
+      inboundOrder: {
+        findMany: jest.fn().mockResolvedValueOnce([]).mockResolvedValueOnce(linked.map(inboundNo => ({ inboundNo }))),
+        count: jest.fn(async () => 1),
+      },
       $queryRawUnsafe: jest.fn().mockResolvedValue([
         { id: 'old', inboundNo: 'RV-OLD', status: 'partial', createdAt: '2026-09-24', customerCode: 'TKL005' },
         { id: 'only', inboundNo: 'RV-ONLY', status: 'partial', createdAt: '2026-09-25', customerCode: 'TKL005' },

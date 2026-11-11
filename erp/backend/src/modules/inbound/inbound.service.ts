@@ -160,19 +160,76 @@ export class InboundService {
         { omsCustomerCode: { contains: kw } },
       ]
     }
-    const rows = await this.prisma.inboundOrder.findMany({
+    // Warehouse work and ERP shipments never merge OMS-only reservations.
+    if (q.warehouseCode || q.source === 'erp_shipment') {
+      const [rows, total] = await Promise.all([
+        this.prisma.inboundOrder.findMany({
+          where,
+          include: { items: true },
+          orderBy: [{ createdAt: 'desc' }, { inboundNo: 'asc' }],
+          skip: (page - 1) * pageSize,
+          take: pageSize,
+        }),
+        this.prisma.inboundOrder.count({ where }),
+      ])
+      return { items: await this.enrichInboundListRows(rows), total, page, pageSize }
+    }
+
+    // Merge only identities and timestamps. Load item details for the selected page.
+    const identities = await this.prisma.inboundOrder.findMany({
       where,
-      include: { items: true },
+      select: { id: true, inboundNo: true, createdAt: true },
       orderBy: { id: 'desc' },
-      take: 5000,
     })
+    const omsIndex = await fetchOmsInboundRows(this.prisma, { keyword: q.keyword, status: q.status, identityOnly: true })
+    const erpNos = new Set(identities.map(row => row.inboundNo))
+    // Linkage ignores the selected ERP status and is chunked independently of page size.
+    for (let start = 0; start < omsIndex.length; start += 1000) {
+      const linked = await this.prisma.inboundOrder.findMany({
+        where: { inboundNo: { in: omsIndex.slice(start, start + 1000).map(row => row.inboundNo) } },
+        select: { inboundNo: true },
+      })
+      linked.forEach(row => erpNos.add(row.inboundNo))
+    }
+    const erpIndex = identities.map(row => ({
+      id: Number(row.id),
+      inboundNo: row.inboundNo,
+      sortKey: row.createdAt.getTime(),
+      dataSource: 'erp' as const,
+    }))
+    const omsOnly = omsIndex.filter(row => !erpNos.has(row.inboundNo))
+    const { items: selected, total } = mergeInboundPaginate([erpIndex, omsOnly], page, pageSize)
+    const selectedErp = selected.filter((row): row is typeof erpIndex[number] => (row as { dataSource?: string }).dataSource === 'erp')
+    const selectedOms = selected.filter((row): row is typeof omsIndex[number] => (row as { dataSource?: string }).dataSource === 'oms')
+    const [rows, omsRows] = await Promise.all([
+      selectedErp.length
+        ? this.prisma.inboundOrder.findMany({
+            where: { ...where, id: { in: selectedErp.map(row => BigInt(row.id)) } },
+            include: { items: true },
+          })
+        : [],
+      selectedOms.length
+        ? fetchOmsInboundRows(this.prisma, {
+            keyword: q.keyword,
+            status: q.status,
+            ids: selectedOms.map(row => String(row.id).slice(4)),
+          })
+        : [],
+    ])
+    const erpItems = await this.enrichInboundListRows(rows)
+    const byNo = new Map([...erpItems, ...omsRows.map(row => ({ ...row, sourceKind: 'oms_customer' as const }))].map(row => [row.inboundNo, row]))
+    if (selected.some(row => !byNo.has(row.inboundNo || ''))) throw new ConflictException('入库列表已更新，请刷新后重试')
+    return { items: selected.map(row => byNo.get(row.inboundNo || '')!), total, page, pageSize }
+  }
+
+  private async enrichInboundListRows(rows: Array<Prisma.InboundOrderGetPayload<{ include: { items: true } }>>) {
     const productIds = [...new Set(rows.flatMap((r) => r.items.map((i) => i.productId)))]
     const products = productIds.length
       ? await this.prisma.product.findMany({ where: { id: { in: productIds } } })
       : []
     const prodMap = new Map(products.map((p) => [Number(p.id), p]))
     const platformBySku = await this.loadPlatformScanIndex(rows.flatMap((r) => r.items), prodMap)
-    const erpItems = rows.map((order) => ({
+    return rows.map((order) => ({
       ...order,
       id: Number(order.id),
       displayStatus: normalizeInboundStatus(order.status),
@@ -183,27 +240,6 @@ export class InboundService {
       sortKey: order.createdAt.getTime(),
       items: order.items.map((item: any) => this.enrichInboundItem(item, prodMap, platformBySku)),
     }))
-
-    const omsItems = q.source === 'erp_shipment' || q.warehouseCode ? [] : await fetchOmsInboundRows(this.prisma, {
-      keyword: q.keyword,
-      status: q.status,
-    })
-    // Check ERP existence without the status filter: an OMS snapshot can lag behind
-    // its ERP order and must not reappear under an earlier workflow status.
-    const linkedErpOrders = omsItems.length
-      ? await this.prisma.inboundOrder.findMany({
-          where: { inboundNo: { in: omsItems.map((r) => r.inboundNo) } },
-          select: { inboundNo: true },
-        })
-      : []
-    const erpNoSet = new Set([
-      ...erpItems.map((r) => r.inboundNo),
-      ...linkedErpOrders.map((r) => r.inboundNo),
-    ])
-    const omsOnly = omsItems.filter((r) => !erpNoSet.has(r.inboundNo)).map(r => ({ ...r, sourceKind: 'oms_customer' }))
-
-    const { items, total } = mergeInboundPaginate([erpItems, omsOnly], page, pageSize)
-    return { items, total, page, pageSize }
   }
 
   async scanLookup(scanCode: string, warehouseCode: string) {
