@@ -4,6 +4,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common'
@@ -174,6 +175,8 @@ function idempotencyPayload(value: {
 
 @Injectable()
 export class OutboundService {
+  private readonly logger = new Logger(OutboundService.name)
+
   constructor(
     private prisma: PrismaService,
     private billing: BillingService,
@@ -944,14 +947,15 @@ export class OutboundService {
       if (message.includes('pdf-lib dependency')) {
         throw new ServiceUnavailableException('标签合并组件暂不可用，请联系管理员')
       }
-      throw new BadRequestException(`标签 PDF 合并失败：${message}`)
+      this.logger.warn(`出库标签合并失败: ${message}`)
+      throw new BadRequestException('标签 PDF 合并失败，请重新生成标签后再试')
     }
   }
 
   async downloadUnitLabel(id: number, sku: string, unitIndex: number) {
     const context = await this.getLabelOrder(id, sku)
     if (!Number.isInteger(unitIndex) || unitIndex < 1) {
-      throw new BadRequestException('unitIndex 必须是大于等于 1 的整数')
+      throw new BadRequestException('单件标签序号必须是大于等于 1 的整数')
     }
     const attachment = await this.prisma.outboundAttachment.findFirst({
       where: {
@@ -2279,7 +2283,7 @@ th{background:#f5f5f5}
     }
 
     const customerCode = String(data.customerCode || '').trim()
-    if (!customerCode) throw new BadRequestException('缺少客户编码 customerCode')
+    if (!customerCode) throw new BadRequestException('缺少客户编码')
     const customer = await this.prisma.customer.findUnique({ where: { customerCode } })
     if (!customer) throw new NotFoundException(`客户代码 ${customerCode} 不存在`)
     if (customer.status !== 1) throw new BadRequestException('客户已停用')

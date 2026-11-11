@@ -606,7 +606,7 @@ async function printOutboundLabels(
     return
   }
   if (action === 'unit' && (unitIndex === undefined || !line?.unitIndices.includes(unitIndex))) {
-    ElMessage.warning('该单件标签索引不存在')
+    ElMessage.warning('该单件标签不存在，请刷新出库单后重试')
     return
   }
 

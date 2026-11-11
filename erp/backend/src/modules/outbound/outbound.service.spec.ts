@@ -183,6 +183,40 @@ describe('OutboundService cropped label storage', () => {
     const result = await service.downloadUnitLabel(7, 'SKU-A', 1)
     expect(result.fileName).toBe('OUT-7_SKU-A_unit-1.pdf')
     expect(files.read).toHaveBeenCalledWith('right-outbound.pdf')
+
+    await expect(service.downloadUnitLabel(7, 'SKU-A', 0)).rejects.toThrow('单件标签序号必须是大于等于 1 的整数')
+  })
+
+  it('keeps label merge failures in Chinese without the library message', async () => {
+    const { service, prisma, files } = buildService()
+    prisma.outboundOrder.findUnique.mockResolvedValue({
+      id: 7n,
+      outboundNo: 'OUT-7',
+      items: [{ id: 1n, sku: 'SKU-A' }],
+    })
+    prisma.outboundAttachment.findMany.mockResolvedValue([
+      { id: 1n, fileType: 'skuLabel', sku: 'SKU-A', unitIndex: 1, labelRole: 'unit', filePath: 'broken.pdf' },
+    ])
+    files.read.mockReturnValue(Buffer.from('not-a-pdf'))
+
+    await expect(service.downloadSkuLabels(7, 'SKU-A')).rejects.toThrow('标签 PDF 合并失败，请重新生成标签后再试')
+  })
+
+  it('rejects an outbound draft that has no customer code', async () => {
+    const { service, prisma } = buildService()
+
+    await expect(service.createFromOms({
+      customerCode: '   ',
+      items: [{ sku: 'SKU-A', qty: 1 }],
+      attachments: [{
+        fileType: 'skuLabel',
+        fileName: 'label.pdf',
+        contentBase64: PDF_BASE64,
+        sku: 'SKU-A',
+        unitIndex: 1,
+      }],
+    } as any)).rejects.toThrow('缺少客户编码')
+    expect(prisma.customer.findUnique).not.toHaveBeenCalled()
   })
 })
 

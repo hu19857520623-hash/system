@@ -1621,7 +1621,7 @@ export class InboundService {
         const warehouseCode = this.resolveWmsWarehouseCode(String(data.warehouseCode || 'WMS-JHB-01').trim())
         const wh = await tx.warehouse.findUnique({ where: { warehouseCode } })
         if (!wh || wh.warehouseType !== 'wms') {
-          throw new BadRequestException(`目的仓 ${warehouseCode} 必须是海外仓（wms）`)
+          throw new BadRequestException(`目的仓 ${warehouseCode} 必须是海外仓`)
         }
 
         const inboundNo = String(data.inboundNo || '').trim() || await this.allocateInboundNo(customerCode, tx)
@@ -1825,7 +1825,7 @@ export class InboundService {
     const no = String(inboundNo || '').trim()
     if (!no) throw new BadRequestException('缺少入库单号')
     const customerCode = String(data.customerCode || '').trim()
-    if (!customerCode) throw new BadRequestException('缺少客户编码 customerCode')
+    if (!customerCode) throw new BadRequestException('缺少客户编码')
     const request = omsAsnControl(no, mode, data)
 
     const written: string[] = []
@@ -1863,7 +1863,7 @@ export class InboundService {
         const warehouseCode = this.resolveWmsWarehouseCode(String(data.warehouseCode || existing.warehouseCode || 'WMS-JHB-01').trim())
         const wh = await tx.warehouse.findUnique({ where: { warehouseCode } })
         if (!wh || wh.warehouseType !== 'wms') {
-          throw new BadRequestException(`目的仓 ${warehouseCode} 必须是海外仓（wms）`)
+          throw new BadRequestException(`目的仓 ${warehouseCode} 必须是海外仓`)
         }
 
         const resolved = await this.resolveOmsAsnLines(data.items, customerCode, tx)
