@@ -1,5 +1,7 @@
 package com.takealot.pda.ui.outbound
 
+import com.takealot.pda.data.mergeWorkListPages
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -174,14 +176,21 @@ class OutboundViewModel : ViewModel() {
     var listError by mutableStateOf<String?>(null)
         private set
     private var listRequest = 0
+    private var listNextPage = 1
+    var listHasMore by mutableStateOf(false)
+        private set
 
-    fun loadList() {
+    fun retryList() = loadList(append = listNextPage > 1)
+
+    fun loadList(append: Boolean = false) {
+        if (append && (listLoading || !listHasMore)) return
         val request = ++listRequest
         val requestedMode = mode
         val warehouse = session.warehouseCode
         val userId = session.userId
         val token = session.token
-        list = emptyList()
+        val requestedPage = if (append) listNextPage else 1
+        if (!append) { list = emptyList(); listNextPage = 1; listHasMore = false }
         listError = null
         listLoading = true
         fun isCurrent() = request == listRequest && mode == requestedMode &&
@@ -194,17 +203,23 @@ class OutboundViewModel : ViewModel() {
                     "review" -> listOf("picked", "reviewing")
                     else -> listOf("packed")
                 }
-                val rows = mutableListOf<OutboundOrder>()
+                val pages = mutableListOf<com.takealot.pda.data.PageResult<OutboundOrder>>()
                 for (status in statuses) {
                     if (!isCurrent()) return@launch
-                    rows += api.outboundList(
+                    pages += api.outboundList(
                         status = status,
                         pickerId = if (requestedMode == "pick") userId else null,
                         warehouseCode = warehouse,
                         pageSize = 50,
-                    ).items.orEmpty()
+                        page = requestedPage,
+                    )
                 }
-                if (isCurrent()) list = rows.distinctBy { it.id }.filterNot { it.isProblem }
+                if (isCurrent()) {
+                    val result = mergeWorkListPages(list, pages, requestedPage, { it.id }) { !it.isProblem && it.warehouseCode == warehouse }
+                    list = result.items
+                    listNextPage = result.nextPage
+                    listHasMore = result.hasMore
+                }
             } catch (e: Exception) {
                 if (isCurrent()) listError = e.message ?: "加载待作业单据失败"
             } finally {
@@ -752,9 +767,9 @@ fun OutboundScreen(modeKey: String, onBack: () -> Unit, vm: OutboundViewModel = 
                     Text("正在读取待作业单据…", color = PdaMuted, fontSize = 13.sp)
                 } else if (listError != null) {
                     FeedbackBar(Feedback(false, listError))
-                    TextButton(onClick = { vm.loadList() }) { Text("重试加载待作业单据") }
+                    TextButton(onClick = { vm.retryList() }) { Text("重试加载待作业单据") }
                 } else if (vm.list.isEmpty()) Text(
-                    if (vm.mode == "pick") "没有分配给你的拣货任务，请先在电脑端分配拣货员" else "暂无任务，可直接扫描出库单号",
+                    if (vm.listHasMore) "本页暂无可作业单据，请加载更多或扫描出库单号" else if (vm.mode == "pick") "没有分配给你的拣货任务，请先在电脑端分配拣货员" else "暂无任务，可直接扫描出库单号",
                     color = PdaMuted,
                     fontSize = 13.sp,
                 )
@@ -769,6 +784,10 @@ fun OutboundScreen(modeKey: String, onBack: () -> Unit, vm: OutboundViewModel = 
                         Text("${row.customerName.orEmpty()} · ${vm.displaySku(row.skuSummary.orEmpty(), row.customerCode).ifBlank { "${row.totalQty} 件" }}", color = PdaMuted, fontSize = 12.sp)
                     }
                 }
+                if (vm.listHasMore && listError == null) {
+                    TextButton(onClick = { vm.loadList(append = true) }, enabled = !vm.listLoading) { Text("加载更多待作业单据") }
+                }
+                TextButton(onClick = { vm.loadList() }, enabled = !vm.listLoading) { Text("刷新待作业列表") }
             } else {
                 DocumentCard(
                     typeLabel = when (vm.mode) { "pick" -> "拣货单"; "review" -> "复核单"; else -> "发运单" },

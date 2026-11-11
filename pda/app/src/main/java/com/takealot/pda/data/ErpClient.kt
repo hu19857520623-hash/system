@@ -45,10 +45,10 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
         parseWarehouseList(get("/warehouses?type=$type"), gson)
     }
 
-    suspend fun inboundList(keyword: String? = null, status: String? = null, pageSize: Int = 20, warehouseCode: String? = null): PageResult<InboundOrder> =
+    suspend fun inboundList(keyword: String? = null, status: String? = null, pageSize: Int = 20, warehouseCode: String? = null, page: Int = 1): PageResult<InboundOrder> =
         withContext(Dispatchers.IO) {
             val q = buildString {
-                append("/inbound?page=1&pageSize=$pageSize")
+                append("/inbound?page=$page&pageSize=$pageSize")
                 if (!keyword.isNullOrBlank()) append("&keyword=${keyword.encodeUrl()}")
                 if (!status.isNullOrBlank()) append("&status=$status")
                 if (!warehouseCode.isNullOrBlank()) append("&warehouseCode=${warehouseCode.encodeUrl()}")
@@ -174,10 +174,10 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
 
     suspend fun outboundList(
         keyword: String? = null, status: String? = null, pickerId: Int? = null,
-        warehouseCode: String? = null, pageSize: Int = 50,
+        warehouseCode: String? = null, pageSize: Int = 50, page: Int = 1,
     ): PageResult<OutboundOrder> = withContext(Dispatchers.IO) {
         val q = buildString {
-            append("/outbound?page=1&pageSize=$pageSize")
+            append("/outbound?page=$page&pageSize=$pageSize")
             if (!keyword.isNullOrBlank()) append("&keyword=${keyword.encodeUrl()}")
             if (!status.isNullOrBlank()) append("&status=$status")
             if (pickerId != null && pickerId > 0) append("&pickerId=$pickerId")

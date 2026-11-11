@@ -1,5 +1,7 @@
 package com.takealot.pda.ui.inbound
 
+import com.takealot.pda.data.mergeWorkListPages
+
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
@@ -220,22 +222,33 @@ class InboundViewModel : ViewModel() {
     var pendingPutawayError by mutableStateOf<String?>(null)
         private set
     private var pendingPutawayRequest = 0
+    private var pendingPutawayNextPage = 1
+    var pendingPutawayHasMore by mutableStateOf(false)
+        private set
 
-    fun loadPendingPutaway() {
+    fun retryPendingPutaway() = loadPendingPutaway(append = pendingPutawayNextPage > 1)
+
+    fun loadPendingPutaway(append: Boolean = false) {
+        if (append && (pendingPutawayLoading || !pendingPutawayHasMore)) return
         val request = ++pendingPutawayRequest
         val warehouse = session.warehouseCode
+        val userId = session.userId
+        val token = session.token
+        val requestedPage = if (append) pendingPutawayNextPage else 1
         pendingPutawayLoading = true
         pendingPutawayError = null
-        pendingOrders = emptyList()
-        fun current() = request == pendingPutawayRequest && mode == InboundMode.Putaway && warehouse == session.warehouseCode
+        if (!append) { pendingOrders = emptyList(); pendingPutawayNextPage = 1; pendingPutawayHasMore = false }
+        fun current() = request == pendingPutawayRequest && mode == InboundMode.Putaway && warehouse == session.warehouseCode &&
+            userId == session.userId && token == session.token
         viewModelScope.launch {
             try {
                 if (warehouse.isBlank()) throw ErpException("请先在首页选择作业仓库", code = 400)
-                val page = api.inboundList(status = "pending_putaway", pageSize = 100, warehouseCode = warehouse)
+                val page = api.inboundList(status = "pending_putaway", pageSize = 100, warehouseCode = warehouse, page = requestedPage)
                 if (current()) {
-                    pendingOrders = page.items.orEmpty()
-                        .filter { row -> row.warehouseCode == warehouse }
-                        .distinctBy { it.id }
+                    val result = mergeWorkListPages(pendingOrders, listOf(page), requestedPage, { it.id }) { it.warehouseCode == warehouse }
+                    pendingOrders = result.items
+                    pendingPutawayNextPage = result.nextPage
+                    pendingPutawayHasMore = result.hasMore
                 }
             } catch (e: Exception) {
                 if (current()) {
@@ -1317,9 +1330,9 @@ fun InboundScreen(modeKey: String, onBack: () -> Unit, vm: InboundViewModel = vi
                     Text("正在读取待上架单据…", color = PdaMuted, fontSize = 13.sp)
                 } else if (listError != null) {
                     FeedbackBar(Feedback(false, vm.displayMessage(listError)))
-                    TextButton(onClick = { vm.loadPendingPutaway() }) { Text("重试加载待上架单据") }
+                    TextButton(onClick = { vm.retryPendingPutaway() }) { Text("重试加载待上架单据") }
                 } else if (vm.pendingOrders.isEmpty()) {
-                    Text("当前仓库暂无待上架单据，可直接扫描入库单号", color = PdaMuted, fontSize = 13.sp)
+                    Text(if (vm.pendingPutawayHasMore) "本页暂无可作业单据，请加载更多或扫描入库单号" else "当前仓库暂无待上架单据，可直接扫描入库单号", color = PdaMuted, fontSize = 13.sp)
                 }
                 vm.pendingOrders.forEach { row ->
                     val remaining = row.itemList.sumOf { it.remainingPutaway }
@@ -1334,6 +1347,10 @@ fun InboundScreen(modeKey: String, onBack: () -> Unit, vm: InboundViewModel = vi
                         Text("仓库 ${row.warehouseCode.orEmpty().ifBlank { "—" }} · 待上架 $remaining / 应收 $expected", color = PdaMuted, fontSize = 12.sp)
                     }
                 }
+                if (vm.pendingPutawayHasMore && listError == null) {
+                    TextButton(onClick = { vm.loadPendingPutaway(append = true) }, enabled = !vm.pendingPutawayLoading) { Text("加载更多待上架单据") }
+                }
+                TextButton(onClick = { vm.loadPendingPutaway() }, enabled = !vm.pendingPutawayLoading) { Text("刷新待上架列表") }
             } else {
                 Text("先扫描单号绑定作业入库单", color = PdaMuted, fontSize = 13.sp)
             }
