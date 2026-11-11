@@ -222,13 +222,17 @@ describe('异步任务范围、原条件重试和结果真实性', () => {
     await expect(f.service.restartLegacyExport(8, 1, actor)).rejects.toThrow('导入可能已部分写入')
     expect(f.exporter.runExport).not.toHaveBeenCalled()
   })
-  it('导出不能把OMS读取失败当空数据，截断前达到上限也拒绝伪成功', async () => {
+  it('导出不能把OMS读取失败当空数据，完整结果不再在5000行截断', async () => {
     const prisma: any = { $queryRawUnsafe: jest.fn().mockRejectedValue(new Error('Synthetic OMS failure')) }
-    await expect(fetchOmsInventoryRows(prisma, {}, true)).rejects.toThrow('Synthetic OMS failure')
-    prisma.$queryRawUnsafe.mockResolvedValue(Array.from({ length: 5000 }, () => ({})))
-    await expect(fetchOmsInventoryRows(prisma, {}, true)).rejects.toThrow('达到 5000 条')
-    const holdings: any = { customerSkuInventory: { findMany: jest.fn().mockResolvedValue(Array.from({ length: 5000 }, () => ({}))) } }
-    await expect(fetchCatalogInventoryRows(holdings, {}, true)).rejects.toThrow('达到 5000 条')
+    await expect(fetchOmsInventoryRows(prisma, {}, true)).rejects.toThrow('无法读取 OMS 库存，请稍后重试')
+    prisma.$queryRawUnsafe.mockResolvedValue(Array.from({ length: 5001 }, (_, i) => ({
+      id: i, sku: `S-${i}`, name: '库存', available: 1, warehouse: 'jhb1',
+    })))
+    await expect(fetchOmsInventoryRows(prisma, {}, true)).resolves.toHaveLength(5001)
+    expect(prisma.$queryRawUnsafe.mock.calls.at(-1)[0]).not.toMatch(/LIMIT/)
+    const holdings: any = { customerSkuInventory: { findMany: jest.fn().mockResolvedValue([]) } }
+    await expect(fetchCatalogInventoryRows(holdings, {}, true)).resolves.toEqual([])
+    expect(holdings.customerSkuInventory.findMany.mock.calls[0][0]).not.toHaveProperty('take')
   })
   it('达到导出上限不静默截断', async () => {
     const prisma: any = { syncLog: { findMany: jest.fn().mockResolvedValue(Array.from({ length: 5001 }, () => ({ id: 1n, status: 'failed', createdAt: new Date(), errorMessage: 'SQLSTATE secret' }))) } }

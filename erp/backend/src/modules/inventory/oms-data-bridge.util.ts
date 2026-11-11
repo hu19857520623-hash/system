@@ -318,7 +318,7 @@ function mapOmsProductRow(r: Record<string, unknown>) {
   })
 }
 
-export async function fetchOmsInventoryRows(prisma: PrismaService, filters: MergedInventoryFilters) {
+export async function fetchOmsInventoryRows(prisma: PrismaService, filters: MergedInventoryFilters, strict = false) {
   const conditions: string[] = ['1=1']
   const params: unknown[] = []
 
@@ -386,6 +386,8 @@ export async function fetchOmsInventoryRows(prisma: PrismaService, filters: Merg
     return rows.map(mapOmsInventoryRow)
   } catch (err) {
     if (err instanceof ServiceUnavailableException) throw err
+    // strict 只表示导出不能把失败当成空结果；两种调用都返回中文，不把数据库英文带回页面。
+    void strict
     throw new ServiceUnavailableException('无法读取 OMS 库存，请稍后重试')
   }
 }
