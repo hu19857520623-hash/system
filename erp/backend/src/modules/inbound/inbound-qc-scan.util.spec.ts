@@ -39,4 +39,9 @@ describe('parseInboundQcScanInput', () => {
       heightCm: 6.5,
     })
   })
+
+  it('rejects an unreadable scan and a payload without a product code in Chinese', () => {
+    expect(() => parseInboundQcScanInput('{')).toThrow('扫描内容无法识别，请重新扫描')
+    expect(() => parseInboundQcScanInput('{"lengthCm":1}')).toThrow('扫描内容缺少有效商品编码')
+  })
 })
