@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { applyErpInventoryView, deleteInventoryProduct, inventoryProductsInput, productWriteFields, saveInventoryProducts } from './inventory-write.util.js'
+import { applyOwnedInventoryNotification } from './owned-inventory-notification.util.js'
 
 test('metadata cannot update stock, catalog membership or catalog commercial data; new stock is zero',()=>{
   const data={customerId:'c1',name:'商品',availableQty:999,lockedQty:999,inCatalog:true,price:7,cost:3}
@@ -46,7 +47,7 @@ function mirrorFixture() {
     {id:'other-customer',customerId:'c2',sku:'TKL1-A',warehouse:'jhb1',stockSource:'owned',available:7}]
   const products:any[]=[{id:'p',customerId:'c1',internalSku:'TKL1-A',availableQty:900,lockedQty:901,inCatalog:false}]
   const tx:any={inventoryItem:{
-    findMany:async({where}:any)=>inventory.filter(i=>i.customerId===where.customerId&&(!where.warehouse||where.warehouse.in.includes(i.warehouse))),
+    findMany:async({where}:any)=>inventory.filter(i=>i.customerId===where.customerId&&(!where.stockSource||i.stockSource===where.stockSource)&&(!where.OR||where.OR.some((clause:any)=>clause.warehouse?clause.warehouse.in.includes(i.warehouse):i.stockSource===clause.stockSource))),
     findUnique:async({where}:any)=>inventory.find(i=>i.id===where.id)||null,
     update:async({where,data}:any)=>Object.assign(inventory.find(i=>i.id===where.id),data),
     upsert:async({where,create,update}:any)=>{const current=inventory.find(i=>i.id===where.id);if(current)Object.assign(current,update);else inventory.push(create)},
@@ -54,6 +55,52 @@ function mirrorFixture() {
   const item:any={id:7,sku:'TKL1-A',productName:'服务端商品',stockSource:'owned',warehouseAvailable:5,warehouseLocked:2,inTransitQty:3,pendingShelvingQty:1,unitPrice:4}
   return {tx,inventory,products,item}
 }
+
+function notificationFixture() {
+  const f = mirrorFixture(), events: string[] = []
+  f.tx.$queryRaw = async (query: any) => { assert.match(String(query.sql || query.join('?')), /FOR UPDATE/); events.push('locked'); return [{ code: 'TKL1' }] }
+  const db: any = { $transaction: async (fn: any) => fn(f.tx) }
+  const view: any = { customerCode: 'TKL1', warehouseCode: 'WMS-JHB-01', items: [{ ...f.item, warehouseCode: 'WMS-JHB-01', pendingShelvingQty: 5 }], total: 1 }
+  const load = async (code: string, warehouse: string) => { events.push('loaded'); assert.equal(code, 'TKL1'); assert.equal(warehouse, 'WMS-JHB-01'); return view }
+  return { ...f, events, db, view, load, apply: () => applyOwnedInventoryNotification(db, 'c1', 'TKL1', 'jhb1', load) }
+}
+
+test('自有库存通知在客户锁内读取完整ERP累计库存，保留其他仓库/客户和货盘', async () => {
+  const f = notificationFixture(); await f.apply()
+  assert.deepEqual(f.events, ['locked', 'loaded'])
+  assert.equal(f.inventory.find(i => i.id === 'old').pendingShelving, 5)
+  assert.equal(f.inventory.find(i => i.id === 'old').available, 5)
+  assert.equal(f.inventory.find(i => i.id === 'duplicate').available, 0)
+  assert.equal(f.inventory.find(i => i.id === 'stale').available, 900)
+  assert.equal(f.inventory.find(i => i.id === 'other-warehouse').available, 7)
+  assert.equal(f.inventory.find(i => i.id === 'other-customer').available, 7)
+})
+
+test('同一仓库大小写和未补零编码使用相同规范仓库，不将有效库存误清零', async () => {
+  const f = notificationFixture()
+  await applyOwnedInventoryNotification(f.db, 'c1', 'TKL1', ' wms-jhb-1 ', f.load)
+  assert.equal(f.inventory.find(i => i.id === 'old').pendingShelving, 5)
+})
+
+test('通知再次到达重新读取当前ERP，累计待上架可以下降或清零，缺失自有行不影响货盘', async () => {
+  const f = notificationFixture(); await f.apply()
+  f.view.items[0].pendingShelvingQty = 3; await f.apply()
+  assert.equal(f.inventory.find(i => i.id === 'old').pendingShelving, 3)
+  f.view.items = []; f.view.total = 0; await f.apply()
+  assert.equal(f.inventory.find(i => i.id === 'old').available, 0)
+  assert.equal(f.inventory.find(i => i.id === 'old').pendingShelving, 0)
+  assert.equal(f.inventory.find(i => i.id === 'stale').available, 900)
+})
+
+test('客户/仓库不匹配、未知来源或不完整ERP视图均在覆盖镜像前拒绝', async () => {
+  for (const patch of [{ customerCode: 'OTHER' }, { warehouseCode: 'WMS-CPT-01' }, { total: 2 }, { items: [{ stockSource: 'unknown', warehouseCode: 'WMS-JHB-01' }] }]) {
+    const f = notificationFixture(); Object.assign(f.view, patch)
+    await assert.rejects(f.apply(), /库存范围返回不完整/)
+    assert.equal(f.inventory.find(i => i.id === 'old').available, 900)
+  }
+  const f = notificationFixture(); await assert.rejects(applyOwnedInventoryNotification(f.db, 'c1', 'OTHER', 'jhb1', f.load), /客户归属/)
+  assert.deepEqual(f.events, ['locked'])
+})
 test('canonical sync clears duplicate/stale stock and preserves unrelated customer, warehouse and EAN',async()=>{
   const f=mirrorFixture();const result=await applyErpInventoryView(f.tx,'c1','WMS-JHB-01',[f.item])
   assert.equal(f.inventory.find(i=>i.id==='old').available,5);assert.equal(f.inventory.find(i=>i.id==='old').ean,'KEEP')
@@ -65,6 +112,20 @@ test('new mirrors use stable bounded scoped IDs; explicit zero values update the
   const f=mirrorFixture();await applyErpInventoryView(f.tx,'c1','WMS-JHB-03',[f.item]);await applyErpInventoryView(f.tx,'c1','WMS-JHB-03',[{...f.item,warehouseAvailable:0,warehouseLocked:0}])
   const rows=f.inventory.filter(i=>i.warehouse==='jhb3');assert.equal(rows.length,1);assert.ok(rows[0].id.length<=50);assert.equal(rows[0].available,0)
   assert.equal(f.inventory.find(i=>i.id==='old').available,900)
+})
+
+test('global catalog holding reuses its existing JHB mirror across jhb1 aliases and clears duplicate free stock without erasing history',async()=>{
+  const f=mirrorFixture()
+  f.inventory.push({id:'csi',customerId:'c1',sku:'TKL-C',warehouse:'JHB',stockSource:'catalog',available:0,locked:1,pendingOutbound:2,shipped:3})
+  f.inventory.push({id:'erp-c',customerId:'c1',sku:'TKL-C',warehouse:'jhb1',stockSource:'catalog',available:0,locked:1,pendingOutbound:0,shipped:0})
+  const item={...f.item,sku:'TKL-C',stockSource:'catalog',quantity:1,warehouseAvailable:0,warehouseLocked:0}
+  await applyErpInventoryView(f.tx,'c1','WMS-JHB-01',[item])
+  const mirrors=f.inventory.filter(row=>row.sku==='TKL-C')
+  assert.equal(mirrors.length,2);assert.equal(mirrors.reduce((sum,row)=>sum+row.locked,0),1)
+  assert.equal(mirrors[0].pendingOutbound,2);assert.equal(mirrors[0].shipped,3)
+  await applyErpInventoryView(f.tx,'c1','WMS-JHB-01',[])
+  assert.equal(mirrors.reduce((sum,row)=>sum+row.locked,0),0)
+  assert.equal(f.inventory.find(row=>row.id==='other-warehouse').available,7)
 })
 test('invalid ERP quantities or duplicate scope rows reject rather than coercing quantities',async()=>{
   for(const value of ['5',-1,1.5,NaN,2147483648]){const f=mirrorFixture();await assert.rejects(applyErpInventoryView(f.tx,'c1','WMS-JHB-01',[{...f.item,warehouseAvailable:value}]),/数量无效/)}

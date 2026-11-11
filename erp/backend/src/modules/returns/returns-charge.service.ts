@@ -28,7 +28,7 @@ export class ReturnsChargeService {
     private billing: BillingService,
   ) {}
 
-  async createReturnCharge(data: ReturnChargeInput) {
+  async createReturnCharge(data: ReturnChargeInput, notify = true) {
     const customer = await this.prisma.customer.findUnique({ where: { id: BigInt(data.customerId) } })
     if (!customer) throw new NotFoundException('客户不存在')
     const suffix = await this.nextChargeSuffix(data.customerId)
@@ -51,7 +51,7 @@ export class ReturnsChargeService {
       data.returnNo,
       data.warehouseCode || 'WMS-JHB-01',
     )
-    void this.billing.pushCustomerBillingToOms(data.customerId)
+    if (notify) void this.billing.pushCustomerBillingToOms(data.customerId)
   }
 
   async clearPendingAutoReturnCharges(returnNo: string) {

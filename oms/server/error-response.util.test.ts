@@ -19,3 +19,27 @@ test('OMS error display preserves Chinese actionable business errors and transla
   assert.equal(userFacingError('{"error":"SKU A-01 库存不足"}'), 'SKU A-01 库存不足')
   assert.equal(userFacingError({ message: ['客户代码不能为空', 'sku must be a string'] }, 400), '客户代码不能为空；输入信息有误，请检查后重试')
 })
+
+test('generic resource responses translate as complete messages through server and frontend', () => {
+  for (const error of ['Resource not found', 'RESOURCE NOT FOUND.', 'Record not found', 'Document not found', 'Entity not found', 'Resource 未找到所需记录']) {
+    const response = localizedErrorResponse({ error, code: 'MISSING_RESOURCE' }, 404)
+    assert.deepEqual(response, { error: '未找到所需记录，请刷新后重试', code: 'MISSING_RESOURCE' })
+    assert.equal(userFacingError(response, 404), response.error)
+  }
+  assert.equal(userFacingError('读取原单失败：Resource not found', 404), '读取原单失败：未找到所需记录，请刷新后重试')
+  assert.equal(userFacingError('SKU Resource-01 缺少 2 件，请核对入库单 RV-81', 400), 'SKU Resource-01 缺少 2 件，请核对入库单 RV-81')
+})
+
+test('technical errors keep Chinese recovery context without exposing database and network details', () => {
+  const messages = [
+    '原单已保存，同步失败：Invalid `prisma.inboundOrder.update()` invocation',
+    '原单已保存，同步失败：SQLSTATE 45000 isolated database fault',
+    '原单已保存，同步失败：ECONNRESET 127.0.0.1:3000',
+    '原单已保存，同步失败：<html>Bad Gateway</html>',
+  ]
+  for (const error of messages) {
+    const response = localizedErrorResponse({ error }, 503)
+    assert.match(String(response.error), /^原单已保存，同步失败：服务暂时不可用/)
+    assert.doesNotMatch(String(response.error), /prisma|SQLSTATE|ECONN|127\.0\.0\.1|<html>/i)
+  }
+})

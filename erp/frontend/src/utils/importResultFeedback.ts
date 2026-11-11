@@ -60,7 +60,7 @@ function failureListVNode(failures: ImportRowFailure[]) {
 }
 
 /** 按成功/失败数量选择提示类型；有失败明细时弹出详情 */
-export async function showImportResultFeedback(job: ImportJobResult | null | undefined) {
+export async function showImportResultFeedback(job: ImportJobResult | null | undefined, canDownload?: () => boolean) {
   if (!job) return
   const { imported, failed } = importCounts(job)
   const failures = parseImportFailures(job)
@@ -75,7 +75,7 @@ export async function showImportResultFeedback(job: ImportJobResult | null | und
   }
 
   if (failed > 0 && failures.length > 0) {
-    await showImportFailuresDialog(summary, failures)
+    await showImportFailuresDialog(summary, failures, undefined, canDownload)
   }
 }
 
@@ -84,6 +84,7 @@ export async function showImportFailuresDialog(
   summary: string,
   failures: ImportRowFailure[],
   csvFilename = '导入失败明细',
+  canDownload = () => true,
 ) {
   if (!failures.length) {
     ElMessage.info(summary)
@@ -104,7 +105,7 @@ export async function showImportFailuresDialog(
       },
     )
   } catch (action) {
-    if (action === 'cancel') {
+    if (action === 'cancel' && canDownload()) {
       downloadImportFailuresCsv(csvFilename, failures)
     }
   }

@@ -22,6 +22,7 @@ export type PoFinanceCostEntry = {
   costType: string
   amountRmb: number
   sku?: string
+  poItemId?: string
   remark?: string
 }
 
@@ -65,15 +66,15 @@ export function computePoFinanceApprovalCosts(
     const tax = round2(qty * unitTax)
 
     if (productCost > 0) {
-      entries.push({ costType: '采购货款', amountRmb: productCost, sku: line.sku, remark: `采购单 ${poNo} · SKU ${line.sku}` })
+      entries.push({ costType: '采购货款', amountRmb: productCost, sku: line.sku, poItemId: String(line.id), remark: `采购单 ${poNo} · SKU ${line.sku}` })
       productTotal += productCost
     }
     if (domesticFreight > 0) {
-      entries.push({ costType: '国内运费', amountRmb: domesticFreight, sku: line.sku, remark: `采购单 ${poNo} · SKU ${line.sku}` })
+      entries.push({ costType: '国内运费', amountRmb: domesticFreight, sku: line.sku, poItemId: String(line.id), remark: `采购单 ${poNo} · SKU ${line.sku}` })
       domesticFreightTotal += domesticFreight
     }
     if (tax > 0) {
-      entries.push({ costType: '采购税费', amountRmb: tax, sku: line.sku, remark: `采购单 ${poNo} · SKU ${line.sku}` })
+      entries.push({ costType: '采购税费', amountRmb: tax, sku: line.sku, poItemId: String(line.id), remark: `采购单 ${poNo} · SKU ${line.sku}` })
       taxTotal += tax
     }
   }

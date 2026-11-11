@@ -14,7 +14,7 @@ export function ToastHost() {
   useEffect(() => subscribeUserToast(setToast), [])
 
   useEffect(() => {
-    if (!toast) return
+    if (!toast || toast.kind === 'err') return
     const timer = window.setTimeout(() => setToast(null), 6000)
     return () => window.clearTimeout(timer)
   }, [toast])
@@ -26,6 +26,7 @@ export function ToastHost() {
       <div
         className={`pointer-events-auto rounded-xl px-4 py-3 text-sm shadow-lg ring-1 ${KIND_STYLES[toast.kind]}`}
         role="alert"
+        data-persist={toast.kind === 'err' ? 'failure' : 'temporary'}
       >
         <div className="flex items-start gap-2">
           <p className="flex-1 whitespace-pre-wrap">{toast.text}</p>

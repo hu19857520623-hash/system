@@ -1,5 +1,5 @@
 import { apiGet, apiPost, apiPut } from './client'
-import type { OutboundRecipient } from '../data/mockData'
+import type { OutboundRecipient, InboundOrder } from '../data/mockData'
 
 export type ErpCatalogItem = {
   sku: string
@@ -120,6 +120,9 @@ export type ErpInboundAsnItem = {
 }
 
 export type ErpInboundOrder = {
+  revision?: string
+  syncPending?: boolean
+
   id: number
   inboundNo: string
   warehouseCode: string
@@ -244,6 +247,8 @@ export type ErpInventoryViewItem = ErpSkuHolding & {
 
 export function createErpInbound(body: {
   inboundNo?: string
+  clientRequestId?: string
+  expectedVersion?: string
   customerCode?: string
   customerId?: string
   warehouseCode?: string
@@ -265,6 +270,8 @@ export function createErpInbound(body: {
 
 export function updateErpInbound(inboundNo: string, body: {
   inboundNo?: string
+  clientRequestId?: string
+  expectedVersion?: string
   customerCode?: string
   customerId?: string
   warehouseCode?: string
@@ -285,6 +292,8 @@ export function updateErpInbound(inboundNo: string, body: {
 }
 
 export function cancelErpInbound(inboundNo: string, body: {
+  clientRequestId?: string
+  expectedVersion?: string
   customerCode?: string
   customerId?: string
 }) {
@@ -293,6 +302,8 @@ export function cancelErpInbound(inboundNo: string, body: {
 
 export function reactivateErpInbound(inboundNo: string, body: {
   inboundNo?: string
+  clientRequestId?: string
+  expectedVersion?: string
   customerCode?: string
   customerId?: string
   warehouseCode?: string
@@ -312,8 +323,16 @@ export function reactivateErpInbound(inboundNo: string, body: {
   return apiPost<ErpInboundOrder>(`/erp/inbound/${encodeURIComponent(inboundNo)}/reactivate`, body)
 }
 
+export function fetchErpInbound(inboundNo: string) {
+  return apiGet<ErpInboundOrder>(`/erp/inbound/${encodeURIComponent(inboundNo)}`)
+}
+
+export function resolveErpInboundOriginal(inboundNo: string, resolution: 'check' | 'cancel', body: { customerCode: string; kind: 'create' | 'update' | 'reactivate' | 'cancel'; original: Record<string, unknown> }) {
+  return apiPost<{ outcome: 'completed' | 'cancelled' | 'unresolved'; order: ErpInboundOrder | null; message: string }>(`/erp/inbound/${encodeURIComponent(inboundNo)}/original/${resolution}`, body)
+}
+
 export function syncErpInbounds(customerCode: string) {
-  return apiGet<{ items: ErpInboundOrder[]; total: number }>(
+  return apiGet<{ items: ErpInboundOrder[]; total: number; drafts?: InboundOrder[]; draftReadErrors?: { inboundNo: string; message: string }[] }>(
     `/erp/inbound/by-customer/${encodeURIComponent(customerCode)}`,
   )
 }
@@ -389,8 +408,8 @@ export function syncErpReturns(customerCode: string) {
   )
 }
 
-export function cancelErpReturn(returnNo: string, customerCode: string) {
-  return apiPost<ErpReturnOrder>(`/erp/returns/${encodeURIComponent(returnNo)}/cancel`, { customerCode })
+export function cancelErpReturn(returnNo: string, body: { customerCode: string; expectedUpdatedAt: string; clientRequestId: string }) {
+  return apiPost<ErpReturnOrder>(`/erp/returns/${encodeURIComponent(returnNo)}/cancel`, body)
 }
 
 export function decideErpReturn(

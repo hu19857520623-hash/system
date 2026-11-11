@@ -20,12 +20,12 @@ export class OmsOutboundAttachmentDto {
   @IsOptional()
   @Transform(({ value }) => normalizeOutboundAttachmentFileType(value))
   @IsString()
-  @MaxLength(30)
+  @MaxLength(30, { message: '文件类型最长 30 个字符' })
   fileType?: string
 
   @IsString()
-  @IsNotEmpty()
-  @MaxLength(200)
+  @IsNotEmpty({ message: '请填写文件名' })
+  @MaxLength(200, { message: '文件名最长 200 个字符' })
   fileName!: string
 
   @IsString()
@@ -41,14 +41,14 @@ export class OmsOutboundAttachmentDto {
 
   @IsOptional()
   @IsString()
-  @MaxLength(100)
+  @MaxLength(100, { message: '平台条码最长 100 个字符' })
   platformBarcode?: string
 
   @ValidateIf((value) =>
     value.labelRole === 'unitCrop' || value.sku != null || value.unitIndex != null)
   @Type(() => Number)
-  @IsInt()
-  @Min(1)
+  @IsInt({ message: '商品标签序号必须是大于等于 1 的整数' })
+  @Min(1, { message: '商品标签序号必须是大于等于 1 的整数' })
   unitIndex?: number
 
   @IsOptional()
@@ -71,12 +71,12 @@ export class OmsOutboundAttachmentDto {
 
   @IsOptional()
   @IsString()
-  @MaxLength(30)
+  @MaxLength(30, { message: '标签用途最长 30 个字符' })
   labelRole?: string
 
   @IsOptional()
   @IsString()
-  @Matches(/^[a-fA-F0-9]{64}$/)
+  @Matches(/^[a-fA-F0-9]{64}$/, { message: '文件校验码必须是 64 位十六进制字符' })
   contentHash?: string
 }
 

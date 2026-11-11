@@ -7,12 +7,14 @@ describe('InventoryService.transferLogistics', () => {
   const product = { id: 9n, sku: 'TKL-HX6' }
 
   function createService() {
-    const tx = {
+    const tx: any = {
+      $queryRaw:jest.fn(),warehouse:{findUnique:jest.fn()},product:{findFirst:jest.fn()},
+      sysUser:{findUnique:jest.fn().mockResolvedValue({realName:'库存验收员'})},operationLog:{create:jest.fn()},
       inventory: { findUnique: jest.fn() },
     }
     const prisma = {
-      warehouse: { findUnique: jest.fn() },
-      product: { findFirst: jest.fn() },
+      warehouse: tx.warehouse,
+      product: tx.product,
       $transaction: jest.fn(async (fn: (client: typeof tx) => unknown) => fn(tx)),
     }
     const opLog = { log: jest.fn().mockResolvedValue(undefined) }
@@ -51,10 +53,11 @@ describe('InventoryService.transferLogistics', () => {
       changeType: 'logistics_transfer',
       remark: '从 深圳集运物流仓 调入 · 集货',
     }))
-    expect(opLog.log).toHaveBeenCalledWith(expect.objectContaining({
+    expect(tx.operationLog.create).toHaveBeenCalledWith(expect.objectContaining({data:expect.objectContaining({
       action: 'logistics_transfer',
       targetId: 'TKL-HX6',
-    }))
+    })}))
+    expect(opLog.log).not.toHaveBeenCalled()
   })
 
   it('rejects when available qty is insufficient', async () => {
@@ -83,4 +86,27 @@ describe('InventoryService.transferLogistics', () => {
       qty: 1,
     }, 1)).rejects.toBeInstanceOf(NotFoundException)
   })
+  it('审计失败使包含调出调入的事务拒绝，不调用独立日志连接',async()=>{
+    const {service,prisma,tx,opLog,inventoryMutation}=createService();prisma.warehouse.findUnique.mockResolvedValueOnce(sz).mockResolvedValueOnce(yw);prisma.product.findFirst.mockResolvedValue(product);tx.inventory.findUnique.mockResolvedValue({availableQty:10});tx.operationLog.create.mockRejectedValueOnce(new Error('库存日志失败'))
+    await expect(service.transferLogistics({sku:'TKL-HX6',fromWarehouseCode:'LW-SZ-01',toWarehouseCode:'LW-YW-01',qty:2},1)).rejects.toThrow('库存日志失败')
+    expect(inventoryMutation.applyWarehouseQtyDelta).toHaveBeenCalledTimes(2);expect(opLog.log).not.toHaveBeenCalled()
+  })
+  it('returns original receipt without repeating stock mutation and rejects changed content', async () => {
+    const { service, prisma, tx, inventoryMutation } = createService()
+    prisma.warehouse.findUnique.mockImplementation(async ({ where }) => where.warehouseCode === sz.warehouseCode ? sz : yw)
+    prisma.product.findFirst.mockResolvedValue(product)
+    tx.inventory.findUnique.mockResolvedValue({ availableQty: 80 })
+    let receipt: any = null
+    tx.operationLog = { findFirst: jest.fn(async () => receipt) }
+    tx.operationLog.create = jest.fn(async ({ data }: any) => { receipt = { detail: data.detail }; return {} })
+    const request = { sku: 'TKL-HX6', fromWarehouseCode: sz.warehouseCode, toWarehouseCode: yw.warehouseCode, qty: 3, clientRequestId: '7d3ec662-cd20-4b8c-b459-eb2d74851e76' }
+    const original = await service.transferLogistics(request, 7)
+    tx.inventory.findUnique.mockResolvedValue({ availableQty: 0 })
+    expect(await service.transferLogistics(request, 7)).toEqual({ ...original, duplicate: true })
+    expect(inventoryMutation.applyWarehouseQtyDelta).toHaveBeenCalledTimes(2)
+    await expect(service.transferLogistics({ ...request, qty: 4 }, 7)).rejects.toThrow('原调拨请求内容不同')
+    expect(inventoryMutation.applyWarehouseQtyDelta).toHaveBeenCalledTimes(2)
+    expect(tx.operationLog.findFirst).toHaveBeenLastCalledWith(expect.objectContaining({ where: expect.objectContaining({ operatorId: 7n }) }))
+  })
+
 })

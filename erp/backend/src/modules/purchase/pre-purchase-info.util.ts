@@ -173,7 +173,7 @@ export function parsePrePurchaseInfo(content: string) {
         const normalized = value.replace(/[/.]/g, '-')
         const parts = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(normalized)
         const date = parts ? `${parts[1]}-${parts[2].padStart(2, '0')}-${parts[3].padStart(2, '0')}` : ''
-        if (!date || !Number.isFinite(Date.parse(date)) || new Date(date).toISOString().slice(0, 10) !== date) { fail(column.label, value, '须为有效的 YYYY-MM-DD 日期'); return }
+        if (!date || !Number.isFinite(Date.parse(date)) || new Date(date).toISOString().slice(0, 10) !== date) { fail(column.label, value, '须为有效日期，请按年-月-日填写，例如 2026-11-11'); return }
         data[column.key] = date
       } else {
         if (column.length && value.length > column.length) fail(column.label, value, `不能超过 ${column.length} 字`)

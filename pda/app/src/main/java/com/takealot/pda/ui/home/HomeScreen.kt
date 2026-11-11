@@ -63,16 +63,30 @@ fun HomeScreen(onInbound: (String) -> Unit, onOutbound: (String) -> Unit, onStoc
     val scannerReady by ScanBus.receiverActive.collectAsState()
     val scannerHealth by ScanBus.health.collectAsState()
     val scanRecords by PdaApp.instance.workJournal.scanRecords.collectAsState()
-    val pendingSync = scanRecords.count { it.state == "pending" }
+    val visibleRecords = scanRecords.filter(PdaApp.instance.workJournal::canSeeRecord)
+    val pendingSync = visibleRecords.count { it.state == "pending" }
+    val failedScans = visibleRecords.count { it.state == "failed" }
+    var warehouseRequest by remember { mutableStateOf(0) }
+    var warehouseLoading by remember { mutableStateOf(true) }
+    var warehouseError by remember { mutableStateOf(false) }
 
-    LaunchedEffect(Unit) {
-        runCatching { api.warehouses("overseas") }.onSuccess { list ->
+    LaunchedEffect(warehouseRequest) {
+        warehouseLoading = true
+        warehouseError = false
+        try {
+            val list = api.warehouses("overseas")
             warehouses = list
             if (warehouseCode.isBlank() && list.isNotEmpty()) {
                 session.warehouseCode = list.first().code
                 session.warehouseName = list.first().title
                 warehouseCode = list.first().code
             }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            warehouseError = true
+        } finally {
+            warehouseLoading = false
         }
     }
 
@@ -112,7 +126,16 @@ fun HomeScreen(onInbound: (String) -> Unit, onOutbound: (String) -> Unit, onStoc
         }
         Column {
             Text(tr("work_warehouse"), color = PdaMuted, fontSize = 12.sp)
-            Text(whLabel, color = PdaText, fontSize = 16.sp, modifier = Modifier.fillMaxWidth().background(PdaSurface, RoundedCornerShape(10.dp)).clickable { menuOpen = true }.padding(14.dp))
+            Text(whLabel, color = PdaText, fontSize = 16.sp, modifier = Modifier.fillMaxWidth().background(PdaSurface, RoundedCornerShape(10.dp)).clickable(enabled = warehouses.isNotEmpty()) { menuOpen = true }.padding(14.dp))
+            when {
+                warehouseLoading -> Text("正在读取仓库列表…", color = PdaMuted, fontSize = 13.sp)
+                warehouseError -> TextButton(onClick = { warehouseRequest++ }) {
+                    Text("仓库列表读取失败，点击重试", color = PdaErr)
+                }
+                warehouses.isEmpty() -> TextButton(onClick = { warehouseRequest++ }) {
+                    Text("暂无可选海外仓，点击重新读取", color = PdaMuted)
+                }
+            }
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                 warehouses.forEach { wh ->
                     DropdownMenuItem(text = { Text("${wh.title} (${wh.code})") }, onClick = {
@@ -124,12 +147,27 @@ fun HomeScreen(onInbound: (String) -> Unit, onOutbound: (String) -> Unit, onStoc
                 }
             }
         }
-        val active = PdaApp.instance.workJournal.latestActive()
-        if (pendingSync > 0) {
-            WorkTile("待同步记录", "$pendingSync 条操作尚未得到 ERP 确认，点击处理", PdaErr, true, onClick = onSync)
+        val resume = PdaApp.instance.workJournal.resumeForHome()
+        val active = resume.work
+        if (pendingSync > 0 || failedScans > 0) {
+            WorkTile("待同步与异常记录", "待确认 $pendingSync 条 · 失败 $failedScans 条", PdaErr, true, onClick = onSync)
+        }
+        if (active == null && PdaApp.instance.workJournal.hasResumeInOtherWarehouse()) {
+            Text("其他仓库有未完成作业，请切换到对应仓库继续。", color = PdaMuted, fontSize = 13.sp)
+        }
+        if (active == null && PdaApp.instance.workJournal.hasUnassignedResume()) {
+            Text("历史作业缺少提交账号，请核对 ERP 单据后，从对应作业入口重新绑定。", color = PdaMuted, fontSize = 13.sp)
+        }
+        if (resume.hasRestrictedWork) {
+            Text("部分未完成作业需要相应权限，请联系主管核对。", color = PdaMuted, fontSize = 13.sp)
         }
         if (active != null) {
-            WorkTile(tr("resume"), "${active.orderNo} · ${active.mode}", PdaAccent, true) {
+            val stageKey = when (active.mode) {
+                "catalog" -> "catalog_inbound"
+                "count" -> "stocktake"
+                else -> active.mode
+            }
+            WorkTile(tr("resume"), "${active.orderNo} · ${tr(stageKey)}", PdaAccent, true) {
                 when (active.module) {
                     "inbound" -> onInbound(active.mode)
                     "outbound" -> onOutbound(active.mode)

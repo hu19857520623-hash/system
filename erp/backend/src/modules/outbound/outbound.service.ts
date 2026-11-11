@@ -4,12 +4,14 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common'
 import { createHash, randomUUID } from 'crypto'
 import { Prisma } from '@prisma/client'
 import { PrismaService } from '../../common/prisma/prisma.service'
+import { PermissionsService } from '../../common/permissions/permissions.service'
 import { FileStoreService } from '../../common/file-store.service'
 import { OperationLogService } from '../operation-log/operation-log.service'
 import { BillingService } from '../billing/billing.service'
@@ -173,6 +175,8 @@ function idempotencyPayload(value: {
 
 @Injectable()
 export class OutboundService {
+  private readonly logger = new Logger(OutboundService.name)
+
   constructor(
     private prisma: PrismaService,
     private billing: BillingService,
@@ -180,6 +184,7 @@ export class OutboundService {
     private inventoryMutation: InventoryMutationService,
     private files: FileStoreService,
     private opLog: OperationLogService,
+    private permissions: PermissionsService = new PermissionsService(prisma),
   ) {}
 
   private runInTx<T>(
@@ -330,16 +335,16 @@ export class OutboundService {
     return where
   }
 
-  private async enrichOrders(rows: any[]) {
+  private async enrichOrders(rows: any[], db: Prisma.TransactionClient = this.prisma) {
     const customerIds = [...new Set(rows.map((r) => r.customerId).filter(Boolean))] as bigint[]
     const pickerIds = [...new Set(rows.map((r) => r.pickerId).filter(Boolean))] as bigint[]
     const reviewerIds = [...new Set(rows.map((r) => r.reviewerId).filter(Boolean))] as bigint[]
     const userIds = [...new Set([...pickerIds, ...reviewerIds])]
     const customers = customerIds.length
-      ? await this.prisma.customer.findMany({ where: { id: { in: customerIds } } })
+      ? await db.customer.findMany({ where: { id: { in: customerIds } } })
       : []
     const users = userIds.length
-      ? await this.prisma.sysUser.findMany({ where: { id: { in: userIds } } })
+      ? await db.sysUser.findMany({ where: { id: { in: userIds } } })
       : []
     const custMap = new Map(
       customers.map((c) => [
@@ -357,11 +362,11 @@ export class OutboundService {
       rows.flatMap((r) => (r.items || []).map((i: any) => i.productId).filter(Boolean)),
     )] as bigint[]
     const products = productIds.length
-      ? await this.prisma.product.findMany({ where: { id: { in: productIds } } })
+      ? await db.product.findMany({ where: { id: { in: productIds } } })
       : []
     const productMap = new Map(products.map((p) => [Number(p.id), p]))
     const platformBySku = await loadPlatformBarcodesByInternalSku(
-      this.prisma,
+      db,
       rows.flatMap((r) =>
         (r.items || []).flatMap((i: any) => {
           const product = productMap.get(Number(i.productId))
@@ -516,13 +521,24 @@ export class OutboundService {
 
   async exportList(q: OutboundListQuery) {
     const where = this.buildListWhere(q)
-    const rows = await this.prisma.outboundOrder.findMany({
-      where,
-      include: { items: true, attachments: { orderBy: { id: 'asc' } } },
-      orderBy: { id: 'desc' },
-      take: 5000,
-    })
-    const items = await this.enrichOrders(rows)
+    const items = await this.prisma.$transaction(async tx => {
+      const result: any[] = []
+      let lastId: bigint | undefined
+      // The order, its lines and display names share one read snapshot. Keyset
+      // paging has no history cap and cannot silently return a partial file.
+      for (;;) {
+        const rows = await tx.outboundOrder.findMany({
+          where: lastId == null ? where : { AND: [where, { id: { lt: lastId } }] },
+          include: { items: true, attachments: { orderBy: { id: 'asc' } } },
+          orderBy: { id: 'desc' },
+          take: 500,
+        })
+        result.push(...await this.enrichOrders(rows, tx))
+        if (rows.length < 500) break
+        lastId = rows[rows.length - 1].id
+      }
+      return result
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead, timeout: 60000 })
     const destLabel: Record<string, string> = { cpt: 'CPT自提', fba: 'FBA转运', local: '本地配送' }
     const headers = [
       '出库单号', '客户', '仓库', '目的地', '箱货类型', '目的仓', 'PO单号', '批次号', '平台', '预约状态', '预约送仓时间', 'SKU摘要', '件数', '状态',
@@ -565,8 +581,8 @@ export class OutboundService {
     return toCsv(headers, dataRows)
   }
 
-  async detail(id: number) {
-    const row = await this.prisma.outboundOrder.findUnique({
+  async detail(id: number, db: Prisma.TransactionClient = this.prisma) {
+    const row = await db.outboundOrder.findUnique({
       where: { id: BigInt(id) },
       include: {
         items: { include: { pickAllocations: { orderBy: { id: 'asc' } } } },
@@ -574,14 +590,14 @@ export class OutboundService {
       },
     })
     if (!row) throw new NotFoundException('出库单不存在')
-    const [item] = await this.enrichOrders([row])
+    const [item] = await this.enrichOrders([row], db)
     const pickStatus = row.status === 'exception' ? row.exceptionFromStatus : row.status
     const showSuggestions = pickStatus === 'pending_pick' || pickStatus === 'picking'
     const items = await Promise.all(item.items.map(async (line) => {
       if (!showSuggestions || line.pickAllocations.length || line.pickedQty > 0) {
         return { ...line, suggestedLocations: [], locationUncovered: 0 }
       }
-      const plan = await this.suggestPickLocations(row.warehouseCode, line.sku, line.qty)
+      const plan = await this.suggestPickLocations(row.warehouseCode, line.sku, line.qty, db)
       return { ...line, suggestedLocations: plan.suggestions, locationUncovered: plan.uncovered }
     }))
     return { ...item, items }
@@ -931,14 +947,15 @@ export class OutboundService {
       if (message.includes('pdf-lib dependency')) {
         throw new ServiceUnavailableException('标签合并组件暂不可用，请联系管理员')
       }
-      throw new BadRequestException(`标签 PDF 合并失败：${message}`)
+      this.logger.warn(`出库标签合并失败: ${message}`)
+      throw new BadRequestException('标签 PDF 合并失败，请重新生成标签后再试')
     }
   }
 
   async downloadUnitLabel(id: number, sku: string, unitIndex: number) {
     const context = await this.getLabelOrder(id, sku)
     if (!Number.isInteger(unitIndex) || unitIndex < 1) {
-      throw new BadRequestException('unitIndex 必须是大于等于 1 的整数')
+      throw new BadRequestException('单件标签序号必须是大于等于 1 的整数')
     }
     const attachment = await this.prisma.outboundAttachment.findFirst({
       where: {
@@ -1014,46 +1031,128 @@ export class OutboundService {
     }
   }
 
-  async assignPicker(ids: number[], pickerId: number) {
-    if (!pickerId) throw new BadRequestException('请选择拣货员')
-    if (!ids?.length) throw new BadRequestException('请选择出库单')
-    const picker = await this.prisma.sysUser.findUnique({ where: { id: BigInt(pickerId) } })
-    if (!picker || picker.status !== 1) throw new BadRequestException('拣货员不存在或已停用')
-    if (!isWarehouseStaffRole(picker.roleCode)) {
-      throw new BadRequestException('只能分配仓储职位的拣货员，运营/销售等办公职位不能作为仓内岗位')
+  async pickers() {
+    const rows = await this.prisma.sysUser.findMany({ where: { status: 1 },
+      select: { id: true, username: true, realName: true, workstation: true, roleCode: true }, orderBy: { id: 'asc' } })
+    const eligible: { id: number; name: string; workstation: string }[] = []
+    // Reuse the same effective permission resolution as the API guard (custom > role > defaults).
+    for (const row of rows) {
+      if (isWarehouseStaffRole(row.roleCode) && await this.permissions.userHasPerm(Number(row.id), row.roleCode, 'outbound.pick')) {
+        eligible.push({ id: Number(row.id), name: row.realName || row.username, workstation: row.workstation || '' })
+      }
     }
+    return { items: eligible, total: eligible.length }
+  }
 
-    const orders = await this.prisma.outboundOrder.findMany({
-      where: { id: { in: ids.map((id) => BigInt(id)) } },
-    })
-    if (orders.length !== ids.length) throw new BadRequestException('部分出库单不存在')
-    const invalid = orders.filter((o) => !['pending_pick', 'picking'].includes(o.status))
-    if (invalid.length) {
-      throw new BadRequestException(`仅待拣货或拣货中状态可分配拣货员：${invalid.map((o) => o.outboundNo).join('、')}`)
-    }
-    const reassigning = orders.every((o) => o.status === 'picking')
-    if (!reassigning && orders.some((o) => o.status === 'picking')) {
-      throw new BadRequestException('请分别分配待拣货和拣货中的出库单')
-    }
+  async assignPicker(ids: number[], pickerId: number, original?: { clientRequestId: string; expectedOrders: { id: number; status: string; pickerId?: number | null }[] }, actor?: number) {
+    if (!Number.isSafeInteger(pickerId) || pickerId <= 0) throw new BadRequestException('请选择有效拣货员')
+    if (!ids?.length || ids.some(id => !Number.isSafeInteger(id) || id <= 0) || new Set(ids).size !== ids.length) throw new BadRequestException('请选择有效且不重复的出库单')
+    const fingerprint = original ? this.assignmentFingerprint(ids, pickerId, original, actor!) : ''
+    return this.prisma.$transaction(async tx => {
+      for (const user of [...new Set([pickerId, ...(original ? [actor!] : [])])].sort((a, b) => a - b)) await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(user)} FOR UPDATE`
+      // Stable order also serializes overlapping batches and picking without a partial batch update.
+      for (const id of [...ids].sort((a, b) => a - b)) await tx.$queryRaw`SELECT id FROM outbound_order WHERE id = ${BigInt(id)} FOR UPDATE`
+      if (original) {
+        const receipt = await this.readAssignmentReceipt(tx, original.clientRequestId, actor!, fingerprint)
+        if (receipt) {
+          if (receipt.action === 'assign_picker_cancel') throw new ConflictException('原分配请求已取消，请核对原操作结果')
+          return { ...(await this.assignmentOutcome(tx, original.clientRequestId, receipt)), duplicate: true }
+        }
+      }
+      const picker = await tx.sysUser.findUnique({ where: { id: BigInt(pickerId) } })
+      if (!picker || picker.status !== 1) throw new BadRequestException('拣货员不存在或已停用')
+      if (!isWarehouseStaffRole(picker.roleCode)) {
+        throw new BadRequestException('只能分配仓储职位的拣货员，运营/销售等办公职位不能作为仓内岗位')
+      }
+      if (!await new PermissionsService(tx as any).userHasPerm(pickerId, picker.roleCode, 'outbound.pick')) {
+        throw new BadRequestException('该人员当前没有拣货权限，请刷新候选名单后重新选择')
+      }
 
-    const updated = await this.prisma.outboundOrder.updateMany({
-      where: {
-        id: { in: ids.map((id) => BigInt(id)) },
-        status: reassigning ? 'picking' : 'pending_pick',
-      },
-      data: reassigning
-        ? { pickerId: BigInt(pickerId) }
-        : { pickerId: BigInt(pickerId), status: 'picking', pickingStartedAt: new Date() },
-    })
-    if (updated.count !== ids.length) {
-      throw new BadRequestException('出库单状态已变化，请刷新后重试')
-    }
-    return {
-      updated: ids.length,
-      pickerId,
-      pickerName: picker.realName || picker.username,
-      pickerWorkstation: picker.workstation || null,
-    }
+      const orders = await tx.outboundOrder.findMany({
+        where: { id: { in: ids.map((id) => BigInt(id)) } },
+      })
+      if (orders.length !== ids.length) throw new BadRequestException('部分出库单不存在')
+      if (original && orders.some(order => {
+        const expected = original.expectedOrders.find(row => row.id === Number(order.id))!
+        return expected.status !== order.status || Number(expected.pickerId || 0) !== Number(order.pickerId || 0)
+      })) throw new ConflictException('原单据状态或拣货员已变化，请查询或取消原请求后重新选择，勿覆盖后续分配')
+      const invalid = orders.filter((o) => !['pending_pick', 'picking'].includes(o.status))
+      if (invalid.length) {
+        throw new BadRequestException(`仅待拣货或拣货中状态可分配拣货员：${invalid.map((o) => o.outboundNo).join('、')}`)
+      }
+      const reassigning = orders.every((o) => o.status === 'picking')
+      if (!reassigning && orders.some((o) => o.status === 'picking')) {
+        throw new BadRequestException('请分别分配待拣货和拣货中的出库单')
+      }
+
+      const updated = await tx.outboundOrder.updateMany({
+        where: {
+          id: { in: ids.map((id) => BigInt(id)) },
+          status: reassigning ? 'picking' : 'pending_pick',
+        },
+        data: reassigning
+          ? { pickerId: BigInt(pickerId) }
+          : { pickerId: BigInt(pickerId), status: 'picking', pickingStartedAt: new Date() },
+      })
+      if (updated.count !== ids.length) {
+        throw new BadRequestException('出库单状态已变化，请刷新后重试')
+      }
+      if (original) {
+        const operator = await tx.sysUser.findUnique({ where: { id: BigInt(actor!) }, select: { realName: true, username: true } })
+        const receipt = await tx.operationLog.create({ data: { module: 'outbound', action: 'assign_picker', targetType: 'outbound_assignment', targetId: String(actor), operatorId: BigInt(actor!), operatorName: operator?.realName || operator?.username,
+          detail: { clientRequestId: original.clientRequestId, requestFingerprint: fingerprint, ids, pickerId, expectedOrders: original.expectedOrders } } })
+        return this.assignmentOutcome(tx, original.clientRequestId, receipt)
+      }
+      return {
+        updated: ids.length,
+        pickerId,
+        pickerName: picker.realName || picker.username,
+        pickerWorkstation: picker.workstation || null,
+      }
+    }, { timeout: 20000 })
+  }
+
+  private assignmentFingerprint(ids: number[], pickerId: number, original: { clientRequestId: string; expectedOrders: { id: number; status: string; pickerId?: number | null }[] }, actor: number) {
+    if (!Number.isSafeInteger(actor) || actor <= 0 || !Number.isSafeInteger(pickerId) || pickerId <= 0 || !/^\S(?:.{0,98}\S)?$/.test(original.clientRequestId || '')
+      || !ids?.length || ids.some(id => !Number.isSafeInteger(id) || id <= 0) || new Set(ids).size !== ids.length
+      || !Array.isArray(original.expectedOrders) || original.expectedOrders.length !== ids.length || new Set(original.expectedOrders.map(r => r.id)).size !== ids.length
+      || original.expectedOrders.some(r => !ids.includes(r.id) || !['pending_pick', 'picking'].includes(r.status) || (r.pickerId != null && (!Number.isSafeInteger(r.pickerId) || r.pickerId <= 0)))) throw new BadRequestException('原分配资料无效，请使用原账号重新核对批次和人员')
+    return createHash('sha256').update(JSON.stringify([pickerId, original.expectedOrders.map(r => [r.id, r.status, r.pickerId || null]).sort((a, b) => Number(a[0]) - Number(b[0]))])).digest('hex')
+  }
+
+  private async readAssignmentReceipt(db: any, requestId: string, actor: number, fingerprint?: string) {
+    if (!Number.isSafeInteger(actor) || actor <= 0 || !/^\S(?:.{0,98}\S)?$/.test(requestId || '')) throw new BadRequestException('请使用原账号和有效操作标识核对分配')
+    const receipt = await db.operationLog.findFirst({ where: { module: 'outbound', action: { in: ['assign_picker', 'assign_picker_cancel'] }, detail: { path: '$.clientRequestId', equals: requestId } } })
+    if (receipt && Number(receipt.operatorId) !== actor) throw new ConflictException('原分配请求属于其它账号，请使用原账号核对')
+    if (receipt && fingerprint && receipt.detail?.requestFingerprint !== fingerprint) throw new ConflictException('原分配批次、人员或单据状态不能更改，请核对原请求')
+    return receipt
+  }
+
+  private async assignmentOutcome(db: any, requestId: string, receipt: any) {
+    if (!receipt) return { requestId, outcome: 'unknown', ids: [], pickerId: null, orders: [] }
+    const detail = receipt.detail
+    const orders = await db.outboundOrder.findMany({ where: { id: { in: detail.ids.map(BigInt) } }, select: { id: true, outboundNo: true, status: true, pickerId: true }, orderBy: { id: 'asc' } })
+    return { requestId, outcome: receipt.action === 'assign_picker_cancel' ? 'cancelled' : 'confirmed', ids: detail.ids, pickerId: detail.pickerId,
+      orders: orders.map((row: any) => ({ id: Number(row.id), outboundNo: row.outboundNo, status: row.status, pickerId: row.pickerId ? Number(row.pickerId) : null })) }
+  }
+
+  async assignmentRequest(requestId: string, actor: number) {
+    return this.assignmentOutcome(this.prisma, requestId, await this.readAssignmentReceipt(this.prisma, requestId, actor))
+  }
+
+  async cancelAssignment(ids: number[], pickerId: number, original: { clientRequestId: string; expectedOrders: { id: number; status: string; pickerId?: number | null }[] }, actor: number) {
+    const fingerprint = this.assignmentFingerprint(ids, pickerId, original, actor)
+    return this.prisma.$transaction(async tx => {
+      for (const user of [...new Set([actor, pickerId])].sort((a, b) => a - b)) await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(user)} FOR UPDATE`
+      for (const id of [...ids].sort((a, b) => a - b)) await tx.$queryRaw`SELECT id FROM outbound_order WHERE id = ${BigInt(id)} FOR UPDATE`
+      let receipt = await this.readAssignmentReceipt(tx, original.clientRequestId, actor, fingerprint)
+      if (!receipt) {
+        const operator = await tx.sysUser.findUnique({ where: { id: BigInt(actor) }, select: { realName: true, username: true } })
+        receipt = await tx.operationLog.create({ data: { module: 'outbound', action: 'assign_picker_cancel', targetType: 'outbound_assignment', targetId: String(actor), operatorId: BigInt(actor), operatorName: operator?.realName || operator?.username,
+          detail: { clientRequestId: original.clientRequestId, requestFingerprint: fingerprint, ids, pickerId, expectedOrders: original.expectedOrders } } })
+      }
+      return this.assignmentOutcome(tx, original.clientRequestId, receipt)
+    }, { timeout: 20000 })
   }
 
   async setProblem(
@@ -1069,104 +1168,152 @@ export class OutboundService {
     },
     operatorId?: number,
   ) {
-    const clientRequestId = String(payload.clientRequestId || '').trim().slice(0, 100)
-    if (clientRequestId && await this.opLog.hasClientRequest('outbound', 'set_problem', clientRequestId)) {
-      return { ...(await this.detail(id)), duplicate: true }
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new BadRequestException('请提交有效的出库单标记')
+    for (const field of ['clientRequestId', 'markType', 'problemType', 'exceptionType', 'problemRemark'] as const) {
+      if (payload[field] != null && typeof payload[field] !== 'string') throw new BadRequestException('标记类型、备注与原操作标识须为有效文本')
     }
-    const order = await this.prisma.outboundOrder.findUnique({ where: { id: BigInt(id) } })
-    if (!order) throw new NotFoundException('出库单不存在')
-    if (order.status === 'cancelled') throw new BadRequestException('已取消单不可变更标记')
+    const clientRequestId = String(payload.clientRequestId || '').trim()
+    if (clientRequestId && (clientRequestId.length > 100 || !Number.isSafeInteger(operatorId) || Number(operatorId) <= 0)) throw new BadRequestException('请使用原账号和有效操作标识核对标记')
+    const requestedMark = payload.markType || (payload.isProblem === true ? 'legacy_problem' : payload.isProblem === false ? 'legacy_clear' : '')
+    const requestFingerprint = createHash('sha256').update(JSON.stringify([id, requestedMark, payload.problemType || '', payload.exceptionType || '', payload.problemRemark?.trim() || ''])).digest('hex')
+    // Preserve receipts written by the concurrent main-branch implementation.
+    // Actor and target binding below still apply to either fingerprint format.
+    const previousFingerprint = createHash('sha256').update(JSON.stringify({
+      markType: payload.markType || null, isProblem: payload.isProblem ?? null,
+      problemType: payload.problemType || null, exceptionType: payload.exceptionType || null,
+      problemRemark: payload.problemRemark?.trim() || null,
+    })).digest('hex')
+    const result = await this.prisma.$transaction(async tx => {
+      if (clientRequestId) await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(operatorId!)} FOR UPDATE`
+      await tx.$queryRaw`SELECT id FROM outbound_order WHERE id = ${BigInt(id)} FOR UPDATE`
+      const order = await tx.outboundOrder.findUnique({ where: { id: BigInt(id) } })
+      if (!order) throw new NotFoundException('出库单不存在')
+      if (clientRequestId) {
+        const receipt = await tx.operationLog.findFirst({
+          where: {
+            module: 'outbound', action: 'set_problem',
+            detail: { path: '$.clientRequestId', equals: clientRequestId },
+          }, orderBy: { id: 'asc' }
+        })
+        if (receipt) {
+          const detail = receipt.detail as Record<string, unknown> | null
+          const priorMark = String(detail?.markType || '')
+          const legacyMarkMatches = requestedMark === 'legacy_clear'
+            ? ['clear_problem', 'clear_exception'].includes(priorMark)
+            : priorMark === (requestedMark === 'legacy_problem' ? 'problem' : requestedMark)
+          const legacyMatches = legacyMarkMatches && String(detail?.problemType || '') === String(payload.problemType || '')
+            && String(detail?.exceptionType || '') === String(payload.exceptionType || '')
+            && String(detail?.problemRemark || '') === (payload.problemRemark?.trim() || '')
+          if (Number(receipt.operatorId) !== operatorId || receipt.targetId !== order.outboundNo || (detail?.requestFingerprint
+            ? ![requestFingerprint, previousFingerprint].includes(String(detail.requestFingerprint)) : !legacyMatches)) {
+            throw new ConflictException('原标记请求对应的账号、出库单或内容不同，请核对原操作，不能修改后重试')
+          }
+          return {
+            item: await this.detail(id, tx), duplicate: true,
+            sync: ['exception', 'clear_exception'].includes(priorMark), outboundNo: order.outboundNo
+          }
+        }
+      }
+      if (order.status === 'cancelled') throw new BadRequestException('已取消单不可变更标记')
 
-    let markType = payload.markType
-    if (!markType && payload.isProblem === true) markType = 'problem'
-    if (!markType && payload.isProblem === false) {
-      markType = order.status === 'exception' ? 'clear_exception' : 'clear_problem'
-    }
-    if (!markType) throw new BadRequestException('请指定 markType')
+      let markType = payload.markType
+      if (!markType && payload.isProblem === true) markType = 'problem'
+      if (!markType && payload.isProblem === false) {
+        markType = order.status === 'exception' ? 'clear_exception' : 'clear_problem'
+      }
+      if (!markType) throw new BadRequestException('请选择问题件或异常标记类型')
 
-    const blocked = ['shipped', 'delivered', 'partial_delivered', 'delivery_failed', 'cancelled']
+      const blocked = ['shipped', 'delivered', 'partial_delivered', 'delivery_failed', 'cancelled']
 
-    switch (markType) {
-      case 'problem':
-        if (blocked.includes(order.status)) {
-          throw new BadRequestException('当前状态不可标记问题件')
-        }
-        if (!payload.problemType || !PICKING_PROBLEM_LABELS[payload.problemType]) {
-          throw new BadRequestException('请选择有效的拣货问题类型')
-        }
-        await this.prisma.outboundOrder.update({
-          where: { id: BigInt(id) },
-          data: {
-            isProblem: true,
-            problemType: payload.problemType,
-            problemRemark: payload.problemRemark?.trim() || order.problemRemark,
-          },
-        })
-        break
-      case 'exception':
-        if (blocked.includes(order.status)) {
-          throw new BadRequestException('当前状态不可标记异常')
-        }
-        if (order.status === 'exception') {
-          throw new BadRequestException('出库单已处于异常状态')
-        }
-        if (!payload.exceptionType || !ORDER_EXCEPTION_LABELS[payload.exceptionType]) {
-          throw new BadRequestException('请选择有效的订单异常类型')
-        }
-        await this.prisma.outboundOrder.update({
-          where: { id: BigInt(id) },
-          data: {
-            exceptionFromStatus: order.status,
-            exceptionType: payload.exceptionType,
-            status: 'exception',
-            problemRemark: payload.problemRemark?.trim() || order.problemRemark,
-          },
-        })
-        break
-      case 'clear_problem':
-        await this.prisma.outboundOrder.update({
-          where: { id: BigInt(id) },
-          data: { isProblem: false, problemType: null, problemRemark: null },
-        })
-        break
-      case 'clear_exception':
-        if (order.status !== 'exception') {
-          throw new BadRequestException('仅异常状态可解除异常')
-        }
-        await this.prisma.outboundOrder.update({
-          where: { id: BigInt(id) },
-          data: {
-            status: order.exceptionFromStatus || 'pending_pick',
-            exceptionFromStatus: null,
-            exceptionType: null,
-          },
-        })
-        break
-      default:
-        throw new BadRequestException('标记类型无效')
-    }
-    await this.opLog.log({
-      operatorId,
-      module: 'outbound',
-      action: 'set_problem',
-      targetType: 'outbound_order',
-      targetId: order.outboundNo,
-      detail: {
-        markType,
-        problemType: payload.problemType || null,
-        exceptionType: payload.exceptionType || null,
-        problemRemark: payload.problemRemark?.trim() || null,
-        clientRequestId: clientRequestId || null,
-      },
+      switch (markType) {
+        case 'problem':
+          if (blocked.includes(order.status)) {
+            throw new BadRequestException('当前状态不可标记问题件')
+          }
+          if (!payload.problemType || !PICKING_PROBLEM_LABELS[payload.problemType]) {
+            throw new BadRequestException('请选择有效的拣货问题类型')
+          }
+          await tx.outboundOrder.update({
+            where: { id: BigInt(id) },
+            data: {
+              isProblem: true,
+              problemType: payload.problemType,
+              problemRemark: payload.problemRemark?.trim() || order.problemRemark,
+            },
+          })
+          break
+        case 'exception':
+          if (blocked.includes(order.status)) {
+            throw new BadRequestException('当前状态不可标记异常')
+          }
+          if (order.status === 'exception') {
+            throw new BadRequestException('出库单已处于异常状态')
+          }
+          if (!payload.exceptionType || !ORDER_EXCEPTION_LABELS[payload.exceptionType]) {
+            throw new BadRequestException('请选择有效的订单异常类型')
+          }
+          await tx.outboundOrder.update({
+            where: { id: BigInt(id) },
+            data: {
+              exceptionFromStatus: order.status,
+              exceptionType: payload.exceptionType,
+              status: 'exception',
+              problemRemark: payload.problemRemark?.trim() || order.problemRemark,
+            },
+          })
+          break
+        case 'clear_problem':
+          await tx.outboundOrder.update({
+            where: { id: BigInt(id) },
+            data: { isProblem: false, problemType: null, problemRemark: null },
+          })
+          break
+        case 'clear_exception':
+          if (order.status !== 'exception') {
+            throw new BadRequestException('仅异常状态可解除异常')
+          }
+          await tx.outboundOrder.update({
+            where: { id: BigInt(id) },
+            data: {
+              status: order.exceptionFromStatus || 'pending_pick',
+              exceptionFromStatus: null,
+              exceptionType: null,
+            },
+          })
+          break
+        default:
+          throw new BadRequestException('标记类型无效')
+      }
+      await new OperationLogService(tx as PrismaService).log({
+        operatorId,
+        module: 'outbound',
+        action: 'set_problem',
+        targetType: 'outbound_order',
+        targetId: order.outboundNo,
+        detail: {
+          markType,
+          problemType: payload.problemType || null,
+          exceptionType: payload.exceptionType || null,
+          problemRemark: payload.problemRemark?.trim() || null,
+          clientRequestId: clientRequestId || null,
+          requestFingerprint: clientRequestId ? requestFingerprint : null,
+        },
+      })
+
+      return {
+        item: await this.detail(id, tx), duplicate: false,
+        sync: markType === 'exception' || markType === 'clear_exception', outboundNo: order.outboundNo
+      }
     })
-    if (markType === 'exception' || markType === 'clear_exception') {
-      await this.pushOutboundStatusToOms(order.outboundNo)
+    const syncPending = result.sync && !await this.pushOutboundStatusToOms(result.outboundNo, true)
+    return {
+      ...result.item, ...(result.duplicate ? { duplicate: true } : {}),
+      ...(syncPending ? { syncPending: true, message: '标记已保存，OMS 状态待同步；请核对原单，重试原请求不会重复修改标记' } : {})
     }
-    return this.detail(id)
   }
 
-  private suggestPickLocations(warehouseCode: string, sku: string, needQty: number) {
-    return this.prisma.inventoryLocation.findMany({
+  private suggestPickLocations(warehouseCode: string, sku: string, needQty: number, db: Prisma.TransactionClient = this.prisma) {
+    return db.inventoryLocation.findMany({
       where: { warehouseCode, sku, qty: { gt: 0 } },
       orderBy: [{ receivedAt: 'asc' }, { id: 'asc' }],
     }).then((locs) => {
@@ -1324,15 +1471,15 @@ th{background:#f5f5f5}
     },
     operatorId?: number,
   ) {
-    const clientRequestId = String(payload.clientRequestId || '').trim().slice(0, 100)
-    if (clientRequestId && await this.opLog.hasClientRequest('outbound', 'pick', clientRequestId)) {
-      return { ...(await this.detail(id)), duplicate: true }
-    }
+    const clientRequestId = String(payload.clientRequestId || '').trim()
+    if (clientRequestId && (clientRequestId.length > 100 || !operatorId || !Number.isSafeInteger(operatorId))) throw new BadRequestException('请使用原账号与有效操作标识核对拣货')
     const order = await this.prisma.outboundOrder.findUnique({
       where: { id: BigInt(id) },
       include: { items: true },
     })
     if (!order) throw new NotFoundException('出库单不存在')
+    const requestFingerprint = this.pickFingerprint(id, payload)
+    if (clientRequestId && await this.readPickReplay(this.prisma, order, payload, operatorId!, requestFingerprint)) return { ...(await this.detail(id)), duplicate: true }
     if (order.status === 'exception') throw new BadRequestException('异常单已暂停流程，请先解除异常')
     const blocked = outboundPickBlockedReason(order)
     if (blocked) throw new BadRequestException(blocked)
@@ -1392,7 +1539,14 @@ th{background:#f5f5f5}
       throw new BadRequestException(`拣货明细不完整，缺少：${missing.join('、')}`)
     }
 
-    await this.prisma.$transaction(async (tx) => {
+    const duplicate = await this.prisma.$transaction(async (tx) => {
+      if (clientRequestId) {
+        await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(operatorId!)} FOR UPDATE`
+        await tx.$queryRaw`SELECT id FROM outbound_order WHERE id = ${BigInt(id)} FOR UPDATE`
+        if (await this.readPickReplay(tx, order, payload, operatorId!, requestFingerprint)) return true
+        const current = await tx.outboundOrder.findUnique({ where: { id: order.id } })
+        if (!current || current.status !== 'picking' || current.pickerId !== order.pickerId) throw new ConflictException('拣货状态或分配人员已变化，请核对原操作，勿重复扣减库位库存')
+      }
       for (const line of resolvedLines) {
         for (const allocation of line.allocations) {
           const loc = await tx.warehouseLocation.findFirst({
@@ -1449,9 +1603,11 @@ th{background:#f5f5f5}
       if (transitioned.count !== 1) {
         throw new BadRequestException('出库单状态已变化，请刷新后重试')
       }
+      const operator = clientRequestId ? await tx.sysUser.findUnique({ where: { id: BigInt(operatorId!) }, select: { realName: true, username: true } }) : null
       if (clientRequestId) await tx.operationLog.create({
         data: {
           operatorId: operatorId ? BigInt(operatorId) : undefined,
+          operatorName: operator?.realName || operator?.username,
           module: 'outbound',
           action: 'pick',
           targetType: 'outbound_order',
@@ -1462,10 +1618,13 @@ th{background:#f5f5f5}
               line.allocations.map((allocation) => ({ sku: line.item.sku, ...allocation })),
             ),
             clientRequestId: clientRequestId || null,
+            requestFingerprint,
           },
         },
       })
+      return false
     })
+    if (duplicate) return { ...(await this.detail(id)), duplicate: true }
     if (!clientRequestId) await this.opLog.log({
       operatorId,
       module: 'outbound',
@@ -1487,25 +1646,83 @@ th{background:#f5f5f5}
     }
   }
 
-  async startReview(id: number, operatorId?: number) {
+  private pickFingerprint(id: number, payload: { pickSource?: string; items: { id: number; locationCode?: string; pickedQty?: number; allocations?: { locationCode: string; qty: number }[] }[] }) {
+    const items = (payload.items || []).map(item => ({ id: Number(item.id),
+      allocations: (item.allocations || (item.locationCode ? [{locationCode:item.locationCode,qty:item.pickedQty}] : [])).map(line => ({locationCode:String(line.locationCode || '').trim().toUpperCase(),qty:Number(line.qty)})).sort((a,b)=>a.locationCode.localeCompare(b.locationCode)||a.qty-b.qty),
+    })).sort((a,b)=>a.id-b.id)
+    return createHash('sha256').update(JSON.stringify([id,payload.pickSource === 'pda' ? 'pda' : 'pick_list',items])).digest('hex')
+  }
+
+  private async readPickReplay(db: any, order: any, payload: any, actor: number, fingerprint: string) {
+    const previous = await this.pickReceipt(db, order, String(payload.clientRequestId).trim(), actor)
+    if (!previous) return false
+    if (previous.action === 'pick_cancel') throw new ConflictException('原拣货请求已取消，本次未扣减库存，请核对原操作结果')
+    const detail = previous.detail as any
+    // Legacy receipts store resolved allocations, sufficient to verify explicit original lines.
+    const original = detail?.requestFingerprint || this.pickFingerprint(Number(order.id), {pickSource:detail?.pickSource,items:order.items.map((item:any)=>({id:Number(item.id),allocations:(detail?.allocations || []).filter((line:any)=>line.sku===item.sku)}))})
+    if (original !== fingerprint) throw new ConflictException('原拣货明细、数量或库位不能更改，请核对原请求后重试')
+    return true
+  }
+
+  private async pickReceipt(db: any, order: any, requestId: string, actor: number) {
+    if (!requestId || !requestId.trim() || requestId !== requestId.trim() || requestId.length > 100 || !Number.isSafeInteger(actor) || actor <= 0) throw new BadRequestException('请使用原账号与有效操作标识核对拣货')
+    const previous = await db.operationLog.findFirst({ where: { module: 'outbound', action: { in: ['pick', 'pick_cancel'] }, detail: { path: '$.clientRequestId', equals: requestId } } })
+    if (previous && (previous.targetId !== order.outboundNo || Number(previous.operatorId) !== actor)) throw new ConflictException('原拣货操作属于其它账号或出库单，请回原单核对')
+    return previous
+  }
+
+  async pickRequest(id: number, requestId: string, actor: number) {
     const order = await this.prisma.outboundOrder.findUnique({ where: { id: BigInt(id) } })
     if (!order) throw new NotFoundException('出库单不存在')
-    if (order.status === 'exception') throw new BadRequestException('异常单已暂停流程，请先解除异常')
-    if (order.status === 'reviewing') return this.detail(id)
-    if (order.status !== 'picked') {
-      throw new BadRequestException('仅已拣货状态可开始复核')
-    }
-    await this.prisma.outboundOrder.update({
-      where: { id: BigInt(id) },
-      data: { status: 'reviewing' },
+    const receipt = await this.pickReceipt(this.prisma, order, requestId, actor)
+    return { requestId, id, outboundNo: order.outboundNo, currentStatus: order.status,
+      outcome: receipt ? receipt.action === 'pick_cancel' ? 'cancelled' : 'confirmed' : 'unknown' }
+  }
+
+  async cancelPickRequest(id: number, requestId: string, actor: number) {
+    if (!Number.isSafeInteger(actor) || actor <= 0) throw new BadRequestException('请使用原账号核对拣货')
+    // Use exactly the same locks as pick: whichever commits first determines the immutable outcome.
+    return this.prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(actor)} FOR UPDATE`
+      await tx.$queryRaw`SELECT id FROM outbound_order WHERE id = ${BigInt(id)} FOR UPDATE`
+      const order = await tx.outboundOrder.findUnique({ where: { id: BigInt(id) } })
+      if (!order) throw new NotFoundException('出库单不存在')
+      const receipt = await this.pickReceipt(tx, order, requestId, actor)
+      if (!receipt) {
+        const operator = await tx.sysUser.findUnique({ where: { id: BigInt(actor) }, select: { realName: true, username: true } })
+        await tx.operationLog.create({ data: { module: 'outbound', action: 'pick_cancel', targetType: 'outbound_order', targetId: order.outboundNo,
+          operatorId: BigInt(actor), operatorName: operator?.realName || operator?.username, detail: { clientRequestId: requestId, outboundId: id } } })
+      }
+      return { requestId, id, outboundNo: order.outboundNo, currentStatus: order.status,
+        outcome: receipt?.action === 'pick' ? 'confirmed' : 'cancelled' }
     })
-    await this.opLog.log({
-      operatorId,
-      module: 'outbound',
-      action: 'start_review',
-      targetType: 'outbound_order',
-      targetId: order.outboundNo,
-      detail: { reviewSource: 'pda_or_web' },
+  }
+
+  async startReview(id: number, operatorId?: number) {
+    await this.prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM outbound_order WHERE id = ${BigInt(id)} FOR UPDATE`
+      const order = await tx.outboundOrder.findUnique({ where: { id: BigInt(id) } })
+      if (!order) throw new NotFoundException('出库单不存在')
+      if (order.status === 'exception') throw new BadRequestException('异常单已暂停流程，请先解除异常')
+      if (order.status === 'reviewing') return
+      if (order.status !== 'picked') {
+        throw new BadRequestException('仅已拣货状态可开始复核')
+      }
+      const changed = await tx.outboundOrder.updateMany({
+        where: { id: BigInt(id), status: 'picked' },
+        data: { status: 'reviewing' },
+      })
+      if (changed.count !== 1) throw new ConflictException('出库单状态已变化，请重新核对复核进度')
+      const operator = operatorId ? await tx.sysUser.findUnique({ where: { id: BigInt(operatorId) }, select: { realName: true, username: true } }) : null
+      await tx.operationLog.create({ data: {
+        operatorId: operatorId ? BigInt(operatorId) : undefined,
+        operatorName: operator?.realName || operator?.username,
+        module: 'outbound',
+        action: 'start_review',
+        targetType: 'outbound_order',
+        targetId: order.outboundNo,
+        detail: { reviewSource: 'pda_or_web' },
+      } })
     })
     return this.detail(id)
   }
@@ -1521,103 +1738,148 @@ th{background:#f5f5f5}
     },
     operatorId?: number,
   ) {
-    const clientRequestId = String(payload?.clientRequestId || '').trim().slice(0, 100)
-    if (clientRequestId && await this.opLog.hasClientRequest('outbound', 'pack', clientRequestId)) {
-      return { ...(await this.detail(id)), duplicate: true }
-    }
-    const order = await this.prisma.outboundOrder.findUnique({
-      where: { id: BigInt(id) },
-      include: { items: true },
-    })
-    if (!order) throw new NotFoundException('出库单不存在')
-    if (order.status === 'exception') throw new BadRequestException('异常单已暂停流程，请先解除异常')
-    if (!['picked', 'reviewing'].includes(order.status)) {
-      throw new BadRequestException('当前状态不可复核（需先完成拣货）')
-    }
-    const reviewSource: ReviewSource = payload?.reviewSource === 'pda' ? 'pda' : 'pick_list'
-    const nextStatus = order.needsRelabel ? 'pending_relabel' : 'packed'
-
-    let remark = order.remark || ''
-    const preDeduct = parseOmsOutboundPreDeduct(remark)
-    const meta = parseOmsOutboundMeta(remark)
-    const cartonsInput = Array.isArray(payload?.cartons) ? payload!.cartons! : []
-
-    if (preDeduct && cartonsInput.length === 0) {
-      throw new BadRequestException('OMS 出库单请录入外箱实测尺寸与重量')
-    }
-
-    if (cartonsInput.length > 0) {
-      const computed = computeOutboundCartonMeasures(cartonsInput)
-      const totals = sumOutboundCartonTotals(computed)
-      const measuredAt = new Date().toISOString()
-      const measure: OmsOutboundMeasure = {
-        cartons: computed,
-        totalVolumeM3: totals.totalVolumeM3,
-        totalWeightKg: totals.totalWeightKg,
-        measuredAt,
-      }
-      const totalQty = order.items.reduce((s, i) => s + (i.pickedQty || i.qty), 0)
-      const snapshot = resolveFeeTemplateSnapshot(preDeduct?.templateSnapshot, {
-        shippingMethod: meta.shippingMethod || order.logisticsProduct || undefined,
-        destRegion: preDeduct?.destRegion || meta.destRegion,
-      })
-      const { lines, total } = calculateOutboundActualFees({
-        totalVolumeM3: totals.totalVolumeM3,
-        totalWeightKg: totals.totalWeightKg,
-        totalQty,
-        skuLineCount: order.items.length,
-        snapshot,
-      })
-      const actualFees: OmsOutboundActualFees = {
-        lines: lines.map(l => ({
-          type: l.type,
-          label: l.label,
-          amount: l.amount,
-          detail: l.detail,
-          chargeType: l.chargeType,
-        })),
-        actualTotal: total,
-        calculatedAt: measuredAt,
-      }
-      remark = upsertOutboundActualFeesInRemark(
-        upsertOutboundMeasureInRemark(remark, measure),
-        actualFees,
-      )
-    }
-
-    await this.prisma.$transaction(async (tx) => {
-      await tx.outboundOrder.update({
+    const clientRequestId = String(payload?.clientRequestId || '').trim()
+    if (clientRequestId && (clientRequestId.length > 100 || !Number.isSafeInteger(operatorId) || Number(operatorId) <= 0)) throw new BadRequestException('请使用原账号与有效操作标识核对复核打包')
+    const requestFingerprint = this.packFingerprint(id, payload)
+    const duplicate = await this.prisma.$transaction(async tx => {
+      if (clientRequestId) await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(operatorId!)} FOR UPDATE`
+      await tx.$queryRaw`SELECT id FROM outbound_order WHERE id = ${BigInt(id)} FOR UPDATE`
+      const order = await tx.outboundOrder.findUnique({
         where: { id: BigInt(id) },
+        include: { items: true },
+      })
+      if (!order) throw new NotFoundException('出库单不存在')
+      if (clientRequestId && await this.readPackReplay(tx, order, clientRequestId, operatorId!, requestFingerprint)) return true
+      if (order.status === 'exception') throw new BadRequestException('异常单已暂停流程，请先解除异常')
+      if (!['picked', 'reviewing'].includes(order.status)) {
+        throw new BadRequestException('当前状态不可复核（需先完成拣货）')
+      }
+      const reviewSource: ReviewSource = payload?.reviewSource === 'pda' ? 'pda' : 'pick_list'
+      const nextStatus = order.needsRelabel ? 'pending_relabel' : 'packed'
+
+      let remark = order.remark || ''
+      const preDeduct = parseOmsOutboundPreDeduct(remark)
+      const meta = parseOmsOutboundMeta(remark)
+      const cartonsInput = Array.isArray(payload?.cartons) ? payload!.cartons! : []
+
+      if (preDeduct && cartonsInput.length === 0) {
+        throw new BadRequestException('OMS 出库单请录入外箱实测尺寸与重量')
+      }
+
+      if (cartonsInput.length > 0) {
+        const computed = computeOutboundCartonMeasures(cartonsInput)
+        const totals = sumOutboundCartonTotals(computed)
+        const measuredAt = new Date().toISOString()
+        const measure: OmsOutboundMeasure = {
+          cartons: computed,
+          totalVolumeM3: totals.totalVolumeM3,
+          totalWeightKg: totals.totalWeightKg,
+          measuredAt,
+        }
+        const totalQty = order.items.reduce((s, i) => s + (i.pickedQty || i.qty), 0)
+        const snapshot = resolveFeeTemplateSnapshot(preDeduct?.templateSnapshot, {
+          shippingMethod: meta.shippingMethod || order.logisticsProduct || undefined,
+          destRegion: preDeduct?.destRegion || meta.destRegion,
+        })
+        const { lines, total } = calculateOutboundActualFees({
+          totalVolumeM3: totals.totalVolumeM3,
+          totalWeightKg: totals.totalWeightKg,
+          totalQty,
+          skuLineCount: order.items.length,
+          snapshot,
+        })
+        const actualFees: OmsOutboundActualFees = {
+          lines: lines.map(l => ({
+            type: l.type,
+            label: l.label,
+            amount: l.amount,
+            detail: l.detail,
+            chargeType: l.chargeType,
+          })),
+          actualTotal: total,
+          calculatedAt: measuredAt,
+        }
+        remark = upsertOutboundActualFeesInRemark(
+          upsertOutboundMeasureInRemark(remark, measure),
+          actualFees,
+        )
+      }
+
+      const changed = await tx.outboundOrder.updateMany({
+        where: { id: BigInt(id), status: order.status },
         data: {
           status: nextStatus,
           reviewerId: operatorId ? BigInt(operatorId) : order.reviewerId,
           reviewedAt: new Date(),
           reviewSource,
           isPalletized: payload?.isPalletized ?? order.isPalletized,
-          palletInfo: payload?.palletInfo?.trim() || order.palletInfo,
+          palletInfo: payload?.isPalletized === false ? null : payload?.palletInfo !== undefined ? String(payload.palletInfo || '').trim() || null : order.palletInfo,
           remark,
         },
       })
-      if (clientRequestId) await tx.operationLog.create({
+      if (changed.count !== 1) throw new ConflictException('出库单状态已变化，请核对原复核结果，勿重复提交')
+      const operator = operatorId ? await tx.sysUser.findUnique({ where: { id: BigInt(operatorId) }, select: { realName: true, username: true } }) : null
+      await tx.operationLog.create({
         data: {
           operatorId: operatorId ? BigInt(operatorId) : undefined,
+          operatorName: operator?.realName || operator?.username,
           module: 'outbound',
           action: 'pack',
           targetType: 'outbound_order',
           targetId: order.outboundNo,
-          detail: { reviewSource, cartonCount: cartonsInput.length, clientRequestId },
+          detail: { reviewSource, cartonCount: cartonsInput.length, clientRequestId, requestFingerprint },
         },
       })
+      return false
     })
-    if (!clientRequestId) await this.opLog.log({
-      operatorId,
-      module: 'outbound',
-      action: 'pack',
-      targetType: 'outbound_order',
-      targetId: order.outboundNo,
-      detail: { reviewSource, cartonCount: cartonsInput.length, clientRequestId: null },
-    })
+    if (duplicate) return { ...(await this.detail(id)), duplicate: true }
     return this.detail(id)
+  }
+
+  private packFingerprint(id: number, payload: any) {
+    return createHash('sha256').update(JSON.stringify([id, payload?.isPalletized ?? null, String(payload?.palletInfo || '').trim(),
+      payload?.reviewSource === 'pda' ? 'pda' : 'pick_list', (payload?.cartons || []).map((c: any) => [Number(c.lengthCm), Number(c.widthCm), Number(c.heightCm), Number(c.grossWeightKg)])])).digest('hex')
+  }
+
+  private async packReceipt(db: any, order: any, requestId: string, actor: number) {
+    if (!requestId || !requestId.trim() || requestId !== requestId.trim() || requestId.length > 100 || !Number.isSafeInteger(actor) || actor <= 0) throw new BadRequestException('请使用原账号与有效操作标识核对复核打包')
+    const receipt = await db.operationLog.findFirst({ where: { module: 'outbound', action: { in: ['pack', 'pack_cancel'] }, detail: { path: '$.clientRequestId', equals: requestId } } })
+    if (receipt && (receipt.targetId !== order.outboundNo || Number(receipt.operatorId) !== actor)) throw new ConflictException('原复核操作属于其它账号或出库单，请回原单核对')
+    return receipt
+  }
+
+  private async readPackReplay(db: any, order: any, requestId: string, actor: number, fingerprint: string) {
+    const receipt = await this.packReceipt(db, order, requestId, actor)
+    if (!receipt) return false
+    if (receipt.action === 'pack_cancel') throw new ConflictException('原复核请求已取消，请核对原操作结果')
+    if (!(receipt.detail as any)?.requestFingerprint) throw new ConflictException('历史复核记录缺少原明细，请返回原单核对尺寸、重量和费用')
+    if ((receipt.detail as any).requestFingerprint !== fingerprint) throw new ConflictException('原复核的尺寸、重量或打托资料不能更改，请核对原请求后重试')
+    return true
+  }
+
+  async packRequest(id: number, requestId: string, actor: number) {
+    const order = await this.prisma.outboundOrder.findUnique({ where: { id: BigInt(id) } })
+    if (!order) throw new NotFoundException('出库单不存在')
+    const receipt = await this.packReceipt(this.prisma, order, requestId, actor)
+    return { requestId, id, outboundNo: order.outboundNo, currentStatus: order.status,
+      outcome: receipt ? receipt.action === 'pack_cancel' ? 'cancelled' : 'confirmed' : 'unknown' }
+  }
+
+  async cancelPackRequest(id: number, requestId: string, actor: number) {
+    if (!Number.isSafeInteger(actor) || actor <= 0) throw new BadRequestException('请使用原账号核对复核打包')
+    return this.prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(actor)} FOR UPDATE`
+      await tx.$queryRaw`SELECT id FROM outbound_order WHERE id = ${BigInt(id)} FOR UPDATE`
+      const order = await tx.outboundOrder.findUnique({ where: { id: BigInt(id) } })
+      if (!order) throw new NotFoundException('出库单不存在')
+      const receipt = await this.packReceipt(tx, order, requestId, actor)
+      if (!receipt) {
+        const operator = await tx.sysUser.findUnique({ where: { id: BigInt(actor) }, select: { realName: true, username: true } })
+        await tx.operationLog.create({ data: { module: 'outbound', action: 'pack_cancel', targetType: 'outbound_order', targetId: order.outboundNo,
+          operatorId: BigInt(actor), operatorName: operator?.realName || operator?.username, detail: { clientRequestId: requestId, outboundId: id } } })
+      }
+      return { requestId, id, outboundNo: order.outboundNo, currentStatus: order.status, outcome: receipt?.action === 'pack' ? 'confirmed' : 'cancelled' }
+    })
   }
 
   async setAppointment(id: number, payload: { appointmentStatus?: string; appointmentDate?: string | null }) {
@@ -1632,7 +1894,7 @@ th{background:#f5f5f5}
           ? parseWorkDate(payload.appointmentDate)
           : undefined
     if (payload.appointmentDate !== undefined && payload.appointmentDate !== null && !appointmentDate) {
-      throw new BadRequestException('预约送仓日期格式无效，请使用 YYYY-MM-DD')
+      throw new BadRequestException('预约送仓日期无效，请按年-月-日填写，例如 2026-11-11')
     }
 
     let status = payload.appointmentStatus?.trim()
@@ -2021,7 +2283,7 @@ th{background:#f5f5f5}
     }
 
     const customerCode = String(data.customerCode || '').trim()
-    if (!customerCode) throw new BadRequestException('缺少客户编码 customerCode')
+    if (!customerCode) throw new BadRequestException('缺少客户编码')
     const customer = await this.prisma.customer.findUnique({ where: { customerCode } })
     if (!customer) throw new NotFoundException(`客户代码 ${customerCode} 不存在`)
     if (customer.status !== 1) throw new BadRequestException('客户已停用')

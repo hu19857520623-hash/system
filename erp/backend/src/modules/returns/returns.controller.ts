@@ -1,6 +1,6 @@
 import { Body, Controller, Delete, Get, Param, ParseIntPipe, Post, Put, Query, Res } from '@nestjs/common'
 import type { Response } from 'express'
-import { ReturnsService } from './returns.service'
+import { ReturnsService, type ReturnMeasureFeesInput } from './returns.service'
 import { PaginationDto } from '../../common/dto/pagination.dto'
 import { OmsBridge } from '../../common/decorators/oms-bridge.decorator'
 import { CreateOmsReturnDto } from './dto/oms-return.dto'
@@ -32,8 +32,8 @@ export class ReturnsController {
 
   @OmsBridge()
   @Post('oms/by-no/:returnNo/cancel')
-  omsCancel(@Param('returnNo') returnNo: string, @Body() body: { customerCode?: string }) {
-    return this.service.cancelFromOms(returnNo, body?.customerCode)
+  omsCancel(@Param('returnNo') returnNo: string, @Body() body: { customerCode?: string; clientRequestId?: string; expectedUpdatedAt?: string }) {
+    return this.service.cancelFromOms(returnNo, body?.customerCode, body?.clientRequestId, body?.expectedUpdatedAt)
   }
 
   @OmsBridge()
@@ -171,10 +171,22 @@ export class ReturnsController {
   }
 
   @RequirePerms('return.receive')
+  @Post(':id/warehouse-request/close')
+  closeWarehouseRequest(@Param('id', ParseIntPipe) id: number, @Body() body: { action: string; payload: Record<string, unknown> }, @CurrentUser('userId') userId: number) {
+    return this.service.closeWarehouseRequest(id, userId, body)
+  }
+
+  @RequirePerms('return.process')
+  @Post(':id/dispose-request/close')
+  closeDisposalRequest(@Param('id', ParseIntPipe) id: number, @Body() body: { action: string; payload: Record<string, unknown> }, @CurrentUser('userId') userId: number) {
+    return this.service.closeWarehouseRequest(id, userId, body, true)
+  }
+
+  @RequirePerms('return.receive')
   @Post(':id/receive')
   receive(
     @Param('id', ParseIntPipe) id: number,
-    @Body() body: { receivedQty?: number; receivedCartonCount?: number; remark?: string },
+    @Body() body: { clientRequestId?: string; receivedQty?: number; receivedCartonCount?: number; remark?: string },
     @CurrentUser('userId') userId: number,
   ) {
     return this.service.receive(id, body, userId)
@@ -184,17 +196,35 @@ export class ReturnsController {
   @Post(':id/re-receive')
   reReceive(
     @Param('id', ParseIntPipe) id: number,
-    @Body() body: { receivedQty?: number; receivedCartonCount?: number; remark?: string },
+    @Body() body: { clientRequestId?: string; receivedQty?: number; receivedCartonCount?: number; remark?: string },
     @CurrentUser('userId') userId: number,
   ) {
     return this.service.reReceive(id, body, userId)
   }
 
   @RequirePerms('return.receive')
+  @Get(':id/measure-fees/snapshot')
+  measurementSnapshot(@Param('id', ParseIntPipe) id: number) {
+    return this.service.measurementSnapshot(id)
+  }
+
+  @RequirePerms('return.receive')
+  @Post(':id/measure-fees')
+  measureAndCalculate(@Param('id', ParseIntPipe) id: number, @Body() body: ReturnMeasureFeesInput, @CurrentUser('userId') userId: number) {
+    return this.service.measureAndCalculate(id, body, userId)
+  }
+
+  @RequirePerms('return.receive')
+  @Post(':id/measure-fees/close')
+  closeMeasureFees(@Param('id', ParseIntPipe) id: number, @Body() body: ReturnMeasureFeesInput, @CurrentUser('userId') userId: number) {
+    return this.service.measureAndCalculate(id, body, userId, true)
+  }
+
+  @RequirePerms('return.receive')
   @Post(':id/measure')
   measure(
     @Param('id', ParseIntPipe) id: number,
-    @Body() body: { cartons: { lengthCm: number; widthCm: number; heightCm: number; grossWeightKg: number }[] },
+    @Body() body: { clientRequestId?: string; cartons: { lengthCm: number; widthCm: number; heightCm: number; grossWeightKg: number }[] },
     @CurrentUser('userId') userId: number,
   ) {
     return this.service.measure(id, body, userId)
@@ -216,7 +246,7 @@ export class ReturnsController {
   @Post(':id/calculate-fees')
   calculateFees(
     @Param('id', ParseIntPipe) id: number,
-    @Body() body: { extraLines?: { description?: string; amount?: number; quantity?: number; unitPrice?: number }[] },
+    @Body() body: { clientRequestId?: string; extraLines?: { description?: string; amount?: number; quantity?: number; unitPrice?: number }[] },
     @CurrentUser('userId') userId: number,
   ) {
     return this.service.calculateFees(id, userId, body)
@@ -226,7 +256,7 @@ export class ReturnsController {
   @Post(':id/inspect')
   submitInspection(
     @Param('id', ParseIntPipe) id: number,
-    @Body() body: {
+    @Body() body: { clientRequestId?: string;
       inspectionResult: string
       inspectionRemark?: string
       attachments?: { fileName: string; contentBase64?: string; url?: string }[]
@@ -240,7 +270,7 @@ export class ReturnsController {
   @Post(':id/dispose')
   executeDispose(
     @Param('id', ParseIntPipe) id: number,
-    @Body() body: { processRemark?: string },
+    @Body() body: { clientRequestId?: string; processRemark?: string },
     @CurrentUser('userId') userId: number,
   ) {
     return this.service.executeDispose(id, body, userId)

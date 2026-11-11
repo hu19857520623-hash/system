@@ -27,6 +27,8 @@ export interface CatalogPurchase {
   sku: string
   productName: string
   qty: number
+  unitPrice?: number | null
+  totalAmount?: number | null
   createdAt: string
 }
 
@@ -191,6 +193,8 @@ function applyErpPurchaseLocally(
     sku: result.sku,
     productName,
     qty: result.quantity,
+    unitPrice: result.unitPrice,
+    totalAmount: result.totalAmount,
     createdAt: typeof result.createdAt === 'string'
       ? result.createdAt.slice(0, 19).replace('T', ' ')
       : new Date().toISOString().slice(0, 19).replace('T', ' '),
@@ -688,9 +692,12 @@ export async function permanentlyDeleteLocalProduct(productId: string): Promise<
   if (!mayRestore(owner, generation)) throw new Error('商品已删除，但登录身份或页面已变化，请重新查询当前商品列表')
   productDeleteVersions.set(productId, (productDeleteVersions.get(productId) || 0) + 1)
   state.products = state.products.filter(item => item.id !== productId)
-  state.inventory = state.inventory.filter(item => (
-    item.stockSource !== 'owned' || item.sku !== product.internalSku || (item.customerId ?? null) !== (product.customerId ?? null)
-  ))
+  const hasSibling = state.products.some(item => item.internalSku === product.internalSku && item.customerId === product.customerId)
+  if (!hasSibling) {
+    state.inventory = state.inventory.filter(item => (
+      item.stockSource !== 'owned' || item.sku !== product.internalSku || (item.customerId ?? null) !== (product.customerId ?? null)
+    ))
+  }
   emit()
   return true
 }

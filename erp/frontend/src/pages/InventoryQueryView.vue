@@ -1,14 +1,16 @@
 <script setup lang="ts">
+import { useInventoryChangeAttempt } from '@/utils/inventoryChangeAttempt'
+import { useInventoryAdjustAttempt } from '@/utils/inventoryAdjustAttempt'
+import { getAccessToken } from '@/auth/tokenStore'
 import { userFacingError } from '@erp/shared/user-facing-error'
 
-import { displaySku, displaySkuText, formatSku } from '@erp/shared/sku-display'
+import { displaySku, displaySkuText } from '@erp/shared/sku-display'
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import type { TableInstance } from 'element-plus'
 import { inventoryApi, warehouseApi, locationApi, productApi } from '@/api/client.js'
 import { mapWarehouse } from '@/api/mappers.ts'
-import { withAction } from '@/composables/useListLoader.ts'
 import { useAppStore } from '@/stores/app'
 import ListPagination from '@/components/ListPagination.vue'
 import {
@@ -270,7 +272,45 @@ async function loadLocationOptions(warehouseCode: string) {
   }
 }
 
+const adjustmentScope = computed(() => app.authenticatedUser && getAccessToken() ? JSON.stringify([getAccessToken(), app.authenticatedUser.id, app.authenticatedUser.roleCode, [...app.currentPermSet].sort()]) : null)
+const originalAdjustment = useInventoryAdjustAttempt({ actor: () => String(app.authenticatedUser?.id || ''), scope: () => adjustmentScope.value, allowed: () => canAdjust.value, storage: localStorage, request: payload => inventoryApi.adjustLocation(payload.id, payload) })
+const { pending: pendingAdjustment, busy: adjusting, blocked: adjustmentBlocked, feedback: adjustmentFeedback } = originalAdjustment
+async function continueAdjustment() {
+  const scope = adjustmentScope.value
+  if (await originalAdjustment.resume() && scope === adjustmentScope.value) { adjustDialogVisible.value = false; await load() }
+}
+watch(adjustmentScope, () => { adjustDialogVisible.value = false })
+const originalChange = useInventoryChangeAttempt({ actor: () => String(app.authenticatedUser?.id || ''), scope: () => adjustmentScope.value, allowed: () => canAdjust.value, storage: localStorage, closeRequest: attempt => inventoryApi.closeLocationChangeBatch({ ...attempt.payload, clientRequestId: attempt.clientRequestId }), request: async attempt => {
+  const payload = { ...attempt.payload, clientRequestId: attempt.clientRequestId }
+  if (attempt.kind === 'single') return inventoryApi.changeLocationStock(payload)
+  const result = await inventoryApi.batchChangeLocationStock(payload)
+  if (result.fail > 0) throw new Error(`本批成功 ${result.ok} 行，尚有 ${result.fail} 行失败：${result.results?.find((row: any) => !row.ok)?.error || '请核对条件后继续原批次'}。已成功行重试不会重复执行`)
+  return result
+} })
+const { pending: pendingChange, busy: changing, blocked: changeBlocked, feedback: changeFeedback } = originalChange
+async function continueChange() {
+  const scope = adjustmentScope.value
+  if (await originalChange.resume() && scope === adjustmentScope.value) { changeDialogVisible.value = false; batchPreviewRows.value = []; await load() }
+}
+async function closeOriginalBatch() {
+  const original = pendingChange.value, scope = adjustmentScope.value
+  if (!original || original.kind !== 'batch' || changing.value || !canAdjust.value) return
+  try { await ElMessageBox.confirm('服务器将核对已成功行并结束原批次，已成功的库存变更不会撤销。仅未成功行将带回表单修正，是否继续？', '核对并结束原批次', { confirmButtonText: '核对并结束', cancelButtonText: '返回继续原批次', type: 'warning' }) }
+  catch { return }
+  if (scope !== adjustmentScope.value || pendingChange.value !== original || !canAdjust.value) return
+  const receipt = await originalChange.closeBatch()
+  if (!receipt || typeof receipt !== 'object' || scope !== adjustmentScope.value) return
+  batchPreviewRows.value = receipt.unappliedIndices.map((index: number) => JSON.parse(JSON.stringify(original.payload.rows[index])))
+  changeTab.value = 'batch'
+  changeDialogVisible.value = batchPreviewRows.value.length > 0
+  ElMessage.success(`原批次已结束，保留 ${receipt.appliedIndices.length} 行已成功记录；${batchPreviewRows.value.length} 行可修正后新建批次`)
+  await load()
+}
+watch(adjustmentScope, () => { changeDialogVisible.value = false })
+
+
 function openAdjust(row: any, customerCode?: string) {
+  if (pendingChange.value || changing.value || changeBlocked.value || pendingAdjustment.value || adjusting.value || adjustmentBlocked.value || !canAdjust.value) { ElMessage.warning('请先核对原库存调整，勿重复提交'); return }
   adjustForm.value = {
     id: row.id,
     sku: row.sku,
@@ -309,25 +349,18 @@ async function openAdjustFromRow(row: any) {
 }
 
 async function submitAdjust() {
-  if (!adjustForm.value.customerCode.trim()) return ElMessage.warning('请填写客户代码')
-  if (adjustForm.value.qty < 0) return ElMessage.warning('数量不能为负')
-  if (!adjustForm.value.newLocationCode) return ElMessage.warning('请选择目标库位')
-  const ok = await withAction(async () => {
-    await inventoryApi.adjustLocation(adjustForm.value.id, {
-      qty: adjustForm.value.qty,
-      locationCode: adjustForm.value.newLocationCode,
-      customerCode: adjustForm.value.customerCode.trim(),
-      remark: adjustForm.value.remark || undefined,
-    })
-    if (locDialogVisible.value) {
-      skuLocations.value = await inventoryApi.byLocation({
-        sku: adjustForm.value.sku,
-        warehouseCode: adjustForm.value.warehouseCode,
-      })
-    }
-    load()
-  }, '库位库存已更新')
-  if (ok) adjustDialogVisible.value = false
+  if (pendingChange.value || changing.value || changeBlocked.value || adjusting.value || pendingAdjustment.value || adjustmentBlocked.value || !canAdjust.value) return
+  const form = adjustForm.value
+  if (!form.customerCode.trim()) return ElMessage.warning('请填写客户代码')
+  if (!Number.isSafeInteger(form.qty) || form.qty < 0) return ElMessage.warning('数量须为非负整数')
+  if (!form.newLocationCode) return ElMessage.warning('请选择目标库位')
+  const scope = adjustmentScope.value
+  const confirmed = await originalAdjustment.start({ id: Number(form.id), qty: form.qty, locationCode: form.newLocationCode, customerCode: form.customerCode.trim(), remark: form.remark || undefined })
+  if (!confirmed || scope !== adjustmentScope.value) return
+  adjustDialogVisible.value = false
+  locDialogVisible.value = false
+  ElMessage.success('原库存调整已确认，请重新打开库位查看最新库存')
+  await load()
 }
 
 function openStockChange(preset?: {
@@ -339,6 +372,7 @@ function openStockChange(preset?: {
   toLocationCode?: string
   qty?: number
 }) {
+  if (pendingChange.value || changing.value || changeBlocked.value || pendingAdjustment.value || adjusting.value || adjustmentBlocked.value) { ElMessage.warning('请先核对原库存调整'); return }
   changeTab.value = 'single'
   batchPreviewRows.value = []
   changeForm.value = {
@@ -377,49 +411,27 @@ async function handleBatchImportFile(e: Event) {
 }
 
 async function submitSingleChange() {
+  if (pendingChange.value || changing.value || changeBlocked.value || pendingAdjustment.value || adjusting.value || adjustmentBlocked.value) return
   const f = changeForm.value
   if (!f.customerCode.trim()) return ElMessage.warning('请填写客户代码')
   if (!f.sku.trim()) return ElMessage.warning('请选择 SKU')
   if (!f.toLocationCode) return ElMessage.warning('请选择目标库位')
   if (f.qty < 0) return ElMessage.warning('数量不能为负')
   if (f.qty === 0 && !f.fromLocationCode) return ElMessage.warning('新库位库存数量须大于 0')
-  const ok = await withAction(async () => {
-    await inventoryApi.changeLocationStock({
-      customerCode: f.customerCode.trim(),
-      sku: f.sku.trim(),
-      warehouseCode: f.warehouseCode,
-      fromLocationCode: f.fromLocationCode.trim() || undefined,
-      toLocationCode: f.toLocationCode,
-      qty: f.qty,
-      remark: f.remark || undefined,
-    })
-    load()
-  }, '库存变更已保存')
-  if (ok) changeDialogVisible.value = false
+  const scope = adjustmentScope.value
+  const confirmed = await originalChange.start({ kind: 'single', payload: { customerCode: f.customerCode.trim(), sku: f.sku.trim(), warehouseCode: f.warehouseCode, fromLocationCode: f.fromLocationCode.trim() || undefined, toLocationCode: f.toLocationCode, qty: f.qty, remark: f.remark || undefined } })
+  if (confirmed && scope === adjustmentScope.value) { changeDialogVisible.value = false; await load() }
 }
 
 async function submitBatchChange() {
+  if (pendingChange.value || changing.value || changeBlocked.value || pendingAdjustment.value || adjusting.value || adjustmentBlocked.value) return
   if (!batchPreviewRows.value.length) return ElMessage.warning('请先上传 XLS 或 CSV 模板')
+  const scope = adjustmentScope.value
   batchSubmitting.value = true
   try {
-    const res = await inventoryApi.batchChangeLocationStock({
-      rows: batchPreviewRows.value,
-      defaultWarehouse: changeForm.value.warehouseCode || JHB_WAREHOUSE_CODE,
-    })
-    const failed = (res.results || []).filter((r: any) => !r.ok)
-    if (res.fail > 0) {
-      ElMessage.warning(`成功 ${res.ok} 行，失败 ${res.fail} 行${failed[0]?.error ? `：${failed[0].error}` : ''}`)
-    } else {
-      ElMessage.success(`批量变更完成，共 ${res.ok} 行`)
-      changeDialogVisible.value = false
-      batchPreviewRows.value = []
-      load()
-    }
-  } catch (e: any) {
-    ElMessage.error(userFacingError(displaySkuText(e?.message || '批量变更失败')))
-  } finally {
-    batchSubmitting.value = false
-  }
+    const confirmed = await originalChange.start({ kind: 'batch', payload: { rows: JSON.parse(JSON.stringify(batchPreviewRows.value)), defaultWarehouse: changeForm.value.warehouseCode || JHB_WAREHOUSE_CODE } })
+    if (confirmed && scope === adjustmentScope.value) { changeDialogVisible.value = false; batchPreviewRows.value = []; await load() }
+  } finally { batchSubmitting.value = false }
 }
 
 async function searchSkuOptions(keyword: string) {
@@ -459,6 +471,19 @@ watch([page, pageSize], () => load())
 
 <template>
   <div class="inv-query-page">
+    <el-alert v-if="changeFeedback" :title="changeFeedback" :closable="false" type="warning" />
+    <el-card v-if="pendingChange" shadow="never">
+      <p>待核对原库存变更：{{ pendingChange.kind === 'batch' ? '批量导入' : '单条变更' }}，请继续原操作。</p>
+      <el-button :loading="changing" :disabled="!canAdjust || changeBlocked || adjusting" @click="continueChange">核对并继续原库存变更</el-button>
+      <el-button v-if="pendingChange.kind === 'batch'" :disabled="changing || !canAdjust || adjusting" @click="closeOriginalBatch">核对结束原批次，处理未成功行</el-button>
+      <el-button @click="router.push('/dashboard')">返回工作台（保留原请求）</el-button>
+    </el-card>
+    <el-alert v-if="adjustmentFeedback" :title="adjustmentFeedback" :closable="false" type="warning" />
+    <el-card v-if="pendingAdjustment" shadow="never">
+      <p>待核对原库存调整：库位记录 {{ pendingAdjustment.id }} → {{ pendingAdjustment.locationCode }} · {{ pendingAdjustment.qty }} 件</p>
+      <el-button :loading="adjusting" :disabled="!canAdjust || adjustmentBlocked" @click="continueAdjustment">核对并继续原库存调整</el-button>
+      <el-button @click="router.push('/dashboard')">返回工作台（保留原请求）</el-button>
+    </el-card>
     <el-card shadow="never" class="page-card">
       <template #header>
         <div class="page-header">
@@ -666,7 +691,7 @@ watch([page, pageSize], () => load())
 
     <!-- 调整库位库存 -->
     <el-dialog v-model="adjustDialogVisible" title="调整库位库存" width="480px">
-      <el-form label-width="90px" size="small">
+      <el-form label-width="90px" size="small" :disabled="adjusting || !!pendingAdjustment">
         <el-form-item label="客户代码" required>
           <el-input v-model="adjustForm.customerCode" placeholder="货盘填 TKL，客户填 TKL0001" />
         </el-form-item>
@@ -686,7 +711,7 @@ watch([page, pageSize], () => load())
       </el-form>
       <template #footer>
         <el-button @click="adjustDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="submitAdjust">保存</el-button>
+        <el-button type="primary" :loading="adjusting" :disabled="!!pendingAdjustment || adjustmentBlocked || !canAdjust" @click="submitAdjust">保存</el-button>
       </template>
     </el-dialog>
 
@@ -740,13 +765,13 @@ watch([page, pageSize], () => load())
             <span v-if="batchPreviewRows.length" class="batch-count">已解析 {{ batchPreviewRows.length }} 行</span>
           </div>
           <el-table v-if="batchPreviewRows.length" :data="batchPreviewRows" border size="small" max-height="280" class="batch-preview">
-            <el-table-column prop="customerCode" label="客户代码" width="96" />
-            <el-table-column prop="sku" label="SKU" min-width="110" :formatter="formatSku" />
-            <el-table-column prop="warehouseCode" label="仓库" width="110" />
-            <el-table-column prop="fromLocationCode" label="原库位" width="90" />
-            <el-table-column prop="toLocationCode" label="目标库位" width="96" />
-            <el-table-column prop="qty" label="数量" width="72" align="right" />
-            <el-table-column prop="remark" label="备注" min-width="100" show-overflow-tooltip />
+            <el-table-column label="客户代码" min-width="100"><template #default="{ row, $index }"><el-input v-model="row.customerCode" :aria-label="`第${$index + 1}行客户代码`" :disabled="!!pendingChange || changing || !!pendingAdjustment || adjusting || !canAdjust" /></template></el-table-column>
+            <el-table-column label="SKU" min-width="120"><template #default="{ row, $index }"><el-input v-model="row.sku" :aria-label="`第${$index + 1}行SKU`" :disabled="!!pendingChange || changing || !!pendingAdjustment || adjusting || !canAdjust" /></template></el-table-column>
+            <el-table-column label="仓库" min-width="130"><template #default="{ row, $index }"><el-input v-model="row.warehouseCode" :aria-label="`第${$index + 1}行仓库`" :disabled="!!pendingChange || changing || !!pendingAdjustment || adjusting || !canAdjust" /></template></el-table-column>
+            <el-table-column label="原库位" min-width="110"><template #default="{ row, $index }"><el-input v-model="row.fromLocationCode" :aria-label="`第${$index + 1}行原库位`" :disabled="!!pendingChange || changing || !!pendingAdjustment || adjusting || !canAdjust" /></template></el-table-column>
+            <el-table-column label="目标库位" min-width="120"><template #default="{ row, $index }"><el-input v-model="row.toLocationCode" :aria-label="`第${$index + 1}行目标库位`" :disabled="!!pendingChange || changing || !!pendingAdjustment || adjusting || !canAdjust" /></template></el-table-column>
+            <el-table-column label="数量" min-width="140"><template #default="{ row, $index }"><el-input-number v-model="row.qty" :min="0" :max="999999" :aria-label="`第${$index + 1}行数量`" :disabled="!!pendingChange || changing || !!pendingAdjustment || adjusting || !canAdjust" /></template></el-table-column>
+            <el-table-column label="备注" min-width="120"><template #default="{ row }"><el-input v-model="row.remark" aria-label="变更备注" :disabled="!!pendingChange || changing || !!pendingAdjustment || adjusting || !canAdjust" /></template></el-table-column>
           </el-table>
           <el-empty v-else description="请下载模板并上传 XLS 或 CSV" :image-size="64" />
           <input ref="changeFileInputRef" type="file" accept=".csv,.xls,.txt" style="display:none" @change="handleBatchImportFile" />

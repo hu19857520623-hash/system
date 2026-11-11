@@ -2,6 +2,9 @@ import { PurchaseService } from './purchase.service'
 
 function setup() {
   const tx: any = {
+    supplier: { findFirst: jest.fn().mockResolvedValue({ id: 4n }), create: jest.fn() },
+    sysUser: { findUnique: jest.fn().mockResolvedValue({realName:'采购验收员'}) },
+    operationLog: {create:jest.fn().mockResolvedValue({id:1n})},
     warehouse: { findUnique: jest.fn().mockResolvedValue({ warehouseCode: 'LW-SZ', status: 1, warehouseType: 'logistics' }) },
     productDev: {
       findFirst: jest.fn().mockResolvedValue(null),
@@ -13,7 +16,6 @@ function setup() {
   }
   const prisma: any = {
     ...tx,
-    supplier: { findFirst: jest.fn().mockResolvedValue({ id: 4n }), create: jest.fn() },
     $transaction: jest.fn(async (callback) => callback(tx)),
   }
   const service = new PurchaseService(prisma, { log: jest.fn().mockResolvedValue({}) } as any)
@@ -21,6 +23,12 @@ function setup() {
 }
 
 describe('创建采购单进入预采购分配', () => {
+  it('新供应商与预采购共用事务，日志失败时创建请求拒绝',async()=>{
+    const {service,tx}=setup();tx.supplier.findFirst.mockResolvedValue(null);tx.supplier.create.mockResolvedValue({id:5n});tx.operationLog.create.mockRejectedValueOnce(new Error('创建日志写入失败'))
+    await expect(service.create({supplierName:'新供应商',warehouseCode:'LW-SZ',items:[{sku:'NEW',productName:'新品',quantity:2,unitPrice:3}]},3)).rejects.toThrow('创建日志写入失败')
+    expect(tx.supplier.create).toHaveBeenCalledTimes(1);expect(tx.prePurchaseOrder.create).toHaveBeenCalledWith(expect.objectContaining({data:expect.objectContaining({supplierId:5n})}))
+    expect((service as any).opLog.log).not.toHaveBeenCalled()
+  })
   it('按明细生成待分配预采购，不创建待审核采购单', async () => {
     const { service, tx } = setup()
     const result = await service.create({
@@ -55,5 +63,6 @@ describe('创建采购单进入预采购分配', () => {
       items: [{ sku: 'FIT-001', productName: '椅子', quantity: 1, unitPrice: 10 }],
     })).rejects.toThrow('启用的物流中转仓')
     expect(tx.prePurchaseOrder.create).not.toHaveBeenCalled()
+    expect(tx.supplier.findFirst).not.toHaveBeenCalled();expect(tx.supplier.create).not.toHaveBeenCalled()
   })
 })

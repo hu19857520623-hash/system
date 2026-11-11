@@ -1,8 +1,13 @@
 <script setup lang="ts">
+import { useReturnMeasureAttempt, type ReturnMeasureResult } from '@/composables/useReturnMeasureAttempt'
+import { useReturnActionAttempt, type ReturnAction } from '@/composables/useReturnActionAttempt'
+import { useReturnInspectionPhotos } from '@/composables/useReturnInspectionPhotos'
+import { createReturnReadGate } from '@/utils/returnReadGate'
+import { getAccessToken } from '@/auth/tokenStore'
 import { userFacingError } from '@erp/shared/user-facing-error'
 
 import { displaySku, displaySkuText, formatSku } from '@erp/shared/sku-display'
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onScopeDispose } from 'vue'
 import { ElMessage } from 'element-plus'
 import { erpConfirm } from '@/utils/messageBox'
 import { returnsApi, operationLogApi } from '@/api/client.js'
@@ -12,6 +17,46 @@ import ListPagination from '@/components/ListPagination.vue'
 import DetailSheet from '@/components/ui/DetailSheet.vue'
 
 const app = useAppStore()
+const returnActionScope = () => getAccessToken() && app.authenticatedUser ? JSON.stringify([getAccessToken(), app.authenticatedUser.id, app.authenticatedUser.roleCode, app.authenticatedUser.workstation, [...app.currentPermSet].sort()]) : null
+const returnActionAttempt = useReturnActionAttempt({
+  actor: () => app.authenticatedUser ? String(app.authenticatedUser.id) : '', scope: returnActionScope,
+  allowed: action => app.hasPerm(action === 'dispose' || action === 'process' ? 'return.process' : 'return.receive'),
+  storage: { getItem: key => localStorage.getItem(key), setItem: (key, value) => localStorage.setItem(key, value), removeItem: key => localStorage.removeItem(key) },
+  request: async (id, step) => {
+    const result = await returnsApi[step.action](id, { ...step.body, clientRequestId: step.clientRequestId })
+    if (step.action === 'process' && (Number(result?.id) !== id || !result.status)) {
+      throw Error('退件处理回执与原单不一致，请继续核对原请求')
+    }
+    return result
+  },
+  close: (id, step) => returnsApi.closeWarehouseRequest(id, step),
+})
+const { pending: pendingReturnAction, busy: returnActionBusy, feedback: returnActionFeedback, blocked: returnActionBlocked } = returnActionAttempt
+async function runReturnActions(row: any, steps: { action: ReturnAction; body: Record<string, unknown> }[]) {
+  const result: any = await returnActionAttempt.start({ id: Number(row.id), returnNo: row.returnNo, steps })
+  if (!result) throw Error(returnActionFeedback.value || '原退件操作待核对，请继续原请求')
+  return result
+}
+async function resumeReturnAction() {
+  const pending = pendingReturnAction.value
+  const result = await returnActionAttempt.resume()
+  if (!result) return
+  const resumedProcess = pending?.steps[pending.index]?.action === 'process'
+  if (resumedProcess && processDialog.value && Number(processTarget.value?.id) === pending.id) {
+    applyProcessResult(result)
+  } else if (!resumedProcess) {
+    receiveDialog.value = false; measureDialog.value = false; inspectDialog.value = false
+  }
+  await loadList()
+  ElMessage.success('原退件操作已确认，请核对当前进度')
+}
+
+
+function returnListScope() {
+  const token = getAccessToken(), user = app.authenticatedUser
+  return token && user && (app.hasPerm('return.view') || app.hasPerm('inbound.view'))
+    ? JSON.stringify([token, user.id, user.roleCode, user.workstation, [...app.currentPermSet].sort()]) : null
+}
 
 const {
   filter,
@@ -27,6 +72,7 @@ const {
   pageSize,
   listTotal,
   loading,
+  loadError: listReadError,
   rows,
   selectedIds,
   loadList,
@@ -34,7 +80,7 @@ const {
   resetFilters,
   setStatusFilter,
   setProcessFilter,
-} = useReturnList()
+} = useReturnList(returnListScope)
 
 type CartonForm = { lengthCm: string; widthCm: string; heightCm: string; grossWeightKg: string }
 
@@ -46,7 +92,20 @@ const processSubmitting = ref(false)
 const processLoading = ref(false)
 const processFeedback = ref('')
 const processUncertain = ref(false)
-const processRequestId = ref('')
+const processRead = createReturnReadGate(returnActionScope)
+watch(processDialog, visible => {
+  if (!visible) {
+    processRead.invalidate()
+    processLoading.value = false
+  }
+}, { flush: 'sync' })
+watch(returnActionScope, () => {
+  processRead.invalidate()
+  processDialog.value = false
+  processTarget.value = null
+  processLoading.value = false
+}, { flush: 'sync' })
+onScopeDispose(() => processRead.invalidate())
 const processStockRows = ref<{ sku: string; name: string; remaining: number; qty: string; locationCode: string }[]>([])
 const processNeedsStock = computed(() => ['restock', 'relabel'].includes(processResultForm.value))
 
@@ -70,15 +129,34 @@ const receiveSubmitting = ref(false)
 const measureDialog = ref(false)
 const measureTarget = ref<any>(null)
 const measureCartons = ref<CartonForm[]>([])
-const measureSubmitting = ref(false)
+const measureMode = ref<'replace' | 'existing'>('replace')
+const measureLoading = ref(false), measureReadError = ref(''), measureReadTarget = ref<any>(null)
+function measureScope() { try { return inspectionScope() } catch { return null } }
+let measurePageLive = true
+const measureRead = createReturnReadGate(measureScope), measurePreviewRead = createReturnReadGate(measureScope)
+const measureAttempt = useReturnMeasureAttempt({
+  actor: () => String(app.authenticatedUser?.id || ''), scope: measureScope,
+  storage: { getItem: key => localStorage.getItem(key), setItem: (key, value) => localStorage.setItem(key, value), removeItem: key => localStorage.removeItem(key) },
+  request: (payload, closeOnly) => closeOnly ? returnsApi.closeMeasureFees(payload.id, payload) : returnsApi.measureAndCalculate(payload.id, payload),
+})
+const { pending: measurePending, busy: measureSubmitting, blocked: measureBlocked, feedback: measureFeedback } = measureAttempt
+const measureFieldsLocked = computed(() => measureLoading.value || measureSubmitting.value || !!measurePending.value || measureBlocked.value || measureMode.value === 'existing')
+const feePreviewError = ref('')
 
 const inspectDialog = ref(false)
 const inspectTarget = ref<any>(null)
 const inspectResult = ref('unknown')
 const inspectRemark = ref('')
-const inspectPhotos = ref<{ fileName: string; contentBase64: string }[]>([])
 const inspectSubmitting = ref(false)
 const inspectFileRef = ref<HTMLInputElement | null>(null)
+function inspectionScope() {
+  const token = getAccessToken(), user = app.authenticatedUser
+  return token && user && app.hasPerm('return.receive')
+    ? JSON.stringify([token, user.id, user.roleCode, user.workstation, [...app.currentPermSet].sort()]) : null
+}
+const inspectionPhotos = useReturnInspectionPhotos(inspectionScope, inspectDialog, inspectSubmitting)
+const { photos: inspectPhotos, reading: inspectReadingPhotos, error: inspectPhotoError, ready: inspectPhotosReady } = inspectionPhotos
+watch(inspectionScope, () => { inspectDialog.value = false; inspectTarget.value = null }, { flush: 'sync' })
 
 const INSPECTION_OPTIONS = [
   { value: 'good', label: '良品' },
@@ -347,9 +425,7 @@ async function submitReceive() {
       receivedCartonCount: Number(receiveCartons.value),
       remark: receiveRemark.value.trim() || undefined,
     }
-    const updated = receiveMode.value === 'reReceive'
-      ? await returnsApi.reReceive(receiveTarget.value.id, payload)
-      : await returnsApi.receive(receiveTarget.value.id, payload)
+    const updated = await runReturnActions(receiveTarget.value, [{ action: receiveMode.value, body: payload }])
     receiveDialog.value = false
     await loadList()
     if (receiveMode.value === 'reReceive') {
@@ -366,25 +442,45 @@ async function submitReceive() {
   }
 }
 
-function openMeasure(row: any) {
-  measureTarget.value = row
-  const count = Math.max(1, Number(row.receivedCartonCount) || 1)
-  if (row.cartons?.length) {
-    measureCartons.value = row.cartons.map((c: any) => ({
-      lengthCm: String(c.lengthCm ?? ''),
-      widthCm: String(c.widthCm ?? ''),
-      heightCm: String(c.heightCm ?? ''),
-      grossWeightKg: String(c.grossWeightKg ?? ''),
-    }))
-  } else {
-    measureCartons.value = Array.from({ length: count }, () => emptyCarton())
+async function openMeasure(row: any, mode: 'replace' | 'existing' = 'replace') {
+  if (!measureScope() || measureSubmitting.value || measurePending.value || measureBlocked.value) {
+    ElMessage.warning('请先核对并继续或结束原测量请求，再打开新的测量作业')
+    return
   }
-  extraFeeLines.value = (row.feeLines || [])
-    .filter((l: any) => l.chargeType === 'return_extra')
-    .map((l: any) => ({ description: l.description, amount: String(l.amount ?? '') }))
-  feePreview.value = null
+  measureReadTarget.value = { id: row.id, returnNo: row.returnNo }
+  measureMode.value = mode
   measureDialog.value = true
-  scheduleFeePreview()
+  measureLoading.value = true
+  measureReadError.value = ''
+  measureTarget.value = null
+  measureCartons.value = []
+  feePreview.value = null
+  const active = measureRead.begin(() => measureDialog.value)
+  try {
+    row = await returnsApi.measurementSnapshot(row.id)
+    if (!active()) return
+    if (!(mode === 'existing' ? ['measured'] : ['received', 'arrived', 'measured', 'fee_calculated']).includes(row.status)) throw Error('当前退件状态已变化，请返回列表读取最新状态')
+    if (!row.revision) throw Error('退件版本无法核对，请重试读取')
+    measureTarget.value = row
+    const count = Math.max(1, Number(row.receivedCartonCount) || 1)
+    if (row.cartons?.length) {
+      measureCartons.value = row.cartons.map((c: any) => ({
+        lengthCm: String(c.lengthCm ?? ''),
+        widthCm: String(c.widthCm ?? ''),
+        heightCm: String(c.heightCm ?? ''),
+        grossWeightKg: String(c.grossWeightKg ?? ''),
+      }))
+    } else {
+      measureCartons.value = Array.from({ length: count }, () => emptyCarton())
+    }
+    extraFeeLines.value = (row.feeLines || [])
+      .filter((l: any) => l.chargeType === 'return_extra')
+      .map((l: any) => ({ description: l.description, amount: String(l.amount ?? '') }))
+    feePreview.value = null
+    scheduleFeePreview()
+  } catch (error) {
+    if (active()) measureReadError.value = `读取原退件失败。${userFacingError(error)} 请重试或返回列表。`
+  } finally { if (active()) measureLoading.value = false }
 }
 
 function buildMeasureCartonPayload() {
@@ -403,29 +499,35 @@ function _buildExtraFeePayload() {
 }
 
 async function refreshFeePreview() {
-  if (!measureTarget.value) return
-  const cartons = buildMeasureCartonPayload()
+  if (!measureTarget.value || !measureDialog.value || !measureScope()) return
+  const cartons = buildMeasureCartonPayload(), targetId = measureTarget.value.id
   if (!cartons.length || cartons.some(c => ![c.lengthCm, c.widthCm, c.heightCm].every(value => Number.isFinite(value) && value > 0)
-    || !Number.isFinite(c.grossWeightKg) || c.grossWeightKg < 0)) {
-    feePreview.value = null
-    return
-  }
+    || !Number.isFinite(c.grossWeightKg) || c.grossWeightKg < 0)) { feePreview.value = null; return }
+  const active = measurePreviewRead.begin(() => measureDialog.value && measureTarget.value?.id === targetId && JSON.stringify(buildMeasureCartonPayload()) === JSON.stringify(cartons))
   feePreviewLoading.value = true
+  feePreviewError.value = ''
   try {
-    feePreview.value = await returnsApi.previewFees(measureTarget.value.id, {
-      cartons,
-    })
-  } catch {
-    feePreview.value = null
-  } finally {
-    feePreviewLoading.value = false
-  }
+    const result = await returnsApi.previewFees(targetId, { cartons })
+    if (active()) feePreview.value = result
+  } catch (error) {
+    if (active()) { feePreview.value = null; feePreviewError.value = `物流费预览读取失败。${userFacingError(error)} 可重试预览或返回列表。` }
+  } finally { if (active()) feePreviewLoading.value = false }
 }
 
 function scheduleFeePreview() {
+  measurePreviewRead.invalidate()
+  feePreview.value = null
+  feePreviewLoading.value = false
+  feePreviewError.value = ''
   if (feePreviewTimer) clearTimeout(feePreviewTimer)
-  feePreviewTimer = setTimeout(() => void refreshFeePreview(), 280)
+  if (measureDialog.value) feePreviewTimer = setTimeout(() => void refreshFeePreview(), 280)
 }
+
+watch(measureDialog, open => {
+  if (!open) { measureRead.invalidate(); measurePreviewRead.invalidate(); if (feePreviewTimer) clearTimeout(feePreviewTimer); measureLoading.value = false }
+}, { flush: 'sync' })
+watch(measureScope, () => { measureDialog.value = false; measureTarget.value = null }, { flush: 'sync' })
+onScopeDispose(() => { measurePageLive = false; measureRead.invalidate(); measurePreviewRead.invalidate(); if (feePreviewTimer) clearTimeout(feePreviewTimer) })
 
 function _addExtraFeeLine() {
   extraFeeLines.value.push({ description: '', amount: '' })
@@ -613,7 +715,7 @@ function removeMeasureCarton(index: number) {
 }
 
 async function submitMeasure() {
-  if (!measureTarget.value || measureSubmitting.value) return
+  if (!measureTarget.value || measureSubmitting.value || measureLoading.value || measurePending.value || measureBlocked.value || !measureScope()) return
   const cartons = buildMeasureCartonPayload()
   if (!cartons.length) { ElMessage.warning('请至少填写一箱外箱尺寸'); return }
   for (const [index, carton] of cartons.entries()) {
@@ -626,67 +728,68 @@ async function submitMeasure() {
       return
     }
   }
-  measureSubmitting.value = true
-  try {
-    await returnsApi.measure(measureTarget.value.id, {
-      cartons,
-    })
-    const feeResult = await returnsApi.calculateFees(measureTarget.value.id, {})
-    const feeTotal = feeResult?.estimatedFeeTotal ?? previewFeeTotal.value
-    ElMessage.success(`测量完成，退件物流费 ${formatFee(feeTotal)} 已生成；其余费用待客户确认后收取`)
-    measureDialog.value = false
-    await loadList()
-  } catch (e: any) {
-    ElMessage.error(userFacingError(displaySkuText(e?.message || '测量或算费失败')))
-  } finally {
-    measureSubmitting.value = false
-  }
+  const identity = measureScope()
+  const result = await measureAttempt.start({ id: measureTarget.value.id, returnNo: measureTarget.value.returnNo,
+    expectedRevision: measureTarget.value.revision, mode: measureMode.value, cartons })
+  await showMeasureOutcome(result, identity)
+}
+
+async function showMeasureOutcome(result: ReturnMeasureResult | null, identity: string | null) {
+  if (!result || !measurePageLive || !identity || identity !== measureScope()) return
+  ElMessage.success(result.outcome === 'applied'
+    ? `原请求已确认执行，回执物流费 ${formatFee(result.estimatedFeeTotal)}；请以最新退件状态继续` : '原请求已核对并结束，请读取最新退件后继续')
+  measureDialog.value = false
+  await loadList()
+}
+
+async function returnFromMeasure() {
+  measureDialog.value = false
+  await loadList()
+}
+
+async function resumeMeasure(closeOnly = false) {
+  const identity = measureScope()
+  await showMeasureOutcome(await (closeOnly ? measureAttempt.close() : measureAttempt.resume()), identity)
 }
 
 function openInspect(row: any) {
+  if (!inspectionScope() || inspectSubmitting.value) return
+  inspectionPhotos.reset()
   inspectTarget.value = row
   inspectResult.value = row.inspectionResult || 'unknown'
   inspectRemark.value = row.inspectionRemark || ''
-  inspectPhotos.value = []
   inspectDialog.value = true
 }
 
-async function readFileAsBase64(file: File): Promise<string> {
-  const buf = await file.arrayBuffer()
-  let binary = ''
-  const bytes = new Uint8Array(buf)
-  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]!)
-  return btoa(binary)
-}
-
 async function onInspectFiles(files: FileList | null) {
-  if (!files?.length) return
-  for (const file of Array.from(files)) {
-    inspectPhotos.value.push({
-      fileName: file.name,
-      contentBase64: await readFileAsBase64(file),
-    })
-  }
+  const selected = files ? Array.from(files) : []
   if (inspectFileRef.value) inspectFileRef.value.value = ''
+  await inspectionPhotos.add(selected)
 }
 
 async function submitInspect() {
-  if (!inspectTarget.value) return
+  if (!inspectTarget.value || inspectSubmitting.value || !inspectionScope()) return
+  if (!inspectionPhotos.canSubmit()) { ElMessage.warning('请先完成照片读取，处理失败照片后再提交'); return }
   if (!inspectPhotos.value.length) {
     ElMessage.warning('请至少上传 1 张质检照片')
     return
   }
+  const targetId = inspectTarget.value.id, identity = inspectionScope()
+  const active = () => inspectDialog.value && inspectTarget.value?.id === targetId && identity === inspectionScope()
+  const attachments = inspectPhotos.value.map(photo => ({ ...photo }))
   inspectSubmitting.value = true
   try {
-    await returnsApi.submitInspection(inspectTarget.value.id, {
+    await runReturnActions(inspectTarget.value, [{ action: 'submitInspection', body: {
       inspectionResult: inspectResult.value,
       inspectionRemark: inspectRemark.value.trim() || undefined,
-      attachments: inspectPhotos.value,
-    })
-    ElMessage.success('质检已提交，已推送客户确认')
+      attachments,
+    } }])
+    if (!active()) return
+    ElMessage.success('质检已提交，等待客户确认')
     inspectDialog.value = false
     await loadList()
   } catch (e: any) {
+    if (!active()) return
     ElMessage.error(userFacingError(displaySkuText(e?.message || '提交失败')))
   } finally {
     inspectSubmitting.value = false
@@ -697,7 +800,7 @@ async function handleDispose(row: any) {
   if (!app.hasPerm('return.process')) return
   try {
     await erpConfirm(`确认退件单 ${row.returnNo} 已销毁？`, '确认销毁')
-    await returnsApi.dispose(row.id, { processRemark: '客户确认不留，仓库已销毁' })
+    await runReturnActions(row, [{ action: 'dispose', body: { processRemark: '客户确认不留，仓库已销毁' } }])
     ElMessage.success('已确认销毁')
     await loadList()
   } catch (e: any) {
@@ -718,19 +821,39 @@ function prepareProcessStockRows(row: any) {
 }
 
 async function refreshProcessTarget() {
-  if (!processTarget.value || processSubmitting.value) return
+  if (!processTarget.value || !processDialog.value || processSubmitting.value || returnActionBusy.value) return
+  const id = Number(processTarget.value.id)
+  const active = processRead.begin(() => processDialog.value && Number(processTarget.value?.id) === id)
   processLoading.value = true
   try {
-    processTarget.value = await returnsApi.detail(processTarget.value.id)
+    const result = await returnsApi.detail(id)
+    if (!active()) return
+    if (Number(result?.id) !== id) throw Error('退件详情与原单不一致，请重试读取')
+    processTarget.value = result
     processResultForm.value = processTarget.value.customerProcessChoice || processTarget.value.processResult || processTarget.value.requestedProcess || 'restock'
     prepareProcessStockRows(processTarget.value)
-    processRequestId.value = crypto.randomUUID()
     processUncertain.value = false
     processFeedback.value = processTarget.value.status === 'completed' ? '该退件已处理完成，可关闭并返回列表查看结果。' : ''
   } catch (error: any) {
+    if (!active()) return
     processUncertain.value = true
     processFeedback.value = `读取退件最新状态失败，请刷新核对后再继续。${userFacingError(error)}`
-  } finally { processLoading.value = false }
+  } finally { if (active()) processLoading.value = false }
+}
+
+function applyProcessResult(result: any) {
+  processRead.invalidate()
+  processLoading.value = false
+  processTarget.value = result
+  processUncertain.value = false
+  if (result.warning) ElMessage.warning(result.warning)
+  if (result.status === 'completed') {
+    ElMessage.success(processNeedsStock.value ? `退件返库完成，累计入库 ${result.restockedQty} 件` : '处理完成')
+    processDialog.value = false
+  } else {
+    processFeedback.value = `本次上架已保存，累计入库 ${result.restockedQty} 件，剩余 ${result.remainingRestockQty} 件；请继续填写实际库位和数量。`
+    prepareProcessStockRows(result)
+  }
 }
 
 async function openProcess(row: any) {
@@ -746,7 +869,8 @@ async function openProcess(row: any) {
 }
 
 async function submitProcess() {
-  if (!processTarget.value || processSubmitting.value || processLoading.value || processUncertain.value || processTarget.value.status === 'completed') return
+  if (!processTarget.value || processSubmitting.value || processLoading.value || processUncertain.value ||
+      pendingReturnAction.value || returnActionBlocked.value || processTarget.value.status === 'completed') return
   processFeedback.value = ''
   const stockLines = []
   if (processNeedsStock.value) {
@@ -768,22 +892,12 @@ async function submitProcess() {
   }
   processSubmitting.value = true
   try {
-    const result = await returnsApi.process(processTarget.value.id, {
+    const result = await runReturnActions(processTarget.value, [{ action: 'process', body: {
       processResult: processResultForm.value,
       processRemark: processRemark.value.trim() || undefined,
-      clientRequestId: processRequestId.value,
       ...(processNeedsStock.value ? { warehouseCode: 'WMS-JHB-01', stockLines } : {}),
-    })
-    processTarget.value = result
-    if (result.warning) ElMessage.warning(result.warning)
-    if (result.status === 'completed') {
-      ElMessage.success(processNeedsStock.value ? `退件返库完成，累计入库 ${result.restockedQty} 件` : '处理完成')
-      processDialog.value = false
-    } else {
-      processFeedback.value = `本次上架已保存，累计入库 ${result.restockedQty} 件，剩余 ${result.remainingRestockQty} 件；请继续填写实际库位和数量。`
-      prepareProcessStockRows(result)
-      processRequestId.value = crypto.randomUUID()
-    }
+    } }])
+    applyProcessResult(result)
     await loadList().catch(() => ElMessage.warning('处理结果已保存，但列表刷新失败，请重新查询核对'))
   } catch (e: any) {
     const status = Number(e?.status)
@@ -802,36 +916,42 @@ async function downloadAttachment(row: any, att: { id: number; fileName: string 
   }
 }
 
+const returnReadScope = computed(() => app.authenticatedUser && getAccessToken() ? JSON.stringify([getAccessToken(), app.authenticatedUser.id, app.authenticatedUser.roleCode, [...app.currentPermSet].sort()]) : null)
+const detailRead = createReturnReadGate(() => returnReadScope.value), logRead = createReturnReadGate(() => returnReadScope.value)
+const detailReadError = ref(''), logReadError = ref(''), detailTarget = ref<any>(null)
+watch(returnReadScope, () => { detailRead.invalidate(); logRead.invalidate(); detailVisible.value = false; logVisible.value = false; detailRow.value = null; logRows.value = []; detailLoading.value = false; logLoading.value = false })
+watch(detailVisible, () => { if (!detailVisible.value) detailRead.invalidate() }, { flush: 'sync' })
+watch(logVisible, () => { if (!logVisible.value) logRead.invalidate() }, { flush: 'sync' })
+onScopeDispose(() => { detailRead.invalidate(); logRead.invalidate(); inspectDialog.value = false; inspectTarget.value = null })
+
 async function openDetail(row: any) {
+  detailTarget.value = { id: row.id, returnNo: row.returnNo }
   detailVisible.value = true
   detailLoading.value = true
-  detailRow.value = row
+  detailRow.value = null
+  detailReadError.value = ''
+  const active = detailRead.begin(() => detailVisible.value)
   try {
-    detailRow.value = await returnsApi.detail(row.id)
-  } catch {
-    // 列表数据仍可展示
-  } finally {
-    detailLoading.value = false
-  }
+    const result = await returnsApi.detail(row.id)
+    if (active()) detailRow.value = result
+  } catch (e) {
+    if (active()) detailReadError.value = `退件详情加载失败。${userFacingError(e)} 请重试或返回列表。`
+  } finally { if (active()) detailLoading.value = false }
 }
 
 async function openLog(row: any) {
   logVisible.value = true
-  logTarget.value = row
+  logTarget.value = { id: row.id, returnNo: row.returnNo }
   logLoading.value = true
   logRows.value = []
+  logReadError.value = ''
+  const active = logRead.begin(() => logVisible.value)
   try {
-    const res = await operationLogApi.list({
-      module: 'returns',
-      targetId: row.returnNo,
-      pageSize: 50,
-    })
-    logRows.value = res.items || []
-  } catch (e: any) {
-    ElMessage.error(userFacingError(displaySkuText(e?.message || '加载日志失败')))
-  } finally {
-    logLoading.value = false
-  }
+    const res = await operationLogApi.list({ module: 'returns', targetId: row.returnNo, pageSize: 50 })
+    if (active()) logRows.value = res.items || []
+  } catch (e) {
+    if (active()) logReadError.value = `退件日志加载失败。${userFacingError(e)} 请重试或返回列表。`
+  } finally { if (active()) logLoading.value = false }
 }
 
 function exportCsv() {
@@ -875,6 +995,13 @@ void _removeExtraFeeLine
 
 <template>
   <div class="return-mgmt">
+    <el-alert v-if="pendingReturnAction || returnActionBlocked || returnActionFeedback" type="warning" :closable="false" show-icon style="margin-bottom: 12px">
+      <template #title>{{ pendingReturnAction ? '原退件操作待核对 · ' + pendingReturnAction.returnNo : '退件操作核对' }}</template>
+      <p>{{ returnActionFeedback }}</p>
+      <el-button v-if="pendingReturnAction" :loading="returnActionBusy" :disabled="returnActionBlocked" @click="resumeReturnAction">继续原请求</el-button>
+      <el-button v-if="pendingReturnAction" :disabled="returnActionBusy || returnActionBlocked" @click="returnActionAttempt.close()">核对并结束原操作</el-button>
+      <el-button :disabled="returnActionBusy" @click="loadList">刷新列表核对</el-button>
+    </el-alert>
     <div class="page-header">
       <div>
         <h1 class="page-title">退件管理</h1>
@@ -972,6 +1099,13 @@ void _removeExtraFeeLine
       </div>
     </div>
 
+    <el-alert v-if="measurePending || measureBlocked || measureFeedback" :type="measurePending || measureBlocked ? 'warning' : 'info'" :closable="false" :title="measureFeedback || '原测量请求待核对'" show-icon>
+      <p v-if="measurePending">退件单：{{ measurePending.returnNo }}</p>
+      <el-button v-if="measurePending" :loading="measureSubmitting" @click="resumeMeasure()">核对并继续原测量</el-button>
+      <el-button v-if="measurePending" :disabled="measureSubmitting" @click="resumeMeasure(true)">核对并结束原请求</el-button>
+      <el-button v-if="measureBlocked" @click="measureAttempt.reload()">重新读取原请求</el-button>
+    </el-alert>
+
     <div class="table-toolbar">
       <div class="toolbar-left">
         <el-button
@@ -986,6 +1120,10 @@ void _removeExtraFeeLine
         <el-button v-if="app.hasPerm('return.export')" size="small" @click="exportCsv">导出</el-button>
       </div>
     </div>
+
+    <el-alert v-if="listReadError" type="error" :closable="false" :title="listReadError" show-icon>
+      <el-button :loading="loading" @click="loadList()">重试加载退件列表</el-button>
+    </el-alert>
 
     <el-table
       v-loading="loading"
@@ -1105,7 +1243,8 @@ void _removeExtraFeeLine
               type="button"
               class="op-link"
               @click="openMeasure(row)"
-            >测体积/算费</button>
+            >{{ ['measured', 'fee_calculated'].includes(row.status) ? '重新测量并算费' : '测量并算费' }}</button>
+            <button v-if="row.status === 'measured' && app.hasPerm('return.receive')" type="button" class="op-link" @click="openMeasure(row, 'existing')">继续生成物流费</button>
             <button
               v-if="row.status === 'fee_calculated' && app.hasPerm('return.receive')"
               type="button"
@@ -1144,7 +1283,7 @@ void _removeExtraFeeLine
       </el-table-column>
     </el-table>
 
-    <el-empty v-if="!loading && !tableRows.length" description="暂无退件记录" />
+    <el-empty v-if="!loading && !listReadError && !tableRows.length" description="暂无退件记录" />
 
     <ListPagination
       v-model:page="page"
@@ -1152,7 +1291,9 @@ void _removeExtraFeeLine
       :total="listTotal"
     />
 
-    <el-dialog v-model="detailVisible" :title="'退件详情 · ' + (detailRow?.returnNo || '')" width="760px" class="erp-detail">
+    <el-dialog v-model="detailVisible" :title="'退件详情 · ' + (detailTarget?.returnNo || '')" width="760px" class="erp-detail">
+      <el-alert v-if="detailReadError" :title="detailReadError" type="error" :closable="false" />
+      <el-button v-if="detailReadError && detailTarget" :loading="detailLoading" @click="openDetail(detailTarget)">重试加载退件详情</el-button>
       <div v-loading="detailLoading">
         <template v-if="detailRow">
           <DetailSheet
@@ -1265,6 +1406,8 @@ void _removeExtraFeeLine
     </el-dialog>
 
     <el-dialog v-model="logVisible" :title="'操作日志 · ' + (logTarget?.returnNo || '')" width="680px">
+      <el-alert v-if="logReadError" :title="logReadError" type="error" :closable="false" />
+      <el-button v-if="logReadError && logTarget" :loading="logLoading" @click="openLog(logTarget)">重试加载退件日志</el-button>
       <el-table v-loading="logLoading" :data="logRows" size="small" border max-height="360">
         <el-table-column prop="createdAt" label="时间" width="160">
           <template #default="{ row }">{{ formatTime(row.createdAt) }}</template>
@@ -1315,10 +1458,18 @@ void _removeExtraFeeLine
 
     <el-dialog
       v-model="measureDialog"
-      :title="'测体积与费用 · ' + (measureTarget?.returnNo || '')"
+      :title="(measureMode === 'existing' ? '继续生成物流费 · ' : '测体积与费用 · ') + (measureReadTarget?.returnNo || '')"
       width="680px"
       class="measure-dialog"
     >
+      <p v-if="measureLoading" role="status">正在读取最新退件，请稍候。</p>
+      <el-alert v-if="measureReadError" type="error" :closable="false" :title="measureReadError" />
+      <el-button v-if="measureReadError && measureReadTarget" :loading="measureLoading" @click="openMeasure(measureReadTarget, measureMode)">重试读取退件</el-button>
+      <el-alert v-if="measurePending || measureBlocked" type="warning" :closable="false" :title="measureFeedback">
+        <el-button v-if="measurePending" :loading="measureSubmitting" @click="resumeMeasure()">核对并继续原测量</el-button>
+        <el-button v-if="measurePending" :disabled="measureSubmitting" @click="resumeMeasure(true)">核对并结束原请求</el-button>
+      </el-alert>
+      <p v-if="measureMode === 'existing'">按已保存的外箱测量生成物流费，不修改原测量。需要修改尺寸时，请返回列表选择重新测量。</p>
       <div v-if="measureTarget" class="measure-summary">
         <span>实收 <strong>{{ measureTarget.receivedQty ?? measureTarget.totalQty ?? '—' }}</strong> 件</span>
         <span>SKU <strong>{{ measureSkuQty }}</strong> 件</span>
@@ -1341,25 +1492,26 @@ void _removeExtraFeeLine
               link
               type="danger"
               size="small"
+              :disabled="measureFieldsLocked"
               @click="removeMeasureCarton(index)"
             >删除</el-button>
           </div>
           <div class="carton-fields">
             <label>
               <span>长 (cm)</span>
-              <el-input v-model="carton.lengthCm" type="number" min="0" placeholder="长" />
+              <el-input v-model="carton.lengthCm" :disabled="measureFieldsLocked" type="number" min="0" placeholder="长" />
             </label>
             <label>
               <span>宽 (cm)</span>
-              <el-input v-model="carton.widthCm" type="number" min="0" placeholder="宽" />
+              <el-input v-model="carton.widthCm" :disabled="measureFieldsLocked" type="number" min="0" placeholder="宽" />
             </label>
             <label>
               <span>高 (cm)</span>
-              <el-input v-model="carton.heightCm" type="number" min="0" placeholder="高" />
+              <el-input v-model="carton.heightCm" :disabled="measureFieldsLocked" type="number" min="0" placeholder="高" />
             </label>
             <label>
               <span>毛重 (kg)</span>
-              <el-input v-model="carton.grossWeightKg" type="number" min="0" placeholder="毛重" />
+              <el-input v-model="carton.grossWeightKg" :disabled="measureFieldsLocked" type="number" min="0" placeholder="毛重" />
             </label>
           </div>
           <p v-if="previewCartons[index]?.valid" class="carton-meta">
@@ -1370,8 +1522,11 @@ void _removeExtraFeeLine
         </div>
       </div>
 
-      <el-button size="small" class="add-carton-btn" @click="addMeasureCarton">+ 加一箱</el-button>
+      <el-button size="small" :disabled="measureFieldsLocked" class="add-carton-btn" @click="addMeasureCarton">+ 加一箱</el-button>
 
+      <el-alert v-if="feePreviewError" type="error" :closable="false" :title="feePreviewError">
+        <el-button :loading="feePreviewLoading" @click="refreshFeePreview()">重试物流费预览</el-button>
+      </el-alert>
       <div v-loading="feePreviewLoading" class="fee-preview-panel">
         <div class="fee-preview-title">{{ measureFeeTitle }}</div>
         <el-table v-if="feePreview?.autoLines?.length" :data="feePreview.autoLines" size="small" border>
@@ -1393,15 +1548,15 @@ void _removeExtraFeeLine
       </div>
 
       <template #footer>
-        <el-button @click="measureDialog = false">取消</el-button>
-        <el-button type="primary" :loading="measureSubmitting" :disabled="previewVolume <= 0" @click="submitMeasure">
-          确认测量并生成物流费
+        <el-button @click="returnFromMeasure">{{ measurePending ? '返回列表（保留原请求）' : '返回列表' }}</el-button>
+        <el-button type="primary" :loading="measureSubmitting" :disabled="!measureTarget || measureLoading || !!measurePending || measureBlocked || previewVolume <= 0" @click="submitMeasure">
+          {{ measureMode === 'existing' ? '按原测量生成物流费' : '确认测量并生成物流费' }}
         </el-button>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="inspectDialog" :title="'质检拍照 · ' + (inspectTarget?.returnNo || '')" width="560px">
-      <el-form label-width="90px">
+    <el-dialog v-model="inspectDialog" :close-on-click-modal="!inspectSubmitting" :close-on-press-escape="!inspectSubmitting" :show-close="!inspectSubmitting" :title="'质检拍照 · ' + (inspectTarget?.returnNo || '')" width="560px">
+      <el-form label-width="90px" :disabled="inspectSubmitting">
         <el-form-item label="质检结论" required>
           <el-select v-model="inspectResult" style="width: 100%">
             <el-option v-for="o in INSPECTION_OPTIONS" :key="o.value" :label="o.label" :value="o.value" />
@@ -1411,17 +1566,23 @@ void _removeExtraFeeLine
           <el-input v-model="inspectRemark" type="textarea" :rows="3" placeholder="外观、破损、少件等说明" />
         </el-form-item>
         <el-form-item label="质检照片" required>
-          <input ref="inspectFileRef" type="file" accept="image/*" multiple class="hidden-input" @change="(e: Event) => void onInspectFiles((e.target as HTMLInputElement).files)">
-          <el-button size="small" @click="inspectFileRef?.click()">上传照片</el-button>
+          <input ref="inspectFileRef" type="file" accept="image/*" multiple :disabled="inspectReadingPhotos || inspectSubmitting" class="hidden-input" @change="(e: Event) => void onInspectFiles((e.target as HTMLInputElement).files)">
+          <el-button size="small" :loading="inspectReadingPhotos" :disabled="inspectSubmitting || inspectReadingPhotos" @click="inspectFileRef?.click()">选择照片</el-button>
+          <p v-if="inspectReadingPhotos" role="status">正在读取照片，请等待完成后提交。</p>
+          <el-alert v-if="inspectPhotoError" type="error" :closable="false" :title="inspectPhotoError" />
+          <template v-if="inspectPhotoError">
+            <el-button :disabled="inspectReadingPhotos || inspectSubmitting" @click="inspectionPhotos.retry()">重试读取照片</el-button>
+            <el-button :disabled="inspectReadingPhotos || inspectSubmitting" @click="inspectionPhotos.discardFailed()">放弃本次选取</el-button>
+          </template>
           <ul v-if="inspectPhotos.length" class="photo-list">
-            <li v-for="p in inspectPhotos" :key="p.fileName">{{ p.fileName }}</li>
+            <li v-for="(p, index) in inspectPhotos" :key="index">{{ p.fileName }} <el-button link type="danger" :disabled="inspectReadingPhotos || inspectSubmitting" @click="inspectionPhotos.remove(index)">移除此照片</el-button></li>
           </ul>
         </el-form-item>
       </el-form>
       <p class="measure-hint">提交后将推送至 OMS，客户确认留/不留及后续处理方式。</p>
       <template #footer>
-        <el-button @click="inspectDialog = false">取消</el-button>
-        <el-button type="primary" :loading="inspectSubmitting" @click="submitInspect">提交质检</el-button>
+        <el-button :disabled="inspectSubmitting" @click="inspectDialog = false">返回列表</el-button>
+        <el-button type="primary" :loading="inspectSubmitting" :disabled="!inspectPhotosReady || !inspectPhotos.length" @click="submitInspect">提交质检</el-button>
       </template>
     </el-dialog>
 
@@ -1630,7 +1791,8 @@ void _removeExtraFeeLine
       <template #footer>
         <el-button :disabled="processSubmitting" @click="processDialog = false">返回列表</el-button>
         <el-button :disabled="processSubmitting || processLoading" @click="refreshProcessTarget">刷新核对结果</el-button>
-        <el-button type="primary" :loading="processSubmitting || processLoading" :disabled="processUncertain || processTarget?.status === 'completed'" @click="submitProcess">{{ processNeedsStock ? '确认本次上架' : '确认处理' }}</el-button>
+        <el-button v-if="pendingReturnAction?.id === processTarget?.id" :loading="returnActionBusy" :disabled="returnActionBlocked || processLoading" @click="resumeReturnAction">继续原请求</el-button>
+        <el-button type="primary" :loading="processSubmitting || processLoading" :disabled="processUncertain || !!pendingReturnAction || returnActionBlocked || processTarget?.status === 'completed'" @click="submitProcess">{{ processNeedsStock ? '确认本次上架' : '确认处理' }}</el-button>
       </template>
     </el-dialog>
   </div>

@@ -1,13 +1,16 @@
 <script setup lang="ts">
+import { useShipmentRequestScope } from '@/features/inbound/shipmentRequestScope'
+import { getAccessToken } from '@/auth/tokenStore'
+import {validateShipmentOutcome,copyDeletedShipmentForm} from '@/features/inbound/shipmentOutcome'
 import { userFacingError } from '@erp/shared/user-facing-error'
 
 import { displaySku, displaySkuText, formatSku } from '@erp/shared/sku-display'
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onScopeDispose, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { warehouseApi, inboundApi, inventoryApi, productApi } from '@/api/client.js'
 import { mapInbound, fmtTime } from '@/api/mappers.ts'
-import { useListLoader } from '@/composables/useListLoader.ts'
+import { useScopedRead } from '@/composables/useScopedRead'
 import { useTablePagination } from '@/composables/useTablePagination.ts'
 import { useRowActions } from '@/composables/useRowActions'
 import { triggerBlobDownload } from '@/composables/useAsyncIo'
@@ -30,11 +33,13 @@ import { reportPartialImportResult, type ImportRowFailure } from '@/utils/import
 
 import { clearShipmentAttempt, readShipmentAttempt, saveShipmentAttempt, type ShipmentAttempt } from '@/utils/erpShipmentAttempt'
 import { inboundListStats } from '@/features/inbound/listStats'
-import { clearShipmentMaintenance, readShipmentMaintenance, saveShipmentMaintenance, type ShipmentMaintenanceAttempt } from '@/utils/shipmentMaintenanceAttempt'
+import { assertShipmentMaintenanceReceipt, clearShipmentMaintenance, readShipmentMaintenance, saveShipmentMaintenance, type ShipmentMaintenanceAttempt } from '@/utils/shipmentMaintenanceAttempt'
 
 const app = useAppStore()
 const route = useRoute()
 const router = useRouter()
+const shipmentScope=computed(()=>app.authenticatedUser && getAccessToken()?JSON.stringify([getAccessToken(),app.authenticatedUser.id,app.authenticatedUser.roleCode,app.authenticatedUser.workstation,[...app.currentPermSet].sort()]):null)
+const shipmentRequests=useShipmentRequestScope({actor:()=>Number(app.authenticatedUser?.id),scope:()=>shipmentScope.value,allowed:()=>app.hasPerm('create_inbound.create')})
 const { confirmAction, toast } = useRowActions()
 
 const tab = ref<'form' | 'drafts' | 'list'>('list')
@@ -90,15 +95,16 @@ interface WhSku {
   weightKg: number
 }
 
-const { loading, items: inbounds, load } = useListLoader(async () => {
-  const res = await inboundApi.list({ page: 1, pageSize: 100, source: 'all' })
+const inboundRead = useScopedRead(()=>shipmentScope.value,async () => {
+  const frame=shipmentRequests.captureRead()
+  const res = await frame.step(()=>inboundApi.list({ page: 1, pageSize: 100, source: 'all' }))
   const rows = [...(res.items || [])]
   for (let page = 2; rows.length < res.total; page++) {
-    const next = await inboundApi.list({ page, pageSize: 100, source: 'all' })
+    const next = await frame.step(()=>inboundApi.list({ page, pageSize: 100, source: 'all' }))
     if (!next.items?.length) break
     rows.push(...next.items)
   }
-  const productMap = await loadProductDimMap()
+  const productMap = await frame.step(()=>loadProductDimMap())
   return {
     items: rows.map((r: any) => {
       const mapped = mapInbound(r)
@@ -126,7 +132,10 @@ const { loading, items: inbounds, load } = useListLoader(async () => {
     }),
     total: res.total,
   }
-})
+},'发运入库单')
+const {loading,refresh:load,error:listError}=inboundRead
+const inbounds=computed<any[]>(()=>inboundRead.data.value?.items||[])
+const listReady=computed(()=>inboundRead.data.value!==null)
 
 const logisticsWarehouses = ref<any[]>([])
 const overseasWarehouses = ref<any[]>([])
@@ -139,7 +148,13 @@ const stockError = ref('')
 const draftsError = ref('')
 const shipmentBusy = ref(false)
 const draftBusy = ref(false)
+const pendingDraftSave = ref<{ draftNo: string; form: Record<string, any> } | null>(null)
+const draftSaveFeedback = ref('')
+const draftSaveCanCopy = ref(false)
+const draftSaveStorageBlocked = ref(false)
 const attachmentBusy = ref(false)
+const pendingAttachment = ref<{ draftNo: string; fileName: string; contentBase64: string } | null>(null)
+const attachmentFeedback = ref('')
 const importBusy = ref(false)
 const maintenanceBusy = ref(false)
 const maintenanceAttempt = ref<ShipmentMaintenanceAttempt | null>(null)
@@ -150,10 +165,12 @@ const shipmentAttempt = ref<ShipmentAttempt | null>(null)
 const shipmentAttemptError = ref('')
 const shipmentError = ref('')
 const shipmentResult = ref<any>(null)
+const deletedShipment = ref<{attempt:ShipmentAttempt;inboundNo:string}|null>(null)
 const formBusy = computed(() => shipmentBusy.value || draftBusy.value || attachmentBusy.value || importBusy.value || maintenanceBusy.value)
-const formLocked = computed(() => formBusy.value || !!shipmentAttempt.value || !!shipmentResult.value || !!shipmentAttemptError.value || !!maintenanceAttempt.value || !!maintenanceStorageError.value)
+const formLocked = computed(() => formBusy.value || !!pendingAttachment.value || draftSaveStorageBlocked.value || !!pendingDraftSave.value || !!shipmentAttempt.value || !!shipmentResult.value || !!shipmentAttemptError.value || !!maintenanceAttempt.value || !!maintenanceStorageError.value)
 let stockLoadVersion = 0
 let draftLoadVersion = 0
+let detailReadVersion=0
 const skuLoading = ref(false)
 const editingDraftId = ref<string | null>(null)
 const skuFileInputRef = ref<HTMLInputElement | null>(null)
@@ -184,12 +201,14 @@ function extractProductDims(p: {
 }
 
 async function loadProductDimMap(force = false) {
+  const frame=shipmentRequests.captureRead()
   if (productDimMapLoaded.value && !force) return productDimMap.value
   const map = new Map(productDimMap.value)
   try {
     let page = 1
     while (true) {
-      const res = await productApi.list({ pageSize: 200, page })
+      const res = await frame.step(()=>productApi.list({ pageSize: 200, page }))
+      if(!frame.active())return productDimMap.value
       const items = res.items || res || []
       items.forEach((p: any) => {
         map.set(p.sku, extractProductDims(p))
@@ -212,11 +231,13 @@ function skuOptionLabel(s: WhSku) {
 }
 
 async function hydrateWarehouseSkuDims(rows: WhSku[]) {
+  const frame=shipmentRequests.captureRead()
   const missing = rows.filter((row) => row.productId && !row.lengthCm && !row.widthCm && !row.heightCm)
   if (!missing.length) return
   await Promise.all(missing.map(async (row) => {
     try {
-      const detail = await productApi.detail(row.productId)
+      const detail = await frame.step(()=>productApi.detail(row.productId))
+      if(!frame.active())return
       const dims = extractProductDims(detail)
       if (!dims.lengthCm && !dims.widthCm && !dims.heightCm && !dims.weightKg) return
       productDimMap.value.set(row.sku, dims)
@@ -250,30 +271,36 @@ function parseInboundMeta(remark?: string) {
 }
 
 async function loadRefs() {
+  const frame=shipmentRequests.captureRead()
   createLoading.value = true
   refsError.value = ''
   try {
-    const [logRes, ovsRes] = await Promise.all([
+    const [logRes, ovsRes] = await frame.step(()=>Promise.all([
       warehouseApi.list({ type: 'logistics' }),
       warehouseApi.list({ type: 'overseas' }),
-    ])
+    ]))
+    if(!frame.active())return
     logisticsWarehouses.value = (Array.isArray(logRes) ? logRes : (logRes.items || [])).filter((wh: any) => wh.status === 1)
     overseasWarehouses.value = (Array.isArray(ovsRes) ? ovsRes : (ovsRes.items || [])).filter((wh: any) => wh.status === 1)
     await loadProductDimMap()
   } catch (error) {
+    if(!frame.active())return
     refsError.value = `仓库或商品资料未能读取，请重新读取后提交。${userFacingError(error)}`
   } finally {
-    createLoading.value = false
+    if(frame.active())createLoading.value = false
   }
 }
 
 onMounted(async () => {
+  const frame=shipmentRequests.captureRead()
   refreshShipmentAttempt()
   refreshMaintenanceAttempt()
+  restoreDraftSaveCheckpoint()
   load()
   await loadRefs()
+  if(!frame.active())return
   loadDrafts()
-  if (shipmentAttempt.value || shipmentAttemptError.value || maintenanceAttempt.value || maintenanceStorageError.value) return
+  if (pendingDraftSave.value || shipmentAttempt.value || shipmentAttemptError.value || maintenanceAttempt.value || maintenanceStorageError.value) return
   const wh = String(route.query.wh || '')
   const sku = String(route.query.sku || '')
   if (wh) {
@@ -329,6 +356,7 @@ const detailMutationWarning = ref('')
 const freightVisible = ref(false)
 const freightSubmitting = ref(false)
 const freightForm = ref({ mode: 'lcl' as 'lcl' | 'fcl', amount: '' })
+const freightFormTarget = ref<{ id: number; inboundNo: string; expectedVersion: string; readVersion: number } | null>(null)
 
 const seaFreightTotal = computed(() => {
   const mode = createForm.value.seaFreightMode
@@ -399,19 +427,20 @@ function mapDraftRow(d: any): DraftRow {
 }
 
 async function loadDrafts() {
+  const frame=shipmentRequests.captureRead()
   const version = ++draftLoadVersion
   draftsError.value = ''
   try {
-    const rows = await inboundApi.listDrafts()
-    if (version === draftLoadVersion) drafts.value = (Array.isArray(rows) ? rows : []).map(mapDraftRow)
+    const rows = await frame.step(()=>inboundApi.listDrafts())
+    if (frame.active() && version === draftLoadVersion) drafts.value = (Array.isArray(rows) ? rows : []).map(mapDraftRow)
   } catch (error) {
-    if (version === draftLoadVersion) draftsError.value = `草稿箱未能读取，请重试。${userFacingError(error)}`
+    if (frame.active() && version === draftLoadVersion) draftsError.value = `草稿箱未能读取，请重试。${userFacingError(error)}`
   }
 }
 
 function refreshShipmentAttempt() {
   try {
-    shipmentAttempt.value = readShipmentAttempt(localStorage, app.authenticatedUser!.id)
+    shipmentAttempt.value = app.authenticatedUser?readShipmentAttempt(localStorage,app.authenticatedUser.id):null
     shipmentAttemptError.value = ''
   } catch (error) { shipmentAttemptError.value = userFacingError(error) }
 }
@@ -426,30 +455,69 @@ function recoverShipment() {
 
 async function postShipment(attempt: ShipmentAttempt) {
   if (formBusy.value) return
+  const frame=shipmentRequests.capture()
+  if(!frame.active()){shipmentError.value='请使用原账号恢复发运权限后核对原提交';return}
   shipmentBusy.value = true
   shipmentError.value = ''
   try {
-    const result = await inboundApi.create(attempt.payload)
-    shipmentResult.value = result
-    shipmentAttempt.value = null
-    try { clearShipmentAttempt(localStorage, app.authenticatedUser!.id) }
-    catch { ElMessage.warning('发运已完成，但本机核对信息未能清除；刷新后可核对原单，请勿重复新建') }
-    productDimMapLoaded.value = false
-    warehouseSkus.value = []
-    toast(`入库单 ${result.inboundNo} 已创建，库存和费用已同步`)
-    // Refresh failures must never turn a committed shipment into a failed submission.
-    await Promise.allSettled([load(), loadDrafts()])
+    await frame.run(attempt,owner=>readShipmentAttempt(localStorage,owner),original=>inboundApi.create(original.payload),async result=>{
+      validateShipmentOutcome(attempt.payload.clientRequestId, {
+        requestId: result?.requestId, status: 'confirmed', inboundId: result?.id, inboundNo: result?.inboundNo,
+      })
+      shipmentResult.value = result
+      try { clearShipmentAttempt(localStorage,frame.owner,attempt);shipmentAttempt.value=null }
+      catch { ElMessage.warning('发运已完成，但本机核对信息未能清除；刷新后可核对原单，请勿重复新建') }
+      productDimMapLoaded.value = false
+      warehouseSkus.value = []
+      toast(`入库单 ${result.inboundNo} 已创建，库存和费用已同步`)
+      // Refresh failures must never turn a committed shipment into a failed submission.
+      await Promise.allSettled([load(), loadDrafts()])
+    })
   } catch (error: any) {
+    if(!frame.active())return
     shipmentError.value = userFacingError(error)
-    if ([400, 403, 404, 422].includes(error.status)) {
-      try { clearShipmentAttempt(localStorage, app.authenticatedUser!.id); shipmentAttempt.value = null }
+    if ([400, 404, 422].includes(error.status)) {
+      try { clearShipmentAttempt(localStorage,frame.owner,attempt); shipmentAttempt.value = null }
       catch { shipmentError.value += '；本机核对信息未能清除，请先核对原操作后重试' }
     } else shipmentError.value = `发运结果待核对，请保持本次内容并点击「核对并重试原提交」。${shipmentError.value}`
-  } finally { shipmentBusy.value = false }
+  } finally { if(frame.active())shipmentBusy.value = false }
+}
+
+async function checkShipmentOutcome(){
+ const attempt=shipmentAttempt.value,frame=shipmentRequests.capture()
+ if(!attempt || formBusy.value || !frame.active())return
+ shipmentBusy.value=true;shipmentError.value=''
+ try{
+  await frame.run(attempt,owner=>readShipmentAttempt(localStorage,owner),original=>inboundApi.shipmentOutcome(original.payload.clientRequestId),async raw=>{
+   const result=validateShipmentOutcome(attempt.payload.clientRequestId,raw)
+   if(result.status==='unknown'){shipmentError.value='尚未查到原发运结果，请继续原提交，勿重新创建。';return}
+   if(result.status==='deleted'){deletedShipment.value={attempt:JSON.parse(JSON.stringify(attempt)),inboundNo:result.inboundNo!};return}
+   const order=await frame.step(()=>inboundApi.detail(result.inboundId))
+   if(!frame.active())return
+   if(order.id!==result.inboundId || order.inboundNo!==result.inboundNo)throw Error('当前单据身份未能核对，请保留原请求')
+   clearShipmentAttempt(localStorage,frame.owner,attempt);shipmentAttempt.value=null;shipmentResult.value=order;deletedShipment.value=null
+   await Promise.allSettled([load(),loadDrafts()])
+  })
+ }catch(error){if(frame.active())shipmentError.value=`原请求已保留。${userFacingError(error)}`}
+ finally{if(frame.active())shipmentBusy.value=false}
+}
+async function finishDeletedShipment(copy:boolean){
+ const resolved=deletedShipment.value,frame=shipmentRequests.capture()
+ if(!resolved || formBusy.value || !frame.active())return
+ try{
+  const copied=copy?copyDeletedShipmentForm(resolved.attempt.form):null
+  clearShipmentAttempt(localStorage,frame.owner,resolved.attempt)
+  shipmentAttempt.value=null;deletedShipment.value=null;shipmentResult.value=null;editingDraftId.value=null;shipmentError.value=''
+  if(copy){
+   createForm.value={...emptyForm(),...copied};warehouseSkus.value=[];tab.value='form'
+   await frame.step(()=>loadLogisticsStock(createForm.value.logisticsWhCode))
+   if(frame.active())toast('原内容已复制，请核对当前可发库存；旧附件需重新上传，将生成新入库单号')
+  }else{createForm.value=emptyForm();warehouseSkus.value=[];tab.value='list'}
+ }catch(error){if(frame.active())shipmentError.value=userFacingError(error)}
 }
 
 function retryShipment() {
-  if (shipmentAttempt.value) postShipment(shipmentAttempt.value)
+  if (shipmentAttempt.value && !deletedShipment.value) postShipment(shipmentAttempt.value)
 }
 
 function returnShipmentList() {
@@ -526,6 +594,7 @@ function clampLinePack(line: InboundLine) {
 }
 
 async function loadLogisticsStock(code: string) {
+  const frame=shipmentRequests.captureRead()
   const version = ++stockLoadVersion
   stockError.value = ''
   if (shipmentAttempt.value || shipmentResult.value) { skuLoading.value = false; return false }
@@ -536,16 +605,16 @@ async function loadLogisticsStock(code: string) {
   }
   skuLoading.value = true
   try {
-    await loadProductDimMap()
+    await frame.step(()=>loadProductDimMap())
     const allItems: any[] = []
     let page = 1
     while (true) {
-      const invRes = await inventoryApi.query({
+      const invRes = await frame.step(()=>inventoryApi.query({
         warehouseCode: code,
         pageSize: 200,
         page,
         onlyAvailable: '1',
-      })
+      }))
       const batch = invRes.items || []
       allItems.push(...batch)
       const total = Number(invRes.total ?? batch.length)
@@ -553,7 +622,7 @@ async function loadLogisticsStock(code: string) {
       page += 1
     }
 
-    if (version !== stockLoadVersion || code !== createForm.value.logisticsWhCode) return false
+    if (!frame.active() || version !== stockLoadVersion || code !== createForm.value.logisticsWhCode) return false
     const rows = allItems
       .filter((r: any) => numDim(r.availableQty ?? r.available) > 0)
       .map((r: any) => {
@@ -576,19 +645,19 @@ async function loadLogisticsStock(code: string) {
         }
       })
 
-    await hydrateWarehouseSkuDims(rows)
-    if (version !== stockLoadVersion || code !== createForm.value.logisticsWhCode) return false
+    await frame.step(()=>hydrateWarehouseSkuDims(rows))
+    if (!frame.active() || version !== stockLoadVersion || code !== createForm.value.logisticsWhCode) return false
     warehouseSkus.value = rows
     for (const line of createForm.value.lines) line.maxAvailable = getSkuAvailable(line.sku)
     return true
   } catch (error) {
-    if (version === stockLoadVersion) {
+    if (frame.active() && version === stockLoadVersion) {
       warehouseSkus.value = []
       stockError.value = `中转仓可发库存未能读取，请重新读取后提交。${userFacingError(error)}`
     }
     return false
   } finally {
-    if (version === stockLoadVersion) skuLoading.value = false
+    if (frame.active() && version === stockLoadVersion) skuLoading.value = false
   }
 }
 
@@ -797,6 +866,7 @@ async function copyDeletedInbound(snapshot: any) {
   if (formBusy.value || shipmentAttempt.value || shipmentAttemptError.value || maintenanceAttempt.value || maintenanceStorageError.value) return
   shipmentResult.value = null
   shipmentError.value = ''
+  draftSaveFeedback.value = ''
   editingDraftId.value = null
   fillFormFromOrder(snapshot)
   tab.value = 'form'
@@ -807,17 +877,18 @@ async function copyDeletedInbound(snapshot: any) {
 }
 
 function refreshMaintenanceAttempt() {
-  try { maintenanceAttempt.value = readShipmentMaintenance(localStorage, app.authenticatedUser!.id); maintenanceStorageError.value = '' }
+  try { maintenanceAttempt.value = app.authenticatedUser?readShipmentMaintenance(localStorage,app.authenticatedUser.id):null; maintenanceStorageError.value = '' }
   catch (error) { maintenanceStorageError.value = userFacingError(error) }
 }
 
 function canBeginMaintenance() {
   refreshMaintenanceAttempt()
   refreshShipmentAttempt()
-  return !formBusy.value && !maintenanceAttempt.value && !maintenanceStorageError.value && !shipmentAttempt.value && !shipmentAttemptError.value
+  return canCreateInbound.value && !formBusy.value && !maintenanceAttempt.value && !maintenanceStorageError.value && !shipmentAttempt.value && !shipmentAttemptError.value
 }
 
 async function startMaintenance(attempt: ShipmentMaintenanceAttempt) {
+  if(!shipmentRequests.capture().active())return
   try {
     saveShipmentMaintenance(localStorage, app.authenticatedUser!.id, attempt)
     maintenanceAttempt.value = readShipmentMaintenance(localStorage, app.authenticatedUser!.id)
@@ -827,50 +898,65 @@ async function startMaintenance(attempt: ShipmentMaintenanceAttempt) {
 
 async function postMaintenance(attempt: ShipmentMaintenanceAttempt) {
   if (formBusy.value) return
+  const frame=shipmentRequests.capture()
+  if(!frame.active()){maintenanceError.value='请使用原账号恢复发运权限后核对原操作';return}
   maintenanceBusy.value = true
   freightSubmitting.value = attempt.kind === 'freight'
   maintenanceError.value = ''
   maintenanceResult.value = null
   try {
-    const result = attempt.kind === 'delete' ? await inboundApi.remove(attempt.inboundId)
-      : attempt.clear ? await inboundApi.clearSeaFreight(attempt.inboundId, attempt.payload) : await inboundApi.applySeaFreight(attempt.inboundId, attempt.payload)
-    maintenanceAttempt.value = null
-    try { clearShipmentMaintenance(localStorage, app.authenticatedUser!.id) }
-    catch { ElMessage.warning('操作已完成，但本机核对信息未能清除；刷新后请核对原操作') }
-    maintenanceResult.value = { ...result, kind: attempt.kind, inboundNo: attempt.inboundNo, clear: attempt.clear }
-    freightVisible.value = false
-    if (attempt.kind === 'delete') {
-      detailVisible.value = false
-      detailOrder.value = null
-      toast(`已删除 ${attempt.inboundNo}，原中转仓库存已返还`)
-    } else {
-      detailMutationWarning.value = result.refreshRequired ? result.warning : ''
-      detailOrder.value = result.refreshRequired ? attempt.snapshot : result
-      toast(result.refreshRequired ? '本次海运费操作已完成，请重新读取详情核对当前状态' : result.duplicate ? '原海运费操作已处理，已核对最新结果' : attempt.clear ? '海运费已清除并同步货盘与批次成本' : '海运费已保存并同步货盘与批次成本')
-    }
-    await Promise.allSettled([load(), loadDrafts()])
+    await frame.run(attempt,owner=>readShipmentMaintenance(localStorage,owner),original=>original.kind==='delete'?inboundApi.remove(original.inboundId):original.clear?inboundApi.clearSeaFreight(original.inboundId,original.payload):inboundApi.applySeaFreight(original.inboundId,original.payload),async result=>{
+      assertShipmentMaintenanceReceipt(attempt, result)
+      try { clearShipmentMaintenance(localStorage,frame.owner,attempt);maintenanceAttempt.value=null }
+      catch { ElMessage.warning('操作已完成，但本机核对信息未能清除；刷新后请核对原操作') }
+      maintenanceResult.value = { ...result, kind: attempt.kind, inboundNo: attempt.inboundNo, clear: attempt.clear }
+      freightVisible.value = false
+      if (attempt.kind === 'delete') {
+        detailVisible.value = false
+        detailOrder.value = null
+        toast(`已删除 ${attempt.inboundNo}，原中转仓库存已返还`)
+      } else {
+        detailMutationWarning.value = result.refreshRequired ? result.warning : ''
+        detailOrder.value = result.refreshRequired ? attempt.snapshot : result
+        toast(result.refreshRequired ? '本次海运费操作已完成，请重新读取详情核对当前状态' : result.duplicate ? '原海运费操作已处理，已核对最新结果' : attempt.clear ? '海运费已清除并同步货盘与批次成本' : '海运费已保存并同步货盘与批次成本')
+      }
+      await Promise.allSettled([load(), loadDrafts()])
+    })
   } catch (error: any) {
+    if(!frame.active())return
     maintenanceError.value = userFacingError(error)
-    if ([400, 403, 404, 409, 422].includes(error.status)) {
-      try { clearShipmentMaintenance(localStorage, app.authenticatedUser!.id); maintenanceAttempt.value = null }
+    if ([400, 404, 409, 422].includes(error.status)) {
+      try { clearShipmentMaintenance(localStorage,frame.owner,attempt); maintenanceAttempt.value = null }
       catch { maintenanceError.value += '；本机核对信息未能清除，请先核对原操作' }
+      if (error.status === 409 && attempt.kind === 'freight' && !maintenanceAttempt.value) {
+        freightVisible.value = false
+        if (inboundNumericId(detailOrder.value) === attempt.inboundId) {
+          detailMutationWarning.value = '请重新读取最新详情，核对海运费后再操作'
+        }
+      }
     } else maintenanceError.value = `操作结果待核对，请点击「核对并重试原操作」，不要重新建立操作。${maintenanceError.value}`
-  } finally { maintenanceBusy.value = false; freightSubmitting.value = false }
+  } finally { if(frame.active()){maintenanceBusy.value = false; freightSubmitting.value = false} }
 }
 
 function retryMaintenance() { if (maintenanceAttempt.value) postMaintenance(maintenanceAttempt.value) }
 
-async function refreshMutationDetail() {
-  const id = inboundNumericId(detailOrder.value)
-  if (!id || maintenanceBusy.value || maintenanceAttempt.value) return
-  detailLoading.value = true
-  detailVisible.value = true
+async function refreshMutationDetail(target = detailOrder.value) {
+  const id=inboundNumericId(target)
+  if(!id || maintenanceBusy.value || maintenanceAttempt.value)return
+  const frame=shipmentRequests.captureRead(),version=++detailReadVersion
+  detailOrder.value = target
+  detailMutationWarning.value = '正在核对最新详情，请稍候'
+  detailLoading.value=true;detailVisible.value=true
   try {
-    detailOrder.value = await inboundApi.detail(id); detailMutationWarning.value = ''; maintenanceError.value = ''
-    if (maintenanceResult.value) maintenanceResult.value.refreshRequired = false
-  }
-  catch (error) { detailMutationWarning.value = `详情未能读取，请稍后重试。${userFacingError(error)}` }
-  finally { detailLoading.value = false }
+    const result=await frame.step(()=>inboundApi.detail(id))
+    if(!frame.active() || version!==detailReadVersion)return
+    if (inboundNumericId(result) !== id || result.inboundNo !== target.inboundNo) throw new Error('返回的入库单与待核对单据不一致')
+    detailOrder.value=result;detailMutationWarning.value='';maintenanceError.value=''
+    if(maintenanceResult.value?.id === id && maintenanceResult.value.inboundNo === result.inboundNo) {
+      maintenanceResult.value.refreshRequired=false
+    }
+  } catch(error) {if(frame.active() && version===detailReadVersion)detailMutationWarning.value=`详情未能读取，请重试或返回列表。${userFacingError(error)}`}
+  finally {if(frame.active() && version===detailReadVersion)detailLoading.value=false}
 }
 
 async function copyMaintenanceDeleted() {
@@ -881,17 +967,19 @@ async function copyMaintenanceDeleted() {
 
 async function removeInbound(row?: any) {
   if (!canBeginMaintenance()) return
+  const frame=shipmentRequests.capture()
   const source = row || detailOrder.value
   const id = inboundNumericId(source)
   if (!id) return
   let snapshot: any
   maintenanceBusy.value = true
   try { snapshot = await inboundApi.detail(id) }
-  catch (error) { maintenanceError.value = `未能核对最新单据，本次尚未删除。${userFacingError(error)}`; return }
-  finally { maintenanceBusy.value = false }
+  catch (error) { if(!frame.active())return;maintenanceError.value = `未能核对最新单据，本次尚未删除。${userFacingError(error)}`; return }
+  finally {if(frame.active())maintenanceBusy.value = false}
+  if(!frame.active())return
   if (!inboundCanDelete(snapshot)) { maintenanceError.value = '此单不是可删除的未收货 ERP 发运单，请查看最新仓库作业进度'; return }
   const ok = await confirmAction(`确认删除入库单 ${snapshot.inboundNo}？未开始收货的良品库存将返还原中转仓；海外仓作业中的该单也会删除。`, '删除入库单')
-  if (!ok) return
+  if (!ok || !frame.active()) return
   await startMaintenance({ kind: 'delete', inboundId: id, inboundNo: snapshot.inboundNo, snapshot })
 }
 
@@ -951,6 +1039,7 @@ async function handleSkuImportFile(e: Event) {
   const file = input.files?.[0]
   input.value = ''
   if (!file || formLocked.value || !canCreateInbound.value) return
+  const frame=shipmentRequests.capture()
   importBusy.value = true
   try {
   if (!createForm.value.logisticsWhCode) {
@@ -958,13 +1047,15 @@ async function handleSkuImportFile(e: Event) {
     return
   }
   if (!warehouseSkus.value.length && !skuLoading.value) {
-    await loadLogisticsStock(createForm.value.logisticsWhCode)
+    await frame.step(()=>loadLogisticsStock(createForm.value.logisticsWhCode))
   }
+  if(!frame.active())return
   if (!warehouseSkus.value.length) {
     ElMessage.warning('当前物流仓暂无可发 SKU，无法导入')
     return
   }
-  const text = normalizeImportFileText(await file.text())
+  const text = normalizeImportFileText(await frame.step(()=>file.text()))
+  if(!frame.active())return
   const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/).filter((l) => l.trim())
   if (lines.length < 2) {
     ElMessage.warning('文件为空或仅有表头')
@@ -1035,8 +1126,8 @@ async function handleSkuImportFile(e: Event) {
     moduleLabel: '明细导入',
     csvFilename: '入库明细导入失败明细',
   })
-  } catch (error) { ElMessage.error(`读取导入文件失败，请核对文件后重试。${userFacingError(error)}`) }
-  finally { importBusy.value = false }
+  } catch (error) { if(!frame.active())return;ElMessage.error(`读取导入文件失败，请核对文件后重试。${userFacingError(error)}`) }
+  finally {if(frame.active())importBusy.value = false}
 }
 
 async function onSourceWarehouseChange(code: string) {
@@ -1048,6 +1139,8 @@ async function onSourceWarehouseChange(code: string) {
 }
 
 function openCreate() {
+  if (pendingDraftSave.value) { viewOriginalDraftSave(); return }
+  if (pendingAttachment.value) { tab.value = 'form'; return }
   refreshShipmentAttempt()
   refreshMaintenanceAttempt()
   if (formBusy.value || shipmentAttempt.value || shipmentAttemptError.value || maintenanceAttempt.value || maintenanceStorageError.value) return
@@ -1065,6 +1158,7 @@ function openCreate() {
 
 function cancelForm() {
   if (formBusy.value) return
+  if (pendingDraftSave.value || pendingAttachment.value) { tab.value = 'list'; return }
   if (shipmentAttempt.value || shipmentResult.value) { returnShipmentList(); return }
   editingDraftId.value = null
   createForm.value = emptyForm()
@@ -1083,24 +1177,158 @@ function buildRemark() {
   return parts.join(' ')
 }
 
-async function persistDraft() {
-  const draftNo = editingDraftId.value || `DRF-${crypto.randomUUID().replace(/-/g, '').slice(0, 26)}`
-  editingDraftId.value = draftNo
-  await inboundApi.saveDraft({ draftNo, form: createForm.value })
+async function persistDraft(frame=shipmentRequests.capture(), snapshot?: { draftNo: string; form: Record<string, any> }) {
+  if(!frame.active())return
+  const { draftNo, form } = snapshot || captureDraftSave()
+  editingDraftId.value=draftNo
+  const receipt = await frame.step(()=>inboundApi.saveDraft({draftNo,form}))
+  if (receipt?.draftNo !== draftNo) throw Error('草稿保存回执与原草稿号不一致')
   return draftNo
 }
 
-async function saveDraft() {
-  if (formLocked.value || !canCreateInbound.value) return
-  draftBusy.value = true
+function captureDraftSave() {
+  return {
+    draftNo: editingDraftId.value || `DRF-${crypto.randomUUID().replace(/-/g,'').slice(0,26)}`,
+    form: JSON.parse(JSON.stringify(createForm.value)),
+  }
+}
+
+const draftSaveKey = (owner: number) => `erp:shipment-draft-save:${owner}`
+
+function restoreDraftSaveCheckpoint() {
+  const frame = shipmentRequests.captureRead()
+  if (!frame.active()) return
+  const wasBlocked = draftSaveStorageBlocked.value
+  draftSaveStorageBlocked.value = false
   try {
-    await persistDraft()
-    await loadDrafts()
-    toast('草稿已保存')
-    tab.value = 'drafts'
-  } catch (e: any) {
-    ElMessage.error(userFacingError(displaySkuText(e.message || '保存草稿失败')))
-  } finally { draftBusy.value = false }
+    const raw = sessionStorage.getItem(draftSaveKey(frame.owner))
+    if (!raw) {
+      if (wasBlocked) draftSaveFeedback.value = ''
+      return
+    }
+    const saved = JSON.parse(raw)
+    if (typeof saved?.draftNo !== 'string' || !saved.draftNo.trim() || saved.draftNo.length > 30 ||
+        !Array.isArray(saved.form?.lines) || !Array.isArray(saved.form?.cartons)) throw Error()
+    pendingDraftSave.value = saved
+    draftSaveFeedback.value = '有原草稿保存结果待核对，原草稿号和输入已保留。'
+  } catch {
+    draftSaveStorageBlocked.value = true
+    draftSaveFeedback.value = '原草稿核对记录无法读取，请恢复浏览器存储后重新读取。'
+  }
+}
+
+function clearDraftSaveCheckpoint(owner: number, snapshot: NonNullable<typeof pendingDraftSave.value>) {
+  const key = draftSaveKey(owner)
+  if (sessionStorage.getItem(key) !== JSON.stringify(snapshot)) throw Error('原草稿核对记录已变化，请重新读取。')
+  sessionStorage.removeItem(key)
+  if (sessionStorage.getItem(key) !== null) throw Error('原草稿核对记录未能清除，请重新核对。')
+}
+
+function viewOriginalDraftSave() {
+  if (!pendingDraftSave.value || formBusy.value) return
+  editingDraftId.value = pendingDraftSave.value.draftNo
+  createForm.value = { ...emptyForm(), ...JSON.parse(JSON.stringify(pendingDraftSave.value.form)) }
+  tab.value = 'form'
+}
+
+function comparableDraft(form: Record<string, any>) {
+  // The list endpoint rebuilds attachments from their separate upload records.
+  const { attachments: _attachments, ...fields } = form
+  return JSON.stringify(fields, (_key, value) => {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      return Object.fromEntries(Object.keys(value).sort().map(key => [key, value[key]]))
+    }
+    return value
+  })
+}
+
+async function saveDraft() {
+  if(formLocked.value || !canCreateInbound.value)return
+  const frame=shipmentRequests.capture();draftBusy.value=true
+  const snapshot = captureDraftSave()
+  draftSaveFeedback.value = ''
+  try {
+    if (!frame.active()) return
+    const key = draftSaveKey(frame.owner), raw = JSON.stringify(snapshot)
+    try {
+      if (sessionStorage.getItem(key) !== null) {
+        restoreDraftSaveCheckpoint()
+        return
+      }
+      sessionStorage.setItem(key, raw)
+      if (sessionStorage.getItem(key) !== raw) throw Error()
+    } catch {
+      draftSaveFeedback.value = '原草稿资料未能保留，本次尚未提交，请检查浏览器存储后重试。'
+      return
+    }
+    pendingDraftSave.value = snapshot
+    await persistDraft(frame, snapshot)
+    clearDraftSaveCheckpoint(frame.owner, snapshot)
+    pendingDraftSave.value = null
+    await frame.step(()=>loadDrafts())
+    if(!frame.active())return
+    toast('草稿已保存');tab.value='drafts'
+  } catch(error: any) {
+    if (!frame.active()) return
+    const status = Number(error?.status)
+    if (!Number.isFinite(status) || status < 100 || status >= 500 || status === 408 || status === 409) {
+      pendingDraftSave.value = snapshot
+      draftSaveCanCopy.value = false
+      draftSaveFeedback.value = `草稿保存结果待核对，原资料已保留。${userFacingError(error)}`
+    } else {
+      try {
+        clearDraftSaveCheckpoint(frame.owner, snapshot)
+        pendingDraftSave.value = null
+        draftSaveFeedback.value = userFacingError(error)
+      } catch {
+        draftSaveFeedback.value = '原草稿核对记录未能清除，请先核对保存结果。'
+      }
+    }
+  }
+  finally {if(frame.active())draftBusy.value=false}
+}
+
+async function verifyDraftSave() {
+  const attempt = pendingDraftSave.value
+  if (!attempt || formBusy.value || !canCreateInbound.value) return
+  const frame = shipmentRequests.captureRead()
+  draftBusy.value = true
+  draftSaveCanCopy.value = false
+  try {
+    const rows = await frame.step(() => inboundApi.listDrafts())
+    if (!frame.active()) return
+    if (!Array.isArray(rows)) throw Error('草稿箱回执不完整，请重新读取')
+    const original = rows.find(row => row.draftNo === attempt.draftNo)
+    drafts.value = rows.map(mapDraftRow)
+    if (original?._form && comparableDraft(original._form) === comparableDraft(attempt.form)) {
+      clearDraftSaveCheckpoint(frame.owner, attempt)
+      pendingDraftSave.value = null
+      draftSaveFeedback.value = ''
+      toast('已核对，原草稿已保存')
+      tab.value = 'drafts'
+    } else {
+      draftSaveCanCopy.value = true
+      draftSaveFeedback.value = original
+        ? '草稿箱资料与本次输入不一致。原输入已保留，可再次核对或复制为新草稿。'
+        : '暂未在草稿箱找到原单。原输入已保留，可再次核对或复制为新草稿。'
+    }
+  } catch(error) { if (frame.active()) draftSaveFeedback.value = `读取原草稿失败，请重试核对。${userFacingError(error)}` }
+  finally { if (frame.active()) draftBusy.value = false }
+}
+
+function copyUnconfirmedDraft() {
+  const attempt = pendingDraftSave.value
+  if (!attempt || !draftSaveCanCopy.value || formBusy.value) return
+  const frame = shipmentRequests.capture()
+  if (!frame.active()) return
+  try { clearDraftSaveCheckpoint(frame.owner, attempt) }
+  catch (error) { draftSaveFeedback.value = userFacingError(error); return }
+  createForm.value = { ...emptyForm(), ...JSON.parse(JSON.stringify(attempt.form)), attachments: [] }
+  editingDraftId.value = null
+  pendingDraftSave.value = null
+  draftSaveCanCopy.value = false
+  draftSaveFeedback.value = '原输入已复制。附件仍属于原草稿，请在新草稿中重新上传。'
+  tab.value = 'form'
 }
 
 function normalizeCarton(carton: CartonForm) {
@@ -1272,56 +1500,71 @@ async function submitCreate() {
   const attempt: ShipmentAttempt = { payload, form: JSON.parse(JSON.stringify(createForm.value)), draftNo: editingDraftId.value }
   try {
     saveShipmentAttempt(localStorage, app.authenticatedUser!.id, attempt)
-    shipmentAttempt.value = readShipmentAttempt(localStorage, app.authenticatedUser!.id)
+    shipmentAttempt.value = app.authenticatedUser?readShipmentAttempt(localStorage,app.authenticatedUser.id):null
   } catch (error) { ElMessage.error(userFacingError(error)); return }
   await postShipment(shipmentAttempt.value!)
 }
 
-async function openDetail(row: any) {
-  const id = inboundNumericId(row)
-  if (maintenanceBusy.value || maintenanceAttempt.value) return
-  detailMutationWarning.value = ''
-  detailVisible.value = true
-  detailLoading.value = true
-  detailOrder.value = row._raw || row
+async function openDetail(row:any) {
+  if(maintenanceBusy.value || maintenanceAttempt.value)return
+  const id=inboundNumericId(row),frame=shipmentRequests.captureRead(),version=++detailReadVersion
+  detailMutationWarning.value='';detailVisible.value=true;detailLoading.value=true;detailOrder.value=row._raw||row
   try {
-    if (id && !row._raw?.readOnly && !String(row._raw?.id || '').startsWith('oms-')) {
-      detailOrder.value = await inboundApi.detail(id)
+    if(id && !row._raw?.readOnly && !String(row._raw?.id||'').startsWith('oms-')){
+      const result=await frame.step(()=>inboundApi.detail(id))
+      if(frame.active() && version===detailReadVersion)detailOrder.value=result
     }
-  } catch (e: any) {
-    ElMessage.error(userFacingError(displaySkuText(e?.message || '加载详情失败')))
-    detailVisible.value = false
-  } finally {
-    detailLoading.value = false
-  }
+  } catch(error) {if(frame.active() && version===detailReadVersion)detailMutationWarning.value=`详情未能读取，请重新读取或返回列表。${userFacingError(error)}`}
+  finally {if(frame.active() && version===detailReadVersion)detailLoading.value=false}
 }
 
 function openFreightDialog() {
   if (!canBeginMaintenance() || !detailCanEditFreight.value) return
+  const order = detailOrder.value
+  const id = inboundNumericId(order)
+  if (!id) return
+  freightFormTarget.value = { id, inboundNo: order.inboundNo, expectedVersion: order.seaFreightVersion, readVersion: detailReadVersion }
   maintenanceError.value = ''
-  const current = inboundSeaFreight(detailOrder.value)
+  const current = inboundSeaFreight(order)
   freightForm.value = { mode: current?.mode === 'fcl' ? 'fcl' : 'lcl', amount: current?.total ? String(current.total) : '' }
   freightVisible.value = true
 }
 
 async function submitFreight() {
-  if (!canBeginMaintenance() || !detailCanEditFreight.value) return
-  const id = inboundNumericId(detailOrder.value)
+  if (!canBeginMaintenance() || !freightVisible.value) return
+  const target = freightFormTarget.value
+  const order = detailOrder.value
+  if (!target || !detailVisible.value || target.readVersion !== detailReadVersion ||
+    target.id !== inboundNumericId(order) || target.inboundNo !== order?.inboundNo ||
+    target.expectedVersion !== order?.seaFreightVersion || !detailCanEditFreight.value) {
+    freightVisible.value = false
+    ElMessage.warning('入库单详情已变化，请打开原单核对后重新补录海运费')
+    return
+  }
   const total = Number(freightForm.value.amount)
-  if (!id) return
   if (!Number.isFinite(total) || total <= 0 || total > 9999999999.99 || Math.abs(total * 100 - Math.round(total * 100)) > 0.0001) { ElMessage.warning('海运费总额须大于零，最多保留两位小数'); return }
   if (detailMissingDimSkus.value.length) { ElMessage.warning(displaySkuText(`请先补齐尺寸：${detailMissingDimSkus.value.join('、')}`)); return }
-  await startMaintenance({ kind: 'freight', inboundId: id, inboundNo: detailOrder.value.inboundNo, clear: false,
-    payload: { clientRequestId: crypto.randomUUID(), expectedVersion: detailOrder.value.seaFreightVersion, mode: freightForm.value.mode, totalAmount: total }, snapshot: detailOrder.value })
+  await startMaintenance({ kind: 'freight', inboundId: target.id, inboundNo: target.inboundNo, clear: false,
+    payload: { clientRequestId: crypto.randomUUID(), expectedVersion: target.expectedVersion, mode: freightForm.value.mode, totalAmount: total }, snapshot: order })
 }
 
 async function clearFreight() {
+  const frame=shipmentRequests.capture()
   if (!canBeginMaintenance() || !detailCanEditFreight.value) return
-  const id = inboundNumericId(detailOrder.value)
+  const snapshot = detailOrder.value
+  const id = inboundNumericId(snapshot)
   if (!id) return
-  if (!await confirmAction('确认清除本单海运费？本单批次成本的海运费将清零，关联本单的货盘费用一并更新；入库单仍保留。', '清除海运费')) return
-  await startMaintenance({ kind: 'freight', inboundId: id, inboundNo: detailOrder.value.inboundNo, clear: true,
-    payload: { clientRequestId: crypto.randomUUID(), expectedVersion: detailOrder.value.seaFreightVersion }, snapshot: detailOrder.value })
+  const version = detailReadVersion
+  const inboundNo = snapshot.inboundNo
+  const expectedVersion = snapshot.seaFreightVersion
+  if (!await confirmAction(`确认清除入库单 ${inboundNo} 的海运费？该单批次成本中的海运费将清零，关联货盘费用一并更新。入库单仍保留。`, '清除海运费')) return
+  if (!frame.active()) return
+  if (version !== detailReadVersion || detailOrder.value !== snapshot || !detailVisible.value || !detailCanEditFreight.value) {
+    ElMessage.warning('入库单详情已变化，请打开原单核对后重新确认')
+    return
+  }
+  await startMaintenance({ kind: 'freight', inboundId: id, inboundNo, clear: true,
+    payload: { clientRequestId: crypto.randomUUID(), expectedVersion }, snapshot })
 }
 
 async function handleInboundDownload(command: string, row: any) {
@@ -1366,7 +1609,7 @@ async function downloadReceivingList(row: any) {
 
 function editDraft(row: any) {
   refreshShipmentAttempt()
-  if (formBusy.value || shipmentAttempt.value || shipmentAttemptError.value || maintenanceAttempt.value || maintenanceStorageError.value) return
+  if (formBusy.value || pendingAttachment.value || pendingDraftSave.value || shipmentAttempt.value || shipmentAttemptError.value || maintenanceAttempt.value || maintenanceStorageError.value) return
   shipmentResult.value = null
   shipmentError.value = ''
   editingDraftId.value = row.id
@@ -1381,17 +1624,15 @@ function editDraft(row: any) {
   if (createForm.value.logisticsWhCode) loadLogisticsStock(createForm.value.logisticsWhCode)
 }
 
-async function deleteDraft(row: any) {
-  if (formBusy.value || shipmentAttempt.value || shipmentAttemptError.value || maintenanceAttempt.value || maintenanceStorageError.value) return
-  if (await confirmAction(`确认删除草稿 ${row.id}？`, '删除草稿')) {
-    try {
-      await inboundApi.deleteDraft(row.id)
-      await loadDrafts()
-      toast('草稿已删除')
-    } catch (e: any) {
-      ElMessage.error(userFacingError(displaySkuText(e.message || '删除失败')))
-    }
-  }
+async function deleteDraft(row:any) {
+  if(formBusy.value || pendingAttachment.value || pendingDraftSave.value || !canCreateInbound.value || shipmentAttempt.value || shipmentAttemptError.value || maintenanceAttempt.value || maintenanceStorageError.value)return
+  const frame=shipmentRequests.capture(),id=row.id
+  if(!await confirmAction(`确认删除草稿 ${id}？`,'删除草稿') || !frame.active())return
+  draftBusy.value=true
+  try {
+    await frame.step(()=>inboundApi.deleteDraft(id));await frame.step(()=>loadDrafts());if(frame.active())toast('草稿已删除')
+  } catch(error) {if(frame.active())ElMessage.error(userFacingError(error))}
+  finally {if(frame.active())draftBusy.value=false}
 }
 
 function onAttachmentPick() {
@@ -1404,27 +1645,89 @@ async function handleAttachmentFile(e: Event) {
   const file = input.files?.[0]
   input.value = ''
   if (!file || formLocked.value || !canCreateInbound.value) return
+  const frame=shipmentRequests.capture()
   attachmentBusy.value = true
   try {
     if (!file.size) throw new Error('附件不能为空，请重新选择文件')
-    const draftNo = await persistDraft()
-    const buf = await file.arrayBuffer()
+    const draftNo = await persistDraft(frame)
+    if(!draftNo || !frame.active())return
+    const buf = await frame.step(()=>file.arrayBuffer())
     const bytes = new Uint8Array(buf)
     let binary = ''
     bytes.forEach((b) => { binary += String.fromCharCode(b) })
     const contentBase64 = btoa(binary)
-    await inboundApi.uploadAttachment({
-      draftNo,
-      fileName: file.name,
-      contentBase64,
-    })
-    createForm.value.attachments.push({ fileName: file.name })
-    await loadDrafts()
-    toast(`附件「${file.name}」已上传并关联本草稿`)
+    pendingAttachment.value = { draftNo, fileName: file.name, contentBase64 }
+    await confirmAttachmentUpload(frame)
   } catch (err: any) {
+    if(!frame.active())return
     ElMessage.error(userFacingError(displaySkuText(err.message || '附件上传失败')))
-  } finally { attachmentBusy.value = false }
+  } finally {if(frame.active())attachmentBusy.value=false}
 }
+
+async function confirmAttachmentUpload(frame: ReturnType<typeof shipmentRequests.capture>) {
+  const attempt = pendingAttachment.value
+  if (!attempt || !frame.active()) return
+  attachmentFeedback.value = ''
+  try {
+    const receipt = await frame.step(() => inboundApi.uploadAttachment(attempt))
+    const id = Number(receipt?.id)
+    if (!Number.isSafeInteger(id) || id <= 0 || receipt.fileName !== attempt.fileName.trim()) throw Error('附件回执与原文件不一致')
+    if (!createForm.value.attachments.some(file => file.id === id)) {
+      createForm.value.attachments.push({ id, fileName: receipt.fileName })
+    }
+    pendingAttachment.value = null
+    toast(`附件「${receipt.fileName}」已关联本草稿`)
+    void loadDrafts()
+  } catch (error: any) {
+    if (!frame.active()) return
+    const status = Number(error?.status)
+    if (status === 400 || status === 404 || status === 413 || status === 422) {
+      pendingAttachment.value = null
+      attachmentFeedback.value = userFacingError(error)
+    } else attachmentFeedback.value = `附件上传结果待核对，可继续原上传。${userFacingError(error)}`
+  }
+}
+
+async function retryAttachmentUpload() {
+  if (!pendingAttachment.value || formBusy.value || !canCreateInbound.value) return
+  const frame = shipmentRequests.capture()
+  attachmentBusy.value = true
+  try { await confirmAttachmentUpload(frame) }
+  finally { if (frame.active()) attachmentBusy.value = false }
+}
+
+async function downloadDraftFile(file: { id?: number; fileName: string }) {
+  const draftNo = editingDraftId.value
+  if (!draftNo || !file.id) return
+  const frame = shipmentRequests.captureRead()
+  try {
+    const { blob, fileName } = await frame.step(() => inboundApi.downloadDraftAttachment(draftNo, file.id))
+    if (frame.active() && draftNo === editingDraftId.value) triggerBlobDownload(blob, fileName || file.fileName)
+  } catch (error) { if (frame.active()) ElMessage.error(userFacingError(error)) }
+}
+
+function resetShipmentSession(){
+  shipmentBusy.value=false;maintenanceBusy.value=false;freightSubmitting.value=false
+  shipmentResult.value=null;deletedShipment.value=null;maintenanceResult.value=null;shipmentError.value='';maintenanceError.value=''
+  detailVisible.value=false;freightVisible.value=false;detailOrder.value=null
+  createForm.value=emptyForm();editingDraftId.value=null;warehouseSkus.value=[];drafts.value=[]
+  ++stockLoadVersion;++draftLoadVersion;++detailReadVersion;detailLoading.value=false
+  draftBusy.value=false;attachmentBusy.value=false;importBusy.value=false;createLoading.value=false;skuLoading.value=false
+  pendingDraftSave.value=null;draftSaveFeedback.value='';draftSaveCanCopy.value=false;draftSaveStorageBlocked.value=false
+  pendingAttachment.value=null;attachmentFeedback.value=''
+  productDimMap.value=new Map();productDimMapLoaded.value=false;logisticsWarehouses.value=[];overseasWarehouses.value=[]
+  refsError.value='';stockError.value='';draftsError.value='';detailMutationWarning.value='';tab.value='list'
+  refreshShipmentAttempt();refreshMaintenanceAttempt();restoreDraftSaveCheckpoint()
+  if(shipmentScope.value && app.hasPerm('create_inbound.view')){void loadRefs();void loadDrafts()}
+}
+watch(shipmentScope,resetShipmentSession,{flush:'sync'})
+const onShipmentStorage=(event:StorageEvent)=>{
+ const owner=app.authenticatedUser?.id
+ if(event.key===null || event.key===`erp:shipment-attempt:${owner}` || event.key===`erp:shipment-maintenance:${owner}`){shipmentRequests.invalidate();resetShipmentSession()}
+}
+window.addEventListener('storage',onShipmentStorage)
+onScopeDispose(()=>window.removeEventListener('storage',onShipmentStorage))
+
 </script>
 
 <template>
@@ -1436,6 +1739,7 @@ async function handleAttachmentFile(e: Event) {
       </div>
     </template>
 
+    <el-alert v-if="listError" :title="listError" type="warning" :closable="false"><el-button :loading="loading" @click="load">重新读取发运列表</el-button></el-alert>
     <div class="callout info">
       <div class="callout-title">国内中转仓 → 海外仓发货</div>
       <div class="callout-body">
@@ -1443,17 +1747,33 @@ async function handleAttachmentFile(e: Event) {
     </div>
 
     <el-alert v-if="shipmentAttempt || shipmentAttemptError" type="warning" :closable="false" style="margin:12px 0">
-      <template #title>{{ shipmentAttemptError || '上次发运结果待核对，请使用原操作重试，避免重复扣减中转仓库存。' }}</template>
+      <template #title>{{ shipmentAttemptError || (deletedShipment ? '原发运已删除，请选择下方复制新建或放弃原内容。' : '上次发运结果待核对，请核对原结果或继续原提交，避免重复扣减中转仓库存。') }}</template>
       <el-button v-if="shipmentAttempt" :disabled="formBusy" @click="recoverShipment">恢复待核对发运</el-button>
+      <el-button v-if="shipmentAttempt" :disabled="formBusy || !canCreateInbound" @click="checkShipmentOutcome">核对原发运结果</el-button>
     </el-alert>
+    <el-alert v-if="deletedShipment" type="warning" :closable="false" :title="`原发运单 ${deletedShipment.inboundNo} 已删除，原请求不会重新发运。请选择复制新建或放弃原内容。`">
+      <el-button :disabled="formBusy || !canCreateInbound" @click="finishDeletedShipment(true)">按原内容复制新建</el-button>
+      <el-button :disabled="formBusy || !canCreateInbound" @click="finishDeletedShipment(false)">放弃原内容并返回列表</el-button>
+    </el-alert>
+    <el-alert v-if="shipmentError && tab !== 'form'" :title="shipmentError" type="error" :closable="false" />
     <el-alert v-if="refsError" :title="refsError" type="error" :closable="false"><el-button :loading="createLoading" @click="loadRefs">重新读取资料</el-button></el-alert>
     <el-alert v-if="draftsError" :title="draftsError" type="error" :closable="false"><el-button @click="loadDrafts">重新读取草稿箱</el-button></el-alert>
+    <el-alert v-if="draftSaveFeedback" :title="draftSaveFeedback" type="warning" :closable="false">
+      <el-button v-if="pendingDraftSave" :loading="draftBusy" @click="verifyDraftSave">核对草稿保存结果</el-button>
+      <el-button v-if="draftSaveStorageBlocked" :disabled="formBusy" @click="restoreDraftSaveCheckpoint">重新读取原草稿记录</el-button>
+      <el-button v-if="pendingDraftSave" :disabled="formBusy" @click="viewOriginalDraftSave">查看原输入</el-button>
+      <el-button v-if="draftSaveCanCopy" :disabled="formBusy || !canCreateInbound" @click="copyUnconfirmedDraft">复制为新草稿</el-button>
+    </el-alert>
+    <el-alert v-if="attachmentFeedback" :title="attachmentFeedback" type="warning" :closable="false">
+      <el-button v-if="pendingAttachment" :loading="attachmentBusy" @click="retryAttachmentUpload">继续原附件上传</el-button>
+      <el-button v-if="pendingAttachment && tab !== 'form'" :disabled="formBusy" @click="tab = 'form'">返回原草稿</el-button>
+    </el-alert>
     <el-alert v-if="maintenanceAttempt || maintenanceStorageError" type="warning" :closable="false" style="margin:12px 0">
       <template #title>{{ maintenanceStorageError || `上次${maintenanceAttempt?.kind === 'delete' ? '删除发运单' : maintenanceAttempt?.clear ? '清除海运费' : '补录海运费'}结果待核对：${maintenanceAttempt?.inboundNo}` }}</template>
-      <el-button v-if="maintenanceAttempt" :loading="maintenanceBusy" @click="retryMaintenance">核对并重试原操作</el-button>
+      <el-button v-if="maintenanceAttempt" :disabled="!canCreateInbound" :loading="maintenanceBusy" @click="retryMaintenance">核对并重试原操作</el-button>
     </el-alert>
     <el-alert v-if="maintenanceError" :title="maintenanceError" type="error" :closable="false" style="margin:12px 0" />
-    <el-alert v-if="maintenanceResult?.refreshRequired" :title="maintenanceResult.warning" type="warning" :closable="false"><el-button :loading="detailLoading" @click="refreshMutationDetail">重新读取最新详情</el-button></el-alert>
+    <el-alert v-if="maintenanceResult?.refreshRequired" :title="maintenanceResult.warning" type="warning" :closable="false"><el-button :loading="detailLoading" @click="refreshMutationDetail(maintenanceResult)">重新读取最新详情</el-button></el-alert>
     <el-alert v-if="maintenanceResult" type="success" :closable="false" style="margin:12px 0" :title="maintenanceResult.kind === 'delete' ? `已删除 ${maintenanceResult.inboundNo}，原中转仓良品库存已返还` : `海运费操作已完成：${maintenanceResult.inboundNo}`">
       <el-button v-if="maintenanceResult.kind === 'delete' && maintenanceResult.deletedOrder" :disabled="formBusy" @click="copyMaintenanceDeleted">按已删除单复制新建</el-button>
       <el-button :disabled="formBusy" @click="tab = 'list'">返回入库单管理</el-button>
@@ -1472,10 +1792,10 @@ async function handleAttachmentFile(e: Event) {
       <el-alert v-if="shipmentError" :title="shipmentError" type="error" :closable="false" style="margin:12px 0" />
       <el-alert v-if="shipmentResult" type="success" :closable="false" style="margin:12px 0" :title="`发运成功：${shipmentResult.inboundNo}。库存、外箱与费用已同步，勿重复新建。`" />
       <div v-if="shipmentAttempt || shipmentResult" style="display:flex;gap:12px;margin:12px 0">
-        <el-button v-if="shipmentAttempt" type="primary" :loading="shipmentBusy" @click="retryShipment">核对并重试原提交</el-button>
+        <el-button v-if="shipmentAttempt && !deletedShipment" type="primary" :disabled="!canCreateInbound" :loading="shipmentBusy" @click="retryShipment">核对并重试原提交</el-button>
         <el-button :disabled="formBusy" @click="returnShipmentList">返回入库单管理</el-button>
         <el-button v-if="app.hasPerm('logistics_wh.view')" :disabled="formBusy" @click="returnSourceStock">查看中转仓库存</el-button>
-        <el-button v-if="shipmentResult && app.hasPerm('inbound.arrival_scan')" @click="continueArrivalScan">继续到仓扫描</el-button>
+        <el-button v-if="shipmentResult && !['completed','cancelled'].includes(shipmentResult.status) && app.hasPerm('inbound.arrival_scan')" @click="continueArrivalScan">继续到仓扫描</el-button>
       </div>
       <el-form :disabled="formLocked || !canCreateInbound" class="form-card" @submit.prevent>
         <div class="form-card-header">
@@ -1854,7 +2174,10 @@ async function handleAttachmentFile(e: Event) {
           <el-form-item label="附件">
             <div class="upload-zone" @click="onAttachmentPick">
               {{ attachmentBusy ? '正在上传附件…' : '点击上传装箱单或质检报告（上传前自动保存草稿）' }}            </div>
-            <ul v-if="createForm.attachments.length"><li v-for="(file, index) in createForm.attachments" :key="index">{{ file.fileName }}</li></ul>
+            <ul v-if="createForm.attachments.length"><li v-for="(file, index) in createForm.attachments" :key="file.id || index">
+              {{ file.fileName }}
+              <el-button v-if="file.id" link type="primary" @click="downloadDraftFile(file)">下载附件</el-button>
+            </li></ul>
           </el-form-item>
         </section>
 
@@ -1898,12 +2221,12 @@ async function handleAttachmentFile(e: Event) {
         <el-table-column prop="savedAt" label="保存时间" width="150" />
         <el-table-column label="操作" width="140" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" size="small" @click="editDraft(row)">继续编辑</el-button>
-            <el-button link type="danger" size="small" @click="deleteDraft(row)">删除</el-button>
+            <el-button link type="primary" size="small" :disabled="formBusy || !!pendingAttachment || !!pendingDraftSave" @click="editDraft(row)">继续编辑</el-button>
+            <el-button link type="danger" size="small" :disabled="formBusy || !!pendingAttachment || !!pendingDraftSave || !canCreateInbound" @click="deleteDraft(row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
-      <el-empty v-if="!drafts.length" description="暂无草稿，填写信息后点击「保存草稿」" />
+      <el-empty v-if="!drafts.length && !draftsError" description="暂无草稿，填写信息后点击「保存草稿」" />
       <ListPagination v-model:page="draftPage" v-model:page-size="draftPageSize" :total="draftTotal" />
       <p class="text-muted footer-note">草稿按当前账号保存在服务端，提交成功后转为正式入库单，附件同时关联正式单据</p>
     </template>
@@ -1911,10 +2234,10 @@ async function handleAttachmentFile(e: Event) {
     <!-- 入库单管理 -->
     <template v-else>
       <div class="list-kpi-row">
-        <div class="kpi"><strong>{{ listStats.total }}</strong><span>有效入库单</span></div>
-        <div class="kpi warn"><strong>{{ listStats.pendingReceipt }}</strong><span>待收货</span></div>
-        <div class="kpi"><strong>{{ listStats.pendingPutaway }}</strong><span>待上架</span></div>
-        <div class="kpi ok"><strong>{{ listStats.completed }}</strong><span>已入库</span></div>
+        <div class="kpi"><strong>{{ listReady ? listStats.total : '—' }}</strong><span>有效入库单</span></div>
+        <div class="kpi warn"><strong>{{ listReady ? listStats.pendingReceipt : '—' }}</strong><span>待收货</span></div>
+        <div class="kpi"><strong>{{ listReady ? listStats.pendingPutaway : '—' }}</strong><span>待上架</span></div>
+        <div class="kpi ok"><strong>{{ listReady ? listStats.completed : '—' }}</strong><span>已入库</span></div>
         <div class="kpi"><strong>{{ listStats.cbm !== '—' ? `约 ${listStats.cbm}m³` : '—' }}</strong><span>在途总立方</span></div>
         <span class="spacer" />
         <el-select v-model="inboundSource" aria-label="入库单来源" style="width:180px">
@@ -1924,7 +2247,7 @@ async function handleAttachmentFile(e: Event) {
         </el-select>
         <el-input v-model="inboundSearchQ" placeholder="入库单 / SKU" clearable style="width:160px;margin-left:8px" />
       </div>
-      <el-table v-loading="loading" :data="inboundPagedItems" stripe border size="small">
+      <el-table v-loading="loading" :data="inboundPagedItems" :empty-text="listReady ? '暂无入库单' : '尚未读取入库单，请重新读取'" stripe border size="small">
         <el-table-column label="来源" width="145">
           <template #default="{ row }">{{ row._raw?.sourceKind === 'erp_shipment' ? 'ERP 中转仓发运' : row._raw?.sourceKind === 'oms_customer' ? 'OMS 客户预约' : 'ERP 历史入库' }}</template>
         </el-table-column>
@@ -1982,8 +2305,8 @@ async function handleAttachmentFile(e: Event) {
           </template>
         </el-table-column>
       </el-table>
-      <el-empty v-if="!loading && !filteredInbounds.length" description="暂无入库单，点击「新建入库单」开始创建" />
-      <ListPagination v-model:page="inboundPage" v-model:page-size="inboundPageSize" :total="inboundTotal" />
+      <el-empty v-if="listReady && !loading && !filteredInbounds.length" description="暂无入库单，点击「新建入库单」开始创建" />
+      <ListPagination v-if="listReady" v-model:page="inboundPage" v-model:page-size="inboundPageSize" :total="inboundTotal" />
       <p class="text-muted footer-note">入库单创建后进入待收货（在途）。未开始收货前可删除整张入库单，海外仓作业中会同步消失；已开始收货后不能删除。可下载入库清单供人工清点，仓库在「到仓扫描」完成收货、清点与上架。</p>
     </template>
   </el-card>
@@ -2053,10 +2376,10 @@ async function handleAttachmentFile(e: Event) {
         <el-empty v-if="!detailItems.length" description="该入库单没有 SKU 明细" :image-size="64" />
       </template>
     </div>
-    <el-alert v-if="detailMutationWarning" :title="detailMutationWarning" type="warning" :closable="false"><el-button :loading="detailLoading" @click="refreshMutationDetail">重新读取最新详情</el-button></el-alert>
+    <el-alert v-if="detailMutationWarning" :title="detailMutationWarning" type="warning" :closable="false"><el-button :loading="detailLoading" @click="refreshMutationDetail()">重新读取最新详情</el-button></el-alert>
     <el-alert v-if="maintenanceError" :title="maintenanceError" type="error" :closable="false">
-      <el-button v-if="maintenanceAttempt" :loading="maintenanceBusy" @click="retryMaintenance">核对并重试原操作</el-button>
-      <el-button :disabled="maintenanceBusy || !!maintenanceAttempt" @click="refreshMutationDetail">重新读取最新详情</el-button>
+      <el-button v-if="maintenanceAttempt" :disabled="!canCreateInbound" :loading="maintenanceBusy" @click="retryMaintenance">核对并重试原操作</el-button>
+      <el-button :disabled="maintenanceBusy || !!maintenanceAttempt" @click="refreshMutationDetail()">重新读取最新详情</el-button>
     </el-alert>
     <template #footer>
       <el-button
@@ -2086,14 +2409,14 @@ async function handleAttachmentFile(e: Event) {
     :close-on-click-modal="!maintenanceBusy"
     :close-on-press-escape="!maintenanceBusy"
     :show-close="!maintenanceBusy"
-    :title="`补录海运费 · ${detailOrder?.inboundNo || ''}`"
+    :title="`补录海运费 · ${freightFormTarget?.inboundNo || ''}`"
     width="720px"
     class="create-inbound-freight"
     destroy-on-close
   >
     <el-alert v-if="maintenanceError" :title="maintenanceError" type="error" :closable="false" />
     <el-alert v-if="maintenanceAttempt" type="warning" :closable="false" title="原操作结果待核对，请保持原内容并重试">
-      <el-button :loading="maintenanceBusy" @click="retryMaintenance">核对并重试原操作</el-button>
+      <el-button :disabled="!canCreateInbound" :loading="maintenanceBusy" @click="retryMaintenance">核对并重试原操作</el-button>
     </el-alert>
     <el-form :disabled="maintenanceBusy || !!maintenanceAttempt" @submit.prevent>
     <p class="section-desc">选择运输方式并填写本票海运费总额，系统按各 SKU 体积占比分摊到单件，并同步货盘库存。</p>

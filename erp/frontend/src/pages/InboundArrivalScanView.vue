@@ -11,6 +11,7 @@ import { useAppStore } from '@/stores/app'
 import { INBOUND_STATUS } from '@/constants/index.js'
 import WarehouseControlDialog from '@/components/inbound/WarehouseControlDialog.vue'
 import { warehouseControlOptions, type WarehouseControlKind } from '@/utils/warehouseControl'
+import { loadWarehouseOrderChoices } from '@/utils/warehouseOrderChoices'
 import { clearWarehouseAttempt, readWarehouseAttempts, runWarehouseAttempt, saveWarehouseAttempt, recoverWarehouseAttemptFailure, type WarehouseAttempt, type WarehouseOperation } from '@/utils/warehouseOperation'
 
 function bound990Text(row: any): string {
@@ -376,18 +377,16 @@ async function loadRecent() {
 async function loadActiveOrderList() {
   const version = ++orderListReadVersion, code = warehouseCode.value
   orderListReadError.value = ''
+  activeOrders.value = []
   if (!warehouseCode.value) {
     activeOrders.value = []
     return
   }
   try {
-    const res = await inboundApi.list({ pageSize: 100 })
+    const rows = await loadWarehouseOrderChoices({ listWorkOrders: params => inboundApi.listWorkOrders(params) }, code,
+      () => version === orderListReadVersion && code === warehouseCode.value)
     if (version !== orderListReadVersion || code !== warehouseCode.value) return
-    const rows = res.items || []
-    activeOrders.value = rows.filter((o: any) =>
-      o.warehouseCode === warehouseCode.value
-      && ['arrived', 'receiving', 'pending_putaway', 'exception'].includes(o.status),
-    )
+    if (rows) activeOrders.value = rows
   } catch (error) {
     if (version === orderListReadVersion) orderListReadError.value = `作业入库单未能刷新，请重新读取后选择。${userFacingError(error)}`
   }
@@ -405,7 +404,8 @@ async function loadActiveOrder(id: number, preferredStep?: WorkStep) {
     activeOrder.value = data
     if (warehouseCode.value !== data.warehouseCode) warehouseCode.value = data.warehouseCode
     buildQcLines(data)
-    workStep.value = preferredStep || deriveWorkStep(data)
+    const canonicalStep = deriveWorkStep(data)
+    workStep.value = ['completed', 'confirmed', 'cancelled'].includes(data.status) ? canonicalStep : preferredStep || canonicalStep
     if (workStep.value === 'putaway' && data.status === 'pending_putaway' && orderNeedsMeasure(data)) workStep.value = 'qc'
     if (workStep.value === 'qc' && ['arrived', 'receiving'].includes(data.status) && !data.cartonConfirmation?.ready) workStep.value = 'receive'
     buildPutawayDraft(data)
@@ -1125,7 +1125,7 @@ onMounted(async () => {
         </el-table>
 
         <div class="panel-actions">
-          <el-button v-if="canQc" type="primary" :disabled="receivingLocked || !cartonReady" @click="goToQcStep">箱数已确认，进入清点与测量</el-button>
+          <el-button v-if="canQc" type="primary" :disabled="receivingLocked || !cartonReady || !canShowQcStep(activeOrder)" @click="goToQcStep">箱数已确认，进入清点与测量</el-button>
           <span v-if="!cartonReady" class="footer-hint">{{ activeOrder.cartonConfirmation?.message || '请先确认实收箱数' }}</span>
         </div>
       </template>

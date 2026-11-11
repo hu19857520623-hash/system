@@ -64,6 +64,12 @@ export class InventoryController {
   }
 
   @RequirePerms('inventory_query.adjust')
+  @Post('location-change/batch/close')
+  closeLocationChangeBatch(@Body() body: { clientRequestId: string; rows: any[] }, @CurrentUser('userId') userId: number) {
+    return this.service.closeLocationChangeBatch(body, userId)
+  }
+
+  @RequirePerms('inventory_query.adjust')
   @Patch('sku-query/:id')
   updateSkuCatalogItem(
     @Param('id', ParseIntPipe) id: number,
@@ -99,6 +105,7 @@ export class InventoryController {
   @Post('location-change')
   changeLocationStock(
     @Body() body: {
+      clientRequestId?: string
       customerCode: string
       sku: string
       warehouseCode: string
@@ -116,6 +123,7 @@ export class InventoryController {
   @Post('location-change/batch')
   batchChangeLocationStock(
     @Body() body: {
+      clientRequestId?: string
       rows?: Array<{
         customerCode: string
         sku: string
@@ -137,7 +145,7 @@ export class InventoryController {
   @Patch('by-location/:id')
   adjustLocation(
     @Param('id', ParseIntPipe) id: number,
-    @Body() body: { qty?: number; locationCode?: string; remark?: string; customerCode: string },
+    @Body() body: { clientRequestId?: string; qty?: number; locationCode?: string; remark?: string; customerCode: string },
     @CurrentUser('userId') userId: number,
   ) {
     return this.service.updateLocationLine(id, body, userId)

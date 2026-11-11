@@ -620,6 +620,7 @@ export function mapPricing(row: any) {
   const customerSku = row.customerSku || catalogBaseSkuFromInternal(sku)
   return {
     id: row.id,
+    updatedAt: row.updatedAt,
     sku,
     customerCode,
     customerSku,

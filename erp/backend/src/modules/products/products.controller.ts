@@ -13,7 +13,7 @@ export class ProductsController {
 
   @RequirePerms('products.view')
   @Get()
-  list(@Query() q: PaginationDto & { status?: string }) {
+  list(@Query() q: PaginationDto & { status?: string; exactSku?: string }) {
     return this.service.list(q)
   }
 

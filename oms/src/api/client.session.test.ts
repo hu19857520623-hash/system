@@ -15,6 +15,19 @@ function setup(t:TestContext) {
   t.after(()=>{globalThis.fetch=originalFetch;for(const[key,value]of descriptors){if(value)Object.defineProperty(globalThis,key,value);else Reflect.deleteProperty(globalThis,key)}})
   return events
 }
+test('refreshing shared login never exposes an empty session to other tabs', t => {
+  setup(t)
+  const changes: string[] = []
+  const { setItem, removeItem } = localStorage
+  localStorage.setItem = (key, value) => { setItem(key, value); changes.push(getStoredAuthSession()?.token ?? 'empty') }
+  localStorage.removeItem = key => { removeItem(key); changes.push(getStoredAuthSession()?.token ?? 'empty') }
+  storeAuthSession({ token: 'old-token', user })
+  assert.deepEqual(changes, [])
+  storeAuthSession({ token: 'old-token', user: { ...user, permissions: ['product:read'] } })
+  assert.deepEqual(changes, ['old-token'])
+  assert.deepEqual(getStoredAuthSession()?.user.permissions, ['product:read'])
+})
+
 test('an old request 401 cannot log out a replacement login, for JSON and authenticated fetch',async t=>{
   setup(t)
   for(const raw of [false,true]) {

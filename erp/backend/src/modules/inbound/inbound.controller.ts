@@ -5,7 +5,7 @@ import { PaginationDto } from '../../common/dto/pagination.dto'
 import { CurrentUser } from '../../common/decorators/current-user.decorator'
 import { RequireAnyPerm, RequirePerms } from '../../common/decorators/require-perms.decorator'
 import { OmsBridge } from '../../common/decorators/oms-bridge.decorator'
-import { CreateOmsAsnDto } from './dto/oms-asn.dto'
+import { CancelOmsAsnDto, CreateOmsAsnDto, OmsAsnOriginalDto } from './dto/oms-asn.dto'
 import { ApplyShipmentFreightDto, CreateErpShipmentDto, SaveInboundDraftDto, ShipmentFreightMutationDto, UploadInboundAttachmentDto } from './dto/erp-shipment.dto'
 import { MeasureInboundDto, RecordInboundCartonsDto, ScanInboundCartonDto, ScanInboundQcDto, SubmitInboundQcDto } from './dto/inbound-receiving.dto'
 import { PutawayInboundDto } from './dto/inbound-putaway.dto'
@@ -32,9 +32,9 @@ export class InboundController {
   @Post('oms/asn/:inboundNo/cancel')
   omsCancelAsn(
     @Param('inboundNo') inboundNo: string,
-    @Body() body: { customerCode?: string },
+    @Body() body: CancelOmsAsnDto,
   ) {
-    return this.service.cancelAsnFromOms(inboundNo, { customerCode: String(body?.customerCode || '') })
+    return this.service.cancelAsnFromOms(inboundNo, body)
   }
 
   @OmsBridge()
@@ -47,6 +47,18 @@ export class InboundController {
   @Get('oms/by-customer/:customerCode')
   omsListByCustomer(@Param('customerCode') customerCode: string) {
     return this.service.listByOmsCustomer(customerCode)
+  }
+
+  @OmsBridge()
+  @Post('oms/asn/:inboundNo/original/check')
+  omsCheckOriginal(@Param('inboundNo') inboundNo: string, @Body() body: OmsAsnOriginalDto) {
+    return this.service.resolveAsnOriginal(inboundNo, body)
+  }
+
+  @OmsBridge()
+  @Post('oms/asn/:inboundNo/original/cancel')
+  omsCancelOriginal(@Param('inboundNo') inboundNo: string, @Body() body: OmsAsnOriginalDto) {
+    return this.service.resolveAsnOriginal(inboundNo, body, true)
   }
 
   @OmsBridge()
@@ -106,6 +118,15 @@ export class InboundController {
     return this.service.uploadAttachment(body, userId)
   }
 
+  @RequirePerms('create_inbound.view')
+  @Get('drafts/:draftNo/attachments/:attachmentId')
+  async downloadDraftAttachment(@Param('draftNo') draftNo: string, @Param('attachmentId', ParseIntPipe) attachmentId: number,
+    @CurrentUser('userId') userId: number, @Res() res: Response) {
+    const file = await this.service.downloadDraftAttachment(draftNo, attachmentId, userId)
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(file.fileName)}"`)
+    res.type('application/octet-stream').send(file.content)
+  }
+
   @RequireAnyPerm(
     'create_inbound.view',
     'inbound.view',
@@ -115,8 +136,14 @@ export class InboundController {
     'inbound.putaway',
   )
   @Get()
-  list(@Query() q: PaginationDto & { status?: string; source?: string }) {
+  list(@Query() q: PaginationDto & { status?: string; source?: string; warehouseCode?: string }) {
     return this.service.list(q)
+  }
+
+  @RequireAnyPerm('inbound.view', 'inbound.arrival_scan', 'inbound.receive', 'inbound.qc', 'inbound.putaway')
+  @Get('scan-lookup')
+  scanLookup(@Query('scanCode') scanCode: string, @Query('warehouseCode') warehouseCode: string) {
+    return this.service.scanLookup(scanCode, warehouseCode)
   }
 
   @RequireAnyPerm('inbound.arrival_scan', 'inbound.view')
@@ -126,6 +153,12 @@ export class InboundController {
       warehouseCode: q.warehouseCode,
       limit: q.limit ? Number(q.limit) : undefined,
     })
+  }
+
+  @RequireAnyPerm('inbound.view', 'inbound.arrival_scan', 'inbound.receive', 'inbound.qc', 'inbound.putaway')
+  @Get('work-orders')
+  listWorkOrders(@Query() q: PaginationDto & { warehouseCode?: string }) {
+    return this.service.listWorkOrders(q)
   }
 
   @RequirePerms('inbound.arrival_scan')
@@ -196,9 +229,14 @@ export class InboundController {
     'inbound.putaway',
   )
   @Get(':id')
-  detail(@Param('id', ParseIntPipe) id: number) {
-    return this.service.detail(id)
+  detail(@Param('id', ParseIntPipe) id: number, @Query('reconcileCatalog') reconcileCatalog?: string) {
+    const reconcile = reconcileCatalog !== 'false'
+    return this.service.detail(id, { reconcileCatalog: reconcile, backfillClosedCartons: reconcile })
   }
+
+  @RequirePerms('create_inbound.create')
+  @Get('shipment-requests/:requestId')
+  readShipmentOutcome(@Param('requestId') requestId:string,@CurrentUser('userId') userId:number){return this.service.readShipmentOutcome(requestId,userId)}
 
   @RequirePerms('create_inbound.create')
   @Post()

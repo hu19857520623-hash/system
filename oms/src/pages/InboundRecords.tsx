@@ -1,27 +1,36 @@
+import { useAsyncViewScope } from '../utils/useAsyncViewScope'
+import { authSessionScope } from '../api/client'
 
 import { userFacingError } from '../utils/userFacingError'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { RefreshCw } from 'lucide-react'
 import { TableActionLink, actionLinkClass } from '../components/outbound/PodReceiptModals'
 import {
-  Badge, Button, Card, PageHeader, MonoCode, Tabs, Table, TableFooter, Select, StatCard,
+  Button, Card, PageHeader, MonoCode, Tabs, Table, TableFooter, Select, StatCard,
 } from '../components/ui'
 import InboundDetailDrawer from '../components/inbound/InboundDetailDrawer'
+import { InboundReceiptStatus } from '../components/inbound/InboundReceiptStatus'
+import InboundRecovery from '../components/inbound/InboundRecovery'
+import InboundSaveRecovery from '../components/inbound/InboundSaveRecovery'
+import { useInboundConfirmation } from '../components/inbound/useInboundConfirmation'
 import { InboundPrintLabelMenu } from '../components/inbound/InboundPrintLabelMenu'
 import {
-  SearchField, FilterActions, DropdownBtn, inputCls, matchText, type SearchMode,
+  SearchField, FilterActions, DropdownBtn, inputCls, matchText,
 } from '../components/ui/filters'
 import {
-  InboundOrder, DELIVERY_METHOD_LABELS, STOCK_SOURCE_LABELS, statusLabels, warehouseFilterOptions, warehouseLabel,
+  InboundOrder, DELIVERY_METHOD_LABELS, STOCK_SOURCE_LABELS, warehouseFilterOptions, warehouseLabel,
   CUSTOMER_INBOUND_TYPES, customerInboundTypeLabel, customerInboundStockLabel,
 } from '../data/mockData'
 import { useInboundOrders } from '../data/entityStore'
+import { useProducts } from '../data/inventoryStore'
+import { displaySku } from '../data/skuDisplay'
+import { inboundOrderMatchesSku } from '../data/inboundSkuFilter'
 import { useDataScope } from '../auth/useDataScope'
 import { AdminCustomerFilter, AdminCustomerCell } from '../components/admin/AdminCustomerFilter'
 import { useRole } from '../auth/RoleContext'
 import { getCustomerIdForRole } from '../data/dataScope'
-import { canEditInboundOrder, canVoidInboundOrder, canReorderInboundOrder, refreshInboundsFromErp, voidInboundOrder, withdrawInboundOrder, inboundMutationFailure } from '../data/inboundStore'
+import { canEditInboundOrder, canVoidInboundOrder, canReorderInboundOrder, refreshInboundsFromErp, voidInboundOrder, withdrawInboundOrder, inboundMutationFailure, captureInboundWriteAccess } from '../data/inboundStore'
 import { addInboundOrdersOrThrow, getInboundOrdersSnapshot } from '../data/entityStore'
 import { buildImportedInboundDrafts } from '../data/inboundDraftImport'
 import { importCsvFile } from '../data/csvImportExport'
@@ -32,6 +41,7 @@ import {
   parseInboundOrders,
 } from '../data/importTemplates'
 import { ImportTemplateLegend } from '../components/ui/ImportTemplateLegend'
+import { defaultInboundFilters as defaultFilters, inboundListParams, readInboundListLocation, type InboundFilters } from '../data/inboundListLocation'
 import { notifyIfUserError, notifySuccess, notifyError, notifyInfo } from '../utils/userNotify'
 
 const statusTabs = [
@@ -44,28 +54,6 @@ const statusTabs = [
   { id: 'exception', label: '异常' },
   { id: 'voided', label: '作废' },
 ]
-
-interface InboundFilters {
-  inboundNo: string
-  inboundNoMode: SearchMode
-  referenceNo: string
-  referenceNoMode: SearchMode
-  sku: string
-  skuMode: SearchMode
-  trackingNo: string
-  warehouse: string
-  inboundType: string
-  dateFrom: string
-  dateTo: string
-}
-
-const defaultFilters: InboundFilters = {
-  inboundNo: '', inboundNoMode: 'fuzzy',
-  referenceNo: '', referenceNoMode: 'fuzzy',
-  sku: '', skuMode: 'fuzzy',
-  trackingNo: '', warehouse: 'all', inboundType: 'all',
-  dateFrom: '', dateTo: '',
-}
 
 function filterByTab(list: InboundOrder[], tab: string) {
   if (tab === 'all') return list
@@ -82,7 +70,7 @@ function applyInboundFilters(list: InboundOrder[], f: InboundFilters, forCustome
     }
     if (!matchText(o.inboundNo, f.inboundNo, f.inboundNoMode)) return false
     if (!matchText(o.referenceNo ?? '', f.referenceNo, f.referenceNoMode)) return false
-    if (!matchText(o.skuHint ?? '', f.sku, f.skuMode)) return false
+    if (!inboundOrderMatchesSku(o, f.sku, f.skuMode, sku => displaySku(sku, o.customerId))) return false
     if (f.trackingNo && !(o.trackingNo ?? '').includes(f.trackingNo)) return false
     if (f.dateFrom && o.createdAt < f.dateFrom) return false
     if (f.dateTo && o.createdAt > f.dateTo) return false
@@ -92,55 +80,79 @@ function applyInboundFilters(list: InboundOrder[], f: InboundFilters, forCustome
 
 export default function InboundRecords() {
   const dataScope = useDataScope()
-  const { role } = useRole()
+  const { role, can } = useRole()
+  const canWrite = can('inbound:write')
   const inboundOrders = useInboundOrders()
+  const products = useProducts()
   const scopedInbound = useMemo(() => dataScope.scopeInbound(inboundOrders), [dataScope, inboundOrders])
-  const [searchParams] = useSearchParams()
-  const initialTab = searchParams.get('tab') ?? 'all'
-  const [tab, setTab] = useState(initialTab === 'submitted' ? 'on_the_way' : initialTab)
-  const [advancedOpen, setAdvancedOpen] = useState(false)
-  const [draft, setDraft] = useState<InboundFilters>(defaultFilters)
-  const [applied, setApplied] = useState<InboundFilters>(defaultFilters)
+  const [searchParams, setSearchParams] = useSearchParams()
+  const locationQuery = searchParams.toString()
+  const { tab, filters: applied } = useMemo(() => readInboundListLocation(new URLSearchParams(locationQuery)), [locationQuery])
+  const [advancedOpen, setAdvancedOpen] = useState(!!(applied.trackingNo || applied.dateFrom || applied.dateTo || applied.inboundType !== 'all'))
+  const [draft, setDraft] = useState<InboundFilters>(applied)
+  const setTab = (next: string) => setSearchParams(inboundListParams(next, applied))
+  const setApplied = (next: InboundFilters) => setSearchParams(inboundListParams(tab, next))
+  const detailQuery = inboundListParams(tab, applied).toString()
+  const detailUrl = (id: string) => `/inbound/records/${encodeURIComponent(id)}${detailQuery ? '?' + detailQuery : ''}`
   const [detail, setDetail] = useState<InboundOrder | null>(null)
   const [syncing, setSyncing] = useState(false)
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  useEffect(() => {
+    setDraft(applied); setSelected(new Set())
+    if (applied.trackingNo || applied.dateFrom || applied.dateTo || applied.inboundType !== 'all') setAdvancedOpen(true)
+  }, [applied])
   const [voiding, setVoiding] = useState(false)
   const [withdrawingId, setWithdrawingId] = useState<string | null>(null)
   const [importing, setImporting] = useState(false)
   const [importFeedback, setImportFeedback] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
+  const sessionScope = authSessionScope()
+  const listScope = JSON.stringify([sessionScope, dataScope.bindingCustomerId])
+  const confirmation = useInboundConfirmation(JSON.stringify([listScope, canWrite]))
+  const view = useAsyncViewScope(listScope)
+  const captureView = () => { const valid = view.capture(); return () => valid() && authSessionScope() === sessionScope }
+  useEffect(() => {
+    setDetail(null); setSelected(new Set()); setSyncing(false); setVoiding(false)
+    setWithdrawingId(null); setImporting(false); setImportFeedback(null)
+  }, [listScope])
 
   const handleWithdraw = async (order: InboundOrder) => {
-    if (!window.confirm(`确认撤回入库单 ${order.inboundNo}？仓库将停止收货，之后可在草稿中修改并重新提交。`)) return
+    const currentView = captureView()
+    if (!canWrite) { notifyError('当前账号只有入库查看权限，不能修改单据'); return }
+    if (!(await confirmation.confirm(`确认撤回入库单 ${order.inboundNo}？仓库将停止收货，之后可在草稿中修改并重新提交。`, '确认撤回'))) return
+    if (!currentView()) return
     setWithdrawingId(order.id)
     try {
       const result = await withdrawInboundOrder(order)
+      if (!currentView()) return
       if (!result.ok) notifyError(result.error)
       else {
-        if (detail?.id === order.id) setDetail(result.order)
+        setDetail(current => current?.id === order.id ? result.order : current)
         if (result.warning) notifyInfo(result.warning)
         else notifySuccess('已撤回为草稿，可修改后重新提交')
       }
     } catch (error) {
-      notifyIfUserError(error, '撤回失败')
+      if (currentView()) notifyIfUserError(error, '撤回失败')
     } finally {
-      setWithdrawingId(null)
+      if (currentView()) setWithdrawingId(null)
     }
   }
 
   const syncFromErp = async () => {
+    const currentView = captureView()
     const customerId = getCustomerIdForRole(role)
     if (!customerId) {
-      window.alert('请切换到客户角色后再同步')
+      notifyError('请切换到客户角色后再同步')
       return
     }
     setSyncing(true)
     try {
-      const n = await refreshInboundsFromErp(customerId)
-      window.alert(`已从 ERP 同步 ${n} 条入库单状态`)
+      const n = await refreshInboundsFromErp(customerId, currentView)
+      if (!currentView()) return
+      notifySuccess(`已从 ERP 同步 ${n} 条入库单状态`)
     } catch (err) {
-      window.alert(userFacingError(err instanceof Error ? err.message : String(err)))
+      if (currentView()) notifyError(userFacingError(err instanceof Error ? err.message : String(err)))
     } finally {
-      setSyncing(false)
+      if (currentView()) setSyncing(false)
     }
   }
 
@@ -149,24 +161,19 @@ export default function InboundRecords() {
     list = filterByTab(list, tab)
     list = applyInboundFilters(list, applied, !dataScope.isAdmin)
     return list
-  }, [tab, applied, scopedInbound, dataScope.isAdmin])
+  }, [tab, applied, scopedInbound, dataScope.isAdmin, products])
 
-  const tabCounts = useMemo(() => ({
-    all: scopedInbound.length,
-    draft: scopedInbound.filter(o => o.status === 'draft').length,
-    on_the_way: scopedInbound.filter(o => o.status === 'on_the_way').length,
-    receiving: scopedInbound.filter(o => ['receiving', 'partial'].includes(o.status)).length,
-    completed: scopedInbound.filter(o => ['partial', 'completed'].includes(o.status)).length,
-    shelved: scopedInbound.filter(o => o.status === 'shelved').length,
-    exception: scopedInbound.filter(o => o.status === 'exception').length,
-    voided: scopedInbound.filter(o => o.status === 'voided').length,
-  }), [scopedInbound])
+  const tabCounts = useMemo(() => Object.fromEntries(
+    statusTabs.map(t => [t.id, filterByTab(scopedInbound, t.id).length]),
+  ), [scopedInbound])
 
   const setDraftField = <K extends keyof InboundFilters>(key: K, value: InboundFilters[K]) => {
     setDraft(prev => ({ ...prev, [key]: value }))
   }
 
   const handleBulkImport = async () => {
+    const currentView = captureView()
+    if (!canWrite) { notifyError('当前账号只有入库查看权限，不能导入预约单'); return }
     if (importing) return
     const customerId = dataScope.bindingCustomerId
     const customerCode = dataScope.getCustomerCode(customerId ?? undefined)
@@ -178,7 +185,10 @@ export default function InboundRecords() {
     setImportFeedback(null)
     let savingImported = false
     try {
+      const assertAccess = captureInboundWriteAccess()
+      const assertWrite = () => { assertAccess(); if (!currentView()) throw new Error('原导入页面已离开，请返回当前客户重新读取文件') }
       const { data, errors } = await importCsvFile(INBOUND_ORDER_COLUMNS, parseInboundOrders)
+      assertWrite()
       if (errors.length > 0) {
         setImportFeedback({ kind: 'err', text: `导入失败：\n${errors.slice(0, 8).join('\n')}${errors.length > 8 ? `\n…共 ${errors.length} 条` : ''}` })
         return
@@ -192,17 +202,21 @@ export default function InboundRecords() {
         customerId, customerCode, existingNos: getInboundOrdersSnapshot().map(order => order.inboundNo),
       })
       savingImported = true
-      await addInboundOrdersOrThrow(orders)
+      // The store must still roll back a failed same-account save after this view leaves.
+      // Only account/permission changes invalidate its data rollback.
+      await addInboundOrdersOrThrow(orders, assertAccess)
+      if (!currentView()) return
       setImportFeedback({ kind: 'ok', text: `已保存 ${orders.length} 张入库预约单（草稿），可在草稿列表继续编辑并提交` })
       setTab('draft')
     } catch (err) {
+      if (!currentView()) return
       if (err === 'cancelled' || (err instanceof Error && err.message === 'cancelled')) return
       const result = inboundMutationFailure(err)
       setImportFeedback({ kind: 'err', text: savingImported && result.uncertain
         ? '导入结果暂无法确认，请先点击“立即刷新”核对记录，请勿重复导入。' + userFacingError(err)
         : `导入未完成：${result.error}` })
     } finally {
-      setImporting(false)
+      if (currentView()) setImporting(false)
     }
   }
 
@@ -226,7 +240,7 @@ export default function InboundRecords() {
 
   const handleExportSelected = () => {
     if (selectedOrders.length === 0) {
-      window.alert('请先勾选要导出的入库单')
+      notifyInfo('请先勾选要导出的入库单')
       return
     }
     exportInboundOrders(selectedOrders)
@@ -235,22 +249,26 @@ export default function InboundRecords() {
   const confirmVoid = (orders: InboundOrder[]) => {
     const labels = orders.map(o => o.inboundNo).slice(0, 8).join('、')
     const more = orders.length > 8 ? ` 等 ${orders.length} 张` : ''
-    return window.confirm(`确认作废入库单 ${labels}${more}？作废后仓库不再收货，可在详情中确认后重新下单。`)
+    return confirmation.confirm(`确认作废入库单 ${labels}${more}？作废后仓库不再收货，可在详情中确认后重新下单。`, '确认作废')
   }
 
   const handleVoidOrders = async (orders: InboundOrder[]) => {
+    const currentView = captureView()
+    if (!canWrite) { notifyError('当前账号只有入库查看权限，不能修改单据'); return }
     const targets = orders.filter(o => canVoidInboundOrder(o.status))
     if (targets.length === 0) {
-      window.alert('选中的入库单均不可作废（仅草稿或在途可作废）')
+      notifyInfo('选中的入库单均不可作废（仅草稿或在途可作废）')
       return
     }
-    if (!confirmVoid(targets)) return
+    if (!(await confirmVoid(targets)) || !currentView()) return
     setVoiding(true)
     const completed: InboundOrder[] = []
     const warnings: string[] = []
     try {
       for (const order of targets) {
+        if (!currentView()) return
         const result = await voidInboundOrder(order)
+        if (!currentView()) return
         if (!result.ok) {
           notifyError(`${completed.length ? `已作废 ${completed.length} 张；` : ''}${order.inboundNo}：${result.error}`)
           return
@@ -261,20 +279,22 @@ export default function InboundRecords() {
       if (warnings.length) notifyInfo(warnings.join('\n'))
       else notifySuccess(targets.length === 1 ? `入库单 ${targets[0].inboundNo} 已作废` : `已作废 ${targets.length} 张入库单`)
     } catch (error) {
-      notifyIfUserError(error, `作废未全部完成，已完成 ${completed.length} 张`)
+      if (currentView()) notifyIfUserError(error, `作废未全部完成，已完成 ${completed.length} 张`)
     } finally {
+      if (!currentView()) return
       setSelected(prev => {
         const next = new Set(prev)
         for (const order of completed) next.delete(order.id)
         return next
       })
-      if (detail && completed.some(o => o.id === detail.id)) setDetail(null)
+      setDetail(current => current && completed.some(order => order.id === current.id) ? null : current)
       setVoiding(false)
     }
   }
 
   return (
     <div className="page-shell">
+      {confirmation.dialog}
       <PageHeader
         title="入库记录"
         desc={dataScope.isAdmin ? '全平台入库单，可按客户筛选' : '查看预约入库草稿，跟踪已提交单据的在途、收货与上架进度'}
@@ -285,7 +305,7 @@ export default function InboundRecords() {
               {syncing ? '刷新中…' : '立即刷新'}
             </Button>
             <DropdownBtn label={importing ? '导入中…' : '导入/导出'} disabled={importing} items={[
-              { label: '批量导入预约单', onClick: () => void handleBulkImport() },
+              ...(canWrite ? [{ label: '批量导入预约单', onClick: () => void handleBulkImport() }] : []),
               { label: '导出列表', onClick: () => exportInboundOrders(filtered) },
               { label: '导出选中', onClick: handleExportSelected },
               { label: '下载导入模板', onClick: downloadInboundOrderTemplate },
@@ -299,7 +319,7 @@ export default function InboundRecords() {
         {importFeedback.text}
       </p>}
 
-      <ImportTemplateLegend columns={INBOUND_ORDER_COLUMNS} />
+      {canWrite && <ImportTemplateLegend columns={INBOUND_ORDER_COLUMNS} />}
 
       <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-5">
         <StatCard label="草稿" value={tabCounts.draft} sub="未提交的预约单" />
@@ -321,6 +341,8 @@ export default function InboundRecords() {
         />
       </div>
 
+      <InboundRecovery orders={scopedInbound} />
+      <InboundSaveRecovery customerId={dataScope.bindingCustomerId || undefined} />
       <Card className="mb-4 p-4">
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {dataScope.isAdmin && <AdminCustomerFilter scope={dataScope} />}
@@ -366,14 +388,14 @@ export default function InboundRecords() {
             <p className="text-xs text-text-secondary">已选 {selectedOrders.length} 张入库单</p>
             <div className="flex gap-2">
               <Button variant="secondary" size="sm" onClick={handleExportSelected}>导出选中</Button>
-              <Button
+              {canWrite && <Button
                 variant="danger-outline"
                 size="sm"
-                disabled={voiding || selectedOrders.every(o => !canVoidInboundOrder(o.status))}
+                disabled={!canWrite || voiding || selectedOrders.every(o => !canVoidInboundOrder(o.status))}
                 onClick={() => void handleVoidOrders(selectedOrders)}
               >
                 {voiding ? '作废中…' : '作废选中'}
-              </Button>
+              </Button>}
             </div>
           </div>
         )}
@@ -399,7 +421,7 @@ export default function InboundRecords() {
               <th>跟踪号</th>
               <th>箱数</th>
               <th>总数量</th>
-              <th>应收/实收</th>
+              <th>实收/应收</th>
               <th>状态</th>
               <th>创建日期</th>
               <th className="min-w-[120px] whitespace-nowrap">操作</th>
@@ -418,7 +440,7 @@ export default function InboundRecords() {
                   />
                 </td>
                 <td className="table-cell">
-                  <Link to={`/inbound/records/${encodeURIComponent(o.id)}`} className="hover:underline" aria-label={`查看 ${o.inboundNo} 详情`}>
+                  <Link to={detailUrl(o.id)} className="hover:underline" aria-label={`查看 ${o.inboundNo} 详情`}>
                     <MonoCode>{o.inboundNo}</MonoCode>
                   </Link>
                 </td>
@@ -436,28 +458,28 @@ export default function InboundRecords() {
                 <td className="table-cell text-xs">{o.boxCount}</td>
                 <td className="table-cell text-xs font-semibold">{o.totalQty}</td>
                 <td className="table-cell text-xs"><span className="font-semibold">{o.receivedQty}</span><span className="text-text-muted"> / {o.totalQty}</span></td>
-                <td className="table-cell"><Badge status={o.status} label={statusLabels[o.status]} /></td>
+                <td className="table-cell"><InboundReceiptStatus order={o} /></td>
                 <td className="table-cell text-xs text-text-muted">{o.createdAt}</td>
                 <td className="table-cell align-top">
                   <div className="flex min-w-[72px] flex-col gap-0.5">
-                    <Link to={`/inbound/records/${encodeURIComponent(o.id)}`} className={actionLinkClass()}>详情</Link>
+                    <Link to={detailUrl(o.id)} className={actionLinkClass()}>详情</Link>
                     <InboundPrintLabelMenu order={o} />
-                    {canEditInboundOrder(o.status) && (
+                    {canWrite && canEditInboundOrder(o.status) && (
                       <Link to={`/inbound?edit=${encodeURIComponent(o.id)}`} className={actionLinkClass()}>
                         编辑
                       </Link>
                     )}
-                    {o.status === 'on_the_way' && (
+                    {canWrite && o.status === 'on_the_way' && (
                       <TableActionLink onClick={() => void handleWithdraw(o)}>
                         {withdrawingId === o.id ? '撤回中…' : '撤回为草稿'}
                       </TableActionLink>
                     )}
-                    {canVoidInboundOrder(o.status) && (
+                    {canWrite && canVoidInboundOrder(o.status) && (
                       <TableActionLink onClick={() => void handleVoidOrders([o])}>
                         作废
                       </TableActionLink>
                     )}
-                    {canReorderInboundOrder(o.status) && (
+                    {canWrite && canReorderInboundOrder(o.status) && (
                       <TableActionLink onClick={() => setDetail(o)}>
                         重新下单
                       </TableActionLink>

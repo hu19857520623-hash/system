@@ -2,7 +2,9 @@
 import { userFacingError } from '@erp/shared/user-facing-error'
 
 import { displaySku, displaySkuText } from '@erp/shared/sku-display'
-import { ref, onMounted, watch } from 'vue'
+import { ref, onMounted, onScopeDispose, watch } from 'vue'
+import { getAccessToken } from '@/auth/tokenStore'
+import { createReturnReadGate } from '@/utils/returnReadGate'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import type { TableInstance } from 'element-plus'
@@ -17,6 +19,14 @@ const route = useRoute()
 const app = useAppStore()
 const tableRef = ref<TableInstance>()
 const loading = ref(false)
+const loadError = ref('')
+function queryScope() {
+  const token = getAccessToken()
+  const user = app.authenticatedUser
+  return token && user ? JSON.stringify([token, user.id, user.roleCode, [...app.currentPermSet].sort()]) : null
+}
+const listGate = createReturnReadGate(queryScope)
+let lastQuery: Record<string, unknown> | null = null
 const rows = ref<any[]>([])
 const listTotal = ref(0)
 const page = ref(1)
@@ -91,19 +101,34 @@ function buildParams() {
   return p
 }
 
-async function load() {
+async function load(params = buildParams()) {
+  lastQuery = params
+  const active = listGate.begin(() => true)
+  rows.value = []
+  listTotal.value = 0
+  selectedRows.value = []
+  tableRef.value?.clearSelection()
+  loadError.value = ''
+  if (!active()) {
+    loading.value = false
+    loadError.value = '请重新登录后查询商品'
+    return
+  }
   loading.value = true
   try {
-    const res = await inventoryApi.skuQuery(buildParams())
+    const res = await inventoryApi.skuQuery(params)
+    if (!active()) return
     rows.value = res.items || []
     listTotal.value = res.total ?? 0
-  } catch (e: any) {
-    rows.value = []
-    listTotal.value = 0
-    ElMessage.error(userFacingError(displaySkuText(e?.message || '加载失败')))
+  } catch (error) {
+    if (active()) loadError.value = `商品查询失败。${userFacingError(error)} 可重试原查询或调整筛选后查询。`
   } finally {
-    loading.value = false
+    if (active()) loading.value = false
   }
+}
+
+function retryList() {
+  void load(lastQuery ?? buildParams())
 }
 
 function search() {
@@ -169,7 +194,9 @@ function openEdit(row: any) {
 }
 
 async function saveEdit() {
-  if (!editRow.value?.erpProductId) return
+  if (!editRow.value?.erpProductId || editSaving.value || !app.hasPerm('inventory_query.adjust')) return
+  const identity = queryScope()
+  if (!identity) return
   editSaving.value = true
   try {
     const f = editForm.value
@@ -197,12 +224,13 @@ async function saveEdit() {
           measuredHeightCm: f.measuredHeightCm,
         }
     const updated = await inventoryApi.updateSkuCatalog(editRow.value.erpProductId, payload)
-    const idx = rows.value.findIndex((r) => r.sku === updated.sku)
+    if (identity !== queryScope()) return
+    const idx = rows.value.findIndex((r) => r.erpProductId === updated.erpProductId && r.sku === updated.sku)
     if (idx >= 0) rows.value[idx] = { ...rows.value[idx], ...updated }
     ElMessage.success('保存成功')
     editVisible.value = false
   } catch (e: any) {
-    ElMessage.error(userFacingError(displaySkuText(e?.message || '保存失败')))
+    if (identity === queryScope()) ElMessage.error(userFacingError(displaySkuText(e?.message || '保存失败')))
   } finally {
     editSaving.value = false
   }
@@ -259,6 +287,15 @@ function handlePrint() {
   window.print()
 }
 
+watch(queryScope, () => {
+  listGate.invalidate()
+  detailVisible.value = false
+  detailRow.value = null
+  editVisible.value = false
+  editRow.value = null
+  void load()
+}, { flush: 'sync' })
+onScopeDispose(() => listGate.invalidate())
 watch([page, pageSize], () => load())
 onMounted(() => {
   const q = String(route.query.q || route.query.sku || '').trim()
@@ -501,7 +538,10 @@ onMounted(() => {
         </el-table-column>
       </el-table>
 
-      <el-empty v-if="!loading && !rows.length" description="暂无匹配 SKU" />
+      <el-alert v-if="loadError" type="error" :title="loadError" :closable="false" show-icon>
+        <el-button @click="retryList">重试商品查询</el-button>
+      </el-alert>
+      <el-empty v-if="!loading && !loadError && !rows.length" description="暂无匹配 SKU" />
       <ListPagination v-model:page="page" v-model:page-size="pageSize" :total="listTotal" />
     </div>
 

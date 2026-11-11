@@ -42,7 +42,7 @@ export function parseProductStatus(raw?: string): string {
 }
 
 export interface ParsedProductImportRow {
-  /** 表格行号（含表头，第 1 行为表头） */
+  /** 原文件中的行号 */
   lineNo: number
   sku: string
   spu?: string
@@ -61,9 +61,10 @@ export interface ParsedProductImportRow {
 }
 
 export function parseProductsImportCsv(content: string): ParsedProductImportRow[] {
-  const rows = parseCsv(content)
-  if (rows.length < 2) return []
-  const header = rows[0].map((h) => h.trim())
+  const rows = parseCsv(content, { preserveBlankLines: true })
+  const headerIndex = rows.findIndex(row => row.some(cell => cell.trim()))
+  if (headerIndex < 0 || rows.length <= headerIndex + 1) return []
+  const header = rows[headerIndex].map((h) => h.trim())
   const skuIdx = colIdx(header, ['SKU', 'sku'])
   const spuIdx = colIdx(header, ['SPU', 'spu'])
   const nameIdx = colIdx(header, ['商品名称', 'productName', 'product_name', '名称'])
@@ -83,11 +84,11 @@ export function parseProductsImportCsv(content: string): ParsedProductImportRow[
   if (nameIdx < 0) throw new Error('CSV 需包含「商品名称」列')
 
   const parsed: ParsedProductImportRow[] = []
-  for (let i = 1; i < rows.length; i++) {
+  for (let i = headerIndex + 1; i < rows.length; i++) {
     const cols = rows[i]
-    const sku = cols[skuIdx]?.trim()
-    const productName = cols[nameIdx]?.trim()
-    if (!sku || !productName) continue
+    if (!cols.some(cell => cell.trim())) continue
+    const sku = cols[skuIdx]?.trim() ?? ''
+    const productName = cols[nameIdx]?.trim() ?? ''
     parsed.push({
       lineNo: i + 1,
       sku,

@@ -1,4 +1,4 @@
-import { BadRequestException } from '@nestjs/common'
+import { ServiceUnavailableException } from '@nestjs/common'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { CATALOG_CUSTOMER_CODE, catalogBaseSkuFromInternal, catalogSkuLookupKeys } from '../../common/catalog-customer.util'
 import { remainingCatalogStock } from '../pricing/catalog-stock.util'
@@ -33,6 +33,14 @@ export type MergedInventoryFilters = {
 }
 
 const SOURCE_SORT: Record<string, number> = { erp: 0, oms: 1, catalog: 2 }
+
+async function readInChunks<T, R>(values: T[], size: number, load: (chunk: T[]) => Promise<R[]>): Promise<R[]> {
+  const found: R[] = []
+  for (let start = 0; start < values.length; start += size) {
+    found.push(...await load(values.slice(start, start + size)))
+  }
+  return found
+}
 
 export type MergedSkuFilters = {
   customerCode?: string
@@ -229,7 +237,6 @@ export async function fetchCatalogPoolRows(prisma: PrismaService, filters: Merge
   const rows = await prisma.productPricing.findMany({
     where,
     orderBy: { updatedAt: 'desc' },
-    take: 5000,
   })
 
   const bounded = await withCatalogReceiptCaps(prisma, rows)
@@ -373,16 +380,15 @@ export async function fetchOmsInventoryRows(prisma: PrismaService, filters: Merg
     LEFT JOIN oms_product p ON p.internalSku = i.sku AND (p.customerId = i.customerId OR p.customerId IS NULL)
     WHERE ${conditions.join(' AND ')}
     ORDER BY i.sku ASC
-    LIMIT 5000
   `
   try {
     const rows = await prisma.$queryRawUnsafe<Record<string, unknown>[]>(sql, ...params)
-    if (strict && rows.length >= 5000) throw new BadRequestException('导出达到 5000 条，请缩小筛选范围后重试，以免遗漏数据')
     return rows.map(mapOmsInventoryRow)
   } catch (err) {
-    if (strict) throw err
-    console.warn('[inventory] OMS 库存读取失败，已跳过 OMS 数据源:', err)
-    return []
+    if (err instanceof ServiceUnavailableException) throw err
+    // strict 只表示导出不能把失败当成空结果；两种调用都返回中文，不把数据库英文带回页面。
+    void strict
+    throw new ServiceUnavailableException('无法读取 OMS 库存，请稍后重试')
   }
 }
 
@@ -468,35 +474,33 @@ export async function fetchCatalogInventoryRows(prisma: PrismaService, filters: 
   const rows = await prisma.customerSkuInventory.findMany({
     where,
     orderBy: { updatedAt: 'desc' },
-    take: 5000,
   })
-
-  if (strict && rows.length >= 5000) throw new BadRequestException('导出达到 5000 条，请缩小筛选范围后重试，以免遗漏数据')
 
   if (!customerMap.size && rows.length) {
     const ids = [...new Set(rows.map((r) => r.customerId))]
-    const customers = await prisma.customer.findMany({
-      where: { id: { in: ids } },
+    const customers = await readInChunks(ids, 500, (chunk) => prisma.customer.findMany({
+      where: { id: { in: chunk } },
       select: { id: true, customerCode: true, customerName: true },
-    })
+    }))
     customerMap = new Map(customers.map((c) => [Number(c.id), c]))
   }
 
   // 预约出库时已扣减持有可用量；锁定量从尚未发货的货盘出库单计算，不能再扣一次。
-  const outboundItems = rows.length ? await prisma.outboundOrderItem.findMany({
+  // 按客户和 SKU 集合分批查询，避免每一行拼一个 OR 把数据库线程栈打满。
+  const skuKeys = [...new Set(rows.flatMap((r) => catalogSkuLookupKeys(r.sku)))]
+  const customerIds = [...new Set(rows.map((r) => r.customerId))]
+  const outboundItems = skuKeys.length ? await readInChunks(skuKeys, 400, (chunk) => prisma.outboundOrderItem.findMany({
     where: {
-      OR: rows.map(r => ({
-        sku: { in: catalogSkuLookupKeys(r.sku) },
-        order: {
-          customerId: r.customerId,
-          shippedAt: null,
-          status: { in: ['pending_pick', 'picking', 'picked', 'reviewing', 'pending_relabel', 'packed', 'exception'] },
-          remark: { contains: '[stock:catalog]' },
-        },
-      })),
+      sku: { in: chunk },
+      order: {
+        customerId: { in: customerIds },
+        shippedAt: null,
+        status: { in: ['pending_pick', 'picking', 'picked', 'reviewing', 'pending_relabel', 'packed', 'exception'] },
+        remark: { contains: '[stock:catalog]' },
+      },
     },
     select: { sku: true, qty: true, order: { select: { customerId: true } } },
-  }) : []
+  })) : []
   const lockedByCustomerSku = new Map<string, number>()
   const holdingKey = (customerId: unknown, sku: string) => `${customerId}::${catalogBaseSkuFromInternal(sku)}`
   for (const item of outboundItems) {
@@ -515,17 +519,17 @@ export async function attachCatalogPurchaseStats<T extends { sku: string; custom
 ) {
   if (!rows.length) return rows
   const skus = [...new Set(rows.flatMap((r) => catalogSkuLookupKeys(r.sku)))]
-  const orders = await prisma.omsCatalogOrder.findMany({
-    where: { sku: { in: skus } },
+  const orders = await readInChunks(skus, 400, (chunk) => prisma.omsCatalogOrder.findMany({
+    where: { sku: { in: chunk } },
     select: { sku: true, customerCode: true, createdAt: true },
     orderBy: { createdAt: 'desc' },
-  })
+  }))
   const statsMap = new Map<string, { purchaseOrderCount: number; lastPurchaseAt: Date | null }>()
   for (const o of orders) {
     const key = `${o.customerCode || ''}::${catalogBaseSkuFromInternal(o.sku)}`
     const prev = statsMap.get(key) || { purchaseOrderCount: 0, lastPurchaseAt: null }
     prev.purchaseOrderCount += 1
-    if (!prev.lastPurchaseAt) prev.lastPurchaseAt = o.createdAt
+    if (!prev.lastPurchaseAt || o.createdAt > prev.lastPurchaseAt) prev.lastPurchaseAt = o.createdAt
     statsMap.set(key, prev)
   }
   return rows.map((r) => {
@@ -593,13 +597,13 @@ export async function fetchOmsProductRows(prisma: PrismaService, filters: Merged
     LEFT JOIN oms_customeraccount c ON c.id = p.customerId
     WHERE ${conditions.join(' AND ')}
     ORDER BY p.internalSku ASC
-    LIMIT 5000
   `
   try {
     const rows = await prisma.$queryRawUnsafe<Record<string, unknown>[]>(sql, ...params)
     return rows.map(mapOmsProductRow)
-  } catch {
-    return []
+  } catch (err) {
+    if (err instanceof ServiceUnavailableException) throw err
+    throw new ServiceUnavailableException('无法读取 OMS 商品，请稍后重试')
   }
 }
 

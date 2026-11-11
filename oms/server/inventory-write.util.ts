@@ -120,12 +120,16 @@ function quantity(value: unknown) {
 }
 
 /** Only a server-fetched ERP result reaches this function; never accept a browser inventory snapshot. */
-export async function applyErpInventoryView(tx: Prisma.TransactionClient, customerId: string, warehouse: string, items: ErpInventoryViewItem[]) {
-  const existing = await tx.inventoryItem.findMany({ where: { customerId, warehouse: { in: [warehouse, warehouseAlias(warehouse)] } }, orderBy: { id: 'asc' } })
+export async function applyErpInventoryView(tx: Prisma.TransactionClient, customerId: string, warehouse: string, items: ErpInventoryViewItem[], stockSource?: 'owned' | 'catalog') {
+  const existing = await tx.inventoryItem.findMany({ where: { customerId, ...(stockSource ? { stockSource } : {}), OR: [
+    { warehouse: { in: [warehouse, warehouseAlias(warehouse)] } },
+    // Catalog holding quantity belongs to the customer/SKU, not a warehouse alias.
+    { stockSource: 'catalog' },
+  ] }, orderBy: { id: 'asc' } })
   const products = await tx.product.findMany({ where: { customerId } })
   const keys = new Set<string>(), retained = new Set<string>()
   for (const item of items) {
-    if (!item.sku || !['owned', 'catalog'].includes(item.stockSource) || keys.has(`${item.stockSource}:${item.sku}`)) throw new InventoryWriteError('ERP库存范围返回异常，请重新同步核对', 502)
+    if (!item.sku || !['owned', 'catalog'].includes(item.stockSource) || (stockSource && item.stockSource !== stockSource) || keys.has(`${item.stockSource}:${item.sku}`)) throw new InventoryWriteError('ERP库存范围返回异常，请重新同步核对', 502)
     const key = `${item.stockSource}:${item.sku}`; keys.add(key)
     const row = existing.find(row => row.sku === item.sku && row.stockSource === item.stockSource)
     const product = products.find(p => p.internalSku === item.sku)

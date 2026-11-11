@@ -2,7 +2,7 @@ import { BadRequestException } from '@nestjs/common'
 import type { InventoryTx } from '../../common/inventory/inventory-mutation.types'
 import type { InventoryMutationService } from '../../common/inventory/inventory-mutation.service'
 import { parseOmsCustomerCodeFromRemark } from '../../common/oms-sync-meta.util'
-import { isCatalogInternalSku } from '../../common/catalog-customer.util'
+import { catalogSkuLookupKeys, isCatalogInternalSku } from '../../common/catalog-customer.util'
 import type { Product, WarehouseLocation } from '@prisma/client'
 
 export type ReturnStockLine = { sku: string; qty: number; locationCode: string }
@@ -12,7 +12,12 @@ type StockLog = { referenceNo: string | null; sku: string; changeQty: number }
 
 export function returnRestockProgress(row: Pick<ReturnForStock, 'returnNo' | 'receivedQty' | 'items'>, logs: StockLog[]) {
   const restockedBySku: Record<string, number> = Object.create(null)
-  for (const log of logs) if (log.referenceNo === row.returnNo) restockedBySku[log.sku] = (restockedBySku[log.sku] || 0) + log.changeQty
+  for (const log of logs) if (log.referenceNo === row.returnNo) {
+    const candidates = [...new Set(row.items.filter(item => item.sku === log.sku || (isCatalogInternalSku(item.sku) && catalogSkuLookupKeys(item.sku).includes(log.sku))).map(item => item.sku))]
+    if (candidates.length !== 1) throw new BadRequestException('退件库存流水与商品明细对应不唯一，请核对后继续返库')
+    const sku = candidates[0]
+    restockedBySku[sku] = (restockedBySku[sku] || 0) + log.changeQty
+  }
   const restockedQty = Object.values(restockedBySku).reduce((sum, qty) => sum + qty, 0)
   const receivedQty = row.receivedQty ?? row.items.reduce((sum, item) => sum + item.quantity, 0)
   return { restockedQty, restockedBySku, remainingRestockQty: Math.max(0, receivedQty - restockedQty) }
@@ -52,18 +57,23 @@ export async function restockReturnToLocations(tx: InventoryTx, row: ReturnForSt
   if (!Number.isSafeInteger(batchQty) || batchQty > before.remainingRestockQty) throw new BadRequestException(`上架数量超出待返库数量，当前剩余 ${before.remainingRestockQty} 件`)
   for (const [sku, qty] of batch) if (qty + (before.restockedBySku[sku] || 0) > expected.get(sku)!) throw new BadRequestException(`${sku} 累计上架数量超出退件明细数量`)
 
-  const products = await tx.product.findMany({ where: { sku: { in: [...batch.keys()] } } })
+  const lookup = [...new Set([...batch.keys()].flatMap(sku => isCatalogInternalSku(sku) ? catalogSkuLookupKeys(sku) : [sku]))]
+  const products = await tx.product.findMany({ where: { sku: { in: lookup } } })
   const customer = await tx.customer.findUnique({ where: { id: row.customerId }, select: { customerCode: true, status: true } })
   if (!customer || customer.status !== 1) throw new BadRequestException('退件所属客户不存在或已停用')
   const code = row.omsCustomerCode || customer.customerCode
   if (code !== customer.customerCode) throw new BadRequestException('退件客户信息不一致，请联系管理员核对')
-  const productBySku = new Map(products.map(product => [product.sku, product]))
+  const productBySku = new Map<string, Product>()
   const catalogSkus = new Set<string>()
   for (const sku of [...batch.keys()].sort()) {
-    const product = productBySku.get(sku)
+    const candidates = products.filter(product => product.sku === sku || (isCatalogInternalSku(sku) && catalogSkuLookupKeys(sku).includes(product.sku)))
+    if (candidates.length > 1) throw new BadRequestException(`${sku} 对应多份仓内商品档案，请先核对货盘编码`)
+    const product = candidates[0]
     if (!product) throw new BadRequestException(`${sku} 尚未建立仓内商品档案，请先同步商品资料`)
+    productBySku.set(sku, product)
     const owner = parseOmsCustomerCodeFromRemark(product.remark)
     if (isCatalogInternalSku(sku)) {
+      if (owner && owner !== 'TKL') throw new BadRequestException(`${sku} 对应其它客户私有商品，不能作为共享货盘返库`)
       const owned = await tx.customerSkuInventory.findUnique({ where: { customerId_sku: { customerId: row.customerId, sku } } })
       const purchase = owned || await tx.omsCatalogOrder.findFirst({ where: { customerId: row.customerId, sku, status: 'confirmed' }, select: { id: true } })
       if (!purchase) throw new BadRequestException(`${sku} 未找到该客户的货盘持有或采购记录，请核对后再返库`)
@@ -83,7 +93,7 @@ export async function restockReturnToLocations(tx: InventoryTx, row: ReturnForSt
   }
   for (const line of resolved) {
     const current = await tx.inventory.findUnique({ where: { productId_warehouseCode: { productId: line.product.id, warehouseCode } } })
-    await inventoryMutation.addLocationStock(tx, { productId: line.product.id, sku: line.sku, warehouseCode,
+    await inventoryMutation.addLocationStock(tx, { productId: line.product.id, sku: line.product.sku, warehouseCode,
       locationId: line.location.id, locationCode: line.location.locationCode, qty: line.qty, batchNo: `RETURN-${row.id}`,
       costRmb: line.product.costRmb == null ? undefined : Number(line.product.costRmb),
       seaFreightPerUnit: line.product.seaFreightPerUnit == null ? undefined : Number(line.product.seaFreightPerUnit),

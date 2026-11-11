@@ -80,6 +80,7 @@ export const MIGRATION_ORDER = [
   'migrate_oms_product_import.sql',
   'migrate_oms_product_save.sql',
   'migrate_oms_product_action.sql',
+  'migrate_oms_inbound_save.sql',
 ] as const
 
 /**

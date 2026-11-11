@@ -1,7 +1,10 @@
 
 import { userFacingError } from '../utils/userFacingError'
 import { displaySku, displaySkuText } from '../data/skuDisplay'
-import { useMemo, useState } from 'react'
+import { useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { authSessionScope } from '../api/client'
+import { createAsyncViewScope } from '../utils/asyncViewScope'
+import { useInboundConfirmation } from '../components/inbound/useInboundConfirmation'
 import { Link, useSearchParams } from 'react-router-dom'
 import { RefreshCw, Plus } from 'lucide-react'
 import { Badge, Button, Card, MonoCode, PageHeader, Table, TableFooter } from '../components/ui'
@@ -14,8 +17,9 @@ import {
   RETURN_PROCESS_OPTIONS,
   refreshReturnsFromErp,
   removeReturnOrder,
-  withdrawReturnOrder,
-  decideReturnOrder,
+  replayReturnWithdrawal,
+  type ReturnWithdrawalIntent,
+  replayReturnDecision,
 } from '../data/returnStore'
 import { formatDatetimeDisplay } from '../data/fileUtils'
 import { importCsvFile } from '../data/csvImportExport'
@@ -32,6 +36,7 @@ import { AdminCustomerFilter } from '../components/admin/AdminCustomerFilter'
 import { notifyIfUserError, notifySuccess, notifyInfo, notifyError } from '../utils/userNotify'
 
 type Tab = 'all' | 'draft' | 'pending_arrival' | 'awaiting_customer' | 'arrived' | 'completed' | 'cancelled'
+type DecisionIntent = Parameters<typeof replayReturnDecision>[0]
 
 function formatReturnFee(v?: number | null) {
   if (v == null) return '—'
@@ -49,7 +54,7 @@ const tabLabels: Record<Tab, string> = {
 }
 
 export default function ReturnProcessing() {
-  const { role, can } = useRole()
+  const { role, can, userId, authToken, permissions, authReady } = useRole()
   const dataScope = useDataScope()
   const [searchParams] = useSearchParams()
   const allReturns = useReturnOrders()
@@ -66,6 +71,56 @@ export default function ReturnProcessing() {
     adminCustomerFilter: dataScope.customerFilter,
     accounts: dataScope.customerOptions,
   })
+  const decisionCustomerId = erpCustomer?.customerId
+  const decisionCustomerCode = erpCustomer?.customerCode
+  const decisionKey = authReady && authToken && userId && decisionCustomerId && decisionCustomerCode && can('returns:write')
+    ? `oms.return.decision.${JSON.stringify([userId, decisionCustomerId, decisionCustomerCode])}` : ''
+  const decisionScope = JSON.stringify([decisionKey, authToken, role, [...permissions].sort()])
+  const withdrawalKey = decisionKey && decisionKey.replace('oms.return.decision.', 'oms.return.withdrawal.')
+  const confirmation = useInboundConfirmation(JSON.stringify([decisionScope, detailId, tab]))
+  const actionLock = useRef(false)
+  const decisionView = useRef(createAsyncViewScope()).current
+  const [decisionState, setDecisionState] = useState<{ scope: string; intent?: DecisionIntent; error?: string }>()
+  const [decisionReview, setDecisionReview] = useState<{ scope: string; intent: DecisionIntent }>()
+  const [decisionRun, setDecisionRun] = useState<{ scope: string }>()
+  const decisionBusy = decisionRun?.scope === decisionScope
+  const pendingDecision = decisionState?.scope === decisionScope ? decisionState.intent : undefined
+  const decisionError = decisionState?.scope === decisionScope ? decisionState.error : undefined
+  const [withdrawalState, setWithdrawalState] = useState<{ scope: string; intent?: ReturnWithdrawalIntent; error?: string }>()
+  const withdrawal = withdrawalState?.scope === decisionScope ? withdrawalState : undefined
+
+  useLayoutEffect(() => {
+    decisionView.update(decisionScope)
+    setDecisionReview(undefined)
+    const read = () => {
+      try {
+        const raw = decisionKey && localStorage.getItem(decisionKey)
+        if (!raw) { setDecisionState(undefined); return }
+        const intent: DecisionIntent = JSON.parse(raw)
+        if (!intent.returnNo || intent.customerId !== decisionCustomerId || intent.customerCode !== decisionCustomerCode ||
+          !['keep', 'discard'].includes(intent.decision) || (intent.decision === 'keep' && !intent.processChoice)) throw Error()
+        setDecisionState({ scope: decisionScope, intent })
+      } catch { setDecisionState({ scope: decisionScope, error: '原退件决定无法读取，请保留记录并核对浏览器存储' }) }
+    }
+    const readWithdrawal = () => {
+      try {
+        const raw = withdrawalKey && localStorage.getItem(withdrawalKey)
+        if (!raw) { setWithdrawalState(undefined); return }
+        const intent: ReturnWithdrawalIntent = JSON.parse(raw)
+        if (!intent.returnNo || intent.customerId !== decisionCustomerId || intent.customerCode !== decisionCustomerCode ||
+          !intent.expectedUpdatedAt || !intent.clientRequestId) throw Error()
+        setWithdrawalState({ scope: decisionScope, intent })
+      } catch { setWithdrawalState({ scope: decisionScope, error: '原撤回记录无法读取，请保留记录并核对浏览器存储' }) }
+    }
+    read()
+    readWithdrawal()
+    const changed = (event: StorageEvent) => {
+      if (event.key === decisionKey || event.key === null) read()
+      if (event.key === withdrawalKey || event.key === null) readWithdrawal()
+    }
+    window.addEventListener('storage', changed)
+    return () => { decisionView.dispose(); window.removeEventListener('storage', changed) }
+  }, [decisionView, decisionScope, decisionKey, decisionCustomerId, decisionCustomerCode, withdrawalKey])
 
   const returns = useMemo(() => {
     let list = allReturns
@@ -77,9 +132,12 @@ export default function ReturnProcessing() {
   }, [allReturns, dataScope, tab])
 
   const detail = returns.find(r => r.id === detailId) || allReturns.find(r => r.id === detailId)
+  const reviewedDecision = decisionReview?.scope === decisionScope && decisionReview.intent.returnNo === detail?.returnNo ? decisionReview.intent : undefined
 
   const handleSync = async () => {
     if (syncing) return
+    const session = authSessionScope(), viewCurrent = decisionView.capture()
+    const current = () => viewCurrent() && authSessionScope() === session
     const customerId = dataScope.bindingCustomerId
     if (!customerId) {
       notifyInfo('请先选择要同步退件的客户')
@@ -87,47 +145,90 @@ export default function ReturnProcessing() {
     }
     setSyncing(true)
     try {
-      const n = await refreshReturnsFromErp(customerId)
-      notifySuccess(`已从 ERP 同步 ${n} 条退件状态`)
+      const n = await refreshReturnsFromErp(customerId, current)
+      if (current()) notifySuccess(`已从 ERP 同步 ${n} 条退件状态`)
     } catch (err) {
-      notifyError(userFacingError(displaySkuText(err instanceof Error ? err.message : String(err))))
+      if (current()) notifyError(userFacingError(displaySkuText(err instanceof Error ? err.message : String(err))))
     } finally {
       setSyncing(false)
     }
   }
 
-  const handleWithdraw = async (r: typeof returns[0]) => {
-    if (!window.confirm(`确认撤回退件单 ${r.returnNo}？撤回后仓库将不再等待到货。`)) return
-    setActingId(r.id)
+  const handleWithdraw = async (r?: typeof returns[0]) => {
+    if (!withdrawalKey || !decisionCustomerId || !decisionCustomerCode || (r && r.customerId !== decisionCustomerId)) {
+      notifyError('请先选择退件所属客户并核对操作权限')
+      return
+    }
+    if (actionLock.current || withdrawal?.error) return
+    if (r && withdrawal?.intent) { notifyInfo('已有撤回待核对，请继续原撤回'); return }
+    if (r && !r.erpUpdatedAt) { notifyInfo('请先同步 ERP，核对最新状态后再撤回'); return }
+    const session = authSessionScope(), viewCurrent = decisionView.capture()
+    const current = () => viewCurrent() && authSessionScope() === session
+    actionLock.current = true
     try {
-      const result = await withdrawReturnOrder(r, {
-        customerId: r.customerId || erpCustomer?.customerId,
-        customerCode: erpCustomer?.customerCode || getCustomerCode(r.customerId),
+      if (r && !await confirmation.confirm(`确认撤回退件单 ${r.returnNo}？撤回后仓库将不再等待到货。`, '确认撤回')) return
+      if (!current()) return
+      if (!navigator.locks?.request) throw Error('当前浏览器无法协调退件撤回，请使用支持标签页锁的浏览器')
+      await navigator.locks.request(withdrawalKey, async () => {
+        if (!current()) return
+        const stored = localStorage.getItem(withdrawalKey)
+        if (r && stored) { notifyInfo('已有撤回待核对，请继续原撤回'); return }
+        const intent = r && r.erpUpdatedAt ? {
+          returnNo: r.returnNo, customerId: decisionCustomerId, customerCode: decisionCustomerCode,
+          expectedUpdatedAt: r.erpUpdatedAt, clientRequestId: crypto.randomUUID(),
+        } : withdrawal?.intent
+        if (!intent) return
+        const raw = JSON.stringify(intent)
+        if (r) localStorage.setItem(withdrawalKey, raw)
+        if (localStorage.getItem(withdrawalKey) !== raw) throw Error('原撤回记录已变化，请刷新页面核对')
+        setWithdrawalState({ scope: decisionScope, intent })
+        setActingId(r?.id || intent.returnNo)
+        const result = await replayReturnWithdrawal(intent, current)
+        if (!current()) return
+        if (!result.ok && result.uncertain) { notifyError(result.error); return }
+        if (localStorage.getItem(withdrawalKey) !== raw) return
+        localStorage.removeItem(withdrawalKey)
+        if (localStorage.getItem(withdrawalKey) !== null) throw Error('原撤回记录未能清理，请继续核对')
+        setWithdrawalState(undefined)
+        if (!result.ok) {
+          notifyError(result.error)
+          await handleSync()
+          return
+        }
+        notifySuccess(result.order.status === 'cancelled' ? '已撤回，可在「已撤回」标签页查看' : '原撤回已确认，退件状态已有更新，请核对当前记录')
+        if (detail?.returnNo === intent.returnNo) setDetailId(null)
       })
-      if (!result.ok) {
-        window.alert(userFacingError(displaySkuText(result.error)))
-        return
-      }
-      if (result.warning) notifyInfo(result.warning)
-      else notifySuccess('已撤回；可在「已撤回」标签页查看该退件单')
-      if (detailId === r.id) setDetailId(null)
+    } catch (error) {
+      if (current()) notifyError(userFacingError(error))
     } finally {
+      actionLock.current = false
       setActingId(null)
     }
   }
 
   const handleDelete = async (r: typeof returns[0]) => {
-    if (actingId) return
-    if (!window.confirm(`确认删除退件单 ${r.returnNo}？此操作不可恢复。`)) return
-    setActingId(r.id)
-    const result = await removeReturnOrder(r)
-    setActingId(null)
-    if (!result.ok) {
-      notifyError(userFacingError(displaySkuText(result.error)))
-      return
+    if (actionLock.current || !can('returns:write')) return
+    if (withdrawal?.intent?.returnNo === r.returnNo) { notifyInfo('请先核对该退件的原撤回，再删除'); return }
+    const session = authSessionScope(), viewCurrent = decisionView.capture()
+    const current = () => viewCurrent() && authSessionScope() === session
+    actionLock.current = true
+    try {
+      if (!await confirmation.confirm(`确认删除退件单 ${r.returnNo}？删除后无法恢复。`, '确认删除') || !current()) return
+      setActingId(r.id)
+      const result = await removeReturnOrder(r)
+      if (!current()) return
+      if (!result.ok) {
+        notifyError(userFacingError(displaySkuText(result.error)))
+        return
+      }
+      notifySuccess('退件记录已删除')
+      if (detailId === r.id) setDetailId(null)
+    } catch (error) {
+      if (current()) notifyError(userFacingError(error))
+    } finally {
+      actionLock.current = false
+      setActingId(null)
     }
-    if (detailId === r.id) setDetailId(null)
-    notifySuccess('退件记录已删除')
   }
 
   const canWrite = can('returns:write')
@@ -160,32 +261,67 @@ export default function ReturnProcessing() {
     }
   }
 
-  const handleDecide = async (r: typeof returns[0], decision: 'keep' | 'discard') => {
-    const msg = decision === 'discard'
-      ? `确认不留货并销毁退件单 ${r.returnNo}？将产生销毁相关费用。`
-      : `确认留货并授权处理退件单 ${r.returnNo}？将按所选方式追加费用。`
-    if (!window.confirm(msg)) return
-    setActingId(r.id)
+  const sendDecision = async (newIntent?: DecisionIntent) => {
+    if (!decisionKey || decisionBusy || decisionError) return
+    const viewCurrent = decisionView.capture(), session = authSessionScope()
+    const current = () => viewCurrent() && authSessionScope() === session
+    const run = { scope: decisionScope }
+    setDecisionRun(run)
     try {
-      const result = await decideReturnOrder(r, decision, {
-        customerId: r.customerId || erpCustomer?.customerId,
-        customerCode: erpCustomer?.customerCode || getCustomerCode(r.customerId),
-        processChoice: decision === 'keep' ? decideProcess : undefined,
+      if (!navigator.locks?.request) throw Error('当前浏览器无法协调退件确认，请使用支持标签页锁的浏览器')
+      await navigator.locks.request(decisionKey, async () => {
+        if (!current()) return
+        let raw = localStorage.getItem(decisionKey)
+        if (newIntent && raw) { notifyInfo('已有原退件决定待核对，请继续原决定'); return }
+        const intent = newIntent || pendingDecision
+        if (!intent) return
+        if (newIntent) {
+          raw = JSON.stringify(intent)
+          localStorage.setItem(decisionKey, raw)
+        }
+        if (!raw || localStorage.getItem(decisionKey) !== JSON.stringify(intent)) throw Error('原退件决定保存或核对失败，请刷新页面核对')
+        setDecisionState({ scope: decisionScope, intent })
+        setDecisionReview(undefined)
+        setDetailId(null)
+        const result = await replayReturnDecision(intent, current)
+        if (!current()) return
+        if (!result.ok && !('resolution' in result)) { notifyError(userFacingError(displaySkuText(result.error))); return }
+        if (localStorage.getItem(decisionKey) !== raw) return
+        localStorage.removeItem(decisionKey)
+        if (localStorage.getItem(decisionKey) !== null) throw Error('原退件决定记录未能清理，请继续核对')
+        setDecisionState(undefined)
+        if (!result.ok) {
+          notifyError(userFacingError(displaySkuText(result.error)))
+          if ('resolution' in result && result.resolution === 'rejected') {
+            const order = allReturns.find(row => row.returnNo === intent.returnNo && row.customerId === intent.customerId)
+            if (order?.status === 'awaiting_customer') {
+              setDecideProcess(intent.processChoice || 'restock')
+              setDetailId(order.id)
+              return
+            }
+          }
+          await handleSync()
+          return
+        }
+        if (result.warning) notifyInfo(result.warning)
+        else notifySuccess('原退件决定已确认，请核对当前状态')
+        setDetailId(null)
       })
-      if (!result.ok) {
-        window.alert(userFacingError(displaySkuText(result.error)))
-        return
-      }
-      if (result.warning) notifyInfo(result.warning)
-      else notifySuccess(decision === 'discard' ? '已确认不留，仓库将销毁' : '已确认留货，仓库将安排作业')
-      if (detailId === r.id) setDetailId(null)
-    } finally {
-      setActingId(null)
+    } catch (error) { if (current()) notifyError(userFacingError(error)) }
+    finally { setDecisionRun(active => active === run ? undefined : active) }
+  }
+
+  const handleDecide = (r: typeof returns[0], decision: 'keep' | 'discard') => {
+    if (!decisionKey || r.customerId !== decisionCustomerId || !decisionCustomerCode) {
+      notifyError('请先核对退件所属客户与当前账号权限'); return
     }
+    setDecisionReview({ scope: decisionScope, intent: { returnNo: r.returnNo, customerId: decisionCustomerId,
+      customerCode: decisionCustomerCode, decision, ...(decision === 'keep' ? { processChoice: decideProcess } : {}) } })
   }
 
   return (
     <div className="page-shell">
+      {confirmation.dialog}
       <PageHeader
         title="退件处理"
         desc={dataScope.isAdmin ? '全平台退件单，查看仓库收货与处理结果' : '查看海外仓收货进度与 ERP 处理结果（重新上架 / 待检查 / 换标 / 等问题）'}
@@ -208,6 +344,18 @@ export default function ReturnProcessing() {
           </div>
         )}
       />
+
+      {(pendingDecision || decisionError) && <Card className="mb-4 p-4">
+        <p role="status">{decisionError || `退件单 ${pendingDecision?.returnNo} 的原决定待核对`}</p>
+        {pendingDecision && <Button size="sm" disabled={decisionBusy} onClick={() => void sendDecision()}>继续原决定</Button>}
+        <Button size="sm" variant="secondary" disabled={syncing || decisionBusy} onClick={() => void handleSync()}>同步并核对状态</Button>
+      </Card>}
+
+      {withdrawal && <Card className="mb-4 p-4">
+        <p role="status">{withdrawal.error || `退件单 ${withdrawal.intent?.returnNo} 的原撤回待核对`}</p>
+        {withdrawal.intent && <Button size="sm" disabled={!!actingId} onClick={() => void handleWithdraw()}>继续原撤回</Button>}
+        <Button size="sm" variant="secondary" disabled={syncing || !!actingId} onClick={() => void handleSync()}>同步并核对状态</Button>
+      </Card>}
 
       {dataScope.isAdmin && (
         <Card className="mb-4 p-4">
@@ -476,26 +624,32 @@ export default function ReturnProcessing() {
                         ))}
                       </select>
                     </label>
-                    <div className="flex flex-wrap justify-end gap-2">
+                    {reviewedDecision ? <div role="group" aria-label="核对退件决定" className="flex flex-wrap items-center justify-end gap-2">
+                      <p className="w-full text-sm">{reviewedDecision.decision === 'discard'
+                        ? `确认不留货并销毁 ${reviewedDecision.returnNo}？将产生销毁相关费用。`
+                        : `确认留货并按「${returnProcessLabel(reviewedDecision.processChoice || '')}」处理 ${reviewedDecision.returnNo}？将按所选方式追加费用。`}</p>
+                      <Button variant="ghost" size="sm" disabled={decisionBusy} onClick={() => setDecisionReview(undefined)}>返回修改</Button>
+                      <Button size="sm" disabled={decisionBusy || !!pendingDecision || !!decisionError} onClick={() => void sendDecision(reviewedDecision)}>确认提交决定</Button>
+                    </div> : <div className="flex flex-wrap justify-end gap-2">
                       <Button variant="ghost" size="sm" onClick={() => setDetailId(null)}>
                         取消
                       </Button>
                       <Button
                         variant="secondary"
                         size="sm"
-                        disabled={actingId === detail.id}
+                        disabled={decisionBusy || !!pendingDecision || !!decisionError}
                         onClick={() => void handleDecide(detail, 'discard')}
                       >
                         不留，销毁
                       </Button>
                       <Button
                         size="sm"
-                        disabled={actingId === detail.id}
+                        disabled={decisionBusy || !!pendingDecision || !!decisionError}
                         onClick={() => void handleDecide(detail, 'keep')}
                       >
                         留货并授权处理
                       </Button>
-                    </div>
+                    </div>}
                   </div>
                 )}
               </div>

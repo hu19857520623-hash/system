@@ -32,10 +32,10 @@ export function parseInboundQcScanInput(raw: string, incrementOverride?: number,
   let token = text, embedded: Record<string, unknown> = {}
   if (text.startsWith('{')) {
     try { embedded = JSON.parse(text) }
-    catch { throw new Error('扫描内容不是有效的 JSON，请重新扫描') }
+    catch { throw new Error('扫描内容无法识别，请重新扫描') }
     if (!embedded || Array.isArray(embedded) || typeof embedded !== 'object') throw new Error('扫描内容须为有效商品资料')
     const code = embedded.sku ?? embedded.SKU ?? embedded.scanCode ?? embedded.barcode
-    if (typeof code !== 'string' || !code.trim()) throw new Error('JSON 扫描内容缺少有效 SKU 编码')
+    if (typeof code !== 'string' || !code.trim()) throw new Error('扫描内容缺少有效商品编码')
     token = code.trim()
   } else if (/[|;,]/.test(text)) {
     const parts = text.split(/[|;,]/).map(part => part.trim())

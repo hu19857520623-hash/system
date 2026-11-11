@@ -64,4 +64,12 @@ export class FileStoreService {
       return false
     }
   }
+
+  /** Remove only a known stored file; never traverse or delete a directory. */
+  remove(relativePath: string) {
+    const full = this.assertInsideRoot(path.join(this.resolvedRoot(), relativePath))
+    if (!fs.existsSync(full)) return
+    if (!fs.lstatSync(full).isFile()) throw new BadRequestException('只能清理指定的临时文件')
+    fs.unlinkSync(full)
+  }
 }

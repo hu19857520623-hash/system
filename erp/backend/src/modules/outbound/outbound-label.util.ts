@@ -105,7 +105,7 @@ export function normalizeOmsOutboundAttachments(
     const fileName = String(attachment.fileName || '').trim()
     if (!fileName) throw new OutboundLabelValidationError(`附件 ${index + 1} 缺少文件名`)
     if (fileName.length > 200) {
-      throw new OutboundLabelValidationError(`附件 ${index + 1} fileName 最长 200 字符`)
+      throw new OutboundLabelValidationError(`附件 ${index + 1} 的文件名最长 200 个字符`)
     }
     const contentBase64 = String(attachment.contentBase64 || '').trim()
     if (!contentBase64) {
@@ -113,14 +113,14 @@ export function normalizeOmsOutboundAttachments(
     }
     const fileType = normalizeOutboundAttachmentFileType(attachment.fileType)
     if (fileType.length > 30) {
-      throw new OutboundLabelValidationError(`附件 ${index + 1} fileType 最长 30 字符`)
+      throw new OutboundLabelValidationError(`附件 ${index + 1} 的文件类型最长 30 个字符`)
     }
-    const sku = optionalText(attachment.sku, 30, `附件 ${index + 1} sku`)
-    const unitIndex = optionalIndex(attachment.unitIndex, 1, `附件 ${index + 1} unitIndex`)
-    const labelRole = optionalText(attachment.labelRole, 30, `附件 ${index + 1} labelRole`)
-    const contentHash = optionalText(attachment.contentHash, 64, `附件 ${index + 1} contentHash`)
+    const sku = optionalText(attachment.sku, 30, `附件 ${index + 1} 的 SKU`)
+    const unitIndex = optionalIndex(attachment.unitIndex, 1, `附件 ${index + 1} 的商品标签序号`)
+    const labelRole = optionalText(attachment.labelRole, 30, `附件 ${index + 1} 的标签用途`)
+    const contentHash = optionalText(attachment.contentHash, 64, `附件 ${index + 1} 的文件校验码`)
     if (contentHash && !/^[a-f0-9]{64}$/i.test(contentHash)) {
-      throw new OutboundLabelValidationError(`附件 ${index + 1} contentHash 必须是 64 位 SHA-256`)
+      throw new OutboundLabelValidationError(`附件 ${index + 1} 的文件校验码必须是 64 位十六进制字符`)
     }
     const isUnitCrop =
       fileType === 'skuLabel'
@@ -143,15 +143,15 @@ export function normalizeOmsOutboundAttachments(
       platformBarcode: optionalText(
         attachment.platformBarcode,
         100,
-        `附件 ${index + 1} platformBarcode`,
+        `附件 ${index + 1} 的平台条码`,
       ),
       unitIndex,
-      sourcePage: optionalIndex(attachment.sourcePage, 0, `附件 ${index + 1} sourcePage`),
-      sourceRow: optionalIndex(attachment.sourceRow, 0, `附件 ${index + 1} sourceRow`),
+      sourcePage: optionalIndex(attachment.sourcePage, 0, `附件 ${index + 1} 的来源页码`),
+      sourceRow: optionalIndex(attachment.sourceRow, 0, `附件 ${index + 1} 的来源行`),
       sourceColumn: optionalIndex(
         attachment.sourceColumn,
         0,
-        `附件 ${index + 1} sourceColumn`,
+        `附件 ${index + 1} 的来源列`,
       ),
       labelRole,
       contentHash: contentHash?.toLowerCase() || null,

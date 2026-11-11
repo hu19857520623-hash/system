@@ -150,4 +150,22 @@ describe('outbound label utilities', () => {
 
     expect(merged.toString()).toBe('first:0|first:1|second:0|second:1')
   })
+
+  it('describes an invalid label index in Chinese', () => {
+    expect(() => normalizeOmsOutboundAttachments([{
+      fileType: 'skuLabel',
+      fileName: 'label.pdf',
+      contentBase64: PDF_BASE64,
+      sku: 'SKU-A',
+      unitIndex: 0,
+    }])).toThrow('附件 1 的商品标签序号 必须是大于等于 1 的整数')
+  })
+
+  it('describes an invalid file checksum in Chinese', () => {
+    expect(() => normalizeOmsOutboundAttachments([{
+      fileName: 'note.pdf',
+      contentBase64: PDF_BASE64,
+      contentHash: 'not-a-checksum',
+    }])).toThrow('附件 1 的文件校验码必须是 64 位十六进制字符')
+  })
 })

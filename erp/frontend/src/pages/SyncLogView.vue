@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
+import { ElMessage } from 'element-plus'
+import { syncRetryFeedback } from '@/utils/syncRetryFeedback'
 import { syncApi } from '@/api/client.js'
 import { mapSyncLog } from '@/api/mappers.ts'
 import { useListLoader, withAction } from '@/composables/useListLoader.ts'
@@ -21,8 +23,8 @@ function toSyncRow(row: any) {
     dir: outbound ? '出站' : '入站',
     src: m.ref || '—',
     tgt: m.target,
-    statusLabel: ok ? '成功' : '失败',
-    tone: ok ? 'ok' : 'err',
+    statusLabel: ok ? '成功' : row.status === 'pending' ? '待同步' : row.status === 'processing' ? '同步中' : row.status === 'failed' ? '失败' : '待核对',
+    tone: ok ? 'ok' : row.status === 'failed' ? 'err' : 'warn',
     err: m.message || '—',
     time: m.time,
     retries: row.retryCount ?? 0,
@@ -47,11 +49,15 @@ const canRetry = computed(() => app.hasPerm('sync.retry'))
 
 async function retry(row: any) {
   if (!canRetry.value) return
+  let feedback = syncRetryFeedback(null)
   const ok = await withAction(async () => {
-    await syncApi.retry(row._raw.id)
+    feedback = syncRetryFeedback(await syncApi.retry(row._raw.id))
     await load()
   })
-  if (ok) toast(`${row.id} 已重试同步成功`)
+  if (ok) {
+    if (feedback.success) toast(feedback.message)
+    else ElMessage.warning(feedback.message)
+  }
 }
 
 function detail(row: any) {
@@ -108,7 +114,7 @@ onMounted(load)
       <el-table-column prop="time" label="时间" width="130" />
       <el-table-column label="操作" width="100" fixed="right">
         <template #default="{ row }">
-          <el-button v-if="row.tone === 'err' && canRetry" link type="primary" size="small" @click="retry(row)">重试</el-button>
+          <el-button v-if="canRetry && (row.tone === 'err' || (row._raw.syncType === 'return_status' && row._raw.status === 'pending'))" link type="primary" size="small" @click="retry(row)">重试</el-button>
           <el-button link type="primary" size="small" @click="detail(row)">详情</el-button>
         </template>
       </el-table-column>

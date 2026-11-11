@@ -74,6 +74,7 @@ declare module 'vue' {
     MetricCard: typeof import('./components/ui/MetricCard.vue')['default']
     MingruiTrackingPanel: typeof import('./components/mingrui/MingruiTrackingPanel.vue')['default']
     OutboundLabelPanel: typeof import('./components/outbound/OutboundLabelPanel.vue')['default']
+    OutboundPackDialog: typeof import('./components/outbound/OutboundPackDialog.vue')['default']
     OutboundPickDialog: typeof import('./components/outbound/OutboundPickDialog.vue')['default']
     OutboundShipDialog: typeof import('./components/outbound/OutboundShipDialog.vue')['default']
     PageErrorBoundary: typeof import('./components/ui/PageErrorBoundary.vue')['default']

@@ -6,7 +6,7 @@ function fixture(status = 'pending_putaway') {
   const order = { id: 71n, inboundNo: 'RV-OWNED', status, warehouseCode: 'WMS-JHB-01', omsCustomerCode: 'TKL9001', remark: null,
     items: [{ id: 1n, productId: 681n, sku: 'TKL9001-WF1016A', expectedQty: 3, actualQty: 3, putawayQty: 0 }], cartons: [] }
   const prisma = { inboundOrder: { findUnique: jest.fn().mockResolvedValue(order) }, inventory: { findMany: jest.fn().mockResolvedValue([{ productId: 681n, availableQty: 4, lockedQty: 0 }]) } }
-  const fees = { recordOperation: jest.fn().mockResolvedValue(null) }
+  const fees = { recordOperation: jest.fn().mockResolvedValue(null), recordMeasuredSkus: jest.fn().mockResolvedValue(null) }
   const service = new InboundService(prisma as any, null as any, null as any, null as any, null as any, fees as any)
   return { order, prisma, fees, service }
 }

@@ -1,4 +1,7 @@
+import { receiveInboundStatus } from './inbound-webhook.util.js'
 import { canReadData } from '../src/data/readAccess.js'
+import { readCatalogPurchaseHistory } from './catalog-purchase-history.util.js'
+import { catalogBootstrapProducts, customerBootstrapProducts } from './catalog-bootstrap-products.util.js'
 import { importProductBatch, readProductImport, cancelProductImport } from './product-import.util.js'
 import { saveProductWithReceipt, readProductSave, cancelProductSave } from './product-save.util.js'
 import { applyProductAction, readProductAction } from './product-action.util.js'
@@ -15,8 +18,13 @@ import { catalogBindingSkus, catalogMappingSource } from './catalog-binding.util
 import { OutboundAttachmentContentError, requireOutboundAttachmentContent } from './outbound-attachment-content.util.js'
 import { assertGlobalSkuAvailable, GlobalSkuConflict } from './global-sku.util.js'
 import { Prisma } from '@prisma/client'
-import { InboundIdentityError, saveInboundOrder } from './inbound-order-persistence.util.js'
-import { ownedInventorySnapshot } from './owned-inventory-snapshot.util.js'
+import { InboundIdentityError, saveInboundOrder, deleteInboundDraft } from './inbound-order-persistence.util.js'
+import { readSavedInboundDrafts } from './inbound-draft-read.util.js'
+import { assertInboundInputCounts } from './inbound-plan.util.js'
+import { readInboundPlan } from './inbound-plan.util.js'
+import { inboundSavedVersion, runInboundSave, resolveInboundSave } from './inbound-save.util.js'
+import { assertInboundSnapshot } from './inbound-snapshot-guard.util.js'
+import { applyOwnedInventoryNotification } from './owned-inventory-notification.util.js'
 import { applicationCache, cachedFulfillmentWarehouses } from './cache.js'
 import express from 'express'
 import cors from 'cors'
@@ -65,6 +73,7 @@ import {
   createErpInboundAsn,
   updateErpInboundAsn,
   cancelErpInboundAsn,
+  resolveErpInboundOriginal,
   reactivateErpInboundAsn,
   createErpOutbound,
   cancelErpOutbound,
@@ -165,50 +174,6 @@ function parseJson<T>(raw: string, fallback: T): T {
   } catch {
     return fallback
   }
-}
-
-function toOmsWarehouseCode(code?: string | null, fallback = 'jhb1'): string {
-  const raw = String(code || '').trim().toLowerCase()
-  if (!raw) return fallback
-  if (['jhb1', 'jhb3', 'cpt1', 'cpt2', 'dbn'].includes(raw)) return raw
-  if (raw.includes('jhb')) return 'jhb1'
-  if (raw.includes('cpt')) return 'cpt1'
-  if (raw.includes('dbn')) return 'dbn'
-  return fallback
-}
-
-type InboundLineItemPayload = {
-  sku: string
-  name: string
-  qty: number
-  boxNo: number
-  packType: string
-  stockType: string
-}
-
-function inboundLinesFromErp(inbound: ErpInboundOrder, existing?: { lineItems?: string | null }): InboundLineItemPayload[] {
-  const existingLines = parseJson<InboundLineItemPayload[]>(String(existing?.lineItems || ''), [])
-  const fromCartons = (inbound.cartons || []).flatMap((carton) => {
-    const boxNo = Number(carton.boxSeq) > 0 ? Number(carton.boxSeq) : 1
-    return (carton.items || []).map((item) => ({
-      sku: item.sku,
-      name: inbound.items.find(line => line.sku === item.sku)?.productName || item.sku,
-      qty: item.qty,
-      boxNo,
-      packType: '自带包装',
-      stockType: '以仓库为准',
-    }))
-  })
-  if (fromCartons.length) return fromCartons
-  if (existingLines.length) return existingLines
-  return (inbound.items || []).map((item, index) => ({
-    sku: item.sku,
-    name: item.productName || item.sku,
-    qty: item.expectedQty,
-    boxNo: index + 1,
-    packType: '自带包装',
-    stockType: '以仓库为准',
-  }))
 }
 
 function validWebhookSignature(rawBody: Buffer, signature: string): boolean {
@@ -328,6 +293,14 @@ async function buildUnscopedBootstrap(
     console.warn(`[bootstrap] ERP Takealot 目的仓未同步（${msg}），使用静态兜底`)
   }
 
+  const requiredCatalogSkus = [
+    ...purchases.map(row => row.sku),
+    ...inventory.filter(row => row.stockSource === 'catalog' && (scope ? row.customerId === scope.customerId : row.customerId !== 'tkl')).map(row => row.sku),
+  ]
+  const bootstrapProducts = requiredCatalogSkus.length
+    ? catalogBootstrapProducts(products, (await fetchErpCatalog()).items, requiredCatalogSkus)
+    : products
+
   return {
     accounts: customers.map(c => ({
       ...c,
@@ -350,7 +323,7 @@ async function buildUnscopedBootstrap(
       : null,
     feeRecords,
     stores,
-    products,
+    products: bootstrapProducts,
     inventory,
     orders: orders.map(o => ({
       ...o,
@@ -361,6 +334,7 @@ async function buildUnscopedBootstrap(
     })),
     inboundOrders: inboundOrders.map(o => ({
       ...o,
+      omsRevision: inboundSavedVersion(o),
       lineItems: o.lineItems ? parseJson(o.lineItems, []) : undefined,
       attachments: o.attachments ? parseJson(o.attachments, []) : undefined,
     })),
@@ -424,7 +398,7 @@ async function buildUnscopedBootstrap(
       regionDispatchRules: regionRules,
     },
     paymentMethods,
-    purchases,
+    purchases: await readCatalogPurchaseHistory(prisma, purchases, customers),
     fulfillmentWarehouses,
   }
 }
@@ -464,7 +438,10 @@ async function buildBootstrap(auth: AuthClaims) {
   const customerId = auth.customerId!
   const customerCode = auth.customerCode!
   const account = accountsWithReadiness.find(item => item.id === customerId)
-  const customerProducts = all.products.filter(item => item.customerId === customerId)
+  const customerProducts = customerBootstrapProducts(all.products, customerId, [
+    ...all.purchases.filter(item => item.customerId === customerId).map(item => item.sku),
+    ...all.inventory.filter(item => item.customerId === customerId && item.stockSource === 'catalog').map(item => item.sku),
+  ])
   const customerInbound = all.inboundOrders.filter(item => item.customerId === customerId)
   const customerOutbound = all.outboundOrders.filter(item => item.customerId === customerId)
   const outboundNos = new Set(customerOutbound.map(item => item.outboundNo))
@@ -924,7 +901,7 @@ app.use('/api', (req: AuthenticatedRequest, res, next) => {
                   select: { customerId: true },
                 })
           if (!owner || owner.customerId !== req.auth!.customerId) {
-            res.status(404).json({ error: 'Resource not found' })
+            res.status(404).json({ error: '未找到该单据，请核对单号及当前客户' })
             return
           }
         }
@@ -933,7 +910,7 @@ app.use('/api', (req: AuthenticatedRequest, res, next) => {
     } catch (error) {
       console.error('[api authorization]', error)
       if (!res.headersSent) {
-        res.status(503).json({ error: 'Authorization service unavailable' })
+        res.status(503).json({ error: '暂时无法核对访问权限，请稍后重试' })
       }
     }
   })
@@ -1559,83 +1536,9 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
     }
 
     if (type === 'inbound.status') {
-      const inbound = data as unknown as ErpInboundOrder & { deleted?: boolean }
-      if (!inbound.inboundNo) return res.status(400).json({ error: '缺少入库单号' })
-      const existing = await prisma.inboundOrder.findFirst({ where: { inboundNo: inbound.inboundNo } })
-      if (inbound.deleted) {
-        if (existing) {
-          await prisma.inboundOrder.delete({ where: { id: existing.id } })
-        }
-        return res.json({ ok: true, type, deleted: true })
-      }
-      const palletInbound = inbound.inboundType === '货盘入库' || inbound.stockSource === 'catalog'
-      if (palletInbound && !existing) {
-        return res.json({ ok: true, type, skipped: 'pallet inbound is ERP-only' })
-      }
-      const status = inbound.omsStatus === 'cancelled' && existing?.status === 'draft'
-        ? 'draft'
-        : inbound.omsStatus || 'on_the_way'
-      const totalQty = inbound.totalExpectedQty ?? 0
-      const receivedQty = inbound.totalReceivedQty ?? 0
-      const lineItemsArr = inboundLinesFromErp(inbound, existing || undefined)
-      const lineItems = JSON.stringify(lineItemsArr)
-      const boxCount = Math.max(
-        inbound.cartons?.length || 0,
-        existing?.boxCount || 0,
-        new Set(lineItemsArr.map(line => Math.max(1, Number(line.boxNo) || 1))).size,
-        1,
-      )
-      const payload = {
-        status,
-        receivedQty,
-        totalQty: totalQty || existing?.totalQty || 0,
-        trackingNo: inbound.trackingNo ?? existing?.trackingNo,
-        warehouse: toOmsWarehouseCode(inbound.warehouseCode, existing?.warehouse),
-        source: inbound.source || existing?.source,
-        inboundType: sanitizeOmsInboundType(inbound.inboundType || existing?.inboundType),
-        deliveryMethod: inbound.deliveryMethod || existing?.deliveryMethod,
-        stockSource: 'owned',
-        referenceNo: inbound.referenceNo || existing?.referenceNo,
-        eta: inbound.eta || existing?.eta,
-        contact: inbound.contact || existing?.contact,
-        contactPhone: inbound.contactPhone || existing?.contactPhone,
-        remark: inbound.remark ?? existing?.remark,
-        lineItems,
-        boxCount,
-        skuCount: inbound.items?.length || existing?.skuCount || 0,
-      }
-      if (existing) {
-        await prisma.inboundOrder.update({
-          where: { id: existing.id },
-          data: payload,
-        })
-      } else {
-        await prisma.inboundOrder.create({
-          data: {
-            id: `erp-ib-${inbound.id}`,
-            customerId: customerId ?? null,
-            inboundNo: inbound.inboundNo,
-            source: inbound.source || 'ERP回传',
-            inboundType: sanitizeOmsInboundType(inbound.inboundType),
-            deliveryMethod: inbound.deliveryMethod || 'self',
-            stockSource: 'owned',
-            boxCount,
-            skuCount: inbound.items?.length || 0,
-            totalQty,
-            receivedQty,
-            status,
-            createdAt: new Date().toISOString().slice(0, 10),
-            warehouse: toOmsWarehouseCode(inbound.warehouseCode, 'jhb1'),
-            referenceNo: inbound.referenceNo,
-            eta: inbound.eta,
-            contact: inbound.contact,
-            contactPhone: inbound.contactPhone,
-            trackingNo: inbound.trackingNo,
-            remark: inbound.remark,
-            lineItems,
-          },
-        })
-      }
+      const no = String(data.inboundNo || '').trim()
+      const result = await receiveInboundStatus(prisma, customerCode, no, data.deleted === true, () => fetchErpInboundByNo(no))
+      return res.json({ ok: true, type, ...result })
     } else if (type === 'outbound.status') {
       const outbound = data as unknown as ErpOutboundOrder
       if (!outbound.outboundNo) return res.status(400).json({ error: '缺少出库单号' })
@@ -1781,63 +1684,10 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
         }
       }
       if (customerId && payload.stockSource === 'catalog' && payload.reason === 'return_restock') {
-        for (const line of payload.items || []) await applyCatalogReturnSnapshot(prisma, customerId, line, toOmsWarehouseCode(payload.warehouseCode, 'jhb1'))
+        for (const line of payload.items || []) await applyCatalogReturnSnapshot(prisma, customerId, line, () => fetchErpSkuInventoryByCode(customerCode))
       }
       if (customerId && payload.stockSource === 'owned') {
-        const warehouse = toOmsWarehouseCode(payload.warehouseCode, 'jhb1')
-        for (const line of payload.items || []) {
-          const sku = String(line.sku || '').trim()
-          if (!sku) continue
-          if (!ownedInventorySnapshot(line)) continue
-          const product = await prisma.product.findFirst({
-            where: { customerId, internalSku: sku },
-          })
-          if (!product) continue
-
-          const inventory = await prisma.inventoryItem.findFirst({
-            where: { customerId, sku, stockSource: 'owned' },
-          })
-          const { available, locked, pendingShelving } = ownedInventorySnapshot(line, inventory?.pendingShelving ?? 0)!
-          const inventoryData = {
-            name: product.name,
-            image: product.image,
-            available,
-            locked,
-            inTransit: payload.reason?.startsWith('outbound_') || payload.reason === 'return_restock' ? inventory?.inTransit ?? 0 : 0,
-            safetyStock: inventory?.safetyStock ?? 0,
-            spec: product.spec,
-            customCode: product.customCode,
-            ean: inventory?.ean ?? null,
-            warehouse,
-            pendingShelving,
-            pendingOutbound: inventory?.pendingOutbound ?? 0,
-            defective: inventory?.defective ?? 0,
-            shipped: inventory?.shipped ?? 0,
-            warningQty: inventory?.warningQty ?? 0,
-            price: product.price,
-            declaredNameEn: product.declaredNameEn,
-            categoryPath: product.categoryPath,
-            stockSource: 'owned',
-          }
-          if (inventory) {
-            await prisma.inventoryItem.update({ where: { id: inventory.id }, data: inventoryData })
-          } else {
-            await prisma.inventoryItem.create({
-              // The inventory table id is VARCHAR(50); keep the mirror id
-              // short even when an imported SKU itself is long.
-              data: {
-                id: `erp-owned-${createHash('sha256').update(`${customerId}:${sku}`).digest('hex').slice(0, 24)}`,
-                customerId,
-                sku,
-                ...inventoryData,
-              },
-            })
-          }
-          await prisma.product.update({
-            where: { id: product.id },
-            data: { availableQty: available, lockedQty: locked },
-          })
-        }
+        await applyOwnedInventoryNotification(prisma, customerId, customerCode, String(payload.warehouseCode || ''), fetchErpInventoryView)
       }
       if (customerId) {
         await prisma.systemMessage.create({
@@ -1855,7 +1705,11 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
     } else if (type === 'return.status') {
       const ret = data as unknown as ErpReturnOrder
       if (!ret.returnNo) return res.status(400).json({ error: '缺少退件单号' })
+      if (!customerId) return res.status(400).json({ error: '退件所属客户未绑定 OMS 账号' })
       const existing = await prisma.returnOrder.findFirst({ where: { returnNo: ret.returnNo } })
+      if (existing?.customerId && existing.customerId !== customerId) {
+        return res.status(409).json({ error: '退件单号已由其他客户使用，请核对归属后重试同步' })
+      }
       const lineItems = JSON.stringify(
         (ret.items || []).map(i => ({
           sku: i.sku,
@@ -1892,13 +1746,14 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
         remark: existing?.remark ?? null,
       }
       if (existing) {
-        await prisma.returnOrder.update({
-          where: { id: existing.id },
+        const updated = await prisma.returnOrder.updateMany({
+          where: { id: existing.id, OR: [{ customerId }, { customerId: null }] },
           data: {
             ...payload,
-            ...(customerId ? { customer: { connect: { id: customerId } } } : {}),
+            customerId,
           },
         })
+        if (!updated.count) return res.status(409).json({ error: '退件归属已变化，请核对后重试同步' })
       } else {
         await prisma.returnOrder.create({
           data: {
@@ -1967,7 +1822,9 @@ app.post('/api/erp/webhooks/events', async (req, res) => {
 
     res.json({ ok: true, type, customerCode })
   } catch (e) {
+    if (e instanceof InboundIdentityError) return res.status(e.status).json({ error: e.message })
     console.error('[webhook]', e)
+    if (e instanceof ErpApiError) return sendErpError(res, e)
     res.status(500).json({ error: String(e) })
   }
 })
@@ -2000,6 +1857,8 @@ type OmsAsnRequestItem = {
 
 function mapOmsAsnRequest(body: {
   inboundNo?: string
+  clientRequestId?: string
+  expectedVersion?: string
   customerCode?: string
   warehouseCode?: string
   trackingNo?: string
@@ -2029,6 +1888,8 @@ function mapOmsAsnRequest(body: {
 
   return {
     inboundNo: body.inboundNo,
+    clientRequestId: body.clientRequestId,
+    expectedVersion: body.expectedVersion,
     customerCode,
     warehouseCode: body.warehouseCode || 'WMS-JHB-01',
     trackingNo: body.trackingNo,
@@ -2050,6 +1911,8 @@ app.post('/api/erp/inbound', async (req, res) => {
   try {
     const body = req.body as {
       inboundNo?: string
+  clientRequestId?: string
+  expectedVersion?: string
       customerCode?: string
       customerId?: string
       warehouseCode?: string
@@ -2086,6 +1949,8 @@ app.put('/api/erp/inbound/:inboundNo', async (req, res) => {
     if (!inboundNo) return res.status(400).json({ error: '缺少入库单号' })
     const body = req.body as {
       inboundNo?: string
+  clientRequestId?: string
+  expectedVersion?: string
       customerCode?: string
       customerId?: string
       warehouseCode?: string
@@ -2120,17 +1985,37 @@ app.post('/api/erp/inbound/:inboundNo/cancel', async (req, res) => {
   try {
     const inboundNo = String(req.params.inboundNo || '').trim()
     if (!inboundNo) return res.status(400).json({ error: '缺少入库单号' })
-    const body = req.body as { customerCode?: string; customerId?: string }
+    const body = req.body as { customerCode?: string; customerId?: string; clientRequestId?: string; expectedVersion?: string }
     let customerCode = authenticatedCustomerCode(req, body.customerCode)
     if (!customerCode && body.customerId) {
       const account = await prisma.customerAccount.findUnique({ where: { id: String(body.customerId) } })
       customerCode = account?.code?.trim() || ''
     }
     if (!customerCode) return res.status(400).json({ error: '缺少客户代码' })
-    res.json(await cancelErpInboundAsn(inboundNo, customerCode))
+    res.json(await cancelErpInboundAsn(inboundNo, customerCode, { clientRequestId: body.clientRequestId, expectedVersion: body.expectedVersion }))
   } catch (e) {
     sendErpError(res, e)
   }
+})
+
+app.post(['/api/erp/inbound/:inboundNo/original/check', '/api/erp/inbound/:inboundNo/original/cancel'], async (req, res) => {
+  try {
+    const inboundNo = String(req.params.inboundNo || '').trim()
+    const body = req.body as { customerCode?: string; kind?: string; original?: Record<string, unknown> }
+    const original = body.original
+    const customerCode = authenticatedCustomerCode(req, body.customerCode)
+    if (!inboundNo || !customerCode || !original || Array.isArray(original) || typeof original !== 'object'
+      || original.customerCode !== customerCode || !['create', 'update', 'reactivate', 'cancel'].includes(body.kind || '')) {
+      return res.status(400).json({ error: '原入库请求、操作类型或客户编码无效，请保留原记录并核对' })
+    }
+    if (body.kind !== 'cancel' && original.inboundNo !== inboundNo) return res.status(400).json({ error: '原请求单号与当前单据不一致，请保留原记录' })
+    const payload = body.kind === 'cancel'
+      ? { customerCode, clientRequestId: original.clientRequestId, expectedVersion: original.expectedVersion }
+      : mapOmsAsnRequest(original, customerCode)
+    res.json(await resolveErpInboundOriginal(inboundNo, req.path.endsWith('/cancel') ? 'cancel' : 'check', {
+      customerCode, kind: body.kind as 'create' | 'update' | 'reactivate' | 'cancel', original: payload,
+    }))
+  } catch (error) { sendErpError(res, error) }
 })
 
 app.post('/api/erp/inbound/:inboundNo/reactivate', async (req, res) => {
@@ -2139,6 +2024,8 @@ app.post('/api/erp/inbound/:inboundNo/reactivate', async (req, res) => {
     if (!inboundNo) return res.status(400).json({ error: '缺少入库单号' })
     const body = req.body as {
       inboundNo?: string
+  clientRequestId?: string
+  expectedVersion?: string
       customerCode?: string
       customerId?: string
       warehouseCode?: string
@@ -2169,8 +2056,13 @@ app.post('/api/erp/inbound/:inboundNo/reactivate', async (req, res) => {
 
 app.get('/api/erp/inbound/by-customer/:customerCode', async (req, res) => {
   try {
-    res.json(await fetchErpInboundsByCustomer(req.params.customerCode))
+    if (!assertCustomerCode(req as AuthenticatedRequest, res, req.params.customerCode)) return
+    const result = await fetchErpInboundsByCustomer(req.params.customerCode)
+    const cancelledNos = result.items.filter(row => ['cancelled', 'voided'].includes(row.omsStatus) || row.status === 'cancelled').filter(row => row.totalReceivedQty === 0).map(row => row.inboundNo)
+    const saved = await readSavedInboundDrafts(prisma, req.params.customerCode, customerScope(req as AuthenticatedRequest), cancelledNos)
+    res.json({ ...result, ...saved })
   } catch (e) {
+    if (e instanceof InboundIdentityError) return res.status(e.status).json({ error: e.message })
     sendErpError(res, e)
   }
 })
@@ -2259,14 +2151,14 @@ app.get('/api/erp/returns/by-customer/:customerCode', async (req, res) => {
 app.post('/api/erp/returns/:returnNo/cancel', async (req, res) => {
   try {
     const returnNo = String(req.params.returnNo || '').trim()
-    const body = req.body as { customerCode?: string; customerId?: string }
+    const body = req.body as { customerCode?: string; customerId?: string; clientRequestId?: string; expectedUpdatedAt?: string }
     let customerCode = authenticatedCustomerCode(req, body.customerCode)
     if (!customerCode && body.customerId) {
       const account = await prisma.customerAccount.findUnique({ where: { id: String(body.customerId) } })
       customerCode = account?.code?.trim() || ''
     }
     if (!customerCode) return res.status(400).json({ error: '缺少客户代码' })
-    res.json(await cancelErpReturnApi(returnNo, customerCode))
+    res.json(await cancelErpReturnApi(returnNo, customerCode, body.clientRequestId, body.expectedUpdatedAt))
   } catch (e) {
     sendErpError(res, e)
   }
@@ -2321,7 +2213,12 @@ app.get('/api/erp/returns/:returnNo/attachment/:attachmentId', async (req, res) 
 
 app.get('/api/erp/returns/:returnNo', async (req, res) => {
   try {
-    res.json(await fetchErpReturnByNo(req.params.returnNo))
+    const order = await fetchErpReturnByNo(req.params.returnNo)
+    const scope = customerScope(req as AuthenticatedRequest)
+    if (scope && order.customerCode !== authenticatedCustomerCode(req, null)) {
+      return res.status(404).json({ error: '未找到该退件单' })
+    }
+    res.json(order)
   } catch (e) {
     sendErpError(res, e)
   }
@@ -3302,14 +3199,24 @@ app.delete('/api/platform-sku-mappings/:id', async (req, res) => {
 app.put('/api/inbound-orders', async (req, res) => {
   try {
     let list = req.body as Record<string, unknown>[]
-    list = await filterDeletedSnapshotRows('inbound', list)
+
     const scope = customerScope(req as AuthenticatedRequest)
     if (!Array.isArray(list) || list.some(o => !o || !String(o.id || '').trim() || !String(o.inboundNo || '').trim())) {
       return res.status(400).json({ error: '入库单缺少标识或单号' })
     }
-    const identities = await prisma.$transaction(async tx => {
-      const saved = []
-      for (const o of list) {
+    const owner = scope || String(list[0]?.customerId || '')
+    const requestId = list[0]?.saveRequestId
+    if (!requestId || list.some(o => o.saveRequestId !== requestId)) return res.status(409).json({ error: '保存页面版本已更新，请保留输入并重新打开入库记录；本次未覆盖任何单据' })
+    const canonical = new Map<string, ErpInboundOrder>()
+    for (const o of list) {
+      assertInboundInputCounts(o)
+      if (typeof o.erpRevision === 'string' && /^[a-f0-9]{64}$/.test(o.erpRevision)) {
+        const current = await fetchErpInboundByNo(String(o.inboundNo))
+        canonical.set(String(o.inboundNo), { ...current, inboundType: sanitizeOmsInboundType(current.inboundType) })
+      }
+    }
+    const result = await runInboundSave(prisma, requestId, (req as AuthenticatedRequest).auth!.userId, owner,
+      list.map(o => ({ order: o, expected: o.omsRevision === undefined ? null : o.omsRevision })), async (tx, o) => {
         const id = String(o.id)
         const data = {
             customerId: scope ?? (o.customerId as string | null | undefined) ?? null,
@@ -3337,14 +3244,27 @@ app.put('/api/inbound-orders', async (req, res) => {
             lineItems: o.lineItems ? JSON.stringify(o.lineItems) : null,
             attachments: o.attachments ? JSON.stringify(o.attachments) : null,
         }
-        saved.push(await saveInboundOrder(tx, id, data, scope))
-      }
-      return saved
+        return saveInboundOrder(tx, id, data, scope, o.erpRevision, canonical.get(data.inboundNo))
+    }, async (tx, incoming, current) => {
+      const kind = incoming.omsAcknowledgementKind
+      if (!['create', 'update', 'reactivate', 'withdraw', 'void'].includes(kind)) return false
+      if (incoming.status === 'draft' && kind !== 'withdraw') return false
+      const trusted = canonical.get(String(incoming.inboundNo))
+      if (!trusted?.omsCustomerCode) return false
+      // Validate a withdrawn draft as canonical voided, not the staging bypass.
+      // Arbitrary draft plans cannot use this exception to change quantities.
+      const data = { ...current, ...incoming, source: String(incoming.source || '客户自发'), stockSource: 'owned', deliveryMethod: String(incoming.deliveryMethod),
+        boxCount: Number(incoming.boxCount), skuCount: Number(incoming.skuCount), totalQty: Number(incoming.totalQty), receivedQty: Number(incoming.receivedQty ?? 0),
+        createdAt: String(incoming.createdAt), warehouse: String(incoming.warehouse), status: incoming.status === 'draft' ? 'voided' : String(incoming.status),
+        inboundType: sanitizeOmsInboundType(String(incoming.inboundType)), lineItems: JSON.stringify(incoming.lineItems || []), attachments: JSON.stringify(incoming.attachments || []) }
+      await assertInboundSnapshot(tx, data, trusted.omsCustomerCode, incoming.erpRevision, trusted)
+      return true
     })
-    res.json({ ok: true, identities })
+    res.json({ ok: true, ...result })
   } catch (e) {
     console.error(e)
     if (e instanceof InboundIdentityError) return res.status(e.status).json({ error: e.message })
+    if (e instanceof ErpApiError) return sendErpError(res, e)
     if ((e as { code?: string }).code === 'P2002') {
       return res.status(409).json({ error: '入库单号已存在或刚被同步，请刷新后重试' })
     }
@@ -3352,37 +3272,62 @@ app.put('/api/inbound-orders', async (req, res) => {
   }
 })
 
-app.delete('/api/inbound-orders/:id', async (req, res) => {
+app.post('/api/inbound-orders/saves/:customerId/:requestId/:action', async (req, res) => {
   try {
-    const scope = customerScope(req as AuthenticatedRequest)
-    const result = await prisma.inboundOrder.deleteMany({
-      where: { id: String(req.params.id), ...(scope ? { customerId: scope } : {}) },
-    })
-    if (scope && result.count === 0) return res.status(404).json({ error: '入库单不存在' })
-    res.json({ ok: true })
-  } catch (e) {
-    console.error(e)
-    res.status(500).json({ error: String(e) })
+    const { customerId, requestId, action } = req.params
+    if (!['check', 'cancel'].includes(action)) return res.status(404).json({ error: '原保存操作不存在，请返回入库记录' })
+    if (!assertCustomerId(req as AuthenticatedRequest, res, customerId)) return
+    const list = req.body
+    if (!Array.isArray(list)) return res.status(400).json({ error: '缺少原保存资料，请保留记录并核对' })
+    const result = await resolveInboundSave(prisma, requestId, (req as AuthenticatedRequest).auth!.userId, customerId,
+      list.map(o => ({ order: o, expected: o?.omsRevision === undefined ? null : o.omsRevision })), action === 'cancel')
+    res.json(result)
+  } catch (error) {
+    if (error instanceof InboundIdentityError) return res.status(error.status).json({ error: error.message })
+    console.error(error);res.status(500).json({ error: '原保存结果暂无法核对，请保留原请求并稍后重试' })
   }
 })
+
+app.get('/api/inbound-orders/by-no/:inboundNo', async (req, res) => {
+  try {
+    const scope = customerScope(req as AuthenticatedRequest)
+    if (scope === '') return res.status(403).json({ error: '客户身份无效，请重新登录' })
+    const row = await prisma.inboundOrder.findFirst({ where: { inboundNo: req.params.inboundNo, ...(scope ? { customerId: scope } : {}) } })
+    if (!row) return res.status(404).json({ error: '当前客户的入库记录不存在，请返回列表核对' })
+    const plan = readInboundPlan(row, row.status === 'draft')
+    res.json({ ...row, ...plan, omsRevision: inboundSavedVersion(row) })
+  } catch (error) {
+    if (error instanceof InboundIdentityError) return res.status(error.status).json({ error: `已保存记录无法读取，请保留原资料并联系管理员核对。${error.message}` })
+    console.error(error);res.status(500).json({ error: '读取已保存入库记录失败，请稍后重试' })
+  }
+})
+
+app.delete('/api/inbound-orders/:id', async (req, res) => {
+  try {
+    const result = await deleteInboundDraft(prisma, String(req.params.id), customerScope(req as AuthenticatedRequest))
+    res.json(result)
+  } catch (error) {
+    if (error instanceof InboundIdentityError) return res.status(error.status).json({ error: error.message })
+    console.error(error)
+    res.status(500).json({ error: '删除结果暂无法确认，请返回入库记录刷新核对后重试原操作' })
+  }
+})
+
+class ReturnSnapshotScopeError extends Error {}
+class ReturnSnapshotStateError extends Error {}
 
 app.put('/api/return-orders', async (req, res) => {
   try {
     const list = req.body as Record<string, unknown>[]
     const scope = customerScope(req as AuthenticatedRequest)
-    if (scope) {
-      const existing = await prisma.returnOrder.findMany({
-        where: { id: { in: list.map(item => String(item.id)) } },
-        select: { customerId: true },
-      })
-      if (existing.some(item => item.customerId !== scope)) {
-        return res.status(403).json({ error: 'Cross-customer mutation denied' })
-      }
-    }
     await prisma.$transaction(async tx => {
       for (const o of list) {
         const id = String(o.id)
-        const previousForm = await tx.returnOrder.findUnique({ where: { id }, select: { remark: true } })
+        const previousForm = await tx.returnOrder.findUnique({ where: { id }, select: { remark: true, customerId: true, status: true } })
+        if (scope && previousForm && previousForm.customerId !== scope) throw new ReturnSnapshotScopeError()
+        if (o.status === 'draft' && previousForm && !['draft', 'cancelled', 'submission_pending'].includes(previousForm.status)) {
+          throw new ReturnSnapshotStateError()
+        }
         const data = {
           customerId: scope ?? (o.customerId as string | null | undefined) ?? null,
           returnNo: String(o.returnNo),
@@ -3413,18 +3358,25 @@ app.put('/api/return-orders', async (req, res) => {
           customerDecidedAt: (o.customerDecidedAt as string | null | undefined) ?? null,
           customerProcessChoice: (o.customerProcessChoice as string | null | undefined) ?? null,
         }
-        await tx.returnOrder.upsert({
-          where: { id },
-          create: { id, ...data },
-          update: data,
+        if (!previousForm) {
+          await tx.returnOrder.create({ data: { id, ...data } })
+          continue
+        }
+        const updated = await tx.returnOrder.updateMany({
+          where: { id, status: previousForm.status, ...(scope ? { customerId: scope } : {}) },
+          data,
         })
+        if (!updated.count) throw new ReturnSnapshotStateError()
       }
     })
     res.json({ ok: true })
   } catch (e) {
+    if (e instanceof ReturnSnapshotStateError) return res.status(409).json({ error: '退件状态已变化，保存未完成，请返回退件处理刷新核对' })
+    if (e instanceof ReturnSnapshotScopeError) return res.status(403).json({ error: '无法保存其他客户或归属已变化的退件，请刷新后核对' })
+    if ((e as { code?: string }).code === 'P2002') return res.status(409).json({ error: '退件单号或记录标识已存在，请刷新后核对' })
     if (e instanceof ReturnFormValidationError) return res.status(400).json({ error: e.message })
     console.error(e)
-    res.status(500).json({ error: String(e) })
+    res.status(500).json({ error: '退件保存失败，请刷新核对当前记录后重试' })
   }
 })
 
@@ -3436,17 +3388,20 @@ app.delete('/api/return-orders/:id', async (req, res) => {
       select: { id: true, status: true },
     })
     if (!target) return res.status(404).json({ error: '退件单不存在' })
+    if (req.query.expectedStatus !== undefined && req.query.expectedStatus !== target.status) {
+      return res.status(409).json({ error: '退件单状态已变化，请刷新后核对' })
+    }
     if (!['draft', 'cancelled'].includes(target.status)) {
       return res.status(400).json({ error: '仅草稿或已撤回的退件可以删除，请先核对退件状态' })
     }
     const result = await prisma.returnOrder.deleteMany({
-      where: { id: target.id, status: { in: ['draft', 'cancelled'] }, ...(scope ? { customerId: scope } : {}) },
+      where: { id: target.id, status: target.status, ...(scope ? { customerId: scope } : {}) },
     })
     if (result.count === 0) return res.status(409).json({ error: '退件单状态已变化，请刷新后核对' })
     res.json({ ok: true })
   } catch (e) {
     console.error(e)
-    res.status(500).json({ error: String(e) })
+    res.status(500).json({ error: '退件删除结果暂无法确认，请刷新退件列表核对后再试' })
   }
 })
 

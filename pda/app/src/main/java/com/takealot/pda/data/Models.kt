@@ -57,13 +57,24 @@ data class InboundOrder(
     val receivedCartonCount: Int? = null,
     val items: List<InboundItem>? = emptyList(),
     val cartons: List<InboundCarton>? = emptyList(),
+    val receivingVersion: String? = null,
+    val measurementVersion: String? = null,
+    val cartonConfirmation: InboundCartonConfirmation? = null,
 ) {
+    val cartonBlockMessage: String?
+        get() = when {
+            cartonConfirmation?.ready == false -> cartonConfirmation.message.orEmpty().ifBlank { "请先确认实收箱数，再继续清点" }
+            (receivedCartonCount ?: 0) <= 0 -> "请先确认实收箱数，再继续清点"
+            else -> null
+        }
     val itemList get() = items.orEmpty()
     val cartonList get() = cartons.orEmpty()
     val no get() = inboundNo.orEmpty()
     val statusKey get() = status.orEmpty()
     val statusText get() = inboundStatusLabel(displayStatus.orEmpty().ifBlank { statusKey })
 }
+
+data class InboundCartonConfirmation(val ready: Boolean, val message: String?)
 
 data class InboundItem(
     val id: Int = 0,
@@ -249,7 +260,8 @@ fun inboundStatusLabel(status: String) = when (status) {
     "pending_putaway" -> "待上架"
     "completed", "confirmed" -> "已入库"
     "exception" -> "异常"
-    else -> status.ifBlank { "—" }
+    "cancelled" -> "已取消"
+    else -> displayUnmappedStatus(status)
 }
 
 fun stocktakeStatusLabel(status: String) = when (status) {
@@ -260,7 +272,8 @@ fun stocktakeStatusLabel(status: String) = when (status) {
     "recount" -> "待复盘"
     "matched" -> "已盘"
     "variance" -> "有差异"
-    else -> status.ifBlank { "—" }
+    "cancelled" -> "已取消"
+    else -> displayUnmappedStatus(status)
 }
 
 fun outboundStatusLabel(status: String) = when (status) {
@@ -276,5 +289,12 @@ fun outboundStatusLabel(status: String) = when (status) {
     "delivery_failed" -> "派送失败"
     "exception" -> "异常"
     "cancelled" -> "已取消"
-    else -> status.ifBlank { "—" }
+    "completed" -> "已完成"
+    else -> displayUnmappedStatus(status)
+}
+
+private fun displayUnmappedStatus(status: String): String = when {
+    status.isBlank() -> "—"
+    status.any { it in '\u4e00'..'\u9fff' } -> status
+    else -> "状态待核对"
 }

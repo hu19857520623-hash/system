@@ -1,11 +1,14 @@
+import { useAsyncViewScope } from '../../utils/useAsyncViewScope'
+import { useInboundConfirmation } from './useInboundConfirmation'
 import { userFacingError } from '../../utils/userFacingError'
 import { displaySku, displaySkuText } from '../../data/skuDisplay'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { X, Download, Printer } from 'lucide-react'
-import { Badge, Button, MonoCode } from '../ui'
+import { Button, MonoCode } from '../ui'
+import { InboundReceiptStatus } from './InboundReceiptStatus'
 import {
-  InboundOrder, DELIVERY_METHOD_LABELS, STOCK_SOURCE_LABELS, statusLabels,
+  InboundOrder, DELIVERY_METHOD_LABELS, STOCK_SOURCE_LABELS,
   customerInboundTypeLabel, customerInboundStockLabel,
 } from '../../data/mockData'
 import { useRole } from '../../auth/RoleContext'
@@ -19,8 +22,8 @@ import { downloadInboundLabelHtml, printInboundLabels, type InboundLabelKind } f
 import { downloadInboundReceivingList, printInboundReceivingList } from '../../data/inboundReceivingListPrint'
 import { useProducts } from '../../data/inventoryStore'
 import { getInboundOrdersSnapshot, setInboundOrders } from '../../data/entityStore'
-import { apiDelete } from '../../api/client'
-import { canEditInboundOrder, canVoidInboundOrder, canReorderInboundOrder, voidInboundOrder, reorderInboundOnErp, withdrawInboundOrder } from '../../data/inboundStore'
+import { apiDelete, authSessionScope } from '../../api/client'
+import { canEditInboundOrder, canVoidInboundOrder, canReorderInboundOrder, voidInboundOrder, reorderInboundOnErp, withdrawInboundOrder, captureInboundWriteAccess, pendingInboundOperation } from '../../data/inboundStore'
 
 interface InboundDetailDrawerProps {
   order: InboundOrder | null
@@ -41,7 +44,8 @@ const TIMELINE: Record<string, string[]> = {
 }
 
 export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mode = 'drawer' }: InboundDetailDrawerProps) {
-  const { role } = useRole()
+  const { role, can } = useRole()
+  const canWrite = can('inbound:write')
   const [printKind, setPrintKind] = useState<InboundLabelKind | null>(null)
   const dataScope = useDataScope()
   const customerView = !isSysAdmin(role)
@@ -51,16 +55,22 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mo
   const [reordering, setReordering] = useState(false)
   const [confirmReorder, setConfirmReorder] = useState(false)
   const products = useProducts()
+  const sessionScope = authSessionScope()
+  const confirmation = useInboundConfirmation(JSON.stringify([sessionScope, order?.id, order?.inboundNo, canWrite]))
+  const view = useAsyncViewScope(JSON.stringify([sessionScope, order?.id, order?.inboundNo]))
+  const captureView = () => { const valid = view.capture(); return () => valid() && authSessionScope() === sessionScope }
 
   useEffect(() => {
     setConfirmReorder(false)
     setFeedback(null)
     setPrintKind(null)
-  }, [order?.id])
+    setVoiding(false); setWithdrawing(false); setReordering(false)
+  }, [order?.id, sessionScope])
 
   if (!order) return null
 
-  const timeline = TIMELINE[order.status] ?? ['已提交预约']
+  const timeline = order.status === 'shelved' && order.receivedQty === 0 && order.totalQty > 0
+    ? ['已提交预约', '零收货结束'] : TIMELINE[order.status] ?? ['已提交预约']
   const customerCode = dataScope.getCustomerCode(order.customerId)
   const skuLabelOrder = {
     ...order,
@@ -76,8 +86,9 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mo
   }
 
   const handlePrint = async (kind: InboundLabelKind, codeType: LabelCodeType) => {
+    const currentView = captureView()
     const ok = await printInboundLabels(kind === 'SKU 标签' ? skuLabelOrder : order, kind, undefined, codeType)
-    if (ok) {
+    if (ok && currentView()) {
       showFeedback('ok', `已打开${kind}打印预览`)
     }
     return ok
@@ -95,22 +106,30 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mo
   }
 
   const handleDownload = async (kind: InboundLabelKind) => {
+    const currentView = captureView()
     await downloadInboundLabelHtml(kind === 'SKU 标签' ? skuLabelOrder : order, kind)
+    if (!currentView()) return
     showFeedback('ok', kind === '箱唛' ? '已下载 100×100mm 箱唛 PDF' : `已下载${kind} HTML 文件`)
   }
 
   const handleCancel = async () => {
+    const currentView = captureView()
+    if (!canWrite) { showFeedback('err', '当前账号只有入库查看权限，不能修改单据'); return }
     if (order.status === 'draft') {
-      if (!window.confirm(`确认删除草稿入库单 ${order.inboundNo}？此操作不可恢复。`)) return
-      const before = getInboundOrdersSnapshot()
-      setInboundOrders(before.filter(o => o.id !== order.id))
+      const pending = pendingInboundOperation(order)
+      if (pending.record || pending.error) { showFeedback('err', pending.error || '本单有待核对原请求，请先读取原单结果，不能删除记录'); return }
+      if (!(await confirmation.confirm(`确认删除草稿入库单 ${order.inboundNo}？此操作不可恢复。`, '确认删除草稿')) || !currentView()) return
       try {
+        const assertWrite = captureInboundWriteAccess()
         await apiDelete(`/inbound-orders/${encodeURIComponent(order.id)}`)
+        assertWrite()
+        setInboundOrders(getInboundOrdersSnapshot().filter(o => o.id !== order.id))
+        if (!currentView()) return
         showFeedback('ok', '草稿已删除')
         onOrderChanged?.()
-        window.setTimeout(onClose, 300)
+        onClose()
       } catch (error) {
-        setInboundOrders(before)
+        if (!currentView()) return
         showFeedback('err', `删除失败：${error instanceof Error ? error.message : String(error)}`)
       }
       return
@@ -118,11 +137,14 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mo
   }
 
   const handleVoid = async () => {
+    const currentView = captureView()
+    if (!canWrite) { showFeedback('err', '当前账号只有入库查看权限，不能修改单据'); return }
     if (!canVoidInboundOrder(order.status)) return
-    if (!window.confirm(`确认作废入库单 ${order.inboundNo}？作废后仓库不再收货，可在详情中确认后重新下单。`)) return
+    if (!(await confirmation.confirm(`确认作废入库单 ${order.inboundNo}？作废后仓库不再收货，可在详情中确认后重新下单。`, '确认作废')) || !currentView()) return
     setVoiding(true)
     try {
       const result = await voidInboundOrder(order)
+      if (!currentView()) return
       if (!result.ok) {
         showFeedback('err', `作废失败：${result.error}`)
         return
@@ -130,16 +152,19 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mo
       showFeedback(result.warning ? 'info' : 'ok', result.warning || '入库单已作废，可确认内容后重新下单')
       onOrderChanged?.(result.order)
     } finally {
-      setVoiding(false)
+      if (currentView()) setVoiding(false)
     }
   }
 
   const handleWithdraw = async () => {
+    const currentView = captureView()
+    if (!canWrite) { showFeedback('err', '当前账号只有入库查看权限，不能修改单据'); return }
     if (order.status !== 'on_the_way') return
-    if (!window.confirm(`确认撤回入库单 ${order.inboundNo}？仓库将停止收货，入库单转为草稿后可修改并重新提交。`)) return
+    if (!(await confirmation.confirm(`确认撤回入库单 ${order.inboundNo}？仓库将停止收货，入库单转为草稿后可修改并重新提交。`, '确认撤回')) || !currentView()) return
     setWithdrawing(true)
     try {
       const result = await withdrawInboundOrder(order)
+      if (!currentView()) return
       if (!result.ok) {
         showFeedback('err', `撤回失败：${result.error}`)
         return
@@ -147,11 +172,13 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mo
       showFeedback(result.warning ? 'info' : 'ok', result.warning || '已撤回为草稿，可修改后重新提交')
       onOrderChanged?.(result.order)
     } finally {
-      setWithdrawing(false)
+      if (currentView()) setWithdrawing(false)
     }
   }
 
   const handleReorderSubmit = async () => {
+    const currentView = captureView()
+    if (!canWrite) { showFeedback('err', '当前账号只有入库查看权限，不能修改单据'); return }
     if (!canReorderInboundOrder(order.status)) return
     if (!confirmReorder) {
       showFeedback('err', '请先确认入库单内容后再提交')
@@ -160,20 +187,21 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mo
     setReordering(true)
     try {
       const result = await reorderInboundOnErp(order)
+      if (!currentView()) return
       if (!result.ok) {
         showFeedback('err', `重新下单失败：${result.error}`)
         return
       }
       showFeedback(result.warning ? 'info' : 'ok', result.warning || '已重新下单，进入在途')
       onOrderChanged?.(result.order)
-      if (!result.warning) window.setTimeout(onClose, 400)
+      // Keep the confirmed result visible; the customer chooses when to return.
     } finally {
-      setReordering(false)
+      if (currentView()) setReordering(false)
     }
   }
 
   return (
-    <div
+    <><div
       className={mode === 'page' ? 'mx-auto w-full max-w-5xl rounded-xl border border-border-light bg-white shadow-sm' : 'fixed inset-0 z-50 flex justify-end bg-slate-900/20 backdrop-blur-sm'}
       onClick={mode === 'drawer' ? onClose : undefined}
     >
@@ -199,7 +227,7 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mo
           )}
 
           <div className="flex items-center gap-2">
-            <Badge status={order.status} label={statusLabels[order.status]} />
+            <InboundReceiptStatus order={order} />
             <span className="rounded-md bg-surface-muted px-2 py-0.5 text-[11px] font-medium text-text-secondary">
               {customerView ? customerInboundStockLabel(order.stockSource) : STOCK_SOURCE_LABELS[order.stockSource]}
             </span>
@@ -216,7 +244,7 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mo
               ['联系人', order.contact ?? '—'],
               ['联系电话', order.contactPhone ?? '—'],
               ['箱数 / SKU', `${order.boxCount} 箱 · ${order.skuCount} SKU`],
-              ['应收 / 实收', `${order.receivedQty} / ${order.totalQty}`],
+              ['实收 / 应收', `${order.receivedQty} / ${order.totalQty}`],
             ].map(([k, v]) => (
               <div key={k}>
                 <p className="text-[11px] text-text-muted">{k}</p>
@@ -287,7 +315,7 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mo
             </ul>
           </div>
 
-          {canReorderInboundOrder(order.status) && (
+          {canWrite && canReorderInboundOrder(order.status) && (
             <div className="rounded-xl bg-slate-50 p-4 ring-1 ring-border-light">
               <p className="text-xs font-semibold text-text-primary">重新下单</p>
               <p className="mt-1 text-[11px] text-text-secondary">请先核对上方入库信息与货品明细，确认无误后再提交，提交后进入在途。</p>
@@ -333,12 +361,12 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mo
 
         {printKind && <PrintCodeTypeDialog title={printKind} initialType={printKind === '箱唛' ? 'barcode' : 'qr'} onClose={() => setPrintKind(null)} onConfirm={type => handlePrint(printKind, type)} />}
         <div className="border-t border-border-light p-4 flex flex-wrap gap-2">
-          {order.status === 'on_the_way' && (
+          {canWrite && order.status === 'on_the_way' && (
             <Button variant="secondary" size="sm" disabled={withdrawing} onClick={() => void handleWithdraw()}>
               {withdrawing ? '撤回中…' : '撤回为草稿'}
             </Button>
           )}
-          {canEditInboundOrder(order.status) && (
+          {canWrite && canEditInboundOrder(order.status) && (
             <Link to={`/inbound?edit=${encodeURIComponent(order.id)}`}>
               <Button size="sm">{order.status === 'draft' ? '编辑' : '修改'}</Button>
             </Link>
@@ -353,23 +381,24 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mo
               <Download className="h-3 w-3" />{l}
             </Button>
           ))}
-          {canVoidInboundOrder(order.status) && (
+          {canWrite && canVoidInboundOrder(order.status) && (
             <Button variant="danger-outline" size="sm" disabled={voiding} onClick={() => void handleVoid()}>
               {voiding ? '作废中…' : '作废'}
             </Button>
           )}
-          {canReorderInboundOrder(order.status) && (
+          {canWrite && canReorderInboundOrder(order.status) && (
             <Button size="sm" disabled={!confirmReorder || reordering} onClick={() => void handleReorderSubmit()}>
               {reordering ? '提交中…' : '提交'}
             </Button>
           )}
-          {order.status === 'draft' && (
+          {canWrite && order.status === 'draft' && !order.erpRevision && (
             <Button variant="danger-outline" size="sm" className="ml-auto" onClick={() => void handleCancel()}>
               删除草稿
             </Button>
           )}
+          {canWrite && order.status === 'draft' && order.erpRevision && <p className="w-full text-xs text-text-muted">该草稿已有 ERP 入库历史，需要保留记录；可核对后修改并重新提交。</p>}
         </div>
       </div>
-    </div>
+    </div>{confirmation.dialog}</>
   )
 }

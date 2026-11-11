@@ -1,7 +1,10 @@
+import { Prisma } from '@prisma/client'
+import { ReturnsSyncService } from './returns-sync.service'
+import { createHash, randomUUID } from 'crypto'
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
-import { OperationLogService } from '../operation-log/operation-log.service'
+import { OperationLogService, type OperationLogInput } from '../operation-log/operation-log.service'
 import { BillingService } from '../billing/billing.service'
 import { notifyOms } from '../../common/oms-notify.util'
 import { FileStoreService } from '../../common/file-store.service'
@@ -38,6 +41,21 @@ function round2Amount(n: number) {
   return Math.round(n * 100) / 100
 }
 
+export type ReturnMeasureFeesInput = {
+  clientRequestId: string
+  mode: 'replace' | 'existing'
+  cartons: CartonInput[]
+  expectedRevision: string
+}
+
+type MeasureFeesReceipt = {
+  outcome: 'applied' | 'closed'
+  id: number
+  returnNo: string
+  estimatedFeeTotal: number | null
+  customerId?: number
+}
+
 export type OmsCreateReturnInput = {
   returnNo?: string
   customerCode: string
@@ -65,11 +83,65 @@ export class ReturnsService {
     private billing: BillingService,
     private returnCharges: ReturnsChargeService,
     private inventoryMutation: InventoryMutationService,
-  ) {}
+    private returnSync: ReturnsSyncService = new ReturnsSyncService(prisma),
+  ) {
+    this.returnSync.setSender(async (returnNo, warehouseCode) => {
+      const row = await this.prisma.returnOrder.findUnique({ where: { returnNo } })
+      if (!row) return false
+      const results = await Promise.all([this.sendReturnStatusToOms(returnNo), warehouseCode ? this.pushReturnStockToOms(Number(row.id), warehouseCode) : Promise.resolve(true)])
+      return results.every(Boolean)
+    })
+  }
+
+  private returnActionIntent(action: string, id: number, actor: number, body: Record<string, unknown>) {
+    const clientRequestId = String(body.clientRequestId || '').trim()
+    if (!clientRequestId) return undefined
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(clientRequestId)) throw new BadRequestException('操作标识无效，请刷新退件页面后重试')
+    const canonical = (value: any): any => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().filter(key => key !== 'clientRequestId').map(key => [key, canonical(value[key])])) : value
+    const actionFingerprint = createHash('sha256').update(JSON.stringify({ action, id, actor, body: canonical(body) })).digest('hex')
+    return { clientRequestId, actionFingerprint }
+  }
+
+  private async hasReturnActionReceipt(tx: Prisma.TransactionClient, actor: number, intent?: { clientRequestId: string; actionFingerprint: string }) {
+    if (!intent) return false
+    const prior = await tx.operationLog.findFirst({ where: { module: 'returns', operatorId: BigInt(actor), detail: { path: '$.clientRequestId', equals: intent.clientRequestId } }, orderBy: { id: 'desc' } })
+    if (!prior) return false
+    if ((prior.detail as any)?.actionFingerprint !== intent.actionFingerprint) throw new ConflictException('同一次退件操作的单据或内容已变化，请核对原请求后继续')
+    if ((prior.detail as any)?.cancelled) throw new ConflictException('原退件操作已核对结束，请刷新单据后重新操作')
+    return true
+  }
+
+  private async logReturn(params: OperationLogInput, tx: Prisma.TransactionClient, intent?: { clientRequestId: string; actionFingerprint: string }) {
+    await this.opLog.log({ ...params, ...(intent ? { detail: { ...params.detail, ...intent } } : {}) }, tx)
+    if (params.targetType === 'return_order') await this.returnSync.enqueue(tx, String(params.targetId))
+  }
+
+  async closeWarehouseRequest(id: number, actor: number, input: { action: string; payload: Record<string, unknown> }, disposal = false) {
+    const actions = new Map(Object.entries({ receive: 'receive', reReceive: 're_receive', measure: 'return_measure', calculateFees: 'return_calc_fee', submitInspection: 'return_inspect', dispose: 'return_dispose', process: 'process' }))
+    const action = actions.get(input?.action)
+    if (!action || (action === 'return_dispose' || action === 'process') !== disposal) throw new BadRequestException('请选择本岗位可核对的退件操作')
+    const intent = this.returnActionIntent(action, id, actor, input.payload || {})
+    if (!intent) throw new BadRequestException('缺少原退件操作标识，不能结束未知请求')
+    return this.prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(actor)} FOR UPDATE`
+      await tx.$queryRaw`SELECT id FROM return_order WHERE id = ${BigInt(id)} FOR UPDATE`
+      const row = await tx.returnOrder.findUnique({ where: { id: BigInt(id) } })
+      if (!row) throw new NotFoundException('退件单不存在，请核对原单据')
+      const prior = await tx.operationLog.findFirst({ where: { module: 'returns', operatorId: BigInt(actor), detail: { path: '$.clientRequestId', equals: intent.clientRequestId } }, orderBy: { id: 'desc' } })
+      if (prior) {
+        const detail = prior.detail as any
+        if (action === 'process' && prior.action === 'process' && prior.targetId === row.returnNo && detail?.requestFingerprint === returnProcessFingerprint(input.payload, String(input.payload.processResult || '').trim())) return { outcome: 'confirmed', currentStatus: row.status }
+        if (detail?.actionFingerprint !== intent.actionFingerprint) throw new ConflictException('原操作内容不同，不能清除其它退件请求')
+        return { outcome: detail.cancelled ? 'cancelled' : 'confirmed', currentStatus: row.status }
+      }
+      await this.opLog.log({ module: 'returns', action: 'warehouse_request_closed', targetType: 'return_order', targetId: row.returnNo, operatorId: actor, detail: { ...intent, cancelled: true, originalAction: input.action } }, tx)
+      return { outcome: 'cancelled', currentStatus: row.status }
+    }, { isolationLevel: 'ReadCommitted' })
+  }
 
   private writeAttachment(fileName: string, contentBase64: string) {
     const buf = Buffer.from(contentBase64, 'base64')
-    const { relativePath } = this.files.write('return-attachments', `${Date.now()}_${fileName}`, buf)
+    const { relativePath } = this.files.write('return-attachments', `${randomUUID()}_${fileName}`, buf)
     return { fileName, filePath: relativePath }
   }
 
@@ -105,10 +177,12 @@ export class ReturnsService {
     tx: any,
     returnId: bigint,
     attachments: { fileType?: string; fileName: string; contentBase64?: string; url?: string }[],
+    written?: string[],
   ) {
     const normalized = this.normalizeAttachments(attachments)
     for (const att of normalized) {
       const saved = this.writeAttachment(att.fileName, att.contentBase64)
+      written?.push(saved.filePath)
       await tx.returnAttachment.create({
         data: {
           returnId,
@@ -259,22 +333,10 @@ export class ReturnsService {
     if (!lines.length) throw new BadRequestException('请填写 SKU 明细')
 
     const returnNo = String(data.returnNo || '').trim() || `RT-${Date.now().toString().slice(-10)}`
-    const existing = await this.prisma.returnOrder.findUnique({ where: { returnNo } })
-    if (existing && existing.omsCustomerCode !== customerCode) {
-      throw new BadRequestException('客户编码与退件单不匹配，请刷新核对单号')
-    }
-    if (existing && existing.status !== 'cancelled') {
-      const detail = await this.prisma.returnOrder.findUnique({
-        where: { id: existing.id },
-        include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
-      })
-      return { ...this.mapReturnForOms(detail!), idempotent: true }
-    }
-
     const parsedItems = lines.map((l) => {
       const sku = String(l.sku || '').trim()
-      const quantity = Math.floor(Number(l.quantity ?? 0))
-      if (!sku || quantity <= 0) throw new BadRequestException('SKU 与数量无效')
+      const quantity = Number(l.quantity ?? 0)
+      if (!sku || !Number.isSafeInteger(quantity) || quantity <= 0) throw new BadRequestException('SKU 与数量无效')
       return {
         sku,
         quantity,
@@ -308,7 +370,49 @@ export class ReturnsService {
       remark: data.remark?.trim() || undefined,
     }
 
-    const row = await this.prisma.$transaction(async (tx) => {
+    const requestFields = ['orderNo', 'referenceNo', 'trackingNo', 'sellerStoreName', 'sellerTaxNo', 'returnWarehouse', 'expectedArrivalAt', 'returnReason', 'returnDescription', 'requestedProcess', 'remark'] as const
+    const fieldValue = (value: unknown) => value instanceof Date ? value.toISOString() : value ?? ''
+    const itemValues = (items: { sku: string; quantity: number; productName: string | null }[]) => items.map(item => [item.sku, item.quantity, item.productName || item.sku]).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))
+    const requestedAttachments = this.normalizeAttachments(data.attachments)
+    const requestFingerprint = createHash('sha256').update(JSON.stringify({
+      customerCode, fields: requestFields.map(key => fieldValue(returnData[key])), items: itemValues(parsedItems),
+      attachments: requestedAttachments.map(file => [file.fileType, file.fileName, createHash('sha256').update(Buffer.from(file.contentBase64, 'base64')).digest('hex')]).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
+    })).digest('hex')
+    const written: string[] = []
+    const run = () => this.prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM return_order WHERE return_no = ${returnNo} FOR UPDATE`
+      const currentCustomer = await tx.customer.findUnique({ where: { id: customer.id } })
+      if (!currentCustomer || currentCustomer.status !== 1) throw new BadRequestException('客户已停用或不存在')
+      const existing = await tx.returnOrder.findUnique({ where: { returnNo } })
+      if (existing && existing.omsCustomerCode !== customerCode) {
+        throw new BadRequestException('客户编码与退件单不匹配，请刷新核对单号')
+      }
+      if (existing && existing.status !== 'cancelled') {
+        const detail = await tx.returnOrder.findUnique({
+          where: { id: existing.id },
+          include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
+        })
+        const receipt = await tx.operationLog.findFirst({
+          where: { module: 'returns', action: { in: ['oms_return_create', 'oms_return_resubmit'] }, targetId: returnNo },
+          orderBy: { id: 'desc' },
+        })
+        const savedFingerprint = (receipt?.detail as { requestFingerprint?: string } | null)?.requestFingerprint
+        if (savedFingerprint) {
+          if (savedFingerprint !== requestFingerprint) throw new ConflictException('退件单号已用于不同内容，请核对原单；修改后请先撤回再重新提交')
+        } else if (detail) {
+          // Older records have no original intent hash. Compare immutable submitted data,
+          // leaving warehouse progress and operator remarks out of the compatibility check.
+          const sameFields = requestFields.filter(key => key !== 'remark').every(key => fieldValue(detail[key]) === fieldValue(returnData[key]))
+          const sameItems = JSON.stringify(itemValues(detail.items)) === JSON.stringify(itemValues(parsedItems))
+          const sameFiles = requestedAttachments.every(file => detail.attachments.some(saved => saved.fileName === file.fileName && saved.fileType === file.fileType && this.files.read(saved.filePath).equals(Buffer.from(file.contentBase64, 'base64'))))
+          if (!sameFields || !sameItems || !sameFiles) throw new ConflictException('退件单内容与原单不同，请核对原单；修改后请先撤回再重新提交')
+        }
+        await this.returnSync.enqueue(tx, returnNo)
+        return { row: detail!, idempotent: true, reactivated: false }
+      }
+
+      let row
+
       if (existing?.status === 'cancelled') {
         if (existing.omsCustomerCode && existing.omsCustomerCode !== customerCode) {
           throw new BadRequestException('客户编码与退件单不匹配')
@@ -318,121 +422,142 @@ export class ReturnsService {
           where: { id: existing.id },
           data: {
             ...returnData,
+            updatedAt: new Date(Math.max(Date.now(), existing.updatedAt.getTime() + 1)),
             omsCustomerCode: customerCode,
             items: { create: parsedItems },
           },
           include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
         })
-        await this.persistAttachments(tx, existing.id, data.attachments || [])
-        return tx.returnOrder.findUnique({
+        await this.persistAttachments(tx, existing.id, data.attachments || [], written)
+        row = await tx.returnOrder.findUnique({
           where: { id: existing.id },
           include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
         }) ?? updated
+      } else {
+        const created = await tx.returnOrder.create({
+          data: {
+            returnNo,
+            customerId: customer.id,
+            omsCustomerCode: customerCode,
+            ...returnData,
+            items: { create: parsedItems },
+          },
+          include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
+        })
+        await this.persistAttachments(tx, created.id, data.attachments || [], written)
+        row = await tx.returnOrder.findUnique({
+          where: { id: created.id },
+          include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
+        })
       }
+      if (!row) throw new NotFoundException('退件单创建失败')
 
-      const created = await tx.returnOrder.create({
-        data: {
-          returnNo,
-          customerId: customer.id,
-          omsCustomerCode: customerCode,
-          ...returnData,
-          items: { create: parsedItems },
-        },
-        include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
-      })
-      await this.persistAttachments(tx, created.id, data.attachments || [])
-      return tx.returnOrder.findUnique({
-        where: { id: created.id },
-        include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
-      })
+      await this.logReturn({
+        module: 'returns',
+        action: existing?.status === 'cancelled' ? 'oms_return_resubmit' : 'oms_return_create',
+        targetType: 'return_order',
+        targetId: returnNo,
+        detail: { customerCode, orderNo, itemCount: parsedItems.length, reactivated: existing?.status === 'cancelled', requestFingerprint },
+      }, tx)
+      return { row, idempotent: false, reactivated: existing?.status === 'cancelled' }
+    }, { isolationLevel: 'ReadCommitted' })
+    const result = await run().catch(error => {
+      // A concurrent creation can win the unique return number; re-read its committed row.
+      if (error?.code === 'P2002') return run()
+      throw error
+    }).catch(error => {
+      for (const path of written) this.files.remove(path)
+      throw error
     })
-    if (!row) throw new NotFoundException('退件单创建失败')
-
-    await this.opLog.log({
-      module: 'returns',
-      action: existing?.status === 'cancelled' ? 'oms_return_resubmit' : 'oms_return_create',
-      targetType: 'return_order',
-      targetId: returnNo,
-      detail: { customerCode, orderNo, itemCount: parsedItems.length, reactivated: existing?.status === 'cancelled' },
-    })
-
+    // Replays must also repair notifications after an earlier committed response was lost.
     void this.pushReturnStatusToOms(returnNo)
-    return { ...this.mapReturnForOms(row), idempotent: false, reactivated: existing?.status === 'cancelled' }
+    return { ...this.mapReturnForOms(result.row), idempotent: result.idempotent, reactivated: result.reactivated }
   }
 
   async receive(
     id: number,
-    body: { receivedQty?: number; receivedCartonCount?: number; remark?: string },
+    body: { clientRequestId?: string; receivedQty?: number; receivedCartonCount?: number; remark?: string },
     userId: number,
   ) {
-    const row = await this.prisma.returnOrder.findUnique({ where: { id: BigInt(id) } })
-    if (!row) throw new NotFoundException('退件单不存在')
-    if (row.status !== 'pending_arrival') {
-      throw new BadRequestException('当前状态不可收货，仅「在途」可收货')
-    }
-    const expectedQty = await this.prisma.returnOrderItem.aggregate({
-      where: { returnId: row.id },
-      _sum: { quantity: true },
-    })
-    const receivedQty = body.receivedQty != null
-      ? Number(body.receivedQty)
-      : expectedQty._sum.quantity || 0
-    const receivedCartonCount = body.receivedCartonCount != null
-      ? Number(body.receivedCartonCount)
-      : 1
-    if (!Number.isSafeInteger(receivedQty) || receivedQty <= 0) throw new BadRequestException('实收件数须为大于零的整数')
-    if (!Number.isSafeInteger(receivedCartonCount) || receivedCartonCount <= 0) throw new BadRequestException('实收箱数须为大于零的整数')
+    const updated = await this.prisma.$transaction(async tx => {
+      const intent = this.returnActionIntent('receive', id, userId, body)
+      if (intent) await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(userId)} FOR UPDATE`
+      await tx.$queryRaw`SELECT id FROM return_order WHERE id = ${BigInt(id)} FOR UPDATE`
+      const row = await tx.returnOrder.findUnique({ where: { id: BigInt(id) } })
+      if (!row) throw new NotFoundException('退件单不存在')
+      if (await this.hasReturnActionReceipt(tx, userId, intent)) return tx.returnOrder.findUniqueOrThrow({ where: { id: BigInt(id) }, include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } } })
+      if (row.status !== 'pending_arrival') {
+        throw new BadRequestException('当前状态不可收货，仅「在途」可收货')
+      }
+      const expectedQty = await tx.returnOrderItem.aggregate({
+        where: { returnId: row.id },
+        _sum: { quantity: true },
+      })
+      const receivedQty = body.receivedQty != null
+        ? Number(body.receivedQty)
+        : expectedQty._sum.quantity || 0
+      const receivedCartonCount = body.receivedCartonCount != null
+        ? Number(body.receivedCartonCount)
+        : 1
+      if (!Number.isSafeInteger(receivedQty) || receivedQty <= 0) throw new BadRequestException('实收件数须为大于零的整数')
+      if (!Number.isSafeInteger(receivedCartonCount) || receivedCartonCount <= 0) throw new BadRequestException('实收箱数须为大于零的整数')
 
-    const updated = await this.prisma.returnOrder.update({
-      where: { id: row.id },
-      data: {
-        status: 'received',
-        receivedAt: new Date(),
-        receivedBy: BigInt(userId),
-        receivedQty,
-        receivedCartonCount,
-        remark: body.remark?.trim() || row.remark || undefined,
-        feeStatus: row.feeStatus === 'none' ? 'none' : row.feeStatus,
-      },
-      include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
-    })
-    await this.opLog.log({
-      module: 'returns',
-      action: 'receive',
-      targetType: 'return_order',
-      targetId: row.returnNo,
-      operatorId: userId,
-      detail: { receivedQty, receivedCartonCount },
-    })
-    void this.pushReturnStatusToOms(row.returnNo)
+      const updated = await tx.returnOrder.update({
+        where: { id: row.id },
+        data: {
+          status: 'received',
+          receivedAt: new Date(),
+          receivedBy: BigInt(userId),
+          receivedQty,
+          receivedCartonCount,
+          remark: body.remark?.trim() || row.remark || undefined,
+          feeStatus: row.feeStatus === 'none' ? 'none' : row.feeStatus,
+        },
+        include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
+      })
+      await this.logReturn({
+        module: 'returns',
+        action: 'receive',
+        targetType: 'return_order',
+        targetId: row.returnNo,
+        operatorId: userId,
+        detail: { receivedQty, receivedCartonCount },
+      }, tx, intent)
+      return updated
+    }, { isolationLevel: 'ReadCommitted' })
+    void this.pushReturnStatusToOms(updated.returnNo)
     return this.enrichRow(updated)
   }
 
   async reReceive(
     id: number,
-    body: { receivedQty?: number; receivedCartonCount?: number; remark?: string },
+    body: { clientRequestId?: string; receivedQty?: number; receivedCartonCount?: number; remark?: string },
     userId: number,
   ) {
-    const row = await this.prisma.returnOrder.findUnique({ where: { id: BigInt(id) } })
-    if (!row) throw new NotFoundException('退件单不存在')
-    if (!(RETURN_RE_RECEIVE_STATUSES as readonly string[]).includes(row.status)) {
-      throw new BadRequestException('当前状态不可重新收货，仅已收货/已测体积/已算费可修正')
-    }
+    const updated = await this.prisma.$transaction(async tx => {
+      const intent = this.returnActionIntent('re_receive', id, userId, body)
+      if (intent) await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(userId)} FOR UPDATE`
+      await tx.$queryRaw`SELECT id FROM return_order WHERE id = ${BigInt(id)} FOR UPDATE`
+      const row = await tx.returnOrder.findUnique({ where: { id: BigInt(id) } })
+      if (!row) throw new NotFoundException('退件单不存在')
+      if (await this.hasReturnActionReceipt(tx, userId, intent)) return tx.returnOrder.findUniqueOrThrow({ where: { id: BigInt(id) }, include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } } })
+      if (!(RETURN_RE_RECEIVE_STATUSES as readonly string[]).includes(row.status)) {
+        throw new BadRequestException('当前状态不可重新收货，仅已收货/已测体积/已算费可修正')
+      }
 
-    const receivedQty = body.receivedQty != null
-      ? Number(body.receivedQty)
-      : row.receivedQty || 0
-    const receivedCartonCount = body.receivedCartonCount != null
-      ? Number(body.receivedCartonCount)
-      : row.receivedCartonCount || 1
-    if (!Number.isSafeInteger(receivedQty) || receivedQty <= 0) throw new BadRequestException('实收件数须为大于零的整数')
-    if (!Number.isSafeInteger(receivedCartonCount) || receivedCartonCount <= 0) throw new BadRequestException('实收箱数须为大于零的整数')
+      const receivedQty = body.receivedQty != null
+        ? Number(body.receivedQty)
+        : row.receivedQty || 0
+      const receivedCartonCount = body.receivedCartonCount != null
+        ? Number(body.receivedCartonCount)
+        : row.receivedCartonCount || 1
+      if (!Number.isSafeInteger(receivedQty) || receivedQty <= 0) throw new BadRequestException('实收件数须为大于零的整数')
+      if (!Number.isSafeInteger(receivedCartonCount) || receivedCartonCount <= 0) throw new BadRequestException('实收箱数须为大于零的整数')
 
-    await this.returnCharges.clearPendingReturnCharges(row.returnNo)
+      await new ReturnsChargeService(tx as PrismaService, this.billing).clearPendingReturnCharges(row.returnNo)
 
-    const updated = await this.prisma.$transaction(async (tx) => {
       await tx.returnCartonMeasure.deleteMany({ where: { returnId: row.id } })
-      return tx.returnOrder.update({
+      const updated = await tx.returnOrder.update({
         where: { id: row.id },
         data: {
           status: 'received',
@@ -451,23 +576,28 @@ export class ReturnsService {
         },
         include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
       })
-    })
 
-    await this.opLog.log({
-      module: 'returns',
-      action: 're_receive',
-      targetType: 'return_order',
-      targetId: row.returnNo,
-      operatorId: userId,
-      detail: { receivedQty, receivedCartonCount, previousStatus: row.status },
-    })
-    void this.pushReturnStatusToOms(row.returnNo)
+      await this.logReturn({
+        module: 'returns',
+        action: 're_receive',
+        targetType: 'return_order',
+        targetId: row.returnNo,
+        operatorId: userId,
+        detail: { receivedQty, receivedCartonCount, previousStatus: row.status },
+      }, tx, intent)
+      return updated
+    }, { isolationLevel: 'ReadCommitted' })
+    void this.pushReturnStatusToOms(updated.returnNo)
     return this.enrichRow(updated)
   }
 
-  async measure(id: number, body: { cartons: CartonInput[] }, userId: number) {
-    const row = await this.prisma.returnOrder.findUnique({ where: { id: BigInt(id) } })
+  private async measureInTransaction(tx: Prisma.TransactionClient, id: number, body: { clientRequestId?: string; cartons: CartonInput[] }, userId: number) {
+    const intent = this.returnActionIntent('return_measure', id, userId, body)
+    if (intent) await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(userId)} FOR UPDATE`
+    await tx.$queryRaw`SELECT id FROM return_order WHERE id = ${BigInt(id)} FOR UPDATE`
+    const row = await tx.returnOrder.findUnique({ where: { id: BigInt(id) } })
     if (!row) throw new NotFoundException('退件单不存在')
+    if (await this.hasReturnActionReceipt(tx, userId, intent)) return tx.returnOrder.findUniqueOrThrow({ where: { id: BigInt(id) }, include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } } })
     if (!['received', 'arrived', 'measured', 'fee_calculated'].includes(row.status)) {
       throw new BadRequestException('当前状态不可测量，请先完成收货')
     }
@@ -482,50 +612,119 @@ export class ReturnsService {
     }
     const totals = sumCartonTotals(computed)
 
-    const updated = await this.prisma.$transaction(async (tx) => {
-      await tx.returnCartonMeasure.deleteMany({ where: { returnId: row.id } })
-      for (const c of computed) {
-        await tx.returnCartonMeasure.create({
-          data: {
-            returnId: row.id,
-            cartonNo: c.cartonNo,
-            lengthCm: c.lengthCm,
-            widthCm: c.widthCm,
-            heightCm: c.heightCm,
-            grossWeightKg: c.grossWeightKg,
-            volumeCbm: c.volumeCbm,
-            volumetricWeightKg: c.volumetricWeightKg,
-            chargeableWeightKg: c.chargeableWeightKg,
-          },
-        })
-      }
-      return tx.returnOrder.update({
-        where: { id: row.id },
+    await tx.returnCartonMeasure.deleteMany({ where: { returnId: row.id } })
+    for (const c of computed) {
+      await tx.returnCartonMeasure.create({
         data: {
-          status: 'measured',
-          measuredAt: new Date(),
-          totalVolumeCbm: totals.totalVolumeCbm,
-          totalGrossWeightKg: totals.totalGrossWeightKg,
-          totalChargeableWeightKg: totals.totalChargeableWeightKg,
-          feeStatus: 'none',
-          estimatedFeeTotal: null,
-          feeCalculatedAt: null,
+          returnId: row.id,
+          cartonNo: c.cartonNo,
+          lengthCm: c.lengthCm,
+          widthCm: c.widthCm,
+          heightCm: c.heightCm,
+          grossWeightKg: c.grossWeightKg,
+          volumeCbm: c.volumeCbm,
+          volumetricWeightKg: c.volumetricWeightKg,
+          chargeableWeightKg: c.chargeableWeightKg,
         },
-        include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
       })
+    }
+    const updated = await tx.returnOrder.update({
+      where: { id: row.id },
+      data: {
+        status: 'measured',
+        measuredAt: new Date(),
+        totalVolumeCbm: totals.totalVolumeCbm,
+        totalGrossWeightKg: totals.totalGrossWeightKg,
+        totalChargeableWeightKg: totals.totalChargeableWeightKg,
+        feeStatus: 'none',
+        estimatedFeeTotal: null,
+        feeCalculatedAt: null,
+      },
+      include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
     })
 
-    await this.returnCharges.clearPendingAutoReturnCharges(row.returnNo)
-    await this.opLog.log({
+    await new ReturnsChargeService(tx as PrismaService, this.billing).clearPendingAutoReturnCharges(row.returnNo)
+    await this.logReturn({
       module: 'returns',
       action: 'return_measure',
       targetType: 'return_order',
       targetId: row.returnNo,
       operatorId: userId,
       detail: { cartonCount: computed.length, ...totals },
-    })
-    void this.pushReturnStatusToOms(row.returnNo)
+    }, tx, intent)
+    return updated
+  }
+
+  async measure(id: number, body: { clientRequestId?: string; cartons: CartonInput[] }, userId: number) {
+    const updated = await this.prisma.$transaction(tx => this.measureInTransaction(tx, id, body, userId), { isolationLevel: 'ReadCommitted' })
+    void this.pushReturnStatusToOms(updated.returnNo)
     return this.enrichRow(updated)
+  }
+
+  private async measurementVersion(tx: Prisma.TransactionClient, row: {
+    id: bigint; returnNo: string; status: string; receivedQty: number | null; receivedCartonCount: number | null; measuredAt: Date | null
+    cartons: { lengthCm: unknown; widthCm: unknown; heightCm: unknown; grossWeightKg: unknown }[]
+  }) {
+    const latest = await tx.operationLog.findFirst({ where: { module: 'returns', targetId: row.returnNo, action: { not: 'return_measure_fees_request' } }, orderBy: { id: 'desc' }, select: { id: true } })
+    return createHash('sha256').update(JSON.stringify([String(row.id), row.status, row.receivedQty, row.receivedCartonCount, row.measuredAt, String(latest?.id || ''), row.cartons.map(c => [Number(c.lengthCm), Number(c.widthCm), Number(c.heightCm), Number(c.grossWeightKg)])])).digest('hex')
+  }
+
+  async measurementSnapshot(id: number) {
+    return this.prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM return_order WHERE id = ${BigInt(id)} FOR UPDATE`
+      const row = await tx.returnOrder.findUnique({ where: { id: BigInt(id) }, include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } } })
+      if (!row) throw new NotFoundException('退件单不存在')
+      return { ...this.enrichRow(row), revision: await this.measurementVersion(tx, row) }
+    }, { isolationLevel: 'ReadCommitted' })
+  }
+
+  async measureAndCalculate(id: number, body: ReturnMeasureFeesInput, userId: number, closeOnly = false) {
+    if (!Number.isSafeInteger(id) || id < 1 || !body || typeof body !== 'object' || Array.isArray(body)) throw new BadRequestException('测量请求资料无效，请重新读取退件')
+    const clientRequestId = String(body.clientRequestId || '').trim().toLowerCase()
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(clientRequestId)) throw new BadRequestException('缺少有效的原测量操作标识，请重新读取原请求')
+    if (!['replace', 'existing'].includes(body.mode)) throw new BadRequestException('测量操作类型无效，请重新读取原请求')
+    let cartons: ReturnType<typeof computeCartonMeasures>
+    try {
+      if (!Array.isArray(body.cartons) || !body.cartons.length) throw Error('请至少录入 1 箱外箱尺寸')
+      cartons = computeCartonMeasures(body.cartons)
+    } catch (error) { throw new BadRequestException(error instanceof Error ? error.message : '外箱资料无效') }
+    const expectedRevision = String(body.expectedRevision || '').toLowerCase()
+    if (!/^[0-9a-f]{64}$/.test(expectedRevision)) throw new BadRequestException('缺少原退件版本，请重新读取退件后再提交')
+    const fingerprint = createHash('sha256').update(JSON.stringify([id, body.mode, expectedRevision, cartons])).digest('hex')
+    const receipt = await this.prisma.$transaction(async tx => {
+      // Serialize receipt lookup and close against delayed submissions from the same actor.
+      await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(userId)} FOR UPDATE`
+      const previous = await tx.operationLog.findFirst({ where: { module: 'returns', operatorId: BigInt(userId), detail: { path: '$.clientRequestId', equals: clientRequestId } }, select: { detail: true } })
+      if (previous) {
+        const detail = previous.detail as { requestFingerprint?: string; result?: MeasureFeesReceipt } | null
+        if (detail?.requestFingerprint !== fingerprint || !detail.result || detail.result.id !== id || !['applied', 'closed'].includes(detail.result.outcome)) throw new ConflictException('原测量请求的内容或单号已变化，请核对原请求，不要重新提交')
+        return { ...detail.result, duplicate: true }
+      }
+      await tx.$queryRaw`SELECT id FROM return_order WHERE id = ${BigInt(id)} FOR UPDATE`
+      const row = await tx.returnOrder.findUnique({ where: { id: BigInt(id) }, include: { cartons: { orderBy: { cartonNo: 'asc' } } } })
+      let result: MeasureFeesReceipt
+      if (closeOnly) {
+        result = { outcome: 'closed', id, returnNo: row?.returnNo || String(id), estimatedFeeTotal: null }
+      } else {
+        if (!row) throw new NotFoundException('退件单不存在')
+        if (await this.measurementVersion(tx, row) !== expectedRevision) throw new ConflictException('退件记录已变化，请先核对并结束原请求，再读取最新退件')
+        if (body.mode === 'existing') {
+          const current = computeCartonMeasures(row.cartons.map(c => ({ lengthCm: Number(c.lengthCm), widthCm: Number(c.widthCm), heightCm: Number(c.heightCm), grossWeightKg: Number(c.grossWeightKg) })))
+          if (JSON.stringify(current) !== JSON.stringify(cartons)) throw new ConflictException('测量记录已变化，请先核对并结束原请求，再读取最新退件')
+        } else {
+          await this.measureInTransaction(tx, id, { cartons }, userId)
+        }
+        const updated = await this.calculateFeesInTransaction(tx, id, userId)
+        result = { outcome: 'applied', id, returnNo: updated.returnNo, estimatedFeeTotal: Number(updated.estimatedFeeTotal || 0), customerId: Number(updated.customerId) }
+      }
+      await this.opLog.log({ module: 'returns', action: 'return_measure_fees_request', targetType: 'return_order', targetId: result.returnNo, operatorId: userId, detail: { clientRequestId, requestFingerprint: fingerprint, mode: body.mode, result } }, tx)
+      return { ...result, duplicate: false }
+    }, { isolationLevel: 'ReadCommitted', timeout: 20000 })
+    if (receipt.outcome === 'applied' && !receipt.duplicate) {
+      void this.pushReturnStatusToOms(receipt.returnNo)
+      if (receipt.customerId) void this.billing.pushCustomerBillingToOms(receipt.customerId)
+    }
+    return receipt
   }
 
   async listFeeTemplates() {
@@ -565,30 +764,70 @@ export class ReturnsService {
     const wh = normalizeReturnWarehouse(body.warehouseCode)
     if (!wh) throw new BadRequestException('请选择有效退件仓库（JHB3 / CPT2 / DBN）')
 
-    const exists = await this.prisma.returnFeeTemplate.findFirst({
-      where: { status: 'active', warehouseCode: wh },
-    })
-    if (exists) throw new BadRequestException(`${wh} 仓库已有收费模板，请直接编辑或先删除`)
+    return this.prisma.$transaction(async tx => {
+      // Serialize warehouse assignment changes across all template editors.
+      await tx.$queryRaw`SELECT id FROM return_fee_template ORDER BY id FOR UPDATE`
+      const exists = await tx.returnFeeTemplate.findFirst({
+        where: { status: 'active', warehouseCode: wh },
+      })
+      if (exists) throw new BadRequestException(`${wh} 仓库已有收费模板，请直接编辑或先删除`)
 
-    let normalizedRules: FeeTemplateRule[]
-    try {
-      normalizedRules = normalizeTemplateRulesInput(body.rules || [])
-    } catch (err) {
-      throw new BadRequestException(err instanceof Error ? err.message : '收费规则无效')
-    }
+      let normalizedRules: FeeTemplateRule[]
+      try {
+        normalizedRules = normalizeTemplateRulesInput(body.rules || [])
+      } catch (err) {
+        throw new BadRequestException(err instanceof Error ? err.message : '收费规则无效')
+      }
 
-    const templateName = body.templateName?.trim() || `${wh} 退件收费`
+      const templateName = body.templateName?.trim() || `${wh} 退件收费`
 
-    const inactive = await this.prisma.returnFeeTemplate.findFirst({
-      where: { status: 'inactive', warehouseCode: wh },
-    })
-    if (inactive) {
-      const revived = await this.prisma.$transaction(async (tx) => {
-        await tx.returnFeeTemplateRule.deleteMany({ where: { templateId: inactive.id } })
-        for (const rule of normalizedRules) {
-          await tx.returnFeeTemplateRule.create({
-            data: {
-              templateId: inactive.id,
+      const inactive = await tx.returnFeeTemplate.findFirst({
+        where: { status: 'inactive', warehouseCode: wh },
+      })
+      if (inactive) {
+          await tx.returnFeeTemplateRule.deleteMany({ where: { templateId: inactive.id } })
+          for (const rule of normalizedRules) {
+            await tx.returnFeeTemplateRule.create({
+              data: {
+                templateId: inactive.id,
+                chargeType: rule.chargeType,
+                description: rule.description,
+                calcMode: rule.calcMode,
+                unitPrice: rule.unitPrice,
+                minQty: rule.minQty,
+                sortOrder: rule.sortOrder,
+                autoApply: rule.autoApply !== false,
+              },
+            })
+          }
+        const revived = await tx.returnFeeTemplate.update({
+            where: { id: inactive.id },
+            data: { templateName, status: 'active', customerId: null },
+            include: { rules: { orderBy: { sortOrder: 'asc' } } },
+          })
+        await this.logReturn({
+          module: 'returns',
+          action: 'return_fee_template_create',
+          targetType: 'return_fee_template',
+          targetId: inactive.templateCode,
+          operatorId: userId,
+          detail: { warehouseCode: wh, ruleCount: normalizedRules.length, revived: true },
+        }, tx)
+        return this.mapFeeTemplate(revived)
+      }
+
+      const templateCode = `wh_${wh.toLowerCase()}`
+
+      const created = await tx.returnFeeTemplate.create({
+        data: {
+          templateCode,
+          templateName,
+          isDefault: false,
+          warehouseCode: wh,
+          customerId: null,
+          status: 'active',
+          rules: {
+            create: normalizedRules.map((rule) => ({
               chargeType: rule.chargeType,
               description: rule.description,
               calcMode: rule.calcMode,
@@ -596,82 +835,48 @@ export class ReturnsService {
               minQty: rule.minQty,
               sortOrder: rule.sortOrder,
               autoApply: rule.autoApply !== false,
-            },
-          })
-        }
-        return tx.returnFeeTemplate.update({
-          where: { id: inactive.id },
-          data: { templateName, status: 'active', customerId: null },
-          include: { rules: { orderBy: { sortOrder: 'asc' } } },
-        })
+            })),
+          },
+        },
+        include: { rules: { orderBy: { sortOrder: 'asc' } } },
       })
-      await this.opLog.log({
+
+      await this.logReturn({
         module: 'returns',
         action: 'return_fee_template_create',
         targetType: 'return_fee_template',
-        targetId: inactive.templateCode,
+        targetId: templateCode,
         operatorId: userId,
-        detail: { warehouseCode: wh, ruleCount: normalizedRules.length, revived: true },
-      })
-      return this.mapFeeTemplate(revived)
-    }
+        detail: { warehouseCode: wh, ruleCount: normalizedRules.length },
+      }, tx)
 
-    const templateCode = `wh_${wh.toLowerCase()}`
-
-    const created = await this.prisma.returnFeeTemplate.create({
-      data: {
-        templateCode,
-        templateName,
-        isDefault: false,
-        warehouseCode: wh,
-        customerId: null,
-        status: 'active',
-        rules: {
-          create: normalizedRules.map((rule) => ({
-            chargeType: rule.chargeType,
-            description: rule.description,
-            calcMode: rule.calcMode,
-            unitPrice: rule.unitPrice,
-            minQty: rule.minQty,
-            sortOrder: rule.sortOrder,
-            autoApply: rule.autoApply !== false,
-          })),
-        },
-      },
-      include: { rules: { orderBy: { sortOrder: 'asc' } } },
-    })
-
-    await this.opLog.log({
-      module: 'returns',
-      action: 'return_fee_template_create',
-      targetType: 'return_fee_template',
-      targetId: templateCode,
-      operatorId: userId,
-      detail: { warehouseCode: wh, ruleCount: normalizedRules.length },
-    })
-
-    return this.mapFeeTemplate(created)
+      return this.mapFeeTemplate(created)
+    }, { isolationLevel: 'ReadCommitted' })
   }
 
   async deleteFeeTemplate(id: number, userId: number) {
-    const row = await this.prisma.returnFeeTemplate.findUnique({ where: { id: BigInt(id) } })
-    if (!row || row.status !== 'active') throw new NotFoundException('收费模板不存在')
+    return this.prisma.$transaction(async tx => {
+      // Serialize warehouse assignment changes across all template editors.
+      await tx.$queryRaw`SELECT id FROM return_fee_template ORDER BY id FOR UPDATE`
+      const row = await tx.returnFeeTemplate.findUnique({ where: { id: BigInt(id) } })
+      if (!row || row.status !== 'active') throw new NotFoundException('收费模板不存在')
 
-    await this.prisma.returnFeeTemplate.update({
-      where: { id: row.id },
-      data: { status: 'inactive' },
-    })
+      await tx.returnFeeTemplate.update({
+        where: { id: row.id },
+        data: { status: 'inactive' },
+      })
 
-    await this.opLog.log({
-      module: 'returns',
-      action: 'return_fee_template_delete',
-      targetType: 'return_fee_template',
-      targetId: row.templateCode,
-      operatorId: userId,
-      detail: { warehouseCode: row.warehouseCode },
-    })
+      await this.logReturn({
+        module: 'returns',
+        action: 'return_fee_template_delete',
+        targetType: 'return_fee_template',
+        targetId: row.templateCode,
+        operatorId: userId,
+        detail: { warehouseCode: row.warehouseCode },
+      }, tx)
 
-    return { ok: true }
+      return { ok: true }
+    }, { isolationLevel: 'ReadCommitted' })
   }
 
   async previewReturnFees(
@@ -713,16 +918,18 @@ export class ReturnsService {
     }
   }
 
-  async calculateFees(
-    id: number,
-    userId: number,
-    _body?: { extraLines?: { description?: string; amount?: number; quantity?: number; unitPrice?: number }[] },
+  private async calculateFeesInTransaction(tx: Prisma.TransactionClient, id: number, userId: number,
+    _body?: { clientRequestId?: string; extraLines?: { description?: string; amount?: number; quantity?: number; unitPrice?: number }[] },
   ) {
-    const row = await this.prisma.returnOrder.findUnique({
+    const intent = this.returnActionIntent('return_calc_fee', id, userId, _body || {})
+    if (intent) await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(userId)} FOR UPDATE`
+    await tx.$queryRaw`SELECT id FROM return_order WHERE id = ${BigInt(id)} FOR UPDATE`
+    const row = await tx.returnOrder.findUnique({
       where: { id: BigInt(id) },
       include: { items: true, cartons: { orderBy: { cartonNo: 'asc' } } },
     })
     if (!row) throw new NotFoundException('退件单不存在')
+    if (await this.hasReturnActionReceipt(tx, userId, intent)) return tx.returnOrder.findUniqueOrThrow({ where: { id: BigInt(id) }, include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } } })
     if (row.status !== 'measured') {
       throw new BadRequestException('请先完成外箱体积测量，再生成费用')
     }
@@ -731,7 +938,7 @@ export class ReturnsService {
     }
 
     const totalVolumeCbm = Number(row.totalVolumeCbm || 0)
-    const template = await this.resolveWarehouseFeeTemplate(row.returnWarehouse)
+    const template = await this.resolveWarehouseFeeTemplate(row.returnWarehouse, tx as PrismaService)
     const rules = mapDbTemplateRules(template.rules || [])
     const ctx = buildFeePreviewContext({
       cartonCount: row.cartons.length,
@@ -743,19 +950,21 @@ export class ReturnsService {
     const autoLines = buildMeasurePhaseFeeLines(ctx, rules)
     const estimatedFeeTotal = autoLines.reduce((s, l) => s + l.amount, 0)
 
-    await this.returnCharges.clearPendingAutoReturnCharges(row.returnNo)
-    await this.returnCharges.clearPendingManualExtraCharges(row.returnNo)
+    await tx.$queryRaw`SELECT id FROM customer WHERE id = ${row.customerId} FOR UPDATE`
+    const charges = new ReturnsChargeService(tx as PrismaService, this.billing)
+    await charges.clearPendingAutoReturnCharges(row.returnNo)
+    await charges.clearPendingManualExtraCharges(row.returnNo)
     for (const line of autoLines) {
-      await this.returnCharges.createReturnCharge({
+      await charges.createReturnCharge({
         customerId: Number(row.customerId),
         returnNo: row.returnNo,
         warehouseCode: row.returnWarehouse || undefined,
         source: 'wms',
         ...line,
-      })
+      }, false)
     }
 
-    const updated = await this.prisma.returnOrder.update({
+    const updated = await tx.returnOrder.update({
       where: { id: row.id },
       data: {
         status: 'fee_calculated',
@@ -766,7 +975,7 @@ export class ReturnsService {
       include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
     })
 
-    await this.opLog.log({
+    await this.logReturn({
       module: 'returns',
       action: 'return_calc_fee',
       targetType: 'return_order',
@@ -778,11 +987,19 @@ export class ReturnsService {
         autoLines,
         phase: 'measure_logistics_only',
       },
-    })
-    void this.pushReturnStatusToOms(row.returnNo)
-    const enriched = this.enrichRow(updated)
-    const loadedFeeLines = await this.returnCharges.loadFeeLines(row.returnNo)
-    return { ...enriched, feeLines: loadedFeeLines }
+    }, tx, intent)
+    return updated
+  }
+
+  async calculateFees(id: number, userId: number,
+    _body?: { clientRequestId?: string; extraLines?: { description?: string; amount?: number; quantity?: number; unitPrice?: number }[] },
+  ) {
+    await this.ensureMissingWarehouseTemplates()
+    const updated = await this.prisma.$transaction(tx => this.calculateFeesInTransaction(tx, id, userId, _body), { isolationLevel: 'ReadCommitted' })
+    void this.billing.pushCustomerBillingToOms(Number(updated.customerId))
+    void this.pushReturnStatusToOms(updated.returnNo)
+    const loadedFeeLines = await this.returnCharges.loadFeeLines(updated.returnNo)
+    return { ...this.enrichRow(updated), feeLines: loadedFeeLines }
   }
 
   async updateFeeTemplate(
@@ -803,72 +1020,74 @@ export class ReturnsService {
     },
     userId: number,
   ) {
-    const row = await this.prisma.returnFeeTemplate.findUnique({ where: { id: BigInt(id) } })
-    if (!row) throw new NotFoundException('收费模板不存在')
-    if (row.status !== 'active') throw new BadRequestException('模板已停用，不可编辑')
+    return this.prisma.$transaction(async tx => {
+      // Serialize warehouse assignment changes across all template editors.
+      await tx.$queryRaw`SELECT id FROM return_fee_template ORDER BY id FOR UPDATE`
+      const row = await tx.returnFeeTemplate.findUnique({ where: { id: BigInt(id) } })
+      if (!row) throw new NotFoundException('收费模板不存在')
+      if (row.status !== 'active') throw new BadRequestException('模板已停用，不可编辑')
 
-    let normalizedRules: FeeTemplateRule[]
-    try {
-      normalizedRules = normalizeTemplateRulesInput(body.rules || [])
-    } catch (err) {
-      throw new BadRequestException(err instanceof Error ? err.message : '收费规则无效')
-    }
-
-    const templateName = body.templateName?.trim() || row.templateName
-    if (!templateName) throw new BadRequestException('模板名称不能为空')
-
-    const warehouseCode = body.warehouseCode !== undefined
-      ? (body.warehouseCode?.trim().toUpperCase() || null)
-      : row.warehouseCode
-    if (!warehouseCode || !isValidReturnWarehouse(warehouseCode)) {
-      throw new BadRequestException('须指定有效退件仓库（JHB3 / CPT2 / DBN）')
-    }
-
-    const wh = normalizeReturnWarehouse(warehouseCode)!
-    const conflict = await this.prisma.returnFeeTemplate.findFirst({
-      where: { status: 'active', warehouseCode: wh, id: { not: row.id } },
-    })
-    if (conflict) throw new BadRequestException(`${wh} 仓库已有其他收费模板`)
-
-    const customerId = null as bigint | null
-
-    const updated = await this.prisma.$transaction(async (tx) => {
-      await tx.returnFeeTemplateRule.deleteMany({ where: { templateId: row.id } })
-      for (const rule of normalizedRules) {
-        await tx.returnFeeTemplateRule.create({
-          data: {
-            templateId: row.id,
-            chargeType: rule.chargeType,
-            description: rule.description,
-            calcMode: rule.calcMode,
-            unitPrice: rule.unitPrice,
-            minQty: rule.minQty,
-            sortOrder: rule.sortOrder,
-            autoApply: rule.autoApply !== false,
-          },
-        })
+      let normalizedRules: FeeTemplateRule[]
+      try {
+        normalizedRules = normalizeTemplateRulesInput(body.rules || [])
+      } catch (err) {
+        throw new BadRequestException(err instanceof Error ? err.message : '收费规则无效')
       }
-      return tx.returnFeeTemplate.update({
-        where: { id: row.id },
-        data: {
-          templateName,
-          warehouseCode: wh,
-          customerId,
-        },
-        include: { rules: { orderBy: { sortOrder: 'asc' } } },
+
+      const templateName = body.templateName?.trim() || row.templateName
+      if (!templateName) throw new BadRequestException('模板名称不能为空')
+
+      const warehouseCode = body.warehouseCode !== undefined
+        ? (body.warehouseCode?.trim().toUpperCase() || null)
+        : row.warehouseCode
+      if (!warehouseCode || !isValidReturnWarehouse(warehouseCode)) {
+        throw new BadRequestException('须指定有效退件仓库（JHB3 / CPT2 / DBN）')
+      }
+
+      const wh = normalizeReturnWarehouse(warehouseCode)!
+      const conflict = await tx.returnFeeTemplate.findFirst({
+        where: { status: 'active', warehouseCode: wh, id: { not: row.id } },
       })
-    })
+      if (conflict) throw new BadRequestException(`${wh} 仓库已有其他收费模板`)
 
-    await this.opLog.log({
-      module: 'returns',
-      action: 'return_fee_template_update',
-      targetType: 'return_fee_template',
-      targetId: row.templateCode,
-      operatorId: userId,
-      detail: { templateName, ruleCount: normalizedRules.length },
-    })
+      const customerId = null as bigint | null
 
-    return this.mapFeeTemplate(updated)
+        await tx.returnFeeTemplateRule.deleteMany({ where: { templateId: row.id } })
+        for (const rule of normalizedRules) {
+          await tx.returnFeeTemplateRule.create({
+            data: {
+              templateId: row.id,
+              chargeType: rule.chargeType,
+              description: rule.description,
+              calcMode: rule.calcMode,
+              unitPrice: rule.unitPrice,
+              minQty: rule.minQty,
+              sortOrder: rule.sortOrder,
+              autoApply: rule.autoApply !== false,
+            },
+          })
+        }
+      const updated = await tx.returnFeeTemplate.update({
+          where: { id: row.id },
+          data: {
+            templateName,
+            warehouseCode: wh,
+            customerId,
+          },
+          include: { rules: { orderBy: { sortOrder: 'asc' } } },
+        })
+
+      await this.logReturn({
+        module: 'returns',
+        action: 'return_fee_template_update',
+        targetType: 'return_fee_template',
+        targetId: row.templateCode,
+        operatorId: userId,
+        detail: { templateName, ruleCount: normalizedRules.length },
+      }, tx)
+
+      return this.mapFeeTemplate(updated)
+    }, { isolationLevel: 'ReadCommitted' })
   }
 
   private mapFeeTemplate(template: {
@@ -908,43 +1127,48 @@ export class ReturnsService {
   }
 
   private async ensureMissingWarehouseTemplates() {
-    for (const wh of RETURN_WAREHOUSES) {
-      const exists = await this.prisma.returnFeeTemplate.findFirst({
-        where: { status: 'active', warehouseCode: wh },
-      })
-      if (exists) continue
-      const rules = defaultMeasureFeeRules(wh)
-      await this.prisma.returnFeeTemplate.create({
-        data: {
-          templateCode: `wh_${wh.toLowerCase()}`,
-          templateName: `${wh} 退件收费`,
-          isDefault: false,
-          warehouseCode: wh,
-          customerId: null,
-          status: 'active',
-          rules: {
-            create: rules.map((rule) => ({
-              chargeType: rule.chargeType,
-              description: rule.description,
-              calcMode: rule.calcMode,
-              unitPrice: rule.unitPrice,
-              minQty: rule.minQty,
-              sortOrder: rule.sortOrder,
-              autoApply: rule.autoApply !== false,
-            })),
+    await this.prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM return_fee_template ORDER BY id FOR UPDATE`
+      for (const wh of RETURN_WAREHOUSES) {
+        const exists = await tx.returnFeeTemplate.findFirst({
+          where: { warehouseCode: wh },
+        })
+        if (exists) continue
+        const rules = defaultMeasureFeeRules(wh)
+        await tx.returnFeeTemplate.upsert({
+          where: { templateCode: `wh_${wh.toLowerCase()}` },
+          update: {},
+          create: {
+            templateCode: `wh_${wh.toLowerCase()}`,
+            templateName: `${wh} 退件收费`,
+            isDefault: false,
+            warehouseCode: wh,
+            customerId: null,
+            status: 'active',
+            rules: {
+              create: rules.map((rule) => ({
+                chargeType: rule.chargeType,
+                description: rule.description,
+                calcMode: rule.calcMode,
+                unitPrice: rule.unitPrice,
+                minQty: rule.minQty,
+                sortOrder: rule.sortOrder,
+                autoApply: rule.autoApply !== false,
+              })),
+            },
           },
-        },
-      })
-    }
+        })
+      }
+    }, { isolationLevel: 'ReadCommitted' })
   }
 
-  private async resolveWarehouseFeeTemplate(warehouseCode: string | null) {
+  private async resolveWarehouseFeeTemplate(warehouseCode: string | null, client: PrismaService = this.prisma) {
     const wh = normalizeReturnWarehouse(warehouseCode)
     if (!wh) {
       throw new BadRequestException('退件单缺少有效退件仓库，无法匹配收费模板')
     }
-    await this.ensureMissingWarehouseTemplates()
-    const row = await this.prisma.returnFeeTemplate.findFirst({
+    if (client === this.prisma) await this.ensureMissingWarehouseTemplates()
+    const row = await client.returnFeeTemplate.findFirst({
       where: { status: 'active', warehouseCode: wh },
       include: { rules: { where: { autoApply: true }, orderBy: { sortOrder: 'asc' } } },
     })
@@ -956,7 +1180,7 @@ export class ReturnsService {
 
   async submitInspection(
     id: number,
-    body: {
+    body: { clientRequestId?: string;
       inspectionResult: string
       inspectionRemark?: string
       attachments?: { fileName: string; contentBase64?: string; url?: string }[]
@@ -967,28 +1191,34 @@ export class ReturnsService {
     if (!isValidInspectionResult(inspectionResult)) {
       throw new BadRequestException('请选择质检结论（良品/不良品/混合/待判定）')
     }
-    const row = await this.prisma.returnOrder.findUnique({
-      where: { id: BigInt(id) },
-      include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
-    })
-    if (!row) throw new NotFoundException('退件单不存在')
-    if (row.status !== 'fee_calculated') {
-      throw new BadRequestException('请先完成测体积与算费，再提交质检')
-    }
+    const written: string[] = []
+    const updated = await this.prisma.$transaction(async tx => {
+      const intent = this.returnActionIntent('return_inspect', id, userId, body)
+      if (intent) await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(userId)} FOR UPDATE`
+      await tx.$queryRaw`SELECT id FROM return_order WHERE id = ${BigInt(id)} FOR UPDATE`
+      const row = await tx.returnOrder.findUnique({
+        where: { id: BigInt(id) },
+        include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
+      })
+      if (!row) throw new NotFoundException('退件单不存在')
+      if (await this.hasReturnActionReceipt(tx, userId, intent)) return tx.returnOrder.findUniqueOrThrow({ where: { id: BigInt(id) }, include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } } })
+      if (row.status !== 'fee_calculated') {
+        throw new BadRequestException('请先完成测体积与算费，再提交质检')
+      }
 
-    const normalized = this.normalizeAttachments(
-      (body.attachments || []).map((a) => ({ ...a, fileType: 'inspection_photo' })),
-    )
-    if (!normalized.length) {
-      throw new BadRequestException('请至少上传 1 张质检照片')
-    }
+      const normalized = this.normalizeAttachments(
+        (body.attachments || []).map((a) => ({ ...a, fileType: 'inspection_photo' })),
+      )
+      if (!normalized.length) {
+        throw new BadRequestException('请至少上传 1 张质检照片')
+      }
 
-    const deadline = new Date()
-    deadline.setHours(deadline.getHours() + RETURN_FEE_RATES.decisionDeadlineHours)
+      const deadline = new Date()
+      deadline.setHours(deadline.getHours() + RETURN_FEE_RATES.decisionDeadlineHours)
 
-    const updated = await this.prisma.$transaction(async (tx) => {
       for (const att of normalized) {
         const saved = this.writeAttachment(att.fileName, att.contentBase64)
+        written.push(saved.filePath)
         await tx.returnAttachment.create({
           data: {
             returnId: row.id,
@@ -998,7 +1228,7 @@ export class ReturnsService {
           },
         })
       }
-      return tx.returnOrder.update({
+      const updated = await tx.returnOrder.update({
         where: { id: row.id },
         data: {
           status: 'awaiting_customer',
@@ -1013,17 +1243,21 @@ export class ReturnsService {
         },
         include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
       })
-    })
 
-    await this.opLog.log({
-      module: 'returns',
-      action: 'return_inspect',
-      targetType: 'return_order',
-      targetId: row.returnNo,
-      operatorId: userId,
-      detail: { inspectionResult, photoCount: normalized.length },
+      await this.logReturn({
+        module: 'returns',
+        action: 'return_inspect',
+        targetType: 'return_order',
+        targetId: row.returnNo,
+        operatorId: userId,
+        detail: { inspectionResult, photoCount: normalized.length },
+      }, tx, intent)
+      return updated
+    }, { isolationLevel: 'ReadCommitted' }).catch(error => {
+      for (const path of written) this.files.remove(path)
+      throw error
     })
-    void this.pushReturnStatusToOms(row.returnNo)
+    void this.pushReturnStatusToOms(updated.returnNo)
     return this.enrichRow(updated)
   }
 
@@ -1038,108 +1272,128 @@ export class ReturnsService {
       throw new BadRequestException('请选择留货或不留货的处理决定')
     }
 
-    const row = await this.prisma.returnOrder.findUnique({
-      where: { returnNo: no },
-      include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
-    })
-    if (!row) throw new NotFoundException(`退件单 ${no} 不存在`)
-    const code = body.customerCode?.trim()
-    if (!code) throw new BadRequestException('缺少客户代码')
-    if (!row.omsCustomerCode || row.omsCustomerCode !== code) {
-      throw new BadRequestException('客户编码与退件单不匹配')
-    }
-    if (row.status !== 'awaiting_customer') {
-      throw new BadRequestException('当前状态不可确认，仅「待客户确认」可操作')
-    }
-
-    const totalQty = row.receivedQty ?? row.items.reduce((s, i) => s + i.quantity, 0)
-    const totalVolumeCbm = Number(row.totalVolumeCbm || 0)
-
-    await this.returnCharges.clearPendingDecisionCharges(no)
-
-    let nextStatus: string
-    let customerProcessChoice: string | null = null
-
-    if (decision === 'discard') {
-      nextStatus = 'dispose_pending'
-      const feeLines = buildDiscardFeeLines(totalVolumeCbm)
-      for (const line of feeLines) {
-        await this.returnCharges.createReturnCharge({
-          customerId: Number(row.customerId),
-          returnNo: no,
-          warehouseCode: row.returnWarehouse || undefined,
-          ...line,
-        })
+    const updated = await this.prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM return_order WHERE return_no = ${no} FOR UPDATE`
+      const row = await tx.returnOrder.findUnique({
+        where: { returnNo: no },
+        include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
+      })
+      if (!row) throw new NotFoundException(`退件单 ${no} 不存在`)
+      const code = body.customerCode?.trim()
+      if (!code) throw new BadRequestException('缺少客户代码')
+      if (!row.omsCustomerCode || row.omsCustomerCode !== code) {
+        throw new BadRequestException('客户编码与退件单不匹配')
       }
-    } else {
-      const processChoice = String(body.processChoice || row.requestedProcess || 'restock').trim()
-      if (!isValidProcessMethod(processChoice) || processChoice === 'destroy') {
+      const processChoice = decision === 'keep' ? String(body.processChoice || row.requestedProcess || 'restock').trim() : null
+      if (processChoice !== null && (!isValidProcessMethod(processChoice) || processChoice === 'destroy')) {
         throw new BadRequestException('留货时请选择有效的处理方式')
       }
-      customerProcessChoice = processChoice
-      nextStatus = 'accepted_pending'
-      const feeLines = buildKeepFeeLines(processChoice as ReturnProcessMethod, totalQty)
-      for (const line of feeLines) {
-        await this.returnCharges.createReturnCharge({
-          customerId: Number(row.customerId),
-          returnNo: no,
-          warehouseCode: row.returnWarehouse || undefined,
-          ...line,
-        })
+      if (row.status !== 'awaiting_customer') {
+        if (row.customerDecidedAt && (row.customerDecision === 'keep' || row.customerDecision === 'discard')) {
+          if (row.customerDecision !== decision || row.customerProcessChoice !== processChoice) {
+            throw new ConflictException('退件处理决定已确认，请刷新核对原决定')
+          }
+          return { row, duplicate: true }
+        }
+        throw new BadRequestException('当前状态不可确认，仅「待客户确认」可操作')
       }
-    }
 
-    const estimatedFeeTotal = await this.returnCharges.refreshEstimatedFeeTotal(row.id, no)
+      const totalQty = row.receivedQty ?? row.items.reduce((s, i) => s + i.quantity, 0)
+      const totalVolumeCbm = Number(row.totalVolumeCbm || 0)
 
-    const updated = await this.prisma.returnOrder.update({
-      where: { id: row.id },
-      data: {
-        status: nextStatus,
-        customerDecision: decision,
-        customerDecidedAt: new Date(),
-        customerProcessChoice,
-        feeStatus: 'confirmed',
-        estimatedFeeTotal,
-      },
-      include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
-    })
+      await tx.$queryRaw`SELECT id FROM customer WHERE id = ${row.customerId} FOR UPDATE`
+      const charges = new ReturnsChargeService(tx as PrismaService, this.billing)
+      await charges.clearPendingDecisionCharges(no)
 
-    await this.opLog.log({
-      module: 'returns',
-      action: 'return_customer_decide',
-      targetType: 'return_order',
-      targetId: no,
-      detail: { decision, processChoice: customerProcessChoice, estimatedFeeTotal },
-    })
+      let nextStatus: string
+      let customerProcessChoice: string | null = null
+
+      if (decision === 'discard') {
+        nextStatus = 'dispose_pending'
+        const feeLines = buildDiscardFeeLines(totalVolumeCbm)
+        for (const line of feeLines) {
+          await charges.createReturnCharge({
+            customerId: Number(row.customerId),
+            returnNo: no,
+            warehouseCode: row.returnWarehouse || undefined,
+            ...line,
+          }, false)
+        }
+      } else {
+        customerProcessChoice = processChoice
+        nextStatus = 'accepted_pending'
+        const feeLines = buildKeepFeeLines(processChoice as ReturnProcessMethod, totalQty)
+        for (const line of feeLines) {
+          await charges.createReturnCharge({
+            customerId: Number(row.customerId),
+            returnNo: no,
+            warehouseCode: row.returnWarehouse || undefined,
+            ...line,
+          }, false)
+        }
+      }
+
+      const estimatedFeeTotal = await charges.refreshEstimatedFeeTotal(row.id, no)
+
+      const updated = await tx.returnOrder.update({
+        where: { id: row.id },
+        data: {
+          status: nextStatus,
+          customerDecision: decision,
+          customerDecidedAt: new Date(),
+          customerProcessChoice,
+          feeStatus: 'confirmed',
+          estimatedFeeTotal,
+        },
+        include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
+      })
+
+      await this.logReturn({
+        module: 'returns',
+        action: 'return_customer_decide',
+        targetType: 'return_order',
+        targetId: no,
+        detail: { decision, processChoice: customerProcessChoice, estimatedFeeTotal },
+      }, tx)
+      return { row: updated, duplicate: false }
+    }, { isolationLevel: 'ReadCommitted' })
+    void this.billing.pushCustomerBillingToOms(Number(updated.row.customerId))
     void this.pushReturnStatusToOms(no)
-    return { ...this.mapReturnForOms(updated), idempotent: false }
+    return { ...this.mapReturnForOms(updated.row), idempotent: updated.duplicate }
   }
 
-  async executeDispose(id: number, body: { processRemark?: string }, userId: number) {
-    const row = await this.prisma.returnOrder.findUnique({ where: { id: BigInt(id) } })
-    if (!row) throw new NotFoundException('退件单不存在')
-    if (row.status !== 'dispose_pending') {
-      throw new BadRequestException('当前状态不可销毁，仅「待销毁」可确认')
-    }
-    const updated = await this.prisma.returnOrder.update({
-      where: { id: row.id },
-      data: {
-        status: 'completed',
-        processResult: 'destroy',
-        processRemark: body.processRemark?.trim() || '客户确认不留，已销毁',
-        processedAt: new Date(),
-        processedBy: BigInt(userId),
-      },
-      include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
-    })
-    await this.opLog.log({
-      module: 'returns',
-      action: 'return_dispose',
-      targetType: 'return_order',
-      targetId: row.returnNo,
-      operatorId: userId,
-    })
-    void this.pushReturnStatusToOms(row.returnNo)
+  async executeDispose(id: number, body: { clientRequestId?: string; processRemark?: string }, userId: number) {
+    const updated = await this.prisma.$transaction(async tx => {
+      const intent = this.returnActionIntent('return_dispose', id, userId, body)
+      if (intent) await tx.$queryRaw`SELECT id FROM sys_user WHERE id = ${BigInt(userId)} FOR UPDATE`
+      await tx.$queryRaw`SELECT id FROM return_order WHERE id = ${BigInt(id)} FOR UPDATE`
+      const row = await tx.returnOrder.findUnique({ where: { id: BigInt(id) } })
+      if (!row) throw new NotFoundException('退件单不存在')
+      if (await this.hasReturnActionReceipt(tx, userId, intent)) return tx.returnOrder.findUniqueOrThrow({ where: { id: BigInt(id) }, include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } } })
+      if (row.status !== 'dispose_pending') {
+        throw new BadRequestException('当前状态不可销毁，仅「待销毁」可确认')
+      }
+      const updated = await tx.returnOrder.update({
+        where: { id: row.id },
+        data: {
+          status: 'completed',
+          processResult: 'destroy',
+          processRemark: body.processRemark?.trim() || '客户确认不留，已销毁',
+          processedAt: new Date(),
+          processedBy: BigInt(userId),
+        },
+        include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
+      })
+      await this.logReturn({
+        module: 'returns',
+        action: 'return_dispose',
+        targetType: 'return_order',
+        targetId: row.returnNo,
+        operatorId: userId,
+      }, tx, intent)
+      return updated
+    }, { isolationLevel: 'ReadCommitted' })
+    void this.pushReturnStatusToOms(updated.returnNo)
     return this.enrichRow(updated)
   }
 
@@ -1163,9 +1417,12 @@ export class ReturnsService {
       if (!isValidProcessMethod(processResult) || processResult === 'destroy') throw new BadRequestException('请选择有效的处理结果')
       const fingerprint = returnProcessFingerprint(body, processResult)
       if (clientRequestId) {
+        const closed = await tx.operationLog.findFirst({ where: { module: 'returns', action: 'warehouse_request_closed', targetId: row.returnNo, operatorId: BigInt(userId), detail: { path: '$.clientRequestId', equals: clientRequestId } } })
+        if (closed) throw new ConflictException('原退件处理已核对结束，请刷新单据后重新操作')
         const previous = await tx.operationLog.findFirst({ where: { module: 'returns', action: 'process', targetId: row.returnNo, detail: { path: '$.clientRequestId', equals: clientRequestId } }, select: { detail: true } })
         if (previous) {
           if ((previous.detail as { requestFingerprint?: string } | null)?.requestFingerprint !== fingerprint) throw new ConflictException('同一次操作的内容已变化，请刷新退件记录核对后再继续')
+          await this.returnSync.enqueue(tx, row.returnNo, ['restock', 'relabel'].includes(processResult) ? String(body.warehouseCode || '').trim() : undefined)
           return { duplicate: true, returnNo: row.returnNo, needsStock: ['restock', 'relabel'].includes(processResult), warehouseCode: String(body.warehouseCode || '').trim() }
         }
       }
@@ -1187,11 +1444,11 @@ export class ReturnsService {
         detail: { processResult, processRemark: body.processRemark || null, clientRequestId: clientRequestId || null,
           requestFingerprint: fingerprint, ...(stock ? { warehouseCode: body.warehouseCode, ...stock } : {}) },
       } })
+      await this.returnSync.enqueue(tx, row.returnNo, needsStock ? String(body.warehouseCode || '').trim() : undefined)
       return { duplicate: false, returnNo: row.returnNo, needsStock, warehouseCode: String(body.warehouseCode || '').trim() }
     }, { timeout: 20000 })
     const statusPushed = await this.pushReturnStatusToOms(result.returnNo)
-    const inventoryPushed = result.needsStock
-      ? await this.pushReturnStockToOms(id, result.warehouseCode) : true
+    const inventoryPushed = true // The durable task includes inventory publication when required.
     return { ...(await this.detail(id)), duplicate: result.duplicate,
       ...(!statusPushed || !inventoryPushed ? { warning: '处理结果已保存，但 OMS 同步未完成，请在 OMS 刷新核对，请勿重复入库。' } : {}) }
   }
@@ -1438,39 +1695,59 @@ export class ReturnsService {
   }
 
   /** OMS：撤回退件（仅待到货） */
-  async cancelFromOms(returnNo: string, customerCode?: string) {
+  async cancelFromOms(returnNo: string, customerCode?: string, clientRequestId?: string, expectedUpdatedAt?: string) {
     const no = returnNo.trim()
     if (!no) throw new BadRequestException('缺少退件单号')
-    const row = await this.prisma.returnOrder.findUnique({
-      where: { returnNo: no },
-      include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
-    })
-    if (!row) throw new NotFoundException(`退件单 ${no} 不存在`)
-    const code = String(customerCode || '').trim()
-    if (!code) throw new BadRequestException('缺少客户代码')
-    if (!row.omsCustomerCode || row.omsCustomerCode !== code) {
-      throw new BadRequestException('客户编码与退件单不匹配')
+    if (clientRequestId !== undefined && (typeof clientRequestId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(clientRequestId))) {
+      throw new BadRequestException('撤回操作标识无效，请核对原请求')
     }
-    if (row.status === 'cancelled') {
-      return { ...this.mapReturnForOms(row), idempotent: true }
-    }
-    if (row.status !== 'pending_arrival') {
-      throw new BadRequestException('当前状态不可撤回，仅「待到货」可撤回')
-    }
-    const updated = await this.prisma.returnOrder.update({
-      where: { id: row.id },
-      data: { status: 'cancelled' },
-      include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
-    })
-    await this.opLog.log({
-      module: 'returns',
-      action: 'oms_return_cancel',
-      targetType: 'return_order',
-      targetId: no,
-      detail: { customerCode: row.omsCustomerCode },
-    })
+    const updated = await this.prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM return_order WHERE return_no = ${no} FOR UPDATE`
+      const row = await tx.returnOrder.findUnique({
+        where: { returnNo: no },
+        include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
+      })
+      if (!row) throw new NotFoundException(`退件单 ${no} 不存在`)
+      const code = String(customerCode || '').trim()
+      if (!code) throw new BadRequestException('缺少客户代码')
+      if (!row.omsCustomerCode || row.omsCustomerCode !== code) {
+        throw new BadRequestException('客户编码与退件单不匹配')
+      }
+      if (clientRequestId) {
+        const receipt = await tx.operationLog.findFirst({ where: { module: 'returns', action: 'oms_return_cancel', targetId: no,
+          detail: { path: '$.clientRequestId', equals: clientRequestId } } })
+        if (receipt) return { row, idempotent: true }
+      }
+      if (expectedUpdatedAt !== undefined && row.updatedAt.toISOString() !== expectedUpdatedAt) {
+        throw new ConflictException('退件单已更新，请刷新核对后再发起撤回')
+      }
+      if (row.status === 'cancelled') {
+        if (clientRequestId) {
+          await this.opLog.log({ module: 'returns', action: 'oms_return_cancel', targetType: 'return_order', targetId: no,
+            detail: { customerCode: code, clientRequestId, alreadyCancelled: true } }, tx)
+        }
+        await this.returnSync.enqueue(tx, no)
+        return { row, idempotent: true }
+      }
+      if (row.status !== 'pending_arrival') {
+        throw new BadRequestException('当前状态不可撤回，仅「待到货」可撤回')
+      }
+      const updated = await tx.returnOrder.update({
+        where: { id: row.id },
+        data: { status: 'cancelled', updatedAt: new Date(Math.max(Date.now(), row.updatedAt.getTime() + 1)) },
+        include: { items: true, attachments: { orderBy: { id: 'asc' } }, cartons: { orderBy: { cartonNo: 'asc' } } },
+      })
+      await this.logReturn({
+        module: 'returns',
+        action: 'oms_return_cancel',
+        targetType: 'return_order',
+        targetId: no,
+        detail: { customerCode: row.omsCustomerCode, ...(clientRequestId ? { clientRequestId } : {}) },
+      }, tx)
+      return { row: updated, idempotent: false }
+    }, { isolationLevel: 'ReadCommitted' })
     void this.pushReturnStatusToOms(no)
-    return { ...this.mapReturnForOms(updated), idempotent: false }
+    return { ...this.mapReturnForOms(updated.row), idempotent: updated.idempotent }
   }
 
   async downloadAttachmentByReturnNo(returnNo: string, attachmentId: number, customerCode: string) {
@@ -1486,6 +1763,10 @@ export class ReturnsService {
   }
 
   private async pushReturnStatusToOms(returnNo: string) {
+    return this.returnSync.flush(returnNo)
+  }
+
+  private async sendReturnStatusToOms(returnNo: string) {
     try {
       const row = await this.prisma.returnOrder.findUnique({
         where: { returnNo },

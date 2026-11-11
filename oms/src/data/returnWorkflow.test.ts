@@ -1,13 +1,54 @@
 import assert from 'node:assert/strict'
 import test, { type TestContext } from 'node:test'
 import { hydrateAccounts } from '../auth/accountStore'
-import { getReturnOrdersSnapshot, setReturnOrders, cacheReturnOrder, upsertReturnOrderOrThrow, addReturnOrdersOrThrow } from './entityStore'
-import { submitReturnWorkflow, withdrawReturnOrder, decideReturnOrder, refreshReturnsFromErp, removeReturnOrder, nextReturnNo, type ReturnOrder } from './returnStore'
+import { getReturnOrdersSnapshot, setReturnOrders, cacheReturnOrder, upsertReturnOrderOrThrow, addReturnOrdersOrThrow, updateReturnOrderOrThrow } from './entityStore'
+import { submitReturnWorkflow, replayReturnWithdrawal, decideReturnOrder, replayReturnDecision, refreshReturnsFromErp, removeReturnOrder, nextReturnNo, type ReturnOrder } from './returnStore'
 import { buildImportedReturnDrafts } from './returnDraftImport'
 import { parseReturnLines, parseReturnOrders } from './importTemplates'
 
 const draft:ReturnOrder={id:'rt-original',customerId:'c1',returnNo:'RT-TKL9001-20261019001',orderNo:'AUDIT-ORDER',returnWarehouse:'JHB3',returnReason:'平台退货',requestedProcess:'pending_inspection',status:'draft',createdAt:'2026-10-19',lineItems:[{sku:'TKL9001-A',name:'商品',qty:2}]}
 const confirmed={...draft,id:31,status:'pending_arrival',statusLabel:'在途',items:[{sku:'TKL9001-A',productName:'商品',quantity:2}]}
+test('编辑期间退件消失或进入后续状态时，保存草稿明确失败且不发送写入', async t => {
+ environment(t)
+ let writes = 0
+ globalThis.fetch = async () => { writes++; return Response.json({ ok: true }) }
+ setReturnOrders([])
+ await assert.rejects(updateReturnOrderOrThrow(draft.id, draft), /返回退件处理核对/)
+ const submitted = { ...draft, status: 'pending_arrival' as const }
+ setReturnOrders([submitted])
+ await assert.rejects(updateReturnOrderOrThrow(draft.id, draft), /状态已变化/)
+ assert.deepEqual(getReturnOrdersSnapshot(), [submitted])
+ assert.equal(writes, 0)
+})
+test('退件决定仅在明确拒绝或已确认冲突时结束原请求', async t => {
+ environment(t)
+ const intent = { returnNo: draft.returnNo, customerCode: 'TKL9001', customerId: 'c1', decision: 'keep' as const, processChoice: 'restock' }
+ for (const [status, expected] of [[400, 'rejected'], [422, 'rejected'], [409, 'conflict'], [403, undefined], [503, undefined]] as const) {
+  globalThis.fetch = async () => Response.json({ error: '退件决定未确认' }, { status })
+  const result = await replayReturnDecision(intent)
+  assert.equal(result.ok, false)
+  assert.equal('resolution' in result ? result.resolution : undefined, expected)
+ }
+})
+test('原退件决定可在本地状态更新后重放，身份切换后丢弃迟到结果', async t => {
+ environment(t)
+ let current = true, writes = 0
+ const intent = { returnNo: draft.returnNo, customerId: 'c1', customerCode: 'TKL9001', decision: 'keep' as const, processChoice: 'restock' }
+ globalThis.fetch = async (input, init) => {
+  if (String(input).endsWith('/decide')) {
+   assert.deepEqual(JSON.parse(String(init?.body)), { customerCode: 'TKL9001', decision: 'keep', processChoice: 'restock' })
+   return Response.json({ ...confirmed, status: 'completed' })
+  }
+  writes++; return Response.json({ ok: true })
+ }
+ const replay = replayReturnDecision(intent, () => current)
+ current = false
+ assert.equal((await replay).ok, false)
+ assert.equal(writes, 0)
+ current = true
+ assert.equal((await replayReturnDecision(intent, () => current)).ok, true)
+ assert.equal(writes, 1)
+})
 function environment(t:TestContext){
  const original=globalThis.fetch
  const descriptors=['localStorage','sessionStorage'].map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)] as const)
@@ -58,12 +99,38 @@ test('保存失败不会覆盖等待期间同单据及其他单据的新状态',
  release(Response.json({error:'Storage unavailable'},{status:503}));await assert.rejects(saving)
  assert.equal(getReturnOrdersSnapshot().find(row=>row.id===draft.id)?.status,'received');assert.equal(getReturnOrdersSnapshot().length,2)
 })
-for(const action of ['withdraw','decide'] as const)test(`${action}等待OMS回写，失败后保留ERP确认状态`,async t=>{
- environment(t);const source={...draft,status:action==='withdraw'?'pending_arrival':'awaiting_customer'};setReturnOrders([source])
- globalThis.fetch=async input=>String(input)==='/api/return-orders'?Response.json({error:'Storage unavailable'},{status:503}):Response.json({...confirmed,status:action==='withdraw'?'cancelled':'accepted_pending'})
- const result=action==='withdraw'?await withdrawReturnOrder(source):await decideReturnOrder(source,'keep',{processChoice:'restock'})
+test('退件决定等待OMS回写，失败后保留ERP确认状态',async t=>{
+ environment(t);const source={...draft,status:'awaiting_customer'};setReturnOrders([source])
+ globalThis.fetch=async input=>String(input)==='/api/return-orders'?Response.json({error:'Storage unavailable'},{status:503}):Response.json({...confirmed,status:'accepted_pending'})
+ const result=await decideReturnOrder(source,'keep',{processChoice:'restock'})
  assert.equal(result.ok,true);if(result.ok)assert.match(result.warning||'',/OMS 回写失败/)
- assert.equal(getReturnOrdersSnapshot()[0].status,action==='withdraw'?'cancelled':'accepted_pending')
+ assert.equal(getReturnOrdersSnapshot()[0].status,'accepted_pending')
+})
+test('撤回失败后可用原标识和版本继续，已重新提交时保留 ERP 当前状态', async t => {
+ environment(t)
+ const intent = { returnNo: draft.returnNo, customerId: 'c1', customerCode: 'TKL9001',
+  expectedUpdatedAt: '2026-10-19T12:00:00.000Z', clientRequestId: crypto.randomUUID() }
+ let calls = 0
+ globalThis.fetch = async (input, init) => {
+  assert.match(String(input), /\/cancel$/)
+  assert.deepEqual(JSON.parse(String(init?.body)), {
+   customerCode: intent.customerCode, expectedUpdatedAt: intent.expectedUpdatedAt, clientRequestId: intent.clientRequestId,
+  })
+  if (++calls === 1) return Response.json({ error: '暂时无法连接 ERP' }, { status: 503 })
+  if (calls === 2) return Response.json({ ...confirmed, idempotent: true, updatedAt: '2026-10-19T12:05:00.000Z' })
+  return Response.json({ error: '退件单已更新，请刷新核对后再发起撤回' }, { status: 409 })
+ }
+ const uncertain = await replayReturnWithdrawal(intent)
+ assert.equal(uncertain.ok, false)
+ if (!uncertain.ok) assert.equal(uncertain.uncertain, true)
+ setReturnOrders([])
+ const replay = await replayReturnWithdrawal(JSON.parse(JSON.stringify(intent)))
+ assert.equal(replay.ok, true)
+ assert.equal(getReturnOrdersSnapshot()[0].status, 'pending_arrival')
+ const stale = await replayReturnWithdrawal(intent)
+ assert.equal(stale.ok, false)
+ if (!stale.ok) assert.equal(stale.uncertain, false)
+ assert.equal(calls, 3)
 })
 test('ERP刷新仅更新读取到的退件状态，不要求写入权限或发送快照',async t=>{
  environment(t);let calls=0
@@ -74,11 +141,66 @@ test('ERP刷新仅更新读取到的退件状态，不要求写入权限或发�
  assert.equal(await refreshReturnsFromErp('c1'),1);assert.equal(calls,1)
  assert.equal(getReturnOrdersSnapshot()[0].status,'pending_arrival')
 })
+test('同步退件不会沿用其他客户同号草稿的标识或备注', async t => {
+ environment(t)
+ const other = { ...draft, id: 'other-customer-draft', customerId: 'c2', remark: '其他客户备注' }
+ setReturnOrders([other])
+ globalThis.fetch = async () => Response.json({ items: [confirmed], total: 1 })
+ await refreshReturnsFromErp('c1')
+ const rows = getReturnOrdersSnapshot()
+ assert.deepEqual(rows.find(order => order.customerId === 'c2'), other)
+ const synced = rows.find(order => order.customerId === 'c1')
+ assert.equal(synced?.id, 'erp-rt-31')
+ assert.equal(synced?.remark, undefined)
+})
 
-test('删除等待服务器确认，失败后恢复记录且保留并发刷新',async t=>{
- environment(t);let release!:(value:Response)=>void;globalThis.fetch=async()=>new Promise(resolve=>{release=resolve})
- const deleting=removeReturnOrder(draft);cacheReturnOrder({...draft,id:'other',returnNo:'OTHER',status:'completed'})
- release(Response.json({error:'Storage unavailable'},{status:503}));const result=await deleting;assert.equal(result.ok,false);assert.equal(getReturnOrdersSnapshot().length,2)
+test('删除等待服务器确认，失败时保留原记录和并发刷新',async t=>{
+ environment(t);let release!:(value:Response)=>void;globalThis.fetch=async input=>{
+   assert.match(String(input), /[?]expectedStatus=draft$/)
+   return new Promise(resolve=>{release=resolve})
+ }
+ const deleting=removeReturnOrder(draft);assert.equal(getReturnOrdersSnapshot().length,1);cacheReturnOrder({...draft,id:'other',returnNo:'OTHER',status:'completed'})
+ release(Response.json({error:'退件删除结果暂无法确认，请刷新退件列表核对后再试'},{status:503}))
+ assert.deepEqual(await deleting, { ok: false, error: '删除结果未确认，请刷新退件列表核对后再试' })
+ assert.equal(getReturnOrdersSnapshot().length,2)
+})
+test('删除成功回执只移除提交时的退件快照', async t => {
+ environment(t)
+ let release!: (value: Response) => void
+ globalThis.fetch = async () => new Promise(resolve => { release = resolve })
+ const deleting = removeReturnOrder(draft)
+ const newer = { ...draft, status: 'cancelled' as const }
+ cacheReturnOrder(newer)
+ release(Response.json({ ok: true }))
+ assert.equal((await deleting).ok, true)
+ assert.deepEqual(getReturnOrdersSnapshot(), [newer])
+})
+test('切换账号后迟到的删除回执不修改当前列表', async t => {
+ environment(t)
+ let session = ''
+ Object.defineProperty(globalThis, 'localStorage', {
+  configurable: true, value: { getItem: () => session || null, removeItem: () => {} },
+ })
+ let release!: (value: Response) => void
+ globalThis.fetch = async () => new Promise(resolve => { release = resolve })
+ const deleting = removeReturnOrder(draft)
+ session = JSON.stringify({ token: 'test-session', user: { id: 'other', username: 'other', role: 'sys_admin', permissions: [] } })
+ release(Response.json({ ok: true }))
+ assert.deepEqual(getReturnOrdersSnapshot(), [draft])
+ assert.equal((await deleting).ok, false)
+ assert.deepEqual(getReturnOrdersSnapshot(), [draft])
+})
+test('退件删除区分状态冲突、记录缺失和结果未知', async t => {
+ environment(t)
+ for (const [status, serverError, expected] of [
+  [409, '退件单状态已变化，请刷新后核对', '退件单状态已变化，请刷新后核对'],
+  [404, '退件单不存在', '退件单已不在当前列表，请刷新核对'],
+  [503, 'Service unavailable', '删除结果未确认，请刷新退件列表核对后再试'],
+ ] as const) {
+  globalThis.fetch = async () => Response.json({ error: serverError }, { status })
+  assert.deepEqual(await removeReturnOrder(draft), { ok: false, error: expected })
+  assert.deepEqual(getReturnOrdersSnapshot(), [draft])
+ }
 })
 test('提交后记录不可删除，不发出删除请求',async t=>{
  environment(t);globalThis.fetch=async()=>{throw new Error('Unexpected request')}

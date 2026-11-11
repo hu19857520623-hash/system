@@ -1,10 +1,129 @@
 package com.takealot.pda.data
 
 import com.google.gson.Gson
+import com.google.gson.JsonParser
 import org.junit.Assert.*
 import org.junit.Test
 
 class InboundScanSnapshotTest {
+    @Test fun exceptionReleaseRequiresOriginalOrderOperationAndHandoffStatus() {
+        val receipt = JsonParser.parseString("""
+            {"id":42,"inboundNo":"RV-42","kind":"resolve-exception","status":"pending_putaway","duplicate":true}
+        """).asJsonObject
+        assertSame(receipt, receipt.requireExceptionReleaseReceipt(42, "RV-42"))
+        for (invalid in listOf(
+            receipt.deepCopy().apply { addProperty("inboundNo", "RV-43") },
+            receipt.deepCopy().apply { addProperty("kind", "reduce-qc") },
+            receipt.deepCopy().apply { addProperty("status", "exception") },
+            receipt.deepCopy().apply { addProperty("syncPending", true) },
+        )) {
+            assertTrue(assertThrows(ErpException::class.java) {
+                invalid.requireExceptionReleaseReceipt(42, "RV-42")
+            }.retriable)
+        }
+    }
+
+    @Test fun exceptionReportRequiresAnExplicitReceiptOnInitialAndRepeatedRequests() {
+        for (duplicate in listOf(false, true)) {
+            val receipt = JsonParser.parseString("""{"message":"未知条码已登记","duplicate":$duplicate}""")
+            assertSame(receipt, receipt.requireExceptionReportReceipt())
+        }
+        for (body in listOf("null", "{}", """{"message":"未知条码已登记"}""",
+            """{"message":"未知条码已登记","duplicate":"false"}""")) {
+            val error = assertThrows(ErpException::class.java) {
+                JsonParser.parseString(body).requireExceptionReportReceipt()
+            }
+            assertTrue(error.retriable)
+        }
+    }
+
+    @Test fun boxReceiptDistinguishesNewScanRepeatedBoxAndReplay() {
+        val body = JsonParser.parseString("""
+            {"id":61,"inboundNo":"RVTEST","scanType":"outer_box","alreadyConfirmed":false,"duplicate":false,
+             "receivedCartonCount":1,"increment":1,"syncPending":false,"carton":{"boxCode":"BOX-1"},
+             "order":{"id":61,"inboundNo":"RVTEST","status":"receiving","receivedCartonCount":1}}
+        """).asJsonObject
+        val gson = Gson()
+        assertEquals(1, body.requireBoxScanReceipt(61, "RVTEST", "BOX-1", gson).increment)
+        for (key in listOf("duplicate", "alreadyConfirmed")) {
+            val repeated = body.deepCopy().apply { addProperty(key, true); addProperty("increment", 0) }
+            assertEquals(0, repeated.requireBoxScanReceipt(61, "RVTEST", "BOX-1", gson).increment)
+        }
+        for (bad in listOf(
+            body.deepCopy().apply { getAsJsonObject("carton").addProperty("boxCode", "BOX-2") },
+            body.deepCopy().apply { getAsJsonObject("order").addProperty("id", 62) },
+            body.deepCopy().apply { addProperty("duplicate", true) },
+            body.deepCopy().apply { remove("syncPending") },
+        )) {
+            val error = assertThrows(ErpException::class.java) { bad.requireBoxScanReceipt(61, "RVTEST", "BOX-1", gson) }
+            assertTrue(error.retriable)
+        }
+    }
+
+    @Test fun cartonCountRequiresOriginalOrderAndExactBoxCount() {
+        val body = JsonParser.parseString("""
+            {"id":61,"inboundNo":"RVTEST","receivedCartonCount":2,"syncPending":false,
+             "order":{"id":61,"inboundNo":"RVTEST","status":"receiving","receivedCartonCount":2}}
+        """).asJsonObject
+        for (duplicate in listOf(false, true)) {
+            body.addProperty("duplicate", duplicate)
+            assertSame(body, body.requireCartonCountReceipt(61, "RVTEST", 2))
+        }
+        val badReceipts = listOf(
+            body.deepCopy().apply { addProperty("inboundNo", "OTHER") },
+            body.deepCopy().apply { addProperty("receivedCartonCount", "2") },
+            body.deepCopy().apply { remove("syncPending") },
+            body.deepCopy().apply { addProperty("syncPending", true) },
+            body.deepCopy().apply { getAsJsonObject("order").addProperty("receivedCartonCount", 3) },
+            body.deepCopy().apply { getAsJsonObject("order").addProperty("id", 62) },
+        )
+        for (bad in badReceipts) {
+            val error = assertThrows(ErpException::class.java) { bad.requireCartonCountReceipt(61, "RVTEST", 2) }
+            assertTrue(error.retriable)
+        }
+        assertThrows(ErpException::class.java) { body.requireCartonCountReceipt(61, "RVTEST", 3) }
+    }
+
+    @Test fun scanReceiptChecksOriginalSkuAndIncrementWithoutTreatingReplayAsNewCount() {
+        val body = JsonParser.parseString("""
+            {"id":61,"inboundNo":"RVTEST","sku":"SKU-1","increment":5,"duplicate":false,"syncPending":false,
+             "itemId":330,"actualQty":15,"expectedQty":15,"remaining":0,
+             "order":{"id":61,"inboundNo":"RVTEST","status":"receiving"}}
+        """).asJsonObject
+        val gson = Gson()
+        assertEquals(15, body.requireQcScanReceipt(61, "RVTEST", 5, "SKU-1", gson).actualQty)
+        val replay = body.deepCopy().apply { addProperty("duplicate", true); addProperty("increment", 0) }
+        assertTrue(replay.requireQcScanReceipt(61, "RVTEST", 5, "SKU-1", gson).duplicate)
+        for (bad in listOf(
+            body.deepCopy().apply { addProperty("sku", "OTHER") },
+            body.deepCopy().apply { addProperty("increment", 1) },
+            body.deepCopy().apply { addProperty("inboundNo", "OTHER") },
+            body.deepCopy().apply { remove("duplicate") },
+            body.deepCopy().apply { addProperty("syncPending", true) },
+            body.deepCopy().apply { remove("actualQty") },
+            replay.deepCopy().apply { addProperty("increment", 5) },
+        )) {
+            val error = assertThrows(ErpException::class.java) { bad.requireQcScanReceipt(61, "RVTEST", 5, "SKU-1", gson) }
+            assertTrue(error.retriable)
+        }
+    }
+
+    @Test fun qcReceiptRequiresMatchingCountAndExplicitSyncConfirmation() {
+        val gson = Gson()
+        for (status in listOf("pending_putaway", "exception")) {
+            val body = """{"id":61,"inboundNo":"RVTEST","status":"$status","syncPending":false,"items":[{"id":330,"actualQty":0}]}"""
+            val receipt = JsonParser.parseString(body)
+            assertSame(receipt, receipt.requireQcSubmitReceipt(61, gson))
+            for (invalid in listOf(body.replace("false", "\"false\""), body.replace("\"actualQty\":0", "\"actualQty\":null"),
+                body.replace("\"id\":61", "\"id\":62"))) {
+                val error = assertThrows(ErpException::class.java) {
+                    JsonParser.parseString(invalid).requireQcSubmitReceipt(61, gson)
+                }
+                assertTrue(error.retriable)
+            }
+        }
+    }
+
     private val original = InboundOrder(id = 61, omsCustomerCode = "TKL005", inboundNo = "RVTEST", warehouseCode = "W",
         status = "receiving", items = listOf(InboundItem(id = 330, sku = "TKL005-710515-2", expectedQty = 16, actualQty = 1, putawayQty = 0,
             barcode = "BAR", platformBarcode = "99012345", qcRemark = "人工核对", weightKg = 2.0)),

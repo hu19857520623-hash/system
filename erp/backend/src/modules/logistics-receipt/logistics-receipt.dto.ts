@@ -28,6 +28,13 @@ export class LogisticsReceiptLineDto {
   @IsInt()
   @Min(0)
   @Max(2147483647)
+  expectedPendingQty?: number
+
+  @IsOptional()
+  @Transform(numeric)
+  @IsInt()
+  @Min(0)
+  @Max(2147483647)
   damagedQty?: number
 
   @IsOptional()

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, ParseIntPipe, Post, Put, Query } from '@nestjs/common'
+import { ConflictException, Body, Controller, Get, Param, ParseIntPipe, Post, Put, Query } from '@nestjs/common'
 import { PricingService } from './pricing.service'
 import { OmsPurchaseService } from './oms-purchase.service'
 import { PaginationDto } from '../../common/dto/pagination.dto'
@@ -61,12 +61,8 @@ export class PricingController {
 
   @RequirePerms('pricing.set')
   @Post(':id/freight-callback')
-  freightCallback(
-    @Param('id', ParseIntPipe) id: number,
-    @Body() body: any,
-    @CurrentUser('realName') role: string,
-  ) {
-    return this.service.freightCallback(id, role, body)
+  freightCallback() {
+    throw new ConflictException('海运费请在「发运海外仓」对应入库单中填写或补录，系统会自动分摊同步；请返回发运页面继续')
   }
 
   @RequirePerms('pricing.set')
@@ -75,24 +71,29 @@ export class PricingController {
     @Param('id', ParseIntPipe) id: number,
     @Body() body: any,
     @CurrentUser('realName') role: string,
+    @CurrentUser('userId') actor: number,
   ) {
-    return this.service.confirmPrice(id, body, role)
+    if(!body?.clientRequestId)throw new ConflictException('页面版本已更新，请刷新后使用原货盘操作核对入口')
+    return this.service.confirmPrice(id, body, role, actor)
   }
 
   @RequirePerms('pricing.sync_oms')
   @Post(':id/sync-oms')
-  syncOms(@Param('id', ParseIntPipe) id: number, @CurrentUser('realName') role: string) {
-    return this.service.syncOms(id, role)
+  syncOms(@Param('id', ParseIntPipe) id: number, @CurrentUser('realName') role: string, @Body() body:any, @CurrentUser('userId') actor:number) {
+    if(!body?.clientRequestId)throw new ConflictException('页面版本已更新，请刷新后使用原货盘操作核对入口')
+    return this.service.syncOms(id, role, body, actor)
   }
 
   @RequirePerms('pricing.sync_oms')
   @Post(':id/share-status')
   setShareStatus(
     @Param('id', ParseIntPipe) id: number,
-    @Body('status') status: unknown,
+    @Body() body: any,
     @CurrentUser('realName') role: string,
+    @CurrentUser('userId') actor: number,
   ) {
-    return this.service.setShareStatus(id, status, role)
+    if(!body?.clientRequestId)throw new ConflictException('页面版本已更新，请刷新后使用原货盘操作核对入口')
+    return this.service.setShareStatus(id, body?.status, role, body, actor)
   }
 
   @RequirePerms('pricing.set')
@@ -101,13 +102,48 @@ export class PricingController {
     @Param('id', ParseIntPipe) id: number,
     @Body() body: any,
     @CurrentUser('realName') role: string,
+    @CurrentUser('userId') actor: number,
   ) {
-    return this.service.reprice(id, body, role)
+    if(!body?.clientRequestId)throw new ConflictException('页面版本已更新，请刷新后使用原调价核对入口')
+    return this.service.reprice(id, body, role, actor)
   }
 
   @RequirePerms('pricing.set')
+  @Get(':id/reprice-requests/:requestId')
+  readRepriceRequest(@Param('id',ParseIntPipe) id:number,@Param('requestId') requestId:string,@CurrentUser('userId') actor:number){return this.service.readRepriceRequest(id,requestId,actor)}
+
+  @RequirePerms('pricing.set')
+  @Post(':id/reprice-requests/:requestId/cancel')
+  cancelRepriceRequest(@Param('id',ParseIntPipe) id:number,@Param('requestId') requestId:string,@CurrentUser('userId') actor:number){return this.service.cancelRepriceRequest(id,requestId,actor)}
+
+  @RequirePerms('pricing.set')
+  @Get(':id/confirm-requests/:requestId')
+  readConfirmRequest(@Param('id',ParseIntPipe) id:number,@Param('requestId') requestId:string,@CurrentUser('userId') actor:number){return this.service.readCatalogAction(id,'confirm',requestId,actor)}
+
+  @RequirePerms('pricing.set')
+  @Post(':id/confirm-requests/:requestId/cancel')
+  cancelConfirmRequest(@Param('id',ParseIntPipe) id:number,@Param('requestId') requestId:string,@CurrentUser('userId') actor:number){return this.service.cancelCatalogAction(id,'confirm',requestId,actor)}
+
+  @RequirePerms('pricing.sync_oms')
+  @Get(':id/sync-requests/:requestId')
+  readSyncRequest(@Param('id',ParseIntPipe) id:number,@Param('requestId') requestId:string,@CurrentUser('userId') actor:number){return this.service.readCatalogAction(id,'sync',requestId,actor)}
+
+  @RequirePerms('pricing.sync_oms')
+  @Post(':id/sync-requests/:requestId/cancel')
+  cancelSyncRequest(@Param('id',ParseIntPipe) id:number,@Param('requestId') requestId:string,@CurrentUser('userId') actor:number){return this.service.cancelCatalogAction(id,'sync',requestId,actor)}
+
+  @RequirePerms('pricing.sync_oms')
+  @Get(':id/share-requests/:requestId')
+  readShareRequest(@Param('id',ParseIntPipe) id:number,@Param('requestId') requestId:string,@CurrentUser('userId') actor:number){return this.service.readCatalogAction(id,'share',requestId,actor)}
+
+  @RequirePerms('pricing.sync_oms')
+  @Post(':id/share-requests/:requestId/cancel')
+  cancelShareRequest(@Param('id',ParseIntPipe) id:number,@Param('requestId') requestId:string,@CurrentUser('userId') actor:number){return this.service.cancelCatalogAction(id,'share',requestId,actor)}
+
+  @RequirePerms('pricing.set')
   @Put(':id')
-  update(@Param('id', ParseIntPipe) id: number, @Body() body: any) {
-    return this.service.confirmPrice(id, body, '系统')
+  update(@Param('id', ParseIntPipe) id: number, @Body() body: any, @CurrentUser('userId') actor:number) {
+    if(!body?.clientRequestId)throw new ConflictException('页面版本已更新，请刷新后使用原货盘操作核对入口')
+    return this.service.confirmPrice(id, body, '系统',actor)
   }
 }

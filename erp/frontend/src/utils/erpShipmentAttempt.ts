@@ -14,11 +14,12 @@ export function readShipmentAttempt(storage: StoragePort, userId: number): Shipm
 
 export function saveShipmentAttempt(storage: StoragePort, userId: number, attempt: ShipmentAttempt) {
   const previous = readShipmentAttempt(storage, userId)
-  if (previous && previous.payload.clientRequestId !== attempt.payload.clientRequestId) throw new Error('还有上次发运结果待核对，请先使用原操作重试')
-  try { storage.setItem(key(userId), JSON.stringify(attempt)) }
+  if (previous && JSON.stringify(previous) !== JSON.stringify(attempt)) throw new Error('还有上次发运结果待核对，请先使用原操作重试')
+  try { const raw=JSON.stringify(attempt);storage.setItem(key(userId),raw);if(storage.getItem(key(userId))!==raw)throw new Error() }
   catch { throw new Error('无法保存发运核对信息，本次尚未提交，请检查浏览器存储后重试') }
 }
 
-export function clearShipmentAttempt(storage: StoragePort, userId: number) {
+export function clearShipmentAttempt(storage: StoragePort, userId: number, expected: ShipmentAttempt) {
+  if(JSON.stringify(readShipmentAttempt(storage,userId))!==JSON.stringify(expected))throw new Error('本地原发运记录已变化，请重新读取核对')
   storage.removeItem(key(userId))
 }

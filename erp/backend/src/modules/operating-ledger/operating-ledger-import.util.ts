@@ -58,7 +58,7 @@ export function parseOperatingLedgerImportCsv(content: string) {
     if (!direction) rowErrors.push('收支类型必须是收入或支出')
     if (!raw.category) rowErrors.push('类别不能为空')
     if (!Number.isFinite(amount) || amount <= 0) rowErrors.push('金额必须大于 0')
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(raw.occurredOn || '')) rowErrors.push('发生日期格式必须为 YYYY-MM-DD')
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(raw.occurredOn || '')) rowErrors.push('发生日期无效，请按年-月-日填写，例如 2026-11-11')
     if (rowErrors.length) {
       errors.push({ line, message: rowErrors.join('；') })
       continue

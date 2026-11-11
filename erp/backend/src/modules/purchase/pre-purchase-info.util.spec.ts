@@ -59,7 +59,7 @@ describe('预采购信息文件必填和字段审核', () => {
     ['unitPrice', '0', '大于零'], ['unitPrice', '-1', '有效'], ['unitPrice', '1.234', '小数'],
     ['plannedQty', '1.1', '整数'], ['plannedQty', '2147483648', '最大'], ['unitPrice', 'Infinity', '有效'],
     ['taxRate', 101, '100'], ['invoiceTaxRate', -1, '不小于零'], ['productLengthCm', 1000000, '最大'],
-    ['expectedArrival', '2026-02-30', '有效的 YYYY-MM-DD'], ['doubleLayerCarton', '不确定', '填写是或否'],
+    ['expectedArrival', '2026-02-30', '例如 2026-11-11'], ['doubleLayerCarton', '不确定', '填写是或否'],
     ['productLink', 'javascript:alert(1)', 'http://'], ['manualUrl', '不是链接', 'http://'],
     ['productName', '长'.repeat(301), '300 字'],
   ])('审核字段 %s 的错误值', (key, value, message) => {

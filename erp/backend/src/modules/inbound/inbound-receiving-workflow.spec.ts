@@ -6,6 +6,7 @@ import { inboundMeasurementVersion, inboundReceivingVersion } from './inbound-re
 import { runInboundReceiving, normalizeReceivingInput } from './inbound-receiving-transaction.util'
 import { parseInboundQcScanInput } from './inbound-qc-scan.util'
 import { RecordInboundCartonsDto, SubmitInboundQcDto } from './dto/inbound-receiving.dto'
+import { InboundService } from './inbound.service'
 
 function fixture(cartonCount = 1) {
   let state: any = {
@@ -40,6 +41,69 @@ function fixture(cartonCount = 1) {
 }
 
 describe('仓库收箱、清点和测量的一致性', () => {
+  it('货盘不登记箱数也可累加同一 SKU 并交接原上架流程，重放不重复计件', async () => {
+    const f = fixture()
+    const sku = 'TK-901'
+    f.state().order.sourceWarehouseCode = 'CN01'
+    f.state().order.items[0].sku = sku
+    f.state().order.items[0].expectedQty = 15
+    f.state().order.items[1].sku = 'TK-902'
+    const first = { clientRequestId: randomUUID(), scanCode: sku, increment: 10, catalogCount: true }
+    const second = { ...first, clientRequestId: randomUUID(), increment: 5 }
+    await expect(runInboundReceiving(f.prisma, 1, 'qc-scan', { ...first, catalogCount: false }, 1)).rejects.toThrow('确认实收箱数')
+    await expect(runInboundReceiving(f.prisma, 1, 'qc-scan', first, 1)).resolves.toMatchObject({ actualQty: 10 })
+    await expect(runInboundReceiving(f.prisma, 1, 'qc-scan', second, 1)).resolves.toMatchObject({ actualQty: 15 })
+    await expect(runInboundReceiving(f.prisma, 1, 'qc-scan', second, 1)).resolves.toMatchObject({ duplicate: true })
+    const submit = f.qc()
+    submit.items[0].actualQty = 15
+    await expect(runInboundReceiving(f.prisma, 1, 'qc-submit', submit as any, 1)).rejects.toThrow('确认实收箱数')
+    await expect(runInboundReceiving(f.prisma, 1, 'qc-submit', { ...submit, catalogCount: true } as any, 1))
+      .resolves.toMatchObject({ status: 'pending_putaway' })
+    expect(f.state().order).toMatchObject({ receivedCartonCount: null, items: [{ actualQty: 15 }, { actualQty: 2 }] })
+  })
+
+  it('普通客户单不能用货盘标记绕过收箱', async () => {
+    const f = fixture()
+    f.state().order.sourceWarehouseCode = 'CN01'
+    f.state().order.omsCustomerCode = 'TKL9001'
+    await expect(runInboundReceiving(f.prisma, 1, 'qc-scan', {
+      clientRequestId: randomUUID(), scanCode: 'TKL9001-A1', increment: 1, catalogCount: true,
+    }, 1)).rejects.toThrow('只接受 ERP 货盘采购入库单')
+    await expect(runInboundReceiving(f.prisma, 1, 'qc-submit', { ...f.qc(), catalogCount: true } as any, 1))
+      .rejects.toThrow('只接受 ERP 货盘采购入库单')
+    expect(f.state().logs).toHaveLength(0)
+  })
+
+  const identityKinds = ['carton-count', 'carton-scan', 'qc-scan'] as const
+  async function identityFixture(kind: typeof identityKinds[number]) {
+    const f = fixture()
+    if (kind === 'qc-scan') await runInboundReceiving(f.prisma, 1, 'carton-count', f.count(), 1)
+    f.prisma.inboundOrder = { findUnique: jest.fn(async ({ where }: any) => {
+      if (where.inboundNo !== 'RV-AUDIT') throw new Error('同步必须使用原入库单号')
+      return f.state().order
+    }) }
+    const service = new InboundService(f.prisma, null as any, null as any, null as any, null as any, null as any)
+    const input = kind === 'carton-count' ? f.count() : { clientRequestId: randomUUID(), scanCode: kind === 'carton-scan' ? 'BOX-1' : 'BAR-1' }
+    const submit = () => kind === 'carton-count' ? service.recordReceivedCartonCount(1, input as any, 1)
+      : kind === 'carton-scan' ? service.receiveBox(1, input as any, 1) : service.scanQc(1, input as any, 1)
+    return { f, input, submit }
+  }
+  it.each(identityKinds)('%s 的新回执携带身份，真实服务后处理不能误报同步失败', async kind => {
+    const { f, input, submit } = await identityFixture(kind)
+    expect(await submit()).toMatchObject({ id: 1, inboundNo: 'RV-AUDIT', syncPending: false, duplicate: false })
+    const receipt = f.state().logs.find((row: any) => row.detail?.clientRequestId === input.clientRequestId)
+    expect(receipt.detail.response).toMatchObject({ id: 1, inboundNo: 'RV-AUDIT' })
+  })
+  it.each(identityKinds)('%s 的历史缺身份回执可补齐返回，已完结后重试不重做业务或改写历史', async kind => {
+    const { f, input, submit } = await identityFixture(kind)
+    await submit()
+    const receipt = f.state().logs.find((row: any) => row.detail?.clientRequestId === input.clientRequestId)
+    delete receipt.detail.response.id; delete receipt.detail.response.inboundNo
+    f.state().order.status = 'completed'
+    const before = structuredClone(f.state())
+    expect(await submit()).toMatchObject({ id: 1, inboundNo: 'RV-AUDIT', syncPending: false, duplicate: true, increment: 0 })
+    expect(f.state()).toEqual(before)
+  })
   it.each([0, -1, 1.2, true, [], null, 2147483648])('拒绝无效箱数 %p，不能改变到仓状态', async value => {
     const f = fixture()
     await expect(runInboundReceiving(f.prisma, 1, 'carton-count', { ...f.count(), receivedCartonCount: value } as any, 1)).rejects.toThrow('整数')

@@ -6,6 +6,7 @@ import { RequireAnyPerm, RequirePerms } from '../../common/decorators/require-pe
 import { OmsBridge } from '../../common/decorators/oms-bridge.decorator'
 import { CreateOmsOutboundDto } from './dto/oms-outbound.dto'
 import { AssignPickerDto, PickOutboundDto } from './dto/pick-outbound.dto'
+import { PackOutboundDto } from './dto/pack-outbound.dto'
 import { ShipOutboundDto } from './dto/ship-outbound.dto'
 
 function sendPdf(res: Response, file: { fileName: string; content: Buffer }) {
@@ -103,9 +104,28 @@ export class OutboundController {
   }
 
   @RequirePerms('outbound.pick')
+  @Get('pickers')
+  pickers() {
+    return this.service.pickers()
+  }
+
+  @RequirePerms('outbound.pick')
   @Post('assign-picker')
-  assignPicker(@Body() body: AssignPickerDto) {
-    return this.service.assignPicker(body.ids || [], body.pickerId)
+  assignPicker(@Body() body: AssignPickerDto, @CurrentUser('userId') userId: number) {
+    return this.service.assignPicker(body.ids || [], body.pickerId, body, userId)
+  }
+
+  @RequirePerms('outbound.pick')
+  @Get('assignment-requests/:requestId')
+  assignmentRequest(@Param('requestId') requestId: string, @CurrentUser('userId') userId: number) {
+    return this.service.assignmentRequest(requestId, userId)
+  }
+
+  @RequirePerms('outbound.pick')
+  @Post('assignment-requests/:requestId/cancel')
+  cancelAssignment(@Param('requestId') requestId: string, @Body() body: AssignPickerDto, @CurrentUser('userId') userId: number) {
+    if (body.clientRequestId !== requestId) throw new BadRequestException('原分配操作标识不一致，请核对原请求')
+    return this.service.cancelAssignment(body.ids, body.pickerId, body, userId)
   }
 
   @RequirePerms('outbound.view')
@@ -216,6 +236,18 @@ export class OutboundController {
   }
 
   @RequirePerms('outbound.pick')
+  @Get(':id/pick-requests/:requestId')
+  pickRequest(@Param('id', ParseIntPipe) id: number, @Param('requestId') requestId: string, @CurrentUser('userId') userId: number) {
+    return this.service.pickRequest(id, requestId, userId)
+  }
+
+  @RequirePerms('outbound.pick')
+  @Post(':id/pick-requests/:requestId/cancel')
+  cancelPickRequest(@Param('id', ParseIntPipe) id: number, @Param('requestId') requestId: string, @CurrentUser('userId') userId: number) {
+    return this.service.cancelPickRequest(id, requestId, userId)
+  }
+
+  @RequirePerms('outbound.pick')
   @Post(':id/pick')
   pick(@Param('id', ParseIntPipe) id: number, @Body() body: PickOutboundDto, @CurrentUser('userId') userId: number) {
     return this.service.pick(id, body, userId)
@@ -228,8 +260,20 @@ export class OutboundController {
   }
 
   @RequirePerms('outbound.pack')
+  @Get(':id/pack-requests/:requestId')
+  packRequest(@Param('id', ParseIntPipe) id: number, @Param('requestId') requestId: string, @CurrentUser('userId') userId: number) {
+    return this.service.packRequest(id, requestId, userId)
+  }
+
+  @RequirePerms('outbound.pack')
+  @Post(':id/pack-requests/:requestId/cancel')
+  cancelPackRequest(@Param('id', ParseIntPipe) id: number, @Param('requestId') requestId: string, @CurrentUser('userId') userId: number) {
+    return this.service.cancelPackRequest(id, requestId, userId)
+  }
+
+  @RequirePerms('outbound.pack')
   @Post(':id/pack')
-  pack(@Param('id', ParseIntPipe) id: number, @Body() body: any, @CurrentUser('userId') userId: number) {
+  pack(@Param('id', ParseIntPipe) id: number, @Body() body: PackOutboundDto, @CurrentUser('userId') userId: number) {
     return this.service.pack(id, body, userId)
   }
 

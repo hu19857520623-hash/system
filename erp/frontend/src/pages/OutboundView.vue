@@ -1,17 +1,19 @@
 <script setup lang="ts">
 import { readShipAttempts, type ShipAttempt } from '@/utils/outboundShipping'
+import { readPickAttempts, type PickAttempt } from '@/utils/outboundPicking'
 import { userFacingError } from '@erp/shared/user-facing-error'
+import { getAccessToken } from '@/auth/tokenStore'
+import { readAssignment, saveAssignment, operateAssignment, withAssignmentLock, type AssignmentAttempt } from '@/utils/outboundAssignment'
 
 import { displaySku, displaySkuText, formatSku } from '@erp/shared/sku-display'
 import { downloadableOutboundSourceAttachments, isOutboundSourceAttachment } from '@/features/outbound/attachments'
-import { ref, computed, onMounted, reactive } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, reactive } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { erpConfirm } from '@/utils/messageBox'
 import {
   outboundApi,
   customerApi,
-  usersApi,
   triggerBrowserDownload,
 } from '@/api/client.js'
 import { withAction } from '@/composables/useListLoader.ts'
@@ -21,6 +23,8 @@ import ListPagination from '@/components/ListPagination.vue'
 import DetailSheet from '@/components/ui/DetailSheet.vue'
 import OutboundLabelPanel from '@/components/outbound/OutboundLabelPanel.vue'
 import OutboundPickDialog from '@/components/outbound/OutboundPickDialog.vue'
+import OutboundPackDialog from '@/components/outbound/OutboundPackDialog.vue'
+import { readPackAttempts, type PackAttempt } from '@/utils/outboundPacking'
 import OutboundShipDialog from '@/components/outbound/OutboundShipDialog.vue'
 import {
   buildOutboundLabelSummary,
@@ -71,12 +75,44 @@ const appointmentDateShortcuts = [
 const pickVisible = ref(false)
 const shipVisible = ref(false)
 const shipPending = ref<ShipAttempt[]>([]), shipStorageError = ref('')
+const pickPending = ref<PickAttempt[]>([]), pickStorageError = ref('')
+const assignmentPending = ref<AssignmentAttempt | null>(null), assignmentStorageError = ref(''), assignmentError = ref('')
+const assignmentOrders = ref<{ id: number; outboundNo: string; status: string; pickerId: number | null }[]>([])
+let assignmentGeneration = 0
+function loadAssignmentPending() {
+  assignmentPending.value = null
+  try { assignmentPending.value = readAssignment(localStorage, Number(app.authenticatedUser?.id));assignmentStorageError.value = '' }
+  catch (e) { assignmentStorageError.value = userFacingError(e) }
+}
+watch(() => app.authenticatedUser?.id, loadAssignmentPending)
+
+const packPending = ref<PackAttempt[]>([]), packStorageError = ref('')
+function loadPackPending() {
+  packPending.value = []
+  try { packPending.value = readPackAttempts(localStorage, Number(app.authenticatedUser?.id));packStorageError.value = '' }
+  catch (e) { packStorageError.value = userFacingError(e) }
+}
+watch(() => app.authenticatedUser?.id, loadPackPending)
+
+function loadPickPending() {
+  pickPending.value = []
+  try { pickPending.value = readPickAttempts(localStorage, Number(app.authenticatedUser?.id));pickStorageError.value = '' }
+  catch (e) { pickStorageError.value = userFacingError(e) }
+}
+watch(() => app.authenticatedUser?.id, loadPickPending)
+function onPickStorage(event: StorageEvent) {
+  if (!event.key || event.key.startsWith('erp:outbound-picking:')) loadPickPending()
+  if (!event.key || event.key.startsWith('erp:outbound-packing:')) loadPackPending()
+  if (!event.key || event.key.startsWith('erp:outbound-assignment:')) loadAssignmentPending()
+}
+onBeforeUnmount(() => window.removeEventListener('storage', onPickStorage))
 function loadShipPending() {
   try { shipPending.value = readShipAttempts(localStorage, Number(app.authenticatedUser?.id));shipStorageError.value = '' }
   catch (e) { shipStorageError.value = userFacingError(e) }
 }
 async function onShipPending() { loadShipPending();await reloadAll() }
 const assignVisible = ref(false)
+watch(assignVisible, () => { assignmentGeneration++ })
 const problemVisible = ref(false)
 const exceptionVisible = ref(false)
 const packVisible = ref(false)
@@ -92,12 +128,6 @@ const deliverOrder = ref<any>(null)
 const shipOrder = ref<any>(null)
 const problemOrder = ref<any>(null)
 const exceptionOrder = ref<any>(null)
-const packIsPalletized = ref(false)
-const packPalletInfo = ref('')
-const packReviewSource = ref<'pda' | 'pick_list'>('pick_list')
-const packCartons = ref<{ lengthCm: string; widthCm: string; heightCm: string; grossWeightKg: string }[]>([
-  { lengthCm: '', widthCm: '', heightCm: '', grossWeightKg: '' },
-])
 const deliverPodFile = ref<File | null>(null)
 const podFileInputRef = ref<HTMLInputElement | null>(null)
 const assignPickerId = ref<number | null>(null)
@@ -125,11 +155,32 @@ const exceptionTypeOptions = [
   { value: 'other', label: '其他异常' },
 ]
 const labelActionLoading = reactive<Record<string, boolean>>({})
-const packDetailLoading = ref(false)
 const relabelLines = ref<{ id: number; sku: string; productName: string; scannedBarcode: string; newBarcode: string }[]>([])
 
 const customers = ref<{ id: number; code: string; name: string }[]>([])
 const pickerUsers = ref<{ id: number; name: string; workstation: string; label: string }[]>([])
+
+const pickerLoading = ref(false), pickerError = ref(''), assigning = ref(false)
+let pickerGeneration = 0, pickerMounted = true
+onBeforeUnmount(() => { pickerMounted = false;pickerGeneration++ })
+watch(() => app.profileRevision, () => {
+  pickerGeneration++;pickerUsers.value = [];assignPickerId.value = null;pickerLoading.value = false;assignmentGeneration++;assignVisible.value = false;assignmentOrders.value = [];loadAssignmentPending()
+  if (assignVisible.value && canPick.value && !assignmentPending.value) void loadPickerUsers()
+})
+async function loadPickerUsers() {
+  if (!canPick.value) return
+  const version = ++pickerGeneration, actor = app.authenticatedUser?.id, revision = app.profileRevision
+  pickerLoading.value = true;pickerError.value = '';pickerUsers.value = []
+  try {
+    const token = getAccessToken(), data = await outboundApi.pickers()
+    if (!pickerMounted || version !== pickerGeneration || actor !== app.authenticatedUser?.id || revision !== app.profileRevision || token !== getAccessToken() || !canPick.value) return
+    pickerUsers.value = data.items.map((u: any) => ({ id: u.id, name: u.name, workstation: u.workstation, label: formatPickerLabel(u.name, u.workstation) }))
+    if (!pickerUsers.value.some(u => u.id === assignPickerId.value)) assignPickerId.value = null
+    if (!pickerUsers.value.length) pickerError.value = '暂无启用且具有拣货权限的仓库人员，请联系管理员核对岗位权限'
+  } catch (e) {
+    if (pickerMounted && version === pickerGeneration) { pickerError.value = userFacingError(e);assignPickerId.value = null }
+  } finally { if (pickerMounted && version === pickerGeneration) pickerLoading.value = false }
+}
 
 function formatPickerLabel(name?: string | null, workstation?: string | null) {
   const display = String(name || '').trim()
@@ -273,7 +324,7 @@ function handleRowCommand(command: string, row: any) {
   }
 }
 
-function resetFilters() {
+function clearFilterValues() {
   searchQ.value = ''
   filterCustomer.value = ''
   filterDest.value = 'all'
@@ -287,11 +338,19 @@ function resetFilters() {
   dateRange.value = null
   appointmentDateRange.value = null
   page.value = 1
+}
+
+function resetFilters() {
+  clearFilterValues()
   reloadAll()
 }
 
 onMounted(async () => {
   loadShipPending()
+  loadPickPending()
+  loadPackPending()
+  loadAssignmentPending()
+  window.addEventListener('storage', onPickStorage)
   await loadTakealotDestConfig()
   const q = String(route.query.q || '').trim()
   if (q) searchQ.value = q
@@ -305,18 +364,7 @@ onMounted(async () => {
   } catch {
     customers.value = []
   }
-  try {
-    const uRes = await usersApi.list({ pageSize: 100, status: 'active', roleSide: 'warehouse' })
-    pickerUsers.value = (uRes.items || [])
-      .filter((u: any) => u.status === 1)
-      .map((u: any) => {
-        const name = u.realName || u.username || ''
-        const workstation = u.workstation || ''
-        return { id: u.id, name, workstation, label: formatPickerLabel(name, workstation) }
-      })
-  } catch {
-    pickerUsers.value = []
-  }
+  if (canPick.value) await loadPickerUsers()
   await reloadAll()
 })
 
@@ -558,7 +606,7 @@ async function printOutboundLabels(
     return
   }
   if (action === 'unit' && (unitIndex === undefined || !line?.unitIndices.includes(unitIndex))) {
-    ElMessage.warning('该单件标签索引不存在')
+    ElMessage.warning('该单件标签不存在，请刷新出库单后重试')
     return
   }
 
@@ -675,7 +723,11 @@ function openPick(row: any) {
 }
 
 async function onPickSuccess() {
-  filterStatus.value = 'picked'
+  loadPickPending()
+  clearFilterValues()
+  filterStatus.value = 'all'
+  searchQ.value = pickOrder.value?.outboundNo || ''
+  selectedRows.value = []
   await reloadAll()
 }
 
@@ -694,86 +746,20 @@ function openShip(row: any) {
 }
 
 async function onShipSuccess() {
+  const outboundNo = shipOrder.value?.outboundNo || ''
   loadShipPending()
+  clearFilterValues()
+  filterStatus.value = 'all'
+  searchQ.value = outboundNo
+  selectedRows.value = []
   await reloadAll()
 }
 
-async function openPack(row: any) {
-  if (row.status === 'picked' && canPack.value) {
-    try {
-      await outboundApi.startReview(row.id)
-      row.status = 'reviewing'
-    } catch (err: any) {
-      ElMessage.error(userFacingError(displaySkuText(err?.message || '无法开始复核')))
-      return
-    }
-  }
-  packOrder.value = row
-  packIsPalletized.value = !!row.isPalletized
-  packPalletInfo.value = row.palletInfo || ''
-  packReviewSource.value = 'pick_list'
-  packCartons.value = [{ lengthCm: '', widthCm: '', heightCm: '', grossWeightKg: '' }]
-  packVisible.value = true
-  packDetailLoading.value = true
-  try {
-    packOrder.value = await outboundApi.detail(row.id)
-  } catch (err: any) {
-    ElMessage.error(userFacingError(displaySkuText(err?.message || '加载复核明细失败')))
-  } finally {
-    packDetailLoading.value = false
-  }
-}
-
-function addPackCarton() {
-  packCartons.value.push({ lengthCm: '', widthCm: '', heightCm: '', grossWeightKg: '' })
-}
-
-function removePackCarton(index: number) {
-  if (packCartons.value.length <= 1) return
-  packCartons.value.splice(index, 1)
-}
-
-async function submitPack() {
-  if (!packOrder.value || !canPack.value) return
-  const needsMeasure = !!packOrder.value.omsPreDeduct
-  const hasMeasure = packCartons.value.some(c => Object.values(c).some(value => value.trim() !== ''))
-  const cartons = (needsMeasure || hasMeasure ? packCartons.value : [])
-    .map(c => ({
-      lengthCm: Number(c.lengthCm),
-      widthCm: Number(c.widthCm),
-      heightCm: Number(c.heightCm),
-      grossWeightKg: Number(c.grossWeightKg),
-    }))
-
-  if (needsMeasure && cartons.length === 0) {
-    ElMessage.warning('请填写外箱实测尺寸（长/宽/高 cm）')
-    return
-  }
-  for (const [index, carton] of cartons.entries()) {
-    if (![carton.lengthCm, carton.widthCm, carton.heightCm].every(value => Number.isFinite(value) && value > 0)) {
-      ElMessage.warning(`请填写第 ${index + 1} 箱大于零的长、宽、高；不需要的箱行请先删除`)
-      return
-    }
-    if (!Number.isFinite(carton.grossWeightKg) || carton.grossWeightKg < 0) {
-      ElMessage.warning(`第 ${index + 1} 箱毛重无效，请填写不小于零的重量`)
-      return
-    }
-  }
-
-  const needsRelabel = !!packOrder.value.needsRelabel
-  await withAction(async () => {
-    await outboundApi.pack(packOrder.value.id, {
-      isPalletized: packIsPalletized.value,
-      palletInfo: packPalletInfo.value.trim() || undefined,
-      reviewSource: packReviewSource.value,
-      cartons: cartons.length ? cartons : undefined,
-    })
-    packVisible.value = false
-    filterStatus.value = needsRelabel ? 'pending_relabel' : 'packed'
-    await reloadAll()
-  }, needsRelabel
-    ? `${packOrder.value.outboundNo} 复核完成，进入换标`
-    : `${packOrder.value.outboundNo} 复核打包完成`)
+function openPack(row: any) { packOrder.value = row;packVisible.value = true }
+async function onPackPending() {
+  loadPackPending()
+  clearFilterValues();filterStatus.value = 'all';searchQ.value = packOrder.value?.outboundNo || '';selectedRows.value = []
+  await reloadAll()
 }
 
 function rowHasPod(row: any) {
@@ -872,7 +858,10 @@ function skipPodUpload() {
 }
 
 function openAssignPicker(row?: any) {
-  if (!canPick.value) return
+  if (!canPick.value || assigning.value) return
+  loadAssignmentPending();assignmentError.value = ''
+  if (assignmentStorageError.value) { ElMessage.error(assignmentStorageError.value);return }
+  if (assignmentPending.value) { assignVisible.value = true;return }
   const rows = row ? [row] : assignableSelected.value
   const reassigning = row?.status === 'picking'
   const ids = rows.filter((r) => r.status === (reassigning ? 'picking' : 'pending_pick')).map((r) => r.id)
@@ -880,34 +869,48 @@ function openAssignPicker(row?: any) {
     ElMessage.warning(row ? '仅待拣货或拣货中状态可分配拣货员' : '请勾选待拣货的出库单')
     return
   }
+  assignmentOrders.value = rows.filter(r => ids.includes(r.id)).map(r => ({ id: r.id, outboundNo: r.outboundNo, status: r.status, pickerId: r.pickerId || null }))
   assignTargetIds.value = ids
   reassigningPicker.value = reassigning
-  assignPickerId.value = reassigning ? row.pickerId ?? null : pickerUsers.value[0]?.id ?? null
+  assignPickerId.value = reassigning ? row.pickerId ?? null : null
   assignVisible.value = true
+  void loadPickerUsers()
 }
 
-async function submitAssignPicker() {
-  if (!assignPickerId.value) {
-    ElMessage.warning('请选择拣货员')
-    return
+async function submitAssignPicker(mode: 'retry' | 'check' | 'cancel' = 'retry') {
+  if (!canPick.value || assigning.value || assignmentStorageError.value || (!assignmentPending.value && (pickerLoading.value || pickerError.value))) return
+  const version = assignmentGeneration, expected = assignmentPending.value?.payload.clientRequestId
+  const actor = Number(app.authenticatedUser?.id), revision = app.profileRevision
+  let token: string
+  try { token = getAccessToken() } catch { assignmentError.value = '无法读取登录信息，请恢复浏览器存储后重试';return }
+  const guard = () => {
+    if (!pickerMounted || !assignVisible.value || version !== assignmentGeneration || !canPick.value || !token || token !== getAccessToken() || actor !== Number(app.authenticatedUser?.id) || revision !== app.profileRevision) throw new Error('账号、权限或页面已变化，请返回原账号核对已保存的分配请求')
   }
-  if (!assignTargetIds.value.length) {
-    ElMessage.warning('请勾选待拣货的出库单')
-    return
-  }
-  const count = assignTargetIds.value.length
-  const reassigning = reassigningPicker.value
-  await withAction(async () => {
-    await outboundApi.assignPicker({
-      ids: assignTargetIds.value,
-      pickerId: assignPickerId.value!,
+  assigning.value = true;assignmentError.value = ''
+  try {
+    await withAssignmentLock(actor, async () => {
+      guard();loadAssignmentPending()
+      if (assignmentStorageError.value) throw new Error(assignmentStorageError.value)
+      if (expected && assignmentPending.value?.payload.clientRequestId !== expected) throw new Error('原分配请求已由其它页面核对，请返回列表重新读取')
+      if (!assignmentPending.value) {
+        if (mode !== 'retry') throw new Error('本机原分配请求已变化，请返回列表重新读取')
+        const picker = pickerUsers.value.find(u => u.id === assignPickerId.value)
+        if (!picker || !assignmentOrders.value.length) throw new Error('请选择原批次和有效候选拣货员')
+        const attempt: AssignmentAttempt = { pickerName: picker.label, orderNos: assignmentOrders.value.map(r => r.outboundNo),
+          payload: { clientRequestId: crypto.randomUUID(), ids: assignmentOrders.value.map(r => r.id), pickerId: picker.id,
+            expectedOrders: assignmentOrders.value.map(r => ({ id: r.id, status: r.status, pickerId: r.pickerId })) } }
+        saveAssignment(localStorage, actor, attempt);loadAssignmentPending()
+      }
+      const original = assignmentPending.value!, result = await operateAssignment(outboundApi, localStorage, actor, original, mode, guard)
+      guard();loadAssignmentPending()
+      if (result.outcome === 'unknown') { assignmentError.value = '尚未查到原分配结果，可重试原批次或取消原请求。请勿另建分配操作。';return }
+      ElMessage.success(result.outcome === 'confirmed' ? '原分配已完成，请查看原单当前拣货员' : '原分配请求已取消，已完成的其它分配保持原结果')
+      assignVisible.value = false;selectedRows.value = [];assignTargetIds.value = [];assignmentOrders.value = []
+      clearFilterValues();filterStatus.value = 'all';searchQ.value = original.orderNos.length === 1 ? original.orderNos[0]! : '';await reloadAll()
     })
-    assignVisible.value = false
-    selectedRows.value = []
-    assignTargetIds.value = []
-    filterStatus.value = 'picking'
-    await reloadAll()
-  }, reassigning ? `已重新分配 ${count} 单` : `已分配 ${count} 单`)
+  } catch (e) {
+    if (pickerMounted && version === assignmentGeneration) { assignmentError.value = userFacingError(e);loadAssignmentPending() }
+  } finally { assigning.value = false }
 }
 
 function openProblem(row: any) {
@@ -975,20 +978,40 @@ async function clearException(row: any) {
   }, `${row.outboundNo} 已解除异常，恢复为「${restoreLabel}」`)
 }
 
-async function doExport() {
-  if (!canExport.value) return
+const exportBusy = ref(false)
+const exportError = ref('')
+const failedExport = ref<ReturnType<typeof buildQueryParams> | null>(null)
+const exportScope = () => app.authenticatedUser && getAccessToken() && canExport.value
+  ? JSON.stringify([app.authenticatedUser.id, getAccessToken(), [...app.currentPermSet].sort()]) : null
+let exportVersion = 0
+watch(exportScope, () => {
+  ++exportVersion
+  exportBusy.value = false
+  exportError.value = ''
+  failedExport.value = null
+}, { flush: 'sync' })
+onBeforeUnmount(() => { ++exportVersion })
+
+async function doExport(params = buildQueryParams()) {
+  if (exportBusy.value) return
+  const scope = exportScope()
+  if (!scope) return
+  const version = ++exportVersion
+  const active = () => version === exportVersion && scope === exportScope()
+  const original = { ...params }
+  exportBusy.value = true
+  exportError.value = ''
+  failedExport.value = null
   try {
-    const { blob, fileName } = await outboundApi.exportCsv(buildQueryParams())
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = fileName || 'outbound-export.csv'
-    a.click()
-    URL.revokeObjectURL(url)
-    ElMessage.success('导出成功')
+    const { blob, fileName } = await outboundApi.exportCsv(original)
+    if (!active()) return
+    triggerBrowserDownload(blob, fileName || 'outbound-export.csv')
+    ElMessage.success('已下载出库 CSV')
   } catch (err: any) {
-    ElMessage.error(userFacingError(displaySkuText(err.message || '导出失败')))
-  }
+    if (!active()) return
+    failedExport.value = original
+    exportError.value = `出库 CSV 下载失败，可按原筛选重试。${userFacingError(displaySkuText(err?.message || '导出失败'))}`
+  } finally { if (active()) exportBusy.value = false }
 }
 
 function printPickList() {
@@ -1059,6 +1082,24 @@ function statusTag(status: string) {
       </template>
 
       <el-alert v-if="shipStorageError" :title="shipStorageError" type="error" :closable="false" />
+      <el-alert v-if="assignmentStorageError" :title="assignmentStorageError" type="error" :closable="false" />
+      <el-alert v-if="assignmentPending" type="warning" :closable="false" style="margin-bottom:8px">
+        <template #title>原分配批次 {{ assignmentPending.orderNos.join('、') }} 待核对，目标人员 {{ assignmentPending.pickerName }}。请勿另建分配操作。</template>
+        <el-button v-if="canPick" size="small" @click="openAssignPicker()">继续核对原分配</el-button>
+        <span v-else>请恢复原账号岗位权限后继续核对。</span>
+      </el-alert>
+      <el-alert v-if="packStorageError" :title="packStorageError" type="error" :closable="false" />
+      <el-alert v-for="attempt in packPending" :key="`pack-${attempt.outboundId}`" type="warning" :closable="false" style="margin-bottom:8px">
+        <template #title>出库单 {{ attempt.outboundNo }} 还有原复核请求待核对，请勿更换尺寸和重量再次提交。</template>
+        <el-button v-if="canPack" size="small" @click="openPack(attempt.order)">继续核对原复核</el-button>
+        <span v-else>请恢复原账号岗位权限后继续核对。</span>
+      </el-alert>
+      <el-alert v-if="pickStorageError" :title="pickStorageError" type="error" :closable="false" />
+      <el-alert v-for="attempt in pickPending" :key="`pick-${attempt.outboundId}`" type="warning" :closable="false" style="margin-bottom:8px">
+        <template #title>出库单 {{ attempt.outboundNo }} 还有原拣货请求待核对，请勿重新拣货。</template>
+        <el-button v-if="canPick" size="small" @click="openPick(attempt.order)">继续核对原拣货</el-button>
+        <span v-else>请恢复原账号岗位权限后继续核对。</span>
+      </el-alert>
       <el-alert v-for="attempt in shipPending" :key="attempt.outboundId" type="warning" :closable="false" style="margin-bottom:8px">
         <template #title>出库单 {{ attempt.outboundNo }} 还有原发运操作待核对，勿再次发运。</template>
         <el-button v-if="canShip" size="small" @click="openShip(attempt.order)">继续核对原发运</el-button>
@@ -1191,9 +1232,13 @@ function statusTag(status: string) {
           </el-radio-group>
         </div>
         <div class="status-bar-actions">
-          <el-button v-if="canExport" size="small" text @click="doExport">导出</el-button>
+          <el-button v-if="canExport" size="small" text :loading="exportBusy" @click="doExport()">导出</el-button>
         </div>
       </div>
+      <el-alert v-if="exportError && failedExport && canExport" type="error" :title="exportError" :closable="false">
+        <el-button size="small" :disabled="exportBusy" @click="doExport(failedExport)">按原筛选重试导出</el-button>
+        <el-button size="small" text @click="exportError = ''; failedExport = null">返回列表</el-button>
+      </el-alert>
 
       <div class="table-toolbar">
         <div class="toolbar-left">
@@ -1346,57 +1391,10 @@ function statusTag(status: string) {
       :order="pickOrder"
       :can-pick="canPick"
       @success="onPickSuccess"
+      @pending="loadPickPending"
     />
 
-    <!-- 复核打包 -->
-    <el-dialog
-      v-model="packVisible"
-      :title="`复核打包 · ${packOrder?.outboundNo || ''}`"
-      width="min(980px, 94vw)"
-    >
-      <div v-if="packOrder?.needsRelabel" class="pick-hint" style="margin-bottom:12px">
-        本单需换标：复核完成后将进入「待换标」，换标确认后再发运。
-      </div>
-      <div v-if="packOrder?.omsPreDeduct" class="pick-hint" style="margin-bottom:12px">
-        OMS 预扣 ¥{{ packOrder.omsPreDeduct.preDeductTotal?.toFixed(2) }}
-        <template v-if="packOrder.omsPreDeduct.totalVolumeM3 != null">
-          · 试算 {{ packOrder.omsPreDeduct.totalVolumeM3?.toFixed(4) }} m³ / {{ packOrder.omsPreDeduct.totalWeightKg?.toFixed(2) }} kg
-        </template>
-        · 请录入实测外箱尺寸，系统将按模板实算费用
-      </div>
-      <div v-if="packOrder?.omsActualFees" class="pick-hint" style="margin-bottom:12px;color:var(--el-color-success)">
-        已实测实算合计 ¥{{ packOrder.omsActualFees.actualTotal?.toFixed(2) }}
-      </div>
-      <el-form label-width="80px">
-        <el-form-item v-if="packOrder?.omsPreDeduct" label="外箱实测" required>
-          <div class="pack-cartons">
-            <div v-for="(carton, idx) in packCartons" :key="idx" class="pack-carton-row">
-              <el-input v-model="carton.lengthCm" placeholder="长 cm" style="width:72px" />
-              <span class="pack-carton-x">×</span>
-              <el-input v-model="carton.widthCm" placeholder="宽 cm" style="width:72px" />
-              <span class="pack-carton-x">×</span>
-              <el-input v-model="carton.heightCm" placeholder="高 cm" style="width:72px" />
-              <el-input v-model="carton.grossWeightKg" placeholder="毛重 kg" style="width:80px;margin-left:8px" />
-              <el-button v-if="packCartons.length > 1" link type="danger" @click="removePackCarton(idx)">删</el-button>
-            </div>
-            <el-button link type="primary" @click="addPackCarton">+ 加一箱</el-button>
-          </div>
-        </el-form-item>
-        <p class="dialog-hint" style="margin:0 0 12px">复核在 ERP 网页确认；独立 PDA 复核端尚未提供。</p>
-        <el-form-item label="打托">
-          <el-checkbox v-model="packIsPalletized">已打托</el-checkbox>
-        </el-form-item>
-        <el-form-item label="打托信息">
-          <el-input v-model="packPalletInfo" placeholder="托数、尺寸等（可选）" clearable />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="packVisible = false">取消</el-button>
-        <el-button type="primary" @click="submitPack">
-          {{ packOrder?.needsRelabel ? '确认复核，去换标' : '确认复核打包' }}
-        </el-button>
-      </template>
-    </el-dialog>
+    <OutboundPackDialog v-model="packVisible" :order="packOrder" :can-pack="canPack" @success="onPackPending" @pending="onPackPending" @progress="onPackPending" />
 
     <!-- 上传 POD 签收单（确认送达后） -->
     <el-dialog v-model="podUploadVisible" :title="`上传POD签收单 · ${deliverOrder?.outboundNo || ''}`" width="440px">
@@ -1426,15 +1424,21 @@ function statusTag(status: string) {
     />
 
     <!-- 分配拣货员 -->
-    <el-dialog v-model="assignVisible" :title="reassigningPicker ? '重新分配拣货员' : '分配拣货员'" width="360px">
-      <p class="dialog-hint" v-if="reassigningPicker">已选 {{ assignTargetIds.length }} 单（拣货中）。重新分配后，新拣货员可继续完成拣货。</p>
-      <p class="dialog-hint" v-else>已选 {{ assignTargetIds.length }} 单（仅待拣货）。须先分配拣货员，才能在 ERP 网页完成拣货确认。</p>
-      <el-select v-model="assignPickerId" placeholder="选择工位 / 拣货员" filterable style="width:100%">
+    <el-dialog v-model="assignVisible" :title="reassigningPicker ? '重新分配拣货员' : '分配拣货员'" width="360px" :close-on-click-modal="false" :close-on-press-escape="!assigning" :show-close="!assigning">
+      <el-alert v-if="assignmentError || assignmentStorageError" :title="assignmentError || assignmentStorageError" type="error" :closable="false" />
+      <el-alert v-if="assignmentPending" :title="`原批次：${assignmentPending.orderNos.join('、')}；原人员：${assignmentPending.pickerName}。重试将使用原资料，取消不撤回已完成分配。`" type="warning" :closable="false" />
+      <el-alert v-if="!assignmentPending && pickerError" :title="pickerError" type="error" :closable="false" />
+      <el-button v-if="!assignmentPending" :loading="pickerLoading" :disabled="assigning || !canPick" @click="loadPickerUsers">刷新候选名单</el-button>
+      <p class="dialog-hint" v-if="!assignmentPending && reassigningPicker">已选 {{ assignTargetIds.length }} 单（拣货中）。重新分配后，新拣货员可继续完成拣货。</p>
+      <p class="dialog-hint" v-else-if="!assignmentPending">已选 {{ assignTargetIds.length }} 单（仅待拣货）。须先分配拣货员，才能在 ERP 网页完成拣货确认。</p>
+      <el-select v-if="!assignmentPending" v-model="assignPickerId" placeholder="选择工位 / 拣货员" :loading="pickerLoading" :disabled="assigning || pickerLoading || !!pickerError || !canPick" filterable style="width:100%">
         <el-option v-for="u in pickerUsers" :key="u.id" :label="u.label" :value="u.id" />
       </el-select>
       <template #footer>
-        <el-button @click="assignVisible = false">取消</el-button>
-        <el-button type="primary" @click="submitAssignPicker">{{ reassigningPicker ? '确认重新分配' : '确认分配' }}</el-button>
+        <el-button :disabled="assigning" @click="assignVisible = false">{{ assignmentPending ? '返回并保留原请求' : '返回' }}</el-button>
+        <el-button v-if="assignmentPending" :disabled="assigning || !canPick || !!assignmentStorageError" @click="submitAssignPicker('check')">查询原分配结果</el-button>
+        <el-button v-if="assignmentPending" :disabled="assigning || !canPick || !!assignmentStorageError" @click="submitAssignPicker('cancel')">取消原分配请求</el-button>
+        <el-button type="primary" :loading="assigning" :disabled="!canPick || !!assignmentStorageError || (!assignmentPending && (pickerLoading || !!pickerError || !assignPickerId))" @click="submitAssignPicker('retry')">{{ assignmentPending ? '核对并重试原分配' : reassigningPicker ? '确认重新分配' : '确认分配' }}</el-button>
       </template>
     </el-dialog>
 

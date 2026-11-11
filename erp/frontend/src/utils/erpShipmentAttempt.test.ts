@@ -17,7 +17,7 @@ describe('发运未知结果恢复', () => {
     expect(readShipmentAttempt(port, 1)?.payload.clientRequestId).toBe('same-id')
   })
   it('按用户隔离，核对成功只清除当前用户', () => {
-    const port = storage(); saveShipmentAttempt(port, 1, attempt()); saveShipmentAttempt(port, 2, attempt()); clearShipmentAttempt(port, 1)
+    const port = storage(); saveShipmentAttempt(port, 1, attempt()); saveShipmentAttempt(port, 2, attempt()); clearShipmentAttempt(port, 1, readShipmentAttempt(port, 1)!)
     expect(readShipmentAttempt(port, 1)).toBeNull(); expect(readShipmentAttempt(port, 2)).not.toBeNull()
   })
   it('浏览器存储不可写时阻止首次提交', () => {
@@ -29,4 +29,12 @@ describe('发运未知结果恢复', () => {
     expect(() => readShipmentAttempt(port, 1)).toThrow('核对信息无法读取')
     expect(() => saveShipmentAttempt(port, 1, attempt())).toThrow('核对信息无法读取')
   })
+  it('同编号不能替换原内容，变化后的原记录不能被旧回调清除',()=>{
+    const port=storage(),original=attempt();saveShipmentAttempt(port,1,original)
+    const changed={...original,form:{lines:[]},snapshot:{changed:true}}
+    expect(()=>saveShipmentAttempt(port,1,changed)).toThrow()
+    port.setItem(`erp:shipment-attempt:1`,JSON.stringify(changed))
+    expect(()=>clearShipmentAttempt(port,1,original)).toThrow('记录已变化');expect(readShipmentAttempt(port,1)).not.toBeNull()
+  })
+
 })

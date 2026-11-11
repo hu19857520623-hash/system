@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common'
+import { BadRequestException, ConflictException, Injectable, NotFoundException, PreconditionFailedException } from '@nestjs/common'
 import { Prisma } from '@prisma/client'
 import { CreateLogisticsReceiptDto } from './logistics-receipt.dto'
 import { logisticsReceiptNumber, logisticsReceiptRequest, receiptRequestMetadata, receiptStoredRemark } from './logistics-receipt-request.util'
@@ -16,7 +16,7 @@ function fmtTime(d: Date | null | undefined): string {
 export class LogisticsReceiptService {
   constructor(
     private prisma: PrismaService,
-    private opLog: OperationLogService,
+    _opLog: OperationLogService,
   ) {}
 
   private serializeReceipt(row: any) {
@@ -169,6 +169,7 @@ export class LogisticsReceiptService {
       if (existing) {
         const metadata = receiptRequestMetadata(existing.remark)
         if (!metadata || metadata.clientRequestId !== (data.clientRequestId || null) || JSON.stringify(metadata.request) !== JSON.stringify(request)) throw new ConflictException('该收货操作已用于其他内容，请刷新核对原收货记录，请勿重复入仓')
+        await this.recordReceiptAudit(tx, existing, operatorName, operatorId, true)
         return { receipt: this.serializeReceipt(existing), duplicate: true, poStatus: po.status }
       }
       if (!['finance_approved', 'at_logistics_wh', 'approved'].includes(po.status)) throw new BadRequestException('该采购单状态不可登记收货，请刷新核对')
@@ -183,6 +184,9 @@ export class LogisticsReceiptService {
         const poItem = po.items.find(item => Number(item.id) === line.poItemId)
         if (!poItem || (line.sku && line.sku !== poItem.sku)) throw new BadRequestException('收货明细与采购单商品不一致，请刷新核对')
         const pending = progress.items.find(item => item.id === poItem.id)!.pendingQty
+        if (line.expectedPendingQty !== undefined && line.expectedPendingQty !== pending) {
+          throw new PreconditionFailedException('采购单待收数量已变化，请重新读取单据，核对后再登记收货')
+        }
         if (line.actualQty + line.damagedQty > pending) throw new BadRequestException(`${poItem.sku} 良品与破损合计超过待收数量 ${pending}`)
         return { ...line, poItem, pending }
       })
@@ -223,11 +227,21 @@ export class LogisticsReceiptService {
       const poStatus = allReceived ? 'received' : 'at_logistics_wh'
       await tx.purchaseOrder.update({ where: { id: po.id }, data: { status: poStatus, warehouseCode: po.warehouseCode || warehouseCode } })
       if (!po.warehouseCode && po.prePoId) await tx.prePurchaseOrder.update({ where: { id: po.prePoId }, data: { warehouseCode } })
+      await this.recordReceiptAudit(tx, receipt, operatorName, operatorId)
       return { receipt: this.serializeReceipt(receipt), duplicate: false, poStatus }
     }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted })
-    if (!result.duplicate) await this.opLog.log({ operatorId, operatorName, module: 'logistics_receipt', action: 'create',
-      targetType: 'logistics_receipt', targetId: result.receipt.receiptNo,
-      detail: { poNo: result.receipt.poNo, warehouseCode: result.receipt.warehouseCode, itemCount: result.receipt.items.length } })
     return { ...result.receipt, duplicate: result.duplicate, poStatus: result.poStatus }
+  }
+
+  private async recordReceiptAudit(tx: Prisma.TransactionClient, receipt: { receiptNo: string; poNo: string; warehouseCode: string; items: unknown[] }, operatorName?: string, operatorId?: number, recovered = false) {
+    // Original retries hold the PO lock; repair old post-commit audit failures
+    // without receiving goods or incrementing inventory a second time.
+    if (recovered && await tx.operationLog.findFirst({ where: { module: 'logistics_receipt', action: 'create', targetId: receipt.receiptNo }, select: { id: true } })) return
+    await tx.operationLog.create({ data: {
+      operatorId: operatorId ? BigInt(operatorId) : undefined, operatorName: operatorName?.trim() || undefined,
+      module: 'logistics_receipt', action: 'create', targetType: 'logistics_receipt', targetId: receipt.receiptNo,
+      detail: { poNo: receipt.poNo, warehouseCode: receipt.warehouseCode, itemCount: receipt.items.length,
+        ...(recovered ? { recoveredOnOriginalRetry: true } : {}) },
+    } })
   }
 }

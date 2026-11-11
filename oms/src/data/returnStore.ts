@@ -37,6 +37,7 @@ export type TakealotReturnDetails = {
 
 export type ReturnOrder = {
   id: string
+  erpUpdatedAt?: string
   customerId?: string
   returnPlatform?: 'takealot' | 'other'
   takealotReturnDetails?: TakealotReturnDetails
@@ -161,9 +162,10 @@ export function nextReturnNo(customerCode?: string, d = new Date(), existingNos 
 }
 
 export function buildReturnOrderFromErp(erp: ErpReturnOrder, customerId?: string): ReturnOrder {
-  const existing = getReturnOrdersSnapshot().find(o => o.returnNo === erp.returnNo)
+  const existing = getReturnOrdersSnapshot().find(o => o.returnNo === erp.returnNo && o.customerId === customerId)
   const order: ReturnOrder = {
     id: existing?.id || `erp-rt-${erp.id}`,
+    erpUpdatedAt: erp.updatedAt,
     customerId: customerId || existing?.customerId,
     returnPlatform: existing?.returnPlatform,
     takealotReturnDetails: existing?.takealotReturnDetails,
@@ -308,43 +310,54 @@ export async function submitReturnWorkflow(order: ReturnOrder, opts?: { customer
   return result
 }
 
-export async function refreshReturnsFromErp(customerId: string): Promise<number> {
+export async function refreshReturnsFromErp(customerId: string, current = () => true): Promise<number> {
   const customerCode = getCustomerCode(customerId)
   if (!customerCode || customerCode === '—') return 0
   const data = await syncErpReturns(customerCode)
+  if (!current()) return 0
   for (const item of data.items || []) applyErpReturnToLocal(item, customerId, { persist: false })
   return data.total
 }
 
-/** 撤回已提交的退件（仅待到货） */
-export async function withdrawReturnOrder(
-  order: ReturnOrder,
-  opts?: { customerCode?: string; customerId?: string },
+export type ReturnWithdrawalIntent = {
+  returnNo: string
+  customerId: string
+  customerCode: string
+  expectedUpdatedAt: string
+  clientRequestId: string
+}
+
+export async function replayReturnWithdrawal(
+  { returnNo, customerId, ...body }: ReturnWithdrawalIntent,
+  current = () => true,
 ): Promise<ReturnMutationResult> {
-  if (order.status !== 'pending_arrival') {
-    return { ok: false, error: '仅「待到货」状态的退件可撤回' }
-  }
-  const customerCode = opts?.customerCode?.trim() || getCustomerCode(opts?.customerId || order.customerId)
-  if (!customerCode || customerCode === '—') {
-    return { ok: false, error: '未绑定客户编码，无法撤回' }
-  }
   try {
-    const erp = await cancelErpReturn(order.returnNo, customerCode)
-    const merged = buildReturnOrderFromErp(erp, order.customerId)
-    const finalOrder = order.attachments?.length
-      ? { ...merged, attachments: order.attachments }
-      : merged
-    return await saveConfirmedReturn(finalOrder, '撤回')
+    if (!current()) return { ok: false, uncertain: true, error: '登录或客户范围已变化，请返回原账号核对' }
+    const erp = await cancelErpReturn(returnNo, body)
+    if (!current()) return { ok: false, uncertain: true, error: '登录或客户范围已变化，请返回原账号核对' }
+    const latest = getReturnOrdersSnapshot().find(order => order.returnNo === returnNo && order.customerId === customerId)
+    // ERP persists its OMS synchronization in the same transaction as the withdrawal.
+    // A second browser write could overwrite a newer resubmission.
+    const order = latest?.erpUpdatedAt && latest.erpUpdatedAt > erp.updatedAt
+      ? latest : applyErpReturnToLocal(erp, customerId, { persist: false })
+    return { ok: true, order }
   } catch (err) {
-    return uncertainReturnError(err, '撤回')
+    const status = (err as { status?: number } | null)?.status
+    if (status === 400 || status === 409 || status === 422) return { ok: false, uncertain: false, error: userFacingError(err) }
+    return { ok: false, uncertain: true, error: `撤回结果待核对，请继续原撤回。${userFacingError(err)}` }
   }
 }
 
 /** 删除退件：草稿 / 已撤回 */
 export async function removeReturnOrder(order: ReturnOrder): Promise<{ ok: true } | { ok: false; error: string }> {
   if (order.status === 'draft' || order.status === 'cancelled') {
-    try { await deleteReturnOrder(order.id); return { ok: true } }
-    catch (error) { return { ok: false, error: `删除结果未确认，请刷新退件处理核对。${userFacingError(error)}` } }
+    try { await deleteReturnOrder(order.id, order.status); return { ok: true } }
+    catch (error) {
+      const status = (error as { status?: number } | null)?.status
+      if (status === 400 || status === 403 || status === 409) return { ok: false, error: userFacingError(error) }
+      if (status === 404) return { ok: false, error: '退件单已不在当前列表，请刷新核对' }
+      return { ok: false, error: '删除结果未确认，请刷新退件列表核对后再试' }
+    }
   }
   if (order.status === 'pending_arrival') {
     return { ok: false, error: '请先撤回退件，再删除' }
@@ -362,20 +375,32 @@ export async function decideReturnOrder(
     return { ok: false, error: '仅「待您确认」状态的退件可决策' }
   }
   const customerCode = opts?.customerCode?.trim() || getCustomerCode(opts?.customerId || order.customerId)
+  return replayReturnDecision({ returnNo: order.returnNo, customerId: order.customerId, customerCode, decision, processChoice: opts?.processChoice })
+}
+
+export async function replayReturnDecision(intent: {
+  returnNo: string; customerId?: string; customerCode: string; decision: 'keep' | 'discard'; processChoice?: string
+}, current = () => true): Promise<ReturnMutationResult | { ok: false; error: string; resolution: 'conflict' | 'rejected' }> {
+  const { returnNo, customerId, customerCode, decision, processChoice } = intent
   if (!customerCode || customerCode === '—') {
     return { ok: false, error: '未绑定客户编码，无法确认' }
   }
-  if (decision === 'keep' && !opts?.processChoice) {
+  if (decision === 'keep' && !processChoice) {
     return { ok: false, error: '留货请选择后续处理方式' }
   }
   try {
-    const erp = await decideErpReturn(order.returnNo, {
+    if (!current()) return { ok: false, uncertain: true, error: '登录或客户范围已变化，请返回原账号核对' }
+    const erp = await decideErpReturn(returnNo, {
       customerCode,
       decision,
-      processChoice: opts?.processChoice,
+      processChoice,
     })
-    return await saveConfirmedReturn(buildReturnOrderFromErp(erp, order.customerId), '确认处理方式')
+    if (!current()) return { ok: false, uncertain: true, error: '登录或客户范围已变化，请返回原账号核对' }
+    return await saveConfirmedReturn(buildReturnOrderFromErp(erp, customerId), '确认处理方式')
   } catch (err) {
+    const status = (err as { status?: number } | null)?.status
+    if (status === 409) return { ok: false, resolution: 'conflict', error: userFacingError(err) }
+    if (status === 400 || status === 422) return { ok: false, resolution: 'rejected', error: userFacingError(err) }
     return uncertainReturnError(err, '确认')
   }
 }

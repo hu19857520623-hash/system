@@ -25,6 +25,9 @@ export function userFacingError(value: unknown, status?: number, fallback = '操
   }
   const context = text.match(/^([^\n]{0,140}?[\u3400-\u9fff][^\n]{0,100}?)[：:]\s*[A-Za-z<]/)?.[1]
   const contextual = (message: string) => context && !/https?:|127\.0\.0\.1|localhost|[`<>]/i.test(context) ? `${context}：${message}` : message
+  const detail = context ? text.slice(context.length).replace(/^[：:]\s*/, '') : text
+  // Match the whole stock HTTP message before translating its suffix, including an older partially localized response.
+  if (/^(?:(?:resource|record|document|entity)\s+)?(?:not found|未找到所需记录)[.!。]?$/i.test(detail)) return contextual(defaults[404])
   // SQL、堆栈和网关页面不属于业务提示，即使带中文前缀也不能直接展示。
   if (/PrismaClient|Invalid `|SQLSTATE|\bat\s+\S+\s*\([^)]*:\d+:\d+|<!doctype|<html|ECONN\w+|ENOTFOUND|ENETUNREACH/i.test(text)) return contextual(safeFallback)
   if (/failed to fetch|fetch failed|network\s*error|networkerror|load failed/i.test(text)) return contextual('网络连接失败，请检查网络后重试')

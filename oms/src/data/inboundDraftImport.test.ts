@@ -3,6 +3,7 @@ import test, { type TestContext } from 'node:test'
 import { buildImportedInboundDrafts } from './inboundDraftImport'
 import { addInboundOrdersOrThrow, cacheInboundOrder, getInboundOrdersSnapshot, setInboundOrders } from './entityStore'
 import type { ParsedInboundImport } from './importTemplates'
+import { storeAuthSession } from '../api/client'
 
 const row: ParsedInboundImport = { headerKey: '很长的备注和参考号'.repeat(40),
   inboundType: '自发头程', deliveryMethod: 'self', remark: '备注'.repeat(200),
@@ -30,10 +31,13 @@ test('未指定客户的管理员导入在保存之前得到中文说明', () =>
 
 function environment(t: TestContext) {
   const previousFetch = globalThis.fetch
-  const descriptors = ['localStorage', 'sessionStorage'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const)
-  for (const [key] of descriptors) Object.defineProperty(globalThis, key, {
-    configurable: true, value: { getItem: () => null, removeItem: () => {} },
-  })
+  const descriptors = ['localStorage', 'sessionStorage', 'navigator'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const)
+  for (const key of ['localStorage', 'sessionStorage']) {
+    const values = new Map<string, string>()
+    Object.defineProperty(globalThis, key, { configurable: true, value: { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value), removeItem: (key: string) => values.delete(key) } })
+  }
+  Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { locks: { request: async (_key: string, _options: unknown, work: any) => work({}) } } })
+  storeAuthSession({ token: 'test', user: { id: 'u1', username: 'test', role: 'hybrid', customerId: 'c1', customerCode: 'TKL9001', permissions: ['inbound:read', 'inbound:write'] } } as any)
   t.after(() => {
     globalThis.fetch = previousFetch; setInboundOrders([])
     for (const [key, descriptor] of descriptors) {
@@ -48,18 +52,22 @@ test('整批只发一个保存请求并等待确认，不回写已有单据的�
   const rows = buildImportedInboundDrafts([row, row], options)
   setInboundOrders([{ ...rows[0], id: 'old', inboundNo: 'OLD', status: 'receiving' }])
   let release!: (value: Response) => void
-  let calls = 0, settled = false
+  let calls = 0, settled = false, saved: any[] = []
+  let entered!: () => void
+  const started = new Promise<void>(resolve => { entered = resolve })
   globalThis.fetch = async (input, init) => {
     calls++
     assert.equal(String(input), '/api/inbound-orders')
+    saved = JSON.parse(String(init?.body))
+    entered()
     assert.deepEqual(JSON.parse(String(init?.body)).map((item: any) => item.inboundNo), rows.map(item => item.inboundNo))
     return new Promise(resolve => { release = resolve })
   }
   const save = addInboundOrdersOrThrow(rows).then(() => { settled = true })
-  await Promise.resolve()
+  await started
   assert.equal(settled, false)
   assert.equal(calls, 1)
-  release(Response.json({ ok: true, identities: [{ inboundNo: rows[0].inboundNo, id: 'canonical-one' }] }))
+  release(Response.json({ requestId: saved[0].saveRequestId, status: 'confirmed', identities: saved.map((order, index) => ({ inboundNo: order.inboundNo, id: index === 0 ? 'canonical-one' : order.id, omsRevision: 'a'.repeat(64) })) }))
   await save
   assert.equal(settled, true)
   assert.equal(getInboundOrdersSnapshot().find(item => item.inboundNo === rows[0].inboundNo)?.id, 'canonical-one')
@@ -72,9 +80,11 @@ test('保存失败撤销本批乐观草稿，保留等待期间 ERP 刷新的记
   const old = { ...rows[0], id: 'old', inboundNo: 'OLD', status: 'receiving' as const }
   setInboundOrders([old])
   let release!: (value: Response) => void
-  globalThis.fetch = async () => new Promise(resolve => { release = resolve })
+  let entered!: () => void
+  const started = new Promise<void>(resolve => { entered = resolve })
+  globalThis.fetch = async () => new Promise(resolve => { release = resolve; entered() })
   const save = addInboundOrdersOrThrow(rows)
-  await Promise.resolve()
+  await started
   cacheInboundOrder({ ...old, status: 'shelved' })
   release(Response.json({ error: '保存失败' }, { status: 503 }))
   await assert.rejects(save)
@@ -87,9 +97,11 @@ test('同一单据等待期间收到 ERP 新状态，失败回滚也不覆盖它
   const rows = buildImportedInboundDrafts([row], options)
   setInboundOrders([])
   let release!: (value: Response) => void
-  globalThis.fetch = async () => new Promise(resolve => { release = resolve })
+  let entered!: () => void
+  const started = new Promise<void>(resolve => { entered = resolve })
+  globalThis.fetch = async () => new Promise(resolve => { release = resolve; entered() })
   const save = addInboundOrdersOrThrow(rows)
-  await Promise.resolve()
+  await started
   cacheInboundOrder({ ...rows[0], status: 'on_the_way' })
   release(Response.json({ error: '保存失败' }, { status: 503 }))
   await assert.rejects(save)

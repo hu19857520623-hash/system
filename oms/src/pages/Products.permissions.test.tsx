@@ -23,6 +23,13 @@ import ProductImportPanel from '../components/products/ProductImportPanel'
 import { saveProductImportAttempt } from '../data/productImportWorkflow'
 import { storeProductSaveAttempt } from '../data/productSaveWorkflow'
 import { buildProductAction, storeProductAction, productActionScope } from '../data/productActionWorkflow'
+import Inbound from './Inbound'
+import InboundRecords from './InboundRecords'
+import InboundDetailDrawer from '../components/inbound/InboundDetailDrawer'
+import InboundRecovery from '../components/inbound/InboundRecovery'
+import { setInboundOrders } from '../data/entityStore'
+import { inboundPendingKey, saveInboundPending } from '../data/inboundPending'
+import type { InboundOrder } from '../data/mockData'
 
 const product = { id:'permission-card',customerId:'permission-customer',internalSku:'TKL9001-PERM41',customerSku:'PERM41',
   name:'隔离只读商品',spec:'',image:'',price:1,cost:1,availableQty:0,lockedQty:0,category:'',categoryPath:'',weight:'1 kg',
@@ -95,6 +102,49 @@ function environment(t: TestContext, permissions: Permission[], role: OmsRole='h
 function render(content:ReactNode, location='/products') {
   return renderToStaticMarkup(<StaticRouter location={location}><RoleProvider>{content}</RoleProvider></StaticRouter>)
 }
+
+const inbound: InboundOrder = { id: 'inbound-readonly', customerId: product.customerId, inboundNo: 'RVTKL9001-READ87', source: '客户自发', inboundType: '自发头程', deliveryMethod: 'self', stockSource: 'owned', boxCount: 1, skuCount: 1, totalQty: 1, receivedQty: 0, status: 'on_the_way', createdAt: '2026-11-02', warehouse: 'jhb1', erpRevision: 'a'.repeat(64), lineItems: [{ sku: product.internalSku, name: '只读入库货品', qty: 1, boxNo: 1 }] }
+function pendingInbound() {
+  saveInboundPending(localStorage, inboundPendingKey('readonly', 'TKL9001', inbound.inboundNo), { version: 1, kind: 'update', customerCode: 'TKL9001', inboundNo: inbound.inboundNo, body: { clientRequestId: crypto.randomUUID(), expectedVersion: inbound.erpRevision, inboundNo: inbound.inboundNo, customerCode: 'TKL9001', customerId: inbound.customerId, items: [{ sku: product.internalSku, qty: 1 }] }, localOrder: inbound, createdAt: '2026-11-02' })
+}
+function labels(html: string) { return (html.match(/<button\b[^>]*>[\s\S]*?<\/button>/g) || []).map(button => button.replace(/<[^>]*>/g, '').trim()) }
+
+for (const role of ['ecommerce', 'catalog', 'hybrid'] as const) test(`${role}: 只读入库的表单、记录、详情和恢复入口保留读/返回且隐藏写入`, t => {
+  environment(t, ['inbound:read'], role); setInboundOrders([inbound, { ...inbound, id: 'draft-87', inboundNo: 'DRAFT87', status: 'draft' }, { ...inbound, id: 'void-87', inboundNo: 'VOID87', status: 'voided' }]); t.after(() => setInboundOrders([]))
+  pendingInbound()
+  const form = render(<Inbound />, '/inbound?edit=inbound-readonly')
+  assert.ok(form.includes('当前账号只有入库查看权限')); assert.ok(form.includes('返回入库记录')); assert.ok(!/<(?:input|select|textarea)\b/.test(form))
+  const list = render(<InboundRecords />, '/inbound/records')
+  assert.ok(list.includes(inbound.inboundNo)); assert.ok(list.includes('详情')); assert.ok(!/href="\/inbound\?(?:edit|reorder)/.test(list))
+  for (const status of ['draft', 'on_the_way', 'voided'] as const) {
+    const detail = render(<InboundDetailDrawer order={{ ...inbound, status }} mode="page" onClose={() => {}} />)
+    assert.ok(detail.includes('返回入库记录'))
+    for (const label of ['编辑', '修改', '撤回为草稿', '作废', '提交', '删除草稿']) assert.ok(!labels(detail).includes(label), label)
+  }
+  const recovery = render(<InboundRecovery orders={[inbound]} />)
+  assert.ok(labels(recovery).includes('读取原单结果')); assert.ok(!labels(recovery).includes('重试原请求'))
+  assert.ok(labels(recovery).includes('核对原请求回执')); assert.ok(!labels(recovery).includes('取消待核对请求'))
+})
+
+test('入库写入账号保留在途编辑、撤回及原请求重试', t => {
+  environment(t, ['inbound:read', 'inbound:write']); setInboundOrders([inbound]); t.after(() => setInboundOrders([])); pendingInbound()
+  const list = render(<InboundRecords />, '/inbound/records')
+  assert.ok(/href="\/inbound\?edit=/.test(list)); assert.ok(labels(list).includes('撤回为草稿'))
+  const detail = render(<InboundDetailDrawer order={inbound} mode="page" onClose={() => {}} />)
+  assert.ok(labels(detail).includes('修改')); assert.ok(labels(detail).includes('撤回为草稿'))
+  assert.ok(labels(render(<InboundRecovery orders={[inbound]} />)).includes('重试原请求'))
+  assert.ok(labels(render(<InboundRecovery orders={[inbound]} />)).includes('取消待核对请求'))
+})
+
+test('原入库记录损坏时提供中文核对和返回入口，不提供重试或清除操作', t => {
+  environment(t, ['inbound:read', 'inbound:write'])
+  localStorage.setItem(inboundPendingKey('readonly', 'TKL9001', inbound.inboundNo), JSON.stringify({ version: 1, kind: 'update', customerCode: 'TKL9001', inboundNo: inbound.inboundNo, body: {}, localOrder: inbound, createdAt: '2026-11-02' }))
+  const html = render(<InboundRecovery orders={[inbound]} />)
+  assert.ok(html.includes('原操作记录无法读取')); assert.ok(html.includes('暂不提交新操作'))
+  assert.ok(labels(html).includes('读取原单结果')); assert.ok(html.includes('返回入库记录'))
+  assert.ok(!labels(html).includes('重试原请求')); assert.ok(!html.includes('清除记录'))
+  assert.ok(!labels(html).includes('取消待核对请求')); assert.ok(!labels(html).includes('核对原请求回执'))
+})
 for(const role of ['ecommerce','catalog','hybrid'] as const) test(`${role}: read-only product page retains reads and hides mutation entries`, t=>{
   environment(t,['product:read','inventory:read'],role)
   const html=render(<Products />)

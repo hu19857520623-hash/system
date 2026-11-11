@@ -4,6 +4,7 @@ import {
   Bell, Warehouse, FileText,
 } from 'lucide-react'
 import { Card, CardHeader, Badge, MonoCode } from '../components/ui'
+import { InboundReceiptStatus } from '../components/inbound/InboundReceiptStatus'
 import { formatCurrency } from '../data/mockData'
 import { useAnnouncements, useCustomerProfile, useInboundOrders, useOrders, useSystemMessages } from '../data/entityStore'
 import { useOutboundOrders } from '../data/outboundStore'
@@ -160,7 +161,7 @@ export default function Dashboard() {
               {dataScope.scope(inboundOrders).slice(0, 3).map(o => (
                 <li key={o.id} className="flex items-center justify-between py-2.5 text-xs">
                   <MonoCode>{o.inboundNo}</MonoCode>
-                  <Badge status={o.status} />
+                  <InboundReceiptStatus order={o} />
                 </li>
               ))}
             </ul>

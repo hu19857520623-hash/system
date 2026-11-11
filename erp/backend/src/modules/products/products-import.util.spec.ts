@@ -40,9 +40,12 @@ describe('parseProductsImportCsv', () => {
     expect(() => parseProductsImportCsv('SKU\nTK-001')).toThrow('商品名称')
   })
 
-  it('skips rows without sku or product name', () => {
-    const csv = 'SKU,商品名称\n,仅名称\nTK-003,\nTK-004,有效商品'
-    expect(parseProductsImportCsv(csv)).toHaveLength(1)
-    expect(parseProductsImportCsv(csv)[0].sku).toBe('TK-004')
+  it('retains incomplete rows at their original line numbers and skips empty rows', () => {
+    const csv = 'SKU,商品名称\n,仅名称\n\nTK-003,\n,\nTK-004,有效商品'
+    expect(parseProductsImportCsv(csv)).toMatchObject([
+      { lineNo: 2, sku: '', productName: '仅名称' },
+      { lineNo: 4, sku: 'TK-003', productName: '' },
+      { lineNo: 6, sku: 'TK-004', productName: '有效商品' },
+    ])
   })
 })

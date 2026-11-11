@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react'
-import { apiDelete, apiPatch, apiPut, type BootstrapData } from '../api/client'
+import { apiDelete, apiPatch, apiPut, authSessionScope, type BootstrapData } from '../api/client'
 import type {
   InboundOrder,
   Order,
@@ -10,6 +10,7 @@ import type {
 import type { ReturnOrder } from './returnStore'
 import { notifyPersistFailed } from '../utils/userNotify'
 import { mergeInboundOrder, reconcileInboundIds } from './inboundOrderIdentity'
+import { saveInboundBatch } from './inboundSaveWorkflow'
 
 export type AnnouncementItem = {
   id: string
@@ -125,8 +126,15 @@ export function persistInboundOrders(list: InboundOrder[]) {
 }
 
 async function saveInboundOrders(list: InboundOrder[]) {
-  const result = await apiPut<{ identities?: { id: string; inboundNo: string }[] }>('/inbound-orders', list)
-  if (result.identities?.length) setInboundOrders(reconcileInboundIds(state.inboundOrders, result.identities))
+  const current = new Map(state.inboundOrders.map(order => [order.inboundNo, order]))
+  const result = await saveInboundBatch(list)
+  const updates = new Map(result.identities.map(row => [row.inboundNo, row]))
+  const latest = new Map(result.currentOrders.map(row => [row.inboundNo, row]))
+  setInboundOrders(reconcileInboundIds(state.inboundOrders.map(order => {
+    const update = updates.get(order.inboundNo)
+    const server = latest.get(order.inboundNo)
+    return update && order === current.get(order.inboundNo) ? server ? { ...server, erpRevision: order.erpRevision } : { ...order, omsRevision: update.omsRevision } : order
+  }), result.identities))
 }
 
 export async function persistInboundOrdersOrThrow(list: InboundOrder[]) {
@@ -153,19 +161,22 @@ export function addInboundOrder(order: InboundOrder) {
   persistInboundOrders([order, ...state.inboundOrders])
 }
 
-export async function addInboundOrderOrThrow(order: InboundOrder) {
-  await addInboundOrdersOrThrow([order])
+export async function addInboundOrderOrThrow(order: InboundOrder, assertSession?: () => void) {
+  await addInboundOrdersOrThrow([order], assertSession)
 }
 
 /** 新导入的草稿在一次服务端事务中保存，不回写其他未修改单据的旧快照。 */
-export async function addInboundOrdersOrThrow(orders: InboundOrder[]) {
+export async function addInboundOrdersOrThrow(orders: InboundOrder[], assertSession: () => void = () => {}) {
+  assertSession()
   if (!orders.length) return
   const before = state.inboundOrders
   const next = orders.reduce((list, order) => nextInboundOrdersWithUpsert(order, list), before)
   setInboundOrders(next)
   try {
     await saveInboundOrders(orders)
+    assertSession()
   } catch (error) {
+    assertSession()
     const imported = new Set(orders.map(order => order.inboundNo))
     const optimistic = new Map(next.map(order => [order.inboundNo, order]))
     const previous = new Map(before.map(order => [order.inboundNo, order]))
@@ -183,18 +194,18 @@ export function updateInboundOrder(id: string, patch: Partial<InboundOrder>) {
   persistInboundOrders(state.inboundOrders.map(o => (o.id === id ? { ...o, ...patch } : o)))
 }
 
-export async function updateInboundOrderOrThrow(id: string, patch: Partial<InboundOrder>) {
+export async function updateInboundOrderOrThrow(id: string, patch: Partial<InboundOrder>, assertSession?: () => void) {
   const order = state.inboundOrders.find(item => item.id === id)
   if (!order) throw new Error('未找到该入库单，请刷新后重试')
-  await addInboundOrdersOrThrow([{ ...order, ...patch }])
+  await addInboundOrdersOrThrow([{ ...order, ...patch }], assertSession)
 }
 
 export function upsertInboundOrder(order: InboundOrder) {
   persistInboundOrders(nextInboundOrdersWithUpsert(order))
 }
 
-export async function upsertInboundOrderOrThrow(order: InboundOrder) {
-  await addInboundOrdersOrThrow([order])
+export async function upsertInboundOrderOrThrow(order: InboundOrder, assertSession?: () => void) {
+  await addInboundOrdersOrThrow([order], assertSession)
 }
 
 export function setOrders(list: Order[]) {
@@ -215,17 +226,13 @@ export function getInboundOrdersSnapshot() {
   return state.inboundOrders
 }
 
-export async function deleteReturnOrder(id: string) {
+export async function deleteReturnOrder(id: string, expectedStatus?: 'draft' | 'cancelled') {
+  const scope = authSessionScope()
   const before = state.returnOrders.find(order => order.id === id)
-  setReturnOrders(state.returnOrders.filter(o => o.id !== id))
-  try {
-    await apiDelete(`/return-orders/${encodeURIComponent(id)}`)
-  } catch (error) {
-    if (before && !state.returnOrders.some(order => order.id === before.id || order.returnNo === before.returnNo)) {
-      setReturnOrders([before, ...state.returnOrders])
-    }
-    throw error
-  }
+  const query = expectedStatus ? `?expectedStatus=${expectedStatus}` : ''
+  await apiDelete(`/return-orders/${encodeURIComponent(id)}${query}`)
+  if (scope !== authSessionScope()) return
+  if (before) setReturnOrders(state.returnOrders.filter(order => order !== before))
 }
 
 export function setReturnOrders(list: ReturnOrder[]) {
@@ -257,13 +264,13 @@ export async function persistReturnOrdersOrThrow(list: ReturnOrder[], changed = 
 }
 
 function nextReturnOrdersWithUpsert(order: ReturnOrder, base = state.returnOrders) {
-  const idx = base.findIndex(o => o.returnNo === order.returnNo || o.id === order.id)
+  const idx = base.findIndex(o => o.id === order.id || (o.returnNo === order.returnNo && o.customerId === order.customerId))
   if (idx >= 0) {
     const next = [...base]
     next[idx] = { ...next[idx], ...order }
     return next
   }
-  return [order, ...base.filter(o => o.id !== order.id && o.returnNo !== order.returnNo)]
+  return [order, ...base]
 }
 
 export function addReturnOrder(order: ReturnOrder) {
@@ -286,8 +293,13 @@ export function updateReturnOrder(id: string, patch: Partial<ReturnOrder>) {
 }
 
 export async function updateReturnOrderOrThrow(id: string, patch: Partial<ReturnOrder>) {
-  const next = state.returnOrders.map(o => (o.id === id ? { ...o, ...patch } : o))
-  await persistReturnOrdersOrThrow(next, next.filter(order => order.id === id))
+  const current = state.returnOrders.find(order => order.id === id)
+  if (!current || (current.status !== 'draft' && current.status !== 'cancelled')) {
+    throw new Error('退件已不存在或状态已变化，请返回退件处理核对')
+  }
+  const updated = { ...current, ...patch }
+  const next = state.returnOrders.map(order => order.id === id ? updated : order)
+  await persistReturnOrdersOrThrow(next, [updated])
 }
 
 export function upsertReturnOrder(order: ReturnOrder) {

@@ -1,23 +1,45 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { applyCatalogReturnSnapshot } from './catalog-return-snapshot.util.js'
-test('货盘返库采用绝对持有量，重复推送不叠加且保留在出库数量', async () => {
-  const row = { id: 'old', customerId: 'c1', locked: 0, pendingOutbound: 2, available: 0 }
-  const prisma = { inventoryItem: { findFirst: async () => row, update: async ({data}:any) => Object.assign(row, data) } }
-  for (let i=0;i<2;i++) assert.equal(await applyCatalogReturnSnapshot(prisma as any, 'c1', { sku: 'TKL-A', holdingQty: 2 }, 'jhb1'), true)
-  assert.deepEqual(row, { id: 'old', customerId: 'c1', locked: 2, pendingOutbound: 2, available: 0 })
+
+function fixture() {
+  const rows:any[]=[{id:'old',customerId:'c1',sku:'TKL-A',locked:0,available:0,pendingOutbound:2,shipped:3},
+    {id:'alias',customerId:'c1',sku:'TKL-A',locked:0,available:0,pendingOutbound:1,shipped:4}]
+  const calls:string[]=[]
+  const tx={$queryRaw:async()=>{calls.push('account-lock');return []},inventoryItem:{
+    findMany:async()=>rows,update:async({where,data}:any)=>{calls.push('write');Object.assign(rows.find(row=>row.id===where.id),data)},
+    create:async({data}:any)=>{calls.push('create');rows.push(data)},
+  }}
+  const prisma={$transaction:async(fn:any)=>fn(tx)} as any
+  return {rows,calls,prisma}
+}
+test('退款后晚到的退件通知不复活旧持有，保留历史出库数量',async()=>{
+  const f=fixture();f.rows[0].locked=1
+  const load=async()=>{f.calls.push('current-source');return []}
+  for(let i=0;i<2;i++) assert.equal(await applyCatalogReturnSnapshot(f.prisma,'c1',{sku:'TKL-A',holdingQty:1},load),true)
+  assert.equal(f.rows.reduce((sum,row)=>sum+row.locked,0),0)
+  assert.deepEqual(f.calls.slice(0,2),['account-lock','current-source'])
+  assert.equal(f.rows[0].pendingOutbound,2);assert.equal(f.rows[1].shipped,4)
 })
-test('新的返库持有镜像使用短且稳定标识，不复制共享平台条码', async () => {
-  const writes:any[]=[]
-  const prisma = { inventoryItem: { findFirst: async () => null, upsert: async (arg:any) => {writes.push(arg)} }, product: { findFirst: async () => ({name:'货盘商品',price:20,image:'',spec:''}) } }
-  for(let i=0;i<2;i++) await applyCatalogReturnSnapshot(prisma as any, 'c1', {sku:'TKL-A',holdingQty:1}, 'jhb1')
-  assert.equal(writes[0].where.id,writes[1].where.id);assert.ok(writes[0].where.id.length<=50)
-  assert.equal(writes[0].create.ean,null);assert.equal(writes[0].create.customerId,'c1');assert.equal(writes[0].create.locked,1)
+test('旧退件通知不能覆盖后续采购，多个仓库名称只保留一份当前持有',async()=>{
+  const f=fixture()
+  await applyCatalogReturnSnapshot(f.prisma,'c1',{sku:'TKL-A',holdingQty:1},async()=>[{sku:'TKL-A',quantity:5}])
+  assert.deepEqual(f.rows.map(row=>row.locked),[5,0])
 })
-test('缺失镜像的零持有不创建历史空行，无效数量不改库存', async () => {
-  let creates=0
-  const prisma = { inventoryItem: {findFirst:async()=>null,upsert:async()=>{creates++}} }
-  assert.equal(await applyCatalogReturnSnapshot(prisma as any,'c1',{sku:'TKL-A',holdingQty:0},'jhb1'),true)
-  for(const qty of [-1,1.5,Infinity,undefined]) assert.equal(await applyCatalogReturnSnapshot(prisma as any,'c1',{sku:'TKL-A',holdingQty:qty},'jhb1'),false)
-  assert.equal(creates,0)
+test('来源故障不把旧事件数量写入库存',async()=>{
+  const f=fixture();const before=structuredClone(f.rows)
+  await assert.rejects(applyCatalogReturnSnapshot(f.prisma,'c1',{sku:'TKL-A',holdingQty:2},async()=>{throw Error('source unavailable')}))
+  assert.deepEqual(f.rows,before);assert.equal(f.calls.includes('write'),false)
+})
+test('缺失镜像只根据当前来源创建短稳定ID，不复制共享条码，也不新建零持有',async()=>{
+  const f=fixture();f.rows.splice(0)
+  await applyCatalogReturnSnapshot(f.prisma,'c1',{sku:'TKL-A',holdingQty:1},async()=>[])
+  assert.equal(f.rows.length,0)
+  await applyCatalogReturnSnapshot(f.prisma,'c1',{sku:'TKL-A',holdingQty:1},async()=>[{sku:'TKL-A',quantity:3,productName:'当前商品',unitPrice:20}])
+  assert.equal(f.rows.length,1);assert.equal(f.rows[0].locked,3);assert.equal(f.rows[0].id.length,44);assert.equal(f.rows[0].ean,null)
+})
+test('无效事件不触发来源读取或写入',async()=>{
+  const f=fixture()
+  for(const holdingQty of [-1,1.5,Infinity,undefined]) assert.equal(await applyCatalogReturnSnapshot(f.prisma,'c1',{sku:'TKL-A',holdingQty},async()=>{throw Error('must not read')}),false)
+  assert.deepEqual(f.calls,[])
 })

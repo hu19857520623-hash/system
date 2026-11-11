@@ -4,12 +4,14 @@ describe('outbound exception synchronization', () => {
   function setup(status = 'picking') {
     const service = Object.create(OutboundService.prototype) as OutboundService
     const prisma = {
+      $queryRaw:jest.fn(),operationLog:{create:jest.fn()},
+      $transaction:jest.fn(async(fn:any)=>fn(prisma)),
       outboundOrder: {
         findUnique: jest.fn().mockResolvedValue({ id: 1n, outboundNo: 'OUT-1', status, exceptionFromStatus: 'picking' }),
         update: jest.fn().mockResolvedValue({}),
       },
     }
-    const push = jest.fn().mockResolvedValue(undefined)
+    const push = jest.fn().mockResolvedValue(true)
     Object.assign(service, { prisma, opLog: { log: jest.fn().mockResolvedValue(undefined) }, pushOutboundStatusToOms: push, detail: jest.fn().mockResolvedValue({}) })
     return { service, prisma, push }
   }
@@ -20,7 +22,7 @@ describe('outbound exception synchronization', () => {
     expect(prisma.outboundOrder.update).toHaveBeenCalledWith({ where: { id: 1n }, data: {
       exceptionFromStatus: 'picking', exceptionType: 'document_missing', status: 'exception', problemRemark: '缺少装箱清单\n请补充上传',
     } })
-    expect(push).toHaveBeenCalledWith('OUT-1')
+    expect(push).toHaveBeenCalledWith('OUT-1',true)
     expect(prisma.outboundOrder.update.mock.invocationCallOrder[0]).toBeLessThan(push.mock.invocationCallOrder[0])
   })
 
@@ -28,7 +30,7 @@ describe('outbound exception synchronization', () => {
     const { service, prisma, push } = setup('exception')
     await service.setProblem(1, { markType: 'clear_exception' })
     expect(prisma.outboundOrder.update).toHaveBeenCalledWith({ where: { id: 1n }, data: { status: 'picking', exceptionFromStatus: null, exceptionType: null } })
-    expect(push).toHaveBeenCalledWith('OUT-1')
+    expect(push).toHaveBeenCalledWith('OUT-1',true)
   })
 
   it('does not publish an invalid exception', async () => {

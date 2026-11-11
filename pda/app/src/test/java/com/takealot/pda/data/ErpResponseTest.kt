@@ -44,6 +44,13 @@ class ErpResponseTest {
         assertTrue(failure("", 200).retriable)
     }
 
+    @Test fun incompleteOrInvalidEnvelopesKeepTheOriginalRequest() {
+        for (body in listOf("{}", """{"code":0}""", """{"code":0.5,"data":{}}""", """{"code":"0","data":{}}""")) {
+            assertTrue(failure(body, 200).retriable)
+        }
+        assertTrue(parseErpResponse("""{"code":0,"data":null}""", 200).isJsonNull)
+    }
+
     @Test fun httpFailureCannotBeHiddenBySuccessEnvelope() {
         val e = failure("""{"code":0,"data":{}}""", 503)
         assertEquals(503, e.code)

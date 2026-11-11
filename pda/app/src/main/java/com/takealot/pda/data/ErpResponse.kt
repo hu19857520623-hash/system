@@ -22,7 +22,13 @@ fun erpFailureMessage(raw: String?, code: Int): String {
 
 fun parseErpResponse(text: String, httpCode: Int): JsonElement {
     val root = runCatching { JsonParser.parseString(text).asJsonObject }.getOrNull()
-    val code = root?.get("code")?.let { runCatching { it.asInt }.getOrNull() } ?: httpCode
+    val code = root?.get("code")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }
+        ?.asString?.toIntOrNull()
+    val httpSuccess = httpCode in 200..299
+    val data = root?.get("data")
+    if (httpSuccess && (code == null || (code == 0 && data == null))) {
+        throw ErpException("ERP 返回结果不完整，请先核对待同步记录后重试", httpCode, retriable = true)
+    }
     val message = root?.get("message")?.let { value ->
         when {
             value.isJsonArray -> value.asJsonArray.mapNotNull { runCatching { it.asString }.getOrNull() }.joinToString("；")
@@ -30,10 +36,10 @@ fun parseErpResponse(text: String, httpCode: Int): JsonElement {
             else -> null
         }
     }
-    if (httpCode !in 200..299 || code != 0 || root == null) {
-        val failureCode = if (httpCode !in 200..299) httpCode else code
+    if (!httpSuccess || code != 0) {
+        val failureCode = if (httpSuccess) code ?: httpCode else httpCode
         throw ErpException(erpFailureMessage(message, failureCode), failureCode,
-            retriable = failureCode in 500..599 || failureCode == 408 || failureCode == 429 || (httpCode in 200..299 && root == null))
+            retriable = failureCode in 500..599 || failureCode == 408 || failureCode == 429)
     }
-    return root.get("data") ?: com.google.gson.JsonNull.INSTANCE
+    return checkNotNull(data)
 }

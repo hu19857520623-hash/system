@@ -286,6 +286,9 @@ export function fetchErpSkuInventoryByCode(customerCode: string) {
 }
 
 export type ErpInboundOrder = {
+  revision?: string
+  syncPending?: boolean
+
   id: number
   inboundNo: string
   warehouseCode: string
@@ -426,6 +429,8 @@ export type ErpInventoryViewItem = ErpSkuHolding & {
 
 export function createErpInboundAsn(body: {
   inboundNo?: string
+  clientRequestId?: string
+  expectedVersion?: string
   customerCode: string
   warehouseCode?: string
   trackingNo?: string
@@ -449,6 +454,8 @@ export function createErpInboundAsn(body: {
 
 export function updateErpInboundAsn(inboundNo: string, body: {
   inboundNo?: string
+  clientRequestId?: string
+  expectedVersion?: string
   customerCode: string
   warehouseCode?: string
   trackingNo?: string
@@ -470,15 +477,21 @@ export function updateErpInboundAsn(inboundNo: string, body: {
   })
 }
 
-export function cancelErpInboundAsn(inboundNo: string, customerCode: string) {
+export function cancelErpInboundAsn(inboundNo: string, customerCode: string, control: { clientRequestId?: string; expectedVersion?: string } = {}) {
   return erpRequest<ErpInboundOrder>(`/inbound/oms/asn/${encodeURIComponent(inboundNo)}/cancel`, {
     method: 'POST',
-    body: JSON.stringify({ customerCode }),
+    body: JSON.stringify({ customerCode, ...control }),
   })
+}
+
+export function resolveErpInboundOriginal(inboundNo: string, resolution: 'check' | 'cancel', body: { customerCode: string; kind: 'create' | 'update' | 'reactivate' | 'cancel'; original: Record<string, unknown> }) {
+  return erpRequest<{ outcome: 'completed' | 'cancelled' | 'unresolved'; order: ErpInboundOrder | null; message: string }>(`/inbound/oms/asn/${encodeURIComponent(inboundNo)}/original/${resolution}`, { method: 'POST', body: JSON.stringify(body) })
 }
 
 export function reactivateErpInboundAsn(inboundNo: string, body: {
   inboundNo?: string
+  clientRequestId?: string
+  expectedVersion?: string
   customerCode: string
   warehouseCode?: string
   trackingNo?: string
@@ -580,10 +593,10 @@ export function fetchErpReturnByNo(returnNo: string) {
   return erpRequest<ErpReturnOrder>(`/returns/oms/by-no/${encodeURIComponent(returnNo)}`)
 }
 
-export function cancelErpReturn(returnNo: string, customerCode: string) {
+export function cancelErpReturn(returnNo: string, customerCode: string, clientRequestId?: string, expectedUpdatedAt?: string) {
   return erpRequest<ErpReturnOrder>(`/returns/oms/by-no/${encodeURIComponent(returnNo)}/cancel`, {
     method: 'POST',
-    body: JSON.stringify({ customerCode }),
+    body: JSON.stringify({ customerCode, clientRequestId, expectedUpdatedAt }),
   })
 }
 

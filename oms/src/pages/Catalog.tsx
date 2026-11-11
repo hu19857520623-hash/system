@@ -129,9 +129,6 @@ export default function Catalog() {
     [allPurchases, customerId],
   )
 
-  const getPurchaseUnitPrice = (sku: string) =>
-    allProducts.find(p => p.internalSku === sku)?.price ?? 0
-
   const getCustomerLabel = (id: string) =>
     accounts.find(a => a.id === id)?.code || getCustomerCode(id) || id
 
@@ -150,11 +147,14 @@ export default function Catalog() {
         text: `已从 ERP 同步货盘 ${catalog.total} 个 SKU` +
           (customerCode && customerCode !== '—' ? ` · 客户 ${customerCode}` : ''),
       })
+      if (noticeTimer.current) clearTimeout(noticeTimer.current)
+      noticeTimer.current = setTimeout(() => setMsg(null), 6000)
     } catch (err) {
+      if (noticeTimer.current) clearTimeout(noticeTimer.current)
+      noticeTimer.current = null
       setMsg({ type: 'err', text: userFacingError(err) })
     } finally {
       setLoadingCatalog(false)
-      setTimeout(() => setMsg(null), 5000)
     }
   }
 
@@ -194,17 +194,23 @@ export default function Catalog() {
     }
   }
 
+  const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const showMsg = (type: 'ok' | 'err', text: string) => {
+    if (noticeTimer.current) clearTimeout(noticeTimer.current)
+    noticeTimer.current = null
     setMsg({ type, text })
-    setTimeout(() => setMsg(null), 6000)
+    if (type === 'ok') noticeTimer.current = setTimeout(() => setMsg(null), 6000)
   }
+  useEffect(() => () => { if (noticeTimer.current) clearTimeout(noticeTimer.current) }, [])
 
   const syncCatalogAfterPurchase = async () => {
     try {
       const catalog = await getErpCatalog()
       await mergeErpCatalogIntoState(catalog.items || [])
       setSyncedAt(catalog.syncedAt)
-    } catch { /* ignore */ }
+    } catch (error) {
+      showMsg('err', `货盘目录刷新未完成，请点击“同步 ERP”后核对。${userFacingError(error)}`)
+    }
   }
 
   const addToCart = (internalSku: string) => {
@@ -391,7 +397,12 @@ export default function Catalog() {
 
       {filtered.length === 0 ? (
         <Card className="p-8 text-center text-sm text-text-muted">
-          {loadingCatalog ? '正在从 ERP 拉取货盘…' : '暂无已同步的货盘商品。请先在 ERP 货盘库存点「同步 OMS」。仅「可见」或「可下单」的 SKU 会显示在这里。'}
+          {msg?.type === 'err' ? (
+            <div className="space-y-3">
+              <p className="text-red-800">货盘同步失败，当前不能确认可售商品。{msg.text}</p>
+              <Button size="sm" variant="secondary" disabled={loadingCatalog} onClick={() => void refreshFromErp()}>重新同步</Button>
+            </div>
+          ) : loadingCatalog ? '正在从 ERP 拉取货盘…' : '暂无已同步的货盘商品。请先在 ERP 货盘库存点「同步 OMS」。仅「可见」或「可下单」的 SKU 会显示在这里。'}
         </Card>
       ) : (
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -521,8 +532,6 @@ export default function Catalog() {
               </thead>
               <tbody>
                 {purchaseRows.map(row => {
-                  const unitPrice = getPurchaseUnitPrice(row.sku)
-                  const amount = Math.round(unitPrice * row.qty * 100) / 100
                   return (
                     <tr key={`${row.purchaseNo}-${row.id}`} className="border-b border-border-light/80">
                       <td className="py-3 pr-3 align-top text-xs text-text-muted whitespace-nowrap">{row.createdAt}</td>
@@ -537,7 +546,7 @@ export default function Catalog() {
                         <MonoCode>{getCustomerSkuDisplay({ internalSku: row.sku, customerSku: undefined }, customerCode)}</MonoCode>
                       </td>
                       <td className="py-3 pr-3 align-top text-right">{row.qty.toLocaleString()}</td>
-                      <td className="py-3 align-top text-right font-medium">{formatCurrency(amount)}</td>
+                      <td className="py-3 align-top text-right font-medium">{row.totalAmount == null ? '待核对' : formatCurrency(row.totalAmount)}</td>
                     </tr>
                   )
                 })}
