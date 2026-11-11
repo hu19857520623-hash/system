@@ -63,4 +63,19 @@ class SavedRequestAuthRecoveryTest {
         assertSame(failed, failed.restoreLegacyAuthorizationFailure())
         assertEquals("pending", failed.copy(retryExtra = "SKU", retryQuantity = 5).restoreLegacyAuthorizationFailure().state)
     }
+    @Test fun pendingPostRequiresItsOwnRequestIdAndOrderRoute() {
+        val record = PdaScanRecord(id = "request-1", module = "outbound", mode = "pick_submit",
+            scanCode = "DO-42", orderId = 42, retryAction = "post", retryEndpoint = "/outbound/42/pick",
+            retryBodyJson = """{"clientRequestId":"request-1","items":[]}""")
+        assertEquals("request-1", record.originalPostPayload()?.get("clientRequestId")?.asString)
+        assertNull(record.copy(retryBodyJson = """{"clientRequestId":"request-2"}""").originalPostPayload())
+        assertNull(record.copy(retryEndpoint = "/outbound/43/pick").originalPostPayload())
+        assertNull(record.copy(retryEndpoint = "/outbound/42/cancel").originalPostPayload())
+        assertNull(record.copy(retryBodyJson = "broken").originalPostPayload())
+        val catalog = record.copy(module = "inbound", mode = "catalog", orderId = null, scanCode = "RV-42",
+            retryEndpoint = "/inbound/catalog-bind", retryBodyJson =
+                """{"clientRequestId":"request-1","scanCode":"RV-42","warehouseCode":"JHB"}""")
+        assertNotNull(catalog.originalPostPayload())
+        assertNull(catalog.copy(scanCode = "RV-43").originalPostPayload())
+    }
 }

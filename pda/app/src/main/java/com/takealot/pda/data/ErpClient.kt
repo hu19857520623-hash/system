@@ -282,9 +282,8 @@ class ErpClient(private val session: SessionStore, private val journal: PdaWorkJ
 
     suspend fun retryPending(record: PdaScanRecord) = withContext(Dispatchers.IO) {
         val endpoint = record.retryEndpoint.orEmpty()
-        val body = record.retryBodyJson.orEmpty()
-        if (endpoint.isBlank() || body.isBlank()) throw ErpException("待同步记录缺少请求内容")
-        val payload = JsonParser.parseString(body)
+        val payload = record.originalPostPayload()
+            ?: throw ErpException("待同步记录与原请求不一致，请由主管核对原单和操作流水", retriable = true)
         val putaway = if (endpoint.startsWith("/inbound/") && endpoint.endsWith("/putaway")) {
             val id = record.orderId
             if (id == null || endpoint != "/inbound/$id/putaway") {

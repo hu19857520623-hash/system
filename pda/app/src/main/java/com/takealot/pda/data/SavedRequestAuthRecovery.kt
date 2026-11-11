@@ -1,7 +1,5 @@
 package com.takealot.pda.data
 
-import com.google.gson.JsonParser
-
 internal val ErpException.isAuthorizationFailure: Boolean get() = code == 401 || code == 403
 
 /** A prepared mutation can resume after the original account regains access. */
@@ -33,38 +31,13 @@ internal fun PdaScanRecord.restoreLegacyAuthorizationFailure(): PdaScanRecord {
 
 private fun PdaScanRecord.hasOriginalAuthorizationRetry(): Boolean {
     if (id.isBlank() || scanCode.isBlank()) return false
-    if (retryAction == "post") {
-        if (!hasKnownPostEndpoint()) return false
-        return runCatching {
-            val body = JsonParser.parseString(retryBodyJson.orEmpty()).asJsonObject
-            val key = body.get("clientRequestId")
-            key?.isJsonPrimitive == true && key.asJsonPrimitive.isString && key.asString == id
-        }.getOrDefault(false)
-    }
+    if (retryAction == "post") return originalPostPayload() != null
     if (module != "inbound") return false
     return when (retryAction) {
         "arrival" -> !retryExtra.isNullOrBlank()
         "receive_box" -> (orderId ?: 0) > 0
         "scan_qc", "scan_catalog_qc" ->
             (orderId ?: 0) > 0 && (retryQuantity ?: 0) > 0 && !retryExtra.isNullOrBlank()
-        else -> false
-    }
-}
-
-private fun PdaScanRecord.hasKnownPostEndpoint(): Boolean {
-    if (module == "inbound" && retryEndpoint == "/inbound/catalog-bind") {
-        return !catalogBindingWarehouse.isNullOrBlank()
-    }
-    val id = orderId?.takeIf { it > 0 } ?: return false
-    val endpoint = retryEndpoint ?: return false
-    val operation = endpoint.substringAfterLast('/')
-    return when (module) {
-        "inbound" -> endpoint == "/inbound/$id/$operation" && operation in setOf(
-            "putaway", "qc", "scan-qc", "measure-dimensions", "resolve-exception", "received-carton-count",
-            "report-exception", "reduce-carton", "reduce-qc", "reduce-putaway",
-        )
-        "outbound" -> endpoint == "/outbound/$id/$operation" && operation in setOf("pick", "pack", "problem", "ship")
-        "stocktake" -> endpoint == "/management-loop/stocktakes/$id/count"
         else -> false
     }
 }
