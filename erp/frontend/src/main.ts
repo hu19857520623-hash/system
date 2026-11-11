@@ -14,7 +14,12 @@ import 'element-plus/theme-chalk/el-popper.css'
 import router from './router'
 import App from './App.vue'
 import { useThemeStore } from './stores/theme'
+import { persistentFailureNotice } from './utils/failureNotice'
+import { ElMessage } from 'element-plus'
 import './styles/global.scss'
+
+const reportFailure = ElMessage.error.bind(ElMessage)
+ElMessage.error = ((options: unknown) => reportFailure(persistentFailureNotice(options) as never)) as typeof ElMessage.error
 
 const app = createApp(App)
 const pinia = createPinia()
