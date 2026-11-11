@@ -178,7 +178,7 @@ export class OperatingLedgerService {
 
   private parseDate(value: string, endOfDay = false) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value || ''))) {
-      throw new BadRequestException('日期格式必须为 YYYY-MM-DD')
+      throw new BadRequestException('日期无效，请按年-月-日填写，例如 2026-11-11')
     }
     const [year, month, day] = value.split('-').map(Number)
     const date = new Date(year, month - 1, day, endOfDay ? 23 : 0, endOfDay ? 59 : 0, endOfDay ? 59 : 0, endOfDay ? 999 : 0)

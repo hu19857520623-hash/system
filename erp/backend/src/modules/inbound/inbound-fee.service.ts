@@ -278,6 +278,6 @@ function parseDate(value?: string | null) {
   const raw = String(value || '').trim()
   if (!raw) return null
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw)
-  if (!match) throw new BadRequestException('生效日期格式为 YYYY-MM-DD')
+  if (!match) throw new BadRequestException('生效日期无效，请按年-月-日填写，例如 2026-11-11')
   return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
 }

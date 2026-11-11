@@ -203,7 +203,7 @@ export function parsePurchaseImportCsv(content: string): PurchaseImportParseResu
     if (lineRemark.length > 500) reasons.push('行备注不能超过 500 字')
 
     const arrival = parseExpectedArrival(arrivalRaw)
-    if (!arrival.ok) reasons.push('预计到货须为 YYYY-MM-DD')
+    if (!arrival.ok) reasons.push('预计到货无效，请按年-月-日填写，例如 2026-11-11')
     const freight = parseMoney(freightRaw, true)
     if (!freight.ok) reasons.push('国内运费须为不小于 0 的金额')
     const quantity = parseQuantity(quantityRaw)

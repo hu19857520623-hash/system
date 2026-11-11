@@ -1894,7 +1894,7 @@ th{background:#f5f5f5}
           ? parseWorkDate(payload.appointmentDate)
           : undefined
     if (payload.appointmentDate !== undefined && payload.appointmentDate !== null && !appointmentDate) {
-      throw new BadRequestException('预约送仓日期格式无效，请使用 YYYY-MM-DD')
+      throw new BadRequestException('预约送仓日期无效，请按年-月-日填写，例如 2026-11-11')
     }
 
     let status = payload.appointmentStatus?.trim()

@@ -6,7 +6,7 @@ const PDF_BASE64 = Buffer.from('%PDF-cropped-label').toString('base64')
 function buildService() {
   const prisma: any = {
     customer: { findUnique: jest.fn() },
-    outboundOrder: { findUnique: jest.fn() },
+    outboundOrder: { findUnique: jest.fn(), update: jest.fn() },
     outboundAttachment: {
       create: jest.fn(),
       findFirst: jest.fn(),
@@ -217,6 +217,15 @@ describe('OutboundService cropped label storage', () => {
       }],
     } as any)).rejects.toThrow('缺少客户编码')
     expect(prisma.customer.findUnique).not.toHaveBeenCalled()
+  })
+
+  it('rejects an invalid appointment date in Chinese and does not save it', async () => {
+    const { service, prisma } = buildService()
+    prisma.outboundOrder.findUnique.mockResolvedValue({ id: 7n, status: 'pending_pick', outboundNo: 'OUT-7' })
+    await expect(service.setAppointment(7, { appointmentDate: '11/11/2026' })).rejects.toThrow(
+      '预约送仓日期无效，请按年-月-日填写，例如 2026-11-11',
+    )
+    expect(prisma.outboundOrder.update).not.toHaveBeenCalled()
   })
 })
 

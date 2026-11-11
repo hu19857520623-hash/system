@@ -67,7 +67,7 @@ export class CreateBillingChargeDto {
   @IsOptional()
   @Transform(trimOptional)
   @IsString()
-  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: '收费日期格式为 YYYY-MM-DD' })
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: '收费日期无效，请按年-月-日填写，例如 2026-11-11' })
   chargeDate?: string
 
   @IsOptional()
@@ -120,13 +120,13 @@ export class GenerateBillingDto {
   @IsOptional()
   @Transform(trimOptional)
   @IsString()
-  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: '起始日期格式为 YYYY-MM-DD' })
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: '起始日期无效，请按年-月-日填写，例如 2026-11-11' })
   dateFrom?: string
 
   @IsOptional()
   @Transform(trimOptional)
   @IsString()
-  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: '结束日期格式为 YYYY-MM-DD' })
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: '结束日期无效，请按年-月-日填写，例如 2026-11-11' })
   dateTo?: string
 
   @IsOptional()
