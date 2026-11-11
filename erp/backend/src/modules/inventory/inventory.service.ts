@@ -6,7 +6,7 @@ import { previewCatalogReclaim, reclaimCatalog } from './catalog-reclaim.util'
 import { catalogReclaimHistory, catalogReclaimSyncReceipt } from './catalog-reclaim-history.util'
 import type { CatalogReclaimHistoryQueryDto } from './dto/catalog-reclaim.dto'
 import type { CatalogReclaimDto } from './dto/catalog-reclaim.dto'
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common'
+import { BadRequestException, ConflictException, Injectable, NotFoundException, ServiceUnavailableException } from '@nestjs/common'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
 import { buildInboundPipelineQtyMap, INBOUND_PIPELINE_STATUSES } from '../../common/inbound-pipeline.util'
@@ -132,9 +132,9 @@ export class InventoryService {
           `%${keyword}%`, `%${keyword}%`,
         )
         for (const row of omsCustomers) customerCodes.add(String(row.code).toUpperCase())
-      } catch (error) {
-        if (exportAll) throw error
-        // ERP customer records remain usable if OMS tables are unavailable.
+      } catch {
+        if (exportAll) throw new ServiceUnavailableException('无法读取 OMS 客户，请稍后重试')
+        // 列表仍可使用已读到的 ERP 客户；导出必须说明 OMS 客户没有读全。
       }
       const ownedProducts = productIdFilter.length && customerCodes.size
         ? await this.prisma.product.findMany({
@@ -234,10 +234,7 @@ export class InventoryService {
     const rows = await this.prisma.inventory.findMany({
       where,
       orderBy: { id: 'desc' },
-      take: exportAll ? 5001 : 5000,
     })
-
-    if (exportAll && rows.length > 5000) throw new BadRequestException('导出超过 5000 条，请缩小筛选范围')
     const productIds = [...new Set(rows.map((r) => r.productId))]
     const products = productIds.length
       ? await this.prisma.product.findMany({ where: { id: { in: productIds } } })
@@ -358,8 +355,11 @@ export class InventoryService {
 
     if (mergedFilters.dataSource === 'catalog_holdings') {
       const catalogHoldings = await fetchCatalogInventoryRows(this.prisma, mergedFilters, exportAll)
-      if (exportAll && catalogHoldings.length >= 5000) throw new BadRequestException('导出达到 5000 条，请缩小筛选范围后重试，以免遗漏数据')
-      const { items, total } = mergePaginate([catalogHoldings], exportAll ? 1 : page, exportAll ? 5000 : pageSize)
+      const { items, total } = mergePaginate(
+        [catalogHoldings],
+        exportAll ? 1 : page,
+        exportAll ? Math.max(catalogHoldings.length, 1) : pageSize,
+      )
       const summary = {
         available: catalogHoldings.reduce(
           (sum, r) => sum + Number((r as { sellableQty?: number; availableQty?: number }).sellableQty ?? (r as { availableQty?: number }).availableQty ?? 0),
@@ -386,7 +386,7 @@ export class InventoryService {
 
     const omsCandidates =
       mergedFilters.dataSource === 'all' || mergedFilters.dataSource === 'oms'
-        ? await fetchOmsInventoryRows(this.prisma, mergedFilters, exportAll)
+        ? await fetchOmsInventoryRows(this.prisma, mergedFilters)
         : []
 
     // Resolve existence independently of quantity filters and the selected source tab.
@@ -414,8 +414,12 @@ export class InventoryService {
     const erpFiltered =
       mergedFilters.dataSource === 'all' || mergedFilters.dataSource === 'erp' ? erpItems : []
 
-    if (exportAll && erpFiltered.length + omsItems.length >= 5000) throw new BadRequestException('导出达到 5000 条，请缩小筛选范围后重试，以免遗漏数据')
-    const { items, total } = mergePaginate([erpFiltered, omsItems], exportAll ? 1 : page, exportAll ? 5000 : pageSize)
+    const mergedCount = erpFiltered.length + omsItems.length
+    const { items, total } = mergePaginate(
+      [erpFiltered, omsItems],
+      exportAll ? 1 : page,
+      exportAll ? Math.max(mergedCount, 1) : pageSize,
+    )
     const allMerged = [...erpFiltered, ...omsItems]
     const summary = {
       available: allMerged.reduce(

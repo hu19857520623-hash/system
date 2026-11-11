@@ -33,10 +33,13 @@ describe('catalog holding availability and outbound locks', () => {
     expect(rows).toHaveLength(1)
     expect(rows[0]).toMatchObject({ availableQty: 0, lockedQty: 9, totalQty: 9, pendingOutboundQty: 9 })
     expect(prisma.outboundOrderItem.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { OR: [expect.objectContaining({ order: {
-        customerId: 1n, shippedAt: null, remark: { contains: '[stock:catalog]' },
-        status: { in: ['pending_pick', 'picking', 'picked', 'reviewing', 'pending_relabel', 'packed', 'exception'] },
-      } })] },
+      where: {
+        sku: { in: expect.arrayContaining(['TKL-SKU-1']) },
+        order: {
+          customerId: { in: [1n] }, shippedAt: null, remark: { contains: '[stock:catalog]' },
+          status: { in: ['pending_pick', 'picking', 'picked', 'reviewing', 'pending_relabel', 'packed', 'exception'] },
+        },
+      },
     }))
   })
 
