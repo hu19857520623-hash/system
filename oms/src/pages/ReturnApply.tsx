@@ -1,5 +1,8 @@
 
 import { userFacingError } from '../utils/userFacingError'
+import { authSessionScope } from '../api/client'
+import { readCurrentFiles } from '../utils/readCurrentFiles'
+import { useAsyncViewScope } from '../utils/useAsyncViewScope'
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { AlertTriangle, CheckCircle2, FileSearch, Plus, Trash2, ListOrdered, Upload } from 'lucide-react'
@@ -138,11 +141,17 @@ function buildReturnOrder(
 }
 
 export default function ReturnApply() {
+  const [searchParams] = useSearchParams()
+  const dataScope = useDataScope()
+  const scope = JSON.stringify([authSessionScope(), searchParams.get('edit'), dataScope.customerFilter])
+  return <ReturnApplyForm key={scope} dataScope={dataScope} />
+}
+
+function ReturnApplyForm({ dataScope }: { dataScope: ReturnType<typeof useDataScope> }) {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const editId = searchParams.get('edit')
   const { role } = useRole()
-  const dataScope = useDataScope()
   const customerIdFromRole = getCustomerIdForRole(role) ?? undefined
 
   const [editingId, setEditingId] = useState<string | null>(editId)
@@ -171,6 +180,7 @@ export default function ReturnApply() {
   const [purchasePrice, setPurchasePrice] = useState('')
   const [userType, setUserType] = useState('微信用户')
   const [recognizingFiles, setRecognizingFiles] = useState(false)
+  const fileTask = useRef(false)
   const [recognitionHint, setRecognitionHint] = useState('')
   const [recognitionWarning, setRecognitionWarning] = useState('')
   const takealotFileInputRef = useRef<HTMLInputElement>(null)
@@ -197,6 +207,30 @@ export default function ReturnApply() {
   })
   const customerId = erpCustomer?.customerId
   const customerCode = erpCustomer?.customerCode
+  const sessionScope = authSessionScope()
+  const fileScope = JSON.stringify([sessionScope, editId, customerId, returnPlatform, department])
+  const view = useAsyncViewScope(fileScope)
+  const captureCurrent = () => {
+    const valid = view.capture()
+    return () => valid() && authSessionScope() === sessionScope
+  }
+
+  useEffect(() => {
+    fileTask.current = false
+    setRecognizingFiles(false)
+  }, [fileScope])
+
+  const runFileTask = async (work: (current: () => boolean) => Promise<void>) => {
+    if (fileTask.current || inFlight.current || submissionUncertain) return
+    const current = captureCurrent()
+    fileTask.current = true
+    setRecognizingFiles(true)
+    try { await work(current) }
+    catch (error) { if (current()) setFeedback(userFacingError(error)) }
+    finally {
+      if (current()) { fileTask.current = false; setRecognizingFiles(false) }
+    }
+  }
 
   useEffect(() => {
     if (dataScope.isAdmin && dataScope.customerFilter !== 'all') {
@@ -317,70 +351,78 @@ export default function ReturnApply() {
 
   const onPickTakealotFiles = async (files: FileList | null) => {
     if (!files?.length) return
-    setRecognizingFiles(true)
-    setRecognitionHint('')
-    setRecognitionWarning('')
-    try {
-      const next: FileAttachment[] = []
-      const takealotParts: Partial<TakealotParsedDoc>[] = []
+    const batch = Array.from(files)
+    await runFileTask(async current => {
+      setRecognitionHint('')
+      setRecognitionWarning('')
+      try {
+        const takealotParts: Partial<TakealotParsedDoc>[] = []
 
-      for (const file of Array.from(files)) {
-        if (!/\.pdf$/i.test(file.name)) throw new Error('Takealot 预约退货文件必须是 PDF')
-        let text = ''
-        try {
-          text = await extractPdfTextFromFile(file)
-        } catch {
-          // 扫描版 PDF 仍可继续按文件名识别。
-        }
-        const fromName = parseTakealotFilename(file.name)
-        const looksTakealot = Boolean(
-          fromName.bookingRef
-          || /takealot|booking confirmation|booking reference number|date of booking/i.test(`${file.name}\n${text}`),
-        )
-        if (!looksTakealot) throw new Error(`“${file.name}”未识别为 Takealot 预约退货文件，请核对后重新上传`)
-        const kind = detectTakealotDocKind(file.name, text)
-        takealotParts.push(fromName)
-        if (text.trim()) takealotParts.push(parseTakealotDocumentText(text, kind))
-        const attachment = await fileToAttachment(file, TAKEALOT_RETURN_FILE_KIND)
-        next.push({ ...attachment, fileType: TAKEALOT_RETURN_FILE_KIND, labelRole: 'sourceDocument' })
+        const next = await readCurrentFiles(batch, async file => {
+          if (!/\.pdf$/i.test(file.name)) throw new Error('Takealot 预约退货文件必须是 PDF')
+          let text = ''
+          try {
+            text = await extractPdfTextFromFile(file)
+          } catch {
+            // 扫描版 PDF 仍可继续按文件名识别。
+          }
+          if (!current()) return null
+          const fromName = parseTakealotFilename(file.name)
+          const looksTakealot = Boolean(
+            fromName.bookingRef
+            || /takealot|booking confirmation|booking reference number|date of booking/i.test(`${file.name}\n${text}`),
+          )
+          if (!looksTakealot) throw new Error(`“${file.name}”未识别为 Takealot 预约退货文件，请核对后重新上传`)
+          const kind = detectTakealotDocKind(file.name, text)
+          takealotParts.push(fromName)
+          if (text.trim()) takealotParts.push(parseTakealotDocumentText(text, kind))
+          const attachment = await fileToAttachment(file, TAKEALOT_RETURN_FILE_KIND)
+          return { ...attachment, fileType: TAKEALOT_RETURN_FILE_KIND, labelRole: 'sourceDocument' }
+        }, current)
+        if (!next || !current()) return
+
+        applyRecognizedTakealot(mergeTakealotParsed(...takealotParts))
+        mergeAttachments(next.filter((item): item is NonNullable<typeof item> => item !== null))
+      } catch (error) {
+        if (current()) setRecognitionWarning(userFacingError(error instanceof Error ? error.message : '文件识别失败，请重新上传'))
+      } finally {
+        if (current() && takealotFileInputRef.current) takealotFileInputRef.current.value = ''
       }
-
-      applyRecognizedTakealot(mergeTakealotParsed(...takealotParts))
-      mergeAttachments(next)
-    } catch (error) {
-      setRecognitionWarning(userFacingError(error instanceof Error ? error.message : '文件识别失败，请重新上传'))
-    } finally {
-      setRecognizingFiles(false)
-      if (takealotFileInputRef.current) takealotFileInputRef.current.value = ''
-    }
+    })
   }
 
   const onPickOtherPlatformFiles = async (files: FileList | null) => {
     if (!files?.length) return
-    try {
-      const next = await Promise.all(Array.from(files).map(async file => {
-        const attachment = await fileToAttachment(file, OTHER_RETURN_FILE_KIND)
-        return { ...attachment, fileType: OTHER_RETURN_FILE_KIND, labelRole: 'sourceDocument' }
-      }))
-      mergeAttachments(next)
-    } catch (error) {
-      window.alert(userFacingError(error instanceof Error ? error.message : '文件上传失败，请重新上传'))
-    } finally {
-      if (otherFileInputRef.current) otherFileInputRef.current.value = ''
-    }
+    const batch = Array.from(files)
+    await runFileTask(async current => {
+      try {
+        const next = await readCurrentFiles(batch, async file => {
+          const attachment = await fileToAttachment(file, OTHER_RETURN_FILE_KIND)
+          return { ...attachment, fileType: OTHER_RETURN_FILE_KIND, labelRole: 'sourceDocument' }
+        }, current)
+        if (next && current()) mergeAttachments(next)
+      } catch (error) {
+        if (current()) setFeedback(userFacingError(error instanceof Error ? error.message : '文件上传失败，请重新上传'))
+      } finally {
+        if (current() && otherFileInputRef.current) otherFileInputRef.current.value = ''
+      }
+    })
   }
 
   const onPickSupportingFiles = async (files: FileList | null, fileKind: string) => {
     if (!files?.length) return
-    try {
-      const next = await Promise.all(Array.from(files).map(async file => {
-        const attachment = await fileToAttachment(file, fileKind)
-        return { ...attachment, fileType: fileKind, labelRole: 'sourceDocument' }
-      }))
-      mergeAttachments(next)
-    } catch (error) {
-      window.alert(userFacingError(error instanceof Error ? error.message : '资料上传失败，请重新上传'))
-    }
+    const batch = Array.from(files)
+    await runFileTask(async current => {
+      try {
+        const next = await readCurrentFiles(batch, async file => {
+          const attachment = await fileToAttachment(file, fileKind)
+          return { ...attachment, fileType: fileKind, labelRole: 'sourceDocument' }
+        }, current)
+        if (next && current()) mergeAttachments(next)
+      } catch (error) {
+        if (current()) setFeedback(userFacingError(error instanceof Error ? error.message : '资料上传失败，请重新上传'))
+      }
+    })
   }
 
   const removeAttachment = (fileName: string) => {
@@ -443,18 +485,22 @@ export default function ReturnApply() {
   }
 
   const handleBatchUploadLines = async () => {
-    try {
-      const result = await importCsvFile(RETURN_LINE_COLUMNS, parseReturnLines)
-      await reportLineImportResult(result, () => {
-        setLines(prev => [...prev, ...result.data])
-      })
-    } catch (err) {
-      notifyIfUserError(err, '导入失败')
-    }
+    await runFileTask(async current => {
+      try {
+        const result = await importCsvFile(RETURN_LINE_COLUMNS, parseReturnLines)
+        await reportLineImportResult(result, () => {
+          setLines(prev => [...prev, ...result.data])
+        }, { isCurrent: current })
+      } catch (err) {
+        if (current()) notifyIfUserError(err, '导入失败')
+      }
+    })
   }
 
   const handleSaveDraft = async () => {
+    if (fileTask.current) { setFeedback('文件仍在读取，请等待完成后核对并保存'); return }
     if (inFlight.current || submissionUncertain || !requireCustomer()) return
+    const current = captureCurrent()
     inFlight.current = true
     setFeedback('')
     setSavingDraft(true)
@@ -465,18 +511,20 @@ export default function ReturnApply() {
       } else {
         await addReturnOrderOrThrow(order)
       }
+      if (!current()) return
       notifySuccess(`草稿已保存：${order.returnNo}`)
       navigate('/returns/processing?tab=draft')
     } catch (err) {
-      setFeedback(userFacingError(err))
+      if (current()) setFeedback(userFacingError(err))
     } finally {
-      inFlight.current = false
-      setSavingDraft(false)
+      if (current()) { inFlight.current = false; setSavingDraft(false) }
     }
   }
 
   const handleSubmit = async () => {
+    if (fileTask.current) { setFeedback('文件仍在读取，请等待完成后核对并提交'); return }
     if (inFlight.current || submissionUncertain) return
+    const current = captureCurrent()
     setFeedback('')
     if (!requireCustomer()) return
     if (returnPlatform === 'takealot' && takealotAttachments.length === 0) {
@@ -532,6 +580,7 @@ export default function ReturnApply() {
     inFlight.current = true
     try {
       const result = await submitReturnWorkflow(order, { customerId, customerCode })
+      if (!current()) return
       if (!result.ok) {
         setSubmissionUncertain(Boolean(result.uncertain))
         setFeedback(userFacingError(result.error))
@@ -541,10 +590,9 @@ export default function ReturnApply() {
       else notifySuccess(`退件单 ${result.order.returnNo} 已提交，仓库到货后将更新处理进度`)
       navigate('/returns/processing')
     } catch (err) {
-      setFeedback(userFacingError(err))
+      if (current()) setFeedback(userFacingError(err))
     } finally {
-      inFlight.current = false
-      setSubmitting(false)
+      if (current()) { inFlight.current = false; setSubmitting(false) }
     }
   }
 
@@ -570,7 +618,8 @@ export default function ReturnApply() {
       </div>
 
       {feedback && <div role="alert" className="mb-4 rounded-lg bg-amber-50 p-4 text-sm text-amber-900">{feedback}{submissionUncertain && <Link to="/returns/processing" className="ml-3 underline">返回退件处理核对结果</Link>}</div>}
-      <fieldset disabled={submitting || savingDraft || submissionUncertain} className="space-y-6 border-0 p-0 m-0 min-w-0">
+      {recognizingFiles && <p role="status" className="mb-4 text-sm text-text-secondary">正在读取文件，请等待完成后核对并提交；可返回退件处理。</p>}
+      <fieldset disabled={submitting || savingDraft || submissionUncertain || recognizingFiles} className="space-y-6 border-0 p-0 m-0 min-w-0">
         {dataScope.isAdmin && (
           <Card className="p-4">
             <AdminCustomerFilter scope={dataScope} />
@@ -733,7 +782,7 @@ export default function ReturnApply() {
                 ].map(item => (
                   <div key={item.kind} className="rounded-lg bg-blue-50/60 p-3 ring-1 ring-blue-100">
                     <p className="text-xs font-medium text-text-secondary">{item.label} {item.required && <span className="text-red-500">*</span>}</p>
-                    <input ref={item.ref} type="file" accept={item.accept} multiple className="hidden" onChange={event => void onPickSupportingFiles(event.target.files, item.kind)} />
+                    <input ref={item.ref} type="file" accept={item.accept} multiple className="hidden" onChange={event => { void onPickSupportingFiles(event.target.files, item.kind); event.target.value = '' }} />
                     <Button type="button" variant="secondary" size="sm" className="mt-2" onClick={() => item.ref.current?.click()}>
                       <Upload className="h-3.5 w-3.5" /> 上传资料
                     </Button>
