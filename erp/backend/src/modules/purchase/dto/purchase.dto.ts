@@ -48,6 +48,11 @@ export class ImportPrePurchaseInfoDto {
 
 export class PurchaseOrderItemDto {
   @IsOptional()
+  @IsInt()
+  @Min(1)
+  id?: number
+
+  @IsOptional()
   @Type(() => Number)
   @IsInt()
   productId?: number
@@ -255,12 +260,39 @@ export class CancelPrePurchaseDto {
   reason?: string
 }
 
-export class SetActualQtyDto {
-  @Type(() => Number)
+export class SetActualQtyLineDto {
+  @IsInt()
+  @Min(1)
+  itemId!: number
+
   @IsInt()
   @Min(1)
   @Max(2147483647, { message: '实际采购数量不能超过 2147483647' })
   quantity!: number
+
+  @IsOptional()
+  @Transform(trimOptional)
+  @IsString()
+  @MaxLength(500)
+  remark?: string
+}
+
+export class SetActualQtyDto {
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(2147483647, { message: '实际采购数量不能超过 2147483647' })
+  quantity?: number
+
+  /** 多明细逐条核定：每条明细必须且只能核定一次，由服务层核对覆盖范围 */
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(1, { message: '请为每条采购明细填写实际采购数量' })
+  @ArrayMaxSize(500, { message: '单次最多核定 500 条采购明细' })
+  @ValidateNested({ each: true })
+  @Type(() => SetActualQtyLineDto)
+  lines?: SetActualQtyLineDto[]
 
   @IsOptional()
   @Transform(trimOptional)
@@ -361,6 +393,15 @@ export class UpdatePrePurchaseDto {
   @IsString()
   @MaxLength(2000)
   remark?: string
+
+  /** 多明细直采驳回重提：逐条修改后的完整明细清单（含原明细 id），服务层核对覆盖范围 */
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(1, { message: '请逐条填写采购明细后重新提交' })
+  @ArrayMaxSize(200, { message: '单次最多提交 200 条采购明细' })
+  @ValidateNested({ each: true })
+  @Type(() => PurchaseOrderItemDto)
+  items?: PurchaseOrderItemDto[]
 
   @IsOptional()
   @Transform(trim)

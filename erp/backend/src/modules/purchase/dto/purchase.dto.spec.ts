@@ -1,7 +1,7 @@
 import 'reflect-metadata'
 import { plainToInstance } from 'class-transformer'
 import { validate } from 'class-validator'
-import { CreatePurchaseOrderDto, ExportPrePurchaseInfoDto, ImportPrePurchaseInfoDto, PoRejectDto, UpdatePrePurchaseDto, UpdatePurchasePackageDto } from './purchase.dto'
+import { CreatePurchaseOrderDto, ExportPrePurchaseInfoDto, ImportPrePurchaseInfoDto, PoRejectDto, SetActualQtyDto, UpdatePrePurchaseDto, UpdatePurchasePackageDto } from './purchase.dto'
 
 describe('预采购信息导入导出请求', () => {
   it('只接收明确勾选的有效单据 ID', async () => {
@@ -74,5 +74,36 @@ describe('预采购修改', () => {
   it('拒绝溢出数量和无效到货日期', async () => {
     const errors = await validate(plainToInstance(UpdatePrePurchaseDto, { plannedQty: 2147483648, expectedArrival: 'not-a-date' }))
     expect(errors.map(error => error.property)).toEqual(expect.arrayContaining(['plannedQty', 'expectedArrival']))
+  })
+  it('多明细重提清单保留原明细 id，整数校验不强转字符串', async () => {
+    const dto = plainToInstance(UpdatePrePurchaseDto, {
+      remark: '重提',
+      items: [{ id: 11, sku: 'SKU-A', productName: '商品A', plannedQty: 4, unitPrice: 11 }, { sku: 'SKU-C', productName: '商品C', plannedQty: 1, unitPrice: 5, remark: '按样' }],
+    })
+    expect(dto.items?.[0]?.id).toBe(11)
+    expect(await validate(dto)).toHaveLength(0)
+    const errors = await validate(plainToInstance(UpdatePrePurchaseDto, { items: [{ id: '11', sku: 'SKU-A', unitPrice: 1 }] }))
+    expect(errors.some(error => error.property === 'items')).toBe(true)
+    const missing = await validate(plainToInstance(UpdatePrePurchaseDto, { items: [] }))
+    expect(missing.some(error => error.property === 'items')).toBe(true)
+  })
+})
+
+describe('核定实际数量', () => {
+  it('单数量与逐条核定两种入参都可提交，逐条保留行级备注', async () => {
+    expect(await validate(plainToInstance(SetActualQtyDto, { quantity: 2 }))).toHaveLength(0)
+    const dto = plainToInstance(SetActualQtyDto, { lines: [{ itemId: 11, quantity: 4 }, { itemId: 12, quantity: 3, remark: '按到样' }] })
+    expect(dto.lines?.[1]?.remark).toBe('按到样')
+    expect(await validate(dto)).toHaveLength(0)
+  })
+  it.each([
+    [{ lines: [{ itemId: 11, quantity: 0 }] }, 'quantity'],
+    [{ lines: [{ itemId: 11, quantity: 1.5 }] }, 'quantity'],
+    [{ lines: [{ itemId: 11, quantity: '2' }] }, 'quantity'],
+    [{ lines: [{ itemId: 0, quantity: 2 }] }, 'itemId'],
+    [{ lines: [] }, 'lines'],
+  ] as const)('无效逐条入参拒绝且不强转 %p', async (payload, property) => {
+    const errors = await validate(plainToInstance(SetActualQtyDto, payload as any))
+    expect(errors.some(error => error.property === property || error.property === 'lines')).toBe(true)
   })
 })
