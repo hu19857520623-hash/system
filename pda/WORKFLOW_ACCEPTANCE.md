@@ -328,3 +328,15 @@ POST /billing/generate 先以 preview 取得费用快照版本，同一请求标
 ## 正向业务闭环 B 段：OMS 建单→分配→拣货→复核→打包→换标→充值→发运→库存扣减（2026-11-13）
 
 对已部署审计环境跑通出库全链路（真实接口，专用夹具客户 AUDIT-LOOP-261113，避免扰动真实客户）：OMS 创建出库单（stockSource=owned，SKU×2）→ 分配拣货员（仓储职位校验：只能仓储岗位）→ 拣货（按库位分配）→ 开始复核 → 打包复核（外箱尺寸重量）→ 换标确认（needsRelabel 默认按需换标，pending_relabel→packed）→ 发运时余额不足（补扣 ¥44.80 > 余额）→ **按失败恢复路径先充值（POST /customers/:id/recharge）再以原 clientRequestId 重试发运成功** → 海外仓库存扣减断言（totalQty 4→2、lockedQty 归零、orderStatus=shipped）。遗留单（首轮真实客户单 15500）已由 API 取消并释放预留。证据 \output/workflow-audit-2026-10-16/recovery-loop-positive-B-20261113.json\（全步骤 ok）。
+
+## 正向业务闭环 C 段：退件全生命周期 + 结算，并修复退件同步事务缺陷（2026-11-13）
+
+**发现并修复真实缺陷（已提交 a697bf6 并推送、部署至审计环境）**：退件同步（ReturnsSyncService.deliver）与公告重放（SyncLogService.retry→replayCurrentOms）此前在数据库事务内执行 OMS HTTP 推送（自带超时重试约 21s），并持有 `return_order`/`announcement` 行锁。OMS 慢或失败时，退件收货/测量/算费会在 `FOR UPDATE` 上被拖到事务过期，用户侧表现为 500「服务器内部错误」，无任何可用恢复路径（真实接口复现：收货/测量/算费连续 500，容器日志为 Transaction already closed + oms-notify 超时）。修复为三段式：短事务校验 → 事务外推送 → 短事务落同步结果；失败写回待重试队列（中文「退件已保存，OMS 同步待重试；请勿重复收货、返库或收费」），业务操作不再受外部同步可用性影响。后端 201 套件 1704 测试全绿。
+
+修复后对已部署审计环境跑通退件全生命周期（真实接口）：OMS 创建退件（returnNo=AUDIT-LOOP-261113-RT，JHB3）→ 退件收货（实收 2 件 1 箱）→ 退件测量（外箱体积）→ 退件算费 → 退件质检（含质检照片，「请至少上传 1 张质检照片」校验）→ 客户决定保留（OMS decide）→ 返库上架处理（商品档案 `[OMS:客户码]` 归属校验）→ **退件返库库存回补（totalQty 2→4）** → 生成结算账单（退件费用 90 元）→ 确认账单扣款时余额不足（47.2 < 90，中文「请先充值后重新核对」）→ **按失败恢复路径充值 200 → 重新核对取新版本 → 新请求确认成功** → **余额扣减与账单金额精确一致（47.2+200−90=157.2）**。全部步骤业务断言通过。证据 \output/workflow-audit-2026-10-16/recovery-loop-positive-C-20261113.json\（全步骤 ok）。
+
+至此组 2「商品—发运—海外仓收货上架—出库—退件—结算」正向闭环 A/B/C 三段全部真实接口跑通（采购/中转仓段由第四批收货契约与 A 段源仓发运覆盖）。其余待办保留：15 组待办中的角色/状态/故障矩阵、混合导入导出、退款结算细节、未知结果恢复等，以及真实浏览器逐按钮、PDA 真机流程验收；夹具（AUDIT-LOOP-261113）待末段清理并全表快照核对。
+
+## 正向闭环夹具清理与零漂移核对（2026-11-13）
+
+对闭环夹具（AUDIT-LOOP-261113）按外键链子表优先清理：退件（附件/箱测/明细/动作请求）、出库（箱/附件/明细）、账务（账单明细/费用/账单/充值/流水）、入库（上架明细/箱/明细/到仓记录）、库存（流水/库位/库存）、同步日志、操作日志、商品、客户全部删除；通用文本清扫兜底覆盖 OMS 侧派生行（oms_webhookevent 25、oms_feerecord 8、oms_outboundorder 2、oms_returnorder、oms_billingaccount、oms_customeraccount、inventory_log 4、product_pricing）。两处外键边角如实记录并修正：`inbound_putaway_item`（无标记文本的子行）需显式删除后 `inbound_order` 才能删；`billing_charge` 无 remark 列需按 charge_no/description 清。**终态：全表扫描零残留（0 行含夹具标记），二次清理删除 0 行、全表快照哈希逐字节一致（eade534c…560e），真实客户/商品/库存/账务数据未被触碰**。证据 \output/workflow-audit-2026-10-16/recovery-loop-positive-CLEAN-20261113.json\（零残留 ok=true，二次清理零漂移 ok=true）。
