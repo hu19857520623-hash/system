@@ -1794,7 +1794,7 @@ void _removeExtraFeeLine
       <template #footer>
         <el-button :disabled="processSubmitting" @click="processDialog = false">返回列表</el-button>
         <el-button :disabled="processSubmitting || processLoading" @click="refreshProcessTarget">刷新核对结果</el-button>
-        <el-button v-if="pendingReturnAction?.id === processTarget?.id && pendingReturnAction.contentChanged" :disabled="returnActionBusy || processLoading" @click="returnActionAttempt.endChanged()">已核对记录，结束本次</el-button>
+        <el-button v-if="pendingReturnAction?.id === processTarget?.id && pendingReturnAction?.contentChanged" :disabled="returnActionBusy || processLoading" @click="returnActionAttempt.endChanged()">已核对记录，结束本次</el-button>
         <el-button v-else-if="pendingReturnAction?.id === processTarget?.id" :loading="returnActionBusy" :disabled="returnActionBlocked || processLoading" @click="resumeReturnAction">继续原请求</el-button>
         <el-button type="primary" :loading="processSubmitting || processLoading" :disabled="processUncertain || !!pendingReturnAction || returnActionBlocked || processTarget?.status === 'completed'" @click="submitProcess">{{ processNeedsStock ? '确认本次上架' : '确认处理' }}</el-button>
       </template>

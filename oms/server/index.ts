@@ -15,6 +15,7 @@ import { readReturnFormMetadata, writeReturnFormMetadata, ReturnFormValidationEr
 import { applyCatalogReturnSnapshot } from './catalog-return-snapshot.util.js'
 import 'dotenv/config'
 import { catalogBindingSkus, catalogMappingSource } from './catalog-binding.util.js'
+import { catalogQuoteCustomer } from './catalog-price-scope.util.js'
 import { OutboundAttachmentContentError, requireOutboundAttachmentContent } from './outbound-attachment-content.util.js'
 import { assertGlobalSkuAvailable, GlobalSkuConflict } from './global-sku.util.js'
 import { Prisma } from '@prisma/client'
@@ -1001,10 +1002,10 @@ function mapAnnouncementType(raw?: string): string {
   return 'notice'
 }
 
-/** P0：货盘目录（ERP 真相源） */
-app.get('/api/erp/catalog', async (_req, res) => {
+/** P0：货盘目录（ERP 真相源）；报价范围限定为登录客户绑定档位 */
+app.get('/api/erp/catalog', async (req, res) => {
   try {
-    res.json(await fetchErpCatalog())
+    res.json(await fetchErpCatalog(catalogQuoteCustomer((req as AuthenticatedRequest).auth, req.query.customerCode)))
   } catch (e) {
     sendErpError(res, e)
   }
@@ -1020,7 +1021,7 @@ app.get('/api/erp/takealot-dest-warehouses/fulfillment', async (_req, res) => {
 
 app.get('/api/erp/catalog/:sku', async (req, res) => {
   try {
-    res.json(await fetchErpCatalogSku(req.params.sku))
+    res.json(await fetchErpCatalogSku(req.params.sku, catalogQuoteCustomer((req as AuthenticatedRequest).auth, req.query.customerCode)))
   } catch (e) {
     sendErpError(res, e)
   }

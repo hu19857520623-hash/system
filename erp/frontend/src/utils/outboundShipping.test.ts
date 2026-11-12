@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { readShipAttempts, saveShipAttempt, runShipAttempt, clearShipAttempt, shipContentMismatch, shipStatusChanged, type ShipAttempt } from './outboundShipping'
+import { readShipAttempts, saveShipAttempt, runShipAttempt, shipContentMismatch, shipStatusChanged, type ShipAttempt } from './outboundShipping'
 const attempt: ShipAttempt = { outboundId: 1, outboundNo: 'DO-TEST', order: { id: 1, status: 'packed' }, payload: { clientRequestId: 'original-id', trackingNo: 'TRACK', carrier: '', logisticsProduct: '' } }
 function storage() { const values = new Map<string, string>();return { getItem: (key: string) => values.get(key) || null, setItem: (key: string, value: string) => { values.set(key, value) }, removeItem: (key: string) => { values.delete(key) } } }
 describe('发运原请求与返回恢复', () => {

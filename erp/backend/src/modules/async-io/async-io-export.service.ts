@@ -6,6 +6,7 @@ import { InventoryService } from '../inventory/inventory.service'
 import { CostService } from '../cost/cost.service'
 import { CustomersService } from '../customers/customers.service'
 import { LeadsService } from '../leads/leads.service'
+import { dealServiceExportRows } from '../leads/leads-deal-service.util'
 import type { AuthUser } from '../../common/decorators/current-user.decorator'
 import { exportScope } from './async-io-scope.util'
 
@@ -41,7 +42,9 @@ export class AsyncIoExportService {
       }
       case 'leads_deals': {
         const { items } = await this.leads.list({ ...params, status: 'deal', assigneeId: params.assigneeId ? Number(params.assigneeId) : undefined }, user, true)
-        return csv(['线索号', '公司', '联系人', '电话', '来源'], items.map(r => [r.leadNo, r.companyName, r.contactName || '', r.contactPhone || '', r.source || '']))
+        // 一客户多服务导出成多行，各自保留原金额与名称快照
+        const rows = dealServiceExportRows(items)
+        return csv(['线索号', '公司', '联系人', '电话', '来源', '成交单号', '服务代码', '服务名称', '成交日期', '成交金额(RMB)', '备注'], rows)
       }
       case 'leads_report': {
         const report = await this.leads.report(params.range)

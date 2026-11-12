@@ -5,7 +5,7 @@ const FILTERS: Record<string, string[]> = {
   logistics_inventory: ['keyword', 'warehouseCode', 'onlyAvailable'],
   cost: ['keyword', 'costType', 'startDate', 'endDate', 'minAmount', 'maxAmount'],
   customers: ['keyword', 'status', 'balanceMin', 'balanceMax', 'portalOnly'],
-  leads_deals: ['keyword', 'source', 'shopType', 'assigneeId', 'dealStatus', 'dealDateFrom', 'dealDateTo'],
+  leads_deals: ['keyword', 'source', 'shopType', 'assigneeId', 'dealStatus', 'dealDateFrom', 'dealDateTo', 'serviceQuery'],
   leads_report: ['range'], sync: [], freight: [], billing: [],
 }
 const ALIASES: Record<string, string> = {

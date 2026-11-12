@@ -6,7 +6,7 @@ import type { ErpCatalogItem } from './erpClient.js'
 const catalog: ErpCatalogItem[] = [20,40].map((length,index) => ({
   sku:`TKL-A${index}`, productName:`商品${index}`, imageUrl:null, spec:null,
   lengthCm:length, widthCm:20, heightCm:20, weightKg:index+1, dimensionsSource:'measured',
-  price:40*(index+1), catalogStockPool:3, soldQty:2, remainingStockQty:1,
+  price:40*(index+1), priceTier:'A', priceConfigured:true, catalogStockPool:3, soldQty:2, remainingStockQty:1,
   visibleOnOms:true, orderableOnOms:true, shareStatus:'enabled', syncedAt:'2026-10-31',
 }))
 test('仅刷新已有镜像尺寸，不改客户归属、持有量、价格或私有商品，也不修改输入', () => {

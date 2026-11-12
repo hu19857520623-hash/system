@@ -3,6 +3,8 @@ export interface ImportRowFailure {
   reason: string
   /** 商品 SKU 等行级标识（有则展示） */
   sku?: string
+  /** 原始行内容（截断保留）：任务详情与失败明细下载可恢复失败行 */
+  row?: string
 }
 
 export interface ImportRowResult {

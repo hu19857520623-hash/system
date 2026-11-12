@@ -167,10 +167,10 @@ export function parsePurchaseImportCsv(content: string): PurchaseImportParseResu
   const lines: ParsedPurchaseImportLine[] = []
   const failures: ImportRowFailure[] = []
   let failureCount = 0
-  const recordFail = (lineNo: number, reason: string, sku?: string) => {
+  const recordFail = (lineNo: number, reason: string, sku?: string, row?: string) => {
     failureCount++
     if (failures.length < MAX_IMPORT_FAILURE_DETAILS) {
-      failures.push({ lineNo, reason, ...(sku ? { sku } : {}) })
+      failures.push({ lineNo, reason, ...(sku ? { sku } : {}), ...(row ? { row } : {}) })
     }
   }
 
@@ -212,7 +212,7 @@ export function parsePurchaseImportCsv(content: string): PurchaseImportParseResu
     if (!unitPrice.ok || unitPrice.value == null) reasons.push('单价须为大于 0 的金额')
 
     if (reasons.length || quantity == null || !arrival.ok || !freight.ok || !unitPrice.ok || unitPrice.value == null) {
-      recordFail(lineNo, reasons.join('；'), sku || undefined)
+      recordFail(lineNo, reasons.join('；'), sku || undefined, cols.map((c) => c ?? '').join(',').slice(0, 500))
       continue
     }
 

@@ -183,6 +183,8 @@ export type ErpCatalogItem = {
   weightKg: number
   dimensionsSource: 'measured' | 'master' | null
   price: number
+  priceTier: string
+  priceConfigured: boolean
   catalogStockPool: number
   soldQty: number
   remainingStockQty: number
@@ -252,13 +254,15 @@ function mapCatalogImage(item: ErpCatalogItem): ErpCatalogItem {
   return { ...item, imageUrl: catalogImageUrlForOms(item.imageUrl) }
 }
 
-export async function fetchErpCatalog() {
-  const result = await erpRequest<{ items: ErpCatalogItem[]; total: number; syncedAt: string }>('/pricing/oms/catalog')
+export async function fetchErpCatalog(customerCode?: string) {
+  const query = customerCode ? `?customerCode=${encodeURIComponent(customerCode)}` : ''
+  const result = await erpRequest<{ items: ErpCatalogItem[]; total: number; syncedAt: string }>(`/pricing/oms/catalog${query}`)
   return { ...result, items: result.items.map(mapCatalogImage) }
 }
 
-export async function fetchErpCatalogSku(sku: string) {
-  const item = await erpRequest<ErpCatalogItem>(`/pricing/oms/catalog/${encodeURIComponent(sku)}`)
+export async function fetchErpCatalogSku(sku: string, customerCode?: string) {
+  const query = customerCode ? `?customerCode=${encodeURIComponent(customerCode)}` : ''
+  const item = await erpRequest<ErpCatalogItem>(`/pricing/oms/catalog/${encodeURIComponent(sku)}${query}`)
   return mapCatalogImage(item)
 }
 

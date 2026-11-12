@@ -1,6 +1,7 @@
 import type { PrismaService } from '../../common/prisma/prisma.service'
 import { withCatalogReceiptCaps } from './catalog-receipts.util'
 import { catalogStockPool, remainingCatalogStock } from './catalog-stock.util'
+import { CatalogPriceTier, catalogPriceTier, catalogUnitPrice } from './catalog-price.util'
 import { CATALOG_CUSTOMER_CODE, catalogBaseSkuFromInternal, catalogSkuLookupKeys, toCatalogInternalSku } from '../../common/catalog-customer.util'
 
 function num(v: unknown, fallback = 0): number {
@@ -22,6 +23,8 @@ export type OmsCatalogStockPayload = {
   weightKg: number
   dimensionsSource: 'measured' | 'master' | null
   price: number
+  priceTier: CatalogPriceTier
+  priceConfigured: boolean
   catalogStockPool: number
   soldQty: number
   remainingStockQty: number
@@ -37,6 +40,9 @@ export function buildOmsCatalogPayload(pricing: {
   imageUrl?: string | null
   spec?: string | null
   finalPrice?: unknown
+  priceB?: unknown
+  priceC?: unknown
+  priceD?: unknown
   visibleStockQty?: number | null
   inboundQty?: number | null
   purchaseQty?: number | null
@@ -51,7 +57,10 @@ export function buildOmsCatalogPayload(pricing: {
   heightCm?: unknown
   weightKg?: unknown
   dimensionsSource?: 'measured' | 'master' | null
-}): OmsCatalogStockPayload {
+}, tier: CatalogPriceTier | string = 'A'): OmsCatalogStockPayload {
+  // 报价范围限定：只返回所选档位的价格，绝不携带其他档位报价。
+  const priceTier = catalogPriceTier(tier)
+  const unitPrice = catalogUnitPrice(pricing, priceTier)
   return {
     sku: pricing.sku,
     customerCode: CATALOG_CUSTOMER_CODE,
@@ -64,7 +73,9 @@ export function buildOmsCatalogPayload(pricing: {
     heightCm: num(pricing.heightCm),
     weightKg: num(pricing.weightKg),
     dimensionsSource: pricing.dimensionsSource ?? null,
-    price: num(pricing.finalPrice),
+    price: unitPrice ?? 0,
+    priceTier,
+    priceConfigured: unitPrice != null,
     catalogStockPool: catalogStockPool(pricing),
     soldQty: pricing.soldQty ?? 0,
     remainingStockQty: remainingCatalogStock(pricing),
@@ -72,7 +83,7 @@ export function buildOmsCatalogPayload(pricing: {
     // visibleOnOms flag. Treat those rows as published as well so they are not
     // silently hidden from the OMS catalog.
     visibleOnOms: Boolean(pricing.visibleOnOms) || pricing.pricingStatus === 'synced',
-    orderableOnOms: Boolean(pricing.orderableOnOms) && remainingCatalogStock(pricing) > 0,
+    orderableOnOms: Boolean(pricing.orderableOnOms) && remainingCatalogStock(pricing) > 0 && unitPrice != null,
     shareStatus: pricing.shareStatus === 'stopped' ? 'stopped' : 'enabled',
     syncedAt: new Date().toISOString(),
   }
@@ -144,10 +155,11 @@ export async function pushCatalogStockToOms(
   return payload
 }
 
-/** OMS 展示层拉取货盘列表（含剩余库存） */
+/** OMS 展示层拉取货盘列表（含剩余库存）；只返回所选报价档位的价格 */
 export async function listOmsCatalogForDisplay(
   prisma: PrismaService,
   resolveImageUrl: (url: string) => string = (url) => url,
+  tier: CatalogPriceTier = 'A',
 ): Promise<OmsCatalogStockPayload[]> {
   const rows = await prisma.productPricing.findMany({
     where: {
@@ -174,7 +186,7 @@ export async function listOmsCatalogForDisplay(
   const boundedRows = await withCatalogReceiptCaps(prisma, rows)
   return boundedRows.map(row => {
     const product = catalogSkuLookupKeys(row.sku).map((key) => productBySku.get(key)).find(Boolean)
-    return buildOmsCatalogPayload(mergeProductDimensions(row, product, resolveImageUrl))
+    return buildOmsCatalogPayload(mergeProductDimensions(row, product, resolveImageUrl), tier)
   })
 }
 
@@ -182,6 +194,7 @@ export async function getOmsCatalogSkuForDisplay(
   prisma: PrismaService,
   sku: string,
   resolveImageUrl: (url: string) => string = (url) => url,
+  tier: CatalogPriceTier = 'A',
 ): Promise<OmsCatalogStockPayload | null> {
   const pricing = await prisma.productPricing.findFirst({ where: { sku: { in: catalogSkuLookupKeys(sku) } } })
   if (!pricing || (!pricing.visibleOnOms && pricing.pricingStatus !== 'synced')) return null
@@ -196,5 +209,5 @@ export async function getOmsCatalogSkuForDisplay(
     },
   })
   const [bounded] = await withCatalogReceiptCaps(prisma, [pricing])
-  return buildOmsCatalogPayload(mergeProductDimensions(bounded, product, resolveImageUrl))
+  return buildOmsCatalogPayload(mergeProductDimensions(bounded, product, resolveImageUrl), tier)
 }

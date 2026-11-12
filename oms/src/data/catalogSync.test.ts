@@ -5,7 +5,7 @@ import { CATALOG_CUSTOMER_ID } from './skuCode.ts'
 import type { ErpCatalogItem } from '../api/erp.ts'
 
 const item: ErpCatalogItem = {
-  sku: 'FUR-KIT-SID-004', customerCode: 'TKL', customerSku: 'FUR-KIT-SID-004', dimensionsSource: 'master', productName: 'Kitchen Sideboard', imageUrl: '', spec: '', price: 100,
+  sku: 'FUR-KIT-SID-004', customerCode: 'TKL', customerSku: 'FUR-KIT-SID-004', dimensionsSource: 'master', productName: 'Kitchen Sideboard', imageUrl: '', spec: '', price: 100, priceTier: 'A', priceConfigured: true,
   lengthCm: 10, widthCm: 20, heightCm: 30, weightKg: 2, catalogStockPool: 20, soldQty: 5,
   remainingStockQty: 15, visibleOnOms: true, orderableOnOms: true, shareStatus: 'enabled', syncedAt: '2026-10-13',
 }

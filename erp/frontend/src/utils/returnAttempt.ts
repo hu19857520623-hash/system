@@ -1,4 +1,11 @@
-export function returnAttemptOutcome(status: number, message: string) {
+export type ReturnAttemptHoldReason = 'login' | 'permission' | 'throttle' | null
+
+export function returnAttemptOutcome(status: number, message: string): {
+  uncertain: boolean
+  contentChanged: boolean
+  statusChanged: boolean
+  holdReason: ReturnAttemptHoldReason
+} {
   const mismatch = ['内容已变化', '不要修改后', '与原单不同', '内容不同'].some(part => message.includes(part))
   const statusChanged = !mismatch && (message.includes('状态已变化') || message.includes('请重新读取最新') || message.includes('已核对结束'))
   const contentChanged = status === 409 && mismatch

@@ -1,12 +1,14 @@
-import { Body, Controller, Delete, Get, Param, ParseIntPipe, Post, Put, Query, Res } from '@nestjs/common'
+import { Body, Controller, Delete, Get, Param, ParseIntPipe, Post, Put, Query, Res, UseGuards } from '@nestjs/common'
 import type { Response } from 'express'
 import { LeadsService } from './leads.service'
+import { LeadsRecordGuard } from './leads-record.guard'
 import { LeadsListQueryDto } from './leads-list.query.dto'
 import { CurrentUser, type AuthUser } from '../../common/decorators/current-user.decorator'
 import { RequireAnyPerm, RequirePerms } from '../../common/decorators/require-perms.decorator'
 import { CreateCustomerDto } from '../customers/dto/customer.dto'
 
 @Controller('leads')
+@UseGuards(LeadsRecordGuard)
 export class LeadsController {
   constructor(private readonly service: LeadsService) {}
 
@@ -65,8 +67,8 @@ export class LeadsController {
 
   @RequireAnyPerm('leads_pool.view', 'leads_follow.view', 'leads_deals.view')
   @Get(':id')
-  detail(@Param('id', ParseIntPipe) id: number) {
-    return this.service.detail(id)
+  detail(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: AuthUser) {
+    return this.service.detailForUser(id, user)
   }
 
   @RequireAnyPerm('leads_pool.view', 'leads_follow.view', 'leads_deals.view')
@@ -105,6 +107,18 @@ export class LeadsController {
   @Post(':id/follow-up')
   addFollowUp(@Param('id', ParseIntPipe) id: number, @Body() body: any, @CurrentUser('userId') userId: number) {
     return this.service.addFollowUp(id, body, userId)
+  }
+
+  /** 编辑历史跟进记录：记录级权限 + 版本核对，保留原填写人与原时间 */
+  @RequirePerms('leads_follow.edit')
+  @Put(':id/follow-up/:historyId')
+  updateFollowUp(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('historyId', ParseIntPipe) historyId: number,
+    @Body() body: any,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.service.updateFollowUp(id, historyId, body, user)
   }
 
   @RequirePerms('leads_follow.edit')

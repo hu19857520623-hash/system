@@ -385,16 +385,16 @@ export class ProductsService {
     let ok = 0
     let fail = 0
     const failures: ImportRowFailure[] = []
-    const recordFail = (lineNo: number, reason: string, sku?: string) => {
+    const recordFail = (lineNo: number, reason: string, sku?: string, row?: string) => {
       fail++
       if (failures.length < MAX_IMPORT_FAILURE_DETAILS) {
-        failures.push({ lineNo, reason, ...(sku?.trim() ? { sku: sku.trim() } : {}) })
+        failures.push({ lineNo, reason, ...(sku?.trim() ? { sku: sku.trim() } : {}), ...(row ? { row } : {}) })
       }
     }
 
     for (const row of parsed) {
       if (!row.sku || !row.productName) {
-        recordFail(row.lineNo, !row.sku ? '请填写 SKU' : '请填写商品名称', row.sku)
+        recordFail(row.lineNo, !row.sku ? '请填写 SKU' : '请填写商品名称', row.sku, row.raw)
         continue
       }
       try {
@@ -402,7 +402,7 @@ export class ProductsService {
         if (row.developerKey) {
           const id = developerByKey.get(row.developerKey.toLowerCase())
           if (!id) {
-            recordFail(row.lineNo, `开发人「${row.developerKey}」未找到`, row.sku)
+            recordFail(row.lineNo, `开发人「${row.developerKey}」未找到`, row.sku, row.raw)
             continue
           }
           developerId = Number(id)
@@ -411,7 +411,7 @@ export class ProductsService {
         if (row.purchaserKey) {
           const id = purchaserByKey.get(row.purchaserKey.toLowerCase())
           if (!id) {
-            recordFail(row.lineNo, `采购员「${row.purchaserKey}」未找到`, row.sku)
+            recordFail(row.lineNo, `采购员「${row.purchaserKey}」未找到`, row.sku, row.raw)
             continue
           }
           purchaserId = Number(id)
@@ -420,7 +420,7 @@ export class ProductsService {
         if (row.supplierKey) {
           const id = supplierByKey.get(row.supplierKey.toLowerCase())
           if (!id) {
-            recordFail(row.lineNo, `供应商「${row.supplierKey}」未找到`, row.sku)
+            recordFail(row.lineNo, `供应商「${row.supplierKey}」未找到`, row.sku, row.raw)
             continue
           }
           supplierId = Number(id)
@@ -443,7 +443,7 @@ export class ProductsService {
         }, operatorId)
         ok++
       } catch (e: any) {
-        recordFail(row.lineNo, e?.message || '写入失败', row.sku)
+        recordFail(row.lineNo, e?.message || '写入失败', row.sku, row.raw)
       }
     }
     return { imported: ok, failed: fail, failures } satisfies ImportRowResult

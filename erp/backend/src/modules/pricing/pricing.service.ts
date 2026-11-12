@@ -20,6 +20,11 @@ import {
 import { catalogStockPool, remainingCatalogStock } from './catalog-stock.util'
 import { withCatalogReceiptCaps } from './catalog-receipts.util'
 import { setCatalogVisibility } from './catalog-visibility.util'
+import { customerCatalogTier } from './catalog-price.util'
+import {
+  setCatalogPrices as applyCatalogPrices,
+  setCustomerCatalogTier as applyCustomerCatalogTier,
+} from './catalog-price-settings.util'
 import type { CatalogVisibilityDto } from './dto/catalog-visibility.dto'
 import {
   addQtyForCatalogSku,
@@ -616,7 +621,9 @@ export class PricingService {
     return this.detail(id)
   }
 
-  async listOmsCatalogForOms() {
+  async listOmsCatalogForOms(customerCode?: string) {
+    // 报价范围限定：按客户绑定的档位展示价格；未带客户时仅返回基础目录（A 档）。
+    const tier = await customerCatalogTier(this.prisma, customerCode)
     // Backfill the publication flag for catalog rows synchronized by older
     // ERP versions. A `synced` row is an explicit OMS publication; leaving the
     // newly added boolean false made it disappear from the OMS catalog.
@@ -624,14 +631,25 @@ export class PricingService {
       where: { pricingStatus: 'synced', visibleOnOms: false },
       data: { visibleOnOms: true, visibleOnOmsAt: new Date() },
     })
-    const items = await listOmsCatalogForDisplay(this.prisma, (url) => this.cosUrls.resolve(url))
+    const items = await listOmsCatalogForDisplay(this.prisma, (url) => this.cosUrls.resolve(url), tier)
     return { items, total: items.length, syncedAt: new Date().toISOString() }
   }
 
-  async getOmsCatalogSkuForOms(sku: string) {
-    const item = await getOmsCatalogSkuForDisplay(this.prisma, sku.trim(), (url) => this.cosUrls.resolve(url))
+  async getOmsCatalogSkuForOms(sku: string, customerCode?: string) {
+    const tier = await customerCatalogTier(this.prisma, customerCode)
+    const item = await getOmsCatalogSkuForDisplay(this.prisma, sku.trim(), (url) => this.cosUrls.resolve(url), tier)
     if (!item) throw new NotFoundException(`SKU ${sku} 未在 OMS 货盘展示`)
     return item
+  }
+
+  /** 四档货盘价格维护（金额与审计同事务提交） */
+  setCatalogPrices(id: number, body: any, actor: number) {
+    return applyCatalogPrices(this.prisma, id, body, actor)
+  }
+
+  /** 客户货盘报价档位绑定（保留余额与信用额度，记录前后档位） */
+  setCustomerCatalogTier(id: number, body: any, actor: number) {
+    return applyCustomerCatalogTier(this.prisma, id, body, actor)
   }
 
   private findCatalogAction(db: any, requestId: string, actor: number) {

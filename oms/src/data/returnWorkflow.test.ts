@@ -23,11 +23,12 @@ test('编辑期间退件消失或进入后续状态时，保存草稿明确失�
 test('退件决定仅在明确拒绝或已确认冲突时结束原请求', async t => {
  environment(t)
  const intent = { returnNo: draft.returnNo, customerCode: 'TKL9001', customerId: 'c1', decision: 'keep' as const, processChoice: 'restock' }
- for (const [status, expected] of [[400, 'rejected'], [422, 'rejected'], [409, 'conflict'], [403, undefined], [503, undefined]] as const) {
+ for (const [status, expected, contentChanged] of [[400, 'rejected', false], [422, 'rejected', false], [409, 'conflict', true], [403, undefined, false], [503, undefined, false]] as const) {
   globalThis.fetch = async () => Response.json({ error: '退件决定未确认' }, { status })
   const result = await replayReturnDecision(intent)
   assert.equal(result.ok, false)
   assert.equal('resolution' in result ? result.resolution : undefined, expected)
+  assert.equal('contentChanged' in result && result.contentChanged, contentChanged)
  }
 })
 test('原退件决定可在本地状态更新后重放，身份切换后丢弃迟到结果', async t => {

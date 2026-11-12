@@ -36,6 +36,11 @@ export class LeadsListQueryDto extends PaginationDto {
   @IsString()
   shopType?: string
 
+  /** 成交服务筛选：代码或名称关键字，历史类型按原店铺类型文本匹配 */
+  @IsOptional()
+  @IsString()
+  serviceQuery?: string
+
   @IsOptional()
   @IsString()
   dealDateFrom?: string

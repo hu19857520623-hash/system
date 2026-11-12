@@ -804,6 +804,8 @@ model LeadDeal {
   id          BigInt               @id @default(autoincrement())
   leadId      BigInt               @map("lead_id")
   dealNo      String               @unique @map("deal_no") @db.VarChar(30)
+  serviceCode String?              @map("service_code") @db.VarChar(8)
+  serviceName String?              @map("service_name") @db.VarChar(200)
   dealAmount  Decimal?             @map("deal_amount") @db.Decimal(14, 2)
   dealDate    DateTime             @map("deal_date") @db.Date
   productDesc String?              @map("product_desc") @db.Text
@@ -814,6 +816,7 @@ model LeadDeal {
   lead        Lead                 @relation(fields: [leadId], references: [id])
   attachments LeadDealAttachment[]
 
+  @@index([serviceCode], map: "idx_lead_deal_service")
   @@map("lead_deal")
 }
 
@@ -841,7 +844,9 @@ model Customer {
   contactName  String?  @map("contact_name") @db.VarChar(50)
   contactPhone String?  @map("contact_phone") @db.VarChar(30)
   balance      Decimal  @default(0) @db.Decimal(14, 2)
+  creditLimit  Decimal  @default(0) @map("credit_limit") @db.Decimal(14, 2)
   status       Int      @default(1) @db.TinyInt
+  catalogPriceTier String @default("A") @map("catalog_price_tier") @db.VarChar(1)
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
@@ -878,6 +883,7 @@ model OmsCatalogOrder {
   balanceAfter  Decimal? @map("balance_after") @db.Decimal(14, 2)
   pricingId    BigInt?  @map("pricing_id")
   status       String   @default("confirmed") @db.VarChar(20)
+  priceTier    String   @default("A") @map("price_tier") @db.VarChar(1)
   createdAt    DateTime @default(now()) @map("created_at")
 
   @@index([customerId, sku], map: "idx_oms_order_customer_sku")
@@ -1365,6 +1371,9 @@ model ProductPricing {
   pricingLogic      String?   @map("pricing_logic") @db.VarChar(500)
   targetProfitRate  Decimal?  @map("target_profit_rate") @db.Decimal(6, 2)
   finalPrice        Decimal?  @map("final_price") @db.Decimal(12, 2)
+  priceB            Decimal?  @map("price_b") @db.Decimal(12, 2)
+  priceC            Decimal?  @map("price_c") @db.Decimal(12, 2)
+  priceD            Decimal?  @map("price_d") @db.Decimal(12, 2)
   overseasDeliveryFee Decimal? @default(0) @map("overseas_delivery_fee") @db.Decimal(12, 2)
   platformCommission  Decimal? @default(0) @map("platform_commission") @db.Decimal(12, 2)
   platformCommissionRate Decimal? @default(15) @map("platform_commission_rate") @db.Decimal(6, 2)

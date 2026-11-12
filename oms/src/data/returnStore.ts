@@ -229,7 +229,7 @@ export function applyErpReturnToLocal(erp: ErpReturnOrder, customerId?: string, 
 
 export type ReturnMutationResult =
   | { ok: true; order: ReturnOrder; warning?: string }
-  | { ok: false; error: string; uncertain?: boolean }
+  | { ok: false; error: string; uncertain?: boolean; contentChanged?: boolean }
 
 function uncertainReturnError(error: unknown, action: string): ReturnMutationResult {
   const status = Number((error as { status?: unknown } | null)?.status)
@@ -380,7 +380,7 @@ export async function decideReturnOrder(
 
 export async function replayReturnDecision(intent: {
   returnNo: string; customerId?: string; customerCode: string; decision: 'keep' | 'discard'; processChoice?: string
-}, current = () => true): Promise<ReturnMutationResult | { ok: false; error: string; resolution: 'conflict' | 'rejected' }> {
+}, current = () => true): Promise<ReturnMutationResult | { ok: false; error: string; resolution: 'conflict' | 'rejected'; contentChanged?: boolean }> {
   const { returnNo, customerId, customerCode, decision, processChoice } = intent
   if (!customerCode || customerCode === '—') {
     return { ok: false, error: '未绑定客户编码，无法确认' }
@@ -399,8 +399,9 @@ export async function replayReturnDecision(intent: {
     return await saveConfirmedReturn(buildReturnOrderFromErp(erp, customerId), '确认处理方式')
   } catch (err) {
     const status = (err as { status?: number } | null)?.status
-    if (status === 409) return { ok: false, resolution: 'conflict', error: userFacingError(err) }
-    if (status === 400 || status === 422) return { ok: false, resolution: 'rejected', error: userFacingError(err) }
+    const message = userFacingError(err)
+    if (status === 409) return { ok: false, resolution: 'conflict', contentChanged: true, error: `${message}。请先核对退件记录，不要继续原决定。` }
+    if (status === 400 || status === 422) return { ok: false, resolution: 'rejected', error: message }
     return uncertainReturnError(err, '确认')
   }
 }

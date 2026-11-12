@@ -9,7 +9,7 @@ test('直接打开出库或冷刷新时，缺少OMS商品镜像仍按ERP实测�
   const catalog: ErpCatalogItem[]=[20,40].map((length,index)=>({
     sku:`TKL-A${index}`,productName:`商品${index}`,imageUrl:null,spec:null,
     lengthCm:length,widthCm:20,heightCm:20,weightKg:index+1,dimensionsSource:'measured',
-    price:40*(index+1),catalogStockPool:3,soldQty:2,remainingStockQty:1,
+    price:40*(index+1),priceTier:'A',priceConfigured:true,catalogStockPool:3,soldQty:2,remainingStockQty:1,
     visibleOnOms:true,orderableOnOms:true,shareStatus:'enabled',syncedAt:'2026-10-31',
   }))
   try {

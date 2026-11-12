@@ -36,7 +36,7 @@ import { AdminCustomerFilter } from '../components/admin/AdminCustomerFilter'
 import { notifyIfUserError, notifySuccess, notifyInfo, notifyError } from '../utils/userNotify'
 
 type Tab = 'all' | 'draft' | 'pending_arrival' | 'awaiting_customer' | 'arrived' | 'completed' | 'cancelled'
-type DecisionIntent = Parameters<typeof replayReturnDecision>[0]
+type DecisionIntent = Parameters<typeof replayReturnDecision>[0] & { contentChanged?: boolean }
 
 function formatReturnFee(v?: number | null) {
   if (v == null) return '—'
@@ -99,6 +99,7 @@ export default function ReturnProcessing() {
         const intent: DecisionIntent = JSON.parse(raw)
         if (!intent.returnNo || intent.customerId !== decisionCustomerId || intent.customerCode !== decisionCustomerCode ||
           !['keep', 'discard'].includes(intent.decision) || (intent.decision === 'keep' && !intent.processChoice)) throw Error()
+        if (intent.contentChanged !== true) delete intent.contentChanged
         setDecisionState({ scope: decisionScope, intent })
       } catch { setDecisionState({ scope: decisionScope, error: '原退件决定无法读取，请保留记录并核对浏览器存储' }) }
     }
@@ -287,6 +288,14 @@ export default function ReturnProcessing() {
         if (!current()) return
         if (!result.ok && !('resolution' in result)) { notifyError(userFacingError(displaySkuText(result.error))); return }
         if (localStorage.getItem(decisionKey) !== raw) return
+        if (result.ok === false && result.contentChanged) {
+          const next = { ...intent, contentChanged: true as const }
+          const nextRaw = JSON.stringify(next)
+          localStorage.setItem(decisionKey, nextRaw)
+          setDecisionState({ scope: decisionScope, intent: next })
+          notifyError(userFacingError(displaySkuText(result.error)))
+          return
+        }
         localStorage.removeItem(decisionKey)
         if (localStorage.getItem(decisionKey) !== null) throw Error('原退件决定记录未能清理，请继续核对')
         setDecisionState(undefined)
@@ -309,6 +318,18 @@ export default function ReturnProcessing() {
       })
     } catch (error) { if (current()) notifyError(userFacingError(error)) }
     finally { setDecisionRun(active => active === run ? undefined : active) }
+  }
+
+  const endChangedDecision = () => {
+    if (!decisionKey || decisionBusy || !pendingDecision?.contentChanged) return
+    try {
+      localStorage.removeItem(decisionKey)
+      setDecisionState(undefined)
+      notifyInfo('已结束这次内容不同的退件决定。请刷新退件记录核对；若没有入账，可以重新确认。')
+      void handleSync()
+    } catch (error) {
+      notifyError(userFacingError(error))
+    }
   }
 
   const handleDecide = (r: typeof returns[0], decision: 'keep' | 'discard') => {
@@ -346,8 +367,11 @@ export default function ReturnProcessing() {
       />
 
       {(pendingDecision || decisionError) && <Card className="mb-4 p-4">
-        <p role="status">{decisionError || `退件单 ${pendingDecision?.returnNo} 的原决定待核对`}</p>
-        {pendingDecision && <Button size="sm" disabled={decisionBusy} onClick={() => void sendDecision()}>继续原决定</Button>}
+        <p role="status">{decisionError || (pendingDecision?.contentChanged
+          ? `退件单 ${pendingDecision?.returnNo} 的决定内容不同，请先核对退件记录，不要继续原决定。`
+          : `退件单 ${pendingDecision?.returnNo} 的原决定待核对`)}</p>
+        {pendingDecision && !pendingDecision.contentChanged && <Button size="sm" disabled={decisionBusy} onClick={() => void sendDecision()}>继续原决定</Button>}
+        {pendingDecision?.contentChanged && <Button size="sm" variant="secondary" disabled={decisionBusy} onClick={() => endChangedDecision()}>已核对记录，结束本次</Button>}
         <Button size="sm" variant="secondary" disabled={syncing || decisionBusy} onClick={() => void handleSync()}>同步并核对状态</Button>
       </Card>}
 

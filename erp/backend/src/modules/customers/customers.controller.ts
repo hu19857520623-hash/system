@@ -129,4 +129,11 @@ export class CustomersController {
   recharge(@Param('id', ParseIntPipe) id: number, @Body() body: RechargeCustomerDto, @CurrentUser('userId') userId: number) {
     return this.service.recharge(id, body, userId)
   }
+
+  /** 客户信用额度调整（记录原因与前后额度，不改余额） */
+  @RequirePerms('budget_credit.create')
+  @Post(':id/credit')
+  setCredit(@Param('id', ParseIntPipe) id: number, @Body() body: any, @CurrentUser('userId') userId: number) {
+    return this.service.setCredit(id, body, userId)
+  }
 }

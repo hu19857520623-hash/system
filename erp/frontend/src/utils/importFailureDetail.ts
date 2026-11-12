@@ -5,12 +5,15 @@ export type ImportRowFailure = {
   lineNo: number
   reason: string
   sku?: string
+  /** 原始行内容（服务端截断保留），用于失败明细恢复 */
+  row?: string
 }
 
 export function formatImportFailureLine(f: ImportRowFailure): string {
   const skuPart = f.sku?.trim() ? ` · SKU ${f.sku.trim()}` : ''
+  const rowPart = f.row?.trim() ? ` · 原行 ${f.row.trim()}` : ''
   const lineLabel = f.lineNo > 0 ? String(f.lineNo) : '—'
-  return `第 ${lineLabel} 行${skuPart}：${userFacingError(f.reason, undefined, '该行导入失败，请核对文件内容后重试')}`
+  return `第 ${lineLabel} 行${skuPart}${rowPart}：${userFacingError(f.reason, undefined, '该行导入失败，请核对文件内容后重试')}`
 }
 
 export function downloadImportFailuresCsv(filename: string, failures: ImportRowFailure[]) {
@@ -18,10 +21,11 @@ export function downloadImportFailuresCsv(filename: string, failures: ImportRowF
   const base = filename.replace(/\.csv$/i, '')
   downloadCsv(
     `${base}.csv`,
-    ['行号', 'SKU', '失败原因'],
+    ['行号', 'SKU', '原始行内容', '失败原因'],
     failures.map(f => [
       f.lineNo > 0 ? f.lineNo : '',
       f.sku?.trim() ?? '',
+      f.row?.trim() ?? '',
       userFacingError(f.reason, undefined, '该行导入失败，请核对文件内容后重试'),
     ]),
   )

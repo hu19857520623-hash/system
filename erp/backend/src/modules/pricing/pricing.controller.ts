@@ -22,17 +22,17 @@ export class PricingController {
     return this.omsPurchase.recordPurchase(body)
   }
 
-  /** OMS 展示层拉取货盘（含剩余库存） */
+  /** OMS 展示层拉取货盘（含剩余库存）；customerCode 决定报价档位范围 */
   @OmsBridge()
   @Get('oms/catalog')
-  listOmsCatalog() {
-    return this.service.listOmsCatalogForOms()
+  listOmsCatalog(@Query('customerCode') customerCode?: string) {
+    return this.service.listOmsCatalogForOms(customerCode)
   }
 
   @OmsBridge()
   @Get('oms/catalog/:sku')
-  getOmsCatalogSku(@Param('sku') sku: string) {
-    return this.service.getOmsCatalogSkuForOms(sku)
+  getOmsCatalogSku(@Param('sku') sku: string, @Query('customerCode') customerCode?: string) {
+    return this.service.getOmsCatalogSkuForOms(sku, customerCode)
   }
 
   @RequirePerms('pricing.view')
@@ -57,6 +57,20 @@ export class PricingController {
   @Post(':id/visible-stock')
   setVisibleStock(@Param('id', ParseIntPipe) id:number,@Body() body:CatalogVisibilityDto,@CurrentUser('userId') userId:number) {
     return this.service.setVisibleStock(id,body,userId)
+  }
+
+  /** 四档货盘价格维护：提交所选四档金额与原价格核对信息 */
+  @RequirePerms('pricing.set')
+  @Post(':id/prices')
+  setCatalogPrices(@Param('id', ParseIntPipe) id: number, @Body() body: any, @CurrentUser('userId') userId: number) {
+    return this.service.setCatalogPrices(id, body, userId)
+  }
+
+  /** 客户货盘报价档位绑定：提交目标档位与原档位核对信息 */
+  @RequirePerms('pricing.set')
+  @Post('customer-tier/:customerId')
+  setCustomerCatalogTier(@Param('customerId', ParseIntPipe) customerId: number, @Body() body: any, @CurrentUser('userId') userId: number) {
+    return this.service.setCustomerCatalogTier(customerId, body, userId)
   }
 
   @RequirePerms('pricing.set')

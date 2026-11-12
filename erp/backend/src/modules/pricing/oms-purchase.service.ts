@@ -5,6 +5,7 @@ import { PrismaService } from '../../common/prisma/prisma.service'
 import { BillingService } from '../billing/billing.service'
 import { catalogStockPool, remainingCatalogStock } from './catalog-stock.util'
 import { pushCatalogStockToOms } from './oms-catalog-sync.util'
+import { catalogPriceTier, catalogUnitPrice } from './catalog-price.util'
 import { catalogSkuLookupKeys, toCatalogInternalSku } from '../../common/catalog-customer.util'
 import { withCatalogReceiptCaps } from './catalog-receipts.util'
 
@@ -53,6 +54,7 @@ export class OmsPurchaseService {
         if (existing) { same(existing);return { order: existing, idempotent: true } }
         const customer = await tx.customer.findUnique({ where: { id: initial.id } })
         if (!customer || customer.status !== 1) throw new BadRequestException('客户已停用，无法新增申购')
+        const tier = catalogPriceTier(customer.catalogPriceTier ?? 'A')
         const found = await this.findCatalogPricing(sku, tx)
         if (!found) throw new NotFoundException(`SKU ${sku} 不在货盘库存中`)
         await tx.$queryRaw`SELECT id FROM product_pricing WHERE id = ${found.id} FOR UPDATE`
@@ -62,7 +64,10 @@ export class OmsPurchaseService {
         if (pricing.shareStatus === 'stopped' || !pricing.orderableOnOms) throw new BadRequestException('商品已停止申购或可售库存不足，请返回货盘列表重新选择')
         const remaining = remainingCatalogStock(pricing), pool = catalogStockPool(pricing)
         if (quantity > remaining) throw new BadRequestException(`SKU ${sku} 货盘剩余 ${remaining} 件，不足以购买 ${quantity} 件`)
-        const unitCents = billingCents(pricing.finalPrice)
+        // 报价范围限定：按客户绑定档位的实际报价扣款，未定价档位不得按其它档位价格成交。
+        const tierUnitPrice = catalogUnitPrice(pricing, tier)
+        if (tierUnitPrice == null) throw new BadRequestException(`商品 ${tier} 档报价尚未定价，请联系运营核对后再购买`)
+        const unitCents = billingCents(tierUnitPrice)
         if (unitCents <= 0 || unitCents > 999999999999) throw new BadRequestException('商品报价无效，请联系运营核对定价')
         if (input.unitPrice != null && billingCents(input.unitPrice) !== unitCents) throw new ConflictException('商品报价已变化，请刷新报价并重新确认清单；本次未扣款')
         const totalCents = unitCents * quantity
@@ -71,7 +76,7 @@ export class OmsPurchaseService {
         if (before < totalCents) throw new BadRequestException(`客户余额不足：可用 ¥${(before / 100).toFixed(2)}，需支付 ¥${(totalCents / 100).toFixed(2)}`)
         const soldQty = (pricing.soldQty || 0) + quantity
         if (!Number.isSafeInteger(pool) || !Number.isSafeInteger(soldQty) || (pricing.soldQty || 0) < 0 || soldQty > pool) throw new ConflictException('货盘可售范围已变化，请刷新库存后核对')
-        const created = await tx.omsCatalogOrder.create({ data: { orderNo, customerId: customer.id, customerCode: customer.customerCode, sku, quantity, unitPrice: (unitCents / 100).toFixed(2), totalAmount: (totalCents / 100).toFixed(2), balanceBefore: (before / 100).toFixed(2), balanceAfter: ((before - totalCents) / 100).toFixed(2), pricingId: pricing.id, status: 'confirmed' } })
+        const created = await tx.omsCatalogOrder.create({ data: { orderNo, customerId: customer.id, customerCode: customer.customerCode, sku, quantity, unitPrice: (unitCents / 100).toFixed(2), totalAmount: (totalCents / 100).toFixed(2), balanceBefore: (before / 100).toFixed(2), balanceAfter: ((before - totalCents) / 100).toFixed(2), pricingId: pricing.id, status: 'confirmed', priceTier: tier } })
         const debited = await tx.customer.updateMany({ where: { id: customer.id, status: 1, balance: { gte: (totalCents / 100).toFixed(2) } }, data: { balance: { decrement: (totalCents / 100).toFixed(2) } } })
         if (debited.count !== 1) throw new ConflictException('客户余额已变化，本次申购已回滚，请核对原请求后重试')
         const charge = await this.billing.createCharge({ customerId: Number(customer.id), chargeType: 'catalog_purchase', source: 'oms', description: `货盘采购 ${sku} × ${quantity}（订单 ${orderNo}，已从余额扣款）`, amount: totalCents / 100, quantity, unitPrice: unitCents / 100, chargeDate: new Date().toISOString().slice(0, 10), bizRef: orderNo, sourceRef: sku, idempotencyKey: `catalog-purchase:${customer.id}:${orderNo}` }, tx, false)
@@ -80,7 +85,7 @@ export class OmsPurchaseService {
         await tx.productPricing.update({ where: { id: pricing.id }, data: { soldQty: { increment: quantity }, ...(soldQty >= pool ? { orderableOnOms: false } : {}) } })
         await tx.customerSkuInventory.upsert({ where: { customerId_sku: { customerId: customer.id, sku } }, update: { quantity: { increment: quantity }, unitPrice: unitCents / 100, productName: pricing.productName, pricingId: pricing.id }, create: { customerId: customer.id, sku, quantity, unitPrice: unitCents / 100, productName: pricing.productName, pricingId: pricing.id } })
         await tx.productPricingHistory.create({ data: { pricingId: pricing.id, operatorRole: 'OMS', action: '客户购买', detail: `客户 ${customer.customerCode} 下单 ${orderNo}，购买 ${quantity} 件，扣款 ¥${(totalCents / 100).toFixed(2)}（余额 ¥${(before / 100).toFixed(2)} → ¥${((before - totalCents) / 100).toFixed(2)}）；已售 ${soldQty}/${pool}` } })
-        await tx.syncLog.create({ data: { syncType: 'oms_catalog_purchase', targetSystem: 'ERP', referenceNo: orderNo, status: 'success', requestBody: { orderNo, customerCode: customer.customerCode, sku, quantity, quotedUnitPrice: input.unitPrice }, responseBody: { customerId: Number(customer.id), totalAmount: totalCents / 100, balanceBefore: before / 100, balanceAfter: (before - totalCents) / 100, soldQty, remainingStockQty: pool - soldQty } } })
+        await tx.syncLog.create({ data: { syncType: 'oms_catalog_purchase', targetSystem: 'ERP', referenceNo: orderNo, status: 'success', requestBody: { orderNo, customerCode: customer.customerCode, sku, quantity, quotedUnitPrice: input.unitPrice, priceTier: tier }, responseBody: { customerId: Number(customer.id), totalAmount: totalCents / 100, balanceBefore: before / 100, balanceAfter: (before - totalCents) / 100, soldQty, remainingStockQty: pool - soldQty } } })
         return { order: created, idempotent: false }
       }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted, timeout: 30000 })
     } catch (error: any) {

@@ -44,6 +44,8 @@ export function parseProductStatus(raw?: string): string {
 export interface ParsedProductImportRow {
   /** 原文件中的行号 */
   lineNo: number
+  /** 原始行内容（截断保留），失败时写入任务详情供恢复下载 */
+  raw?: string
   sku: string
   spu?: string
   productName: string
@@ -91,6 +93,7 @@ export function parseProductsImportCsv(content: string): ParsedProductImportRow[
     const productName = cols[nameIdx]?.trim() ?? ''
     parsed.push({
       lineNo: i + 1,
+      raw: cols.map((cell) => cell ?? '').join(',').slice(0, 500),
       sku,
       spu: spuIdx >= 0 ? cols[spuIdx]?.trim() || undefined : undefined,
       productName,

@@ -14,6 +14,8 @@ export type ErpCatalogItem = {
   weightKg: number
   dimensionsSource: 'measured' | 'master' | null
   price: number
+  priceTier: string
+  priceConfigured: boolean
   catalogStockPool: number
   soldQty: number
   remainingStockQty: number

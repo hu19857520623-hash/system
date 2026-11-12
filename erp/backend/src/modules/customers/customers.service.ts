@@ -1,4 +1,5 @@
 import { creditCustomer } from './customer-recharge.util'
+import { setCustomerCredit } from './customer-credit.util'
 import { userFacingError } from '@erp/shared/user-facing-error'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -31,6 +32,11 @@ export class CustomersService {
     private readonly prisma: PrismaService,
     private readonly provisioning: CustomerProvisioningService,
   ) {}
+
+  /** 客户信用额度调整：只改额度上限，不改余额、不创建充值 */
+  setCredit(id: number, body: any, actor: number) {
+    return setCustomerCredit(this.prisma, id, body, actor)
+  }
 
   async list(q: PaginationDto & {
     status?: string

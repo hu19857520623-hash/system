@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
 import { Prisma } from '@prisma/client'
 import * as path from 'path'
 import { PrismaService } from '../../common/prisma/prisma.service'
@@ -19,6 +19,9 @@ import {
 } from './leads-follow-sales.util'
 import { stripLeadRemarkImportPrefix } from './leads-remark.util'
 import { planLeadCorrection } from './leads-correction.util'
+import { isCurrentLeadSales, followUpRevision, SHARED_POOL_STATUSES } from './leads-access.util'
+import { resolveDealService, dealServiceWhere } from './leads-deal-service.util'
+import { OMS_CUSTOMER_TYPES } from '@erp/shared/oms-portal.permissions'
 import {
   buildLeadContactIndex,
   collectLeadContactKeys,
@@ -80,6 +83,7 @@ export class LeadsService {
       followDue?: string
       dealStatus?: string
       shopType?: string
+      serviceQuery?: string
       dealDateFrom?: string
       dealDateTo?: string
       createdAtFrom?: string
@@ -154,6 +158,11 @@ export class LeadsService {
     } else if (q.followSales) {
       where.followSales = q.followSales
     }
+    // 记录访问范围：指定他人归属、他人编号等筛选条件不能扩大当前账号的可见范围。
+    // mine/followMine 已由服务端身份强制限定（归属运营或跟进销售范围），不重复叠加。
+    if (currentUser?.userId && !canViewAllLeads && !mine && !followMine) {
+      and.push(await this.recordAccessScope(currentUser.userId))
+    }
     const createdAt = toDayRange(q.createdAtFrom, q.createdAtTo)
     if (createdAt) where.createdAt = createdAt
     const nextFollowAt = toDayRange(q.nextFollowAtFrom, q.nextFollowAtTo)
@@ -172,6 +181,7 @@ export class LeadsService {
       })
     }
     const dealWhere: Record<string, unknown> = {}
+    if (q.serviceQuery) Object.assign(dealWhere, dealServiceWhere(q.serviceQuery))
     if (q.dealStatus) dealWhere.status = q.dealStatus
     if (q.shopType) dealWhere.productDesc = q.shopType
     if (q.dealDateFrom || q.dealDateTo) {
@@ -194,8 +204,8 @@ export class LeadsService {
     }
     if (and.length) where.AND = and
 
-    const includeDeals = !exportAll && (
-      q.status === 'deal' || Boolean(q.dealStatus || q.shopType || q.dealDateFrom || q.dealDateTo))
+    const includeDeals = q.status === 'deal'
+      || Boolean(q.dealStatus || q.shopType || q.serviceQuery || q.dealDateFrom || q.dealDateTo)
     const findArgs = {
       where,
       skip: exportAll ? 0 : (page - 1) * pageSize,
@@ -207,6 +217,7 @@ export class LeadsService {
           ? {
               deals: {
                 orderBy: { id: 'desc' as const },
+                ...(exportAll && Object.keys(dealWhere).length ? { where: dealWhere } : {}),
                 include: {
                   attachments: {
                     orderBy: { id: 'desc' as const },
@@ -273,6 +284,150 @@ export class LeadsService {
       select: { username: true, realName: true },
     })
     return followSalesScopeWhere(dbUser || fallback)
+  }
+
+  /** 记录访问范围：本人归属、本人登记或历史跟进销售姓名精确命中的线索。 */
+  private async recordAccessScope(userId: number) {
+    const [users, rows] = await Promise.all([
+      this.prisma.sysUser.findMany({
+        where: { status: 1 },
+        select: { id: true, username: true, realName: true },
+      }),
+      this.prisma.lead.findMany({
+        where: { followSales: { not: null } },
+        select: { id: true, followSales: true },
+      }),
+    ])
+    const matchedIds = rows
+      .filter((row) => isCurrentLeadSales(row.followSales, userId, users))
+      .map((row) => row.id)
+    return {
+      OR: [
+        { assigneeId: BigInt(userId) },
+        { createdById: BigInt(userId) },
+        { id: { in: matchedIds } },
+      ],
+    }
+  }
+
+  /**
+   * 线索记录级访问核对。
+   * - read/follow：本人归属、本人登记、全量权限，或公共池线索配合查看权限（保留查看与认领入口）。
+   * - history/write/correct：仅当前负责人（归属运营或历史跟进销售）或有全量权限的主管；
+   *   失去归属后的原填写人、登记人不能借历史记录继续编辑，一律按不存在处理。
+   */
+  async assertRecordAccess(
+    leadId: number,
+    user: AuthUser | null | undefined,
+    mode: 'read' | 'follow' | 'history' | 'write' | 'correct' = 'read',
+  ) {
+    if (!user?.userId) throw new ForbiddenException('请先登录后访问线索记录')
+    const id = Number(leadId)
+    if (!Number.isSafeInteger(id) || id <= 0) throw new BadRequestException('线索编号无效')
+    const lead = await this.prisma.lead.findUnique({
+      where: { id: BigInt(id) },
+      select: { id: true, assigneeId: true, createdById: true, status: true, followSales: true },
+    })
+    if (!lead) throw new NotFoundException('线索不存在')
+    const users = await this.prisma.sysUser.findMany({
+      where: { status: 1 },
+      select: { id: true, username: true, realName: true },
+    })
+    const owned =
+      (lead.assigneeId != null && Number(lead.assigneeId) === user.userId) ||
+      isCurrentLeadSales(lead.followSales, user.userId, users)
+    const canViewAll =
+      user.roleCode === 'admin' ||
+      (await this.permissions.userHasAnyPerm(user.userId, user.roleCode, ['leads_pool.view_all']))
+    if (mode === 'history' || mode === 'write' || mode === 'correct') {
+      if (!owned && !canViewAll) {
+        throw new NotFoundException('线索不存在或当前账号无权维护该线索记录')
+      }
+      return lead
+    }
+    if (owned || canViewAll || (lead.createdById != null && Number(lead.createdById) === user.userId)) return lead
+    const inSharedPool = SHARED_POOL_STATUSES.includes(String(lead.status))
+    const canBrowse = await this.permissions.userHasAnyPerm(user.userId, user.roleCode, [
+      'leads_pool.view', 'leads_follow.view', 'leads_deals.view',
+    ])
+    if (inSharedPool && canBrowse) return lead
+    throw new NotFoundException('线索不存在或当前账号无权维护该线索记录')
+  }
+
+  /** 编辑历史跟进记录：功能权限 + 记录级权限 + 版本核对 + 原子审计。 */
+  async updateFollowUp(leadId: number, historyId: number, data: any, actor: AuthUser) {
+    const followType = String(data?.followType || '')
+    if (!['phone', 'wechat', 'wecom', 'email', 'visit', 'other'].includes(followType)) {
+      throw new BadRequestException('跟进方式无效')
+    }
+    const content = String(data?.content || '').trim()
+    if (!content) throw new BadRequestException('请填写跟进内容')
+    const nextPlan = String(data?.nextPlan ?? '').trim()
+    let nextFollowAt: Date | null = null
+    if (data?.nextFollowAt != null && data?.nextFollowAt !== '') {
+      nextFollowAt = new Date(data.nextFollowAt)
+      if (Number.isNaN(nextFollowAt.getTime())) throw new BadRequestException('下次跟进时间格式无效')
+    }
+    if (!actor?.userId || !(await this.permissions.userHasAnyPerm(actor.userId, actor.roleCode, ['leads_follow.edit']))) {
+      throw new ForbiddenException('当前账号没有编辑跟进记录的权限')
+    }
+    await this.assertRecordAccess(leadId, actor, 'history')
+    const record = await this.prisma.leadFollowUp.findFirst({
+      where: { id: BigInt(historyId), leadId: BigInt(leadId) },
+    })
+    if (!record) throw new NotFoundException('跟进记录不存在')
+    const expectedRevision = typeof data?.expectedRevision === 'string' ? data.expectedRevision : ''
+    if (!expectedRevision || expectedRevision !== followUpRevision(record)) {
+      throw new ConflictException('跟进记录已被其他人修改，请刷新后重新核对')
+    }
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const updated = await tx.leadFollowUp.updateMany({
+          where: { id: BigInt(historyId), leadId: BigInt(leadId), followType: record.followType, content: record.content },
+          data: { followType, content, nextPlan: nextPlan || null, nextFollowAt },
+        })
+        if (updated.count !== 1) throw new ConflictException('跟进记录已被其他人修改，请刷新后重新核对')
+        await tx.operationLog.create({
+          data: {
+            module: 'leads',
+            action: 'follow_up_update',
+            operatorId: BigInt(actor.userId),
+            targetType: 'lead_follow_up',
+            targetId: String(historyId),
+            detail: { leadId: String(leadId), before: { followType: record.followType }, after: { followType } },
+          },
+        })
+        return {
+          ...record,
+          followType,
+          content,
+          nextPlan: nextPlan || null,
+          nextFollowAt,
+          revision: followUpRevision({ followType, content, nextPlan: nextPlan || null, nextFollowAt }),
+        }
+      })
+    } catch (error: any) {
+      if (error?.code === 'P2034') throw new ConflictException('跟进记录正在被其他人修改，请稍后重试')
+      throw error
+    }
+  }
+
+  /** 详情附带当前账号能否编辑历史跟进记录，供页面决定编辑入口。 */
+  async detailForUser(id: number, user: AuthUser) {
+    const detail = await this.detail(id)
+    let canEditFollowUps = false
+    if (user?.userId) {
+      const hasEdit = await this.permissions.userHasAnyPerm(user.userId, user.roleCode, ['leads_follow.edit'])
+      if (hasEdit) {
+        try {
+          await this.assertRecordAccess(id, user, 'history')
+          canEditFollowUps = true
+        } catch {
+          canEditFollowUps = false
+        }
+      }
+    }
+    return { ...detail, canEditFollowUps }
   }
 
   async listAssignees(currentUserId: number) {
@@ -605,7 +760,7 @@ export class LeadsService {
     const content = String(data.content || '').trim()
     if (!content) throw new BadRequestException('请填写跟进内容')
     const followType = String(data.followType || 'phone')
-    if (!['phone', 'wechat', 'email', 'visit', 'other'].includes(followType)) {
+    if (!['phone', 'wechat', 'wecom', 'email', 'visit', 'other'].includes(followType)) {
       throw new BadRequestException('跟进方式无效')
     }
     const nextFollowAt = data.nextFollowAt ? new Date(data.nextFollowAt) : undefined
@@ -668,13 +823,15 @@ export class LeadsService {
 
   async addDeal(id: number, data: any) {
     const lead = await this.detail(id)
+    // 成交服务：存储代码与名称快照，忽略客户端伪造名称；旧客户端仅保留原店铺类型文本。
+    const service = resolveDealService(data)
     const deal = await this.prisma.leadDeal.create({
       data: {
         leadId: BigInt(id),
         dealNo: data.dealNo || 'DL-' + Date.now().toString().slice(-8),
+        ...service,
         dealAmount: data.dealAmount,
         dealDate: data.dealDate ? new Date(data.dealDate) : new Date(),
-        productDesc: data.productDesc,
         status: data.status || 'pending',
         remark: data.remark,
       },
@@ -688,6 +845,13 @@ export class LeadsService {
   }
 
   async confirmToErp(leadId: number, data: CreateCustomerDto) {
+    // OMS 客户类型必须在转客户时单独选择，绝不从成交服务或店铺类型推断。
+    const omsType = OMS_CUSTOMER_TYPES.includes(data?.omsType as never)
+      ? data.omsType
+      : OMS_CUSTOMER_TYPES.includes(data?.portalType as never)
+        ? data.portalType
+        : null
+    if (!omsType) throw new BadRequestException('请单独选择 OMS 客户类型，成交服务不代表客户类型')
     const lead = await this.detail(leadId)
     const dealCount = await this.prisma.leadDeal.count({ where: { leadId: BigInt(leadId) } })
     if (!dealCount) throw new BadRequestException('没有成交记录，无法转客户')
@@ -848,31 +1012,33 @@ export class LeadsService {
     let ok = 0
     let fail = 0
     const failures: ImportRowFailure[] = []
-    const recordFail = (lineNo: number, reason: string, sku?: string) => {
+    const recordFail = (lineNo: number, reason: string, sku?: string, row?: string) => {
       fail++
       if (failures.length < MAX_IMPORT_FAILURE_DETAILS) {
-        failures.push({ lineNo, reason, ...(sku?.trim() ? { sku: sku.trim() } : {}) })
+        failures.push({ lineNo, reason, ...(sku?.trim() ? { sku: sku.trim() } : {}), ...(row ? { row } : {}) })
       }
     }
+    const rowText = (row: object) =>
+      Object.values(row as Record<string, unknown>).filter((value) => value != null && String(value).trim() !== '').join(', ').slice(0, 500)
 
     for (const row of parsed) {
       try {
         const importedType = row.contactType || inferLeadContactType(row)
         if (findIndexedLeadContactConflict(contactIndex, row.contactName, row.contactPhone, importedType)) {
-          recordFail(row.lineNo, '联系方式与客户名称组合已存在')
+          recordFail(row.lineNo, '联系方式与客户名称组合已存在', undefined, rowText(row))
           continue
         }
         let assigneeId: bigint | undefined
         if (row.assigneeKey) {
           assigneeId = assigneeByKey.get(row.assigneeKey.toLowerCase())
           if (!assigneeId) {
-            recordFail(row.lineNo, `归属运营「${row.assigneeKey}」未找到`)
+            recordFail(row.lineNo, `归属运营「${row.assigneeKey}」未找到`, undefined, rowText(row))
             continue
           }
         } else if (defaultAssigneeId) {
           assigneeId = BigInt(defaultAssigneeId)
         } else {
-          recordFail(row.lineNo, '未填写归属运营且无法使用当前用户作为默认归属')
+          recordFail(row.lineNo, '未填写归属运营且无法使用当前用户作为默认归属', undefined, rowText(row))
           continue
         }
         await this.create(
@@ -898,7 +1064,7 @@ export class LeadsService {
         )
         ok++
       } catch (e: any) {
-        recordFail(row.lineNo, e?.message || '写入失败')
+        recordFail(row.lineNo, e?.message || '写入失败', undefined, rowText(row))
       }
     }
     return { imported: ok, failed: fail, failures } satisfies ImportRowResult
