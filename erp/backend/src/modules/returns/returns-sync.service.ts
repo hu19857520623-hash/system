@@ -2,6 +2,8 @@ import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common'
 import { Prisma } from '@prisma/client'
 import { PrismaService } from '../../common/prisma/prisma.service'
 
+type SyncLogRow = { id: bigint; referenceNo: string | null; requestBody: unknown; retryCount: number | null; status: string }
+
 @Injectable()
 export class ReturnsSyncService implements OnModuleInit, OnModuleDestroy {
   private sender?: (returnNo: string, warehouseCode?: string) => Promise<boolean>
@@ -13,25 +15,34 @@ export class ReturnsSyncService implements OnModuleInit, OnModuleDestroy {
     return tx.syncLog.create({ data: { syncType: 'return_status', targetSystem: 'OMS', referenceNo: returnNo,
       status: 'pending', nextRetryAt: new Date(), requestBody: { returnNo, ...(warehouseCode ? { warehouseCode } : {}) } } })
   }
-  async deliver(tx: Prisma.TransactionClient, log: { id: bigint; referenceNo: string | null; requestBody: unknown; retryCount: number | null; status: string }) {
-    if (log.status === 'success') return log
+
+  /**
+   * 退件状态推送（OMS 为外部 HTTP，自带超时与重试）。
+   * 外部调用必须在数据库事务之外执行：此前在事务内持 return_order 行锁等待 HTTP，
+   * OMS 慢或失败时会把收货/测量/算费等用户操作拖到事务过期，表现为 500 服务器内部错误。
+   * 现在先推送（无锁），再用短事务落同步结果；失败仍写回待重试，语义不变。
+   */
+  async deliver(log: SyncLogRow): Promise<{ id: bigint; status: string; [k: string]: unknown }> {
+    if (log.status === 'success') return log as never
     const returnNo = log.referenceNo || ''
-    await tx.$queryRaw`SELECT id FROM return_order WHERE return_no = ${returnNo} FOR UPDATE`
     const input = log.requestBody as { warehouseCode?: string } | null
     const sent = Boolean(this.sender && await this.sender(returnNo, input?.warehouseCode))
     const count = (log.retryCount || 0) + 1
     const message = sent ? '退件当前状态和库存已同步至 OMS' : '退件已保存，OMS 同步待重试；请勿重复收货、返库或收费'
-    return tx.syncLog.update({ where: { id: log.id }, data: { status: sent ? 'success' : 'failed', retryCount: count,
-      nextRetryAt: sent ? null : new Date(Date.now() + Math.min(300, 30 * count) * 1000),
-      errorMessage: sent ? null : message, responseBody: { ok: sent, message } } })
-  }
-  async retry(id: bigint) {
     return this.prisma.$transaction(async tx => {
-      await tx.$queryRaw`SELECT id FROM sync_log WHERE id = ${id} FOR UPDATE`
-      const log = await tx.syncLog.findUnique({ where: { id } })
-      if (!log || log.syncType !== 'return_status' || log.targetSystem !== 'OMS') return false
-      return (await this.deliver(tx, log)).status === 'success'
-    }, { isolationLevel: 'ReadCommitted', timeout: 40000 })
+      const fresh = await tx.syncLog.findUnique({ where: { id: log.id } })
+      if (fresh?.status === 'success') return fresh as never
+      return tx.syncLog.update({ where: { id: log.id }, data: { status: sent ? 'success' : 'failed', retryCount: count,
+        nextRetryAt: sent ? null : new Date(Date.now() + Math.min(300, 30 * count) * 1000),
+        errorMessage: sent ? null : message, responseBody: { ok: sent, message } } }) as never
+    }, { isolationLevel: 'ReadCommitted' })
+  }
+
+  async retry(id: bigint) {
+    const log = await this.prisma.syncLog.findUnique({ where: { id } })
+    if (!log || log.syncType !== 'return_status' || log.targetSystem !== 'OMS') return false
+    const updated = await this.deliver(log)
+    return updated.status === 'success'
   }
   async flush(returnNo: string) {
     try {

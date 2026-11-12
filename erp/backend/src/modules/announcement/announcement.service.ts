@@ -386,7 +386,8 @@ export class AnnouncementService {
   }
 
   /** Retry only the current published version; never replay a historical log payload. */
-  async replayCurrentOms(id: number, tx: Prisma.TransactionClient) {
+  /** 校验原公告当前可重放并返回当前内容（短事务内只读校验 + 行锁，不做外部调用）。 */
+  async readReplayable(id: number, tx: Prisma.TransactionClient) {
     await tx.$queryRaw`SELECT id FROM announcement WHERE id = ${BigInt(id)} FOR UPDATE`
     const row = await tx.announcement.findUnique({ where: { id: BigInt(id) } })
     if (!row) throw new NotFoundException('原公告已删除，不能重放历史同步内容')
@@ -394,6 +395,11 @@ export class AnnouncementService {
     if (row.targetChannel !== 'oms' || row.status !== 'published' || !row.publishedAt || row.publishedAt > now || (row.expiresAt && row.expiresAt <= now)) {
       throw new ConflictException('原公告当前不可发布，请返回公告管理核对状态，不能重放历史内容')
     }
+    return row
+  }
+
+  /** 事务外重放推送当前公告内容（OMS 为外部 HTTP，自带超时与重试，不能占用数据库事务）。 */
+  async sendReplay(row: AnnouncementRow) {
     return notifyOms('announcement.publish', null, this.toPublic(row) as unknown as Record<string, unknown>)
   }
 
