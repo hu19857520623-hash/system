@@ -37,6 +37,7 @@ import {
   type SessionUser,
 } from '../api/client'
 import { createSessionAccessRead } from './sessionAccessRead'
+import { pageNotice } from '../utils/pageConfirm'
 
 interface RoleContextValue {
   role: OmsRole
@@ -218,7 +219,7 @@ export function RoleProvider({ children }: { children: React.ReactNode }) {
 
   const updateAccount = useCallback((id: string, patch: Partial<CustomerAccount>) => {
     void persistAccount(id, patch).catch(error => {
-      window.alert(userFacingError(`账号保存失败，数据已恢复：${error instanceof Error ? error.message : String(error)}`))
+      pageNotice(userFacingError(`账号保存失败，数据已恢复：${error instanceof Error ? error.message : String(error)}`))
     })
   }, [])
 
@@ -228,7 +229,7 @@ export function RoleProvider({ children }: { children: React.ReactNode }) {
     void persistAccount(id, {
       status: current.status === 'active' ? 'disabled' : 'active',
     }).catch(error => {
-      window.alert(userFacingError(`账号状态更新失败，数据已恢复：${error instanceof Error ? error.message : String(error)}`))
+      pageNotice(userFacingError(`账号状态更新失败，数据已恢复：${error instanceof Error ? error.message : String(error)}`))
     })
   }, [])
 

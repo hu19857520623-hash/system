@@ -8,6 +8,7 @@ import {
   printInboundWarehouseCode,
   type InboundReceivingListDoc,
 } from './inboundReceivingList'
+import { pageNotice } from '../utils/pageConfirm'
 
 function productBySku(products: Product[], sku: string) {
   const token = String(sku || '').trim().toUpperCase()
@@ -72,7 +73,7 @@ export function printInboundReceivingList(order: InboundOrder, products: Product
   )
   const win = window.open('', '_blank', 'width=900,height=1100')
   if (!win) {
-    window.alert('浏览器拦截了打印窗口，请允许弹出窗口后重试')
+    pageNotice('浏览器拦截了打印窗口，请允许弹出窗口后重试')
     return false
   }
   win.document.write(html)

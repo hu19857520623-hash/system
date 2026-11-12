@@ -13,6 +13,7 @@ import {
 } from './boxLabelTemplate'
 import { downloadBoxLabelsPdf } from './boxLabelPdf'
 import { printSelectableBoxLabels } from './selectableBoxLabelPrint'
+import { pageNotice } from '../utils/pageConfirm'
 
 export type InboundLabelKind = '箱唛' | 'SKU 标签'
 
@@ -93,14 +94,14 @@ export async function printInboundLabels(order: InboundOrder, kind: InboundLabel
   if (kind === '箱唛') {
     const labels = buildBoxLabelData(order, customerCode)
     if (!labels.length) {
-      window.alert('没有可打印的箱唛')
+      pageNotice('没有可打印的箱唛')
       return false
     }
     return printSelectableBoxLabels(labels, codeType)
   }
   const inputs = buildInboundLabelInputs(order, kind, customerCode)
   if (!inputs.length) {
-    window.alert('没有可打印的标签')
+    pageNotice('没有可打印的标签')
     return false
   }
   return printBarcodeLabels(inputs, `${order.inboundNo}-${kind}`, codeType)

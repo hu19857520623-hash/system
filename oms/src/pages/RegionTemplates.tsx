@@ -29,6 +29,8 @@ import {
 } from '../data/feeTemplateStore'
 
 import { useDataScope } from '../auth/useDataScope'
+import { pageConfirm } from '../utils/pageConfirm'
+import { pageNotice } from '../utils/pageConfirm'
 
 
 
@@ -78,7 +80,7 @@ export default function RegionTemplates() {
 
     if (!code || !label) {
 
-      window.alert('请填写地区代码和名称')
+      pageNotice('请填写地区代码和名称')
 
       return
 
@@ -86,7 +88,7 @@ export default function RegionTemplates() {
 
     if (!/^[a-z0-9_-]+$/.test(code)) {
 
-      window.alert('地区代码仅支持小写字母、数字、下划线、连字符')
+      pageNotice('地区代码仅支持小写字母、数字、下划线、连字符')
 
       return
 
@@ -94,7 +96,7 @@ export default function RegionTemplates() {
 
     if (draft.some(r => r.code === code)) {
 
-      window.alert('该地区代码已存在')
+      pageNotice('该地区代码已存在')
 
       return
 
@@ -126,13 +128,13 @@ export default function RegionTemplates() {
 
 
 
-  const removeRegion = (id: string) => {
+  const removeRegion = async (id: string) => {
 
     const rule = draft.find(r => r.id === id)
 
     if (!rule) return
 
-    if (!window.confirm(`确定删除地区「${rule.label}」？价格模板中该地区的费率将保留，需手动在价格模板调整。`)) return
+    if (!(await pageConfirm({ title: '删除地区', message: `确定删除地区「${rule.label}」？价格模板中该地区的费率将保留，需手动在价格模板调整。`, confirmLabel: '确认删除', cancelLabel: '取消', danger: true }))) return
 
     setDraft(prev => prev.filter(r => r.id !== id))
 

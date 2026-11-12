@@ -18,6 +18,8 @@ import {
 } from '../data/feeTemplateStore'
 import { useDataScope } from '../auth/useDataScope'
 import { Navigate, Link } from 'react-router-dom'
+import { pageConfirm } from '../utils/pageConfirm'
+import { pageNotice } from '../utils/pageConfirm'
 
 export default function BillingTemplates() {
   const dataScope = useDataScope()
@@ -64,7 +66,7 @@ export default function BillingTemplates() {
     if (!Number.isFinite(ratio) || ratio <= 0 || Object.values(rates).some(rule =>
       !Number.isFinite(rule.ratePerKg) || (rule.ratePerKg ?? -1) < 0 ||
       !Number.isFinite(rule.minCharge) || rule.minCharge < 0)) {
-      window.alert('请填写大于 0 的抛重比，以及不小于 0 的物流单价和最低收费。')
+      pageNotice('请填写大于 0 的抛重比，以及不小于 0 的物流单价和最低收费。')
       return
     }
     const nextTemplates = priceTemplates.map(t => t.id === priceDraft.id ? priceDraft : t)
@@ -98,12 +100,12 @@ export default function BillingTemplates() {
     setPriceDraft(tpl)
   }
 
-  const deleteTemplate = () => {
+  const deleteTemplate = async () => {
     if (regionTemplates.length <= 1) {
-      window.alert(`${regionLabel(activeRegion, regionDispatchRules)} 至少保留一个价格模板`)
+      await pageConfirm({ title: '无法删除模板', message: `${regionLabel(activeRegion, regionDispatchRules)} 至少保留一个价格模板`, noticeOnly: true })
       return
     }
-    if (!window.confirm(`确定删除模板「${priceDraft.name}」？已绑定该模板的客户将回退到该地区默认模板。`)) return
+    if (!(await pageConfirm({ title: '删除价格模板', message: `确定删除模板「${priceDraft.name}」？已绑定该模板的客户将回退到该地区默认模板。`, confirmLabel: '确认删除', cancelLabel: '取消', danger: true }))) return
     removePriceTemplate(priceDraft.id)
     const next = regionTemplates.find(t => t.id !== priceDraft.id)
     if (next) {

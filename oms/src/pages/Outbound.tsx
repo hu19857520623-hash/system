@@ -78,6 +78,8 @@ import {
   downloadOutboundLineTemplate,
   parseOutboundLines,
 } from '../data/importTemplates'
+import { pageNotice } from '../utils/pageConfirm'
+import { pageConfirm } from '../utils/pageConfirm'
 import { ImportTemplateLegend } from '../components/ui/ImportTemplateLegend'
 import PlatformBindingModal, { type BindingFormState } from '../components/platform/PlatformBindingModal'
 import OutboundSkuPickerModal, { type OutboundSkuPickerConfirmRow } from '../components/outbound/OutboundSkuPickerModal'
@@ -396,7 +398,7 @@ export default function Outbound() {
 
   const withdraw = async () => {
     if (!can('outbound:write') || !editOrder || editOrder.status !== 'locked' || detailLoading || detailError || withdrawing) return
-    if (!window.confirm('确认撤回这张待拣货出库单？撤回后将释放库存并退回预扣费用。')) return
+    if (!(await pageConfirm({ title: '撤回出库单', message: '确认撤回这张待拣货出库单？撤回后将释放库存并退回预扣费用。', confirmLabel: '确认撤回', cancelLabel: '返回', danger: true }))) return
     setWithdrawing(true)
     try {
       const result = await cancelErpOutbound(editOrder.outboundNo, getCustomerCode(editOrder.customerId))
@@ -1004,7 +1006,7 @@ export default function Outbound() {
     const validLines = form.lines.filter(line => line.internalSku)
     const source = bindingStockSource(validLines, allProducts, form.stockSource)
     if (!form.platformBarcode.trim() || validLines.length !== 1) {
-      window.alert('快速绑定需要填写 990 条码并且只选择一个仓库 SKU')
+      pageNotice('快速绑定需要填写 990 条码并且只选择一个仓库 SKU')
       return
     }
     const store = stores.find(item => item.id === form.storeId) ?? quickBindStore
@@ -1062,7 +1064,7 @@ export default function Outbound() {
       setQuickBindTarget(null)
     } catch (error) {
       setPlatformSkuMappings(before)
-      window.alert(userFacingError(displaySkuText(`绑定保存失败：${error instanceof Error ? error.message : String(error)}`)))
+      pageNotice(userFacingError(displaySkuText(`绑定保存失败：${error instanceof Error ? error.message : String(error)}`)))
     }
   }
 

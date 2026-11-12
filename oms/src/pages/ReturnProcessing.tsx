@@ -34,6 +34,7 @@ import { useDataScope } from '../auth/useDataScope'
 import { getCustomerCode, getCustomerIdForRole, resolveErpCustomerContext } from '../data/dataScope'
 import { AdminCustomerFilter } from '../components/admin/AdminCustomerFilter'
 import { notifyIfUserError, notifySuccess, notifyInfo, notifyError } from '../utils/userNotify'
+import { pageNotice } from '../utils/pageConfirm'
 
 type Tab = 'all' | 'draft' | 'pending_arrival' | 'awaiting_customer' | 'arrived' | 'completed' | 'cancelled'
 type DecisionIntent = Parameters<typeof replayReturnDecision>[0] & { contentChanged?: boolean }
@@ -240,7 +241,7 @@ export default function ReturnProcessing() {
       const result = await importCsvFile(RETURN_ORDER_COLUMNS, parseReturnOrders)
       const customerId = erpCustomer?.customerId ?? getCustomerIdForRole(role) ?? undefined
       if (dataScope.isAdmin && !customerId && result.data.length > 0) {
-        window.alert('请先在上方选择要代操作的客户端，再批量导入退件')
+        pageNotice('请先在上方选择要代操作的客户端，再批量导入退件')
         return
       }
 

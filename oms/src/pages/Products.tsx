@@ -32,6 +32,8 @@ import { notifyIfUserError, notifyError } from '../utils/userNotify'
 import { validateProductDrafts } from '../data/productDraftApproval'
 import { useRole } from '../auth/RoleContext'
 import { currentProductWriteScope } from '../auth/productAccess'
+import { pageConfirm } from '../utils/pageConfirm'
+import { pageNotice } from '../utils/pageConfirm'
 
 const statusTabs = [
   { id: 'all', label: '全部' },
@@ -177,7 +179,7 @@ export default function Products() {
   const handleExportSelected = () => {
     const picked = filtered.filter(p => selected.has(p.id))
     if (picked.length === 0) {
-      window.alert('请先勾选要导出的产品')
+      pageNotice('请先勾选要导出的产品')
       return
     }
     exportProducts(picked, dataScope.getCustomerCode)
@@ -194,7 +196,7 @@ export default function Products() {
 
   const printBarcodes = async (items = selectedProducts) => {
     if (items.length === 0) {
-      window.alert('请先勾选要打印条码的产品')
+      pageNotice('请先勾选要打印条码的产品')
       return
     }
     const inputs = items.map(product => ({
@@ -227,10 +229,10 @@ export default function Products() {
     if (!owner) { notifyError('当前账号没有商品维护权限，请联系管理员核对'); return }
     const blockReason = permanentDeleteBlockReason(product)
     if (blockReason) {
-      window.alert(blockReason)
+      await pageConfirm({ title: '无法删除商品', message: blockReason, noticeOnly: true })
       return
     }
-    if (!window.confirm(`确认永久删除商品「${displaySku(product)}」？关联的本地库存展示记录将一并删除，且无法恢复。`)) return
+    if (!(await pageConfirm({ title: '永久删除商品', message: `确认永久删除商品「${displaySku(product)}」？关联的本地库存展示记录将一并删除，且无法恢复。`, confirmLabel: '永久删除', cancelLabel: '取消', danger: true }))) return
     try {
       await permanentlyDeleteLocalProduct(product.id)
       if (owner !== currentProductWriteScope()) return
@@ -243,7 +245,7 @@ export default function Products() {
       if (owner !== currentProductWriteScope()) return
       const status = (error as { status?: number }).status
       const message = userFacingError(error)
-      window.alert(status && [400, 403, 409].includes(status)
+      pageNotice(status && [400, 403, 409].includes(status)
         ? `永久删除未完成：${message}。请按提示处理后重新操作。`
         : `删除结果暂未核对：${message}。请保留当前列表，关闭提示后可再次点击“永久删除”核对结果。`)
     }

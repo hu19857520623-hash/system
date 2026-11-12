@@ -2,6 +2,7 @@ import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from 'pdf
 import { code128Widths } from './code128'
 import { splitBoxLabelPages, type BoxLabelData } from './boxLabelTemplate'
 import { buildCartonCode } from './wmsDocNo'
+import { pageNotice } from '../utils/pageConfirm'
 
 const PT_PER_MM = 72 / 25.4
 const PAGE_W = 100 * PT_PER_MM
@@ -131,7 +132,7 @@ export async function openBoxLabelsPdf(labels: BoxLabelData[]) {
   const win = window.open(url, '_blank')
   if (!win) {
     URL.revokeObjectURL(url)
-    window.alert('浏览器拦截了标签预览，请允许弹出窗口后重试')
+    pageNotice('浏览器拦截了标签预览，请允许弹出窗口后重试')
     return false
   }
   window.setTimeout(() => URL.revokeObjectURL(url), 60_000)

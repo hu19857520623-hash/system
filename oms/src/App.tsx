@@ -1,6 +1,7 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { lazy, Suspense } from 'react'
 import Layout from './components/layout/Layout'
+import { PageConfirmProvider } from './components/ui/PageConfirm'
 import { useRole } from './auth/RoleContext'
 import { DataBootstrap } from './data/DataBootstrap'
 
@@ -57,7 +58,8 @@ function ChangePasswordGate() {
 
 export default function App() {
   return (
-    <Suspense fallback={<div className="p-6 text-sm text-text-muted">页面加载中…</div>}>
+    <PageConfirmProvider>
+      <Suspense fallback={<div className="p-6 text-sm text-text-muted">页面加载中…</div>}>
       <Routes>
       <Route path="/login" element={<LoginGate />} />
       <Route path="/change-password" element={<ChangePasswordGate />} />
@@ -100,6 +102,7 @@ export default function App() {
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
-    </Suspense>
+      </Suspense>
+    </PageConfirmProvider>
   )
 }

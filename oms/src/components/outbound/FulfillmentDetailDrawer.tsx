@@ -16,6 +16,7 @@ import OutboundFeePanel from './OutboundFeePanel'
 import type { LogisticsRecord } from '../../data/mockData'
 import { PodStatusBadge, PodRowActions } from './PodReceiptModals'
 import { AlertCircle, Package } from 'lucide-react'
+import { pageConfirm } from '../../utils/pageConfirm'
 
 interface Props {
   row: FulfillmentRow | null
@@ -45,9 +46,9 @@ export default function FulfillmentDetailDrawer({ row, open, onClose, onUploadPo
 
   const { order, outbound } = row
 
-  const saveExceptionReason = () => {
+  const saveExceptionReason = async () => {
     const reason = exceptionReason.trim()
-    if (!window.confirm('确认将该单据标记为“异常”并保存备注？')) return
+    if (!(await pageConfirm({ title: '标记异常', message: '确认将该单据标记为“异常”并保存备注？', confirmLabel: '确认标记', cancelLabel: '取消', danger: true }))) return
     if (order) {
       updateOrder(order.id, {
         exception: order.exception ?? 'sync_fail',

@@ -46,6 +46,8 @@ import {
 } from '../../data/importTemplates'
 import { ImportTemplateLegend } from '../ui/ImportTemplateLegend'
 import { reportLineImportResult } from '../../utils/lineImportResult'
+import { pageConfirm } from '../../utils/pageConfirm'
+import { pageNotice } from '../../utils/pageConfirm'
 
 const STATUS_TABS: { id: PlatformBindingTab; label: string }[] = [
   { id: 'all', label: '全部' },
@@ -133,7 +135,7 @@ export default function PlatformBindingsPanel() {
     } catch (error) {
       setList(before)
       setPlatformSkuMappings(before)
-      window.alert(userFacingError(`保存失败，数据已恢复：${error instanceof Error ? error.message : String(error)}`))
+      pageNotice(userFacingError(`保存失败，数据已恢复：${error instanceof Error ? error.message : String(error)}`))
       return false
     }
   }
@@ -163,7 +165,7 @@ export default function PlatformBindingsPanel() {
   }
 
   const openEdit = (row: PlatformSkuMapping) => {
-    if (isLocked(row)) { window.alert('自有库存有库存，不能修改原绑定，请在发货时填写其他 990 标签。'); return }
+    if (isLocked(row)) { pageNotice('自有库存有库存，不能修改原绑定，请在发货时填写其他 990 标签。'); return }
     setEditing(row)
     setQueryPrefill(undefined)
     setModalOpen(true)
@@ -172,14 +174,14 @@ export default function PlatformBindingsPanel() {
   const handleSave = async (form: BindingFormState, prev: PlatformSkuMapping | null) => {
     const customerId = bindingCustomerId ?? prev?.customerId
     if (!customerId) {
-      window.alert('请先筛选客户。同一货盘 SKU 在每个客户下绑定的 990 条码相互独立，不能写成全平台共用。')
+      pageNotice('请先筛选客户。同一货盘 SKU 在每个客户下绑定的 990 条码相互独立，不能写成全平台共用。')
       return
     }
     const takealotStore = firstTakealotStore(stores)
     const store = takealotStore ?? stores.find(s => s.id === form.storeId)
     const validLines = form.lines.filter(l => l.internalSku)
     const source = bindingStockSource(validLines, products, form.stockSource)
-    if (prev && isLocked(prev)) { window.alert('自有库存有库存，不能修改原绑定。'); return }
+    if (prev && isLocked(prev)) { pageNotice('自有库存有库存，不能修改原绑定。'); return }
     const nextStatus = validLines.length === 0
         ? 'unmapped' as const
         : 'active' as const
@@ -231,8 +233,8 @@ export default function PlatformBindingsPanel() {
 
   const handleDelete = async () => {
     if (selected.size === 0) return
-    if (list.some(m => selected.has(m.id) && isLocked(m))) { window.alert('选中的自有库存绑定有库存，不能删除。'); return }
-    if (!window.confirm(`确认删除已选 ${selected.size} 条 990 绑定？此操作不可恢复。`)) return
+    if (list.some(m => selected.has(m.id) && isLocked(m))) { await pageConfirm({ title: '无法删除绑定', message: '选中的自有库存绑定有库存，不能删除。', noticeOnly: true }); return }
+    if (!(await pageConfirm({ title: '删除 990 绑定', message: `确认删除已选 ${selected.size} 条 990 绑定？此操作不可恢复。`, confirmLabel: '确认删除', cancelLabel: '取消', danger: true }))) return
     const before = list
     const next = list.filter(m => !selected.has(m.id))
     setList(next)
@@ -242,17 +244,17 @@ export default function PlatformBindingsPanel() {
         apiDelete(`/platform-sku-mappings/${encodeURIComponent(id)}`),
       ))
       setSelected(new Set())
-      window.alert(`已删除 ${selected.size} 条 990 绑定`)
+      pageNotice(`已删除 ${selected.size} 条 990 绑定`)
     } catch (error) {
       setList(before)
       setPlatformSkuMappings(before)
-      window.alert(userFacingError(`删除失败，数据已恢复：${error instanceof Error ? error.message : String(error)}`))
+      pageNotice(userFacingError(`删除失败，数据已恢复：${error instanceof Error ? error.message : String(error)}`))
     }
   }
 
   const handleImportBindings = async () => {
     if (!bindingCustomerId) {
-      window.alert('请先筛选客户再导入。同一货盘 SKU 在每个客户下绑定的 990 条码相互独立。')
+      pageNotice('请先筛选客户再导入。同一货盘 SKU 在每个客户下绑定的 990 条码相互独立。')
       return
     }
     try {
@@ -445,8 +447,8 @@ export default function PlatformBindingsPanel() {
                           <Button
                             variant="ghost"
                             size="sm"
-                            onClick={() => {
-                              if (!window.confirm(`确认审核通过 990 条码 ${row.platformBarcode}？`)) return
+                            onClick={async () => {
+                              if (!(await pageConfirm({ title: '审核 990 条码', message: `确认审核通过 990 条码 ${row.platformBarcode}？`, confirmLabel: '确认通过', cancelLabel: '取消' }))) return
                               void persistList(list.map(m => m.id === row.id ? { ...m, status: 'active' } : m))
                             }}
                           >

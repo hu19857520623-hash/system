@@ -8,6 +8,7 @@ import { uploadPodReceipt } from '../../data/logisticsStore'
 import { readFileAsDataUrl } from '../../data/fileUtils'
 import { getOutboundPodFileUrl } from '../../api/erp'
 import { fetchWithAuth } from '../../api/client'
+import { pageNotice } from '../../utils/pageConfirm'
 
 function podBadgeClass(status: LogisticsRecord['podStatus']) {
   if (status === 'uploaded') return 'bg-emerald-100 text-emerald-800'
@@ -294,7 +295,7 @@ export function PodRowActions({
           onClick={() => void downloadPodFile(
             record.outboundNo,
             record.podFileName || `POD-${record.outboundNo}`,
-          ).catch(error => window.alert(userFacingError(error instanceof Error ? error.message : '下载签收单失败')))}
+          ).catch(error => pageNotice(userFacingError(error instanceof Error ? error.message : '下载签收单失败')))}
         >
           下载
         </TableActionLink>

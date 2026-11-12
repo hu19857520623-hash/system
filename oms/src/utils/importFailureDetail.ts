@@ -1,4 +1,5 @@
 import { downloadCsv } from '../data/csvImportExport'
+import { pageConfirm } from './pageConfirm'
 
 export type ImportRowFailure = {
   lineNo: number
@@ -41,20 +42,26 @@ export function failuresFromLegacyErrors(errors: string[]): ImportRowFailure[] {
   })
 }
 
-/** 与 ERP 一致：一次弹窗展示明细；确定 = 下载 CSV，取消 = 关闭 */
-export function showImportFailuresDialog(
+/** 与 ERP 一致：一次弹窗展示明细；确认 = 下载 CSV，取消/关闭 = 不执行 */
+export async function showImportFailuresDialog(
   summary: string,
   failures: ImportRowFailure[],
   csvFilename = '导入失败明细',
 ) {
   if (!failures.length) {
-    window.alert(summary)
+    await pageConfirm({ title: '导入结果', message: summary, noticeOnly: true })
     return
   }
   const preview = failures.slice(0, 40).map(formatImportFailureLine).join('\n')
-  const tail = failures.length > 40 ? `\n…共 ${failures.length} 条，确定可下载完整 CSV` : ''
-  const body = `${summary}\n\n${preview}${tail}\n\n【确定】下载失败明细 CSV\n【取消】关闭`
-  if (window.confirm(body)) {
+  const tail = failures.length > 40 ? `\n…共 ${failures.length} 条，确认可下载完整 CSV` : ''
+  const body = `${summary}\n\n${preview}${tail}`
+  const confirmed = await pageConfirm({
+    title: '导入失败明细',
+    message: body,
+    confirmLabel: '下载失败明细 CSV',
+    cancelLabel: '关闭',
+  })
+  if (confirmed) {
     downloadImportFailuresCsv(csvFilename, failures)
   }
 }

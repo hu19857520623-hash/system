@@ -29,6 +29,7 @@ import { PodStatusBadge, PodUploadModal, PodViewModal, PodRowActions, TableActio
 import { useRole } from '../auth/RoleContext'
 import { useDataScope } from '../auth/useDataScope'
 import { getCustomerCode, getCustomerIdForRole } from '../data/dataScope'
+import { pageNotice } from '../utils/pageConfirm'
 
 const POD_TABS = [
   { id: 'pod_pending', label: '待回传签收单' },
@@ -89,15 +90,15 @@ export default function OutboundRecords() {
   const syncLogisticsFromErp = async () => {
     const customerCode = getCustomerCode(getCustomerIdForRole(role) ?? undefined)
     if (!customerCode || customerCode === '—') {
-      window.alert('请切换到客户角色后再同步 ERP 物流')
+      pageNotice('请切换到客户角色后再同步 ERP 物流')
       return
     }
     setSyncing(true)
     try {
       const n = await refreshLogisticsFromErp(customerCode)
-      window.alert(`已从 ERP 同步 ${n} 条物流记录`)
+      pageNotice(`已从 ERP 同步 ${n} 条物流记录`)
     } catch (err) {
-      window.alert(userFacingError(err instanceof Error ? err.message : String(err)))
+      pageNotice(userFacingError(err instanceof Error ? err.message : String(err)))
     } finally {
       setSyncing(false)
     }

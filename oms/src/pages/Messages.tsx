@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { Bell } from 'lucide-react'
 import { Badge, Button, Card, PageHeader, FilterChip } from '../components/ui'
 import { markSystemMessagesRead, useSystemMessages } from '../data/entityStore'
+import { pageNotice } from '../utils/pageConfirm'
 
 const typeLabels = { inbound: '入库', outbound: '出库', billing: '费用', system: '系统' }
 const typeColors = { inbound: 'bg-orange-50 text-orange-700', outbound: 'bg-blue-50 text-blue-700', billing: 'bg-amber-50 text-amber-700', system: 'bg-slate-100 text-slate-700' }
@@ -19,7 +20,7 @@ export default function MessagesPage() {
     try {
       await markSystemMessagesRead(ids)
     } catch (error) {
-      window.alert(userFacingError(`标记已读失败：${error instanceof Error ? error.message : String(error)}`))
+      pageNotice(userFacingError(`标记已读失败：${error instanceof Error ? error.message : String(error)}`))
     } finally {
       setSaving(false)
     }

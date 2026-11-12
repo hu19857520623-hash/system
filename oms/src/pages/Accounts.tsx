@@ -22,6 +22,7 @@ import {
 import type { CustomerAccount } from '../data/mockData'
 import { apiPost, authSessionScope } from '../api/client'
 import { bootstrapFromApi } from '../data/DataBootstrap'
+import { pageConfirm } from '../utils/pageConfirm'
 
 type CreateAccountDraft = {
   customerCode: string
@@ -250,7 +251,7 @@ export default function Accounts() {
       setFeedback({ kind: 'error', message: '该客户尚未开通 OMS 登录账号。' })
       return
     }
-    if (!window.confirm(`以 ${account.code}（${username}）身份登录 OMS？`)) return
+    if (!(await pageConfirm({ title: '切换登录身份', message: `以 ${account.code}（${username}）身份登录 OMS？`, confirmLabel: '确认登录', cancelLabel: '取消' }))) return
 
     setImpersonatingId(account.id)
     setFeedback(null)
@@ -433,10 +434,10 @@ export default function Accounts() {
                       <Button
                         variant={acc.status === 'active' ? 'danger-outline' : 'secondary'}
                         size="sm"
-                        onClick={() => {
+                        onClick={async () => {
                           const action = acc.status === 'active' ? '禁用' : '启用'
                           const detail = acc.status === 'active' ? '禁用后该客户将无法登录。' : ''
-                          if (!window.confirm(`确认${action}客户账号 ${acc.code}？${detail}`)) return
+                          if (!(await pageConfirm({ title: `${action}客户账号`, message: `确认${action}客户账号 ${acc.code}？${detail}`, confirmLabel: `确认${action}`, cancelLabel: '取消', danger: acc.status === 'active' }))) return
                           toggleAccountStatus(acc.id)
                         }}
                       >

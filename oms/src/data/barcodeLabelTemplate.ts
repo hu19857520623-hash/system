@@ -1,5 +1,6 @@
 import { getCustomerSkuDisplay } from './skuCode'
 import { code128Svg } from './code128'
+import { pageNotice } from '../utils/pageConfirm'
 
 export type LabelCodeType = 'qr' | 'barcode'
 
@@ -81,12 +82,12 @@ export async function buildBarcodeLabelsHtml(inputs: BarcodeLabelInput[], title 
 
 export async function printBarcodeLabels(inputs: BarcodeLabelInput[], title = '条码标签', codeType: LabelCodeType = 'qr') {
   if (!inputs.length) {
-    window.alert('没有可打印的标签')
+    pageNotice('没有可打印的标签')
     return false
   }
   const win = window.open('', '_blank', 'width=520,height=640')
   if (!win) {
-    window.alert('浏览器拦截了打印窗口，请允许弹出窗口后重试')
+    pageNotice('浏览器拦截了打印窗口，请允许弹出窗口后重试')
     return false
   }
   let html: string

@@ -2,6 +2,7 @@
 
 import { code128Svg } from './code128'
 import { buildCartonCode } from './wmsDocNo'
+import { pageNotice } from '../utils/pageConfirm'
 
 export interface BoxLabelLine {
   sku: string
@@ -81,12 +82,12 @@ export function buildBoxLabelsHtml(labels: BoxLabelData[], title = '箱唛') {
 
 export function printBoxLabels(labels: BoxLabelData[], title = '箱唛') {
   if (!labels.length) {
-    window.alert('没有可打印的箱唛')
+    pageNotice('没有可打印的箱唛')
     return false
   }
   const win = window.open('', '_blank', 'width=720,height=820')
   if (!win) {
-    window.alert('浏览器拦截了打印窗口，请允许弹出窗口后重试')
+    pageNotice('浏览器拦截了打印窗口，请允许弹出窗口后重试')
     return false
   }
   win.document.write(buildBoxLabelsHtml(labels, title))

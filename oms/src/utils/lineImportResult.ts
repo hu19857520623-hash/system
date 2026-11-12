@@ -1,5 +1,7 @@
 import type { ImportRowFailure } from './importFailureDetail'
 import { failuresFromLegacyErrors, showImportFailuresDialog } from './importFailureDetail'
+import { pageConfirm } from './pageConfirm'
+import { pageNotice } from '../utils/pageConfirm'
 
 export type LineImportParseResult = {
   data: unknown[]
@@ -37,21 +39,21 @@ export async function reportLineImportResult(
   const successMsg = options?.successMessage ?? ((n: number) => `已读取 ${n} 行明细，请核对后提交`)
 
   if (ok === 0 && fail === 0) {
-    window.alert(options?.emptyMessage ?? '未解析到有效明细，请使用最新模板')
+    pageNotice(options?.emptyMessage ?? '未解析到有效明细，请使用最新模板')
     return false
   }
 
   if (fail === 0) {
     await onAcceptedRows()
     if (!isCurrent()) return false
-    window.alert(successMsg(ok))
+    void pageConfirm({ title: '导入完成', message: successMsg(ok), noticeOnly: true })
     return true
   }
 
   if (ok > 0) {
     await onAcceptedRows()
     if (!isCurrent()) return false
-    showImportFailuresDialog(
+    void showImportFailuresDialog(
       `部分行未导入：成功 ${ok} 行，失败 ${fail} 行`,
       failures,
       options?.csvFilename,
@@ -59,6 +61,6 @@ export async function reportLineImportResult(
     return true
   }
 
-  showImportFailuresDialog(`导入失败：${fail} 行未通过校验`, failures, options?.csvFilename)
+  void showImportFailuresDialog(`导入失败：${fail} 行未通过校验`, failures, options?.csvFilename)
   return false
 }
