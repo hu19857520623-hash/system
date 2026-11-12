@@ -617,14 +617,14 @@ export class PrePurchaseService {
     })
   }
 
-  /** 直接创建、没有预采购的驳回单：按当前明细生成预采购并进入分配。 */
+  /** 直接创建、没有预采购的驳回单：按当前明细生成预采购并进入分配；多明细单修改后直接回到核定。 */
   private async resubmitDirectRejected(po: { id: bigint; poNo: string; purchaserId?: bigint | null }, data: any, viewer?: { userId: number; roleCode: string }) {
     const full = await this.prisma.purchaseOrder.findUnique({ where: { id: po.id }, include: { items: true } })
     if (!full || full.status !== 'rejected') throw new BadRequestException('仅已驳回的采购单可修改后重新提交')
     if (viewer?.roleCode === 'purchaser' && full.purchaserId && Number(full.purchaserId) !== viewer.userId) {
       throw new ForbiddenException('无权提交未分配给您的采购单')
     }
-    if (full.items.length !== 1) throw new BadRequestException('该采购单包含多项明细，请先保留一项后再退回分配采购员')
+    if (full.items.length !== 1) return this.resubmitDirectRejectedMultiLine(full, data, viewer)
     const line = full.items[0]
     const sku = String(data.sku ?? line.sku ?? '').trim()
     const productName = String(data.productName ?? line.productName ?? '').trim()
@@ -708,6 +708,102 @@ export class PrePurchaseService {
       })
       const [item] = await this.enrich([pre], tx)
       return item
+    })
+  }
+
+  /**
+   * 多明细直采驳回单：逐条修改后直接回到「核定实际数量」，保留现采购员与原采购单号。
+   * 单明细预采购分配流程按行对应，不能承载多明细，因此多明细不走分配改派。
+   */
+  private async resubmitDirectRejectedMultiLine(full: any, data: any, viewer?: { userId: number; roleCode: string }) {
+    const inputLines = Array.isArray(data?.items) ? data.items : []
+    if (!inputLines.length) throw new BadRequestException('请逐条填写采购明细后重新提交')
+    const prepared = inputLines.map((line: any) => {
+      const plannedQty = Number(line.plannedQty ?? line.quantity ?? 0)
+      const unitPrice = Number(line.unitPrice ?? 0)
+      const sku = String(line.sku || '').trim()
+      const productName = String(line.productName || '').trim()
+      if (!sku) throw new BadRequestException('SKU 不能为空')
+      if (sku.length > 30) throw new BadRequestException('SKU 不能超过 30 字')
+      if (!productName) throw new BadRequestException('请填写商品名称')
+      if (!Number.isSafeInteger(plannedQty) || plannedQty < 1) throw new BadRequestException('采购数量须为大于零的整数')
+      if (!Number.isFinite(unitPrice) || unitPrice <= 0) throw new BadRequestException('请填写大于零的采购单价')
+      return {
+        id: line.id != null && line.id !== '' ? BigInt(line.id) : null,
+        sku, productName, plannedQty, unitPrice,
+        remark: line.remark ? String(line.remark).slice(0, 500) : null,
+      }
+    })
+    const orderDomestic = data.domesticFreight != null && data.domesticFreight !== '' ? Number(data.domesticFreight) : Number(full.domesticFreight ?? 0)
+    if (!Number.isFinite(orderDomestic) || orderDomestic < 0) throw new BadRequestException('国内运费须为不小于 0 的金额')
+    const totalQty = prepared.reduce((sum: number, line: any) => sum + line.plannedQty, 0)
+
+    return this.prisma.$transaction(async (tx: any) => {
+      await tx.$queryRaw`SELECT id FROM purchase_order WHERE id = ${full.id} FOR UPDATE`
+      const current = await tx.purchaseOrder.findUnique({ where: { id: full.id }, include: { items: true } })
+      if (!current || current.status !== 'rejected' || current.prePoId) throw new ConflictException('采购单状态已变化，请刷新核对后再提交')
+      const supplierId = await this.resolveSupplier(data, current.supplierId, tx)
+      if (!supplierId) throw new BadRequestException('请选择供应商')
+      const warehouseCode = data.warehouseCode !== undefined ? String(data.warehouseCode || '').trim() : (current.warehouseCode || '')
+      if (warehouseCode) {
+        const warehouse = await tx.warehouse.findUnique({ where: { warehouseCode } })
+        if (!warehouse || warehouse.status !== 1 || warehouse.warehouseType !== 'logistics') throw new BadRequestException('请选择有效的国内中转收货仓库')
+      }
+      const kept = new Set(prepared.filter((line: any) => line.id).map((line: any) => String(line.id)))
+      for (const existing of current.items) {
+        if (!kept.has(String(existing.id))) {
+          if ((existing.receivedQty ?? 0) > 0) throw new BadRequestException(`明细 ${existing.sku} 已有收货数量，不能删除`)
+          await tx.purchaseOrderItem.delete({ where: { id: existing.id } })
+        }
+      }
+      for (const line of prepared) {
+        const lineDomestic = orderDomestic > 0 && totalQty > 0
+          ? Math.round((orderDomestic * line.plannedQty) / totalQty * 100) / 100
+          : null
+        // 重提后回到待核定：实际数量由产品主管逐条核定，此处数量与金额从零开始。
+        const itemData = {
+          sku: line.sku,
+          productName: line.productName,
+          plannedQty: line.plannedQty,
+          quantity: 0,
+          amount: 0,
+          unitPrice: line.unitPrice,
+          domesticFreight: lineDomestic,
+          remark: line.remark,
+        }
+        if (line.id) {
+          const currentLine = current.items.find((item: any) => item.id === line.id)
+          if (!currentLine) throw new BadRequestException('采购明细已变化，请刷新后再修改')
+          await tx.purchaseOrderItem.update({ where: { id: line.id }, data: itemData })
+        } else {
+          await tx.purchaseOrderItem.create({ data: { ...itemData, poId: current.id, productId: BigInt(0) } })
+        }
+      }
+      const updated = await tx.purchaseOrder.update({
+        where: { id: current.id },
+        data: {
+          status: 'pending_actual_qty',
+          totalAmount: 0,
+          supplierId,
+          warehouseCode: warehouseCode || null,
+          domesticFreight: orderDomestic > 0 ? orderDomestic : current.domesticFreight,
+          expectedArrival: data.expectedArrival ? new Date(data.expectedArrival) : current.expectedArrival,
+          remark: data.remark != null ? String(data.remark) : current.remark,
+        },
+        include: { items: true },
+      })
+      await new OperationLogService(tx as PrismaService).log({
+        operatorId: viewer?.userId,
+        module: 'purchase',
+        action: 'resubmit_direct_po',
+        targetType: 'purchase_order',
+        targetId: current.poNo,
+        detail: {
+          status: 'pending_actual_qty',
+          lines: updated.items.map((line: any) => ({ sku: line.sku, plannedQty: line.plannedQty })),
+        },
+      })
+      return updated
     })
   }
 

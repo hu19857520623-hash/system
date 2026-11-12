@@ -1286,13 +1286,8 @@ async function openDirectRejectedRevision(source: { poId?: number | null; poNo?:
       })
       return
     }
-    if ((detail.items || []).length > 1) {
-      directReviseVisible.value = false
-      ElMessage.warning('该采购单包含多项明细，请先保留一项后再退回分配采购员')
-      return
-    }
-    const line = detail.items?.[0] || {}
-    directReviseForm.value = {
+    const items = detail.items || []
+    const base = {
       poId: source.poId,
       poNo: detail.poNo || source.poNo || '',
       poAuditRemark: detail.poAuditRemark || source.poAuditRemark || '',
@@ -1301,6 +1296,25 @@ async function openDirectRejectedRevision(source: { poId?: number | null; poNo?:
       expectedArrival: toDateInput(detail.expectedArrivalStr),
       domesticFreight: detail.domesticFreight,
       remark: detail.remark || '',
+    }
+    if (items.length > 1) {
+      // 多明细单逐条修改后直接回到「核定实际数量」，保留现采购员与原采购单号。
+      directReviseForm.value = {
+        ...base,
+        lines: items.map((line: any) => ({
+          id: line.id,
+          sku: line.sku || '',
+          productName: line.productName || '',
+          quantity: Number(line.quantity) > 0 ? Number(line.quantity) : Number(line.plannedQty) || 1,
+          unitPrice: Number(line.unitPrice) || 0,
+          remark: line.remark || '',
+        })),
+      }
+      return
+    }
+    const line = items[0] || {}
+    directReviseForm.value = {
+      ...base,
       sku: line.sku || '',
       productName: line.productName || '',
       quantity: Number(line.quantity) > 0 ? Number(line.quantity) : Number(line.plannedQty) || 1,
@@ -1319,35 +1333,63 @@ async function submitDirectRejectedRevision() {
     ElMessage.warning('请选择供应商')
     return
   }
-  if (!form.sku?.trim() || !form.productName?.trim()) {
-    ElMessage.warning('请填写 SKU 和商品名称')
-    return
-  }
-  if (!Number.isInteger(Number(form.quantity)) || Number(form.quantity) < 1) {
-    ElMessage.warning('采购数量须为大于零的整数')
-    return
-  }
-  if (!(Number(form.unitPrice) > 0)) {
-    ElMessage.warning('请填写大于零的采购单价')
-    return
+  const multi = Array.isArray(form.lines) && form.lines.length > 0
+  if (multi) {
+    const invalid = form.lines.find((line: any) => !String(line.sku || '').trim() || !String(line.productName || '').trim())
+    if (invalid) { ElMessage.warning('请填写每条明细的 SKU 和商品名称'); return }
+    const badQty = form.lines.find((line: any) => !Number.isInteger(Number(line.quantity)) || Number(line.quantity) < 1)
+    if (badQty) { ElMessage.warning(`SKU ${badQty.sku || '—'} 的采购数量须为大于零的整数`); return }
+    const badPrice = form.lines.find((line: any) => !(Number(line.unitPrice) > 0))
+    if (badPrice) { ElMessage.warning(`SKU ${badPrice.sku || '—'} 请填写大于零的采购单价`); return }
+  } else {
+    if (!form.sku?.trim() || !form.productName?.trim()) {
+      ElMessage.warning('请填写 SKU 和商品名称')
+      return
+    }
+    if (!Number.isInteger(Number(form.quantity)) || Number(form.quantity) < 1) {
+      ElMessage.warning('采购数量须为大于零的整数')
+      return
+    }
+    if (!(Number(form.unitPrice) > 0)) {
+      ElMessage.warning('请填写大于零的采购单价')
+      return
+    }
   }
   directReviseSaving.value = true
   try {
-    await purchaseApi.resubmit(form.poId, {
+    const header = {
       supplierName: form.supplierName.trim(),
       warehouseCode: form.warehouseCode || '',
       expectedArrival: form.expectedArrival || '',
       domesticFreight: form.domesticFreight ?? undefined,
       remark: form.remark || '',
-      sku: form.sku.trim(),
-      productName: form.productName.trim(),
-      plannedQty: Number(form.quantity),
-      unitPrice: Number(form.unitPrice),
-    })
+    }
+    const payload = multi
+      ? {
+          ...header,
+          items: form.lines.map((line: any) => ({
+            id: line.id,
+            sku: String(line.sku).trim(),
+            productName: String(line.productName).trim(),
+            plannedQty: Number(line.quantity),
+            unitPrice: Number(line.unitPrice),
+            ...(String(line.remark || '').trim() ? { remark: String(line.remark).trim() } : {}),
+          })),
+        }
+      : {
+          ...header,
+          sku: form.sku.trim(),
+          productName: form.productName.trim(),
+          plannedQty: Number(form.quantity),
+          unitPrice: Number(form.unitPrice),
+        }
+    await purchaseApi.resubmit(form.poId, payload)
     directReviseVisible.value = false
-    ElMessage.success(`采购单 ${form.poNo} 已重新提交，进入预采购分配`)
+    ElMessage.success(multi
+      ? `采购单 ${form.poNo} 已重新提交，进入「核定实际数量」，由产品主管逐条核定`
+      : `采购单 ${form.poNo} 已重新提交，进入预采购分配`)
     await Promise.all([load(), loadMyPrePo(), canAssignPurchaser.value ? loadPrePoPendingAssign() : Promise.resolve()])
-    if (canAssignPurchaser.value) mainTab.value = 'pre_assign'
+    if (canAssignPurchaser.value && !multi) mainTab.value = 'pre_assign'
   } catch (error) {
     ElMessage.error(userFacingError(error))
   } finally {
@@ -2206,8 +2248,10 @@ async function markPoUnpaid(po?: { id: number }) {
     </template>
   </el-dialog>
 
-  <el-dialog v-model="directReviseVisible" :title="`修改并重新提交 · ${directReviseForm?.poNo || ''}`" width="640px" :close-on-click-modal="!directReviseSaving" :close-on-press-escape="!directReviseSaving" :show-close="!directReviseSaving">
-    <el-alert :title="`驳回原因：${directReviseForm?.poAuditRemark || '请联系审核人核对'}。提交后进入预采购分配，由采购主管重新分配采购员。`" type="warning" :closable="false" style="margin-bottom:12px" />
+  <el-dialog v-model="directReviseVisible" :title="`修改并重新提交 · ${directReviseForm?.poNo || ''}`" :width="directReviseForm?.lines?.length ? '820px' : '640px'" :close-on-click-modal="!directReviseSaving" :close-on-press-escape="!directReviseSaving" :show-close="!directReviseSaving">
+    <el-alert :title="directReviseForm?.lines?.length
+      ? `驳回原因：${directReviseForm?.poAuditRemark || '请联系审核人核对'}。该单含多条明细，提交后进入「核定实际数量」，由产品主管逐条核定；保留现采购员与原采购单号。`
+      : `驳回原因：${directReviseForm?.poAuditRemark || '请联系审核人核对'}。提交后进入预采购分配，由采购主管重新分配采购员。`" type="warning" :closable="false" style="margin-bottom:12px" />
     <el-form v-if="directReviseForm" label-width="108px" :disabled="directReviseSaving">
       <el-form-item label="供应商" required>
         <el-select v-model="directReviseForm.supplierName" filterable allow-create default-first-option placeholder="选择或输入供应商" style="width:100%">
@@ -2219,17 +2263,40 @@ async function markPoUnpaid(po?: { id: number }) {
           <el-option v-for="w in createPoWarehouses" :key="w.warehouseCode || w.code" :label="w.warehouseName || w.name" :value="w.warehouseCode || w.code" />
         </el-select>
       </el-form-item>
-      <el-form-item label="SKU" required><el-input v-model="directReviseForm.sku" maxlength="30" /></el-form-item>
-      <el-form-item label="商品名称" required><el-input v-model="directReviseForm.productName" maxlength="300" /></el-form-item>
-      <el-form-item label="采购数量" required><el-input-number v-model="directReviseForm.quantity" :min="1" :precision="0" style="width:100%" /></el-form-item>
-      <el-form-item label="单价" required><el-input-number v-model="directReviseForm.unitPrice" :min="0" :precision="2" style="width:100%" /></el-form-item>
+      <template v-if="directReviseForm.lines?.length">
+        <el-form-item label="采购明细" required>
+          <el-table :data="directReviseForm.lines" border size="small" max-height="280">
+            <el-table-column label="SKU" min-width="130">
+              <template #default="{ row }"><el-input v-model="row.sku" maxlength="30" :aria-label="`SKU ${row.sku}`" /></template>
+            </el-table-column>
+            <el-table-column label="商品名称" min-width="150">
+              <template #default="{ row }"><el-input v-model="row.productName" maxlength="300" :aria-label="`SKU ${row.sku} 商品名称`" /></template>
+            </el-table-column>
+            <el-table-column label="采购数量" width="130">
+              <template #default="{ row }"><el-input-number v-model="row.quantity" :min="1" :precision="0" size="small" style="width:100%" /></template>
+            </el-table-column>
+            <el-table-column label="单价" width="120">
+              <template #default="{ row }"><el-input-number v-model="row.unitPrice" :min="0" :precision="2" size="small" style="width:100%" /></template>
+            </el-table-column>
+            <el-table-column label="备注" min-width="120">
+              <template #default="{ row }"><el-input v-model="row.remark" maxlength="500" placeholder="选填" /></template>
+            </el-table-column>
+          </el-table>
+        </el-form-item>
+      </template>
+      <template v-else>
+        <el-form-item label="SKU" required><el-input v-model="directReviseForm.sku" maxlength="30" /></el-form-item>
+        <el-form-item label="商品名称" required><el-input v-model="directReviseForm.productName" maxlength="300" /></el-form-item>
+        <el-form-item label="采购数量" required><el-input-number v-model="directReviseForm.quantity" :min="1" :precision="0" style="width:100%" /></el-form-item>
+        <el-form-item label="单价" required><el-input-number v-model="directReviseForm.unitPrice" :min="0" :precision="2" style="width:100%" /></el-form-item>
+      </template>
       <el-form-item label="预计到货"><el-date-picker v-model="directReviseForm.expectedArrival" type="date" value-format="YYYY-MM-DD" style="width:100%" /></el-form-item>
       <el-form-item label="国内运费"><el-input-number v-model="directReviseForm.domesticFreight" :min="0" :precision="2" style="width:100%" /></el-form-item>
       <el-form-item label="备注"><el-input v-model="directReviseForm.remark" type="textarea" :rows="2" /></el-form-item>
     </el-form>
     <template #footer>
       <el-button :disabled="directReviseSaving" @click="directReviseVisible = false">取消</el-button>
-      <el-button type="primary" :loading="directReviseSaving" :disabled="!directReviseForm" @click="submitDirectRejectedRevision">提交到分配采购员</el-button>
+      <el-button type="primary" :loading="directReviseSaving" :disabled="!directReviseForm" @click="submitDirectRejectedRevision">{{ directReviseForm?.lines?.length ? '提交并进入核定' : '提交到分配采购员' }}</el-button>
     </template>
   </el-dialog>
 
