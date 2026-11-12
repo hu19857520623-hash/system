@@ -140,6 +140,12 @@ function truckRatePerKgFromCbm(ratePerCbm: number, ratio = DEFAULT_VOLUMETRIC_RA
   return Math.round((ratePerCbm * ratio / 1_000_000) * 100) / 100
 }
 
+/** 收费配置值清洗：缺失、负数、NaN/Infinity 一律按 0（免费）处理，不把非法值带进金额。 */
+function amount0(value: unknown): number {
+  const n = Number(value)
+  return Number.isFinite(n) && n > 0 ? n : 0
+}
+
 function regionRates(
   truckCbm: number, truckMin: number,
   expressKg: number, expressMin: number,
@@ -302,15 +308,16 @@ export function normalizeChannelShippingRule(rule: ChannelShippingRule): Channel
     return {
       mode: 'weight',
       volumetricRatio: ratio,
-      ratePerKg: rule.ratePerKg ?? truckRatePerKgFromCbm(rule.ratePerCbm, ratio),
-      minCharge: rule.minCharge,
+      ratePerKg: amount0(rule.ratePerKg ?? truckRatePerKgFromCbm(amount0(rule.ratePerCbm), ratio)),
+      minCharge: amount0(rule.minCharge),
     }
   }
   return {
     ...rule,
     mode: 'weight',
     volumetricRatio: ratio,
-    ratePerKg: rule.ratePerKg ?? 0,
+    ratePerKg: amount0(rule.ratePerKg),
+    minCharge: amount0(rule.minCharge),
   }
 }
 
@@ -330,13 +337,16 @@ export function estimateDailyStorageRent(
   qty: number,
   template: StorageRentTemplate = DEFAULT_STORAGE_TEMPLATE,
 ): number {
+  const perCbm = amount0(template.pricePerCbmPerDay)
+  const perPiece = amount0(template.pricePerPiecePerDay)
+  const minDaily = amount0(template.minChargePerDay)
   let rent = 0
   if (template.billingUnit === 'volume') {
-    rent = calcSkuVolumeM3(dims, qty) * template.pricePerCbmPerDay
+    rent = calcSkuVolumeM3(dims, qty) * perCbm
   } else {
-    rent = qty * template.pricePerPiecePerDay
+    rent = qty * perPiece
   }
-  return Math.max(template.minChargePerDay, rent)
+  return Math.max(minDaily, rent)
 }
 
 export function calculateOutboundPreDeduct(
@@ -368,15 +378,16 @@ export function calculateOutboundPreDeduct(
   const feeLines: OutboundFeeLine[] = []
   const destRegionLabel = regionLabel(destRegion, regionRules)
 
-  const handling = priceTemplate.handling.perOrderBase
-    + priceTemplate.handling.perUnit * totalQty
-    + priceTemplate.handling.perSkuLine * lines.length
+  const handlingBase = amount0(priceTemplate.handling.perOrderBase)
+  const handlingPerUnit = amount0(priceTemplate.handling.perUnit)
+  const handlingPerLine = amount0(priceTemplate.handling.perSkuLine)
+  const handling = handlingBase + handlingPerUnit * totalQty + handlingPerLine * lines.length
 
   feeLines.push({
     type: 'handling',
     label: '操作费',
     amount: round2(handling),
-    detail: `基础 ¥${priceTemplate.handling.perOrderBase} + ${totalQty} 件 × ¥${priceTemplate.handling.perUnit} + ${lines.length} SKU × ¥${priceTemplate.handling.perSkuLine}`,
+    detail: `基础 ¥${handlingBase} + ${totalQty} 件 × ¥${handlingPerUnit} + ${lines.length} SKU × ¥${handlingPerLine}`,
   })
 
   const pickupOnly = shippingMethod === '自提'
@@ -384,8 +395,8 @@ export function calculateOutboundPreDeduct(
   if (pickupOnly) {
     const pickupRule = priceTemplate.pickupByRegion?.[destRegion] ?? defaultPickupRegionRule()
     const pickup = Math.max(
-      pickupRule.minCharge,
-      pickupRule.perOrder + pickupRule.perUnit * totalQty,
+      amount0(pickupRule.minCharge),
+      amount0(pickupRule.perOrder) + amount0(pickupRule.perUnit) * totalQty,
     )
     feeLines.push({
       type: 'shipping',
@@ -437,7 +448,11 @@ export function buildOutboundTemplateSnapshot(
   const channelRule = normalizeChannelShippingRule(rates[channel] ?? rates['快递'])
   const pickup = priceTemplate.pickupByRegion?.[destRegion] ?? defaultPickupRegionRule()
   return {
-    handling: { ...priceTemplate.handling },
+    handling: {
+      perOrderBase: amount0(priceTemplate.handling.perOrderBase),
+      perUnit: amount0(priceTemplate.handling.perUnit),
+      perSkuLine: amount0(priceTemplate.handling.perSkuLine),
+    },
     shipping: pickupOnly
       ? { mode: 'volume' as const, ratePerCbm: 0, minCharge: 0 }
       : {
@@ -447,7 +462,11 @@ export function buildOutboundTemplateSnapshot(
           ratePerKg: channelRule.ratePerKg,
           minCharge: channelRule.minCharge,
         },
-    pickup: { ...pickup },
+    pickup: {
+      perOrder: amount0(pickup.perOrder),
+      perUnit: amount0(pickup.perUnit),
+      minCharge: amount0(pickup.minCharge),
+    },
     shippingMethod,
     destRegion,
   }
@@ -484,13 +503,23 @@ export function normalizePriceTemplate(raw: Partial<PriceTemplate> & { shippingC
   const legacyShipping = raw.shippingByRegion ?? DEFAULT_PRICE_TEMPLATE.shippingByRegion
   const legacyPickup = raw.pickupByRegion ?? DEFAULT_PRICE_TEMPLATE.pickupByRegion
   const regionShipping = legacyShipping[regionCode] ?? defaultRegionShippingRates()
+  const pickup = legacyPickup?.[regionCode] ?? defaultPickupRegionRule()
   return {
     ...base,
+    handling: {
+      perOrderBase: amount0(base.handling?.perOrderBase),
+      perUnit: amount0(base.handling?.perUnit),
+      perSkuLine: amount0(base.handling?.perSkuLine),
+    },
     shippingByRegion: {
       [regionCode]: normalizeRegionShippingRates(regionShipping),
     },
     pickupByRegion: {
-      [regionCode]: legacyPickup?.[regionCode] ?? defaultPickupRegionRule(),
+      [regionCode]: {
+        perOrder: amount0(pickup.perOrder),
+        perUnit: amount0(pickup.perUnit),
+        minCharge: amount0(pickup.minCharge),
+      },
     },
   }
 }
