@@ -21,7 +21,10 @@ private fun savedRequestAuthMessage(code: Int): String =
 internal fun PdaScanRecord.restoreLegacyAuthorizationFailure(): PdaScanRecord {
     if (state != "failed" || (ownerId ?: 0) <= 0 || serverUrl.isNullOrBlank()) return this
     val code = when (message) {
-        "登录已过期，请重新登录", erpFailureMessage(null, 401) -> 401
+        "登录已过期，请重新登录",
+        "登录已过期，请重新登录后继续未完成作业",
+        erpFailureMessage(null, 401) -> 401
+        "当前账号没有操作权限，请联系主管确认",
         erpFailureMessage(null, 403) -> 403
         else -> return this
     }

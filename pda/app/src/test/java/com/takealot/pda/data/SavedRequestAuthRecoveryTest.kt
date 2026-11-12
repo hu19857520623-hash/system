@@ -34,7 +34,7 @@ class SavedRequestAuthRecoveryTest {
             scanCode = "RV-42", orderId = 42, orderNo = "RV-42", state = "failed", ownerId = 7,
             serverUrl = "https://erp.example/api", retryAction = "post", retryEndpoint = "/inbound/42/resolve-exception",
             retryBodyJson = """{"clientRequestId":"request-1","reason":"已核对"}""")
-        for (message in listOf(erpFailureMessage(null, 401), erpFailureMessage(null, 403), "登录已过期，请重新登录")) {
+        for (message in listOf(erpFailureMessage(null, 401), erpFailureMessage(null, 403), "登录已过期，请重新登录", "登录已过期，请重新登录后继续未完成作业", "当前账号没有操作权限，请联系主管确认")) {
             val legacy = original.copy(message = message)
             val restored = legacy.restoreLegacyAuthorizationFailure()
             assertEquals("pending", restored.state)

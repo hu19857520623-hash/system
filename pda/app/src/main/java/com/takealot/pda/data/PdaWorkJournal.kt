@@ -264,7 +264,7 @@ class PdaWorkJournal(context: Context, private val session: SessionStore) {
     fun dismiss(id: String): Boolean {
         val record = _scanRecords.value.firstOrNull { it.id == id } ?: return false
         if (!canSeeRecord(record)) return false
-        if (record.state != "failed" && !(record.state == "pending" && record.retryAction == null)) return false
+        if (record.state != "failed" && !(record.state == "pending" && (record.retryAction == null || syncContentMismatch(record.message.orEmpty())))) return false
         update(id, "dismissed", "已人工确认")
         return true
     }

@@ -27,6 +27,7 @@ import com.takealot.pda.data.ErpException
 import com.takealot.pda.data.isAuthorizationFailure
 import com.takealot.pda.data.PdaResumeWork
 import com.takealot.pda.data.PdaScanRecord
+import com.takealot.pda.data.syncContentMismatch
 import com.takealot.pda.data.confirmsCurrentShortPick
 import com.takealot.pda.data.countExitMessage
 import com.takealot.pda.data.resolveSkuScan
@@ -60,6 +61,10 @@ class SyncViewModel : ViewModel() {
 
     fun retry(record: PdaScanRecord) {
         if (retryingId != null || journal.pendingRecords().none { it.id == record.id && it.retryAction != null }) return
+        if (syncContentMismatch(record.message.orEmpty())) {
+            feedback = Feedback(false, "这条记录的内容不同。请核对原单后结束本次，不要安全重试。")
+            return
+        }
         if (!canReplay(record)) return
         retryingId = record.id
         viewModelScope.launch {
@@ -300,7 +305,8 @@ fun SyncScreen(onBack: () -> Unit, vm: SyncViewModel = viewModel()) {
             Panel { Text("没有待处理记录", color = PdaMuted, fontSize = 14.sp) }
         }
         records.forEach { record ->
-            val canRetry = record.state == "pending" && record.retryAction != null && vm.canReplay(record)
+            val mismatch = syncContentMismatch(record.message.orEmpty())
+            val canRetry = record.state == "pending" && record.retryAction != null && vm.canReplay(record) && !mismatch
             Panel {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(record.scanCode, color = PdaText, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
@@ -320,15 +326,18 @@ fun SyncScreen(onBack: () -> Unit, vm: SyncViewModel = viewModel()) {
                 if (record.state == "pending" && record.retryAction == null) {
                     Text("缺少可重试的请求内容，请回原作业核对单据和实际进度后再关闭。", color = PdaWarn, fontSize = 13.sp)
                 }
+                if (mismatch) {
+                    Text("内容不同。请核对原单后结束本次，不要安全重试。", color = PdaWarn, fontSize = 13.sp)
+                }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     if (canRetry) {
                         TextButton(onClick = { vm.retry(record) }, enabled = vm.retryingId == null) {
                             Text("安全重试", color = PdaAccent)
                         }
                     }
-                    if (record.state == "failed" || record.retryAction == null) {
+                    if (mismatch || record.state == "failed" || record.retryAction == null) {
                         TextButton(onClick = { vm.dismiss(record) }, enabled = vm.retryingId == null) {
-                            Text("人工确认关闭", color = PdaMuted)
+                            Text(if (mismatch) "已核对记录，结束本次" else "人工确认关闭", color = PdaMuted)
                         }
                     }
                 }

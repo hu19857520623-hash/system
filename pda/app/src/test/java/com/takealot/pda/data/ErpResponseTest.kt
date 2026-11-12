@@ -28,8 +28,27 @@ class ErpResponseTest {
     }
 
     @Test fun unauthorizedIsRecognizedWithMalformedBodyAndApplicationEnvelope() {
-        assertEquals(401, failure("not json", 401).code)
-        assertEquals(401, failure("""{"code":401,"message":"Unauthorized"}""", 200).code)
+        val malformed = failure("not json", 401)
+        assertEquals(401, malformed.code)
+        assertTrue(malformed.retriable)
+        assertTrue(malformed.message!!.contains("重试原请求"))
+        val login = failure("""{"code":401,"message":"Unauthorized"}""", 200)
+        assertEquals(401, login.code)
+        assertTrue(login.retriable)
+        assertFalse(login.message!!.contains("Unauthorized"))
+    }
+
+    @Test fun permissionAndRateLimitKeepTheOriginalScanForRetry() {
+        val denied = failure("Forbidden", 403)
+        assertTrue(denied.retriable)
+        assertTrue(denied.message!!.contains("不要重新扫描"))
+        assertFalse(denied.message!!.contains("Forbidden"))
+        val business = failure("""{"message":"当前岗位不能执行上架"}""", 403)
+        assertEquals("当前岗位不能执行上架", business.message)
+        assertTrue(business.retriable)
+        val busy = failure("""{"message":"Too Many Requests"}""", 429)
+        assertTrue(busy.retriable)
+        assertTrue(busy.message!!.contains("重试原请求"))
     }
 
     @Test fun validationArrayIsReadableAndBusinessFailureIsNotRetryable() {
