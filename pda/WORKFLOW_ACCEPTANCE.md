@@ -341,6 +341,10 @@ POST /billing/generate 先以 preview 取得费用快照版本，同一请求标
 
 对 15 组待办中「内部费用表名/英文状态」类缺口按当前代码逐处核验：管理报表/盘点的 `presentation.ts` 标签与未知码兜底（「待核对」）、Dashboard 断网误报、OMS 账务 `feeTypeLabel` 均已是中文安全实现。发现并修复两处残留（提交 87a2532，前端 594 测试全绿，已部署审计环境）：①账单确认弹窗费用明细表直接渲染 `chargeType` 内部码（如 return_logistics），改为 BILLING_CHARGE_LABELS 中文映射并带说明/「其他费用」兜底；②商品/开发/审核/采购/线索五处状态映射的兜底 `statusMap[row.status] || row.status` 会把未知英文状态码原样显示，统一为中文安全兜底（已知码中文映射、纯中文原样、未知内部码「待核对」）。
 
+## 同缺陷类排查与修复：库位体积/承重上限手工入口缺校验（2026-11-13）
+
+因商品负尺寸缺陷（上节）按同缺陷类全面排查其它手工录入入口：供应商（账期 0～9999 整数/文本/邮箱均有中文校验，无缺陷）、库区（无容量字段）、**库位（warehouse-location create/update 的 maxVolumeCbm/maxWeightKg 完全无校验，负数/零/非数值可写库——同缺陷类实锤）**。修复：新增 validLocationCapacity（>0 且 ≤999999.99，空值清空，中文报错）接入 create/update，新增 3 项单测；后端 203 套件 1723 测试全绿，已构建部署。真实接口复验（PUT /api/locations/:id）：maxVolumeCbm=-5 → 400「库位体积上限须为大于 0 且不超过 999999.99 的数值」、maxWeightKg=0 → 400「库位承重上限…」、maxVolumeCbm='abc' → 同中文拒绝，全部未写库。证据 \output/workflow-audit-2026-10-16\recovery-product-measure-fix-20261113.json\（同缺陷类附记）。
+
 ## 商品修改表单分支实测暴露并修复真实缺陷：手工入口接受负尺寸（2026-11-13）
 
 **事故如实记录**：浏览器实测修改表单「失败保留输入」时，服务端接受了 lengthCm=-5 并写库，误改历史夹具商品 TK-AUD-IM-CED2168F（商品名/尺寸被覆盖）。按 operation_log 前后值（日志 id 2093 from/to）**精确恢复**：product_name='Audit mixed valid'、length_cm=NULL，恢复后两次查库确认。**根因是真实缺陷**：products.service 的 create/update 无尺寸/重量/金额录入校验（导入解析与入库测量均有 0.01～999.99/0.001～999.999 口径，手工入口缺失）。**修复**（已提交部署）：新增 assertProductMeasureInput（尺寸 0.01～999.99cm、重量 0.001～999.999kg、金额不小于 0，空值放行，中文报错）接入 create/update，新增 5 项单测；后端 202 套件 1717 测试全绿。**复验**：浏览器内直连 PUT /api/products/:id {lengthCm:-5} → 400「长须为 0.01～999.99 厘米之间的数值」；同一编辑表单再试 -5 后**两次查库均未写入**且输入原样保留（保留保存失败 toast 为自动消失消息未截图，如实记录）。证据 \output/workflow-audit-2026-10-16\recovery-product-measure-fix-20261113.json\。

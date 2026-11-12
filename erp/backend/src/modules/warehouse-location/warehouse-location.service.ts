@@ -3,6 +3,17 @@ import { PrismaService } from '../../common/prisma/prisma.service'
 import { OperationLogService } from '../operation-log/operation-log.service'
 
 const LOCATION_STATUSES = new Set(['available', 'disabled', 'locked'])
+
+/** 库位体积/承重上限录入校验：空值清空，非法或越界拒绝并中文报错。 */
+export function validLocationCapacity(v: unknown, label: string): number | null | undefined {
+  if (v === undefined) return undefined
+  if (v == null || v === '') return null
+  const n = Number(v)
+  if (!Number.isFinite(n) || n <= 0 || n > 999999.99) {
+    throw new BadRequestException(`${label}须为大于 0 且不超过 999999.99 的数值`)
+  }
+  return n
+}
 const PARTITION_LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
 function warehouseShortCode(warehouseCode: string) {
@@ -90,8 +101,8 @@ export class WarehouseLocationService {
         rack: data.rack || null,
         level: data.level || null,
         bin: data.bin || null,
-        maxVolumeCbm: data.maxVolumeCbm != null ? data.maxVolumeCbm : null,
-        maxWeightKg: data.maxWeightKg != null ? data.maxWeightKg : null,
+        maxVolumeCbm: validLocationCapacity(data.maxVolumeCbm, '库位体积上限'),
+        maxWeightKg: validLocationCapacity(data.maxWeightKg, '库位承重上限'),
         status,
         remark: data.remark || null,
       },
@@ -213,8 +224,8 @@ export class WarehouseLocationService {
         rack: data.rack !== undefined ? data.rack : undefined,
         level: data.level !== undefined ? data.level : undefined,
         bin: data.bin !== undefined ? data.bin : undefined,
-        maxVolumeCbm: data.maxVolumeCbm !== undefined ? data.maxVolumeCbm : undefined,
-        maxWeightKg: data.maxWeightKg !== undefined ? data.maxWeightKg : undefined,
+        maxVolumeCbm: data.maxVolumeCbm !== undefined ? validLocationCapacity(data.maxVolumeCbm, '库位体积上限') : undefined,
+        maxWeightKg: data.maxWeightKg !== undefined ? validLocationCapacity(data.maxWeightKg, '库位承重上限') : undefined,
         status,
         remark: data.remark !== undefined ? data.remark : undefined,
       },
