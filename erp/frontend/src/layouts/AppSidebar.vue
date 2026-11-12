@@ -11,6 +11,7 @@ const app = useAppStore()
 const router = useRouter()
 const route = useRoute()
 const { getBadge, loadNotifications } = useNotifications()
+const primaryWarehouseItems = new Set(['inbound_arrival', 'inbound', 'returns', 'outbound'])
 
 onMounted(() => loadNotifications())
 
@@ -64,7 +65,7 @@ function showChannelHeader(group: NavGroup, index: number): boolean {
         <template v-for="item in group.items" :key="item.id">
           <div
             class="nav-item"
-            :class="{ active: isActive(item.id) }"
+            :class="{ active: isActive(item.id), 'nav-item-primary': primaryWarehouseItems.has(item.id) }"
             @click="navTo(item.id)"
           >
             <span class="nav-ico" v-html="getNavIcon(item.id)"></span>
