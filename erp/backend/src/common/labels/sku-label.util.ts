@@ -1,3 +1,4 @@
+import { BadRequestException } from '@nestjs/common'
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from 'pdf-lib'
 import {
   buildBarcodeLabelArticle,
@@ -111,7 +112,7 @@ export async function buildSkuLabelsPdfBuffer(
   options: { customerCode?: string | null } = {},
 ): Promise<Buffer> {
   const codes = expandSkuLabelCodes(lines, options.customerCode)
-  if (!codes.length) throw new Error('没有可打印的 SKU 标签')
+  if (!codes.length) throw new BadRequestException('没有可打印的 SKU 标签')
 
   const doc = await PDFDocument.create()
   const fontBold = await doc.embedFont(StandardFonts.HelveticaBold)
