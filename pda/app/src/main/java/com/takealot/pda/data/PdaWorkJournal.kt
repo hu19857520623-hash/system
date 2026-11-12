@@ -62,6 +62,16 @@ internal val PdaScanRecord.catalogBindingWarehouse: String?
         JsonParser.parseString(retryBodyJson.orEmpty()).asJsonObject.get("warehouseCode").asString
     }.getOrNull()?.takeIf { it.isNotBlank() }
 
+/**
+ * 可人工关闭（删除待办卡片）的记录：已失败（重试无门）或结果待确认但属于内容不同
+ * （须先「已核对记录，结束本次」）。结果待确认且可安全重试的记录不允许关闭——保留继续入口。
+ */
+internal fun canDismissRecord(record: PdaScanRecord, visible: Boolean): Boolean {
+    if (!visible) return false
+    if (record.state == "failed") return true
+    return record.state == "pending" && (record.retryAction == null || syncContentMismatch(record.message.orEmpty()))
+}
+
 data class PdaPickProgressLine(
     val id: Int,
     val scannedQty: Int,
@@ -263,8 +273,7 @@ class PdaWorkJournal(context: Context, private val session: SessionStore) {
     @Synchronized
     fun dismiss(id: String): Boolean {
         val record = _scanRecords.value.firstOrNull { it.id == id } ?: return false
-        if (!canSeeRecord(record)) return false
-        if (record.state != "failed" && !(record.state == "pending" && (record.retryAction == null || syncContentMismatch(record.message.orEmpty())))) return false
+        if (!canDismissRecord(record, canSeeRecord(record))) return false
         update(id, "dismissed", "已人工确认")
         return true
     }
