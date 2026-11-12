@@ -47,7 +47,9 @@ export default function InboundRecovery({ orders, onCompleted }: { orders: Inbou
   return <div className="mb-4 space-y-3" aria-label="入库原操作恢复">
     {pending.map(({ order, state }) => <section key={order.inboundNo} className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm" aria-label={`${order.inboundNo} 原操作`}>
       <p className="font-semibold">{order.inboundNo} · {state.record ? `${labels[state.record.kind]}待核对` : '原操作记录无法读取'}</p>
-      <p className="mt-1 text-xs">{state.error || `已保存 ${state.record!.createdAt} 的原请求。重试会使用当时的内容；本页后续修改不会加入重试。`}</p>
+      <p className="mt-1 text-xs">{state.error || (state.record!.contentChanged
+        ? '原请求对应的单据或内容不同。请先核对入库记录；若本次没有入账，结束本次后再重新填写，不要重试原请求。'
+        : `已保存 ${state.record!.createdAt} 的原请求。重试会使用当时的内容；本页后续修改不会加入重试。`)}</p>
       <p className="mt-1 text-xs">返回列表或读取原单不会取消已发送的操作，也不会清除待核对记录。</p>
       <div className="mt-3 flex flex-wrap gap-3">
         <button type="button" disabled={Boolean(busy)} className="font-medium underline disabled:opacity-50" onClick={() => void act(order, 'read')}>读取原单结果</button>

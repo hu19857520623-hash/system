@@ -1,4 +1,5 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common'
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common'
+import { createHash } from 'crypto'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { InventoryMutationService } from '../../common/inventory/inventory-mutation.service'
 
@@ -31,6 +32,9 @@ export async function reduceInboundQuantity(
   const requestId = String(body.clientRequestId || '').trim().slice(0, 100)
   if (reason.length < 2 || !requestId) throw new BadRequestException('请填写撤回原因及请求标识')
   const action = `reduce_${mode}`
+  const requestFingerprint = createHash('sha256').update(JSON.stringify({
+    id, mode, inboundItemId: body.inboundItemId ?? null, quantity: qty, expectedCurrent: expected, reason,
+  })).digest('hex')
   return prisma.$transaction(async (tx) => {
     // Same-order retries serialize; the audit record and mutation commit together.
     await tx.$queryRaw`SELECT id FROM inbound_order WHERE id = ${BigInt(id)} FOR UPDATE`
@@ -40,7 +44,11 @@ export async function reduceInboundQuantity(
       module: 'inbound', action, targetId: order.inboundNo,
       detail: { path: '$.clientRequestId', equals: requestId },
     } })
-    if (duplicate) return { message: '该减少请求已处理，请按最新数量核对', duplicate: true }
+    if (duplicate) {
+      const detail = duplicate.detail as { requestFingerprint?: string } | null
+      if (detail?.requestFingerprint !== requestFingerprint) throw new ConflictException('原处理对应的单据或内容不同，请先核对原操作，不要修改后重试')
+      return { message: '该减少请求已处理，请按最新数量核对', duplicate: true }
+    }
     const allowed = mode === 'putaway' ? ['pending_putaway'] : ['arrived', 'receiving']
     if (!allowed.includes(order.status)) throw new BadRequestException('当前单据已提交或进入后续环节，请交主管处理')
     let current: number
@@ -85,7 +93,7 @@ export async function reduceInboundQuantity(
     await tx.operationLog.create({ data: {
       operatorId: operatorId ? BigInt(operatorId) : undefined, module: 'inbound', action,
       targetType: 'inbound_order', targetId: order.inboundNo,
-      detail: { sku, locationCode, boxes, before: current, after: target, quantity: qty, reason, clientRequestId: requestId },
+      detail: { sku, locationCode, boxes, before: current, after: target, quantity: qty, reason, clientRequestId: requestId, requestFingerprint },
     } })
     return { message: `已减少 ${qty} ${mode === 'carton' ? '箱' : '件'}，当前 ${target}`, before: current, after: target, sku, locationCode, boxes }
   })

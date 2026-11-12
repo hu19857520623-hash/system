@@ -1,3 +1,4 @@
+import { createHash } from 'crypto'
 import { reduceInboundQuantity, reductionTarget } from './inbound-reduce.util'
 
 describe('PDA quantity reduction', () => {
@@ -32,9 +33,18 @@ describe('PDA quantity reduction', () => {
   })
   it('does not repeat a request after a timeout', async () => {
     const f = fixture()
-    f.tx.operationLog.findFirst.mockResolvedValue({ id: 4n })
+    const requestFingerprint = createHash('sha256').update(JSON.stringify({
+      id: 61, mode: 'qc', inboundItemId: 1, quantity: 2, expectedCurrent: 16, reason: '重复扫码',
+    })).digest('hex')
+    f.tx.operationLog.findFirst.mockResolvedValue({ id: 4n, detail: { requestFingerprint } })
     const result: any = await reduceInboundQuantity(f.prisma, f.inventory, 61, 'qc', body)
     expect(result.duplicate).toBe(true)
+    expect(f.tx.inboundOrderItem.updateMany).not.toHaveBeenCalled()
+  })
+  it('rejects a reused request id with changed content instead of replaying it', async () => {
+    const f = fixture()
+    f.tx.operationLog.findFirst.mockResolvedValue({ id: 4n, detail: { requestFingerprint: 'other-content' } })
+    await expect(reduceInboundQuantity(f.prisma, f.inventory, 61, 'qc', { ...body, quantity: 3 })).rejects.toThrow('不要修改后重试')
     expect(f.tx.inboundOrderItem.updateMany).not.toHaveBeenCalled()
   })
   it('blocks completed receipts and stale counts', async () => {

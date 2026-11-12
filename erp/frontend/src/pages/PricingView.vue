@@ -657,6 +657,10 @@ async function submitReprice() {
       </div>
     </template>
 
+    <el-alert v-if="reclaimPending" :title="reclaimPending.contentChanged ? `原收回内容不同：${reclaimPending.payload.customerCode} · ${reclaimPending.payload.quantity}件。请先核对持有和退款，不要重试原收回。` : `原收回退款待核对：${reclaimPending.payload.customerCode} · ${reclaimPending.payload.quantity}件 · ¥${reclaimPending.payload.expectedRefundAmount.toFixed(2)}`" type="warning" :closable="false">
+      <el-button v-if="reclaimPending.contentChanged" :disabled="reclaimSubmitting" @click="endChangedReclaim">已核对记录，结束本次</el-button>
+      <el-button v-else :disabled="reclaimSubmitting || !canReclaim" @click="reopenPendingReclaim">核对原收回退款</el-button>
+    </el-alert>
     <template v-if="section === 'pool'">
     <el-button v-if="hasPendingVisibility && canSetPrice" style="margin-bottom:12px" @click="visibilityId=undefined;visibilityVisible=true">核对原额度设置</el-button>
     <el-alert type="info" :closable="false" show-icon style="margin-bottom:14px">
@@ -779,9 +783,6 @@ async function submitReprice() {
       <el-alert v-if="holdingsError" :title="holdingsError" type="error" :closable="false" />
       <el-button v-if="holdingsError" :loading="holdingsLoading" @click="loadHoldings">重新读取持有记录</el-button>
       <el-alert v-if="reclaimStorageError" :title="reclaimStorageError" type="error" :closable="false" />
-      <el-alert v-if="reclaimPending" :title="reclaimPending.contentChanged ? `原收回内容不同：${reclaimPending.payload.customerCode} · ${reclaimPending.payload.quantity}件。请先核对持有和退款，不要重试原收回。` : `原收回退款待核对：${reclaimPending.payload.customerCode} · ${reclaimPending.payload.quantity}件 · ¥${reclaimPending.payload.expectedRefundAmount.toFixed(2)}`" type="warning" :closable="false" />
-      <el-button v-if="reclaimPending && !reclaimPending.contentChanged" :disabled="reclaimSubmitting || !canReclaim" @click="reopenPendingReclaim">核对原收回退款</el-button>
-      <el-button v-else-if="reclaimPending?.contentChanged" :disabled="reclaimSubmitting" @click="endChangedReclaim">已核对记录，结束本次</el-button>
       <el-alert type="info" :closable="false" show-icon style="margin-bottom:14px">
         持有量为可收回数量；锁定量为已预约、尚未发货的货盘数量。历史持有量与锁定量均为 0 的记录不显示。
       </el-alert>

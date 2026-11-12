@@ -231,7 +231,10 @@ onMounted(() => { readOriginalRecharge();void load() })
       </div>
     </template>
 
-    <el-alert v-if="rechargePending" :title="rechargePending.contentChanged ? `原充值内容不同：${rechargePending.customerCode} · ${rechargePending.rechargeNo}。请先核对充值记录，不要重试原充值。` : `原充值待核对：${rechargePending.customerCode} · ${rechargePending.rechargeNo}。请打开充值，重试原单。`" type="warning" :closable="false" />
+    <el-alert v-if="rechargePending" :title="rechargePending.contentChanged ? `原充值内容不同：${rechargePending.customerCode} · ${rechargePending.rechargeNo}。请先核对充值记录，不要重试原充值。` : `原充值待核对：${rechargePending.customerCode} · ${rechargePending.rechargeNo}。请打开充值，重试原单。`" type="warning" :closable="false">
+      <el-button v-if="rechargePending.contentChanged" :disabled="rechargeBusy" @click="endChangedRechargeRequest">已核对记录，结束本次</el-button>
+      <el-button v-else :disabled="rechargeBusy" @click="openRecharge()">打开充值核对原单</el-button>
+    </el-alert>
     <el-alert v-if="rechargeStorageError" :title="rechargeStorageError" type="error" :closable="false" />
     <div class="filter-bar">
       <el-input
