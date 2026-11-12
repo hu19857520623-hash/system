@@ -881,10 +881,13 @@ export class PurchaseService {
     })
   }
 
-  /** 产品主管核定实际采购数量 → 进入采购主管审核 */
-  async setActualQty(id: number, body: { quantity?: number; remark?: string }, operatorId?: number) {
-    const qty = Number(body.quantity)
-    if (!Number.isSafeInteger(qty) || qty <= 0 || qty > 2147483647) throw new BadRequestException('实际采购数量须为 1 至 2147483647 的整数')
+  /** 产品主管核定实际采购数量 → 进入采购主管审核（支持多明细逐条核定） */
+  async setActualQty(id: number, body: { quantity?: number; remark?: string; lines?: Array<{ itemId?: number; quantity?: number; remark?: string }> }, operatorId?: number) {
+    const legacyQty = body?.quantity
+    if (legacyQty != null) {
+      const qty = Number(legacyQty)
+      if (!Number.isSafeInteger(qty) || qty <= 0 || qty > 2147483647) throw new BadRequestException('实际采购数量须为 1 至 2147483647 的整数')
+    }
     return this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM purchase_order WHERE id = ${BigInt(id)} FOR UPDATE`
       const row = await tx.purchaseOrder.findUnique({
@@ -893,10 +896,68 @@ export class PurchaseService {
       })
       if (!row) throw new NotFoundException('采购单不存在')
       if (row.status !== 'pending_actual_qty') throw new BadRequestException('当前状态不可核定实际采购数量')
+      if (!row.items.length) throw new BadRequestException('采购明细为空')
 
+      const lineInputs = Array.isArray(body?.lines) ? body.lines : null
+      if (lineInputs) {
+        // 多明细逐条核定：每条明细必须且只能核定一次，任一项无效则整单不写入。
+        if (!lineInputs.length) throw new BadRequestException('请为每条采购明细填写实际采购数量')
+        const byId = new Map<bigint, { quantity: number; remark?: string }>()
+        for (const input of lineInputs) {
+          const itemId = input?.itemId
+          if (typeof itemId !== 'number' || !Number.isSafeInteger(itemId) || itemId <= 0) throw new BadRequestException('核定明细与采购单不一致，请刷新后重新填写')
+          const qty = input?.quantity
+          if (typeof qty !== 'number' || !Number.isSafeInteger(qty) || qty <= 0 || qty > 2147483647) throw new BadRequestException('实际采购数量须为 1 至 2147483647 的整数')
+          const key = BigInt(itemId)
+          if (byId.has(key)) throw new BadRequestException('同一条采购明细不能重复核定，请刷新后重新填写')
+          byId.set(key, { quantity: qty, remark: typeof input?.remark === 'string' ? input.remark.trim() : '' })
+        }
+        for (const line of row.items) {
+          if (!byId.has(BigInt(line.id))) throw new BadRequestException('请为每条采购明细填写实际采购数量，不能遗漏后直接提交')
+        }
+        if (byId.size !== row.items.length) throw new BadRequestException('核定明细与采购单不一致，请刷新后重新填写')
+
+        let total = 0
+        const updates = row.items.map((line) => {
+          const unitPrice = Number(line.unitPrice)
+          if (!Number.isFinite(unitPrice) || unitPrice <= 0) throw new BadRequestException('请先补充有效的采购单价')
+          const qty = byId.get(BigInt(line.id))!.quantity
+          const amount = Math.round(qty * unitPrice * 100) / 100
+          if (!Number.isFinite(amount) || amount > 999999999999.99) throw new BadRequestException('采购明细金额超出支持范围，请核对数量和单价')
+          total = Math.round((total + amount) * 100) / 100
+          const remark = byId.get(BigInt(line.id))!.remark || body?.remark?.trim() || line.remark
+          return {
+            where: { id: line.id },
+            data: { quantity: qty, amount, remark },
+          }
+        })
+        if (!Number.isFinite(total) || total > 999999999999.99) throw new BadRequestException('采购金额超出支持范围，请核对数量和单价')
+
+        return this.finishPurchaseChange(tx, await (tx.purchaseOrder.update({
+          where: { id: BigInt(id) },
+          data: {
+            status: 'pending_po_audit',
+            totalAmount: total,
+            items: { update: updates },
+          },
+          include: { items: true },
+        })), (item, updated) => ({
+          operatorId,
+          module: 'purchase',
+          action: 'set_actual_qty',
+          targetType: 'purchase_order',
+          targetId: item.poNo,
+          detail: {
+            totalAmount: total,
+            lines: updated.items.map((line: any) => ({ sku: line.sku, plannedQty: line.plannedQty, actualQty: line.quantity })),
+          },
+        }))
+      }
+
+      const qty = Number(legacyQty)
+      if (!Number.isSafeInteger(qty) || qty <= 0 || qty > 2147483647) throw new BadRequestException('实际采购数量须为 1 至 2147483647 的整数')
       const line = row.items[0]
-      if (!line) throw new BadRequestException('采购明细为空')
-      if (row.items.length !== 1) throw new BadRequestException('该单包含多项采购明细，请联系管理员逐项核对数量')
+      if (row.items.length !== 1) throw new BadRequestException('该单包含多项采购明细，请逐条填写实际采购数量')
 
       const unitPrice = Number(line.unitPrice)
       const amount = Math.round(qty * unitPrice * 100) / 100

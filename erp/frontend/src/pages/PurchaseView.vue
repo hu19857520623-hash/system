@@ -734,19 +734,41 @@ async function confirmPrePoRow(row: any) {
 
 async function submitActualQty(po: any) {
   if (!canOperatePo.value) return
-  const line = po.items?.[0]
-  if (!line || po.items.length !== 1) { detailFeedback.value = '请联系管理员逐项核对该单的采购明细'; return }
+  const items = Array.isArray(po.items) ? po.items : []
+  if (!items.length) { detailFeedback.value = '该采购单没有可核定的明细，请刷新后重试'; return }
   actualQtyInput.value = ''
+  actualQtyLines.value = items.map((line: any) => ({
+    itemId: line.id,
+    sku: String(line.sku || '—'),
+    plannedQty: line.plannedQty ?? '—',
+    quantity: '',
+    remark: '',
+  }))
   actualQtyVisible.value = true
 }
 
 async function saveActualQty() {
   if (!canOperatePo.value || !selectedPo.value) return
-  if (!/^[1-9]\d*$/.test(actualQtyInput.value) || Number(actualQtyInput.value) > 2147483647) {
+  const id = selectedPo.value.id
+  const validQty = (raw: string) => /^[1-9]\d*$/.test(raw) && Number(raw) <= 2147483647
+  if (actualQtyLines.value.length > 1) {
+    const invalid = actualQtyLines.value.find(line => !validQty(line.quantity))
+    if (invalid) {
+      detailFeedback.value = `SKU ${invalid.sku} 的实际采购数量须为 1 至 2147483647 的整数`
+      return
+    }
+    const lines = actualQtyLines.value.map(line => ({ itemId: Number(line.itemId), quantity: Number(line.quantity), ...(line.remark.trim() ? { remark: line.remark.trim() } : {}) }))
+    if (await runPoAction(() => purchaseApi.setActualQty(id, { lines }), '实际数量已提交，下一步由采购主管审核')) {
+      actualQtyVisible.value = false
+      mainTab.value = 'po_pending'
+      await openDetail({ id })
+    }
+    return
+  }
+  if (!validQty(actualQtyInput.value)) {
     detailFeedback.value = '实际采购数量须为 1 至 2147483647 的整数'
     return
   }
-  const id = selectedPo.value.id
   if (await runPoAction(() => purchaseApi.setActualQty(id, { quantity: Number(actualQtyInput.value) }), '实际数量已提交，下一步由采购主管审核')) {
     actualQtyVisible.value = false
     mainTab.value = 'po_pending'
@@ -858,6 +880,7 @@ const poActionBusy = ref(false)
 const poActionUncertain = ref(false)
 const actualQtyVisible = ref(false)
 const actualQtyInput = ref('')
+const actualQtyLines = ref<Array<{ itemId: any; sku: string; plannedQty: any; quantity: string; remark: string }>>([])
 const canOperatePo = computed(() => Boolean(selectedPo.value) && !detailLoading.value && !poActionBusy.value && !poActionUncertain.value)
 let detailReadVersion = 0
 const auditWarehouseCode = ref('')
@@ -2047,12 +2070,31 @@ async function markPoUnpaid(po?: { id: number }) {
     </template>
   </el-dialog>
 
-  <el-dialog v-model="actualQtyVisible" title="核定实际采购数量" width="460px" :close-on-click-modal="!poActionBusy" :close-on-press-escape="!poActionBusy" :show-close="!poActionBusy">
-    <p>商品 {{ selectedPo?.items?.[0]?.sku }}，计划数量 {{ selectedPo?.items?.[0]?.plannedQty ?? '—' }}。提交后进入采购主管审核。</p>
-    <el-alert v-if="detailFeedback" :title="detailFeedback" type="warning" :closable="false" role="alert" style="margin-bottom:12px" />
-    <el-form label-width="110px" @submit.prevent="saveActualQty">
-      <el-form-item label="实际采购数量" required><el-input v-model="actualQtyInput" aria-label="实际采购数量" inputmode="numeric" :disabled="poActionBusy || poActionUncertain" placeholder="请输入大于零的整数" /></el-form-item>
-    </el-form>
+  <el-dialog v-model="actualQtyVisible" title="核定实际采购数量" :width="actualQtyLines.length > 1 ? '620px' : '460px'" :close-on-click-modal="!poActionBusy" :close-on-press-escape="!poActionBusy" :show-close="!poActionBusy">
+    <template v-if="actualQtyLines.length > 1">
+      <p>该采购单共 {{ actualQtyLines.length }} 条明细，请逐条填写实际采购数量，全部填写后一并提交。提交后进入采购主管审核。</p>
+      <el-table :data="actualQtyLines" border size="small" max-height="320">
+        <el-table-column prop="sku" label="SKU" min-width="140" show-overflow-tooltip />
+        <el-table-column prop="plannedQty" label="计划数量" width="90" align="right" />
+        <el-table-column label="实际采购数量" width="160">
+          <template #default="{ row }">
+            <el-input v-model="row.quantity" :aria-label="`SKU ${row.sku} 实际采购数量`" inputmode="numeric" :disabled="poActionBusy || poActionUncertain" placeholder="大于零的整数" />
+          </template>
+        </el-table-column>
+        <el-table-column label="备注" min-width="140">
+          <template #default="{ row }">
+            <el-input v-model="row.remark" :aria-label="`SKU ${row.sku} 核定备注`" maxlength="500" :disabled="poActionBusy || poActionUncertain" placeholder="选填" />
+          </template>
+        </el-table-column>
+      </el-table>
+    </template>
+    <template v-else>
+      <p>商品 {{ selectedPo?.items?.[0]?.sku }}，计划数量 {{ selectedPo?.items?.[0]?.plannedQty ?? '—' }}。提交后进入采购主管审核。</p>
+      <el-form label-width="110px" @submit.prevent="saveActualQty">
+        <el-form-item label="实际采购数量" required><el-input v-model="actualQtyInput" aria-label="实际采购数量" inputmode="numeric" :disabled="poActionBusy || poActionUncertain" placeholder="请输入大于零的整数" /></el-form-item>
+      </el-form>
+    </template>
+    <el-alert v-if="detailFeedback" :title="detailFeedback" type="warning" :closable="false" role="alert" style="margin:12px 0 0" />
     <template #footer>
       <el-button :disabled="poActionBusy" @click="actualQtyVisible = false">返回采购单</el-button>
       <el-button type="primary" :loading="poActionBusy" :disabled="!canOperatePo" @click="saveActualQty">提交数量</el-button>
