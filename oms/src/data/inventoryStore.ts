@@ -5,7 +5,7 @@ import { purchaseErpCatalog, type ErpCatalogItem, type ErpPurchaseResult } from 
 import type { InventoryItem, Product } from './mockData'
 import { getCustomerCode } from './dataScope'
 import { getFeeRecords, hydrateBilling } from './billingStore'
-import { readCatalogAttempts, saveCatalogAttempt, runCatalogAttempt, type CatalogPurchaseAttempt } from './catalogPurchaseWorkflow'
+import { readCatalogAttempts, saveCatalogAttempt, runCatalogAttempt, endChangedCatalogAttempt, type CatalogPurchaseAttempt } from './catalogPurchaseWorkflow'
 import {
   buildInternalSku,
   CATALOG_CUSTOMER_CODE,
@@ -207,6 +207,14 @@ function applyErpPurchaseLocally(
   return purchase
 }
 
+export function endPendingCatalogPurchase(customerId: string, orderNo: string) {
+  const user = getStoredAuthSession()?.user
+  if (!user || user.customerId !== customerId) throw new Error('请使用原客户账号登录后核对采购')
+  const attempt = readCatalogAttempts(localStorage, user.id, customerId).find(row => row.orderNo === orderNo)
+  if (!attempt) throw new Error('没有待结束的原采购')
+  endChangedCatalogAttempt(localStorage, user.id, attempt)
+}
+
 export function getPendingCatalogPurchases(customerId: string): CatalogPurchaseAttempt[] {
   const user = getStoredAuthSession()?.user
   if (!user || user.customerId !== customerId) throw new Error('请使用原客户账号登录后核对采购')
@@ -223,6 +231,7 @@ export async function purchaseCatalogProductViaErp(internalSku: string, qty: num
     const previous = getPendingCatalogPurchases(customerId).find(row => row.sku === internalSku)
     const price = quotedUnitPrice ?? state.products.find(p => p.internalSku === internalSku)?.price
     if (!price || !Number.isFinite(price) || price <= 0) return { ok: false, error: '商品报价无效，请刷新货盘后核对' }
+    if (previous?.contentChanged) return { ok: false, uncertain: true, error: '原采购内容不同。请先核对采购记录和余额，不要继续原采购。' }
     if (previous && (previous.quantity !== qty || previous.unitPrice !== price)) return { ok: false, uncertain: true, error: '此商品还有原采购待核对，请使用原数量和报价继续核对，勿再次购买' }
     const attempt = previous || { orderNo: `CAT-${crypto.randomUUID()}`, customerId, customerCode, sku: internalSku, quantity: qty, unitPrice: price, name: state.products.find(p => p.internalSku === internalSku)?.name || internalSku }
     if (!previous) saveCatalogAttempt(localStorage, user.id, attempt)

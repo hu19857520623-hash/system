@@ -3,6 +3,7 @@ import { apiGet, apiPost } from '../api/client'
 import { comparableProductMetadata } from './productSaveContract'
 import { PRODUCT_ACTIONS, type ProductAction, type ProductActionItem, type ProductActionReceipt } from './productActionContract'
 import { userFacingError } from '../utils/userFacingError'
+import { productWriteMustRefresh } from './productSaveWorkflow'
 
 type StoragePort = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
 export type ActionActor = { id: string; role: string; customerId: string | null }
@@ -60,5 +61,9 @@ export async function runProductAction(request: () => Promise<ProductActionRecei
     if (r.status === 'confirmed' && (r.productIds!.length !== a.items.length || new Set(r.productIds).size !== a.items.length || a.items.some(item => !r.productIds!.includes(item.id)))) throw new Error('商品操作回执中的商品范围不符')
     if (r.status === 'cancelled' && r.productIds!.length) throw new Error('商品取消回执不完整')
     return r
-  } catch (error) { throw new Error(`原商品操作已保留，请核对结果、继续原操作或取消原操作，勿重新操作。${userFacingError(error)}`) }
+  } catch (error) {
+    const text = `${error instanceof Error ? error.message : ''} ${userFacingError(error)}`
+    if (productWriteMustRefresh(text)) throw new Error(`${userFacingError(error)}。请取消原商品操作后刷新列表重新选择，不要继续原商品操作。`)
+    throw new Error(`原商品操作已保留，请核对结果、继续原操作或取消原操作，勿重新操作。${userFacingError(error)}`)
+  }
 }

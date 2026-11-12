@@ -9,6 +9,7 @@ export type InboundPending = {
   body: Record<string, unknown>
   localOrder: InboundOrder
   createdAt: string
+  contentChanged?: boolean
 }
 export class InboundPendingError extends Error { readonly status = 409 }
 
@@ -46,6 +47,7 @@ export function readInboundPending(storage: PendingStorage, key: string): Inboun
   try {
     const value: unknown = JSON.parse(raw)
     assertOriginal(value)
+    if (value.contentChanged !== true) delete value.contentChanged
     return value
   } catch { throw new InboundPendingError('原入库操作记录无法读取，请保留记录并核对原单，暂不提交新操作') }
 }
@@ -61,6 +63,16 @@ export function saveInboundPending(storage: PendingStorage, key: string, record:
     if (storage.getItem(key) !== raw) throw new InboundPendingError()
   } catch { throw new InboundPendingError('原入库请求未能可靠保存，本次没有发送，请释放浏览器存储空间后重试') }
   return JSON.parse(raw) as InboundPending
+}
+
+export function markInboundContentChanged(storage: PendingStorage, key: string, expected: InboundPending) {
+  const current = readInboundPending(storage, key)
+  if (!current || current.body.clientRequestId !== expected.body.clientRequestId) throw new InboundPendingError('原入库操作记录已被其他页面更新，请重新核对')
+  const next = { ...current, contentChanged: true as const }
+  const raw = JSON.stringify(next)
+  storage.setItem(key, raw)
+  if (storage.getItem(key) !== raw) throw new InboundPendingError('原入库内容变化未能保存，请保留记录并重新核对')
+  return next
 }
 
 /** A late response must never clear a newer operation from another tab. */

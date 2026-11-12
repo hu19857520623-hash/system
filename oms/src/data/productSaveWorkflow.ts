@@ -4,6 +4,9 @@ import type { ProductSaveReceipt } from './productSaveContract'
 import { userFacingError } from '../utils/userFacingError'
 
 type StoragePort = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
+export function productWriteMustRefresh(message: string) {
+  return ['状态已变化', '请刷新列表', '请取消原操作', '不能覆盖新资料', '请返回列表核对'].some(part => message.includes(part))
+}
 export type ProductSaveAttempt = { requestId: string; userId: string; customerId: string; mode: 'create' | 'update'; action: 'draft' | 'submit' | 'update'; expected: string | null; product: Product }
 function key(user: string, customer: string) {
   if (!user || !customer) throw new Error('请使用原账号核对商品保存结果')
@@ -44,5 +47,9 @@ export async function runProductSaveAttempt(request: () => Promise<ProductSaveRe
     if (result?.requestId !== a.requestId || !['unknown', 'confirmed', 'cancelled'].includes(result.status)
       || (result.status === 'confirmed' && result.productId !== a.product.id) || (result.status === 'cancelled' && result.productId !== null)) throw new Error('商品保存回执与原请求不符')
     return result
-  } catch (error) { throw new Error(`原商品保存请求已保留，请核对原结果、继续原保存或取消原请求。${userFacingError(error)}`) }
+  } catch (error) {
+    const text = `${error instanceof Error ? error.message : ''} ${userFacingError(error)}`
+    if (productWriteMustRefresh(text)) throw new Error(`${userFacingError(error)}。请取消原保存请求后刷新商品再重新填写，不要继续原保存。`)
+    throw new Error(`原商品保存请求已保留，请核对原结果、继续原保存或取消原请求。${userFacingError(error)}`)
+  }
 }

@@ -8,6 +8,7 @@ import {
   useCatalogPurchases,
   purchaseCatalogProductViaErp,
   getPendingCatalogPurchases,
+  endPendingCatalogPurchase,
   getCatalogAvailableQty,
   mergeErpCatalogIntoState,
   refreshInventoryFromErp,
@@ -300,8 +301,17 @@ export default function Catalog() {
     finally { checkoutBusyRef.current = false;setCheckoutBusy(false) }
   }
 
+  const endChangedPurchase = (attempt: CatalogPurchaseAttempt) => {
+    if (!customerId || checkoutBusyRef.current || !attempt.contentChanged) return
+    try {
+      endPendingCatalogPurchase(customerId, attempt.orderNo)
+      setCheckoutError('已结束这次未能入账的采购。请先核对采购记录和余额；若没有扣款，可以重新确认清单。')
+    } catch (error) { setCheckoutError(userFacingError(error)); return }
+    loadPendingPurchases()
+  }
+
   const resumePurchase = async (attempt: CatalogPurchaseAttempt) => {
-    if (!customerId || checkoutBusyRef.current) return
+    if (!customerId || checkoutBusyRef.current || attempt.contentChanged) return
     checkoutBusyRef.current = true;setCheckoutBusy(true);setCheckoutError('')
     try {
       const result = await purchaseCatalogProductViaErp(attempt.sku, attempt.quantity, customerId, attempt.unitPrice)
@@ -378,8 +388,10 @@ export default function Catalog() {
       {purchaseStorageError && <div className="mb-4 rounded-lg bg-red-50 p-4 text-sm text-red-800">{purchaseStorageError}</div>}
       {pendingPurchases.map(attempt => (
         <div key={attempt.orderNo} className="mb-3 rounded-lg bg-amber-50 p-4 text-sm text-amber-900">
-          <p>采购单 {attempt.orderNo} 待核对：{attempt.name} × {attempt.quantity}，原报价 {formatCurrency(attempt.unitPrice)}。请使用原请求核对，勿再次购买。</p>
-          <Button size="sm" variant="secondary" disabled={checkoutBusy} onClick={() => void resumePurchase(attempt)}>继续核对原采购</Button>
+          <p>{attempt.contentChanged ? `采购单 ${attempt.orderNo} 的内容不同：${attempt.name}。请先核对采购记录和余额，不要继续原采购。` : `采购单 ${attempt.orderNo} 待核对：${attempt.name} × ${attempt.quantity}，原报价 ${formatCurrency(attempt.unitPrice)}。请使用原请求核对，勿再次购买。`}</p>
+          {attempt.contentChanged
+            ? <Button size="sm" variant="secondary" disabled={checkoutBusy} onClick={() => endChangedPurchase(attempt)}>已核对记录，结束本次</Button>
+            : <Button size="sm" variant="secondary" disabled={checkoutBusy} onClick={() => void resumePurchase(attempt)}>继续核对原采购</Button>}
         </div>
       ))}
       {msg && (
@@ -632,7 +644,7 @@ export default function Catalog() {
             </div>
             <div className="max-h-[50vh] overflow-y-auto px-6 py-4">
               {(checkoutError || purchaseStorageError) && <div className="mb-3 rounded bg-red-50 p-3 text-sm text-red-800">{checkoutError || purchaseStorageError}</div>}
-              {pendingPurchases.map(attempt => <div key={attempt.orderNo} className="mb-3 rounded bg-amber-50 p-3 text-sm">原采购 {attempt.orderNo} 待核对。<Button size="sm" variant="secondary" disabled={checkoutBusy} onClick={() => void resumePurchase(attempt)}>继续核对原采购</Button></div>)}
+              {pendingPurchases.map(attempt => <div key={attempt.orderNo} className="mb-3 rounded bg-amber-50 p-3 text-sm">{attempt.contentChanged ? `原采购 ${attempt.orderNo} 内容不同，请先核对采购记录，不要继续原采购。` : `原采购 ${attempt.orderNo} 待核对。`}{attempt.contentChanged ? <Button size="sm" variant="secondary" disabled={checkoutBusy} onClick={() => endChangedPurchase(attempt)}>已核对记录，结束本次</Button> : <Button size="sm" variant="secondary" disabled={checkoutBusy} onClick={() => void resumePurchase(attempt)}>继续核对原采购</Button>}</div>)}
               <table className="w-full text-left text-sm">
                 <thead>
                   <tr className="border-b border-border-light text-xs text-text-muted">

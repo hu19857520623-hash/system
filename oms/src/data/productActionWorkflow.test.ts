@@ -34,6 +34,7 @@ test('network, stale version and permission errors preserve exact original actio
  const s=storage(),a=buildProductAction({action:'approve',products:[product],failures:[{sku:'BAD',error:'请填写长宽高'}]},actor);storeProductAction(s,actor,a)
  for(const status of [0,401,403,409,500])await assert.rejects(runProductAction(async()=>{throw Object.assign(Error('NetworkError'),{status})},a,'scope',()=> 'scope'),/原商品操作已保留/)
  assert.deepEqual(readProductAction(s,actor),a)
+ await assert.rejects(runProductAction(async()=>{throw Object.assign(Error('商品资料或状态已变化，旧操作不能覆盖新资料；请取消原操作后刷新列表重新选择'),{status:409})},a,'scope',()=> 'scope'),/不要继续原商品操作/)
 })
 test('late action responses after login/permission changes cannot confirm or clear the original action',async()=>{
  const a=create();let current:string|null='scope',release!:(v:any)=>void

@@ -38,7 +38,11 @@ export default function ProductActionPanel({ actor, intent, onConsumed, onApplie
       setMessage(text); notifySuccess(text)
       if (result.status === 'confirmed') onApplied(result.productIds!)
     } catch (cause) {
-      if (active.current && owner === currentProductWriteScope()) { setMessage('原商品操作结果尚未核实，请选择下方操作继续'); setError(userFacingError(cause)) }
+      if (active.current && owner === currentProductWriteScope()) {
+        const text = userFacingError(cause)
+        if (text.includes('不要继续原商品操作')) { setMessage(text); setError('') }
+        else { setMessage('原商品操作结果尚未核实，请选择下方操作继续'); setError(text) }
+      }
     } finally { running.current = false; if (active.current) setBusy(false) }
   }
 
@@ -68,7 +72,7 @@ export default function ProductActionPanel({ actor, intent, onConsumed, onApplie
     {message && <p role="status">{message}</p>}{error && <p role="alert" className="text-red-600">{error}</p>}
     <div className="flex flex-wrap gap-2">
       {attempt && !completed && <>
-        <Button disabled={busy} onClick={() => void perform('submit')}>{pending ? '继续原商品操作' : attempt.action === 'discard' ? '确认废弃' : `继续${productActionLabels[attempt.action]}`}</Button>
+        {!message.includes('不要继续原商品操作') && <Button disabled={busy} onClick={() => void perform('submit')}>{pending ? '继续原商品操作' : attempt.action === 'discard' ? '确认废弃' : `继续${productActionLabels[attempt.action]}`}</Button>}
         {pending && <><Button disabled={busy} onClick={() => void perform('check')}>核对商品操作结果</Button><Button disabled={busy} onClick={() => void perform('cancel')}>取消原商品操作</Button></>}
       </>}
       <Button disabled={busy} onClick={() => { setOpen(false); if (!pending) { setAttempt(null); setMessage(''); setError('') } }}>返回商品列表</Button>

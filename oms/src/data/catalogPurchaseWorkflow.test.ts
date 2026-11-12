@@ -26,6 +26,11 @@ for (const status of [400, 404, 409, 422]) test(`采购明确拒绝${status}后�
   await assert.rejects(runCatalogAttempt(async () => { throw { status } }, s, 'u1', attempt, () => {}), /请核对最新商品和余额/)
   assert.deepEqual(readCatalogAttempts(s, 'u1', 'c1'), [])
 })
+test('采购内容不能修改后再试时保留原单，并且不再继续原采购', async () => {
+  const s = storage(); saveCatalogAttempt(s, 'u1', attempt)
+  await assert.rejects(runCatalogAttempt(async () => { throw { status: 409, message: '原采购单号对应的客户、商品、数量或报价不同，请核对原请求，不能修改后重试' } }, s, 'u1', attempt, () => {}), /不要继续原采购/)
+  assert.equal(readCatalogAttempts(s, 'u1', 'c1')[0].contentChanged, true)
+})
 test('本地应用结果失败仍保留已提交原采购号', async () => {
   const s = storage();saveCatalogAttempt(s, 'u1', attempt)
   await assert.rejects(runCatalogAttempt(async () => ({}), s, 'u1', attempt, () => { throw Error('登录账号已变化') }), /原采购单已保留/)

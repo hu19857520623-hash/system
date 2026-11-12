@@ -2,7 +2,7 @@
 import { userFacingError } from '../utils/userFacingError'
 
 type StoragePort = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
-export type RechargeAttempt = { customerCode: string; customerId?: number; customerName?: string; rechargeNo: string; amount: number; paymentMethod?: string; paymentMethodId?: string; paymentMethodTitle?: string; remark?: string }
+export type RechargeAttempt = { customerCode: string; customerId?: number; customerName?: string; rechargeNo: string; amount: number; paymentMethod?: string; paymentMethodId?: string; paymentMethodTitle?: string; remark?: string; contentChanged?: boolean }
 const key = (scope: string) => {
   if (!scope) throw new Error('请使用原账号登录后核对充值')
   return `recharge:pending:${scope}`
@@ -17,6 +17,7 @@ export function readRecharge(storage: StoragePort, scope: string): RechargeAttem
     const raw = storage.getItem(key(scope)); if (!raw) return null
     const row = JSON.parse(raw)
     if (!row?.customerCode || !/^[A-Za-z0-9_-]{1,30}$/.test(row.rechargeNo) || typeof row.amount !== 'number' || !/^\d+(\.\d{1,2})?$/.test(String(row.amount)) || row.amount <= 0) throw new Error()
+    if (row.contentChanged !== true) delete row.contentChanged
     return row
   } catch { throw new Error('原充值核对信息无法读取，请联系财务核对原充值单，勿重新充值') }
 }
@@ -26,7 +27,16 @@ export function saveRecharge(storage: StoragePort, scope: string, attempt: Recha
   try { storage.setItem(key(scope), JSON.stringify(attempt)) }
   catch { throw new Error('无法保存充值核对信息，本次尚未提交，请检查浏览器存储后重试') }
 }
+export function rechargeContentMismatch(message: string) {
+  return message.includes('勿另建单重复充值') || message.includes('内容不同')
+}
+export function endChangedRecharge(storage: StoragePort, scope: string, attempt: RechargeAttempt) {
+  const current = readRecharge(storage, scope)
+  if (!current?.contentChanged || current.rechargeNo !== attempt.rechargeNo) throw new Error('原充值仍待核对，请重试原充值，不要直接结束')
+  storage.removeItem(key(scope))
+}
 export async function runRecharge<T extends { record: { rechargeNo: string; amount: number }; customerCode: string; balance: number; syncPending?: boolean; warning?: string }>(storage: StoragePort, scope: string, attempt: RechargeAttempt, request: (attempt: RechargeAttempt) => Promise<T>) {
+  if (attempt.contentChanged) throw new Error('原充值内容不同。请先核对充值记录和余额，不要重试原充值。')
   if (typeof attempt.amount !== 'number' || !/^\d{1,12}(\.\d{1,2})?$/.test(String(attempt.amount)) || attempt.amount <= 0) throw new Error('请输入有效充值金额，最多两位小数')
   saveRecharge(storage, scope, attempt)
   const clear = () => { if (readRecharge(storage, scope)?.rechargeNo === attempt.rechargeNo) storage.removeItem(key(scope)) }
@@ -38,6 +48,11 @@ export async function runRecharge<T extends { record: { rechargeNo: string; amou
     return { result, completed: true, message: '充值已到账，请查看最新余额与记录' }
   } catch (error) {
     const status = Number((error as { status?: unknown })?.status)
+    const text = `${error instanceof Error ? error.message : ''} ${userFacingError(error)}`
+    if (rechargeContentMismatch(text)) {
+      storage.setItem(key(scope), JSON.stringify({ ...attempt, contentChanged: true }))
+      throw new Error(`原充值内容不同。请先核对充值记录和余额，不要重试原充值。${userFacingError(error)}`)
+    }
     if ([400, 404, 422].includes(status)) { clear(); throw new Error(`${userFacingError(error)}。本次未新增充值，请重新核对`) }
     throw new Error(`充值结果待核对，原单已保留。请使用原账号重试原充值，勿另建单。${userFacingError(error)}`)
   }

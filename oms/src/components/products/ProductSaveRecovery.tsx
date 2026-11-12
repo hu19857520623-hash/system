@@ -33,7 +33,11 @@ export default function ProductSaveRecovery({ attempt, onResolved, disabled = fa
       setMessage(result.status === 'confirmed' ? '原保存已完成，商品列表已刷新；后续编辑不会被原请求覆盖' : '原请求已取消，未更改商品。请重新核对资料后继续编辑')
       onResolved(result)
     } catch (cause) {
-      if (active.current && owner === currentProductWriteScope()) { setMessage('原保存结果尚未核实，请选择下方操作继续'); setError(userFacingError(cause)) }
+      if (active.current && owner === currentProductWriteScope()) {
+        const text = userFacingError(cause)
+        if (text.includes('不要继续原保存')) { setMessage(text); setError('') }
+        else { setMessage('原保存结果尚未核实，请选择下方操作继续'); setError(text) }
+      }
     } finally { running.current = false; setBusy(false) }
   }
   return <Card className="mb-4 space-y-3">
@@ -43,7 +47,7 @@ export default function ProductSaveRecovery({ attempt, onResolved, disabled = fa
     {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
     <div className="flex flex-wrap gap-2">
       <Button disabled={busy || disabled} onClick={() => void run('check')}>核对原保存结果</Button>
-      <Button disabled={busy || disabled} onClick={() => void run('submit')}>继续原保存</Button>
+      {!message.includes('不要继续原保存') && <Button disabled={busy || disabled} onClick={() => void run('submit')}>继续原保存</Button>}
       <Button disabled={busy || disabled} onClick={() => void run('cancel')}>取消原保存请求</Button>
       <Link to="/products">返回商品列表</Link>
     </div>

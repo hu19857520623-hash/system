@@ -1,6 +1,6 @@
 import { authSessionScope, getStoredAuthSession } from '../api/client'
 import { can } from '../auth/permissions'
-import { inboundPendingKey, readInboundPending, saveInboundPending, clearInboundPending, withInboundOperationLock, type InboundPending, type InboundOperationKind } from './inboundPending'
+import { inboundPendingKey, readInboundPending, saveInboundPending, clearInboundPending, markInboundContentChanged, withInboundOperationLock, type InboundPending, type InboundOperationKind } from './inboundPending'
 import type { DeliveryMethod, InboundOrder, InboundStatus, InboundType } from './mockData'
 import { isErpPalletInbound, sanitizeCustomerInboundType } from './mockData'
 import {
@@ -20,6 +20,10 @@ import { userFacingError } from '../utils/userFacingError'
 
 export type InboundMutationResult = { ok: true; order: InboundOrder; warning?: string; persistencePending?: boolean }
   | { ok: false; error: string; uncertain?: boolean }
+
+export function inboundContentMismatch(message: string) {
+  return ['不要修改后重试', '内容不同', '已用于其他内容', '内容已变化', '与原单不同'].some(part => message.includes(part))
+}
 
 export function inboundMutationFailure(error: unknown): Extract<InboundMutationResult, { ok: false }> {
   const status = error && typeof error === 'object' ? Number((error as { status?: number }).status) : NaN
@@ -242,6 +246,7 @@ async function runOriginal(order: InboundOrder, kind: InboundOperationKind, retr
       let record = readInboundPending(localStorage, context.key)
       if (retry) {
         if (!record) throw knownFailure('没有待处理的原操作，请读取最新入库单后继续')
+        if (record.contentChanged) throw knownFailure('原入库内容不同。请先核对入库记录，结束本次后再重新填写，不要重试原请求。')
       } else {
         if (record) throw knownFailure('本单有待核对的原操作，请先使用原请求重试或读取原单')
         if (kind !== 'create' && !/^[a-f0-9]{64}$/.test(order.erpRevision || '')) throw knownFailure('原单缺少最新版本，请刷新入库记录并重新打开原单后操作')
@@ -258,6 +263,12 @@ async function runOriginal(order: InboundOrder, kind: InboundOperationKind, retr
       catch (error) {
         context.assertSession()
         const status = Number((error as { status?: number })?.status)
+        const text = `${error instanceof Error ? error.message : ''} ${userFacingError(error)}`
+        if (inboundContentMismatch(text)) {
+          markInboundContentChanged(localStorage, context.key, record)
+          pendingChanged()
+          throw knownFailure(`${userFacingError(error)}。请先核对入库记录，结束本次后再重新填写，不要重试原请求。`)
+        }
         // Only a definite first-attempt rejection proves this original did not commit.
         if (!retry && status >= 400 && status < 500 && status !== 408) { clearInboundPending(localStorage, context.key, record); pendingChanged() }
         throw error
@@ -272,6 +283,20 @@ async function runOriginal(order: InboundOrder, kind: InboundOperationKind, retr
 }
 
 export async function retryInboundOriginal(order: InboundOrder) { return runOriginal(order, 'update', true) }
+
+export async function endChangedInboundOriginal(order: InboundOrder): Promise<InboundMutationResult> {
+  try {
+    const context = pendingContext(order, true)
+    return await withInboundOperationLock(context.key, async () => {
+      context.assertSession()
+      const record = readInboundPending(localStorage, context.key)
+      if (!record?.contentChanged) throw knownFailure('原请求仍待核对，请重试或取消，不要直接结束')
+      clearInboundPending(localStorage, context.key, record)
+      pendingChanged()
+      return { ok: true as const, order, warning: '已结束这次未能按本机内容入账的入库操作。请先核对入库记录；若没有入账，可以重新填写。' }
+    })
+  } catch (error) { return inboundMutationFailure(error) }
+}
 
 /** Retire a saved original only after a matching server receipt. A failed or
  * lost cancellation response keeps the exact record, so a later lookup/retry

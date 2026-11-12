@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { InboundOrder } from '../../data/mockData'
-import { pendingInboundOperation, readInboundOriginal, retryInboundOriginal, resolveInboundOriginal } from '../../data/inboundStore'
+import { pendingInboundOperation, readInboundOriginal, retryInboundOriginal, resolveInboundOriginal, endChangedInboundOriginal } from '../../data/inboundStore'
 import { useRole } from '../../auth/RoleContext'
 import { userFacingError } from '../../utils/userFacingError'
 import { useAsyncViewScope } from '../../utils/useAsyncViewScope'
@@ -26,13 +26,14 @@ export default function InboundRecovery({ orders, onCompleted }: { orders: Inbou
 
   const pending = orders.map(order => ({ order, state: pendingInboundOperation(order) })).filter(row => row.state.record || row.state.error)
   if (!pending.length && !Object.keys(feedback).length) return null
-  const act = async (order: InboundOrder, action: 'read' | 'retry' | 'check' | 'cancel') => {
+  const act = async (order: InboundOrder, action: 'read' | 'retry' | 'check' | 'cancel' | 'end') => {
     if (busy) return
     const isCurrent = view.capture()
     setConfirmCancel(null)
     setBusy(order.inboundNo)
     try {
       const result = action === 'retry' ? await retryInboundOriginal(order)
+        : action === 'end' ? await endChangedInboundOriginal(order)
         : action === 'read' ? await readInboundOriginal(order) : await resolveInboundOriginal(order, action === 'cancel')
       // Store functions also check the login before writing canonical results.
       if (!isCurrent()) return
@@ -51,10 +52,11 @@ export default function InboundRecovery({ orders, onCompleted }: { orders: Inbou
       <div className="mt-3 flex flex-wrap gap-3">
         <button type="button" disabled={Boolean(busy)} className="font-medium underline disabled:opacity-50" onClick={() => void act(order, 'read')}>读取原单结果</button>
         {state.record && <button type="button" disabled={Boolean(busy)} className="font-medium underline disabled:opacity-50" onClick={() => void act(order, 'check')}>核对原请求回执</button>}
-        {state.record && canWrite && <>
+        {state.record && canWrite && !state.record.contentChanged && <>
           <button type="button" disabled={Boolean(busy)} className="font-medium underline disabled:opacity-50" onClick={() => void act(order, 'retry')}>{busy === order.inboundNo ? '处理中…' : '重试原请求'}</button>
           <button type="button" disabled={Boolean(busy)} className="font-medium underline disabled:opacity-50" onClick={() => setConfirmCancel(order.inboundNo)}>取消待核对请求</button>
         </>}
+        {state.record?.contentChanged && canWrite && <button type="button" disabled={Boolean(busy)} className="font-medium underline disabled:opacity-50" onClick={() => void act(order, 'end')}>已核对记录，结束本次</button>}
         <Link to="/inbound/records" className="underline">返回入库记录</Link>
       </div>
       {canWrite && confirmCancel === order.inboundNo && <div className="mt-3 rounded border border-amber-400 p-3" role="group" aria-label="确认取消原请求">

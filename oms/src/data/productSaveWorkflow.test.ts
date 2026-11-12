@@ -32,6 +32,7 @@ test('network, revocation and stale-version errors keep the original immutable r
     await assert.rejects(runProductSaveAttempt(async()=>{throw Object.assign(Error('NetworkError'),{status})},a,'scope',()=> 'scope'),/原商品保存请求已保留/)
     assert.deepEqual(readProductSaveAttempt(s,'u1','c1'),a)
   }
+  await assert.rejects(runProductSaveAttempt(async()=>{throw Object.assign(Error('商品状态已变化，请返回列表核对后继续'),{status:409})},attempt(),'scope',()=> 'scope'),/不要继续原保存/)
 })
 test('late response after identity/permission switch cannot confirm or clear the original save', async () => {
   const s=storage(),a=attempt();storeProductSaveAttempt(s,a)

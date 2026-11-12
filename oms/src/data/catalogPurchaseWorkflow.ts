@@ -1,6 +1,6 @@
 import { userFacingError } from '../utils/userFacingError'
 type StoragePort = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
-export type CatalogPurchaseAttempt = { orderNo: string; customerId: string; customerCode: string; sku: string; name: string; quantity: number; unitPrice: number }
+export type CatalogPurchaseAttempt = { orderNo: string; customerId: string; customerCode: string; sku: string; name: string; quantity: number; unitPrice: number; contentChanged?: boolean }
 function key(userId: string, customerId: string) {
   if (!userId || !customerId) throw new Error('请使用原客户账号登录后核对采购')
   return `oms:catalog-purchase:${JSON.stringify([userId, customerId])}`
@@ -10,7 +10,7 @@ export function readCatalogAttempts(storage: StoragePort, userId: string, custom
     const raw = storage.getItem(key(userId, customerId));if (!raw) return []
     const rows = JSON.parse(raw)
     if (!Array.isArray(rows) || rows.some(r => typeof r?.orderNo !== 'string' || !r.orderNo || r.customerId !== customerId || typeof r.sku !== 'string' || !Number.isSafeInteger(r.quantity) || r.quantity <= 0 || !Number.isFinite(r.unitPrice) || r.unitPrice <= 0)) throw new Error()
-    return rows
+    return rows.map(row => { if (row.contentChanged !== true) delete row.contentChanged; return row })
   } catch { throw new Error('原采购核对信息无法读取，请联系管理员核对原采购单与余额，勿再次购买') }
 }
 export function saveCatalogAttempt(storage: StoragePort, userId: string, attempt: CatalogPurchaseAttempt) {
@@ -23,6 +23,14 @@ function clear(storage: StoragePort, userId: string, attempt: CatalogPurchaseAtt
   const rows = readCatalogAttempts(storage, userId, attempt.customerId).filter(r => r.orderNo !== attempt.orderNo)
   if (rows.length) storage.setItem(key(userId, attempt.customerId), JSON.stringify(rows));else storage.removeItem(key(userId, attempt.customerId))
 }
+export function endChangedCatalogAttempt(storage: StoragePort, userId: string, attempt: CatalogPurchaseAttempt) {
+  const current = readCatalogAttempts(storage, userId, attempt.customerId).find(row => row.orderNo === attempt.orderNo)
+  if (!current?.contentChanged) throw new Error('原采购仍待核对，请继续核对原采购，不要直接结束')
+  clear(storage, userId, current)
+}
+export function catalogPurchaseMismatch(message: string) {
+  return message.includes('不能修改后重试') || message.includes('内容不同') || message.includes('已用于其他内容')
+}
 export async function runCatalogAttempt<T extends { syncPending?: boolean; warning?: string }>(request: (body: CatalogPurchaseAttempt) => Promise<T>, storage: StoragePort, userId: string, attempt: CatalogPurchaseAttempt, apply: (result: T) => void) {
   try {
     const result = await request(attempt)
@@ -31,6 +39,13 @@ export async function runCatalogAttempt<T extends { syncPending?: boolean; warni
     return { completed: true, result, message: '采购已完成，余额与持有已更新' }
   } catch (error) {
     const status = Number((error as { status?: unknown })?.status)
+    const text = `${(error as { message?: unknown })?.message || ''} ${userFacingError(error)}`
+    if (catalogPurchaseMismatch(text)) {
+      const next = { ...attempt, contentChanged: true as const }
+      const rows = readCatalogAttempts(storage, userId, attempt.customerId).map(row => row.orderNo === attempt.orderNo ? next : row)
+      storage.setItem(key(userId, attempt.customerId), JSON.stringify(rows))
+      throw new Error(`${userFacingError(error)}。请先核对采购记录和余额，不要继续原采购。`)
+    }
     if ([400, 404, 409, 422].includes(status)) {
       try { clear(storage, userId, attempt) } catch { throw new Error('原采购已返回结果，但核对信息未能清除，请联系管理员核对，勿重复购买') }
       throw new Error(`${userFacingError(error)}。本次请求未新增采购，请核对最新商品和余额后继续`)

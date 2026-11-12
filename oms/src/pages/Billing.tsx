@@ -5,7 +5,8 @@ import { Link } from 'react-router-dom'
 import { Button, PageHeader, Card, MonoCode, StatCard, Table, TableFooter, FilterChip, Badge } from '../components/ui'
 import { formInput, formTextarea } from '../components/ui/form'
 import { formatCurrency } from '../data/mockData'
-import { rechargeViaErp, pendingRecharge, useBilling, refreshBillingFromErp } from '../data/billingStore'
+import { rechargeViaErp, pendingRecharge, rechargeScope, useBilling, refreshBillingFromErp } from '../data/billingStore'
+import { endChangedRecharge } from '../data/rechargeWorkflow'
 import { groupFeeRecordsByOutbound, isOutboundRefNo } from '../data/outboundFeeUtils'
 import { useRole } from '../auth/RoleContext'
 import { useDataScope } from '../auth/useDataScope'
@@ -321,14 +322,22 @@ export default function BillingPage({ rechargeOnly }: BillingPageProps) {
   }
   const submitRecharge = async (retry = false) => {
     const request = retry ? originalRecharge : rechargeDraft
-    if (!request || rechargeBusy.current) return
+    if (!request || rechargeBusy.current || ('contentChanged' in request && request.contentChanged)) return
     rechargeBusy.current = true;setRecharging(true);setRechargeMsg(null)
     try {
       const result = await rechargeViaErp(request, retry)
       setRechargeMsg(result.ok ? {ok:!result.pending,text:`${result.message}，当前余额 ${formatCurrency(result.balance)}`} : {ok:false,text:result.error})
       setRechargeDraft(null);readOriginalRecharge()
       if (result.ok) await readBilling()
-    } finally { rechargeBusy.current = false;setRecharging(false) }
+    }     finally { rechargeBusy.current = false;setRecharging(false) }
+  }
+  const endChangedRechargeRequest = () => {
+    if (!originalRecharge?.contentChanged || rechargeBusy.current) return
+    try {
+      endChangedRecharge(localStorage, rechargeScope(), originalRecharge)
+      setRechargeMsg({ ok: false, text: '已结束这次未能入账的充值。请先核对充值记录和余额；若没有入账，可以重新填写。' })
+      readOriginalRecharge()
+    } catch (error) { setRechargeMsg({ ok: false, text: userFacingError(error) }) }
   }
 
   const billingReadControls = <div className="mb-4 space-y-2">
@@ -382,8 +391,10 @@ export default function BillingPage({ rechargeOnly }: BillingPageProps) {
               </div>
               {rechargeStorageError && <p role="alert" className="text-sm text-red-700">{rechargeStorageError}</p>}
               {originalRecharge && <div role="status" className="space-y-2 rounded bg-amber-50 p-3 text-sm">
-                <p>原充值待核对：{originalRecharge.customerCode} · {originalRecharge.rechargeNo} · {formatCurrency(originalRecharge.amount)}。请保留原单号，勿另建单。</p>
-                <Button disabled={recharging || !can('billing:recharge')} onClick={() => void submitRecharge(true)}>重试原充值</Button>
+                <p>{originalRecharge.contentChanged ? `原充值内容不同：${originalRecharge.customerCode} · ${originalRecharge.rechargeNo}。请先核对充值记录和余额，不要重试原充值。` : `原充值待核对：${originalRecharge.customerCode} · ${originalRecharge.rechargeNo} · ${formatCurrency(originalRecharge.amount)}。请保留原单号，勿另建单。`}</p>
+                {originalRecharge.contentChanged
+                  ? <Button disabled={recharging} onClick={() => endChangedRechargeRequest()}>已核对记录，结束本次</Button>
+                  : <Button disabled={recharging || !can('billing:recharge')} onClick={() => void submitRecharge(true)}>重试原充值</Button>}
               </div>}
               {rechargeDraft && <div role="region" aria-label="核对充值" className="space-y-3 rounded border p-3 text-sm">
                 <p>请核对：客户 {rechargeDraft.customerCode}，{rechargeDraft.paymentMethodTitle}，充值 {formatCurrency(rechargeDraft.amount)}。</p>

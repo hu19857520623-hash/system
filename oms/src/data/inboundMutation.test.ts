@@ -215,6 +215,22 @@ test('新版本不能为旧表单自动放行；缺少打开时的版本不会�
   assert.equal(calls, 1); assert.equal(pendingInboundOperation(draft).record, null)
 })
 
+test('入库内容不同时保留原请求，并且不再重试', async t => {
+  environment(t); setInboundOrders([draft])
+  let calls = 0
+  globalThis.fetch = async () => {
+    calls++
+    return Response.json({ error: '原入库操作对应的单据或内容不同，请先核对原操作，不要修改后重试' }, { status: 409 })
+  }
+  const first = await submitInboundToErp(draft)
+  assert.equal(first.ok, false)
+  if (!first.ok) assert.match(first.error, /不要重试原请求/)
+  assert.equal(pendingInboundOperation(draft).record?.contentChanged, true)
+  const second = await retryInboundOriginal(draft)
+  assert.equal(second.ok, false)
+  assert.equal(calls, 1)
+})
+
 test('多页面操作锁阻止第二次提交，存储失败也不发送请求', async t => {
   environment(t); setInboundOrders([draft])
   let release!: () => void, entered!: () => void
