@@ -82,7 +82,59 @@ export class OutboundBillingService {
     const receipt = await this.prisma.operationLog.findFirst({ where: { module: 'billing', action: 'outbound_payment', targetId: order.outboundNo } })
     if (!rows.length && receipt && (receipt.detail as any)?.actualAmount === 0) return []
     const paid = await billingPaidChargeIds(this.prisma, customer, rows)
-    if (!rows.length || rows.some(row => !paid.has(String(row.id)))) throw new ConflictException('历史发运费用缺少完整支付依据，请由财务核对原发运与扣款记录；本次未再扣款，可返回单据列表')
+    if (!rows.length || rows.some(row => !paid.has(String(row.id)))) throw new ConflictException('历史发运费用缺少完整支付依据，请由财务核对原发运与扣款记录后，在出库单操作中使用「核对补记支付凭据」补录；本次未再扣款，可返回单据列表')
     return rows.map(row => ({ id: Number(row.id), chargeNo: row.charge_no, chargeType: row.charge_type, amount: Number(row.amount), description: row.description || '', bizRef: order.outboundNo }))
+  }
+
+  /**
+   * 财务人工核对历史发运实扣后补记支付凭据：只写凭据、不改余额、不重复扣款。
+   * 补记后历史费用可正常对账（billingPaidChargeIds 认可逐笔分配依据），发运同步恢复入口可继续。
+   */
+  async verifyHistoricShipPayment(orderId: number, data: { clientRequestId?: string; reason?: string; confirmedTotal?: number }, operatorId?: number) {
+    const clientRequestId = String(data?.clientRequestId || '').trim()
+    if (!/^[0-9a-fA-F-]{36}$/.test(clientRequestId)) throw new BadRequestException('请提供有效的原核对操作标识，重新打开页面后重试')
+    const reason = String(data?.reason || '').trim()
+    if (reason.length < 2 || reason.length > 500) throw new BadRequestException('请填写 2 至 500 字的核对说明')
+    const confirmedTotal = Number(data?.confirmedTotal)
+    if (!Number.isFinite(confirmedTotal) || confirmedTotal < 0 || billingCents(confirmedTotal) > 999999999999) throw new BadRequestException('核对实扣合计金额无效，请按原发运扣款记录填写')
+    const operator = Number(operatorId)
+    if (!Number.isSafeInteger(operator) || operator <= 0) throw new BadRequestException('请重新登录后核对支付凭据')
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM outbound_order WHERE id = ${BigInt(orderId)} FOR UPDATE`
+      const order = await tx.outboundOrder.findUnique({ where: { id: BigInt(orderId) }, include: { items: true } })
+      if (!order) throw new BadRequestException('出库单不存在，请返回列表重新选择')
+      if (!order.shippedAt || !['shipped', 'delivered', 'partial_delivered', 'delivery_failed', 'exception'].includes(order.status)) {
+        throw new BadRequestException('出库尚未完成发运，暂不能补记历史支付凭据；请先核对发运结果')
+      }
+      if (!order.customerId) throw new BadRequestException('该出库单没有客户费用，无需核对支付凭据')
+      await tx.$queryRaw`SELECT id FROM customer WHERE id = ${order.customerId} FOR UPDATE`
+      const customer = await tx.customer.findUnique({ where: { id: order.customerId } })
+      if (!customer) throw new BadRequestException('发运客户不存在，请核对原单据')
+      const rows: any[] = await tx.$queryRawUnsafe("SELECT * FROM billing_charge WHERE customer_id=? AND biz_ref=? AND source IN ('erp','wms') ORDER BY id", customer.id, order.outboundNo)
+      if (!rows.length) throw new BadRequestException('没有需要核对的历史发运费用')
+      const receipt = await tx.operationLog.findFirst({ where: { module: 'billing', action: 'outbound_payment', targetId: order.outboundNo }, orderBy: { id: 'desc' } })
+      if (receipt) {
+        const detail: any = receipt.detail || {}
+        if (detail.clientRequestId === clientRequestId) {
+          return { duplicate: true, outboundNo: order.outboundNo, totalAmount: detail.actualAmount, message: '原核对已完成，本次未重复写入凭据，也未改变余额' }
+        }
+        const allocations = Array.isArray(detail.allocations) ? detail.allocations : []
+        const complete = rows.every(row => allocations.some((a: any) => String(a.chargeId) === String(row.id) && billingCents(a.paidAmount) === billingCents(row.amount)))
+        if (complete) throw new ConflictException('此出库单已有完整发运支付凭据，无需重复核对')
+        throw new ConflictException('此出库单存在不完整的历史发运凭据，请先人工核对原始记录后再处理；本次未写入、未改余额')
+      }
+      const total = rows.reduce((n, c) => n + billingCents(c.amount), 0)
+      if (billingCents(confirmedTotal) !== total) {
+        throw new BadRequestException(`核对实扣合计 ¥${confirmedTotal.toFixed(2)} 与系统费用合计 ¥${(total / 100).toFixed(2)} 不一致，请先核对原发运扣款记录后重新填写`)
+      }
+      const balance = billingCents(customer.balance)
+      const allocations = rows.map(row => ({ chargeId: Number(row.id), chargeNo: row.charge_no, chargeType: row.charge_type, paidAmount: Number(row.amount) }))
+      await tx.operationLog.create({ data: { module: 'billing', action: 'outbound_payment', operatorId: BigInt(operator), targetType: 'outbound_order', targetId: order.outboundNo,
+        detail: json({ clientRequestId, manualVerification: true, verificationReason: reason, customerId: Number(customer.id), outboundId: Number(order.id),
+          preDeductAmount: null, actualAmount: total / 100, balanceBefore: balance / 100, balanceAfter: balance / 100, balanceDelta: 0,
+          estimatedCharges: [], allocations,
+          message: '财务已人工核对历史发运实扣并补记支付凭据；本次只记录凭据，未改余额、未重复扣款' }) } })
+      return { outboundNo: order.outboundNo, verified: true, totalAmount: total / 100, allocations, balanceDelta: 0, message: '支付凭据已补记，历史发运费用已可正常对账；本次未改余额、未重复扣款' }
+    })
   }
 }

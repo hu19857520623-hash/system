@@ -429,6 +429,7 @@ export const outboundApi = {
   deliver: (id, data) => api.post(`/outbound/${id}/deliver`, data || {}),
   ship: (id, data) => api.post(`/outbound/${id}/ship`, data || {}),
   syncShipment: (id) => api.post(`/outbound/${id}/sync-shipment`, {}),
+  verifyPaymentEvidence: (id, data) => api.post(`/outbound/${id}/verify-payment-evidence`, data),
   cancel: (id) => api.post(`/outbound/${id}/cancel`),
   assignPicker: (data) => api.post('/outbound/assign-picker', data),
   assignmentRequest: (requestId) => api.get(`/outbound/assignment-requests/${encodeURIComponent(requestId)}`),

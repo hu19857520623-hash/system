@@ -2041,6 +2041,11 @@ th{background:#f5f5f5}
       ...(feePending || syncPending ? { warning: '发运、库存与扣费已保存，但OMS费用、状态或库存同步未完成。请使用原操作重试，或返回列表选择“核对发运同步”，勿再次发运或扣款' } : { message: duplicate ? '原发运操作已完成，本次仅核对同步，未重复扣库存或扣款' : '发运与费用已保存，OMS同步已完成' }) }
   }
 
+  /** 财务核对补记历史发运支付凭据；只写凭据，不改余额、不重复扣款。 */
+  async verifyHistoricShipPayment(id: number, data: { clientRequestId?: string; reason?: string; confirmedTotal?: number }, operatorId?: number) {
+    return this.outboundBilling.verifyHistoricShipPayment(id, data, operatorId)
+  }
+
   async cancelFromOms(outboundNo: string, customerCode: string) {
     const customer = await this.prisma.customer.findUnique({
       where: { customerCode: String(customerCode || '').trim() },

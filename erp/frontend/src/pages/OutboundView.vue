@@ -286,6 +286,9 @@ function handleRowCommand(command: string, row: any) {
     case 'ship':
       openShip(row)
       break
+    case 'verifyPayment':
+      openVerifyPayment(row)
+      break
     case 'deliver':
       openDeliver(row, 'delivered')
       break
@@ -374,6 +377,7 @@ const canPick = computed(() => app.hasPerm('outbound.pick'))
 const canPack = computed(() => app.hasPerm('outbound.pack'))
 const canShip = computed(() => app.hasPerm('outbound.ship'))
 const canExport = computed(() => app.hasPerm('outbound.export'))
+const canVerifyPayment = computed(() => app.hasPerm('billing.manual'))
 const relabelLabelSummary = computed(() => buildOutboundLabelSummary(relabelOrder.value))
 const relabelUsesPlatformUnitLabels = computed(() =>
   relabelLabelSummary.value.isTakealot && relabelLabelSummary.value.hasLabelMetadata,
@@ -474,6 +478,7 @@ function rowCommands(row: any): RowAction[] {
     cmds.push({ key: 'pack', command: 'pack', label: '复核打包' })
   }
   if (['shipped', 'delivered', 'partial_delivered', 'delivery_failed'].includes(status) && canShip.value) cmds.push({ key: 'syncShipment', command: 'syncShipment', label: '核对发运同步' })
+  if (['shipped', 'delivered', 'partial_delivered', 'delivery_failed', 'exception'].includes(status) && canVerifyPayment.value) cmds.push({ key: 'verifyPayment', command: 'verifyPayment', label: '核对补记支付凭据' })
   if (status === 'packed' && canShip.value) {
     cmds.push({ key: 'ship', command: 'ship', label: '发运' })
   }
@@ -772,6 +777,51 @@ async function readFileAsBase64(file: File): Promise<string> {
   const bytes = new Uint8Array(buf)
   for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]!)
   return btoa(binary)
+}
+
+const verifyPaymentVisible = ref(false)
+const verifyPaymentRow = ref<any>(null)
+const verifyPaymentBusy = ref(false)
+const verifyPaymentFeedback = ref('')
+const verifyPaymentForm = ref<{ reason: string; confirmedTotal: number | null }>({ reason: '', confirmedTotal: null })
+
+function openVerifyPayment(row: any) {
+  if (!canVerifyPayment.value) return
+  verifyPaymentRow.value = row
+  verifyPaymentForm.value = { reason: '', confirmedTotal: null }
+  verifyPaymentFeedback.value = ''
+  verifyPaymentVisible.value = true
+}
+
+async function submitVerifyPayment() {
+  const row = verifyPaymentRow.value
+  if (!row || verifyPaymentBusy.value) return
+  const reason = verifyPaymentForm.value.reason.trim()
+  if (reason.length < 2 || reason.length > 500) {
+    verifyPaymentFeedback.value = '请填写 2 至 500 字的核对说明'
+    return
+  }
+  const total = Number(verifyPaymentForm.value.confirmedTotal)
+  if (!Number.isFinite(total) || total < 0) {
+    verifyPaymentFeedback.value = '请按原发运扣款记录填写核对实扣合计金额'
+    return
+  }
+  verifyPaymentBusy.value = true
+  verifyPaymentFeedback.value = ''
+  try {
+    const result = await outboundApi.verifyPaymentEvidence(row.id, {
+      clientRequestId: (globalThis.crypto?.randomUUID?.() || `${Date.now()}-verify-${Math.random().toString(16).slice(2)}`),
+      reason,
+      confirmedTotal: total,
+    })
+    verifyPaymentVisible.value = false
+    ElMessage.success(result?.message || `出库单 ${row.outboundNo} 支付凭据已补记，本次未改余额、未重复扣款`)
+    await reloadAll()
+  } catch (error) {
+    verifyPaymentFeedback.value = userFacingError(error)
+  } finally {
+    verifyPaymentBusy.value = false
+  }
 }
 
 async function openDeliver(row: any, outcome: 'delivered' | 'partial_delivered' | 'delivery_failed' = 'delivered') {
@@ -1576,6 +1626,23 @@ function statusTag(status: string) {
       </div>
       <template #footer>
         <el-button type="primary" @click="detailVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="verifyPaymentVisible" :title="`核对补记支付凭据 · ${verifyPaymentRow?.outboundNo || ''}`" width="540px" :close-on-click-modal="!verifyPaymentBusy" :close-on-press-escape="!verifyPaymentBusy" :show-close="!verifyPaymentBusy">
+      <p>请先在原始发运与扣款记录中完成人工核对。本入口只补记支付凭据：<b>不会再次扣款，也不会修改客户余额</b>；补记后历史费用可正常对账，「核对发运同步」可继续。</p>
+      <el-form label-width="130px" :disabled="verifyPaymentBusy" @submit.prevent="submitVerifyPayment">
+        <el-form-item label="核对实扣合计" required>
+          <el-input-number v-model="verifyPaymentForm.confirmedTotal" :min="0" :precision="2" style="width:100%" placeholder="按原发运扣款流水填写" />
+        </el-form-item>
+        <el-form-item label="核对说明" required>
+          <el-input v-model="verifyPaymentForm.reason" type="textarea" :rows="3" maxlength="500" placeholder="例如：已与原发运扣款流水核对一致（2 至 500 字）" />
+        </el-form-item>
+      </el-form>
+      <el-alert v-if="verifyPaymentFeedback" :title="verifyPaymentFeedback" type="warning" :closable="false" role="alert" style="margin-top:12px" />
+      <template #footer>
+        <el-button :disabled="verifyPaymentBusy" @click="verifyPaymentVisible = false">取消</el-button>
+        <el-button type="primary" :loading="verifyPaymentBusy" @click="submitVerifyPayment">确认补记凭据</el-button>
       </template>
     </el-dialog>
   </div>

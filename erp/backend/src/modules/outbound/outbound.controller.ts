@@ -301,6 +301,13 @@ export class OutboundController {
     return this.service.syncShipment(id)
   }
 
+  /** 财务人工核对后补记历史发运支付凭据：只写凭据，不改余额、不重复扣款 */
+  @RequirePerms('billing.manual')
+  @Post(':id/verify-payment-evidence')
+  verifyPaymentEvidence(@Param('id', ParseIntPipe) id: number, @Body() body: any, @CurrentUser('userId') userId: number) {
+    return this.service.verifyHistoricShipPayment(id, body, userId)
+  }
+
   @RequirePerms('outbound.create')
   @Post(':id/cancel')
   cancel(@Param('id', ParseIntPipe) id: number) {
