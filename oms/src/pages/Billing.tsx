@@ -7,7 +7,7 @@ import { formInput, formTextarea } from '../components/ui/form'
 import { formatCurrency } from '../data/mockData'
 import { rechargeViaErp, pendingRecharge, rechargeScope, useBilling, refreshBillingFromErp } from '../data/billingStore'
 import { endChangedRecharge } from '../data/rechargeWorkflow'
-import { groupFeeRecordsByOutbound, isOutboundRefNo } from '../data/outboundFeeUtils'
+import { groupFeeRecordsByOutbound, isOutboundRefNo, summarizeOutboundFeeGroups } from '../data/outboundFeeUtils'
 import { useRole } from '../auth/RoleContext'
 import { useDataScope } from '../auth/useDataScope'
 import type { ErpBillingSnapshot } from '../api/erp'
@@ -298,6 +298,7 @@ export default function BillingPage({ rechargeOnly }: BillingPageProps) {
   useEffect(() => { if (!dataScope.isAdmin && globalBilling.snapshot?.customerCode === selectedCode) setBillingView(globalBilling.snapshot) }, [globalBilling.snapshot, selectedCode, dataScope.isAdmin])
 
   const outboundGroups = useMemo(() => groupFeeRecordsByOutbound(feeRecords), [feeRecords])
+  const outboundSummary = useMemo(() => summarizeOutboundFeeGroups(outboundGroups), [outboundGroups])
   const [expandedOutbound, setExpandedOutbound] = useState<string | null>(null)
 
   const filteredFees = feeRecords.filter(f => {
@@ -549,6 +550,14 @@ export default function BillingPage({ rechargeOnly }: BillingPageProps) {
           <div className="border-b border-border-light px-5 py-3">
             <p className="text-sm font-semibold text-text-primary">按出库单聚合</p>
             <p className="mt-0.5 text-[11px] text-text-muted">同一出库单的预扣、实扣、对账流水归为一组</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-border-light bg-surface-muted/20 px-5 py-2 text-xs text-text-secondary" role="status">
+            <span>出库对账汇总</span>
+            <span>预扣合计 <span className="font-semibold text-text-primary">{formatCurrency(outboundSummary.preDeductTotal)}</span></span>
+            <span>实扣合计 <span className="font-semibold text-text-primary">{formatCurrency(outboundSummary.actualTotal)}</span></span>
+            <span>对账差额 <span className={`font-semibold ${outboundSummary.settlementAdjustTotal > 0 ? 'text-emerald-600' : outboundSummary.settlementAdjustTotal < 0 ? 'text-orange-600' : 'text-text-primary'}`}>{outboundSummary.settlementAdjustTotal > 0 ? '+' : ''}{formatCurrency(outboundSummary.settlementAdjustTotal)}</span></span>
+            <span>已对账 <span className="font-semibold text-text-primary">{outboundSummary.settledCount}</span> 单</span>
+            <span>待对账 <span className="font-semibold text-text-primary">{outboundSummary.pendingCount}</span> 单</span>
           </div>
           <div className="divide-y divide-border-light">
             {outboundGroups.map(g => {

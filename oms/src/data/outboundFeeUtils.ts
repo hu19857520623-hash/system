@@ -131,3 +131,35 @@ export function settlementStatusLabel(status?: OutboundOrder['settlementStatus']
   if (status === 'pending') return '待对账'
   return '—'
 }
+
+export type OutboundFeeGroupSummary = {
+  orderCount: number
+  preDeductTotal: number
+  actualTotal: number
+  settlementAdjustTotal: number
+  netChangeTotal: number
+  settledCount: number
+  pendingCount: number
+}
+
+/** 账单页：出库对账调整汇总（预扣/实扣/差额合计与已对账、待对账单数） */
+export function summarizeOutboundFeeGroups(groups: OutboundFeeGroup[]): OutboundFeeGroupSummary {
+  const summary: OutboundFeeGroupSummary = {
+    orderCount: groups.length,
+    preDeductTotal: 0,
+    actualTotal: 0,
+    settlementAdjustTotal: 0,
+    netChangeTotal: 0,
+    settledCount: 0,
+    pendingCount: 0,
+  }
+  for (const g of groups) {
+    summary.preDeductTotal += g.preDeductTotal
+    summary.actualTotal += g.actualTotal
+    summary.settlementAdjustTotal += g.settlementAdjust
+    summary.netChangeTotal += g.netChange
+    if (g.settled) summary.settledCount += 1
+    else if (g.preDeductTotal > 0) summary.pendingCount += 1
+  }
+  return summary
+}
