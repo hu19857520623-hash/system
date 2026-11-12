@@ -315,6 +315,21 @@ jobs:
           test -f "$inbound_save_sql" || { echo "Missing $inbound_save_sql"; exit 1; }
           cat "$inbound_save_sql" | docker compose exec -T mysql mysql -uroot -p"$mysql_pw" --default-character-set=utf8mb4 --batch takealot_erp
 
+          echo '=== Apply catalog price tier schema ==='
+          catalog_tiers_sql="${PWD}/backend/prisma/scripts/migrate_catalog_price_tiers.sql"
+          test -f "$catalog_tiers_sql" || { echo "Missing $catalog_tiers_sql"; exit 1; }
+          cat "$catalog_tiers_sql" | docker compose exec -T mysql mysql -uroot -p"$mysql_pw" --batch takealot_erp
+
+          echo '=== Apply lead deal service schema ==='
+          lead_deal_service_sql="${PWD}/backend/prisma/scripts/migrate_lead_deal_service.sql"
+          test -f "$lead_deal_service_sql" || { echo "Missing $lead_deal_service_sql"; exit 1; }
+          cat "$lead_deal_service_sql" | docker compose exec -T mysql mysql -uroot -p"$mysql_pw" --batch takealot_erp
+
+          echo '=== Apply customer credit limit schema ==='
+          customer_credit_sql="${PWD}/backend/prisma/scripts/migrate_customer_credit_limit.sql"
+          test -f "$customer_credit_sql" || { echo "Missing $customer_credit_sql"; exit 1; }
+          cat "$customer_credit_sql" | docker compose exec -T mysql mysql -uroot -p"$mysql_pw" --batch takealot_erp
+
           echo '=== Build store-monitor ==='
           cd /opt/system/store-monitor
           docker build -t takealot/store-monitor:production . </dev/null
