@@ -341,6 +341,10 @@ POST /billing/generate 先以 preview 取得费用快照版本，同一请求标
 
 对 15 组待办中「内部费用表名/英文状态」类缺口按当前代码逐处核验：管理报表/盘点的 `presentation.ts` 标签与未知码兜底（「待核对」）、Dashboard 断网误报、OMS 账务 `feeTypeLabel` 均已是中文安全实现。发现并修复两处残留（提交 87a2532，前端 594 测试全绿，已部署审计环境）：①账单确认弹窗费用明细表直接渲染 `chargeType` 内部码（如 return_logistics），改为 BILLING_CHARGE_LABELS 中文映射并带说明/「其他费用」兜底；②商品/开发/审核/采购/线索五处状态映射的兜底 `statusMap[row.status] || row.status` 会把未知英文状态码原样显示，统一为中文安全兜底（已知码中文映射、纯中文原样、未知内部码「待核对」）。
 
+## OMS 门户逐按钮矩阵 + PDA APK 与代码一致性核验（2026-11-13）
+
+①**OMS 三页按钮矩阵**（TKL9001 门户会话，真实浏览器）：/inbound/records（28 按钮：立即刷新/导入导出/状态页签/高级搜索/打印标签）、/outbound（20 按钮：增加/清除/下载模板/批量上传/**取消/保存草稿/提交并锁定库存**返回与失败恢复钮实存）、/billing（19 按钮：导出流水/重新读取账务/导出已付费用及退款/**「重新读取账务」读取失败恢复钮**）——界面文案 100% 中文、0 条英文主导标签。②**PDA APK 一致性**：dex 字符串硬核验桌面包含『未知状态』『草稿』『已核对记录，结束本次』且旧串『状态待核对』已被替换（ddd1d78 状态标签修复在包内）——初判「APK 过期」系构建时间≠提交时间的误判，已纠正并如实记录；新复制 PDA-1.0.28-debug-20261113.apk 供测试（旧包保留），PDA 单测 112 项全绿。证据 \output/workflow-audit-2026-10-16\recovery-oms-buttons-apk-20261113.json\。
+
 ## 同缺陷类排查与修复：库位体积/承重上限手工入口缺校验（2026-11-13）
 
 因商品负尺寸缺陷（上节）按同缺陷类全面排查其它手工录入入口：供应商（账期 0～9999 整数/文本/邮箱均有中文校验，无缺陷）、库区（无容量字段）、**库位（warehouse-location create/update 的 maxVolumeCbm/maxWeightKg 完全无校验，负数/零/非数值可写库——同缺陷类实锤）**。修复：新增 validLocationCapacity（>0 且 ≤999999.99，空值清空，中文报错）接入 create/update，新增 3 项单测；后端 203 套件 1723 测试全绿，已构建部署。真实接口复验（PUT /api/locations/:id）：maxVolumeCbm=-5 → 400「库位体积上限须为大于 0 且不超过 999999.99 的数值」、maxWeightKg=0 → 400「库位承重上限…」、maxVolumeCbm='abc' → 同中文拒绝，全部未写库。证据 \output/workflow-audit-2026-10-16\recovery-product-measure-fix-20261113.json\（同缺陷类附记）。
