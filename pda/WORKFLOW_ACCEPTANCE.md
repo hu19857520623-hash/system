@@ -341,6 +341,10 @@ POST /billing/generate 先以 preview 取得费用快照版本，同一请求标
 
 对 15 组待办中「内部费用表名/英文状态」类缺口按当前代码逐处核验：管理报表/盘点的 `presentation.ts` 标签与未知码兜底（「待核对」）、Dashboard 断网误报、OMS 账务 `feeTypeLabel` 均已是中文安全实现。发现并修复两处残留（提交 87a2532，前端 594 测试全绿，已部署审计环境）：①账单确认弹窗费用明细表直接渲染 `chargeType` 内部码（如 return_logistics），改为 BILLING_CHARGE_LABELS 中文映射并带说明/「其他费用」兜底；②商品/开发/审核/采购/线索五处状态映射的兜底 `statusMap[row.status] || row.status` 会把未知英文状态码原样显示，统一为中文安全兜底（已知码中文映射、纯中文原样、未知内部码「待核对」）。
 
+## 真实浏览器回归：已部署文案修复实证（2026-11-13）
+
+通过 loopback SSH 隧道对**已部署**审计环境 ERP（127.0.0.1:15180）真实浏览器回归本轮两处文案修复：①登录后进入账务页，点击「核对确认」打开「核对账单与余额」弹窗（真实账单 BL-202610… · 流程验收客户一），DOM 抽取费用明细表全部为中文（「退件物流费（JHB3 · 4 RMB/kg）· 2.400 kg × 4 RMB/kg」「直接上架 · 包装费 × 2 件」「直接上架 · 上架费 × 2 件」），**无任何 chargeType 内部码**（修复前该列显示 return_logistics 等），余额链（99.60/当前 100/确认后 0.40）正确；②商品管理页 20 行状态列全部中文（「已生效」等），无 active/inactive 英文码。两处截图留证。证据 \output/workflow-audit-2026-10-16\recovery-browser-labels-20261113.json\（allPassed=true）。
+
 ## PDA 服务端读面真实接口验收：工作台/收货清单/标签打印（2026-11-13）
 
 以真实接口验证 PDA/网页共用读面路由（先跑通一票真实完成入库作数据）：①作业工作台 `GET /inbound/work-orders`——未选仓返回中文校验「请选择有效的海外仓后读取作业单」（规范门），选仓后 200 返回作业单列表；②收货清单 `GET /inbound/:id/receiving-list`——200 text/html，含入库单号与中文标题（6152 字节）；③SKU 标签 `GET /inbound/:id/labels/sku?sku=`——200 %PDF（4887 字节）；④外箱唛 `GET /inbound/:id/labels/outer`——200 %PDF（2421 字节）；⑤单据详情 200；⑥不存在 ID → 404 中文「入库单不存在」。清理后全表零残留。证据 \output/workflow-audit-2026-10-16\recovery-pda-reads-20261113.json\（全步骤 ok）。
