@@ -30,6 +30,7 @@ function toCustomerRow(row: any) {
     status: m.status,
     lastRechargeAt: m.lastRechargeAt || fmtTime(row.lastRechargeAt).split(' ')[0] || '—',
     _id: row.id ?? m.id,
+    rechargeable: row.readOnly !== true && row.dataSource !== 'oms' && Number(row.id) > 0,
     _raw: row,
   }
 }
@@ -94,6 +95,13 @@ function openRecharge(row?: any) {
 }
 
 function syncFromCustomer(row: { _id: number; id: string; name: string }) {
+  if (!(Number(row._id) > 0)) {
+    rechargeForm.value.customerId = null
+    rechargeForm.value.customerCode = row.id
+    rechargeForm.value.customerName = row.name
+    toast('该客户为 OMS 门户客户，尚无 ERP 客户档案，请先在「客户列表」建立 ERP 档案后充值', 'warning')
+    return
+  }
   rechargeForm.value.customerId = row._id
   rechargeForm.value.customerCode = row.id
   rechargeForm.value.customerName = row.name
@@ -116,7 +124,11 @@ async function onCodeBlur() {
     const items = (res.items || []).map(toCustomerRow)
     const exact = items.find((c: any) => c.id.toLowerCase() === code.toLowerCase())
     if (rechargeLocked.value || rechargeForm.value.customerCode.trim() !== code) return
-    if (exact) syncFromCustomer(exact)
+    if (exact && Number(exact._id) > 0) syncFromCustomer(exact)
+    else if (exact) {
+      rechargeForm.value.customerId = null
+      toast('该客户为 OMS 门户客户，尚无 ERP 客户档案，请先在「客户列表」建立 ERP 档案后充值', 'warning')
+    }
     else {
       rechargeForm.value.customerId = null
       toast('未找到该客户 ID', 'warning')
@@ -179,6 +191,7 @@ async function submitRecharge(retry = false) {
   if (rechargePending.value && !retry) { rechargeError.value = '请先重试原充值';return }
   const form = rechargeForm.value
   if (!form.customerId || !form.customerCode || !form.rechargeNo.trim()) { rechargeError.value = '请选择有效客户并填写充值单号';return }
+  if (!(Number(form.customerId) > 0)) { rechargeError.value = '该客户为 OMS 门户客户，尚无 ERP 客户档案，不能在 ERP 侧充值。请先在「客户列表」建立 ERP 档案后再充值；门户资金回填需先建档。本次未新增充值。';return }
   if (!/^[A-Za-z0-9_-]{1,30}$/.test(form.rechargeNo.trim())) { rechargeError.value = '充值单号须为1至30位字母、数字、下划线或短横线';return }
   const attempt: RechargeAttempt = rechargePending.value || { customerId: form.customerId, customerCode: form.customerCode, customerName: form.customerName, rechargeNo: form.rechargeNo.trim(), amount: form.amount, remark: form.remark }
   const operatorId = String(app.authenticatedUser?.id), scope = rechargeScope()
@@ -272,10 +285,15 @@ onMounted(() => { readOriginalRecharge();void load() })
         </template>
       </el-table-column>
       <el-table-column prop="lastRechargeAt" label="最近充值" width="100" />
-      <el-table-column label="操作" width="120" fixed="right">
+      <el-table-column label="操作" width="180" fixed="right">
         <template #default="{ row }">
-          <el-button v-if="app.hasPerm('budget_credit.create')" link type="primary" size="small" @click="openRecharge(row)">充值</el-button>
-          <el-button link type="primary" size="small" @click="showDetail(row)">明细</el-button>
+          <template v-if="row.rechargeable">
+            <el-button v-if="app.hasPerm('budget_credit.create')" link type="primary" size="small" @click="openRecharge(row)">充值</el-button>
+            <el-button link type="primary" size="small" @click="showDetail(row)">明细</el-button>
+          </template>
+          <el-tooltip v-else content="该客户为 OMS 门户客户，尚无 ERP 客户档案，ERP 侧不能充值或查看充值明细。请先在「客户列表」建立 ERP 档案后再充值。" placement="top">
+            <el-tag type="info" effect="plain" size="small">门户客户 · 请先建立 ERP 档案</el-tag>
+          </el-tooltip>
         </template>
       </el-table-column>
     </el-table>
