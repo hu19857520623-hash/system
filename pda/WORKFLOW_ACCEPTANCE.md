@@ -341,6 +341,10 @@ POST /billing/generate 先以 preview 取得费用快照版本，同一请求标
 
 对 15 组待办中「内部费用表名/英文状态」类缺口按当前代码逐处核验：管理报表/盘点的 `presentation.ts` 标签与未知码兜底（「待核对」）、Dashboard 断网误报、OMS 账务 `feeTypeLabel` 均已是中文安全实现。发现并修复两处残留（提交 87a2532，前端 594 测试全绿，已部署审计环境）：①账单确认弹窗费用明细表直接渲染 `chargeType` 内部码（如 return_logistics），改为 BILLING_CHARGE_LABELS 中文映射并带说明/「其他费用」兜底；②商品/开发/审核/采购/线索五处状态映射的兜底 `statusMap[row.status] || row.status` 会把未知英文状态码原样显示，统一为中文安全兜底（已知码中文映射、纯中文原样、未知内部码「待核对」）。
 
+## 故障矩阵残项实测：导出任务中断恢复 + 会话内降权（2026-11-13）
+
+对已部署代码真实接口实测两个故障矩阵残项：①**任务重启恢复**——直插 processing 且租约过期的导出任务（模拟执行中服务被杀），GET /async-io/:id 返回 `displayStatus=interrupted`、`canRetry=true`（页面恢复入口可用），POST :id/retry 后 completed、下载 CSV 行数与 totalRows 精确一致（17=17）；②**会话内降权即时生效**——finance 角色令牌读账务 200，库内降为 viewer 后**同一令牌**再读即 403「无权限执行此操作」（每次请求按当前角色鉴权，会话内不留旧权限，UI 层菜单清理另有历史实测）。清理后全表零残留。证据 \output/workflow-audit-2026-10-16\recovery-taskrestart-sessiondown-20261113.json\（全步骤 ok）。
+
 ## 故障矩阵注入实测：外部推送成功 + 同步结果落库失败（2026-11-13）
 
 针对公告组残项「外部推送成功后数据库提交失败场景」的同类退件同步链路，以 MySQL 触发器做真实故障注入（sync_log 指定行 UPDATE 抛错）对已部署代码实测：①**注入阶段**（POST /sync-logs/:id/retry 真实人工重试入口）——OMS 推送已发出并落 OMS 镜像（oms_returnorder 命中），但同步行落库失败后保持 pending/retryCount=0（**外部成功不被本地失败伪造为已同步**），响应 500 中文「服务器内部错误」，业务数据（退件单/余额/库存/持有）零变化；②**恢复阶段**（撤除注入）——重试成功 status=success/retryCount=1、中文「退件当前状态和库存已同步至 OMS」，重复重试幂等（201）且业务零变化；③清理后全表零残留（含 OMS 镜像行）。过程中发现并顺手修复一小缺口：return_status 重试成功响应此前不带中文提示字段，已补（提交内含，201 套件 1704 测试全绿，已部署复验）。证据 \output/workflow-audit-2026-10-16\recovery-syncfail-injection-20261113.json\（injected/recovery 全步骤 ok）。
