@@ -277,6 +277,7 @@ fun stocktakeStatusLabel(status: String) = when (status) {
 }
 
 fun outboundStatusLabel(status: String) = when (status) {
+    "draft" -> "草稿"
     "pending_pick" -> "待拣货"
     "picking" -> "拣货中"
     "picked" -> "已拣货"
@@ -296,5 +297,5 @@ fun outboundStatusLabel(status: String) = when (status) {
 private fun displayUnmappedStatus(status: String): String = when {
     status.isBlank() -> "—"
     status.any { it in '\u4e00'..'\u9fff' } -> status
-    else -> "状态待核对"
+    else -> "未知状态"
 }

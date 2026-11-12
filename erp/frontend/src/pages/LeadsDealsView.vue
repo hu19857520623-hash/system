@@ -323,8 +323,6 @@ async function toErp(row: any) {
   if (row.customerId) return
   const leadNo = String(row.leadNo || row.id || '')
   const codeRest = leadNo.replace(/^LD-?/i, '').replace(/[^A-Za-z0-9_-]/g, '') || Date.now().toString().slice(-8)
-  const shopType = String(row.shopType || '')
-  const omsType: OmsCustomerType = shopType.includes('海外') ? 'catalog' : 'ecommerce'
   omsTarget.value = row
   omsForm.value = {
     customerCode: `CUS-${codeRest}`.slice(0, 30),
@@ -333,9 +331,9 @@ async function toErp(row: any) {
     contactName: row.contactName || '',
     contactPhone: row.contactPhone || '',
     contactEmail: row.email || '',
-    omsType,
+    omsType: '',
     warehouse: warehouseOptions.value[0]?.code || 'WMS-JHB-01',
-    permissionTemplate: omsType,
+    permissionTemplate: '',
   }
   omsDialogVisible.value = true
 }
@@ -355,9 +353,9 @@ const omsForm = ref({
   contactName: '',
   contactPhone: '',
   contactEmail: '',
-  omsType: 'ecommerce' as OmsCustomerType,
+  omsType: '' as OmsCustomerType | '',
   warehouse: 'WMS-JHB-01',
-  permissionTemplate: 'ecommerce' as OmsCustomerType,
+  permissionTemplate: '' as OmsCustomerType | '',
 })
 
 function normalizePortalLoginPhone(value: unknown) {
@@ -407,6 +405,11 @@ async function submitOmsAccount() {
     return
   }
   const f = omsForm.value
+  if (!f.omsType) {
+    ElMessage.warning('请选择 OMS 客户类型')
+    return
+  }
+  const omsType = f.omsType as OmsCustomerType
   omsSaving.value = true
   try {
     const result = await leadApi.confirmToErp(omsTarget.value._leadId, {
@@ -416,10 +419,10 @@ async function submitOmsAccount() {
       contactEmail: f.contactEmail.trim().toLowerCase() || undefined,
       contactName: f.contactName.trim() || undefined,
       contactPhone: f.contactPhone.trim(),
-      portalType: f.omsType,
-      omsType: f.omsType,
+      portalType: omsType,
+      omsType,
       warehouse: f.warehouse.trim(),
-      permissionTemplate: f.permissionTemplate || f.omsType,
+      permissionTemplate: (f.permissionTemplate || omsType) as OmsCustomerType,
       temporaryPassword: DEFAULT_OMS_TEMPORARY_PASSWORD,
     })
     omsDialogVisible.value = false
@@ -703,6 +706,8 @@ onMounted(async () => {
         <el-select
           v-model="omsForm.omsType"
           style="width:100%"
+          placeholder="请选择 OMS 客户类型"
+          clearable
           @change="(v: OmsCustomerType) => { omsForm.permissionTemplate = v }"
         >
           <el-option label="电商客户" value="ecommerce" />

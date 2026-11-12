@@ -1,4 +1,5 @@
 import { userFacingError } from '@erp/shared/user-facing-error'
+import { leadFollowTypeLabel } from '@/features/leads/leadFollowType'
 /**
  * 后端字段 → 前端展示字段映射
  */
@@ -403,6 +404,7 @@ export function mapLead(row: any) {
     followSales: String(row.followSales || '').trim() || parseFollowSalesFromRemark(row.remark),
     time: fmtTime(row.createdAt),
     latestFollowContent,
+    latestFollowTypeLabel: leadFollowTypeLabel(latestFollow?.followType),
     latestFollowAt: latestFollow?.createdAt ? fmtTime(latestFollow.createdAt) : '',
     nextPlan,
     nextFollowAt: latestFollow?.nextFollowAt ? fmtTime(latestFollow.nextFollowAt) : '',
