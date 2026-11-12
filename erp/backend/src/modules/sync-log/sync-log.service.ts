@@ -50,7 +50,10 @@ export class SyncLogService {
       return { kind: 'announcement' as const, row, announcement }
     }, { isolationLevel: 'ReadCommitted', timeout: 40000 })
 
-    if (plan.kind === 'return') return this.returnsSync!.deliver(plan.row)
+    if (plan.kind === 'return') {
+      const updated = await this.returnsSync!.deliver(plan.row)
+      return { ...updated, message: updated.status === 'success' ? '退件当前状态和库存已同步至 OMS' : '退件已保存，OMS 同步待重试；请勿重复收货、返库或收费' }
+    }
 
     const sent = await this.announcements.sendReplay(plan.announcement)
     const message = sent ? '当前公告已重新同步至 OMS' : 'OMS 尚未确认同步，请稍后重试；公告内容未被重复修改'
