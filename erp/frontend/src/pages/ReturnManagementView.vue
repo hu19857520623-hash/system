@@ -10,7 +10,7 @@ import { displaySku, displaySkuText, formatSku } from '@erp/shared/sku-display'
 import { ref, computed, watch, onScopeDispose } from 'vue'
 import { ElMessage } from 'element-plus'
 import { erpConfirm } from '@/utils/messageBox'
-import { returnsApi, operationLogApi } from '@/api/client.js'
+import { returnsApi, operationLogApi, triggerBrowserDownload } from '@/api/client.js'
 import { useReturnList } from '@/composables/useReturnList.ts'
 import { useAppStore } from '@/stores/app'
 import ListPagination from '@/components/ListPagination.vue'
@@ -910,7 +910,8 @@ async function submitProcess() {
 
 async function downloadAttachment(row: any, att: { id: number; fileName: string }) {
   try {
-    await returnsApi.downloadAttachment(row.id, att.id)
+    const { blob, fileName } = await returnsApi.downloadAttachment(row.id, att.id)
+    triggerBrowserDownload(blob, fileName || att.fileName)
   } catch (e: any) {
     ElMessage.error(userFacingError(displaySkuText(e?.message || '下载失败')))
   }

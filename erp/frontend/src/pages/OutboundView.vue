@@ -739,7 +739,8 @@ async function onPickSuccess() {
 async function downloadPickList(row: any) {
   if (!canPick.value && !canExport.value) return
   try {
-    await outboundApi.downloadPickList(row.id)
+    const { blob, fileName } = await outboundApi.downloadPickList(row.id)
+    triggerBrowserDownload(blob, fileName)
   } catch (err: any) {
     ElMessage.error(userFacingError(displaySkuText(err.message || '下载拣货清单失败')))
   }
