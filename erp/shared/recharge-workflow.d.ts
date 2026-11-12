@@ -14,7 +14,8 @@ export type RechargeAttempt = {
 export declare function newRechargeNo(): string;
 export declare function readRecharge(storage: StoragePort, scope: string): RechargeAttempt | null;
 export declare function saveRecharge(storage: StoragePort, scope: string, attempt: RechargeAttempt): void;
-export declare function clearRecharge(storage: StoragePort, scope: string, attempt: RechargeAttempt): void;
+export declare function rechargeContentMismatch(message: string): boolean;
+export declare function endChangedRecharge(storage: StoragePort, scope: string, attempt: RechargeAttempt): void;
 export declare function runRecharge<T extends {
     record: {
         rechargeNo: string;

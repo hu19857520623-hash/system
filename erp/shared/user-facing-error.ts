@@ -28,6 +28,10 @@ export function userFacingError(value: unknown, status?: number, fallback = '操
   const detail = context ? text.slice(context.length).replace(/^[：:]\s*/, '') : text
   // Match the whole stock HTTP message before translating its suffix, including an older partially localized response.
   if (/^(?:(?:resource|record|document|entity)\s+)?(?:not found|未找到所需记录)[.!。]?$/i.test(detail)) return contextual(defaults[404])
+  // 数据库并发冲突：结果明确未生效，给出可安全重试的中文提示（先于通用 SQL 屏蔽分支）。
+  if (/deadlock|lock wait timeout|\bP2034\b|try restarting transaction/i.test(text)) {
+    return contextual('操作冲突，本次未生效，请刷新后重试；如反复出现，请联系管理员')
+  }
   // SQL、堆栈和网关页面不属于业务提示，即使带中文前缀也不能直接展示。
   if (/PrismaClient|Invalid `|SQLSTATE|\bat\s+\S+\s*\([^)]*:\d+:\d+|<!doctype|<html|ECONN\w+|ENOTFOUND|ENETUNREACH/i.test(text)) return contextual(safeFallback)
   if (/failed to fetch|fetch failed|network\s*error|networkerror|load failed/i.test(text)) return contextual('网络连接失败，请检查网络后重试')

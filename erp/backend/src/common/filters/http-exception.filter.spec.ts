@@ -10,6 +10,8 @@ describe('Chinese user-facing API failures', () => {
     ['sku must be a string', 400, '输入信息有误'], ['quantity must not be less than 1', 400, '输入信息有误'],
     ['Unexpected token < in JSON at position 0', 0, '数据处理失败'], ['Cannot read properties of undefined', 0, '数据处理失败'],
     ['Database unavailable', 500, '服务处理失败'], ['操作失败：PrismaClientKnownRequestError', 500, '服务处理失败'],
+    ['Invalid `prisma.$queryRaw()` invocation: Deadlock found when trying to get lock; try restarting transaction', 500, '操作冲突，本次未生效'],
+    ['PrismaClientKnownRequestError: \nInvalid `prisma.$transaction` invocation:\n\n\nRaw query failed. Code: `1213`. Message: `Deadlock found when trying to get lock; try restarting transaction`', 500, '操作冲突，本次未生效'],
   ])('normalizes %s without exposing English diagnostics', (raw, status, expected) => {
     expect(userFacingError(raw, Number(status))).toContain(expected)
   })

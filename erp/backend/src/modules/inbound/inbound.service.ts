@@ -28,6 +28,7 @@ import { erpShipmentFingerprint, erpShipmentRequest } from './erp-shipment-reque
 import { ERP_MASTER_PRODUCT_WHERE } from '../../common/product-source.util'
 import { syncCatalogFromInbound } from '../pricing/catalog-sync.util'
 import { PrismaService } from '../../common/prisma/prisma.service'
+import { withDeadlockRetry } from '../../common/db/deadlock-retry.util'
 import { FileStoreService } from '../../common/file-store.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
 import { OperationLogService } from '../operation-log/operation-log.service'
@@ -526,15 +527,15 @@ export class InboundService {
   }
 
   remove(id: number, operatorId?: number) {
-    return removeErpShipment(this.prisma, id, operatorId)
+    return withDeadlockRetry(() => removeErpShipment(this.prisma, id, operatorId))
   }
 
   applySeaFreight(id: number, body: ApplyShipmentFreightDto, operatorId?: number) {
-    return this.writeSeaFreight(id, body, false, operatorId)
+    return withDeadlockRetry(() => this.writeSeaFreight(id, body, false, operatorId))
   }
 
   clearSeaFreight(id: number, body: ShipmentFreightMutationDto, operatorId?: number) {
-    return this.writeSeaFreight(id, body, true, operatorId)
+    return withDeadlockRetry(() => this.writeSeaFreight(id, body, true, operatorId))
   }
 
   private async writeSeaFreight(id: number, body: ShipmentFreightMutationDto | ApplyShipmentFreightDto, clear: boolean, operatorId?: number) {
@@ -855,7 +856,7 @@ export class InboundService {
     if (!scanCode) throw new BadRequestException('请扫描或输入单号')
     if (!warehouseCode) throw new BadRequestException('请选择操作仓库')
     const inboundNo = inboundNoFromScan(scanCode) || scanCode
-    const result = await this.prisma.$transaction(async tx => {
+    const result = await withDeadlockRetry(() => this.prisma.$transaction(async tx => {
       const wh = await tx.warehouse.findUnique({ where: { warehouseCode } })
       if (!wh || wh.warehouseType !== 'wms' || wh.status !== 1) throw new BadRequestException('操作仓库必须是启用的海外仓')
       await tx.$queryRaw`SELECT id FROM inbound_order WHERE inbound_no = ${inboundNo} AND warehouse_code = ${warehouseCode} FOR UPDATE`
@@ -868,7 +869,7 @@ export class InboundService {
       await tx.inboundArrivalScan.create({ data: { inboundId: order.id, scanCode, scanType: 'inbound_no', warehouseCode, operatorId: operatorId ? BigInt(operatorId) : undefined, scannedAt: now } })
       await tx.operationLog.create({ data: { operatorId: operatorId ? BigInt(operatorId) : undefined, module: 'inbound', action: 'arrival_scan', targetType: 'inbound_order', targetId: order.inboundNo, detail: { scanCode, warehouseCode } } })
       return { order: updated, alreadyScanned: false }
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted })
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted }))
     await this.pushInboundStatusToOms(result.order.inboundNo)
     return { alreadyScanned: result.alreadyScanned, message: result.alreadyScanned ? '该入库单已登记到仓，已读取最新作业状态，无需重复扫描' : `${result.order.inboundNo} 到仓扫描成功`, order: this.serializeInbound(result.order) }
   }

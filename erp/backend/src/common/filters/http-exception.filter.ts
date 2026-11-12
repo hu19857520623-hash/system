@@ -27,6 +27,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
       if (Array.isArray(message)) message = message.join('; ')
     } else if (exception instanceof Error) {
       this.logger.error(exception.message, exception.stack)
+      message = exception.message || message
     }
 
     response.status(status).json({ code: status, message: userFacingError(message, status), data: null })

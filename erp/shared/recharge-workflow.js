@@ -3,7 +3,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.newRechargeNo = newRechargeNo;
 exports.readRecharge = readRecharge;
 exports.saveRecharge = saveRecharge;
-exports.clearRecharge = clearRecharge;
+exports.rechargeContentMismatch = rechargeContentMismatch;
+exports.endChangedRecharge = endChangedRecharge;
 exports.runRecharge = runRecharge;
 const user_facing_error_1 = require("./user-facing-error");
 const key = (scope) => {
@@ -35,8 +36,7 @@ function readRecharge(storage, scope) {
 }
 function saveRecharge(storage, scope, attempt) {
     const previous = readRecharge(storage, scope);
-    const body = (row) => { const { contentChanged, ...rest } = row; return JSON.stringify(rest); };
-    if (previous && body(previous) !== body(attempt))
+    if (previous && JSON.stringify(previous) !== JSON.stringify(attempt))
         throw new Error('还有原充值待核对，请先重试原充值，勿修改金额或更换单号');
     try {
         storage.setItem(key(scope), JSON.stringify(attempt));
@@ -45,13 +45,18 @@ function saveRecharge(storage, scope, attempt) {
         throw new Error('无法保存充值核对信息，本次尚未提交，请检查浏览器存储后重试');
     }
 }
-function clearRecharge(storage, scope, attempt) {
+function rechargeContentMismatch(message) {
+    return message.includes('勿另建单重复充值') || message.includes('内容不同');
+}
+function endChangedRecharge(storage, scope, attempt) {
     const current = readRecharge(storage, scope);
-    if (current && current.rechargeNo !== attempt.rechargeNo)
-        throw new Error('原充值单已变化，请重新核对');
+    if (!current?.contentChanged || current.rechargeNo !== attempt.rechargeNo)
+        throw new Error('原充值仍待核对，请重试原充值，不要直接结束');
     storage.removeItem(key(scope));
 }
 async function runRecharge(storage, scope, attempt, request) {
+    if (attempt.contentChanged)
+        throw new Error('原充值内容不同。请先核对充值记录和余额，不要重试原充值。');
     if (typeof attempt.amount !== 'number' || !/^\d{1,12}(\.\d{1,2})?$/.test(String(attempt.amount)) || attempt.amount <= 0)
         throw new Error('请输入有效充值金额，最多两位小数');
     saveRecharge(storage, scope, attempt);
@@ -68,11 +73,10 @@ async function runRecharge(storage, scope, attempt, request) {
     }
     catch (error) {
         const status = Number(error?.status);
-        const text = `${(0, user_facing_error_1.userFacingError)(error)} ${String(error?.message || '')}`;
-        const mismatch = status === 409 && (text.includes('金额、方式或备注不同') || text.includes('充值单号已被使用') || text.includes('勿另建单'));
-        if (mismatch) {
-            try { saveRecharge(storage, scope, { ...attempt, contentChanged: true }); } catch { /* 原充值仍在，本次页面仍可结束。 */ }
-            throw new Error(`原充值单号对应的内容不同。请先核对充值记录；若本次没有入账，结束本次后再重新填写。不要修改后重试原充值。${(0, user_facing_error_1.userFacingError)(error)}`);
+        const text = `${error instanceof Error ? error.message : ''} ${(0, user_facing_error_1.userFacingError)(error)}`;
+        if (rechargeContentMismatch(text)) {
+            storage.setItem(key(scope), JSON.stringify({ ...attempt, contentChanged: true }));
+            throw new Error(`原充值内容不同。请先核对充值记录和余额，不要重试原充值。${(0, user_facing_error_1.userFacingError)(error)}`);
         }
         if ([400, 404, 422].includes(status)) {
             clear();
