@@ -26,6 +26,36 @@ function num(v: unknown, fallback = 0): number {
   return Number.isFinite(n) ? n : fallback
 }
 
+/** 商品尺寸/重量/金额录入校验（与入库测量同口径）：空值放行，非法或越界拒绝并中文报错。 */
+export function assertProductMeasureInput(data: {
+  lengthCm?: unknown; widthCm?: unknown; heightCm?: unknown; weightKg?: unknown
+  costRmb?: unknown; marketPrice?: unknown; seaFreightPerUnit?: unknown; domesticFeePerUnit?: unknown
+}) {
+  const dim = (v: unknown, label: string) => {
+    if (v === undefined || v === null || v === '') return
+    const n = Number(v)
+    if (!Number.isFinite(n) || n < 0.01 || n > 999.99) throw new BadRequestException(`${label}须为 0.01～999.99 厘米之间的数值`)
+  }
+  const weight = (v: unknown) => {
+    if (v === undefined || v === null || v === '') return
+    const n = Number(v)
+    if (!Number.isFinite(n) || n < 0.001 || n > 999.999) throw new BadRequestException('重量须为 0.001～999.999 千克之间的数值')
+  }
+  const money = (v: unknown, label: string) => {
+    if (v === undefined || v === null || v === '') return
+    const n = Number(v)
+    if (!Number.isFinite(n) || n < 0) throw new BadRequestException(`${label}须为不小于 0 的有效数值`)
+  }
+  dim(data.lengthCm, '长')
+  dim(data.widthCm, '宽')
+  dim(data.heightCm, '高')
+  weight(data.weightKg)
+  money(data.costRmb, '采购成本')
+  money(data.marketPrice, '市场参考价')
+  money(data.seaFreightPerUnit, '海运费')
+  money(data.domesticFeePerUnit, '国内费用')
+}
+
 function fmtTime(d: Date | null | undefined): string {
   if (!d) return ''
   return d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
@@ -454,6 +484,7 @@ export class ProductsService {
     const productName = String(data.productName || '').trim()
     if (!sku) throw new BadRequestException('请填写 SKU')
     if (!productName) throw new BadRequestException('请填写商品名称')
+    assertProductMeasureInput(data)
     await assertGlobalSkuAvailable(this.prisma, { sku, customerSku: data.customerSku, mirrorOmsSku: String(data.remark || '').includes('OMS客户:') ? sku : undefined })
 
     const [existingProduct, existingDev] = await Promise.all([
@@ -543,6 +574,7 @@ export class ProductsService {
   }
 
   async update(id: number, data: any, operatorId?: number) {
+    assertProductMeasureInput(data)
     const before = await this.detail(id)
     const beforeSku = data.customerSku !== undefined ? await this.prisma.product.findUnique({ where: { id: BigInt(id) }, select: { customerSku: true } }) : null
     if (data.customerSku !== undefined && String(data.customerSku || '').trim() !== String(beforeSku?.customerSku || '').trim()) {
