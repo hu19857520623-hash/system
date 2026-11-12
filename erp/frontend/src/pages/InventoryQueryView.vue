@@ -274,7 +274,7 @@ async function loadLocationOptions(warehouseCode: string) {
 
 const adjustmentScope = computed(() => app.authenticatedUser && getAccessToken() ? JSON.stringify([getAccessToken(), app.authenticatedUser.id, app.authenticatedUser.roleCode, [...app.currentPermSet].sort()]) : null)
 const originalAdjustment = useInventoryAdjustAttempt({ actor: () => String(app.authenticatedUser?.id || ''), scope: () => adjustmentScope.value, allowed: () => canAdjust.value, storage: localStorage, request: payload => inventoryApi.adjustLocation(payload.id, payload) })
-const { pending: pendingAdjustment, busy: adjusting, blocked: adjustmentBlocked, feedback: adjustmentFeedback } = originalAdjustment
+const { pending: pendingAdjustment, busy: adjusting, blocked: adjustmentBlocked, feedback: adjustmentFeedback, endChanged: endChangedAdjustment } = originalAdjustment
 async function continueAdjustment() {
   const scope = adjustmentScope.value
   if (await originalAdjustment.resume() && scope === adjustmentScope.value) { adjustDialogVisible.value = false; await load() }
@@ -287,7 +287,7 @@ const originalChange = useInventoryChangeAttempt({ actor: () => String(app.authe
   if (result.fail > 0) throw new Error(`本批成功 ${result.ok} 行，尚有 ${result.fail} 行失败：${result.results?.find((row: any) => !row.ok)?.error || '请核对条件后继续原批次'}。已成功行重试不会重复执行`)
   return result
 } })
-const { pending: pendingChange, busy: changing, blocked: changeBlocked, feedback: changeFeedback } = originalChange
+const { pending: pendingChange, busy: changing, blocked: changeBlocked, feedback: changeFeedback, endChanged: endChangedInventory } = originalChange
 async function continueChange() {
   const scope = adjustmentScope.value
   if (await originalChange.resume() && scope === adjustmentScope.value) { changeDialogVisible.value = false; batchPreviewRows.value = []; await load() }
@@ -473,16 +473,24 @@ watch([page, pageSize], () => load())
   <div class="inv-query-page">
     <el-alert v-if="changeFeedback" :title="changeFeedback" :closable="false" type="warning" />
     <el-card v-if="pendingChange" shadow="never">
-      <p>待核对原库存变更：{{ pendingChange.kind === 'batch' ? '批量导入' : '单条变更' }}，请继续原操作。</p>
+      <p v-if="pendingChange.contentChanged">原库存变更内容不同。请先核对库存流水；若本次没有入账，结束本次后再重新填写。</p>
+      <p v-else>待核对原库存变更：{{ pendingChange.kind === 'batch' ? '批量导入' : '单条变更' }}，请继续原操作。</p>
+      <el-button v-if="pendingChange.contentChanged" :disabled="changing" @click="endChangedInventory">已核对记录，结束本次</el-button>
+      <template v-else>
       <el-button :loading="changing" :disabled="!canAdjust || changeBlocked || adjusting" @click="continueChange">核对并继续原库存变更</el-button>
       <el-button v-if="pendingChange.kind === 'batch'" :disabled="changing || !canAdjust || adjusting" @click="closeOriginalBatch">核对结束原批次，处理未成功行</el-button>
       <el-button @click="router.push('/dashboard')">返回工作台（保留原请求）</el-button>
+      </template>
     </el-card>
     <el-alert v-if="adjustmentFeedback" :title="adjustmentFeedback" :closable="false" type="warning" />
     <el-card v-if="pendingAdjustment" shadow="never">
-      <p>待核对原库存调整：库位记录 {{ pendingAdjustment.id }} → {{ pendingAdjustment.locationCode }} · {{ pendingAdjustment.qty }} 件</p>
+      <p v-if="pendingAdjustment.contentChanged">原库存调整内容不同。请先核对库存流水；若本次没有入账，结束本次后再重新填写。</p>
+      <p v-else>待核对原库存调整：库位记录 {{ pendingAdjustment.id }} → {{ pendingAdjustment.locationCode }} · {{ pendingAdjustment.qty }} 件</p>
+      <el-button v-if="pendingAdjustment.contentChanged" :disabled="adjusting" @click="endChangedAdjustment">已核对记录，结束本次</el-button>
+      <template v-else>
       <el-button :loading="adjusting" :disabled="!canAdjust || adjustmentBlocked" @click="continueAdjustment">核对并继续原库存调整</el-button>
       <el-button @click="router.push('/dashboard')">返回工作台（保留原请求）</el-button>
+      </template>
     </el-card>
     <el-card shadow="never" class="page-card">
       <template #header>

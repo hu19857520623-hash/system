@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { assertShipmentMaintenanceReceipt, clearShipmentMaintenance, readShipmentMaintenance, saveShipmentMaintenance, type ShipmentMaintenanceAttempt } from './shipmentMaintenanceAttempt'
+import { assertShipmentMaintenanceReceipt, clearShipmentMaintenance, readShipmentMaintenance, saveShipmentMaintenance, shipmentMaintenanceFailure, type ShipmentMaintenanceAttempt } from './shipmentMaintenanceAttempt'
 function storage() { const data = new Map<string, string>(); return { getItem: (key: string) => data.get(key) ?? null, setItem: (key: string, value: string) => { data.set(key, value) }, removeItem: (key: string) => { data.delete(key) } } }
 const attempt = (): ShipmentMaintenanceAttempt => ({ kind: 'freight', inboundId: 1, inboundNo: 'RV-TEST', clear: false, payload: { clientRequestId: 'same-id', expectedVersion: 'old-version', totalAmount: 12 }, snapshot: { items: [] } })
 describe('发运维护未知结果核对', () => {
@@ -41,6 +41,13 @@ describe('发运维护未知结果核对', () => {
     expect(()=>saveShipmentMaintenance(port,1,changed)).toThrow()
     port.setItem(`erp:shipment-maintenance:1`,JSON.stringify(changed))
     expect(()=>clearShipmentMaintenance(port,1,original)).toThrow('记录已变化');expect(readShipmentMaintenance(port,1)).not.toBeNull()
+  })
+  it('海运费内容已用于其他操作时不再重试，资料变更则清掉原操作', () => {
+    const mismatch = shipmentMaintenanceFailure(409, '本次海运费操作已用于其他内容，请先核对原操作，请勿重复修改')
+    expect(mismatch).toMatchObject({ clear: false, retry: false })
+    expect(mismatch.message).toContain('不要重试原操作')
+    expect(shipmentMaintenanceFailure(409, '单据、商品尺寸或海运费已变更，请重新读取最新详情后再提交')).toMatchObject({ clear: true, retry: false })
+    expect(shipmentMaintenanceFailure(500, '服务处理失败')).toMatchObject({ clear: false, retry: true })
   })
 
 })

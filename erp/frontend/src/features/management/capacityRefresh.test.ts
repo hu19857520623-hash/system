@@ -51,4 +51,13 @@ describe('容量预警刷新恢复',()=>{
     const f=fixture();f.applied.mockImplementation(()=>{throw new Error('render')});await f.controller.start('A')
     expect(f.controller.pending.value).toBeNull();expect(f.controller.feedback.value).toContain('预警已刷新');expect(f.controller.feedback.value).not.toContain('尚未确认')
   })
+  it('同一刷新请求不能更改仓库时不再重试原刷新',async()=>{
+    const f=fixture()
+    f.send.mockRejectedValue(Object.assign(new Error('同一容量刷新请求不能更改仓库，请先核对原结果'),{status:409}))
+    await f.controller.start('A')
+    expect(f.controller.pending.value?.contentChanged).toBe(true)
+    expect(f.controller.feedback.value).toContain('不要重试原刷新')
+    await f.controller.retry()
+    expect(f.send).toHaveBeenCalledTimes(1)
+  })
 })

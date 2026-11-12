@@ -2,10 +2,13 @@ import { userFacingError } from '@erp/shared/user-facing-error'
 
 type StoragePort = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
 export type PickAttempt = {
-  outboundId: number; outboundNo: string
+  outboundId: number; outboundNo: string; stale?: boolean
   labels?: Record<string, string>
   order: { id: number; outboundNo: string; status?: string; pickerId?: number | null }
   payload: { clientRequestId: string; pickSource: 'pda' | 'pick_list'; items: { id: number; allocations: { locationCode: string; qty: number }[] }[] }
+}
+export function outboundAttemptStale(message: string) {
+  return ['不能更改', '内容不同', '勿修改后', '不要修改后', '状态已变化', '已回滚'].some(part => message.includes(part))
 }
 const positive = (n: unknown): n is number => Number.isSafeInteger(n) && Number(n) > 0
 const key = (actor: number) => {
@@ -25,7 +28,7 @@ export function readPickAttempts(storage: StoragePort, actor: number): PickAttem
   try {
     const raw = storage.getItem(key(actor)), rows = raw ? JSON.parse(raw) : []
     if (!Array.isArray(rows) || !rows.every(valid) || new Set(rows.map(r => r.outboundId)).size !== rows.length) throw new Error()
-    return rows
+    return rows.map(row => { if (row.stale !== true) delete row.stale; return row })
   } catch { throw new Error('原拣货信息无法读取，请由主管核对原单和库位扣减，勿重新拣货') }
 }
 export function savePickAttempt(storage: StoragePort, actor: number, attempt: PickAttempt) {
@@ -51,6 +54,7 @@ export async function withPickLock<T>(actor: number, work: () => Promise<T>): Pr
 }
 export async function operatePickAttempt(api: any, storage: StoragePort, actor: number, attempt: PickAttempt,
   mode: 'retry' | 'check' | 'cancel', guard: () => void) {
+  if (mode === 'retry' && attempt.stale) throw new Error('原拣货明细不能更改或出库单状态已变化。请查询原结果或取消原请求后重新读取，不要重试原拣货。')
   const assertCurrent = () => { guard();assertSaved(storage, actor, attempt) }
   try {
     assertCurrent()
@@ -79,6 +83,13 @@ export async function operatePickAttempt(api: any, storage: StoragePort, actor: 
     return receipt as { outcome: 'unknown' | 'confirmed' | 'cancelled'; currentStatus: string }
   } catch (error: any) {
     const status = Number(error?.status)
+    const text = `${error?.message || ''} ${userFacingError(error)}`
+    if (outboundAttemptStale(text)) {
+      const next = { ...attempt, stale: true }
+      const rows = readPickAttempts(storage, actor).map(row => row.outboundId === attempt.outboundId ? next : row)
+      storage.setItem(key(actor), JSON.stringify(rows))
+      throw new Error(`原拣货明细不能更改或出库单状态已变化。请查询原结果或取消原请求后重新读取，不要重试原拣货。${userFacingError(error)}`)
+    }
     throw new Error(status === 401 ? '登录已失效，原拣货请求已保留，请使用原账号登录后核对'
       : status === 403 ? '当前岗位无法核对拣货，原请求已保留，请恢复原岗位权限后继续'
         : `原拣货请求仍需核对，请保留原明细并继续查询或取消原请求。${userFacingError(error)}`)

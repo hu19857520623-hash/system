@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useCatalogAttempt, catalogActionLabel, type CatalogAction } from '@/features/pricing/catalogAttempt'
 import { useRepriceAttempt } from '@/features/pricing/repriceAttempt'
-import { readReclaimAttempt, runReclaimAttempt, reclaimRequestId, type ReclaimAttempt } from '@/utils/catalogReclaimWorkflow'
+import { readReclaimAttempt, runReclaimAttempt, reclaimRequestId, endChangedReclaimAttempt, type ReclaimAttempt } from '@/utils/catalogReclaimWorkflow'
 import { userFacingError } from '@erp/shared/user-facing-error'
 
 import { displaySku, displaySkuText } from '@erp/shared/sku-display'
@@ -282,8 +282,16 @@ async function readReclaimQuote() {
   } catch(error) { if(sequence===reclaimReadSequence) reclaimQuoteError.value=`原购买记录未能核对，请重新读取后继续。${userFacingError(error)}` }
   finally { if(sequence===reclaimReadSequence) reclaimReading.value=false }
 }
+function endChangedReclaim() {
+  const attempt = reclaimPending.value
+  if (!attempt?.contentChanged || reclaimSubmitting.value) return
+  try { endChangedReclaimAttempt(localStorage, Number(app.authenticatedUser?.id), attempt) }
+  catch (error) { reclaimError.value = userFacingError(error); return }
+  readPendingReclaim()
+  reclaimError.value = '已结束这次未能入账的收回。请先核对持有和退款；若没有退款，可以重新读取后再填写。'
+}
 async function submitReclaim(retry=false) {
-  if (reclaimSubmitting.value || reclaimStorageError.value) return
+  if (reclaimSubmitting.value || reclaimStorageError.value || reclaimPending.value?.contentChanged) return
   if (!canReclaim.value) { reclaimError.value='当前岗位无收回退款权限';return }
   if (reclaimPending.value && !retry) { reclaimError.value='请先重试原收回退款';return }
   const f=reclaimForm.value
@@ -610,7 +618,7 @@ async function submitReprice() {
       <p v-if="pendingCatalog">原商品：{{ pendingCatalog.name }} · 原操作：{{ catalogActionLabel[pendingCatalog.action] }}</p>
       <template v-if="pendingCatalog">
         <el-button :disabled="catalogBusy || !catalogAllowed(pendingCatalog.action)" @click="originalCatalog.run('check')">核对原货盘操作结果</el-button>
-        <el-button :disabled="catalogBusy || !catalogAllowed(pendingCatalog.action)" @click="originalCatalog.run('submit')">继续原货盘操作</el-button>
+        <el-button v-if="!pendingCatalog.stale" :disabled="catalogBusy || !catalogAllowed(pendingCatalog.action)" @click="originalCatalog.run('submit')">继续原货盘操作</el-button>
         <el-button :disabled="catalogBusy || !catalogAllowed(pendingCatalog.action)" @click="originalCatalog.run('cancel')">取消原货盘操作请求</el-button>
         <p v-if="!catalogAllowed(pendingCatalog.action)">当前权限不足，请使用原账号恢复相应权限后核对。</p>
       </template>
@@ -620,7 +628,7 @@ async function submitReprice() {
       <p v-if="pendingReprice">原商品：{{ pendingReprice.name }} · 原调价 ¥{{ pendingReprice.payload.price }}</p>
       <template v-if="pendingReprice">
         <el-button :disabled="originalRepriceBusy" @click="originalReprice.run('check')">核对原调价结果</el-button>
-        <el-button :disabled="originalRepriceBusy" @click="originalReprice.run('submit')">继续原调价</el-button>
+        <el-button v-if="!pendingReprice.stale" :disabled="originalRepriceBusy" @click="originalReprice.run('submit')">继续原调价</el-button>
         <el-button :disabled="originalRepriceBusy" @click="originalReprice.run('cancel')">取消原调价请求</el-button>
       </template>
     </el-alert>
@@ -771,8 +779,9 @@ async function submitReprice() {
       <el-alert v-if="holdingsError" :title="holdingsError" type="error" :closable="false" />
       <el-button v-if="holdingsError" :loading="holdingsLoading" @click="loadHoldings">重新读取持有记录</el-button>
       <el-alert v-if="reclaimStorageError" :title="reclaimStorageError" type="error" :closable="false" />
-      <el-alert v-if="reclaimPending" :title="`原收回退款待核对：${reclaimPending.payload.customerCode} · ${reclaimPending.payload.quantity}件 · ¥${reclaimPending.payload.expectedRefundAmount.toFixed(2)}`" type="warning" :closable="false" />
-      <el-button v-if="reclaimPending" :disabled="reclaimSubmitting || !canReclaim" @click="reopenPendingReclaim">核对原收回退款</el-button>
+      <el-alert v-if="reclaimPending" :title="reclaimPending.contentChanged ? `原收回内容不同：${reclaimPending.payload.customerCode} · ${reclaimPending.payload.quantity}件。请先核对持有和退款，不要重试原收回。` : `原收回退款待核对：${reclaimPending.payload.customerCode} · ${reclaimPending.payload.quantity}件 · ¥${reclaimPending.payload.expectedRefundAmount.toFixed(2)}`" type="warning" :closable="false" />
+      <el-button v-if="reclaimPending && !reclaimPending.contentChanged" :disabled="reclaimSubmitting || !canReclaim" @click="reopenPendingReclaim">核对原收回退款</el-button>
+      <el-button v-else-if="reclaimPending?.contentChanged" :disabled="reclaimSubmitting" @click="endChangedReclaim">已核对记录，结束本次</el-button>
       <el-alert type="info" :closable="false" show-icon style="margin-bottom:14px">
         持有量为可收回数量；锁定量为已预约、尚未发货的货盘数量。历史持有量与锁定量均为 0 的记录不显示。
       </el-alert>
@@ -1139,7 +1148,8 @@ async function submitReprice() {
     </el-form>
     <template #footer>
       <el-button @click="reclaimDialogVisible = false">{{ reclaimPending || reclaimSubmitting ? '返回（保留原操作）' : '取消' }}</el-button>
-      <el-button v-if="reclaimPending" type="danger" :loading="reclaimSubmitting" :disabled="!canReclaim || !!reclaimStorageError" @click="submitReclaim(true)">重试原收回退款</el-button>
+      <el-button v-if="reclaimPending && !reclaimPending.contentChanged" type="danger" :loading="reclaimSubmitting" :disabled="!canReclaim || !!reclaimStorageError" @click="submitReclaim(true)">重试原收回退款</el-button>
+      <el-button v-else-if="reclaimPending?.contentChanged" :disabled="reclaimSubmitting" @click="endChangedReclaim">已核对记录，结束本次</el-button>
       <el-button v-else type="danger" :loading="reclaimSubmitting" :disabled="!canReclaim || !!reclaimStorageError || reclaimReading || !reclaimQuote || reclaimRefund <= 0" @click="submitReclaim()">确认收回并退款</el-button>
     </template>
   </el-dialog>

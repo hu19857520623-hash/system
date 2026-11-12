@@ -1,6 +1,6 @@
 import { userFacingError } from '@erp/shared/user-facing-error'
 type StoragePort = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
-export type ReclaimAttempt = { productName: string; maxQty: number; refundLines?: Array<{orderId:number;orderNo:string;quantity:number;unitPrice:number}>; payload: { clientRequestId: string; customerCode: string; sku: string; quantity: number; remark?: string; allocations: Array<{orderId:number;quantity:number}>; expectedRefundAmount: number } }
+export type ReclaimAttempt = { productName: string; maxQty: number; refundLines?: Array<{orderId:number;orderNo:string;quantity:number;unitPrice:number}>; contentChanged?: boolean; payload: { clientRequestId: string; customerCode: string; sku: string; quantity: number; remark?: string; allocations: Array<{orderId:number;quantity:number}>; expectedRefundAmount: number } }
 const key = (userId: number) => {
   if (!Number.isSafeInteger(userId) || userId <= 0) throw new Error('请使用原账号登录后核对收回操作')
   return `erp:catalog-reclaim:${userId}`
@@ -16,8 +16,21 @@ export function readReclaimAttempt(storage: StoragePort, userId: number): Reclai
     const raw = storage.getItem(key(userId));if (!raw) return null
     const row = JSON.parse(raw)
     if (!validAttempt(row)) throw new Error()
+    if (row.contentChanged !== true) delete row.contentChanged
     return row
   } catch { throw new Error('原收回信息无法读取，请核对原操作记录，勿重新收回') }
+}
+export function reclaimContentMismatch(message: string) {
+  return ['勿再次收回', '勿按当前售价', '内容不同', '不要修改后'].some(part => message.includes(part))
+}
+export function reclaimMustRefresh(message: string) {
+  if (reclaimContentMismatch(message)) return false
+  return ['已变化', '已回滚', '请重新核对', '请先核对商品编码', '退款金额与原购买记录不一致', '持有量与货盘已售记录不一致'].some(part => message.includes(part))
+}
+export function endChangedReclaimAttempt(storage: StoragePort, userId: number, attempt: ReclaimAttempt) {
+  const current = readReclaimAttempt(storage, userId)
+  if (!current?.contentChanged || current.payload.clientRequestId !== attempt.payload.clientRequestId) throw new Error('原收回仍待核对，请重试原收回，不要直接结束')
+  storage.removeItem(key(userId))
 }
 export function saveReclaimAttempt(storage: StoragePort, userId: number, attempt: ReclaimAttempt) {
   if (!validAttempt(attempt)) throw new Error('收回退款信息不完整，本次尚未提交，请重新核对原购买记录')
@@ -27,6 +40,7 @@ export function saveReclaimAttempt(storage: StoragePort, userId: number, attempt
   catch { throw new Error('无法保存收回核对信息，本次尚未提交，请检查浏览器存储后重试') }
 }
 export async function runReclaimAttempt(request: (body: ReclaimAttempt['payload']) => Promise<any>, storage: StoragePort, userId: number, attempt: ReclaimAttempt) {
+  if (attempt.contentChanged) throw new Error('原收回内容不同。请先核对持有和退款，不要重试原收回。')
   saveReclaimAttempt(storage, userId, attempt)
   const clear = () => { if (readReclaimAttempt(storage, userId)?.payload.clientRequestId === attempt.payload.clientRequestId) storage.removeItem(key(userId)) }
   try {
@@ -36,6 +50,12 @@ export async function runReclaimAttempt(request: (body: ReclaimAttempt['payload'
     clear();return { completed: true, result, message: result.message || '收回已完成，请核对最新持有记录' }
   } catch (error) {
     const status = Number((error as {status?:unknown})?.status)
+    const text = `${error instanceof Error ? error.message : ''} ${userFacingError(error)}`
+    if (reclaimContentMismatch(text)) {
+      storage.setItem(key(userId), JSON.stringify({ ...attempt, contentChanged: true }))
+      throw new Error(`原收回内容不同。请先核对持有和退款，不要重试原收回。${userFacingError(error)}`)
+    }
+    if (reclaimMustRefresh(text)) { clear();throw new Error(`${userFacingError(error)}。请重新读取持有后再填写，不要重试原收回。`) }
     if ([400,404,422].includes(status)) { clear();throw new Error(`${userFacingError(error)}。本次未新增收回，请重新读取持有后核对`) }
     throw new Error(`收回结果待核对，原操作已保留。请使用原账号重试原收回，勿另建操作。${userFacingError(error)}`)
   }

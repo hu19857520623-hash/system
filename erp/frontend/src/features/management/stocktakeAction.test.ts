@@ -78,6 +78,20 @@ describe('盘点提交恢复', () => {
     lookup.mockRejectedValue(new TypeError('Failed to fetch')); await controller.reconcile()
     expect(controller.pending.value).not.toBeNull(); expect(controller.feedback.value).toContain('核对结果失败')
   })
+  it('盘点内容不能更改时不再重试原提交，结果已变化则清掉原提交', async () => {
+    const changed = fixture()
+    changed.send.mockRejectedValue(Object.assign(new Error('同一盘点请求不能更改内容，请核对原操作结果'), { status: 409 }))
+    await changed.controller.start('count', { lineId: 4, qty: 9, expectedStage: 'pending' }, 3)
+    expect(changed.controller.pending.value?.contentChanged).toBe(true)
+    expect(changed.controller.feedback.value).toContain('不要重试原提交')
+    await changed.controller.retry()
+    expect(changed.send).toHaveBeenCalledTimes(1)
+    const refreshed = fixture()
+    refreshed.send.mockRejectedValue(Object.assign(new Error('盘点结果已变化，请刷新核对后重新操作'), { status: 409 }))
+    await refreshed.controller.start('cancel', { expectedVersion: 'st1', reason: '核对' }, 3)
+    expect(refreshed.controller.pending.value).toBeNull()
+    expect(refreshed.controller.feedback.value).toContain('请刷新盘点结果')
+  })
   it('新账号不接管旧账号的提交，迟到结果不会覆盖当前页面', async () => {
     const { controller, send, owner, values, applied } = fixture()
     let resolve!: (value: unknown) => void

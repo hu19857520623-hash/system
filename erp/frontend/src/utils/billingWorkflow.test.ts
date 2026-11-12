@@ -35,6 +35,12 @@ describe('账单原操作恢复与完整导出', () => {
     await expect(runBillingAttempt({ confirm: vi.fn().mockRejectedValue({ status, message: '账单已变化' }) }, local, 1, original)).rejects.toThrow('重新核对最新费用和余额')
     expect(readBillingAttempt(local, 1)).toBeNull()
   })
+  it('账务内容不同时保留原请求，并且不再重试', async () => {
+    const local = storage(), original = attempt(); saveBillingAttempt(local, 1, original)
+    await expect(runBillingAttempt({ confirm: vi.fn().mockRejectedValue({ status: 409, message: '原账务操作对应的内容不同，请核对原请求，勿修改后重试' }) }, local, 1, original)).rejects.toThrow('不要重试原操作')
+    expect(readBillingAttempt(local, 1)?.contentChanged).toBe(true)
+    await expect(runBillingAttempt({ confirm: vi.fn() }, local, 1, readBillingAttempt(local, 1)!)).rejects.toThrow('不要重试原操作')
+  })
   it('存储不可读/不可写均不冒险新建请求', () => {
     const local = storage();local.setItem('erp:billing-operation:1', '{bad')
     expect(() => readBillingAttempt(local, 1)).toThrow('核对信息无法读取')

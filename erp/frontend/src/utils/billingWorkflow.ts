@@ -1,6 +1,6 @@
 import { userFacingError } from '@erp/shared/user-facing-error'
 type StoragePort = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
-export type BillingAttempt = { kind: 'generate' | 'confirm' | 'manual-charge'; billId?: number; title: string; payload: { clientRequestId: string; [key: string]: any }; snapshot: any }
+export type BillingAttempt = { kind: 'generate' | 'confirm' | 'manual-charge'; billId?: number; title: string; payload: { clientRequestId: string; [key: string]: any }; snapshot: any; contentChanged?: boolean }
 const key = (userId: number) => {
   if (!Number.isSafeInteger(userId) || userId <= 0) throw new Error('请使用原账号重新登录后核对账务操作')
   return `erp:billing-operation:${userId}`
@@ -10,6 +10,7 @@ export function readBillingAttempt(storage: StoragePort, userId: number): Billin
     const raw = storage.getItem(key(userId));if (!raw) return null
     const attempt = JSON.parse(raw)
     if (!['generate', 'confirm', 'manual-charge'].includes(attempt?.kind) || typeof attempt.title !== 'string' || typeof attempt.payload?.clientRequestId !== 'string' || !attempt.snapshot || (attempt.kind === 'confirm' && (!Number.isSafeInteger(attempt.billId) || attempt.billId <= 0))) throw new Error()
+    if (attempt.contentChanged !== true) delete attempt.contentChanged
     return attempt
   } catch { throw new Error('上次账务操作核对信息无法读取，请联系管理员核对原账单和余额，勿重新扣款') }
 }
@@ -19,12 +20,21 @@ export function saveBillingAttempt(storage: StoragePort, userId: number, attempt
   try { storage.setItem(key(userId), JSON.stringify(attempt)) }
   catch { throw new Error('无法保存账务核对信息，本次尚未提交，请检查浏览器存储后重试') }
 }
+export function billingContentMismatch(message: string) {
+  return ['勿修改后重试', '内容不同', '已用于其他内容', '不要修改后'].some(part => message.includes(part))
+}
+export function endChangedBillingAttempt(storage: StoragePort, userId: number, attempt: BillingAttempt) {
+  const current = readBillingAttempt(storage, userId)
+  if (!current?.contentChanged || current.payload.clientRequestId !== attempt.payload.clientRequestId) throw new Error('原账务请求仍待核对，请重试原操作，不要直接结束')
+  storage.removeItem(key(userId))
+}
 function clearOriginal(storage: StoragePort, userId: number, attempt: BillingAttempt) {
   const current = readBillingAttempt(storage, userId)
   if (current && current.payload.clientRequestId !== attempt.payload.clientRequestId) return
   storage.removeItem(key(userId))
 }
 export async function runBillingAttempt(api: any, storage: StoragePort, userId: number, attempt: BillingAttempt) {
+  if (attempt.contentChanged) throw new Error('原账务操作内容不同。请先核对账单和余额，不要重试原操作。')
   try {
     const result = attempt.kind === 'generate' ? await api.generate(attempt.payload) : attempt.kind === 'confirm' ? await api.confirm(attempt.billId, attempt.payload) : await api.createCharge(attempt.payload)
     if (result.syncPending || result.feePending) return { completed: false, result, message: result.warning || '账务操作已保存，OMS同步待核对，请用原操作重试' }
@@ -32,6 +42,11 @@ export async function runBillingAttempt(api: any, storage: StoragePort, userId: 
     return { completed: true, result, message: result.message || '账务操作已保存，请查看最新结果' }
   } catch (error: any) {
     const status = Number(error?.status)
+    const text = `${error?.message || ''} ${userFacingError(error)}`
+    if (status === 409 && billingContentMismatch(text)) {
+      storage.setItem(key(userId), JSON.stringify({ ...attempt, contentChanged: true }))
+      throw new Error(`原账务操作内容不同。请先核对账单和余额，不要重试原操作。${userFacingError(error)}`)
+    }
     if ([400, 404, 409, 422].includes(status)) {
       try { clearOriginal(storage, userId, attempt) }
       catch { throw new Error('原操作已返回结果，但核对信息未能清除；请核对原请求，勿重复录入或扣款') }

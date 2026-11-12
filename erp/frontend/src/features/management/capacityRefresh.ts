@@ -1,7 +1,10 @@
 import { ref, watch } from 'vue'
 import { userFacingError } from '@erp/shared/user-facing-error'
 
-type Attempt = { requestId: string; warehouseCode?: string; uncertain?: boolean }
+type Attempt = { requestId: string; warehouseCode?: string; uncertain?: boolean; contentChanged?: boolean }
+function capacityContentMismatch(message: string) {
+  return ['不能更改仓库', '不能更改内容', '内容不同'].some(part => message.includes(part))
+}
 export function createCapacityRefresh(options: {
   owner: () => string
   storage: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
@@ -18,7 +21,10 @@ export function createCapacityRefresh(options: {
     try {
       const value = JSON.parse(options.storage.getItem(key()) || 'null')
       if (value && /^[A-Za-z0-9_-]{8,100}$/.test(value.requestId) && (value.warehouseCode === undefined || typeof value.warehouseCode === 'string')) {
-        pending.value = { ...value, uncertain: true }; feedback.value = '上次刷新结果尚待核对，请保留原请求后继续。'
+        pending.value = { ...value, uncertain: true }
+        feedback.value = value.contentChanged
+          ? '同一容量刷新请求不能更改仓库。请先核对原结果，结束本次后再重新选择，不要重试原刷新。'
+          : '上次刷新结果尚待核对，请保留原请求后继续。'
       }
     } catch { feedback.value = '未能读取上次刷新记录，请查询容量并核对后继续。' }
   }
@@ -33,6 +39,10 @@ export function createCapacityRefresh(options: {
   }
   async function retry() {
     if (busy.value || !pending.value) return
+    if (pending.value.contentChanged) {
+      feedback.value = '同一容量刷新请求不能更改仓库。请先核对原结果，结束本次后再重新选择，不要重试原刷新。'
+      return
+    }
     const attempt = { ...pending.value }, actor = owner, sequence = ++revision
     busy.value = true
     try {
@@ -40,7 +50,13 @@ export function createCapacityRefresh(options: {
       if (sequence === revision && actor === options.owner()) complete(result)
     } catch (error) {
       if (sequence !== revision || actor !== options.owner()) return
-      if (!attempt.uncertain && [400, 403, 409, 422].includes((error as { status?: number })?.status || 0)) {
+      const text = `${error instanceof Error ? error.message : ''} ${userFacingError(error)}`
+      if (capacityContentMismatch(text)) {
+        const next = { ...attempt, uncertain: true, contentChanged: true }
+        pending.value = next
+        try { options.storage.setItem(key(), JSON.stringify(next)) } catch { /* 原请求仍在，页面仍可结束。 */ }
+        feedback.value = '同一容量刷新请求不能更改仓库。请先核对原结果，结束本次后再重新选择，不要重试原刷新。'
+      } else if (!attempt.uncertain && [400, 403, 409, 422].includes((error as { status?: number })?.status || 0)) {
         pending.value = null
         try { options.storage.removeItem(key()) } catch { /* A later recovery still uses the original identity. */ }
         feedback.value = `${userFacingError(error)} 请查询容量后核对。`
@@ -70,5 +86,11 @@ export function createCapacityRefresh(options: {
       if (sequence === revision && actor === options.owner()) feedback.value = `核对刷新结果失败。${userFacingError(error)} 请保留原请求后重试核对。`
     } finally { if (sequence === revision) busy.value = false }
   }
-  return { pending, busy, feedback, start, retry, reconcile, stop: () => { ++revision; stopWatch() } }
+  function endChanged() {
+    if (busy.value || !pending.value?.contentChanged) return
+    pending.value = null
+    try { options.storage.removeItem(key()) } catch { feedback.value = '原刷新请求未能结束，请保留记录并重新核对。'; return }
+    feedback.value = '已结束这次未能确认的容量刷新。请先核对容量；若没有刷新，可以重新选择仓库。'
+  }
+  return { pending, busy, feedback, start, retry, reconcile, endChanged, stop: () => { ++revision; stopWatch() } }
 }

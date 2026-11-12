@@ -457,6 +457,14 @@ function refreshWarehouseAttempts() {
   catch (error) { warehouseAttemptError.value = userFacingError(error) }
 }
 
+function endWarehouseAttempt(attempt: WarehouseAttempt) {
+  if (pageBusy.value) return
+  try { clearWarehouseAttempt(localStorage, app.authenticatedUser!.id, attempt) }
+  catch (error) { warehouseAttemptError.value = userFacingError(error); return }
+  refreshWarehouseAttempts()
+  warehouseOperationError.value = '已结束这次未能入账的仓库作业。请先核对入库记录；若没有入账，可以重新填写后再提交。'
+}
+
 async function restoreWarehouseAttempt(attempt: WarehouseAttempt) {
   if (pageBusy.value) return
   warehouseCode.value = attempt.warehouseCode
@@ -822,9 +830,15 @@ async function submitControl(data: { kind: WarehouseControlKind; order: any; pay
 }
 async function retryControl(id: number) {
   const attempt = warehouseAttempts.value.find(row => row.inboundId === id)
-  if (!attempt) return false
+  if (!attempt || attempt.contentChanged) return false
   await postWarehouseOperation(attempt)
   return !warehouseOperationError.value && !warehouseAttempts.value.some(row => row.inboundId === id)
+}
+async function endControl(id: number) {
+  const attempt = warehouseAttempts.value.find(row => row.inboundId === id)
+  if (!attempt?.contentChanged) return false
+  endWarehouseAttempt(attempt)
+  return !warehouseAttempts.value.some(row => row.inboundId === id)
 }
 
 function scanTypeLabel(type: string) {
@@ -906,9 +920,14 @@ onMounted(async () => {
     <el-alert v-if="orderListReadError" :title="orderListReadError" type="warning" :closable="false"><el-button @click="loadActiveOrderList">刷新作业单</el-button></el-alert>
     <el-alert v-if="locationReadError" :title="locationReadError" type="error" :closable="false"><el-button @click="loadLocations()">重新读取可用库位</el-button></el-alert>
     <el-alert v-if="warehouseAttemptError" :title="warehouseAttemptError" type="error" :closable="false"><el-button @click="refreshWarehouseAttempts">重新读取核对信息</el-button></el-alert>
-    <el-alert v-for="attempt in warehouseAttempts" :key="attempt.payload.clientRequestId" type="warning" :closable="false" style="margin-bottom:10px" :title="`仓库作业待核对：${attempt.inboundNo}`">
+    <el-alert v-for="attempt in warehouseAttempts" :key="attempt.payload.clientRequestId" type="warning" :closable="false" style="margin-bottom:10px" :title="attempt.contentChanged ? `仓库作业内容不同：${attempt.inboundNo}` : `仓库作业待核对：${attempt.inboundNo}`">
+      <template v-if="attempt.contentChanged">请先核对入库记录。若本次没有入账，结束本次后再重新填写。
+        <el-button :disabled="pageBusy" @click="endWarehouseAttempt(attempt)">已核对记录，结束本次</el-button>
+      </template>
+      <template v-else>
       <el-button :disabled="pageBusy" @click="restoreWarehouseAttempt(attempt)">恢复原操作</el-button>
       <el-button :loading="warehouseBusy" @click="postWarehouseOperation(attempt)">核对并重试原操作</el-button>
+      </template>
     </el-alert>
     <el-alert v-if="warehouseOperationError" :title="warehouseOperationError" type="error" :closable="false" style="margin-bottom:10px" />
     <el-alert v-if="warehouseResult" :type="warehouseResult.feePending || warehouseResult.syncPending ? 'warning' : 'success'" :closable="false" style="margin-bottom:10px" :title="`${warehouseResult.inboundNo}：${warehouseResult.message || '作业已保存'}`">
@@ -966,7 +985,7 @@ onMounted(async () => {
     <div v-if="activeOrder && controlChoices.length" style="margin:10px 0;display:flex;gap:8px;flex-wrap:wrap">
       <el-button v-for="kind in controlChoices" :key="kind" size="small" :disabled="receivingLocked" @click="openControl(kind)">{{ ({ 'resolve-exception': '放行上架', 'reopen-count': '更正清点', 'close-zero': '零收货结束', 'reduce-qc': '减少实收件数', 'reduce-carton': '减少实收箱数', 'reduce-putaway': '撤回最近上架' })[kind] }}</el-button>
     </div>
-    <WarehouseControlDialog v-model="controlVisible" :inbound-id="activeOrderId" :initial-kind="controlKind" :busy="warehouseBusy" :attempt="pendingWarehouseAttempt" :error-text="warehouseOperationError || warehouseAttemptError" :submit-action="submitControl" :retry-action="retryControl" />
+    <WarehouseControlDialog v-model="controlVisible" :inbound-id="activeOrderId" :initial-kind="controlKind" :busy="warehouseBusy" :attempt="pendingWarehouseAttempt" :error-text="warehouseOperationError || warehouseAttemptError" :submit-action="submitControl" :retry-action="retryControl" :end-action="endControl" />
 
     <!-- 到仓扫描 -->
     <div v-show="workStep === 'arrival'" class="panel">

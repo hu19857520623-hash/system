@@ -31,9 +31,9 @@ import {
 import { normalizeImportFileText, parseCsvLine } from '@/utils/csv.ts'
 import { reportPartialImportResult, type ImportRowFailure } from '@/utils/importResultFeedback.ts'
 
-import { clearShipmentAttempt, readShipmentAttempt, saveShipmentAttempt, type ShipmentAttempt } from '@/utils/erpShipmentAttempt'
+import { clearShipmentAttempt, readShipmentAttempt, saveShipmentAttempt, shipmentSubmitFailure, draftAlreadyShipped, attachmentUploadFailure, type ShipmentAttempt } from '@/utils/erpShipmentAttempt'
 import { inboundListStats } from '@/features/inbound/listStats'
-import { assertShipmentMaintenanceReceipt, clearShipmentMaintenance, readShipmentMaintenance, saveShipmentMaintenance, type ShipmentMaintenanceAttempt } from '@/utils/shipmentMaintenanceAttempt'
+import { assertShipmentMaintenanceReceipt, clearShipmentMaintenance, readShipmentMaintenance, saveShipmentMaintenance, shipmentMaintenanceFailure, type ShipmentMaintenanceAttempt } from '@/utils/shipmentMaintenanceAttempt'
 
 const app = useAppStore()
 const route = useRoute()
@@ -148,7 +148,7 @@ const stockError = ref('')
 const draftsError = ref('')
 const shipmentBusy = ref(false)
 const draftBusy = ref(false)
-const pendingDraftSave = ref<{ draftNo: string; form: Record<string, any> } | null>(null)
+const pendingDraftSave = ref<{ draftNo: string; form: Record<string, any>; closed?: boolean } | null>(null)
 const draftSaveFeedback = ref('')
 const draftSaveCanCopy = ref(false)
 const draftSaveStorageBlocked = ref(false)
@@ -475,11 +475,12 @@ async function postShipment(attempt: ShipmentAttempt) {
     })
   } catch (error: any) {
     if(!frame.active())return
-    shipmentError.value = userFacingError(error)
-    if ([400, 404, 422].includes(error.status)) {
+    const decision = shipmentSubmitFailure(Number(error?.status), userFacingError(error))
+    shipmentError.value = decision.message
+    if (decision.clear) {
       try { clearShipmentAttempt(localStorage,frame.owner,attempt); shipmentAttempt.value = null }
       catch { shipmentError.value += '；本机核对信息未能清除，请先核对原操作后重试' }
-    } else shipmentError.value = `发运结果待核对，请保持本次内容并点击「核对并重试原提交」。${shipmentError.value}`
+    }
   } finally { if(frame.active())shipmentBusy.value = false }
 }
 
@@ -517,7 +518,17 @@ async function finishDeletedShipment(copy:boolean){
 }
 
 function retryShipment() {
+  if (shipmentError.value.includes('不要重试原提交')) return
   if (shipmentAttempt.value && !deletedShipment.value) postShipment(shipmentAttempt.value)
+}
+function endMismatchedShipment() {
+  const attempt = shipmentAttempt.value
+  const frame = shipmentRequests.capture()
+  if (!attempt || formBusy.value || !frame.active()) return
+  try { clearShipmentAttempt(localStorage, frame.owner, attempt) }
+  catch (error) { shipmentError.value = userFacingError(error); return }
+  shipmentAttempt.value = null
+  shipmentError.value = '已结束这次未能按本机内容入账的发运。请先核对入库单；若没有入账，可以重新填写后再提交。'
 }
 
 function returnShipmentList() {
@@ -924,8 +935,9 @@ async function postMaintenance(attempt: ShipmentMaintenanceAttempt) {
     })
   } catch (error: any) {
     if(!frame.active())return
-    maintenanceError.value = userFacingError(error)
-    if ([400, 404, 409, 422].includes(error.status)) {
+    const decision = shipmentMaintenanceFailure(Number(error?.status), userFacingError(error))
+    maintenanceError.value = decision.message
+    if (decision.clear) {
       try { clearShipmentMaintenance(localStorage,frame.owner,attempt); maintenanceAttempt.value = null }
       catch { maintenanceError.value += '；本机核对信息未能清除，请先核对原操作' }
       if (error.status === 409 && attempt.kind === 'freight' && !maintenanceAttempt.value) {
@@ -934,11 +946,20 @@ async function postMaintenance(attempt: ShipmentMaintenanceAttempt) {
           detailMutationWarning.value = '请重新读取最新详情，核对海运费后再操作'
         }
       }
-    } else maintenanceError.value = `操作结果待核对，请点击「核对并重试原操作」，不要重新建立操作。${maintenanceError.value}`
+    }
   } finally { if(frame.active()){maintenanceBusy.value = false; freightSubmitting.value = false} }
 }
 
-function retryMaintenance() { if (maintenanceAttempt.value) postMaintenance(maintenanceAttempt.value) }
+function retryMaintenance() { if (maintenanceAttempt.value && !maintenanceError.value.includes('不要重试原操作')) postMaintenance(maintenanceAttempt.value) }
+function endMismatchedMaintenance() {
+  const attempt = maintenanceAttempt.value
+  const frame = shipmentRequests.capture()
+  if (!attempt || formBusy.value || !frame.active()) return
+  try { clearShipmentMaintenance(localStorage, frame.owner, attempt) }
+  catch (error) { maintenanceError.value = userFacingError(error); return }
+  maintenanceAttempt.value = null
+  maintenanceError.value = '已结束这次未能按本机内容入账的发运维护。请先核对入库单和海运费；若没有入账，可以重新读取后再填写。'
+}
 
 async function refreshMutationDetail(target = detailOrder.value) {
   const id=inboundNumericId(target)
@@ -1210,7 +1231,10 @@ function restoreDraftSaveCheckpoint() {
     if (typeof saved?.draftNo !== 'string' || !saved.draftNo.trim() || saved.draftNo.length > 30 ||
         !Array.isArray(saved.form?.lines) || !Array.isArray(saved.form?.cartons)) throw Error()
     pendingDraftSave.value = saved
-    draftSaveFeedback.value = '有原草稿保存结果待核对，原草稿号和输入已保留。'
+    draftSaveCanCopy.value = false
+    draftSaveFeedback.value = saved.closed === true
+      ? '该草稿已转为正式入库单。请返回入库单管理核对，不要复制为新草稿。'
+      : '有原草稿保存结果待核对，原草稿号和输入已保留。'
   } catch {
     draftSaveStorageBlocked.value = true
     draftSaveFeedback.value = '原草稿核对记录无法读取，请恢复浏览器存储后重新读取。'
@@ -1272,9 +1296,18 @@ async function saveDraft() {
     if (!frame.active()) return
     const status = Number(error?.status)
     if (!Number.isFinite(status) || status < 100 || status >= 500 || status === 408 || status === 409) {
-      pendingDraftSave.value = snapshot
+      const text = userFacingError(error)
+      const closed = status === 409 && draftAlreadyShipped(text)
+      const saved = closed ? { ...snapshot, closed: true } : snapshot
+      if (closed) {
+        const key = draftSaveKey(frame.owner), raw = JSON.stringify(saved)
+        sessionStorage.setItem(key, raw)
+      }
+      pendingDraftSave.value = saved
       draftSaveCanCopy.value = false
-      draftSaveFeedback.value = `草稿保存结果待核对，原资料已保留。${userFacingError(error)}`
+      draftSaveFeedback.value = closed
+        ? `${text}。请返回入库单管理核对，不要复制为新草稿。`
+        : `草稿保存结果待核对，原资料已保留。${text}`
     } else {
       try {
         clearDraftSaveCheckpoint(frame.owner, snapshot)
@@ -1297,6 +1330,10 @@ async function verifyDraftSave() {
   try {
     const rows = await frame.step(() => inboundApi.listDrafts())
     if (!frame.active()) return
+    if (attempt.closed) {
+      draftSaveFeedback.value = '该草稿已转为正式入库单。请返回入库单管理核对，不要复制为新草稿。'
+      return
+    }
     if (!Array.isArray(rows)) throw Error('草稿箱回执不完整，请重新读取')
     const original = rows.find(row => row.draftNo === attempt.draftNo)
     drafts.value = rows.map(mapDraftRow)
@@ -1318,7 +1355,7 @@ async function verifyDraftSave() {
 
 function copyUnconfirmedDraft() {
   const attempt = pendingDraftSave.value
-  if (!attempt || !draftSaveCanCopy.value || formBusy.value) return
+  if (!attempt || attempt.closed || !draftSaveCanCopy.value || formBusy.value) return
   const frame = shipmentRequests.capture()
   if (!frame.active()) return
   try { clearDraftSaveCheckpoint(frame.owner, attempt) }
@@ -1329,6 +1366,17 @@ function copyUnconfirmedDraft() {
   draftSaveCanCopy.value = false
   draftSaveFeedback.value = '原输入已复制。附件仍属于原草稿，请在新草稿中重新上传。'
   tab.value = 'form'
+}
+
+function endClosedDraftSave() {
+  const attempt = pendingDraftSave.value
+  const frame = shipmentRequests.capture()
+  if (!attempt?.closed || formBusy.value || !frame.active()) return
+  try { clearDraftSaveCheckpoint(frame.owner, attempt) }
+  catch (error) { draftSaveFeedback.value = userFacingError(error); return }
+  pendingDraftSave.value = null
+  draftSaveCanCopy.value = false
+  draftSaveFeedback.value = '已结束这次草稿保存。请到入库单管理核对正式入库单，不要再保存同一份发运。'
 }
 
 function normalizeCarton(carton: CartonForm) {
@@ -1680,16 +1728,19 @@ async function confirmAttachmentUpload(frame: ReturnType<typeof shipmentRequests
     void loadDrafts()
   } catch (error: any) {
     if (!frame.active()) return
-    const status = Number(error?.status)
-    if (status === 400 || status === 404 || status === 413 || status === 422) {
-      pendingAttachment.value = null
-      attachmentFeedback.value = userFacingError(error)
-    } else attachmentFeedback.value = `附件上传结果待核对，可继续原上传。${userFacingError(error)}`
+    const decision = attachmentUploadFailure(Number(error?.status), `${error?.message || ''} ${userFacingError(error)}`)
+    if (decision.clear) pendingAttachment.value = null
+    attachmentFeedback.value = decision.message
   }
 }
 
+function endMismatchedAttachment() {
+  if (formBusy.value || !attachmentFeedback.value.includes('不要继续原上传')) return
+  pendingAttachment.value = null
+  attachmentFeedback.value = '已结束这次附件上传。请先核对草稿里的附件；若没有这份文件，可以重新选择后再上传。'
+}
 async function retryAttachmentUpload() {
-  if (!pendingAttachment.value || formBusy.value || !canCreateInbound.value) return
+  if (!pendingAttachment.value || formBusy.value || !canCreateInbound.value || attachmentFeedback.value.includes('不要继续原上传')) return
   const frame = shipmentRequests.capture()
   attachmentBusy.value = true
   try { await confirmAttachmentUpload(frame) }
@@ -1759,18 +1810,21 @@ onScopeDispose(()=>window.removeEventListener('storage',onShipmentStorage))
     <el-alert v-if="refsError" :title="refsError" type="error" :closable="false"><el-button :loading="createLoading" @click="loadRefs">重新读取资料</el-button></el-alert>
     <el-alert v-if="draftsError" :title="draftsError" type="error" :closable="false"><el-button @click="loadDrafts">重新读取草稿箱</el-button></el-alert>
     <el-alert v-if="draftSaveFeedback" :title="draftSaveFeedback" type="warning" :closable="false">
-      <el-button v-if="pendingDraftSave" :loading="draftBusy" @click="verifyDraftSave">核对草稿保存结果</el-button>
+      <el-button v-if="pendingDraftSave && !pendingDraftSave.closed" :loading="draftBusy" @click="verifyDraftSave">核对草稿保存结果</el-button>
       <el-button v-if="draftSaveStorageBlocked" :disabled="formBusy" @click="restoreDraftSaveCheckpoint">重新读取原草稿记录</el-button>
-      <el-button v-if="pendingDraftSave" :disabled="formBusy" @click="viewOriginalDraftSave">查看原输入</el-button>
-      <el-button v-if="draftSaveCanCopy" :disabled="formBusy || !canCreateInbound" @click="copyUnconfirmedDraft">复制为新草稿</el-button>
+      <el-button v-if="pendingDraftSave && !pendingDraftSave.closed" :disabled="formBusy" @click="viewOriginalDraftSave">查看原输入</el-button>
+      <el-button v-if="draftSaveCanCopy && !pendingDraftSave?.closed" :disabled="formBusy || !canCreateInbound" @click="copyUnconfirmedDraft">复制为新草稿</el-button>
+      <el-button v-if="pendingDraftSave?.closed" :disabled="formBusy" @click="endClosedDraftSave">已核对记录，结束本次</el-button>
     </el-alert>
     <el-alert v-if="attachmentFeedback" :title="attachmentFeedback" type="warning" :closable="false">
-      <el-button v-if="pendingAttachment" :loading="attachmentBusy" @click="retryAttachmentUpload">继续原附件上传</el-button>
+      <el-button v-if="pendingAttachment && !attachmentFeedback.includes('不要继续原上传')" :loading="attachmentBusy" @click="retryAttachmentUpload">继续原附件上传</el-button>
+      <el-button v-if="pendingAttachment && attachmentFeedback.includes('不要继续原上传')" :disabled="formBusy" @click="endMismatchedAttachment">已核对记录，结束本次</el-button>
       <el-button v-if="pendingAttachment && tab !== 'form'" :disabled="formBusy" @click="tab = 'form'">返回原草稿</el-button>
     </el-alert>
     <el-alert v-if="maintenanceAttempt || maintenanceStorageError" type="warning" :closable="false" style="margin:12px 0">
       <template #title>{{ maintenanceStorageError || `上次${maintenanceAttempt?.kind === 'delete' ? '删除发运单' : maintenanceAttempt?.clear ? '清除海运费' : '补录海运费'}结果待核对：${maintenanceAttempt?.inboundNo}` }}</template>
-      <el-button v-if="maintenanceAttempt" :disabled="!canCreateInbound" :loading="maintenanceBusy" @click="retryMaintenance">核对并重试原操作</el-button>
+      <el-button v-if="maintenanceAttempt && !maintenanceError.includes('不要重试原操作')" :disabled="!canCreateInbound" :loading="maintenanceBusy" @click="retryMaintenance">核对并重试原操作</el-button>
+      <el-button v-if="maintenanceAttempt && maintenanceError.includes('不要重试原操作')" :disabled="formBusy" @click="endMismatchedMaintenance">已核对记录，结束本次</el-button>
     </el-alert>
     <el-alert v-if="maintenanceError" :title="maintenanceError" type="error" :closable="false" style="margin:12px 0" />
     <el-alert v-if="maintenanceResult?.refreshRequired" :title="maintenanceResult.warning" type="warning" :closable="false"><el-button :loading="detailLoading" @click="refreshMutationDetail(maintenanceResult)">重新读取最新详情</el-button></el-alert>
@@ -1792,7 +1846,8 @@ onScopeDispose(()=>window.removeEventListener('storage',onShipmentStorage))
       <el-alert v-if="shipmentError" :title="shipmentError" type="error" :closable="false" style="margin:12px 0" />
       <el-alert v-if="shipmentResult" type="success" :closable="false" style="margin:12px 0" :title="`发运成功：${shipmentResult.inboundNo}。库存、外箱与费用已同步，勿重复新建。`" />
       <div v-if="shipmentAttempt || shipmentResult" style="display:flex;gap:12px;margin:12px 0">
-        <el-button v-if="shipmentAttempt && !deletedShipment" type="primary" :disabled="!canCreateInbound" :loading="shipmentBusy" @click="retryShipment">核对并重试原提交</el-button>
+        <el-button v-if="shipmentAttempt && !deletedShipment && !shipmentError.includes('不要重试原提交')" type="primary" :disabled="!canCreateInbound" :loading="shipmentBusy" @click="retryShipment">核对并重试原提交</el-button>
+        <el-button v-if="shipmentAttempt && shipmentError.includes('不要重试原提交')" :disabled="formBusy" @click="endMismatchedShipment">已核对记录，结束本次</el-button>
         <el-button :disabled="formBusy" @click="returnShipmentList">返回入库单管理</el-button>
         <el-button v-if="app.hasPerm('logistics_wh.view')" :disabled="formBusy" @click="returnSourceStock">查看中转仓库存</el-button>
         <el-button v-if="shipmentResult && !['completed','cancelled'].includes(shipmentResult.status) && app.hasPerm('inbound.arrival_scan')" @click="continueArrivalScan">继续到仓扫描</el-button>
@@ -2378,7 +2433,8 @@ onScopeDispose(()=>window.removeEventListener('storage',onShipmentStorage))
     </div>
     <el-alert v-if="detailMutationWarning" :title="detailMutationWarning" type="warning" :closable="false"><el-button :loading="detailLoading" @click="refreshMutationDetail()">重新读取最新详情</el-button></el-alert>
     <el-alert v-if="maintenanceError" :title="maintenanceError" type="error" :closable="false">
-      <el-button v-if="maintenanceAttempt" :disabled="!canCreateInbound" :loading="maintenanceBusy" @click="retryMaintenance">核对并重试原操作</el-button>
+      <el-button v-if="maintenanceAttempt && !maintenanceError.includes('不要重试原操作')" :disabled="!canCreateInbound" :loading="maintenanceBusy" @click="retryMaintenance">核对并重试原操作</el-button>
+      <el-button v-if="maintenanceAttempt && maintenanceError.includes('不要重试原操作')" :disabled="formBusy" @click="endMismatchedMaintenance">已核对记录，结束本次</el-button>
       <el-button :disabled="maintenanceBusy || !!maintenanceAttempt" @click="refreshMutationDetail()">重新读取最新详情</el-button>
     </el-alert>
     <template #footer>
@@ -2415,8 +2471,9 @@ onScopeDispose(()=>window.removeEventListener('storage',onShipmentStorage))
     destroy-on-close
   >
     <el-alert v-if="maintenanceError" :title="maintenanceError" type="error" :closable="false" />
-    <el-alert v-if="maintenanceAttempt" type="warning" :closable="false" title="原操作结果待核对，请保持原内容并重试">
-      <el-button :disabled="!canCreateInbound" :loading="maintenanceBusy" @click="retryMaintenance">核对并重试原操作</el-button>
+    <el-alert v-if="maintenanceAttempt" type="warning" :closable="false" :title="maintenanceError.includes('不要重试原操作') ? '原海运费或删除内容不同。请先核对入库单，不要重试原操作。' : '原操作结果待核对，请保持原内容并重试'">
+      <el-button v-if="!maintenanceError.includes('不要重试原操作')" :disabled="!canCreateInbound" :loading="maintenanceBusy" @click="retryMaintenance">核对并重试原操作</el-button>
+      <el-button v-else :disabled="formBusy" @click="endMismatchedMaintenance">已核对记录，结束本次</el-button>
     </el-alert>
     <el-form :disabled="maintenanceBusy || !!maintenanceAttempt" @submit.prevent>
     <p class="section-desc">选择运输方式并填写本票海运费总额，系统按各 SKU 体积占比分摊到单件，并同步货盘库存。</p>

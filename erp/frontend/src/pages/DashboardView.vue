@@ -358,7 +358,7 @@ watch(readScope, () => {
       <template v-if="pendingPublication">
         <p>原公告：{{ pendingPublication.payload.title }}</p>
         <el-button :disabled="publicationBusy" @click="publication.run('check')">核对原发布结果</el-button>
-        <el-button :disabled="publicationBusy" @click="publication.run('submit')">继续原公告发布</el-button>
+        <el-button v-if="!pendingPublication.stale" :disabled="publicationBusy" @click="publication.run('submit')">继续原公告发布</el-button>
         <el-button :disabled="publicationBusy" @click="publication.run('cancel')">取消原发布请求</el-button>
       </template>
     </el-alert>

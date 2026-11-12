@@ -1426,7 +1426,8 @@ function statusTag(status: string) {
     <!-- 分配拣货员 -->
     <el-dialog v-model="assignVisible" :title="reassigningPicker ? '重新分配拣货员' : '分配拣货员'" width="360px" :close-on-click-modal="false" :close-on-press-escape="!assigning" :show-close="!assigning">
       <el-alert v-if="assignmentError || assignmentStorageError" :title="assignmentError || assignmentStorageError" type="error" :closable="false" />
-      <el-alert v-if="assignmentPending" :title="`原批次：${assignmentPending.orderNos.join('、')}；原人员：${assignmentPending.pickerName}。重试将使用原资料，取消不撤回已完成分配。`" type="warning" :closable="false" />
+      <el-alert v-if="assignmentPending?.stale" title="原分配批次、人员或单据状态不能更改。请查询原结果，或取消原请求后重新读取，不要重试原分配。" type="warning" :closable="false" />
+      <el-alert v-else-if="assignmentPending" :title="`原批次：${assignmentPending.orderNos.join('、')}；原人员：${assignmentPending.pickerName}。重试将使用原资料，取消不撤回已完成分配。`" type="warning" :closable="false" />
       <el-alert v-if="!assignmentPending && pickerError" :title="pickerError" type="error" :closable="false" />
       <el-button v-if="!assignmentPending" :loading="pickerLoading" :disabled="assigning || !canPick" @click="loadPickerUsers">刷新候选名单</el-button>
       <p class="dialog-hint" v-if="!assignmentPending && reassigningPicker">已选 {{ assignTargetIds.length }} 单（拣货中）。重新分配后，新拣货员可继续完成拣货。</p>
@@ -1438,7 +1439,7 @@ function statusTag(status: string) {
         <el-button :disabled="assigning" @click="assignVisible = false">{{ assignmentPending ? '返回并保留原请求' : '返回' }}</el-button>
         <el-button v-if="assignmentPending" :disabled="assigning || !canPick || !!assignmentStorageError" @click="submitAssignPicker('check')">查询原分配结果</el-button>
         <el-button v-if="assignmentPending" :disabled="assigning || !canPick || !!assignmentStorageError" @click="submitAssignPicker('cancel')">取消原分配请求</el-button>
-        <el-button type="primary" :loading="assigning" :disabled="!canPick || !!assignmentStorageError || (!assignmentPending && (pickerLoading || !!pickerError || !assignPickerId))" @click="submitAssignPicker('retry')">{{ assignmentPending ? '核对并重试原分配' : reassigningPicker ? '确认重新分配' : '确认分配' }}</el-button>
+        <el-button v-if="!assignmentPending?.stale" type="primary" :loading="assigning" :disabled="!canPick || !!assignmentStorageError || (!assignmentPending && (pickerLoading || !!pickerError || !assignPickerId))" @click="submitAssignPicker('retry')">{{ assignmentPending ? '核对并重试原分配' : reassigningPicker ? '确认重新分配' : '确认分配' }}</el-button>
       </template>
     </el-dialog>
 

@@ -23,6 +23,16 @@ function clear(storage: StoragePort, userId: number, attempt: ShipAttempt) {
   const rows = readShipAttempts(storage, userId).filter(r => r.outboundId !== attempt.outboundId || r.payload.clientRequestId !== attempt.payload.clientRequestId)
   if (rows.length) storage.setItem(key(userId), JSON.stringify(rows));else storage.removeItem(key(userId))
 }
+export function clearShipAttempt(storage: StoragePort, userId: number, attempt: ShipAttempt) {
+  clear(storage, userId, attempt)
+}
+export function shipContentMismatch(message: string) {
+  return message.includes('勿修改后重试') || message.includes('不要修改后重新发运') || message.includes('内容不同')
+}
+export function shipStatusChanged(message: string) {
+  if (shipContentMismatch(message)) return false
+  return message.includes('状态已变化') || message.includes('不可再次发运') || message.includes('已回滚') || message.includes('不要重试原发运')
+}
 export async function runShipAttempt(api: any, storage: StoragePort, userId: number, attempt: ShipAttempt) {
   try {
     const result = await api.ship(attempt.outboundId, attempt.payload)
@@ -31,6 +41,14 @@ export async function runShipAttempt(api: any, storage: StoragePort, userId: num
     return { completed: true, result, message: result.message || '发运与扣费已保存，请查看最新结果' }
   } catch (error: any) {
     const status = Number(error?.status)
+    const detail = String(error?.message || '')
+    if (status === 409 && shipContentMismatch(detail)) {
+      throw new Error(`原发运操作对应的内容不同，原请求已保留。请先核对出库记录，不要修改后重新发运。${userFacingError(error)}`)
+    }
+    if ((status === 400 || status === 409) && shipStatusChanged(detail)) {
+      try { clear(storage, userId, attempt) } catch { throw new Error('原请求已返回结果，但本机核对信息未清除，请由主管核对，勿重复发运') }
+      throw new Error(`${userFacingError(error)}。请返回列表刷新出库单后再发运，不要重试原发运。`)
+    }
     if ([400, 404, 409, 422].includes(status)) {
       try { clear(storage, userId, attempt) } catch { throw new Error('原请求已返回结果，但本机核对信息未清除，请由主管核对，勿重复发运') }
       throw new Error(`${userFacingError(error)}。请返回列表核对最新单据后继续`)

@@ -55,7 +55,7 @@ function canTransferRow(row: any) {
 const transferVisible = ref(false)
 const transferScope = computed(() => app.authenticatedUser && getAccessToken() ? JSON.stringify([getAccessToken(), app.authenticatedUser.id, app.authenticatedUser.roleCode, [...app.currentPermSet].sort()]) : null)
 const transferAttempt = useLogisticsTransferAttempt({ actor: () => String(app.authenticatedUser?.id || ''), scope: () => transferScope.value, allowed: () => canTransfer.value, storage: localStorage, request: payload => inventoryApi.transferLogistics(payload) })
-const { pending: pendingTransfer, busy: transferring, blocked: transferBlocked, feedback: transferFeedback } = transferAttempt
+const { pending: pendingTransfer, busy: transferring, blocked: transferBlocked, feedback: transferFeedback, endChanged: endChangedTransfer } = transferAttempt
 async function continueTransfer() {
   if (await transferAttempt.resume()) { transferVisible.value = false; await load() }
 }
@@ -238,9 +238,13 @@ onMounted(async () => {
   <div class="transit-stock-page">
     <el-alert v-if="transferFeedback" :title="transferFeedback" :closable="false" type="warning" />
     <el-card v-if="pendingTransfer" shadow="never">
-      <p>待核对原调拨：{{ displaySku(pendingTransfer.sku) }} · {{ pendingTransfer.fromWarehouseCode }} → {{ pendingTransfer.toWarehouseCode }} · {{ pendingTransfer.qty }} 件</p>
+      <p v-if="pendingTransfer.contentChanged">原调拨内容不同。请先核对库存流水；若本次没有入账，结束本次后再重新填写。</p>
+      <p v-else>待核对原调拨：{{ displaySku(pendingTransfer.sku) }} · {{ pendingTransfer.fromWarehouseCode }} → {{ pendingTransfer.toWarehouseCode }} · {{ pendingTransfer.qty }} 件</p>
+      <el-button v-if="pendingTransfer.contentChanged" :disabled="transferring" @click="endChangedTransfer">已核对记录，结束本次</el-button>
+      <template v-else>
       <el-button :loading="transferring" :disabled="!canTransfer || transferBlocked" @click="continueTransfer">核对并继续原调拨</el-button>
       <el-button @click="router.push('/dashboard')">返回工作台（保留原请求）</el-button>
+      </template>
     </el-card>
     <el-card shadow="never" class="page-card">
       <div class="page-head">

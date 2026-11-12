@@ -998,8 +998,11 @@ void _removeExtraFeeLine
     <el-alert v-if="pendingReturnAction || returnActionBlocked || returnActionFeedback" type="warning" :closable="false" show-icon style="margin-bottom: 12px">
       <template #title>{{ pendingReturnAction ? '原退件操作待核对 · ' + pendingReturnAction.returnNo : '退件操作核对' }}</template>
       <p>{{ returnActionFeedback }}</p>
+      <el-button v-if="pendingReturnAction?.contentChanged" :disabled="returnActionBusy" @click="returnActionAttempt.endChanged()">已核对记录，结束本次</el-button>
+      <template v-else>
       <el-button v-if="pendingReturnAction" :loading="returnActionBusy" :disabled="returnActionBlocked" @click="resumeReturnAction">继续原请求</el-button>
       <el-button v-if="pendingReturnAction" :disabled="returnActionBusy || returnActionBlocked" @click="returnActionAttempt.close()">核对并结束原操作</el-button>
+      </template>
       <el-button :disabled="returnActionBusy" @click="loadList">刷新列表核对</el-button>
     </el-alert>
     <div class="page-header">
@@ -1101,8 +1104,8 @@ void _removeExtraFeeLine
 
     <el-alert v-if="measurePending || measureBlocked || measureFeedback" :type="measurePending || measureBlocked ? 'warning' : 'info'" :closable="false" :title="measureFeedback || '原测量请求待核对'" show-icon>
       <p v-if="measurePending">退件单：{{ measurePending.returnNo }}</p>
-      <el-button v-if="measurePending" :loading="measureSubmitting" @click="resumeMeasure()">核对并继续原测量</el-button>
-      <el-button v-if="measurePending" :disabled="measureSubmitting" @click="resumeMeasure(true)">核对并结束原请求</el-button>
+      <el-button v-if="measurePending && !measurePending.contentChanged && !measureFeedback.includes('不要继续原测量')" :loading="measureSubmitting" @click="resumeMeasure()">核对并继续原测量</el-button>
+      <el-button v-if="measurePending" :disabled="measureSubmitting" @click="resumeMeasure(true)">{{ measurePending.contentChanged ? '已核对记录，结束本次' : '核对并结束原请求' }}</el-button>
       <el-button v-if="measureBlocked" @click="measureAttempt.reload()">重新读取原请求</el-button>
     </el-alert>
 
@@ -1466,8 +1469,8 @@ void _removeExtraFeeLine
       <el-alert v-if="measureReadError" type="error" :closable="false" :title="measureReadError" />
       <el-button v-if="measureReadError && measureReadTarget" :loading="measureLoading" @click="openMeasure(measureReadTarget, measureMode)">重试读取退件</el-button>
       <el-alert v-if="measurePending || measureBlocked" type="warning" :closable="false" :title="measureFeedback">
-        <el-button v-if="measurePending" :loading="measureSubmitting" @click="resumeMeasure()">核对并继续原测量</el-button>
-        <el-button v-if="measurePending" :disabled="measureSubmitting" @click="resumeMeasure(true)">核对并结束原请求</el-button>
+        <el-button v-if="measurePending && !measurePending.contentChanged && !measureFeedback.includes('不要继续原测量')" :loading="measureSubmitting" @click="resumeMeasure()">核对并继续原测量</el-button>
+        <el-button v-if="measurePending" :disabled="measureSubmitting" @click="resumeMeasure(true)">{{ measurePending.contentChanged ? '已核对记录，结束本次' : '核对并结束原请求' }}</el-button>
       </el-alert>
       <p v-if="measureMode === 'existing'">按已保存的外箱测量生成物流费，不修改原测量。需要修改尺寸时，请返回列表选择重新测量。</p>
       <div v-if="measureTarget" class="measure-summary">
@@ -1791,7 +1794,8 @@ void _removeExtraFeeLine
       <template #footer>
         <el-button :disabled="processSubmitting" @click="processDialog = false">返回列表</el-button>
         <el-button :disabled="processSubmitting || processLoading" @click="refreshProcessTarget">刷新核对结果</el-button>
-        <el-button v-if="pendingReturnAction?.id === processTarget?.id" :loading="returnActionBusy" :disabled="returnActionBlocked || processLoading" @click="resumeReturnAction">继续原请求</el-button>
+        <el-button v-if="pendingReturnAction?.id === processTarget?.id && pendingReturnAction.contentChanged" :disabled="returnActionBusy || processLoading" @click="returnActionAttempt.endChanged()">已核对记录，结束本次</el-button>
+        <el-button v-else-if="pendingReturnAction?.id === processTarget?.id" :loading="returnActionBusy" :disabled="returnActionBlocked || processLoading" @click="resumeReturnAction">继续原请求</el-button>
         <el-button type="primary" :loading="processSubmitting || processLoading" :disabled="processUncertain || !!pendingReturnAction || returnActionBlocked || processTarget?.status === 'completed'" @click="submitProcess">{{ processNeedsStock ? '确认本次上架' : '确认处理' }}</el-button>
       </template>
     </el-dialog>

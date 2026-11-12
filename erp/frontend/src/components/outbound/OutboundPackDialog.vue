@@ -94,7 +94,8 @@ async function run(mode: 'retry' | 'check' | 'cancel') {
   <el-dialog :model-value="modelValue" :title="`复核打包 · ${order?.outboundNo || ''}`" width="min(980px, 94vw)"
     :close-on-click-modal="false" :close-on-press-escape="!busy" :show-close="!busy" @update:model-value="emit('update:modelValue', $event)">
     <el-alert v-if="error || storageError" :title="error || storageError" type="error" :closable="false" />
-    <el-alert v-if="pending" title="原尺寸、重量和打托资料已保存。请查询原结果或重试原资料；取消只终止这次原请求。" type="warning" :closable="false" />
+    <el-alert v-if="pending?.stale" title="原复核资料不能更改，或出库单状态已变化。请查询原结果，或取消原请求后重新读取，不要重试原复核。" type="warning" :closable="false" />
+    <el-alert v-else-if="pending" title="原尺寸、重量和打托资料已保存。请查询原结果或重试原资料；取消只终止这次原请求。" type="warning" :closable="false" />
     <p v-if="detail?.needsRelabel">复核完成后进入「待换标」，确认换标后再发运。</p>
     <p v-if="detail?.omsPreDeduct">已预扣 ¥{{ Number(detail.omsPreDeduct.preDeductTotal || 0).toFixed(2) }}，请录入实测外箱尺寸和重量，系统按原收费模板计算实际费用。</p>
     <p v-if="detail?.omsActualFees">已实测实算合计 ¥{{ Number(detail.omsActualFees.actualTotal || 0).toFixed(2) }}</p>
@@ -118,7 +119,7 @@ async function run(mode: 'retry' | 'check' | 'cancel') {
       <el-button v-if="pending" :disabled="busy || !canPack || !!storageError" @click="run('check')">查询原复核结果</el-button>
       <el-button v-if="pending" :disabled="busy || !canPack || !!storageError" @click="run('cancel')">取消原复核请求</el-button>
       <el-button v-if="error && !pending && !storageError" :disabled="busy || loading || !canPack" @click="loadFresh">重新读取原单</el-button>
-      <el-button type="primary" :loading="busy" :disabled="!canPack || loading || !!storageError || (!pending && detail?.status !== 'reviewing')" @click="run('retry')">{{ pending ? '核对并重试原复核' : detail?.needsRelabel ? '确认复核，去换标' : '确认复核打包' }}</el-button>
+      <el-button v-if="!pending?.stale" type="primary" :loading="busy" :disabled="!canPack || loading || !!storageError || (!pending && detail?.status !== 'reviewing')" @click="run('retry')">{{ pending ? '核对并重试原复核' : detail?.needsRelabel ? '确认复核，去换标' : '确认复核打包' }}</el-button>
     </template>
   </el-dialog>
 </template>

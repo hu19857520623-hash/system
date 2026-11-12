@@ -1,6 +1,7 @@
 import { userFacingError } from '@erp/shared/user-facing-error'
+import { outboundAttemptStale } from './outboundPicking'
 type StoragePort = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
-export type AssignmentAttempt = { pickerName: string; orderNos: string[]; payload: { clientRequestId: string; ids: number[]; pickerId: number; expectedOrders: { id: number; status: string; pickerId: number | null }[] } }
+export type AssignmentAttempt = { pickerName: string; orderNos: string[]; stale?: boolean; payload: { clientRequestId: string; ids: number[]; pickerId: number; expectedOrders: { id: number; status: string; pickerId: number | null }[] } }
 const positive = (n: unknown) => Number.isSafeInteger(n) && Number(n) > 0
 const key = (actor: number) => {
   if (!positive(actor)) throw new Error('请使用原账号重新登录后核对分配')
@@ -15,7 +16,7 @@ function valid(row: AssignmentAttempt) {
     && p.expectedOrders.every(r => p.ids.includes(r.id) && ['pending_pick', 'picking'].includes(r.status) && (r.pickerId === null || positive(r.pickerId)))
 }
 export function readAssignment(storage: StoragePort, actor: number): AssignmentAttempt | null {
-  try { const raw = storage.getItem(key(actor));if (!raw) return null;const row = JSON.parse(raw);if (!valid(row)) throw new Error();return row }
+  try { const raw = storage.getItem(key(actor));if (!raw) return null;const row = JSON.parse(raw);if (row?.stale !== true) delete row.stale;if (!valid(row)) throw new Error();return row }
   catch { throw new Error('原分配资料无法读取，请由主管核对原批次和人员，勿再次分配') }
 }
 function assertSaved(storage: StoragePort, actor: number, attempt: AssignmentAttempt) {
@@ -36,6 +37,7 @@ export async function withAssignmentLock<T>(actor: number, work: () => Promise<T
   })
 }
 export async function operateAssignment(api: any, storage: StoragePort, actor: number, attempt: AssignmentAttempt, mode: 'retry' | 'check' | 'cancel', guard: () => void) {
+  if (mode === 'retry' && attempt.stale) throw new Error('原分配批次、人员或单据状态不能更改。请查询原结果或取消原请求后重新读取，不要重试原分配。')
   const assertCurrent = () => { guard();assertSaved(storage, actor, attempt) }
   try {
     assertCurrent()
@@ -56,6 +58,11 @@ export async function operateAssignment(api: any, storage: StoragePort, actor: n
     }
     return receipt as { outcome: 'unknown' | 'confirmed' | 'cancelled'; orders: { id: number; outboundNo: string; status: string; pickerId: number | null }[] }
   } catch (e: any) {
+    const text = `${e?.message || ''} ${userFacingError(e)}`
+    if (outboundAttemptStale(text)) {
+      storage.setItem(key(actor), JSON.stringify({ ...attempt, stale: true }))
+      throw new Error(`原分配批次、人员或单据状态不能更改。请查询原结果或取消原请求后重新读取，不要重试原分配。${userFacingError(e)}`)
+    }
     throw new Error(Number(e?.status) === 401 ? '登录已失效，原分配请求已保留，请使用原账号登录后核对'
       : Number(e?.status) === 403 ? '当前岗位无法核对分配，原请求已保留，请恢复原岗位权限后继续'
         : `原分配请求仍需核对，请继续查询原结果、重试原批次或取消原请求。${userFacingError(e)}`)

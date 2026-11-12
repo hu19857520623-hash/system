@@ -81,6 +81,13 @@ async function submitWarehouseOperation(kind: WarehouseAttempt['kind'], order: a
 function continueWarehouseOperation(attempt: WarehouseAttempt) {
   void router.push({ name: 'InboundArrivalScan', query: { inboundId: String(attempt.inboundId) } })
 }
+function endWarehouseAttempt(attempt: WarehouseAttempt) {
+  if (warehouseBusy.value) return
+  try { clearWarehouseAttempt(localStorage, Number(app.authenticatedUser?.id), attempt) }
+  catch (error) { warehouseStorageError.value = userFacingError(error); return }
+  readPendingOperations()
+  warehouseNotice.value = '已结束这次未能入账的仓库作业。请先核对入库记录；若没有入账，可以重新填写后再提交。'
+}
 
 type StatusFilter = 'all' | 'in_transit' | 'arrived' | 'receiving' | 'putaway' | 'completed' | 'exception' | 'cancelled'
 
@@ -378,7 +385,13 @@ async function submitControl(data: { kind: WarehouseControlKind; order: any; pay
 }
 async function retryControl(id: number) {
   const attempt = warehouseAttempts.value.find(row => row.inboundId === id)
-  return attempt ? retryWarehouseOperation(attempt) : false
+  return attempt && !attempt.contentChanged ? retryWarehouseOperation(attempt) : false
+}
+async function endControl(id: number) {
+  const attempt = warehouseAttempts.value.find(row => row.inboundId === id)
+  if (!attempt?.contentChanged) return false
+  endWarehouseAttempt(attempt)
+  return !warehouseAttempts.value.some(row => row.inboundId === id)
 }
 
 const canResolve = computed(() => ['inbound.qc', 'inbound.putaway', 'inbound.handle_exception', 'inbound.confirm_diff'].some(permission => app.hasPerm(permission)))
@@ -563,10 +576,15 @@ onMounted(async () => {
     <el-alert v-if="warehouseStorageError" :title="warehouseStorageError" type="error" :closable="false"><el-button @click="readPendingOperations">重新读取核对信息</el-button></el-alert>
     <el-alert v-if="listReadError" :title="listReadError" type="error" :closable="false"><el-button @click="load">重新读取列表</el-button></el-alert>
     <el-alert v-if="countsReadError" :title="countsReadError" type="warning" :closable="false"><el-button @click="refreshCounts">刷新状态数量</el-button></el-alert>
-    <el-alert v-for="attempt in warehouseAttempts" :key="attempt.payload.clientRequestId" :title="`${attempt.inboundNo} 有原仓库操作待核对`" type="warning" :closable="false">
+    <el-alert v-for="attempt in warehouseAttempts" :key="attempt.payload.clientRequestId" :title="attempt.contentChanged ? `${attempt.inboundNo} 的仓库操作内容不同` : `${attempt.inboundNo} 有原仓库操作待核对`" type="warning" :closable="false">
+      <template v-if="attempt.contentChanged">请先核对入库记录。若本次没有入账，结束本次后再重新填写。
+        <el-button :disabled="warehouseBusy" @click="endWarehouseAttempt(attempt)">已核对记录，结束本次</el-button>
+      </template>
+      <template v-else>
       作业结果尚未核实，原请求已保存。请核对后继续。
       <el-button :loading="warehouseBusy" @click="retryWarehouseOperation(attempt)">核对并重试原操作</el-button>
       <el-button :disabled="warehouseBusy" @click="continueWarehouseOperation(attempt)">查看并继续作业</el-button>
+      </template>
     </el-alert>
     <el-alert v-if="warehouseNotice" :title="warehouseNotice" type="info" :closable="false" />
 
@@ -652,7 +670,7 @@ onMounted(async () => {
     <el-empty v-if="!loading && !orderRows.length" description="暂无入库单" />
     <ListPagination v-model:page="page" v-model:page-size="pageSize" :total="listTotal" />
 
-    <WarehouseControlDialog v-model="controlVisible" :inbound-id="controlInboundId" :initial-kind="controlKind" :busy="warehouseBusy" :attempt="controlAttempt" :error-text="warehouseNotice || warehouseStorageError" :submit-action="submitControl" :retry-action="retryControl" />
+    <WarehouseControlDialog v-model="controlVisible" :inbound-id="controlInboundId" :initial-kind="controlKind" :busy="warehouseBusy" :attempt="controlAttempt" :error-text="warehouseNotice || warehouseStorageError" :submit-action="submitControl" :retry-action="retryControl" :end-action="endControl" />
 
     <el-dialog v-model="detailVisible" :title="`入库详情 · ${detailOrder?.inboundNo || ''}`" width="760px" class="inbound-detail-dialog erp-detail" destroy-on-close>
       <div v-loading="detailLoading">

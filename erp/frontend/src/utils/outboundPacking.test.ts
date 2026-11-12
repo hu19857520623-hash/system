@@ -93,4 +93,12 @@ describe('复核打包原请求保存与恢复', () => {
     try { await expect(withPackLock(59, action)).rejects.toThrow('另一个页面');expect(action).not.toHaveBeenCalled() }
     finally { vi.unstubAllGlobals() }
   })
+  it('复核资料不能更改或状态已变化后不再重试原复核', async () => {
+    const s = storage(); savePackAttempt(s, 59, original)
+    const api = { packRequest: vi.fn().mockResolvedValue(receipt('unknown')), pack: vi.fn().mockRejectedValue({ status: 409, message: '原复核的尺寸、重量或打托资料不能更改，请核对原请求后重试' }) }
+    await expect(operatePackAttempt(api, s, 59, original, 'retry', () => {})).rejects.toThrow('不要重试原复核')
+    expect(readPackAttempts(s, 59)[0].stale).toBe(true)
+    await expect(operatePackAttempt(api, s, 59, readPackAttempts(s, 59)[0], 'retry', () => {})).rejects.toThrow('不要重试原复核')
+    expect(api.pack).toHaveBeenCalledOnce()
+  })
 })

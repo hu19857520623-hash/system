@@ -1,8 +1,9 @@
 import { userFacingError } from '@erp/shared/user-facing-error'
+import { outboundAttemptStale } from './outboundPicking'
 
 type StoragePort = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
 export type PackAttempt = {
-  outboundId: number; outboundNo: string
+  outboundId: number; outboundNo: string; stale?: boolean
   order: { id: number; outboundNo: string; status?: string; needsRelabel?: boolean; omsPreDeduct?: any; omsActualFees?: any }
   payload: { clientRequestId: string; reviewSource: 'pda' | 'pick_list'; isPalletized: boolean; palletInfo: string;
     cartons: { lengthCm: number; widthCm: number; heightCm: number; grossWeightKg: number }[] }
@@ -26,7 +27,7 @@ export function readPackAttempts(storage: StoragePort, actor: number): PackAttem
   try {
     const raw = storage.getItem(key(actor)), rows = raw ? JSON.parse(raw) : []
     if (!Array.isArray(rows) || !rows.every(valid) || new Set(rows.map(r => r.outboundId)).size !== rows.length) throw new Error()
-    return rows
+    return rows.map(row => { if (row.stale !== true) delete row.stale; return row })
   } catch { throw new Error('原复核打包信息无法读取，请由主管核对原单和实测费用，勿重新复核打包') }
 }
 export function savePackAttempt(storage: StoragePort, actor: number, attempt: PackAttempt) {
@@ -52,6 +53,7 @@ export async function withPackLock<T>(actor: number, work: () => Promise<T>): Pr
 }
 export async function operatePackAttempt(api: any, storage: StoragePort, actor: number, attempt: PackAttempt,
   mode: 'retry' | 'check' | 'cancel', guard: () => void) {
+  if (mode === 'retry' && attempt.stale) throw new Error('原复核资料不能更改或出库单状态已变化。请查询原结果或取消原请求后重新读取，不要重试原复核。')
   const assertCurrent = () => { guard();assertSaved(storage, actor, attempt) }
   try {
     assertCurrent()
@@ -80,6 +82,13 @@ export async function operatePackAttempt(api: any, storage: StoragePort, actor: 
     return receipt as { outcome: 'unknown' | 'confirmed' | 'cancelled'; currentStatus: string }
   } catch (error: any) {
     const status = Number(error?.status)
+    const text = `${error?.message || ''} ${userFacingError(error)}`
+    if (outboundAttemptStale(text)) {
+      const next = { ...attempt, stale: true }
+      const rows = readPackAttempts(storage, actor).map(row => row.outboundId === attempt.outboundId ? next : row)
+      storage.setItem(key(actor), JSON.stringify(rows))
+      throw new Error(`原复核资料不能更改或出库单状态已变化。请查询原结果或取消原请求后重新读取，不要重试原复核。${userFacingError(error)}`)
+    }
     throw new Error(status === 401 ? '登录已失效，原复核打包请求已保留，请使用原账号登录后核对'
       : status === 403 ? '当前岗位无法核对复核打包，原请求已保留，请恢复原岗位权限后继续'
         : `原复核打包请求仍需核对，请保留原明细并继续查询或取消原请求。${userFacingError(error)}`)

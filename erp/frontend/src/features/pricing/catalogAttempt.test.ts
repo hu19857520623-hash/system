@@ -69,4 +69,13 @@ describe('货盘操作原请求恢复', () => {
   const first = f.start('confirm', 9, '商品', payload); await f.run('submit'); await f.start('sync', 10, '其它', payload); expect(f.request).toHaveBeenCalledOnce()
   release(receipt(f.pending.value!.requestId, 'confirm')); expect(await first).toBe(true)
  })
+ it('资料已变化或内容不能更改时不再继续原货盘操作', async () => {
+  const f = fixture()
+  f.request.mockRejectedValueOnce(Error('货盘资料已变化，旧页面不能覆盖；请读取最新资料后核对再继续'))
+  expect(await f.start('confirm', 9, '商品', payload)).toBe(false)
+  expect(f.pending.value?.stale).toBe(true)
+  expect(f.feedback.value).toContain('不要继续原货盘操作')
+  expect(await f.run('submit')).toBe(false)
+  expect(f.request).toHaveBeenCalledOnce()
+ })
 })

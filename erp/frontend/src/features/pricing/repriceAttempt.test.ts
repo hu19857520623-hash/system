@@ -63,5 +63,13 @@ describe('调价原请求恢复',()=>{
   conflict=true;await f.run('submit');expect(f.request).toHaveBeenCalledOnce()
   f.request.mockResolvedValueOnce({requestId:id,status:'cancelled',pricingId:9});expect(await f.run('cancel')).toBe(true)
  })
+ it('定价资料已变化时不再继续原调价',async()=>{
+  const f=fixture();f.request.mockRejectedValueOnce(Error('定价资料已变化，旧页面不能覆盖；请读取最新定价后核对再继续'))
+  expect(await f.start(9,'商品',payload)).toBe(false)
+  expect(f.pending.value?.stale).toBe(true)
+  expect(f.feedback.value).toContain('不要继续原调价')
+  expect(await f.run('submit')).toBe(false)
+  expect(f.request).toHaveBeenCalledOnce()
+ })
 
 })

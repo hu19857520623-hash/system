@@ -31,4 +31,11 @@ describe('充值原请求恢复', () => {
     const s=storage(),api=vi.fn();s.setItem=()=>{throw Error('quota')}
     await expect(runRecharge(s,'u1',attempt,api)).rejects.toThrow('本次尚未提交');expect(api).not.toHaveBeenCalled()
   })
+  it('充值内容不同时保留原单，并且不再重试', async () => {
+    const s = storage(), api = vi.fn().mockRejectedValue(Object.assign(new Error('原充值单号对应的客户、金额、方式或备注不同，请核对原充值记录，勿另建单重复充值'), { status: 409 }))
+    await expect(runRecharge(s, 'u1', attempt, api)).rejects.toThrow('不要重试原充值')
+    expect(readRecharge(s, 'u1')?.contentChanged).toBe(true)
+    await expect(runRecharge(s, 'u1', readRecharge(s, 'u1')!, api)).rejects.toThrow('不要重试原充值')
+    expect(api).toHaveBeenCalledOnce()
+  })
 })

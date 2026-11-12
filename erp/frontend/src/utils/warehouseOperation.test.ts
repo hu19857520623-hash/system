@@ -99,4 +99,11 @@ describe('仓库操作中断后的原请求恢复', () => {
     expect(result).toMatchObject({ retained: true, message: expect.stringContaining('核对信息未能清除') })
     expect(result.message).not.toContain('SecurityError');expect(readWarehouseAttempts(local, 1)).toEqual([original])
   })
+  it('仓库操作内容不同时保留原请求，并改为结束本次', () => {
+    const local = storage(), original = attempt(); saveWarehouseAttempt(local, 1, original)
+    const result = recoverWarehouseAttemptFailure(local, 1, original, { status: 409, message: '原上架操作对应的内容不同，请先核对原操作，不要修改后重试' })
+    expect(result).toMatchObject({ retained: true, contentChanged: true, message: expect.stringContaining('不要修改后重试') })
+    expect(readWarehouseAttempts(local, 1)[0].contentChanged).toBe(true)
+    expect(recoverWarehouseAttemptFailure(local, 1, original, { status: 409, message: '单据已变更' }).retained).toBe(false)
+  })
 })

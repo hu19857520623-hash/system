@@ -6,7 +6,7 @@ import { userFacingError } from '@erp/shared/user-facing-error'
 import { displaySku } from '@erp/shared/sku-display'
 import { warehouseControlLabels, warehouseControlDescriptions, warehouseControlOptions, warehouseControlCurrent, warehouseControlLimit, type WarehouseControlKind } from '@/utils/warehouseControl'
 import type { WarehouseAttempt } from '@/utils/warehouseOperation'
-const props = defineProps<{ modelValue: boolean; inboundId: number | null; initialKind?: WarehouseControlKind; busy: boolean; attempt?: WarehouseAttempt | null; errorText?: string; submitAction: (data: { kind: WarehouseControlKind; order: any; payload: any }) => Promise<boolean>; retryAction: (id: number) => Promise<boolean> }>()
+const props = defineProps<{ modelValue: boolean; inboundId: number | null; initialKind?: WarehouseControlKind; busy: boolean; attempt?: WarehouseAttempt | null; errorText?: string; submitAction: (data: { kind: WarehouseControlKind; order: any; payload: any }) => Promise<boolean>; retryAction: (id: number) => Promise<boolean>; endAction?: (id: number) => Promise<boolean> }>()
 const emit = defineEmits<{ 'update:modelValue': [value: boolean] }>()
 const app = useAppStore(), order = ref<any>(null), kind = ref<WarehouseControlKind>('reopen-count'), reason = ref(''), itemId = ref<number | null>(null), quantity = ref(1), loading = ref(false), error = ref(''), readFailed = ref(false)
 let version = 0
@@ -49,15 +49,21 @@ async function submit() {
   catch (failure) { error.value = userFacingError(failure) }
 }
 async function retry() {
-  if (!props.attempt || props.busy) return
+  if (!props.attempt || props.busy || props.attempt.contentChanged) return
   try { if (await props.retryAction(props.attempt.inboundId)) emit('update:modelValue', false) }
+  catch (failure) { error.value = userFacingError(failure) }
+}
+async function endAttempt() {
+  if (!props.attempt?.contentChanged || props.busy) return
+  try { if (await props.endAction?.(props.attempt.inboundId)) emit('update:modelValue', false) }
   catch (failure) { error.value = userFacingError(failure) }
 }
 </script>
 <template>
   <el-dialog :model-value="modelValue" :title="warehouseControlLabels[kind]" width="660px" :close-on-click-modal="false" :close-on-press-escape="!busy" :show-close="!busy" @update:model-value="value => !busy && emit('update:modelValue', value)">
     <el-alert v-if="error || errorText" :title="error || errorText" type="error" :closable="false" />
-    <el-alert v-if="attempt" title="原处理结果待核对，已保存原请求。请使用原操作重试，或返回页面查看恢复入口。" type="warning" :closable="false" />
+    <el-alert v-if="attempt?.contentChanged" title="原处理内容不同。请先核对入库记录；若本次没有入账，结束本次后再重新填写。" type="warning" :closable="false" />
+    <el-alert v-else-if="attempt" title="原处理结果待核对，已保存原请求。请使用原操作重试，或返回页面查看恢复入口。" type="warning" :closable="false" />
     <div v-loading="loading">
       <el-descriptions v-if="order" :column="2" border size="small" style="margin:12px 0"><el-descriptions-item label="入库单">{{ order.inboundNo }}</el-descriptions-item><el-descriptions-item label="目的仓">{{ order.warehouseCode }}</el-descriptions-item></el-descriptions>
       <el-form label-width="110px">
@@ -70,6 +76,6 @@ async function retry() {
         <el-form-item label="处理原因" required><el-input v-model="reason" type="textarea" :rows="3" maxlength="500" show-word-limit :disabled="locked" placeholder="填写实际差异、处理结论或更正原因" /></el-form-item>
       </el-form>
     </div>
-    <template #footer><el-button :disabled="busy" @click="emit('update:modelValue', false)">{{ attempt ? '返回并核对原操作' : '取消' }}</el-button><el-button :disabled="busy || !!attempt" @click="reload">重新读取单据</el-button><el-button v-if="attempt" type="primary" :loading="busy" @click="retry">核对并重试原操作</el-button><el-button v-else type="primary" :loading="busy" :disabled="loading || readFailed || !order || !choices.includes(kind)" @click="submit">确认{{ warehouseControlLabels[kind] }}</el-button></template>
+    <template #footer><el-button :disabled="busy" @click="emit('update:modelValue', false)">{{ attempt && !attempt.contentChanged ? '返回并核对原操作' : '返回' }}</el-button><el-button :disabled="busy || !!attempt" @click="reload">重新读取单据</el-button><el-button v-if="attempt?.contentChanged" type="primary" :disabled="busy" @click="endAttempt">已核对记录，结束本次</el-button><el-button v-else-if="attempt" type="primary" :loading="busy" @click="retry">核对并重试原操作</el-button><el-button v-else type="primary" :loading="busy" :disabled="loading || readFailed || !order || !choices.includes(kind)" @click="submit">确认{{ warehouseControlLabels[kind] }}</el-button></template>
   </el-dialog>
 </template>

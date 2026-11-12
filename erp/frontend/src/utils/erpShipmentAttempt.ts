@@ -23,3 +23,20 @@ export function clearShipmentAttempt(storage: StoragePort, userId: number, expec
   if(JSON.stringify(readShipmentAttempt(storage,userId))!==JSON.stringify(expected))throw new Error('本地原发运记录已变化，请重新读取核对')
   storage.removeItem(key(userId))
 }
+
+export function attachmentUploadFailure(status: number, message: string) {
+  if (message.includes('回执与原文件不一致') || message.includes('与原请求不一致')) {
+    return { clear: false, retry: false, message: `${message}。请先核对草稿附件，不要继续原上传。` }
+  }
+  if ([400, 404, 413, 422].includes(status)) return { clear: true, retry: false, message }
+  return { clear: false, retry: true, message: `附件上传结果待核对，可继续原上传。${message}` }
+}
+export function draftAlreadyShipped(message: string) {
+  return message.includes('已转为正式入库单') || message.includes('请勿重复保存发运')
+}
+export function shipmentSubmitFailure(status: number, message: string) {
+  const mismatch = ['已用于其他内容', '请勿重复发运', '请勿重复提交', '内容不同', '不要修改'].some(part => message.includes(part))
+  if (mismatch) return { clear: false, retry: false, message: `${message}。请先核对入库单，不要重试原提交。` }
+  if ([400, 404, 422].includes(status)) return { clear: true, retry: false, message: `${message}。请重新读取后再填写，不要重试原提交。` }
+  return { clear: false, retry: true, message: `发运结果待核对，请保持本次内容并点击「核对并重试原提交」。${message}` }
+}

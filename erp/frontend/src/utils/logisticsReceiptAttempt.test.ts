@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { assertReceiptAcknowledgement, clearReceiptAttempt, readReceiptAttempts, saveReceiptAttempt, withReceiptAttemptLock, type ReceiptAttempt } from './logisticsReceiptAttempt'
+import { assertReceiptAcknowledgement, clearReceiptAttempt, readReceiptAttempts, saveReceiptAttempt, withReceiptAttemptLock, receiptContentMismatch, type ReceiptAttempt } from './logisticsReceiptAttempt'
 
 function storage() {
   const data = new Map<string, string>()
@@ -57,5 +57,12 @@ describe('收货待核对操作跨刷新恢复', () => {
     const port = storage(); port.setItem('erp:logistics-receipt-attempts:1', '{bad')
     expect(() => readReceiptAttempts(port, 1)).toThrow('核对信息无法读取')
     expect(() => saveReceiptAttempt(port, 1, attempt())).toThrow('核对信息无法读取')
+  })
+  it('收货已用于其他内容时保留原请求标记，普通失败不标记', () => {
+    const port = storage(), original = attempt()
+    saveReceiptAttempt(port, 1, { ...original, contentChanged: true })
+    expect(readReceiptAttempts(port, 1)[0].contentChanged).toBe(true)
+    expect(receiptContentMismatch('该收货操作已用于其他内容，请刷新核对原收货记录，请勿重复入仓')).toBe(true)
+    expect(receiptContentMismatch('收货结果暂无法确定')).toBe(false)
   })
 })

@@ -3,7 +3,7 @@ import type { WarehouseControlKind } from './warehouseControl'
 import { userFacingError } from '@erp/shared/user-facing-error'
 type StoragePort = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
 export type WarehouseOperation = 'carton-count' | 'carton-scan' | 'qc-scan' | 'qc-submit' | 'qc-measure-submit' | 'measure' | 'putaway' | WarehouseControlKind
-export type WarehouseAttempt = { kind: WarehouseOperation; inboundId: number; inboundNo: string; warehouseCode: string; payload: { clientRequestId: string; [key: string]: any }; snapshot: { order: any; [key: string]: any } }
+export type WarehouseAttempt = { kind: WarehouseOperation; inboundId: number; inboundNo: string; warehouseCode: string; payload: { clientRequestId: string; [key: string]: any }; snapshot: { order: any; [key: string]: any }; contentChanged?: boolean }
 const key = (userId: number) => {
   if (!Number.isSafeInteger(userId) || userId <= 0) throw new Error('登录身份无效，请重新登录后核对仓库作业')
   return `erp:warehouse-operations:${userId}`
@@ -29,8 +29,17 @@ export function clearWarehouseAttempt(storage: StoragePort, userId: number, atte
   else storage.removeItem(key(userId))
 }
 /** A failed retry is not proof that an earlier request was rejected. Auth failures must keep its receipt. */
+export function warehouseContentMismatch(message: string) {
+  return ['不要修改后重试', '不要修改原请求', '内容不同', '已用于其他内容', '结束本次'].some(part => message.includes(part))
+}
 export function recoverWarehouseAttemptFailure(storage: StoragePort, userId: number, attempt: WarehouseAttempt, error: any) {
   const status = Number(error?.status), detail = userFacingError(error)
+  const text = `${error?.message || ''} ${detail}`
+  if (status === 409 && warehouseContentMismatch(text)) {
+    try { saveWarehouseAttempt(storage, userId, { ...attempt, contentChanged: true }) }
+    catch { return { retained: true, contentChanged: true, message: `${detail}；原操作核对信息未能更新，请先核对原操作，不要修改后重试` } }
+    return { retained: true, contentChanged: true, message: `${detail}。请先核对入库记录，结束本次后再重新填写，不要修改后重试` }
+  }
   if ([400, 404, 409, 422].includes(status)) {
     try { clearWarehouseAttempt(storage, userId, attempt) }
     catch { return { retained: true, message: `${detail}；原操作核对信息未能清除，请先核对原操作，勿重新建立操作` } }

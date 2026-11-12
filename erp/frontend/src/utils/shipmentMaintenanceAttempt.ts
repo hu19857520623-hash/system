@@ -23,3 +23,10 @@ export function saveShipmentMaintenance(storage: StoragePort, userId: number, at
   catch { throw new Error('无法保存原操作核对信息，本次尚未提交，请检查浏览器存储后重试') }
 }
 export function clearShipmentMaintenance(storage: StoragePort, userId: number, expected: ShipmentMaintenanceAttempt) {if(JSON.stringify(readShipmentMaintenance(storage,userId))!==JSON.stringify(expected))throw new Error('本地原发运维护记录已变化，请重新读取核对');storage.removeItem(key(userId)) }
+
+export function shipmentMaintenanceFailure(status: number, message: string) {
+  const mismatch = ['已用于其他内容', '请勿重复修改', '请勿重复删除', '内容不同', '不要修改'].some(part => message.includes(part))
+  if (mismatch) return { clear: false, retry: false, message: `${message}。请先核对入库单和海运费，不要重试原操作。` }
+  if ([400, 404, 409, 422].includes(status)) return { clear: true, retry: false, message: `${message}。请重新读取最新详情后再填写，不要重试原操作。` }
+  return { clear: false, retry: true, message: `操作结果待核对，请点击「核对并重试原操作」，不要重新建立操作。${message}` }
+}

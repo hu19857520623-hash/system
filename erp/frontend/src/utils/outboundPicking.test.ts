@@ -92,4 +92,12 @@ describe('拣货原请求保存与恢复', () => {
     try { await expect(withPickLock(59, action)).rejects.toThrow('另一个页面');expect(action).not.toHaveBeenCalled() }
     finally { vi.unstubAllGlobals() }
   })
+  it('明细不能更改或状态已变化后不再重试原拣货', async () => {
+    const s = storage(); savePickAttempt(s, 59, original)
+    const api = { pickRequest: vi.fn().mockResolvedValue(receipt('unknown')), pick: vi.fn().mockRejectedValue({ status: 409, message: '原拣货明细、数量或库位不能更改，请核对原请求后重试' }) }
+    await expect(operatePickAttempt(api, s, 59, original, 'retry', () => {})).rejects.toThrow('不要重试原拣货')
+    expect(readPickAttempts(s, 59)[0].stale).toBe(true)
+    await expect(operatePickAttempt(api, s, 59, readPickAttempts(s, 59)[0], 'retry', () => {})).rejects.toThrow('不要重试原拣货')
+    expect(api.pick).toHaveBeenCalledOnce()
+  })
 })

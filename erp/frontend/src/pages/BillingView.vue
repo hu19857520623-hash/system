@@ -8,7 +8,7 @@ import { billingApi, customerApi } from '@/api/client.js'
 import { fmtTime, num } from '@/api/mappers.ts'
 
 import { userFacingError } from '@erp/shared/user-facing-error'
-import { readBillingAttempt, saveBillingAttempt, runBillingAttempt, loadAllBillingCharges, BILLING_CHARGE_LABELS, type BillingAttempt } from '@/utils/billingWorkflow'
+import { readBillingAttempt, saveBillingAttempt, runBillingAttempt, loadAllBillingCharges, endChangedBillingAttempt, BILLING_CHARGE_LABELS, type BillingAttempt } from '@/utils/billingWorkflow'
 
 
 
@@ -425,7 +425,7 @@ function readPending() {
   catch (error) { billingStorageError.value = userFacingError(error) }
 }
 async function postBilling(attempt: BillingAttempt) {
-  if (financialBusy.value) return false
+  if (financialBusy.value || attempt.contentChanged) return false
   const operatorId = Number(app.authenticatedUser?.id);financialBusy.value = true;billingNotice.value = ''
   try {
     const response = await runBillingAttempt(billingApi, localStorage, operatorId, attempt)
@@ -451,8 +451,16 @@ async function submitBilling(kind: BillingAttempt['kind'], payload: any, snapsho
   catch (error) { billingStorageError.value = userFacingError(error);return false }
   return postBilling(attempt)
 }
+function endChangedBilling() {
+  const attempt = billingPending.value
+  if (!attempt?.contentChanged || financialBusy.value) return
+  try { endChangedBillingAttempt(localStorage, Number(app.authenticatedUser?.id), attempt) }
+  catch (error) { billingNotice.value = userFacingError(error); return }
+  readPending()
+  billingNotice.value = '已结束这次未能入账的账务操作。请先核对账单和余额；若没有扣款，可以重新填写。'
+}
 function restoreBilling() {
-  const attempt = billingPending.value;if (!attempt || financialBusy.value) return
+  const attempt = billingPending.value;if (!attempt || financialBusy.value || attempt.contentChanged) return
   if (attempt.kind === 'generate') { generateForm.value = JSON.parse(JSON.stringify(attempt.snapshot.form));generatePreview.value = attempt.snapshot.preview;generateVisible.value = true }
   else if (attempt.kind === 'manual-charge') { chargeForm.value = JSON.parse(JSON.stringify(attempt.snapshot.form));chargeDialogVisible.value = true }
   else { confirmBillId.value = attempt.billId!;settlement.value = attempt.snapshot;confirmVisible.value = true }
@@ -679,10 +687,11 @@ onMounted(async () => {
 
   <div class="billing-page">
     <el-alert v-if="billingStorageError" :title="billingStorageError" type="error" :closable="false" />
-    <el-alert v-if="billingPending" :title="`${billingPending.title} 有原账务请求待核对`" type="warning" :closable="false">
-      <p>原金额和费用范围已保留，请先核对原操作，勿重新生成或扣款。</p>
-      <el-button :disabled="financialBusy" @click="restoreBilling">恢复原操作</el-button>
-      <el-button :loading="financialBusy" @click="postBilling(billingPending)">核对并重试原操作</el-button>
+    <el-alert v-if="billingPending" :title="billingPending.contentChanged ? `${billingPending.title} 的账务内容不同` : `${billingPending.title} 有原账务请求待核对`" type="warning" :closable="false">
+      <p>{{ billingPending.contentChanged ? '请先核对账单和余额。若本次没有入账，结束本次后再重新填写。' : '原金额和费用范围已保留，请先核对原操作，勿重新生成或扣款。' }}</p>
+      <el-button v-if="!billingPending.contentChanged" :disabled="financialBusy" @click="restoreBilling">恢复原操作</el-button>
+      <el-button v-if="!billingPending.contentChanged" :loading="financialBusy" @click="postBilling(billingPending)">核对并重试原操作</el-button>
+      <el-button v-else :disabled="financialBusy" @click="endChangedBilling">已核对记录，结束本次</el-button>
     </el-alert>
     <el-alert v-if="billingNotice" :title="billingNotice" type="info" :closable="false" />
     <el-alert v-if="customerError" :title="customerError" type="error" :closable="false"><el-button @click="loadCustomers">重新读取客户</el-button></el-alert>
@@ -1089,7 +1098,8 @@ onMounted(async () => {
         <el-button :disabled="financialBusy" @click="generateVisible = false">{{ billingPending ? '返回并核对原操作' : '取消' }}</el-button>
 
         <el-button :disabled="financialLocked" :loading="generateLoading" @click="refreshGeneratePreview">重新预览</el-button>
-        <el-button v-if="billingPending" :loading="financialBusy" type="primary" @click="postBilling(billingPending)">核对并重试原操作</el-button>
+        <el-button v-if="billingPending && !billingPending.contentChanged" :loading="financialBusy" type="primary" @click="postBilling(billingPending)">核对并重试原操作</el-button>
+        <el-button v-else-if="billingPending?.contentChanged" :disabled="financialBusy" @click="endChangedBilling">已核对记录，结束本次</el-button>
         <el-button v-else type="primary" :loading="financialBusy" :disabled="financialLocked || generateLoading || !!generateError || !generatePreview.chargeCount" @click="submitGenerate">确认生成</el-button>
 
       </template>
@@ -1149,7 +1159,8 @@ onMounted(async () => {
 
         <el-button :disabled="financialBusy" @click="chargeDialogVisible = false">{{ billingPending ? '返回并核对原操作' : '取消' }}</el-button>
 
-        <el-button v-if="billingPending" :loading="financialBusy" type="primary" @click="postBilling(billingPending)">核对并重试原操作</el-button>
+        <el-button v-if="billingPending && !billingPending.contentChanged" :loading="financialBusy" type="primary" @click="postBilling(billingPending)">核对并重试原操作</el-button>
+        <el-button v-else-if="billingPending?.contentChanged" :disabled="financialBusy" @click="endChangedBilling">已核对记录，结束本次</el-button>
         <el-button v-else type="primary" :disabled="financialLocked || !!customerError" :loading="financialBusy" @click="submitManualCharge">保存费用</el-button>
 
       </template>
@@ -1183,7 +1194,8 @@ onMounted(async () => {
       <template #footer>
         <el-button :disabled="financialBusy" @click="confirmVisible = false">返回账单列表</el-button>
         <el-button :disabled="financialLocked" :loading="confirmLoading" @click="loadSettlement">重新核对余额</el-button>
-        <el-button v-if="billingPending" type="primary" :loading="financialBusy" @click="postBilling(billingPending)">核对并重试原操作</el-button>
+        <el-button v-if="billingPending && !billingPending.contentChanged" type="primary" :loading="financialBusy" @click="postBilling(billingPending)">核对并重试原操作</el-button>
+        <el-button v-else-if="billingPending?.contentChanged" :disabled="financialBusy" @click="endChangedBilling">已核对记录，结束本次</el-button>
         <el-button v-else type="primary" :loading="financialBusy" :disabled="financialLocked || confirmLoading || !!confirmError || !settlement?.canConfirm" @click="submitConfirmBill">{{ settlement?.toDeductAmount > 0 ? '确认并扣未付费用' : '确认核对已付费用' }}</el-button>
       </template>
     </el-dialog>

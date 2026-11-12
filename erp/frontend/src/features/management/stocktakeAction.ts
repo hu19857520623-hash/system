@@ -2,7 +2,7 @@ import { ref, watch } from 'vue'
 import { userFacingError } from '@erp/shared/user-facing-error'
 
 export type StocktakeAction = 'create' | 'count' | 'approve' | 'cancel' | 'replan'
-type Attempt = { action: StocktakeAction; requestId: string; payload: Record<string, unknown>; planId?: number; uncertain?: boolean }
+type Attempt = { action: StocktakeAction; requestId: string; payload: Record<string, unknown>; planId?: number; uncertain?: boolean; contentChanged?: boolean }
 type Options = {
   owner: () => string
   storage: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
@@ -12,7 +12,13 @@ type Options = {
   newId?: () => string
 }
 
-/** A pending request survives navigation/reload and is always retried with its original identity and body. */
+export function stocktakeContentMismatch(message: string) {
+  return ['不能更改内容', '不能更改仓库', '内容不同', '勿修改后'].some(part => message.includes(part))
+}
+export function stocktakeMustRefresh(message: string) {
+  if (stocktakeContentMismatch(message)) return false
+  return ['已变化', '请刷新盘点', '请刷新后', '请刷新核对', '已结束'].some(part => message.includes(part))
+}
 export function createStocktakeAction(options: Options) {
   const pending = ref<Attempt | null>(null), busy = ref(false), feedback = ref('')
   let owner = options.owner(), revision = 0
@@ -23,7 +29,9 @@ export function createStocktakeAction(options: Options) {
       const value = JSON.parse(options.storage.getItem(key()) || 'null')
       if (value && ['create', 'count', 'approve', 'cancel', 'replan'].includes(value.action) && /^[A-Za-z0-9_-]{8,100}$/.test(value.requestId) && value.payload && typeof value.payload === 'object') {
         pending.value = { ...value, uncertain: true }
-        feedback.value = '上次盘点提交的结果尚待核对，请核对后继续。'
+        feedback.value = value.contentChanged
+          ? '同一盘点请求内容不同。请先核对盘点结果，结束本次后再重新填写，不要重试原提交。'
+          : '上次盘点提交的结果尚待核对，请核对后继续。'
       }
     } catch { feedback.value = '未能读取上次提交记录，请核对盘点列表后继续。' }
   }
@@ -38,6 +46,10 @@ export function createStocktakeAction(options: Options) {
   }
   async function retry() {
     if (busy.value || !pending.value) return
+    if (pending.value.contentChanged) {
+      feedback.value = '同一盘点请求内容不同。请先核对盘点结果，结束本次后再重新填写，不要重试原提交。'
+      return
+    }
     const attempt = JSON.parse(JSON.stringify(pending.value)) as Attempt, actor = owner, sequence = ++revision
     busy.value = true
     try {
@@ -46,7 +58,13 @@ export function createStocktakeAction(options: Options) {
     } catch (error) {
       if (actor !== options.owner() || sequence !== revision) return
       const status = (error as { status?: number })?.status
-      if (!attempt.uncertain && [400, 403, 409, 422].includes(status || 0)) {
+      const text = `${error instanceof Error ? error.message : ''} ${userFacingError(error)}`
+      if (stocktakeContentMismatch(text)) {
+        const next = { ...attempt, uncertain: true, contentChanged: true }
+        pending.value = next
+        try { options.storage.setItem(key(), JSON.stringify(next)) } catch { /* 原请求仍在，页面仍可结束。 */ }
+        feedback.value = '同一盘点请求内容不同。请先核对盘点结果，结束本次后再重新填写，不要重试原提交。'
+      } else if (stocktakeMustRefresh(text) || (!attempt.uncertain && [400, 403, 409, 422].includes(status || 0))) {
         pending.value = null
         try { options.storage.removeItem(key()) } catch { /* A later receipt check will be safe. */ }
         feedback.value = `${userFacingError(error)} 请刷新盘点结果后核对再操作。`
@@ -81,6 +99,12 @@ export function createStocktakeAction(options: Options) {
       if (actor === options.owner() && sequence === revision) feedback.value = `核对结果失败。${userFacingError(error)} 请保留当前提交并稍后重试核对。`
     } finally { if (sequence === revision) busy.value = false }
   }
+  function endChanged() {
+    if (busy.value || !pending.value?.contentChanged) return
+    pending.value = null
+    try { options.storage.removeItem(key()) } catch { feedback.value = '原盘点请求未能结束，请保留记录并重新核对。'; return }
+    feedback.value = '已结束这次未能入账的盘点提交。请先核对盘点结果；若没有入账，可以重新填写。'
+  }
   function clearFeedback() { if (!pending.value && !busy.value) feedback.value = '' }
-  return { pending, busy, feedback, start, retry, reconcile, clearFeedback, stop: () => { ++revision; unwatch() } }
+  return { pending, busy, feedback, start, retry, reconcile, endChanged, clearFeedback, stop: () => { ++revision; unwatch() } }
 }

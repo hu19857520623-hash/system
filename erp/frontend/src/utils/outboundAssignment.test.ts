@@ -50,4 +50,12 @@ describe('原分配批次恢复',()=>{
     vi.stubGlobal('navigator',{locks:{request:async(_k:unknown,_o:unknown,fn:(lock:null)=>unknown)=>fn(null)}});const fn=vi.fn()
     try{await expect(withAssignmentLock(59,fn)).rejects.toThrow('另一个页面');expect(fn).not.toHaveBeenCalled()}finally{vi.unstubAllGlobals()}
   })
+  it('批次或状态不能更改后不再重试原分配',async()=>{
+    const s=storage();saveAssignment(s,59,original)
+    const api={assignmentRequest:vi.fn().mockResolvedValue(receipt('unknown')),assignPicker:vi.fn().mockRejectedValue({status:409,message:'原分配批次、人员或单据状态不能更改，请核对原请求'})}
+    await expect(operateAssignment(api,s,59,original,'retry',()=>{})).rejects.toThrow('不要重试原分配')
+    expect(readAssignment(s,59)?.stale).toBe(true)
+    await expect(operateAssignment(api,s,59,readAssignment(s,59)!,'retry',()=>{})).rejects.toThrow('不要重试原分配')
+    expect(api.assignPicker).toHaveBeenCalledOnce()
+  })
 })

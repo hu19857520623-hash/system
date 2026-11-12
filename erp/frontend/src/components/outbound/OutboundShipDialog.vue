@@ -4,7 +4,7 @@ import { ElMessage } from 'element-plus'
 import { outboundApi } from '@/api/client.js'
 import { useAppStore } from '@/stores/app'
 import { userFacingError } from '@erp/shared/user-facing-error'
-import { readShipAttempts, saveShipAttempt, runShipAttempt, type ShipAttempt } from '@/utils/outboundShipping'
+import { readShipAttempts, saveShipAttempt, runShipAttempt, clearShipAttempt, shipContentMismatch, shipStatusChanged, type ShipAttempt } from '@/utils/outboundShipping'
 const props = defineProps<{
   modelValue: boolean
   order: { id: number; outboundNo?: string; status?: string; trackingNo?: string | null; carrier?: string | null; logisticsProduct?: string | null
@@ -15,6 +15,8 @@ const emit = defineEmits<{ 'update:modelValue': [value: boolean]; success: []; p
 const app = useAppStore(), busy = ref(false), error = ref(''), storageError = ref(''), pending = ref<ShipAttempt | null>(null)
 const shipTrackingNo = ref(''), shipCarrier = ref(''), shipLogisticsProduct = ref('')
 const recoveryOnly = computed(() => !!props.order?.status && props.order.status !== 'packed')
+const shipMismatch = computed(() => shipContentMismatch(error.value))
+const shipMustRefresh = computed(() => shipStatusChanged(error.value))
 function readPending() {
   try { pending.value = readShipAttempts(localStorage, Number(app.authenticatedUser?.id)).find(r => r.outboundId === props.order?.id) || null;storageError.value = '' }
   catch (e) { storageError.value = userFacingError(e) }
@@ -47,13 +49,22 @@ async function submitShip() {
   } catch (e) { error.value = userFacingError(e);readPending();emit('pending') }
   finally { busy.value = false }
 }
+function endMismatchedShip() {
+  const attempt = pending.value
+  if (!attempt || busy.value) return
+  try { clearShipAttempt(localStorage, Number(app.authenticatedUser?.id), attempt) }
+  catch (e) { error.value = userFacingError(e); return }
+  readPending()
+  error.value = '已结束这次未能入账的发运。请先查看出库记录；若没有扣款，可以重新填写物流资料后再发运。'
+}
 </script>
 
 <template>
   <el-dialog :model-value="modelValue" :title="`${recoveryOnly ? '核对发运同步' : '发运'} · ${order?.outboundNo || ''}`" width="520px"
     :close-on-click-modal="false" :close-on-press-escape="!busy" :show-close="!busy" @update:model-value="emit('update:modelValue', $event)">
     <el-alert v-if="error || storageError" :title="error || storageError" type="error" :closable="false" />
-    <el-alert v-if="pending" title="原发运请求已保留。请核对并重试原操作，勿修改物流资料后再次发运。" type="warning" :closable="false" />
+    <el-alert v-if="pending && shipMismatch" title="原发运内容不同。请先查看出库记录；若本次没有扣款，结束本次后再重新填写。" type="warning" :closable="false" />
+    <el-alert v-else-if="pending" title="原发运请求已保留。请核对并重试原操作，勿修改物流资料后再次发运。" type="warning" :closable="false" />
     <p v-if="recoveryOnly" class="pick-hint">核对已保存的支付凭据，补发OMS费用、状态和库存同步，不再次扣库存或余额。</p>
     <template v-else>
       <p v-if="order?.omsActualFees" class="pick-hint">实测基础费用 ¥{{ Number(order.omsActualFees.actualTotal || 0).toFixed(2) }}，换标费按实际作业另计；预扣差额在发运时扣退。</p>
@@ -65,8 +76,9 @@ async function submitShip() {
       </el-form>
     </template>
     <template #footer>
-      <el-button :disabled="busy" @click="emit('update:modelValue', false)">{{ pending ? '返回列表并保留原操作' : '返回' }}</el-button>
-      <el-button type="primary" :loading="busy" :disabled="!canShip || !!storageError || (!pending && !recoveryOnly && !!order?.omsPreDeduct && !order?.omsActualFees)" @click="submitShip">{{ pending ? '核对并重试原发运' : recoveryOnly ? '重试同步' : '确认发运' }}</el-button>
+      <el-button :disabled="busy" @click="emit('update:modelValue', false)">{{ pending && !shipMismatch ? '返回列表并保留原操作' : '返回' }}</el-button>
+      <el-button v-if="pending && shipMismatch" type="primary" :disabled="busy" @click="endMismatchedShip">已核对记录，结束本次</el-button>
+      <el-button v-else-if="!shipMustRefresh" type="primary" :loading="busy" :disabled="!canShip || !!storageError || (!pending && !recoveryOnly && !!order?.omsPreDeduct && !order?.omsActualFees)" @click="submitShip">{{ pending ? '核对并重试原发运' : recoveryOnly ? '重试同步' : '确认发运' }}</el-button>
     </template>
   </el-dialog>
 </template>

@@ -42,4 +42,13 @@ describe('公告原发布恢复',()=>{
   const id=f.pending.value!.requestId;release({requestId:'other',status:'confirmed',announcementId:9});await p;expect(f.pending.value).not.toBeNull()
   f.request.mockResolvedValueOnce({requestId:id,status:'unknown'});await f.run('check');expect(f.pending.value).not.toBeNull();expect(f.feedback.value).toContain('尚未查到')
  })
+ it('公告内容不能更改或状态已变化时不再继续原发布',async()=>{
+  const f=fixture()
+  f.request.mockRejectedValueOnce(Error('原公告发布内容不能更改，请先核对或取消原请求'))
+  await f.start({title:'原标题',content:'原正文'})
+  expect(f.pending.value?.stale).toBe(true)
+  expect(f.feedback.value).toContain('不要继续原公告发布')
+  await f.run('submit')
+  expect(f.request).toHaveBeenCalledTimes(1)
+ })
 })

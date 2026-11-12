@@ -30,4 +30,14 @@ describe('收回退款原请求恢复',()=>{
   it('请求标识符合后端UUID约束',()=>{
     const first=reclaimRequestId();expect(first).toMatch(/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/);expect(reclaimRequestId()).not.toBe(first)
   })
+  it('收回内容不同时保留原请求，库存已回滚则清掉并不再重试',async()=>{
+    const s=storage(),api=vi.fn().mockRejectedValueOnce(Object.assign(new Error('原收回请求对应的客户、商品、数量或备注不同，请核对原操作，勿再次收回'),{status:409}))
+    await expect(runReclaimAttempt(api,s,1,attempt)).rejects.toThrow('不要重试原收回')
+    expect(readReclaimAttempt(s,1)?.contentChanged).toBe(true)
+    await expect(runReclaimAttempt(api,s,1,readReclaimAttempt(s,1)!)).rejects.toThrow('不要重试原收回')
+    expect(api).toHaveBeenCalledOnce()
+    const rolled=storage();saveReclaimAttempt(rolled,1,attempt)
+    await expect(runReclaimAttempt(async()=>{throw Object.assign(new Error('持有或货盘库存已变化，本次收回已回滚，请重新核对'),{status:409})},rolled,1,attempt)).rejects.toThrow('不要重试原收回')
+    expect(readReclaimAttempt(rolled,1)).toBeNull()
+  })
 })

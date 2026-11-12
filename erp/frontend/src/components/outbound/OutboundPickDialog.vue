@@ -162,7 +162,8 @@ async function run(mode: 'retry' | 'check' | 'cancel') {
     @update:model-value="emit('update:modelValue', $event)"
   >
     <el-alert v-if="error || storageError" :title="error || storageError" type="error" :closable="false" />
-    <el-alert v-if="pending" title="原拣货明细已保存。请先查询原结果，重试将使用原数量和库位；取消只终止这次原请求。" type="warning" :closable="false" />
+    <el-alert v-if="pending?.stale" title="原拣货明细不能更改，或出库单状态已变化。请查询原结果，或取消原请求后重新读取，不要重试原拣货。" type="warning" :closable="false" />
+    <el-alert v-else-if="pending" title="原拣货明细已保存。请先查询原结果，重试将使用原数量和库位；取消只终止这次原请求。" type="warning" :closable="false" />
     <div class="pick-hint">
       在 ERP 网页按库位确认拣货（无独立 PDA 扫描端）。系统已拆分库位任务，须全部拣完；短拣请标记库存短缺异常。
     </div>
@@ -187,7 +188,7 @@ async function run(mode: 'retry' | 'check' | 'cancel') {
       <el-button v-if="pending" :disabled="pickSubmitting || !canPick || !!storageError" @click="run('check')">查询原结果</el-button>
       <el-button v-if="pending" :disabled="pickSubmitting || !canPick || !!storageError" @click="run('cancel')">取消原请求</el-button>
       <el-button v-if="error && !pending && !storageError" :disabled="pickSubmitting" @click="order && loadPickLines(order, generation)">重新加载库位</el-button>
-      <el-button type="primary" :loading="pickSubmitting" :disabled="!canPick || pickLoading || !!storageError || !pickLines.length" @click="run('retry')">{{ pending ? '核对并重试原拣货' : '完成拣货' }}</el-button>
+      <el-button v-if="!pending?.stale" type="primary" :loading="pickSubmitting" :disabled="!canPick || pickLoading || !!storageError || !pickLines.length" @click="run('retry')">{{ pending ? '核对并重试原拣货' : '完成拣货' }}</el-button>
     </template>
   </el-dialog>
 </template>

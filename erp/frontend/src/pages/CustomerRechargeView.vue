@@ -7,7 +7,7 @@ import { useTablePagination } from '@/composables/useTablePagination.ts'
 import { useRowActions } from '@/composables/useRowActions'
 import { useAppStore } from '@/stores/app'
 import { userFacingError } from '@erp/shared/user-facing-error'
-import { newRechargeNo, readRecharge, runRecharge, type RechargeAttempt } from '@erp/shared/recharge-workflow'
+import { newRechargeNo, readRecharge, runRecharge, endChangedRecharge, type RechargeAttempt } from '@erp/shared/recharge-workflow'
 import ListPagination from '@/components/ListPagination.vue'
 import DetailSheet from '@/components/ui/DetailSheet.vue'
 
@@ -164,8 +164,17 @@ function onNameBlur() {
   }).catch(() => {})
 }
 
+function endChangedRechargeRequest() {
+  const attempt = rechargePending.value
+  if (!attempt?.contentChanged || rechargeBusy.value) return
+  try { endChangedRecharge(localStorage, rechargeScope(), attempt) }
+  catch (error) { rechargeError.value = userFacingError(error); return }
+  readOriginalRecharge()
+  rechargeForm.value.rechargeNo = genRechargeNo()
+  rechargeError.value = '已结束这次未能入账的充值。请先核对充值记录和余额；若没有入账，可以重新填写。'
+}
 async function submitRecharge(retry = false) {
-  if (rechargeBusy.value || rechargeStorageError.value) return
+  if (rechargeBusy.value || rechargeStorageError.value || rechargePending.value?.contentChanged) return
   if (!app.hasPerm('budget_credit.create')) { rechargeError.value = '当前岗位无充值权限';return }
   if (rechargePending.value && !retry) { rechargeError.value = '请先重试原充值';return }
   const form = rechargeForm.value
@@ -222,7 +231,7 @@ onMounted(() => { readOriginalRecharge();void load() })
       </div>
     </template>
 
-    <el-alert v-if="rechargePending" :title="`原充值待核对：${rechargePending.customerCode} · ${rechargePending.rechargeNo}。请打开充值，重试原单。`" type="warning" :closable="false" />
+    <el-alert v-if="rechargePending" :title="rechargePending.contentChanged ? `原充值内容不同：${rechargePending.customerCode} · ${rechargePending.rechargeNo}。请先核对充值记录，不要重试原充值。` : `原充值待核对：${rechargePending.customerCode} · ${rechargePending.rechargeNo}。请打开充值，重试原单。`" type="warning" :closable="false" />
     <el-alert v-if="rechargeStorageError" :title="rechargeStorageError" type="error" :closable="false" />
     <div class="filter-bar">
       <el-input
@@ -274,7 +283,7 @@ onMounted(() => { readOriginalRecharge();void load() })
   <el-dialog v-model="dialogVisible" title="客户充值" width="520px">
     <el-alert v-if="rechargeStorageError" :title="rechargeStorageError" type="error" :closable="false" />
     <el-alert v-if="rechargeError" :title="rechargeError" type="warning" :closable="false" />
-    <el-alert v-if="rechargePending" title="原充值待核对。客户、金额与单号已保留，请重试原充值，勿另建单。" type="warning" :closable="false" />
+    <el-alert v-if="rechargePending" :title="rechargePending.contentChanged ? '原充值内容不同。客户、金额与单号已保留，请核对记录后结束本次，勿另建单。' : '原充值待核对。客户、金额与单号已保留，请重试原充值，勿另建单。'" type="warning" :closable="false" />
     <el-form label-width="90px" size="small" :disabled="rechargeLocked">
       <el-form-item label="客户 ID" required>
         <el-input
@@ -312,7 +321,8 @@ onMounted(() => { readOriginalRecharge();void load() })
     </el-form>
     <template #footer>
       <el-button @click="dialogVisible = false">取消</el-button>
-      <el-button v-if="rechargePending" type="primary" :loading="rechargeBusy" :disabled="!!rechargeStorageError || !app.hasPerm('budget_credit.create')" @click="submitRecharge(true)">重试原充值</el-button>
+      <el-button v-if="rechargePending && !rechargePending.contentChanged" type="primary" :loading="rechargeBusy" :disabled="!!rechargeStorageError || !app.hasPerm('budget_credit.create')" @click="submitRecharge(true)">重试原充值</el-button>
+      <el-button v-else-if="rechargePending?.contentChanged" :disabled="rechargeBusy" @click="endChangedRechargeRequest">已核对记录，结束本次</el-button>
       <el-button v-else type="primary" :loading="rechargeBusy" :disabled="!!rechargeStorageError || !app.hasPerm('budget_credit.create')" @click="submitRecharge()">确认充值</el-button>
     </template>
   </el-dialog>

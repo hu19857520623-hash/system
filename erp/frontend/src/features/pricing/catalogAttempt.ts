@@ -2,7 +2,10 @@ import { onScopeDispose, ref, shallowRef, watch } from 'vue'
 import { userFacingError } from '@erp/shared/user-facing-error'
 
 export type CatalogAction = 'confirm' | 'sync' | 'share'
-export type CatalogAttempt = { actor: string; requestId: string; pricingId: number; name: string; action: CatalogAction; payload: Record<string, unknown> }
+export type CatalogAttempt = { actor: string; requestId: string; pricingId: number; name: string; action: CatalogAction; payload: Record<string, unknown>; stale?: boolean }
+export function catalogWriteStale(message: string) {
+ return ['内容不能更改', '资料已变化', '不能覆盖', '请读取最新', '请先核对或取消原请求'].some(part => message.includes(part))
+}
 type Receipt = { requestId: string; pricingId: number; action: CatalogAction; status: 'unknown' | 'confirmed' | 'cancelled'; version?: string; price?: number; pricingStatus?: string; shareStatus?: string }
 export const catalogActionLabel = { confirm: '确认定价', sync: '同步OMS', share: '变更共享' }
 
@@ -29,7 +32,11 @@ export function useCatalogAttempt(options: {
   try {
    const raw = options.storage.getItem(key(actor)); if (!raw) return
    const a = JSON.parse(raw) as CatalogAttempt; if (!valid(a, actor)) throw Error()
-   pending.value = a; feedback.value = `原${catalogActionLabel[a.action]}结果待核对，请核对、继续或取消原请求，勿重新提交。`
+   if (a.stale !== true) delete a.stale
+   pending.value = a
+   feedback.value = a.stale
+    ? `原${catalogActionLabel[a.action]}资料已变化或内容不能更改。请核对结果或取消原请求后读取最新资料，不要继续原货盘操作。`
+    : `原${catalogActionLabel[a.action]}结果待核对，请核对、继续或取消原请求，勿重新提交。`
   } catch { blocked.value = true; feedback.value = '原货盘操作信息无法读取，请联系管理员核对，勿重新提交。' }
  }
  const stopWatch = watch(options.scope, () => { ++revision; restore() }, { immediate: true, flush: 'sync' })
@@ -40,6 +47,7 @@ export function useCatalogAttempt(options: {
   const a = pending.value, owner = options.scope(), version = revision
   if (stopped || !a || busy.value || blocked.value || !owner || a.actor !== options.actor()) return false
   if (!options.allowed(a.action)) { feedback.value = '当前权限不足，请使用原账号恢复相应权限后核对原请求。'; return false }
+  if (mode === 'submit' && a.stale) { feedback.value = `原${catalogActionLabel[a.action]}资料已变化或内容不能更改。请核对结果或取消原请求后读取最新资料，不要继续原货盘操作。`; return false }
   const active = () => !stopped && revision === version && owner === options.scope() && a.actor === options.actor() && options.allowed(a.action)
   busy.value = true; feedback.value = '正在核对原货盘操作结果…'
   try {
@@ -49,7 +57,7 @@ export function useCatalogAttempt(options: {
    const result = await options.request(mode, structuredClone(a)); if (!active()) return false
    if (result?.requestId !== a.requestId || result.pricingId !== a.pricingId || result.action !== a.action || !['unknown', 'confirmed', 'cancelled'].includes(result.status)
     || result.status === 'confirmed' && (typeof result.version !== 'string' || !Number.isFinite(Date.parse(result.version)) || !Number.isFinite(result.price) || Number(result.price) <= 0 || !['priced', 'synced'].includes(result.pricingStatus || '') || !['enabled', 'stopped'].includes(result.shareStatus || ''))) throw Error('原操作回执不完整，请保留原请求继续核对')
-   if (result.status === 'unknown') { feedback.value = '尚未查到原操作结果，请继续原请求或取消原请求，勿重新创建。'; return false }
+   if (result.status === 'unknown') { feedback.value = a.stale ? `尚未查到原${catalogActionLabel[a.action]}结果。请取消原请求后读取最新资料，不要继续原货盘操作。` : '尚未查到原操作结果，请继续原请求或取消原请求，勿重新创建。'; return false }
    // A confirmed receipt describes the original outcome; reload current data before releasing it.
    // Cancellation needs no detail read, so deleted products cannot trap a cancelled request.
    if (result.status === 'confirmed') await options.applied(a, result, active)
@@ -58,7 +66,19 @@ export function useCatalogAttempt(options: {
    options.storage.removeItem(key(a.actor)); pending.value = null
    feedback.value = result.status === 'cancelled' ? '原货盘操作请求已取消，请读取最新资料后继续。' : '原货盘操作结果已确认，列表显示当前最新资料，请核对后继续。'
    return true
-  } catch (error) { if (active()) feedback.value = `原货盘操作已保留。${userFacingError(error)} 请核对结果、继续或取消原请求。`; return false }
+  } catch (error) {
+   if (!active()) return false
+   const text = `${error instanceof Error ? error.message : ''} ${userFacingError(error)}`
+   if (catalogWriteStale(text)) {
+    const next = { ...a, stale: true as const }
+    try { options.storage.setItem(key(a.actor), JSON.stringify(next)) } catch { /* 原请求仍在内存中，页面仍可取消。 */ }
+    pending.value = next
+    feedback.value = `原货盘资料已变化或原内容不能更改。请核对结果或取消原请求后读取最新资料，不要继续原货盘操作。${userFacingError(error)}`
+    return false
+   }
+   feedback.value = `原货盘操作已保留。${userFacingError(error)} 请核对结果、继续或取消原请求。`
+   return false
+  }
   finally { if (active()) busy.value = false }
  }
  async function start(action: CatalogAction, pricingId: number, name: string, payload: Record<string, unknown>) {

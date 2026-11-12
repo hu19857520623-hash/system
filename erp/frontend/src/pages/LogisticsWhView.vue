@@ -12,7 +12,7 @@ import { useRowActions } from '@/composables/useRowActions'
 import ListPagination from '@/components/ListPagination.vue'
 import StockFillBar from '@/components/ui/StockFillBar.vue'
 import { useAppStore } from '@/stores/app'
-import { assertReceiptAcknowledgement, clearReceiptAttempt, readReceiptAttempts, saveReceiptAttempt, withReceiptAttemptLock, type ReceiptAttempt } from '@/utils/logisticsReceiptAttempt'
+import { assertReceiptAcknowledgement, clearReceiptAttempt, readReceiptAttempts, saveReceiptAttempt, withReceiptAttemptLock, receiptContentMismatch, type ReceiptAttempt } from '@/utils/logisticsReceiptAttempt'
 
 const { confirmAction, showDetail } = useRowActions()
 const router = useRouter()
@@ -209,6 +209,7 @@ const receiveRemark = ref('')
 const receiveLoading = ref(false)
 const receiveBusy = ref(false)
 const receiveUncertain = ref(false)
+const receiveContentChanged = ref(false)
 const receiveFeedback = ref('')
 const receiveRequestId = ref('')
 const receiveTargetId = ref<number | null>(null)
@@ -250,8 +251,11 @@ function openReceiptRecovery(attempt: ReceiptAttempt) {
   receiveRemark.value = String(attempt.payload.remark || '')
   receiveRequestId.value = attempt.payload.clientRequestId
   receiveUncertain.value = true
+  receiveContentChanged.value = attempt.contentChanged === true
   receiveResult.value = null
-  receiveFeedback.value = '上次收货结果待核对。输入已保留，核对并重试将使用同一次操作标识，避免重复入仓。'
+  receiveFeedback.value = attempt.contentChanged
+    ? '这次收货已用于其他内容。请先核对收货记录，不要重试本次收货。'
+    : '上次收货结果待核对。输入已保留，核对并重试将使用同一次操作标识，避免重复入仓。'
   receiveVisible.value = true
 }
 
@@ -269,6 +273,7 @@ async function openReceive(requested: any) {
   receiveLines.value = []
   receiveFeedback.value = ''
   receiveUncertain.value = false
+  receiveContentChanged.value = false
   receivePayload.value = null
   receiveResult.value = null
   receiveRequestId.value = crypto.randomUUID()
@@ -380,6 +385,7 @@ async function submitReceive(replay = false) {
       assertReceiptAcknowledgement(result, payload)
       receiveResult.value = result
       receiveUncertain.value = false
+      receiveContentChanged.value = false
       receiveFeedback.value = `${result.duplicate ? '已核对原收货记录' : '本次收货已确认'}：${result.receiptNo}。${result.poStatus === 'received' ? '采购单已收齐，良品已入中转仓库存' : '仍有待收数量，可返回列表继续收货'}。破损件单独记录，不增加可用库存。`
       try { clearReceiptAttempt(localStorage, userId, payload.poId, payload.clientRequestId) } catch { receiveFeedback.value += ' 本地核对信息暂未清除，可使用原操作标识再次核对。' }
       refreshReceiptAttempts()
@@ -390,6 +396,16 @@ async function submitReceive(replay = false) {
     } catch (error) {
       if (!current()) return
       const status = Number((error as { status?: unknown })?.status)
+      const text = `${error instanceof Error ? error.message : ''} ${userFacingError(error)}`
+      if (receiptContentMismatch(text) && receivePayload.value && receiveTarget.value) {
+        receiveUncertain.value = true
+        receiveContentChanged.value = true
+        try { saveReceiptAttempt(localStorage, userId, { payload: receivePayload.value, target: receiveTarget.value, lines: receiveLines.value, contentChanged: true }) } catch { /* 原请求仍在，页面仍可结束。 */ }
+        receiveFeedback.value = `${userFacingError(error)}。请先核对收货记录，不要重试本次收货。`
+        refreshReceiptAttempts()
+        return
+      }
+      receiveContentChanged.value = false
       receiveUncertain.value = (sent || replay) && !(status === 400 || status === 412 || status === 422)
       receiveFeedback.value = receiveUncertain.value ? `收货结果暂无法确定，请核对并重试本次收货。${userFacingError(error)}` : userFacingError(error)
       if (!receiveUncertain.value && receivePayload.value) { try { clearReceiptAttempt(localStorage, userId, receivePayload.value.poId, receivePayload.value.clientRequestId) } catch { /* retain safe replay metadata */ } }
@@ -397,6 +413,18 @@ async function submitReceive(replay = false) {
       if (status === 412) receiveTarget.value = null
     }
   }
+}
+
+function endMismatchedReceipt() {
+  const payload = receivePayload.value
+  if (!receiveContentChanged.value || receiveBusy.value || !payload || !app.authenticatedUser) return
+  try { clearReceiptAttempt(localStorage, app.authenticatedUser.id, payload.poId, payload.clientRequestId) }
+  catch (error) { receiveFeedback.value = userFacingError(error); return }
+  receiveContentChanged.value = false
+  receiveUncertain.value = false
+  receivePayload.value = null
+  refreshReceiptAttempts()
+  receiveFeedback.value = '已结束这次未能入账的收货。请先核对收货记录；若没有入仓，可以重新登记。'
 }
 
 function receiptDetail(row: any) {
@@ -796,7 +824,8 @@ function goCreateInbound(row?: any) {
         <el-button @click="showReceiptNext('receipts')">查看收货记录</el-button>
         <el-button type="primary" @click="showReceiptNext('stock')">查看中转仓库存</el-button>
       </template>
-      <el-button v-else-if="receiveUncertain" type="primary" :loading="receiveBusy" @click="submitReceive(true)">核对并重试本次收货</el-button>
+      <el-button v-else-if="receiveUncertain && !receiveContentChanged" type="primary" :loading="receiveBusy" @click="submitReceive(true)">核对并重试本次收货</el-button>
+      <el-button v-else-if="receiveContentChanged" :disabled="receiveBusy" @click="endMismatchedReceipt">已核对记录，结束本次</el-button>
       <el-button v-else type="primary" :loading="receiveBusy" :disabled="receiveLoading || !receiveTarget" @click="submitReceive()">确认收货入仓</el-button>
     </template>
   </el-dialog>

@@ -5,6 +5,12 @@ export type ReturnMeasurement = {
   id: number; returnNo: string; clientRequestId: string; expectedRevision: string
   mode: 'replace' | 'existing'
   cartons: { lengthCm: number; widthCm: number; heightCm: number; grossWeightKg: number }[]
+  contentChanged?: boolean
+}
+export function returnMeasureFailure(message: string) {
+  const mismatch = ['内容或单号已变化', '不要重新提交', '内容已变化', '内容不同'].some(part => message.includes(part))
+  const statusChanged = !mismatch && (message.includes('记录已变化') || message.includes('请先核对并结束原请求'))
+  return { mismatch, statusChanged }
 }
 export type ReturnMeasureResult = { id: number; outcome: 'applied' | 'closed'; estimatedFeeTotal: number | null }
 type StoragePort = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
@@ -40,8 +46,11 @@ export function useReturnMeasureAttempt(options: {
       if (!raw) return
       const p = JSON.parse(raw)
       if (!valid(p)) throw Error('invalid original measurement')
+      if (p.contentChanged !== true) delete p.contentChanged
       pending.value = p
-      feedback.value = '原测量与算费结果待核对。请继续原请求，或核对并结束原请求；返回列表会保留原内容。'
+      feedback.value = p.contentChanged
+        ? '原测量内容或单号已变化。请先核对退件记录，结束本次后再重新填写，不要继续原测量。'
+        : '原测量与算费结果待核对。请继续原请求，或核对并结束原请求；返回列表会保留原内容。'
     } catch {
       blocked.value = true
       feedback.value = '无法读取原测量请求，请重试读取；仍失败时请联系主管核对退件审计，勿另建测量请求。'
@@ -54,6 +63,17 @@ export function useReturnMeasureAttempt(options: {
 
   async function settle(closeOnly = false): Promise<ReturnMeasureResult | null> {
     if (stopped || busy.value || blocked.value || !pending.value || !scope()) return null
+    if (pending.value.contentChanged) {
+      const id = pending.value.id
+      if (!closeOnly) {
+        feedback.value = '原测量内容或单号已变化。请先核对退件记录，结束本次后再重新填写，不要继续原测量。'
+        return null
+      }
+      options.storage.removeItem(key(options.actor()))
+      pending.value = null
+      feedback.value = '已结束这次未能入账的测量。请读取最新退件；若没有入账，可以重新填写。'
+      return { id, outcome: 'closed', estimatedFeeTotal: null }
+    }
     const actor = options.actor(), identity = scope(), version = revision
     const p = structuredClone(pending.value), raw = JSON.stringify(p)
     const active = () => !stopped && version === revision && actor === options.actor() && identity === scope()
@@ -76,7 +96,21 @@ export function useReturnMeasureAttempt(options: {
       feedback.value = result.outcome === 'applied' ? '原请求已确认保存；请读取最新退件，以当前状态继续作业。' : '原请求已结束，尚未执行的测量和算费不会再提交。请读取最新退件后继续。'
       return result
     } catch (e) {
-      if (active()) feedback.value = `原请求已保留。${userFacingError(e)} 请继续原请求或核对并结束，勿另建测量请求。`
+      if (!active()) return null
+      const text = `${e instanceof Error ? e.message : ''} ${userFacingError(e)}`
+      const failure = returnMeasureFailure(text)
+      if (failure.mismatch) {
+        const next = { ...p, contentChanged: true as const }
+        options.storage.setItem(key(actor), JSON.stringify(next))
+        pending.value = next
+        feedback.value = '原测量内容或单号已变化。请先核对退件记录，结束本次后再重新填写，不要继续原测量。'
+        return null
+      }
+      if (failure.statusChanged) {
+        feedback.value = `${userFacingError(e)}。请核对并结束原请求，不要继续原测量。`
+        return null
+      }
+      feedback.value = `原请求已保留。${userFacingError(e)} 请继续原请求或核对并结束，勿另建测量请求。`
       return null
     } finally {
       if (active()) busy.value = false

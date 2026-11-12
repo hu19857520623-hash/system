@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { readShipAttempts, saveShipAttempt, runShipAttempt, type ShipAttempt } from './outboundShipping'
+import { readShipAttempts, saveShipAttempt, runShipAttempt, clearShipAttempt, shipContentMismatch, shipStatusChanged, type ShipAttempt } from './outboundShipping'
 const attempt: ShipAttempt = { outboundId: 1, outboundNo: 'DO-TEST', order: { id: 1, status: 'packed' }, payload: { clientRequestId: 'original-id', trackingNo: 'TRACK', carrier: '', logisticsProduct: '' } }
 function storage() { const values = new Map<string, string>();return { getItem: (key: string) => values.get(key) || null, setItem: (key: string, value: string) => { values.set(key, value) }, removeItem: (key: string) => { values.delete(key) } } }
 describe('发运原请求与返回恢复', () => {
@@ -37,5 +37,14 @@ describe('发运原请求与返回恢复', () => {
     const other = { ...attempt, outboundId: 2, order: { id: 2 }, outboundNo: 'DO-2' };saveShipAttempt(s, 1, other)
     await runShipAttempt({ ship: vi.fn().mockResolvedValue({}) }, s, 1, attempt)
     expect(readShipAttempts(s, 1)).toEqual([other])
+  })
+  it('同一次发运内容不同时保留原请求，状态变化则清掉并不再重试', async () => {
+    const s = storage(); saveShipAttempt(s, 1, attempt)
+    await expect(runShipAttempt({ ship: vi.fn().mockRejectedValue({ status: 409, message: '原发运操作对应的单据或内容不同，请核对原请求，勿修改后重试' }) }, s, 1, attempt)).rejects.toThrow('不要修改后重新发运')
+    expect(readShipAttempts(s, 1)).toEqual([attempt])
+    await expect(runShipAttempt({ ship: vi.fn().mockRejectedValue({ status: 409, message: '当前状态不可再次发运；已发运单据请使用核对发运同步' }) }, s, 1, attempt)).rejects.toThrow('不要重试原发运')
+    expect(readShipAttempts(s, 1)).toEqual([])
+    expect(shipStatusChanged('原发运操作对应的内容不同，不要修改后重新发运')).toBe(false)
+    expect(shipContentMismatch('勿修改后重试')).toBe(true)
   })
 })

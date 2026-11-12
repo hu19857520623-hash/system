@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { clearShipmentAttempt, readShipmentAttempt, saveShipmentAttempt, type ShipmentAttempt } from './erpShipmentAttempt'
+import { clearShipmentAttempt, readShipmentAttempt, saveShipmentAttempt, shipmentSubmitFailure, draftAlreadyShipped, attachmentUploadFailure, type ShipmentAttempt } from './erpShipmentAttempt'
 function storage() {
   const data = new Map<string, string>()
   return { getItem: (key: string) => data.get(key) ?? null, setItem: (key: string, value: string) => { data.set(key, value) }, removeItem: (key: string) => { data.delete(key) } }
@@ -35,6 +35,19 @@ describe('发运未知结果恢复', () => {
     expect(()=>saveShipmentAttempt(port,1,changed)).toThrow()
     port.setItem(`erp:shipment-attempt:1`,JSON.stringify(changed))
     expect(()=>clearShipmentAttempt(port,1,original)).toThrow('记录已变化');expect(readShipmentAttempt(port,1)).not.toBeNull()
+  })
+  it('发运内容已用于其他请求时不再重试，数量不足则清掉原提交', () => {
+    expect(shipmentSubmitFailure(409, '本次发运操作已用于其他内容，请先核对原入库单，请勿重复发运')).toMatchObject({ clear: false, retry: false })
+    expect(shipmentSubmitFailure(409, '本次发运操作已用于其他内容，请先核对原入库单，请勿重复发运').message).toContain('不要重试原提交')
+    expect(shipmentSubmitFailure(400, 'SKU 中转仓可发数量不足，请重新读取库存后修改发运数量')).toMatchObject({ clear: true, retry: false })
+    expect(shipmentSubmitFailure(401, '登录已失效')).toMatchObject({ clear: false, retry: true })
+    expect(draftAlreadyShipped('该草稿已转为正式入库单，请返回入库单管理查看，请勿重复保存发运')).toBe(true)
+    expect(draftAlreadyShipped('草稿保存结果待核对')).toBe(false)
+    const mismatch = attachmentUploadFailure(200, '附件回执与原文件不一致')
+    expect(mismatch.retry).toBe(false)
+    expect(mismatch.message).toContain('不要继续原上传')
+    expect(attachmentUploadFailure(500, '服务处理失败').retry).toBe(true)
+    expect(attachmentUploadFailure(400, '附件文件名无效').clear).toBe(true)
   })
 
 })
