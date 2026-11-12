@@ -1184,7 +1184,7 @@ onMounted(async () => {
         <el-alert v-for="reason in settlement.blockedReasons" :key="reason" :title="reason" type="error" :closable="false" />
         <el-alert v-if="!settlement.balanceSufficient" title="余额不足，本次尚未扣款。请先完成充值，再重新核对余额。" type="warning" :closable="false" />
         <el-table :data="settlement.charges" border size="small" max-height="300" style="margin-top:12px">
-          <el-table-column prop="chargeType" label="费用" min-width="100" />
+          <el-table-column label="费用" min-width="100"><template #default="{ row }">{{ BILLING_CHARGE_LABELS[row.chargeType] || row.chargeTypeLabel || row.description || '其他费用' }}</template></el-table-column>
           <el-table-column label="金额" width="90"><template #default="{ row }">¥{{ Number(row.amount).toFixed(2) }}</template></el-table-column>
           <el-table-column label="已付" width="90"><template #default="{ row }">¥{{ Number(row.alreadyPaidAmount).toFixed(2) }}</template></el-table-column>
           <el-table-column label="本次扣" width="90"><template #default="{ row }">¥{{ Number(row.toDeductAmount).toFixed(2) }}</template></el-table-column>

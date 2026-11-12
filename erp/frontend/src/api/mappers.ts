@@ -88,6 +88,13 @@ export function num(v: unknown, fallback = 0): number {
   return Number(v)
 }
 
+/** 未知状态码兜底：不把英文/内部码直接呈现给用户；纯中文原样保留，其余提示「待核对」。 */
+function zhStatus(value: unknown, map: Record<string, string>) {
+  const key = value == null ? '' : String(value)
+  if (!key) return '—'
+  return map[key] || (/^[\u3400-\u9fff\s，。、（）()\d-]+$/.test(key) ? key : '待核对')
+}
+
 export function mapProduct(row: any) {
   const sync = row.syncStatus === 'synced' ? 'OMS✓ ERP✓' : row.syncStatus === 'partial' ? '部分同步' : '未同步'
   const statusMap: Record<string, string> = { active: '已生效', pending: '待完善主数据', inactive: '已停用' }
@@ -129,7 +136,7 @@ export function mapProduct(row: any) {
     purchaserId: row.purchaserId ?? null,
     supplier: row.supplierName || '—',
     supplierId: row.supplierId ?? null,
-    status: statusMap[row.status] || row.status,
+    status: zhStatus(row.status, statusMap),
     statusKey: row.status,
     sync,
     history: row.history || [],
@@ -170,7 +177,7 @@ export function mapProductDev(row: any) {
     seaFreightChannel: row.seaFreightChannel || '',
     volumetricWeightKg: num(row.volumetricWeightKg),
     cbm: num(row.cbm),
-    status: statusMap[row.status] || row.status,
+    status: zhStatus(row.status, statusMap),
     statusKey: row.status,
     purchaseQty: row.purchaseQty,
     time: fmtTime(row.createdAt),
@@ -193,7 +200,7 @@ export function mapProductAudit(row: any) {
     sku: row.sku || '—',
     purchaseQty: row.purchaseQty,
     auditRemark: row.auditRemark || '',
-    status: statusMap[row.status] || row.status,
+    status: zhStatus(row.status, statusMap),
     statusKey: row.status,
     user: row.applicantName || '—',
     time: fmtTime(row.createdAt),
@@ -327,7 +334,7 @@ export function mapPurchaseOrder(row: any) {
     currency: row.currency || 'RMB',
     amount: num(row.totalAmount),
     domesticFreight: row.domesticFreight != null ? num(row.domesticFreight) : null,
-    status: statusMap[row.status] || row.status,
+    status: zhStatus(row.status, statusMap),
     statusKey: row.status,
     items: row.items || [],
     remark: row.remark || '',
@@ -397,7 +404,7 @@ export function mapLead(row: any) {
     phone: row.contactPhone || row.phone || '',
     source: row.source || '',
     acq: parseLeadAcqFromRemark(row.remark),
-    status: statusMap[row.status] || row.status,
+    status: zhStatus(row.status, statusMap),
     statusKey: row.status,
     owner: row.assigneeName || row.ownerName || '—',
     assigneeId: row.assigneeId != null ? Number(row.assigneeId) : null,
