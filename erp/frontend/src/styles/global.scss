@@ -29,9 +29,9 @@
   --overlay: rgba(15, 23, 42, 0.45);
   --sidebar-bg: #f5f9ff;
   --sidebar-border: rgba(99, 102, 241, 0.16);
-  --sidebar-text: #475569;
-  --sidebar-text-hover: #131d38;
-  --sidebar-text-active: #131d38;
+  --sidebar-text: #111111;
+  --sidebar-text-hover: #111111;
+  --sidebar-text-active: #111111;
   --sidebar-active-bg: linear-gradient(90deg, rgba(79, 70, 229, 0.14), rgba(6, 182, 212, 0.06));
   --sidebar-active-border: rgba(79, 70, 229, 0.28);
   --sidebar-icon: #64748b;
@@ -108,7 +108,7 @@ html.dark {
   --overlay: rgba(2, 2, 10, 0.72);
   --sidebar-bg: #080818;
   --sidebar-border: rgba(99, 102, 241, 0.16);
-  --sidebar-text: #94a3b8;
+  --sidebar-text: #e2e8f0;
   --sidebar-text-hover: #e2e8f0;
   --sidebar-text-active: #f8fafc;
   --sidebar-active-bg: linear-gradient(90deg, rgba(99, 102, 241, 0.22), rgba(6, 182, 212, 0.06));
@@ -255,27 +255,27 @@ html.dark .sidebar { box-shadow: 16px 0 52px rgba(0, 0, 0, 0.28); }
 }
 .sidebar-nav::-webkit-scrollbar { width: 5px; }
 .sidebar-nav::-webkit-scrollbar-thumb { background: rgba(99, 102, 241, 0.25); border-radius: 999px; }
-.nav-channel-banner { padding: 12px 11px 7px; }
+.nav-channel-banner { padding: 16px 11px 7px; }
 .nav-channel-banner.overseas_wms { padding-top: 5px; }
 .nav-channel-divider {
   display: block;
   height: 1px;
-  margin-bottom: 14px;
+  margin-bottom: 16px;
   background: linear-gradient(90deg, transparent, rgba(99, 102, 241, 0.5), transparent);
 }
 .nav-channel-title {
   display: block;
-  color: var(--primary-bright);
-  font-size: 10px;
+  color: var(--sidebar-text);
+  font-size: 18px;
   font-weight: 700;
-  letter-spacing: 0.12em;
+  line-height: 24px;
 }
 .nav-channel-desc { display: block; margin-top: 3px; font-size: 10px; color: var(--text-muted); }
 .nav-group-label {
-  color: var(--text-muted);
+  color: var(--sidebar-text);
   padding: 12px 11px 5px;
   letter-spacing: 0.11em;
-  font-size: 10px;
+  font-size: 13px;
   font-weight: 700;
   text-transform: uppercase;
 }
@@ -310,7 +310,9 @@ html.dark .sidebar { box-shadow: 16px 0 52px rgba(0, 0, 0, 0.28); }
 .nav-ico svg { display: block; width: 100%; height: 100%; }
 .nav-item:hover .nav-ico { color: var(--sidebar-icon-hover); }
 .nav-item.active .nav-ico { color: var(--sidebar-icon-active); }
-.nav-label { flex: 1; min-width: 0; font-size: 13px; }
+.nav-label { flex: 1; min-width: 0; font-size: 14px; font-weight: 600; }
+.nav-item-primary { min-height: 44px; }
+.nav-item-primary .nav-label { font-size: 17px; font-weight: 700; line-height: 24px; }
 .nav-badge {
   margin-left: auto;
   padding: 1px 7px;
