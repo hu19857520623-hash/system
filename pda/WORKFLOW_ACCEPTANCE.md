@@ -341,6 +341,10 @@ POST /billing/generate 先以 preview 取得费用快照版本，同一请求标
 
 对 15 组待办中「内部费用表名/英文状态」类缺口按当前代码逐处核验：管理报表/盘点的 `presentation.ts` 标签与未知码兜底（「待核对」）、Dashboard 断网误报、OMS 账务 `feeTypeLabel` 均已是中文安全实现。发现并修复两处残留（提交 87a2532，前端 594 测试全绿，已部署审计环境）：①账单确认弹窗费用明细表直接渲染 `chargeType` 内部码（如 return_logistics），改为 BILLING_CHARGE_LABELS 中文映射并带说明/「其他费用」兜底；②商品/开发/审核/采购/线索五处状态映射的兜底 `statusMap[row.status] || row.status` 会把未知英文状态码原样显示，统一为中文安全兜底（已知码中文映射、纯中文原样、未知内部码「待核对」）。
 
+## reduce-carton 正向 + 草稿删除恢复（2026-11-13）
+
+自查收口两处小缺口（如实注明：此前「减少/更正三件套」中 reduce-carton 仅契约 409 证据、缺正向）：①**减少箱数正向**——2 箱单减 1「已减少 1 箱，当前 1 箱，请重新确认箱数」（中文+继续指引），箱数 2→1 落库；②**草稿删除恢复**（删除待办卡片族）——建草稿→删除（回执）→同名重建成功。至此 reduce-qc / reduce-carton / reduce-putaway 三件套**正向**证据齐全（另 reduce-qc/reduce-carton 的 409 内容契约、reduce-putaway 反向库存流水另有证据）。清理后全表零残留。证据 \output/workflow-audit-2026-10-16\recovery-reduce-carton-draft-20261113.json\（全步骤 ok）。
+
 ## 派送结果矩阵与失败后恢复验收（2026-11-13）
 
 补齐出库「返回及失败恢复」的派送结果族（真实接口三态矩阵）：①**部分签收→全签升级**（partial_delivered→delivered，POD 逐次落库）；②**派送失败后恢复**（delivery_failed→delivered，失败恢复具名支）；③非法转换（已签收→派送失败）400「仅已发运、部分签收或派送失败的出库单可更新派送结果」（中文状态机门）。清理后全表零残留。证据 \output/workflow-audit-2026-10-16\recovery-delivery-outcomes-20261113.json\（全步骤 ok）。
