@@ -1,18 +1,23 @@
-import { deriveCustomerCodeFromInternalSku } from '../../common/sku-code.util'
+import type { Prisma } from '@prisma/client'
+import { ERP_MASTER_PRODUCT_WHERE } from '../../common/product-source.util'
 
-/** ERP 采购发运单：国内中转仓/采购来源，平台货盘明细；不接受 OMS 客户 ASN。 */
-export function isCatalogPurchaseInbound(order: {
+type CatalogInbound = {
   sourceWarehouseCode?: string | null
   poId?: unknown
   omsCustomerCode?: string | null
-  items: Array<{ sku: string }>
-}): boolean {
+  items: Array<{ productId: bigint; sku: string }>
+}
+
+/** Validate actual ERP product ownership, including legacy category-prefixed SKUs. */
+export async function isCatalogPurchaseInbound(order: CatalogInbound, db: Pick<Prisma.TransactionClient, 'product'>): Promise<boolean> {
   const customer = String(order.omsCustomerCode || '').trim().toUpperCase()
   if (customer && customer !== 'TKL') return false
   if (!order.sourceWarehouseCode?.trim() && !order.poId) return false
-  if (!order.items.length) return false
-  return order.items.every(item => {
-    const owner = deriveCustomerCodeFromInternalSku(item.sku.trim().toUpperCase())
-    return Boolean(item.sku.trim()) && (!owner || owner === 'TKL')
+  if (!order.items.length || order.items.some(item => !item.sku.trim())) return false
+  const products = await db.product.findMany({
+    where: { AND: [ERP_MASTER_PRODUCT_WHERE, { id: { in: order.items.map(item => item.productId) } }] },
+    select: { id: true, sku: true, remark: true },
   })
+  return order.items.every(item => products.some(product => product.id === item.productId && product.sku === item.sku
+    && !/OMS客户:|OMS 预约入库自动建档/.test(product.remark || '')))
 }

@@ -1,9 +1,9 @@
 import { InboundService } from './inbound.service'
 
 describe('catalog inbound binding', () => {
-  const row = { id: 11n, inboundNo: 'RV-260101-0001', warehouseCode: 'ZA01', sourceWarehouseCode: 'CN01', status: 'pending_receipt', items: [{ sku: 'TKL-719110' }] }
+  const row = { id: 11n, inboundNo: 'RV-260101-0001', warehouseCode: 'ZA01', sourceWarehouseCode: 'CN01', status: 'pending_receipt', items: [{ productId: 5n, sku: 'TKL-719110' }] }
   function fixture(order: any = row) {
-    const prisma = { inboundOrder: { findFirst: jest.fn().mockResolvedValue(order) } }
+    const prisma = { product: { findMany: jest.fn().mockResolvedValue([{ id: 5n, sku: 'TKL-719110', remark: null }]) }, inboundOrder: { findFirst: jest.fn().mockResolvedValue(order) } }
     const service = new InboundService(prisma as any, null as any, null as any, null as any, null as any, null as any)
     const arrival = jest.spyOn(service, 'arrivalScan').mockResolvedValue({} as any)
     const detail = jest.spyOn(service, 'detail').mockResolvedValue({ ...row, status: 'arrived' } as any)

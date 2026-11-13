@@ -840,7 +840,7 @@ export class InboundService {
       where: { inboundNo: scanCode, warehouseCode }, include: { items: true },
     })
     if (!order) throw new NotFoundException('未找到当前仓库的入库单，请扫描完整入库单号')
-    if (!isCatalogPurchaseInbound(order)) throw new BadRequestException('货盘入库只接受 ERP 货盘采购发运的入库单，不支持客户预约或客户自有货物入库单')
+    if (!await isCatalogPurchaseInbound(order, this.prisma)) throw new BadRequestException('货盘入库只接受 ERP 货盘采购发运的入库单，不支持客户预约或客户自有货物入库单')
     if (!PENDING_RECEIPT_STATUSES.has(order.status) && !QC_STATUSES.has(order.status) && !PUTAWAY_STATUSES.has(order.status) && order.status !== 'exception') {
       throw new BadRequestException(`当前状态「${inboundStatusLabel(order.status)}」不可绑定货盘入库作业`)
     }

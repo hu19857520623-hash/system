@@ -124,7 +124,7 @@ export async function runInboundReceiving(prisma: PrismaService, id: number, kin
     if (!warehouse || warehouse.status !== 1 || warehouse.warehouseType !== 'wms') throw new BadRequestException('目的海外仓已停用或无效，请联系主管核对')
     if (!order.items.length) throw new BadRequestException('入库单没有商品明细，请联系主管核对后再作业')
     const catalogCount = 'catalogCount' in request && request.catalogCount === true
-    if (catalogCount && !isCatalogPurchaseInbound(order)) throw new BadRequestException('货盘清点只接受 ERP 货盘采购入库单')
+    if (catalogCount && !await isCatalogPurchaseInbound(order, tx)) throw new BadRequestException('货盘清点只接受 ERP 货盘采购入库单')
     let response: any, action: string = actionByKind[kind]
     if (kind === 'carton-count') {
       const body = request as Extract<typeof request, { receivedCartonCount: number }>

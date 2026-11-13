@@ -48,6 +48,8 @@ describe('仓库收箱、清点和测量的一致性', () => {
     f.state().order.items[0].sku = sku
     f.state().order.items[0].expectedQty = 15
     f.state().order.items[1].sku = 'TK-902'
+    f.state().products[0].sku = sku
+    f.state().products[1].sku = 'TK-902'
     const first = { clientRequestId: randomUUID(), scanCode: sku, increment: 10, catalogCount: true }
     const second = { ...first, clientRequestId: randomUUID(), increment: 5 }
     await expect(runInboundReceiving(f.prisma, 1, 'qc-scan', { ...first, catalogCount: false }, 1)).rejects.toThrow('确认实收箱数')
