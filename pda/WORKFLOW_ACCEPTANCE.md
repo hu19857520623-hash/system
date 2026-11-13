@@ -341,6 +341,10 @@ POST /billing/generate 先以 preview 取得费用快照版本，同一请求标
 
 对 15 组待办中「内部费用表名/英文状态」类缺口按当前代码逐处核验：管理报表/盘点的 `presentation.ts` 标签与未知码兜底（「待核对」）、Dashboard 断网误报、OMS 账务 `feeTypeLabel` 均已是中文安全实现。发现并修复两处残留（提交 87a2532，前端 594 测试全绿，已部署审计环境）：①账单确认弹窗费用明细表直接渲染 `chargeType` 内部码（如 return_logistics），改为 BILLING_CHARGE_LABELS 中文映射并带说明/「其他费用」兜底；②商品/开发/审核/采购/线索五处状态映射的兜底 `statusMap[row.status] || row.status` 会把未知英文状态码原样显示，统一为中文安全兜底（已知码中文映射、纯中文原样、未知内部码「待核对」）。
 
+## 问题件/异常标记解除恢复生命周期验收（2026-11-13）
+
+补齐问题件分支续集（真实接口四态生命周期）：标记问题件（damaged 货品破损）→ **解除恢复**（isProblem=false）→ **异常标记** delivery_failure（配送失败，中文类型表：配送失败/错过预约/客户取消/平台取消/文件缺失/系统同步异常/其他异常）→ 状态 exception → **解除 → 恢复原状态 pending_pick**（exceptionFromStatus 回滚语义）；**非异常态解除 400「仅异常状态可解除异常」**；未标记即解除为**幂等空操作**（clear_problem 设计语义，不产生业务变更，按实记录）。清理后全表零残留。证据 \output/workflow-audit-2026-10-16\recovery-problem-lifecycle-20261113.json\（全步骤 ok）。
+
 ## 退件重新收货恢复分支 + 出库问题件分支验收（2026-11-13）
 
 ①**退件重新收货**（「重新收货」按钮恢复路径，真实接口）：收 2 件→测体积→算费（费用/测体积各 1）→ **重新收货修正 1 件**——状态回已收货、实收=1、**待确认费用清除、测体积删除**（修正语义完整）；状态门外中文拒绝「当前状态不可重新收货，仅已收货/已测体积/已算费可修正」。②**出库问题件**：markType=problem + problemType=damaged（货品破损中文类型表）→ isProblem=true、订单态保持可继续；首轮缺 markType 被「请选择问题件或异常标记类型」中文门正确拒绝（如实记录）。清理后全表零残留。证据 \output/workflow-audit-2026-10-16\recovery-rereceive-problem-20261113.json\（全步骤 ok）。
