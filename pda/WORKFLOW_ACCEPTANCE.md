@@ -341,6 +341,10 @@ POST /billing/generate 先以 preview 取得费用快照版本，同一请求标
 
 对 15 组待办中「内部费用表名/英文状态」类缺口按当前代码逐处核验：管理报表/盘点的 `presentation.ts` 标签与未知码兜底（「待核对」）、Dashboard 断网误报、OMS 账务 `feeTypeLabel` 均已是中文安全实现。发现并修复两处残留（提交 87a2532，前端 594 测试全绿，已部署审计环境）：①账单确认弹窗费用明细表直接渲染 `chargeType` 内部码（如 return_logistics），改为 BILLING_CHARGE_LABELS 中文映射并带说明/「其他费用」兜底；②商品/开发/审核/采购/线索五处状态映射的兜底 `statusMap[row.status] || row.status` 会把未知英文状态码原样显示，统一为中文安全兜底（已知码中文映射、纯中文原样、未知内部码「待核对」）。
 
+## 真实附件上传下载往返验收（2026-11-13）
+
+补齐发运/出库组「真实附件上传下载」缺口（真实接口字节级往返）：①**发运草稿附件**（先建草稿再上传——「草稿不存在，请返回草稿箱重新读取」中文门顺带验证）：POST /inbound/attachments → GET /inbound/drafts/:draftNo/attachments/:id，70 字节逐字节一致、Content-Disposition 中文文件名回传（URL 编码）；②**出库附件**：POST /outbound/:id/attachment → GET /outbound/:id/attachment/:id，字节一致（上传回执为单据快照、附件 id 在 attachments 列表/库行——响应形态如实记录）；③不存在附件 404 中文「附件不存在」。清理后全表零残留。证据 \output/workflow-audit-2026-10-16\recovery-attachment-roundtrip-20261113.json\（全步骤 ok）。
+
 ## 出库 POD 签收与核对发运同步恢复验收（2026-11-13）
 
 补齐出库组残项（409 提示指名的「核对发运同步」恢复入口与签收闭环，真实接口）：出库全链（建单→分配→拣货→复核→打包→换标→发运）至 shipped 后：①**核对发运同步**（sync-shipment）→「发运与费用已保存，OMS同步已完成」（恢复指引语义「勿再次发运或扣款」同链验证）；②**POD 签收**（deliver outcome=delivered + podCode）→ status=delivered、podCode/送达时间落库；③**重复签收** 400「出库单已是该派送状态」、**非法派送结果** 400「派送结果无效，请使用已送达、部分签收或派送失败」（中文枚举提示）；非发运态访问 sync/deliver 亦为中文门（「请先完成发运；当前单据无需恢复发运同步」「仅已发运、部分签收或派送失败的出库单可更新派送结果」，首轮夹具缺库位行时顺带验证）。清理后全表零残留。证据 \output/workflow-audit-2026-10-16\recovery-outbound-pod-20261113.json\（全步骤 ok）。
