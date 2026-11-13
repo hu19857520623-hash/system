@@ -632,6 +632,8 @@ POST /billing/generate 先以 preview 取得费用快照版本，同一请求标
 
 **至此「PDA 真机断网/恢复」待收口项完成**：返回/继续/失败恢复路径与中文报错在真机逐项实证。
 
+注意事项（如实记录）：验收收尾时远端出现并行工作流的三个修复提交（`ed2c02c` 入库货盘归属识别、`bdd7384` 发运选品排除 OMS SKU、`c238a01` PDA 清点质量状态规范化），已 autostash 变基推送 `d113d15`；**合并态四层测试全绿**（后端 204 套件/1729 项、OMS 517 项、前端 72 文件/594 项、PDA BUILD SUCCESSFUL）。变基时 autostash 回放与来向修改冲突，涉及另一工作流的 `inventory.service.ts`、`CreateInboundView.vue` 两文件呈未合并态并阻塞提交——**已将两文件复位到 HEAD 解锁仓库，该工作流的全部未暂存改动完整保留在 stash**（`stash@{0}` autostash、另有 `wip before pulling origin/main`、`components-dts-wip`），未触碰其内容，交还该工作流自行恢复与续作。
+
 ### 完成度审计：证据索引与内容断言（同日续）
 
 按「主张必须有可检查的权威证据」做两项机器核验：
