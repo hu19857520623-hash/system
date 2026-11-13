@@ -341,6 +341,10 @@ POST /billing/generate 先以 preview 取得费用快照版本，同一请求标
 
 对 15 组待办中「内部费用表名/英文状态」类缺口按当前代码逐处核验：管理报表/盘点的 `presentation.ts` 标签与未知码兜底（「待核对」）、Dashboard 断网误报、OMS 账务 `feeTypeLabel` 均已是中文安全实现。发现并修复两处残留（提交 87a2532，前端 594 测试全绿，已部署审计环境）：①账单确认弹窗费用明细表直接渲染 `chargeType` 内部码（如 return_logistics），改为 BILLING_CHARGE_LABELS 中文映射并带说明/「其他费用」兜底；②商品/开发/审核/采购/线索五处状态映射的兜底 `statusMap[row.status] || row.status` 会把未知英文状态码原样显示，统一为中文安全兜底（已知码中文映射、纯中文原样、未知内部码「待核对」）。
 
+## 盘点保存数量/重复请求/复盘交接/审批落库/仓库隔离验收（2026-11-13）
+
+补齐盘点组缺口（真实接口）：SKU 盘点（WMS-JHB-01 账 10、LW-SZ-01 对照 5）——创建计划 → **首次计数 12≠账 10 转复盘**（状态机 pending→recount）→ **同请求重放幂等**（回执不重复写）→ **同人复盘 400「复盘必须由另一名作业员完成，请交接给其他账号」** → **另一账号（仓库岗位）复盘** variance +2 → 计划 pending_approval → **审批 completed 并落实库存 10→12**，**对照仓 LW-SZ-01 不动（5）——仓库隔离实证**。全程中文回执。清理后全表零残留（计划行经通用清扫兜底删除，如实记录）。证据 \output/workflow-audit-2026-10-16\recovery-stocktake-count-20261113.json\（全步骤 ok）。
+
 ## 真实附件上传下载往返验收（2026-11-13）
 
 补齐发运/出库组「真实附件上传下载」缺口（真实接口字节级往返）：①**发运草稿附件**（先建草稿再上传——「草稿不存在，请返回草稿箱重新读取」中文门顺带验证）：POST /inbound/attachments → GET /inbound/drafts/:draftNo/attachments/:id，70 字节逐字节一致、Content-Disposition 中文文件名回传（URL 编码）；②**出库附件**：POST /outbound/:id/attachment → GET /outbound/:id/attachment/:id，字节一致（上传回执为单据快照、附件 id 在 attachments 列表/库行——响应形态如实记录）；③不存在附件 404 中文「附件不存在」。清理后全表零残留。证据 \output/workflow-audit-2026-10-16\recovery-attachment-roundtrip-20261113.json\（全步骤 ok）。
