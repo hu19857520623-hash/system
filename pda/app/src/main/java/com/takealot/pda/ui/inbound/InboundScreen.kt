@@ -1,5 +1,7 @@
 package com.takealot.pda.ui.inbound
 
+import com.takealot.pda.data.qcSubmissionStatus
+
 import com.takealot.pda.data.mergeWorkListPages
 
 import androidx.compose.animation.AnimatedVisibility
@@ -705,7 +707,7 @@ class InboundViewModel : ViewModel() {
                     "id" to it.id,
                     "sku" to it.skuCode,
                     "actualQty" to (it.actualQty ?: 0),
-                    "qcStatus" to (it.qcStatus ?: "pass"),
+                    "qcStatus" to (qcSubmissionStatus(it.qcStatus)),
                     "qcRemark" to it.qcRemark,
                 ) }
                 val payload = buildMap {
