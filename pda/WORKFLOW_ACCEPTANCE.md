@@ -341,6 +341,10 @@ POST /billing/generate 先以 preview 取得费用快照版本，同一请求标
 
 对 15 组待办中「内部费用表名/英文状态」类缺口按当前代码逐处核验：管理报表/盘点的 `presentation.ts` 标签与未知码兜底（「待核对」）、Dashboard 断网误报、OMS 账务 `feeTypeLabel` 均已是中文安全实现。发现并修复两处残留（提交 87a2532，前端 594 测试全绿，已部署审计环境）：①账单确认弹窗费用明细表直接渲染 `chargeType` 内部码（如 return_logistics），改为 BILLING_CHARGE_LABELS 中文映射并带说明/「其他费用」兜底；②商品/开发/审核/采购/线索五处状态映射的兜底 `statusMap[row.status] || row.status` 会把未知英文状态码原样显示，统一为中文安全兜底（已知码中文映射、纯中文原样、未知内部码「待核对」）。
 
+## 退件处理方式余支验收：换标上架 / 等问题（2026-11-13）
+
+补齐退件「处理方式」全集（此前 restock/destroy 已验）：①**换标上架（relabel）**：全链后决定 keep+relabel → process（stockLines 上架 1 件）→ completed、**库存回补 +1**、**换标费入账**（chargeType/description 含换标）；②**等问题（other_issue）**：决定 keep+other_issue → **accepted_pending（挂起待处理语义，按实记录）**。至此 RETURN_PROCESS_METHODS 五法全覆盖（restock/relabel/destroy/other_issue + 检查拍照链）。清理后全表零残留。证据 \output/workflow-audit-2026-10-16\recovery-return-process-20261113.json\（全步骤 ok）。
+
 ## 跨客户隔离验收（2026-11-13）
 
 补齐退件组「跨客户」缺口（OMS 桥接真实接口）：客户 A 名下退件单——**B 的决定/取消/下载附件三入口全部 400「客户编码与退件单不匹配」**（中文隔离门，状态无关先拒）；**A 本人链**（收货→测量→算费→质检→决定）→ accepted_pending；过程中顺带验证决定状态门「当前状态不可确认，仅『待客户确认』可操作」（中文）。清理后全表零残留。证据 \output/workflow-audit-2026-10-16\recovery-cross-customer-20261113.json\（全步骤 ok）。
