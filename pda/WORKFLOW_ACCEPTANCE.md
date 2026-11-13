@@ -585,4 +585,5 @@ POST /billing/generate 先以 preview 取得费用快照版本，同一请求标
 - 推送成功 `217c307..801d336`（含修复 `dd2b7ce`）；**Deploy production run 43353661886（head 801d336）自动触发并全绿**。
 - **生产实测新文案生效**：未带内部令牌访问 `GET /api/outbound/oms/by-customer/AUDIT` → `{"code":401,"message":"内部系统认证失败，请联系管理员","data":null}`（修复前为英文 `OMS internal authentication failed`）。
 - 生产容器健康：`erp-api`/`erp-web` Up (healthy)，`/api/auth/health` 200 `{"ok":true}`。
+- **审计容器同步生效**：`tmp_deploy_audit_stack.py`（本地构建 dist→上传替换→重启四容器 SWAP_DONE）后实测 `{"status":401,"message":"内部系统认证失败，请联系管理员"}`（`verify-cn-fix-audit-20261113.py`）。
 - 过程勘误（如实记录）：误用 `tmp_deploy_leads.py` 触发了生产主机手工重建（该脚本为早期线索功能部署脚本，仅同步 5 个 leads 文件后重建 erp-api/erp-web）；重建本身成功、容器健康无损害，末尾 compose 报「dependency failed to start: No such container」为收尾杂音（`--no-deps` 重建竞态），健康检查与线上探针均正常。审计容器正确重建脚本为 `rebuild-audit-stack-20261113.py`（同主机 workflow-audit-20261016 栈，git pull + build + up）。
