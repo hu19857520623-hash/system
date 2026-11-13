@@ -12,7 +12,7 @@ fun syncRecordLabel(module: String, mode: String): String {
         mode.startsWith("reduce_") -> "核减${reductionTarget(mode.removePrefix("reduce_"))}"
         mode.startsWith("problem_") -> "问题标记·${problemTarget(mode.removePrefix("problem_"))}"
         else -> when (mode) {
-            "arrival" -> "到仓扫描"
+            "arrival" -> "电商入库"
             "receive" -> "确认箱数"
             "qc" -> "清点数量"
             "catalog" -> "货盘入库"

@@ -13,7 +13,7 @@ private val translations = mapOf(
         "catalog_inbound" to "货盘入库", "catalog_inbound_hint" to "扫入库单绑定 → 输入件数扫 SKU → 上架",
         "settings" to "设置", "language" to "语言", "greeting" to "你好，%s", "light_work" to "轻量仓库作业",
         "work_warehouse" to "作业仓库", "no_warehouse" to "未选择仓库", "resume" to "继续未完成作业",
-        "inbound" to "入库", "outbound" to "出库", "arrival" to "到仓扫描", "arrival_hint" to "扫入库单号后自动确认箱数",
+        "inbound" to "入库", "outbound" to "出库", "arrival" to "电商入库", "arrival_hint" to "扫入库单号后自动确认箱数",
         "receive" to "确认箱数", "receive_hint" to "扫箱唛和 SKU", "qc" to "清点", "qc_hint" to "扫 SKU 或条码累加实收",
         "putaway" to "上架", "putaway_hint" to "扫 SKU 或条码再扫库位", "pick" to "拣货", "pick_hint" to "仅扫本工位已分配的出库单，可按箱扫",
         "review" to "复核", "review_hint" to "逐件扫 SKU 或条码，录入外箱实测后提交", "ship" to "发运", "ship_hint" to "扫描已打包单并确认扣减库存与费用", "select_warehouse" to "请先选择作业仓", "no_permission" to "无权限",

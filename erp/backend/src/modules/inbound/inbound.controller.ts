@@ -348,7 +348,7 @@ export class InboundController {
     return this.service.scanReceiptLabel(id, body?.scanCode || '')
   }
 
-  @RequireAnyPerm('inbound.qc', 'inbound.putaway', 'inbound.handle_exception', 'inbound.confirm_diff')
+  @RequirePerms('inbound.handle_exception')
   @Post(':id/resolve-exception')
   resolveException(@Param('id', ParseIntPipe) id: number, @Body() body: InboundControlDto, @CurrentUser('userId') userId: number) {
     return this.service.resolveException(id, body, userId)

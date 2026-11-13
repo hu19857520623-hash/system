@@ -348,7 +348,7 @@ fun SyncScreen(onBack: () -> Unit, vm: SyncViewModel = viewModel()) {
 
 private fun PdaScanRecord.workLabel(): String = when (module) {
     "inbound" -> when (mode) {
-        "arrival" -> "到仓扫描"
+        "arrival" -> "电商入库"
         "receive", "carton_count_submit" -> "确认箱数"
         "qc" -> "清点数量"
         "qc_submit" -> "提交清点"
