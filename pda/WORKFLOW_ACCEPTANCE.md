@@ -341,6 +341,10 @@ POST /billing/generate 先以 preview 取得费用快照版本，同一请求标
 
 对 15 组待办中「内部费用表名/英文状态」类缺口按当前代码逐处核验：管理报表/盘点的 `presentation.ts` 标签与未知码兜底（「待核对」）、Dashboard 断网误报、OMS 账务 `feeTypeLabel` 均已是中文安全实现。发现并修复两处残留（提交 87a2532，前端 594 测试全绿，已部署审计环境）：①账单确认弹窗费用明细表直接渲染 `chargeType` 内部码（如 return_logistics），改为 BILLING_CHARGE_LABELS 中文映射并带说明/「其他费用」兜底；②商品/开发/审核/采购/线索五处状态映射的兜底 `statusMap[row.status] || row.status` 会把未知英文状态码原样显示，统一为中文安全兜底（已知码中文映射、纯中文原样、未知内部码「待核对」）。
 
+## 派送结果矩阵与失败后恢复验收（2026-11-13）
+
+补齐出库「返回及失败恢复」的派送结果族（真实接口三态矩阵）：①**部分签收→全签升级**（partial_delivered→delivered，POD 逐次落库）；②**派送失败后恢复**（delivery_failed→delivered，失败恢复具名支）；③非法转换（已签收→派送失败）400「仅已发运、部分签收或派送失败的出库单可更新派送结果」（中文状态机门）。清理后全表零残留。证据 \output/workflow-audit-2026-10-16\recovery-delivery-outcomes-20261113.json\（全步骤 ok）。
+
 ## 撤回上架（reduce-putaway）验收：减少/更正全集收口（2026-11-13）
 
 补齐「减少/更正」最后一条（唯一反向改库存者，真实接口）：4 件单上架 3 件（部分，保持待上架）→ **撤回 1 件**「已撤回最近上架 1 件，当前已上架 2 件，请核对实际库位后继续」（中文+继续指引），putawayQty 3→2、**库存 3→2、inventoryChanged=true** → 续上 2 件 completed「本单已全部上架完成，共确认本次 2 件」、库存 4；**流水链 0→3→2→4 逐链闭合（含撤回反向流水）**。全量上架即完结态拒撤回（「当前单据已提交或进入后续环节，请先核对进度并交主管处理」中文门）亦顺带实证。至此 reduce-qc/reduce-carton/reduce-putaway 三件套全集覆盖。清理后全表零残留。证据 \output/workflow-audit-2026-10-16\recovery-reduce-putaway-20261113.json\（全步骤 ok）。
