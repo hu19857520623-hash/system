@@ -566,3 +566,16 @@ POST /billing/generate 先以 preview 取得费用快照版本，同一请求标
 5. 夹具（公告/同步行/操作日志）零残留。
 
 测试台说明：「推送失败待重试」同步行为 DB 播种（OMS 可达时推送成功不留重试行）；重试按钮全链（读单校验/事务外重放/结果落库/计数）真实接口。PDA 侧人工关闭路径由 `PdaWorkJournalDismissTest`（pending 保留继续入口、失败可关闭为已人工确认）与 SavedRequest 26 单测覆盖，真机点击待用户实测。
+
+## 2026-11-13 「用户可见报错为中文」代码级全量扫描与修复（零残留）
+
+对「用户可见报错为中文」做代码级全量审计（不以抽样代替全量），两类扫描脚本（`audit-cn-error-sweep.py` / `audit-cn-error-sweep-raw-error.py`）：
+
+1. **异常文案字面量**（throw XxxException('...')，非测试文件）：1191 条 → 初扫 1188 中文 + 3 英文（`oms-internal-token.guard.ts` 内部认证守卫，用户直访该类端点可见）→ **修复为「内部系统认证失败，请联系管理员」**。
+2. **裸 Error 字面量**（经 500 运行时透传可能露出）：70 条 → 初扫 16 条非中文，逐条分诊：
+   - 4 条为内部哨兵（`mismatch`/`protocol`/`invalid reference price`/`Original receipt unavailable`），立即被中文 catch 转换或吞掉，**用户不可见**；为零疑点仍全部译为中文（「附件内容不一致」「链接协议不合规」「市场参考价不合规」「原收货单不可用」）。
+   - 12 条为启动配置/依赖/工具类（DATABASE_URL/JWT_SECRET/CORS_ORIGINS/Redis/店铺密钥加密/pdf 组件/调试表标识/面单合并空集），其中「没有可合并的面单 PDF」「店铺 API 密钥已损坏」「无效的数据表标识」在业务失败时可能透传 → 全部译为中文（保留配置名英文子串以兼容配置指引与既有断言语义）。
+3. **终态**：异常文案 1191/1191、裸 Error 70/70 **全部中文，零残留**；`environment.spec.ts` 断言同步适配（保留 `JWT_SECRET` 等配置名子串），后端 204 套件 / 1729 测试全绿、`tsc --noEmit` 干净。
+4. OMS 侧引导期运维提示（`oms/server` 内 Redis 配置错误等）为部署者可见日志、不在产品用户面，未改动（如实记录）。
+
+代码修复 `dd2b7ce`，待推送与部署（Deploy production + 审计容器重建）。
