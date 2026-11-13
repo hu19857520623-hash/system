@@ -6,11 +6,11 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
   const databaseUrl = String(config.DATABASE_URL || '')
 
   if (!databaseUrl) {
-    throw new Error('DATABASE_URL is required')
+    throw new Error('数据库连接配置缺失（DATABASE_URL）')
   }
 
   if (!jwtSecret) {
-    throw new Error('JWT_SECRET is required')
+    throw new Error('登录密钥配置缺失（JWT_SECRET）')
   }
 
   if (
@@ -18,7 +18,7 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
     (jwtSecret.length < 32 ||
       INSECURE_SECRET_MARKERS.some((marker) => jwtSecret.toLowerCase().includes(marker)))
   ) {
-    throw new Error('JWT_SECRET must be a non-placeholder secret of at least 32 characters')
+    throw new Error('登录密钥（JWT_SECRET）不合规：须为至少 32 位的非占位密钥')
   }
 
   return config
@@ -32,7 +32,7 @@ export function resolveCorsOrigins(value: unknown, nodeEnv: unknown): string[] {
 
   if (configured.length) return configured
   if (String(nodeEnv || 'development') === 'production') {
-    throw new Error('CORS_ORIGINS is required in production')
+    throw new Error('生产环境必须配置跨域来源（CORS_ORIGINS）')
   }
   return [
     'http://localhost:5180',

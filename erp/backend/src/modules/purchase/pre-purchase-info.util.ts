@@ -181,7 +181,7 @@ export function parsePrePurchaseInfo(content: string) {
         if (column.key.endsWith('Url') || column.key === 'productLink') {
           try {
             const url = new URL(value)
-            if (!['http:', 'https:'].includes(url.protocol)) throw new Error('protocol')
+            if (!['http:', 'https:'].includes(url.protocol)) throw new Error('链接协议不合规')
           } catch { fail(column.label, value, '须为有效的 http:// 或 https:// 链接') }
         }
         data[column.key] = value

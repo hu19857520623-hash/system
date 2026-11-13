@@ -13,7 +13,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       ignoreExpiration: false,
       secretOrKey: (() => {
         const secret = String(config.get<string>('JWT_SECRET') || '').trim()
-        if (!secret) throw new Error('JWT_SECRET is required')
+        if (!secret) throw new Error('登录密钥配置缺失（JWT_SECRET）')
         return secret
       })(),
     })

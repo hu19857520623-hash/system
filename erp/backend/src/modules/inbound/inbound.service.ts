@@ -948,7 +948,7 @@ export class InboundService {
     let feePending = false
     try {
       const order = await this.prisma.inboundOrder.findUnique({ where: { id: BigInt(id) }, include: { items: true } })
-      if (!order) throw new Error('Original receipt unavailable')
+      if (!order) throw new Error('原收货单不可用')
       if (kind !== 'measure') await this.inboundFee.recordOperation(order, 'qc', pieceQty(result.items || order.items), true)
       if (kind !== 'qc-submit' && result.measuredCount > 0) await this.inboundFee.recordMeasuredSkus(order)
     } catch {
@@ -1575,7 +1575,7 @@ export class InboundService {
       const digest = (name: string, bytes: Buffer) => JSON.stringify([this.files.safeFileName(name.trim()), createHash('sha256').update(bytes).digest('hex')])
       const incoming = (attachments || []).map(row => digest(row.fileName, Buffer.from(row.contentBase64, 'base64'))).sort()
       const saved = rows.map(row => digest(row.fileName, this.files.read(row.filePath))).sort()
-      if (JSON.stringify(incoming) !== JSON.stringify(saved)) throw new Error('mismatch')
+      if (JSON.stringify(incoming) !== JSON.stringify(saved)) throw new Error('附件内容不一致')
     } catch { throw new ConflictException('入库附件与原请求不一致或无法读取，请返回原单通过修改入口核对附件') }
   }
 

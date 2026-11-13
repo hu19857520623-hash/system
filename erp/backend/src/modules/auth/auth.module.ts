@@ -15,7 +15,7 @@ import { JwtStrategy } from './jwt.strategy'
       useFactory: (config: ConfigService) => ({
         secret: (() => {
           const secret = String(config.get<string>('JWT_SECRET') || '').trim()
-          if (!secret) throw new Error('JWT_SECRET is required')
+          if (!secret) throw new Error('登录密钥配置缺失（JWT_SECRET）')
           return secret
         })(),
         signOptions: { expiresIn: config.get<string>('JWT_EXPIRES_IN') || '7d' },

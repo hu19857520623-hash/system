@@ -29,7 +29,7 @@ export class RedisJsonCache {
     const port = Number(env.REDIS_PORT || 6379)
     if (!env.REDIS_HOST || !Number.isInteger(port) || port < 1 || port > 65535
       || (env.NODE_ENV === 'production' && !env.REDIS_PASSWORD)) {
-      throw new Error('Enabled Redis cache requires REDIS_HOST, a valid REDIS_PORT, and a production password')
+      throw new Error('启用 Redis 缓存需配置 REDIS_HOST、有效 REDIS_PORT 与生产密码')
     }
     this.client = createClient({
       username: env.REDIS_USERNAME || undefined,

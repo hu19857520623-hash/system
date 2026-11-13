@@ -13,12 +13,12 @@ export class OmsInternalTokenGuard implements CanActivate {
       this.config.get<string>('OMS_INTERNAL_TOKEN_HEADER') || 'x-oms-internal-token',
     ).trim().toLowerCase()
     if (!/^[a-z0-9!#$%&'*+.^_`|~-]+$/.test(headerName)) {
-      throw new UnauthorizedException('OMS internal authentication failed')
+      throw new UnauthorizedException('内部系统认证失败，请联系管理员')
     }
     const supplied = context.switchToHttp().getRequest<Request>().header(headerName) || ''
 
     if (!expected.trim() || !supplied) {
-      throw new UnauthorizedException('OMS internal authentication failed')
+      throw new UnauthorizedException('内部系统认证失败，请联系管理员')
     }
 
     const expectedBytes = Buffer.from(expected)
@@ -27,7 +27,7 @@ export class OmsInternalTokenGuard implements CanActivate {
       expectedBytes.length !== suppliedBytes.length ||
       !timingSafeEqual(expectedBytes, suppliedBytes)
     ) {
-      throw new UnauthorizedException('OMS internal authentication failed')
+      throw new UnauthorizedException('内部系统认证失败，请联系管理员')
     }
     return true
   }

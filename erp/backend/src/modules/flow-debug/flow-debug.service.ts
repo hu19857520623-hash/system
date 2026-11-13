@@ -7,7 +7,7 @@ const LOOKUPS = new Set(['Customer', 'CustomerAccount', 'Supplier', 'Warehouse',
 const DOC_FIELDS = new Set(['inboundNo', 'outboundNo', 'returnNo', 'orderNo', 'poNo', 'referenceNo', 'bizRef', 'sourceRef', 'targetId', 'batchNo'])
 const SKUS = new Set(['sku', 'internalSku'])
 const quote = (value: string) => {
-  if (!/^\w+$/.test(value)) throw new Error('Invalid catalog identifier')
+  if (!/^\w+$/.test(value)) throw new Error('无效的数据表标识')
   return '`' + value + '`'
 }
 function safeValue(value: any, key = '', depth = 0): any {

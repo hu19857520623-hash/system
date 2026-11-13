@@ -259,7 +259,7 @@ function loadPdfDocumentApi(): PdfDocumentApi {
   try {
     return (require('pdf-lib') as { PDFDocument: PdfDocumentApi }).PDFDocument
   } catch {
-    throw new Error('pdf-lib dependency is required to merge outbound labels')
+    throw new Error('缺少面单合并所需的 PDF 组件')
   }
 }
 
@@ -267,7 +267,7 @@ export async function mergePdfBuffers(
   inputs: Buffer[],
   pdfDocumentApi: PdfDocumentApi = loadPdfDocumentApi(),
 ): Promise<Buffer> {
-  if (!inputs.length) throw new Error('No label PDFs to merge')
+  if (!inputs.length) throw new Error('没有可合并的面单 PDF，请检查面单生成结果后重试')
   const merged = await pdfDocumentApi.create()
   for (const input of inputs) {
     const source = await pdfDocumentApi.load(input)

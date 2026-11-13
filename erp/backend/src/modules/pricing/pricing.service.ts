@@ -759,7 +759,7 @@ export class PricingService {
       if (data.marketPrice !== undefined) {
         try {
           const cents = billingCents(data.marketPrice)
-          if (cents <= 0 || cents > 999999999999) throw new Error('invalid reference price')
+          if (cents <= 0 || cents > 999999999999) throw new Error('市场参考价不合规')
         } catch {
           throw new BadRequestException('市场参考价须大于零、最多两位小数且在有效范围内')
         }
