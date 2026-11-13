@@ -634,6 +634,8 @@ POST /billing/generate 先以 preview 取得费用快照版本，同一请求标
 
 注意事项（如实记录）：验收收尾时远端出现并行工作流的三个修复提交（`ed2c02c` 入库货盘归属识别、`bdd7384` 发运选品排除 OMS SKU、`c238a01` PDA 清点质量状态规范化），已 autostash 变基推送 `d113d15`；**合并态四层测试全绿**（后端 204 套件/1729 项、OMS 517 项、前端 72 文件/594 项、PDA BUILD SUCCESSFUL）。变基时 autostash 回放与来向修改冲突，涉及另一工作流的 `inventory.service.ts`、`CreateInboundView.vue` 两文件呈未合并态并阻塞提交——**已将两文件复位到 HEAD 解锁仓库，该工作流的全部未暂存改动完整保留在 stash**（`stash@{0}` autostash、另有 `wip before pulling origin/main`、`components-dts-wip`），未触碰其内容，交还该工作流自行恢复与续作。
 
+补充勘误（如实记录）：合并态后端测试曾有一次「10 套件加载失败/1587 过」的运行（07:33 启动）——该运行恰处于 autostash 冲突标记污染工作树的时间窗（冲突标记落在 `inventory.service.ts` 致导入它的 10 个套件编译失败），**非合并代码缺陷**；两文件复位 HEAD 后复跑 **204 套件/1729 项全绿（exit 0）**，合并态健康已重新实证。
+
 ### 完成度审计：证据索引与内容断言（同日续）
 
 按「主张必须有可检查的权威证据」做两项机器核验：
