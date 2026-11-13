@@ -590,4 +590,10 @@ POST /billing/generate 先以 preview 取得费用快照版本，同一请求标
 ### 全测试层当前态复核（HEAD 9413416）
 
 收口前全量复核（非抽样）：后端 **204 套件 / 1729 测试**全绿、前端 **72 文件 / 594 测试**全绿、OMS **517 测试 0 失败**、PDA **gradlew test BUILD SUCCESSFUL**（含 PdaWorkJournalDismissTest 等 26+ 套件）。`tsc --noEmit` 干净。Deploy production run 43356200225（9413416）全绿——部署链路连续 6 个提交全部 success。
+
+### 生产部署后冒烟（同日续，`smoke-prod-20261113.py`）
+
+- 健康端点 200 `{"ok":true,"service":"erp-api"}`；OMS 桥 401 返回「内部系统认证失败，请联系管理员」（新文案在线）。
+- 生产已登录会话认证读全绿：商品 20 行 / 同步日志 20 行 / 出库 12 行 / 退件 20 行（`/api/products|sync-logs|outbound|returns` 均 200）——**部署后无回归**。
+- 勘误：冒烟脚本首版用 `audit_admin`（审计栈账号）登录生产得 401——凭证域错配（生产无该用户），非系统回归；已改用生产会话核验认证面（如实记录）。
 - 过程勘误（如实记录）：误用 `tmp_deploy_leads.py` 触发了生产主机手工重建（该脚本为早期线索功能部署脚本，仅同步 5 个 leads 文件后重建 erp-api/erp-web）；重建本身成功、容器健康无损害，末尾 compose 报「dependency failed to start: No such container」为收尾杂音（`--no-deps` 重建竞态），健康检查与线上探针均正常。审计容器正确重建脚本为 `rebuild-audit-stack-20261113.py`（同主机 workflow-audit-20261016 栈，git pull + build + up）。
