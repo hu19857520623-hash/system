@@ -625,6 +625,7 @@ async function loadLogisticsStock(code: string) {
         pageSize: 200,
         page,
         onlyAvailable: '1',
+        dataSource: 'erp',
       }))
       const batch = invRes.items || []
       allItems.push(...batch)

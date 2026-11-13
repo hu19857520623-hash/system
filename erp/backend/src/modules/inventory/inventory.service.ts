@@ -169,6 +169,7 @@ export class InventoryService {
 
     if (productIdFilter.length) {
     const productAnd: any[] = [{ id: { in: productIdFilter } }]
+    if (q.dataSource === 'erp') productAnd.push(ERP_MASTER_PRODUCT_WHERE)
     const skuTokens = (q.skuCodes || '').split(/[\s,，]+/).map((s) => s.trim()).filter(Boolean)
     if (skuTokens.length) {
       productAnd.push({
