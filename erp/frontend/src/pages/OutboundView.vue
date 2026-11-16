@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { renderPickListHtml } from '@erp/shared/outbound-pick-list'
 import { readShipAttempts, type ShipAttempt } from '@/utils/outboundShipping'
 import { readPickAttempts, type PickAttempt } from '@/utils/outboundPicking'
 import { userFacingError } from '@erp/shared/user-facing-error'
@@ -1071,40 +1072,30 @@ async function doExport(params = buildQueryParams()) {
   } finally { if (active()) exportBusy.value = false }
 }
 
-function printPickList() {
+async function printPickList() {
   const rows = printablePickOrders.value
   if (!rows.length) {
     ElMessage.warning('没有可打印的拣货中出库单')
     return
   }
-  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>拣货单</title>
-<style>
-body{font-family:sans-serif;padding:16px;font-size:12px}
-h2{margin:0 0 12px}
-table{width:100%;border-collapse:collapse}
-th,td{border:1px solid #ccc;padding:6px 8px;text-align:left}
-th{background:#f5f5f5}
-.meta{color:#666;margin-bottom:12px}
-</style></head><body>
-<h2>出库拣货单</h2>
-<div class="meta">打印时间：${new Date().toLocaleString('zh-CN')} · 共 ${rows.length} 单</div>
-<table><thead><tr>
-<th>出库单</th><th>客户</th><th>仓库</th><th>SKU</th><th>件数</th><th>拣货员</th><th>备注</th>
-</tr></thead><tbody>
-${rows.map((r) => `<tr>
-<td>${r.outboundNo}</td><td>${r.customerName || '—'}</td><td>${r.warehouseCode}</td>
-<td>${r.skuSummary}</td><td>${r.totalQty}</td><td>${formatPickerLabel(r.pickerName, r.pickerWorkstation) || '—'}</td><td>${r.remarkSummary || '—'}</td>
-</tr>`).join('')}
-</tbody></table>
-<script>window.onload=function(){window.print()}<\/script>
-</body></html>`
   const win = window.open('', '_blank')
   if (!win) {
     ElMessage.error('无法打开打印窗口，请允许弹窗')
     return
   }
-  win.document.write(html)
-  win.document.close()
+  win.document.body.textContent = '正在准备拣货明细…'
+  try {
+    const details = []
+    for (const row of rows) details.push(await outboundApi.detail(row.id))
+    const html = renderPickListHtml(details)
+    if (win.closed) return
+    win.document.open()
+    win.document.write(html)
+    win.document.close()
+  } catch (err: any) {
+    win.close()
+    ElMessage.error(userFacingError(err?.message || '获取拣货明细失败，请重试'))
+  }
 }
 
 async function returnToPendingPick(row: any) {

@@ -1,3 +1,4 @@
+import { renderPickListHtml } from '@erp/shared/outbound-pick-list'
 import { catalogBaseSkuFromInternal, catalogSkuLookupKeys, toCatalogInternalSku } from '../../common/catalog-customer.util'
 import { ERP_MASTER_PRODUCT_WHERE } from '../../common/product-source.util'
 import {
@@ -1335,71 +1336,8 @@ export class OutboundService {
   }
 
   async buildPickListHtml(id: number) {
-    const order = await this.prisma.outboundOrder.findUnique({
-      where: { id: BigInt(id) },
-      include: { items: true },
-    })
-    if (!order) throw new NotFoundException('出库单不存在')
-
-    let pickerName = ''
-    let pickerWorkstation = ''
-    if (order.pickerId) {
-      const picker = await this.prisma.sysUser.findUnique({ where: { id: order.pickerId } })
-      pickerName = picker?.realName || picker?.username || ''
-      pickerWorkstation = picker?.workstation || ''
-    }
-
-    const lines = await Promise.all(
-      order.items.map(async (item) => {
-        const plan = await this.suggestPickLocations(order.warehouseCode, item.sku, item.qty)
-        return {
-          sku: item.sku,
-          productName: item.productName || '',
-          qty: item.qty,
-          ...plan,
-        }
-      }),
-    )
-
-    const rowsHtml = lines.map((line) => {
-      const locText = line.suggestions.length
-        ? line.suggestions.map((s) => `${s.locationCode}（拣 ${s.pickQty} / 库 ${s.available}）`).join('<br/>')
-        : '— 暂无库位库存 —'
-      const warn = line.uncovered > 0 ? `<div class="warn">缺 ${line.uncovered} 件，请核对库存</div>` : ''
-      return `<tr>
-        <td>${line.sku}</td>
-        <td>${line.productName || '—'}</td>
-        <td class="num">${line.qty}</td>
-        <td class="loc">${locText}${warn}</td>
-      </tr>`
-    }).join('')
-
-    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>拣货清单 ${order.outboundNo}</title>
-<style>
-body{font-family:Arial,sans-serif;padding:20px;font-size:13px;color:#222}
-h2{margin:0 0 8px}
-.meta{color:#666;margin-bottom:16px;line-height:1.6}
-table{width:100%;border-collapse:collapse;margin-top:12px}
-th,td{border:1px solid #ccc;padding:8px 10px;text-align:left;vertical-align:top}
-th{background:#f5f5f5}
-.num{text-align:right;white-space:nowrap}
-.loc{font-family:Consolas,monospace;font-size:12px;line-height:1.5}
-.warn{color:#c45656;font-size:11px;margin-top:4px}
-@media print { .no-print { display:none } }
-</style></head><body>
-<h2>出库拣货清单</h2>
-<div class="meta">
-  出库单：<strong>${order.outboundNo}</strong><br/>
-  仓库：${order.warehouseCode} · 状态：${OUTBOUND_STATUS_LABELS[order.status] || order.status}<br/>
-  拣货员：${formatPickerStationLabel(pickerName, pickerWorkstation)} · 打印时间：${new Date().toLocaleString('zh-CN')}
-</div>
-<table>
-  <thead><tr><th>SKU</th><th>品名</th><th>应拣</th><th>拣货库位（建议）</th></tr></thead>
-  <tbody>${rowsHtml}</tbody>
-</table>
-<div class="no-print" style="margin-top:16px"><button onclick="window.print()">打印</button></div>
-<script>window.onload=function(){window.print()}<\/script>
-</body></html>`
+    const order = await this.detail(id)
+    const html = renderPickListHtml([order])
 
     return {
       fileName: `拣货清单_${order.outboundNo}.html`,
