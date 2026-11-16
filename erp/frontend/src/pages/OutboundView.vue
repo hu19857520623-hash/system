@@ -313,6 +313,9 @@ function handleRowCommand(command: string, row: any) {
     case 'clearException':
       clearException(row)
       break
+    case 'returnPendingPick':
+      void returnToPendingPick(row)
+      break
     case 'cancel':
       doCancel(row)
       break
@@ -473,6 +476,9 @@ function rowCommands(row: any): RowAction[] {
     cmds.push({ key: 'assignPicker', command: 'assignPicker', label: '重新分配拣货员' })
     cmds.push({ key: 'downloadPick', command: 'downloadPick', label: '下载拣货清单' })
     cmds.push({ key: 'pick', command: 'pick', label: '完成拣货' })
+  }
+  if (status === 'picked' && canPick.value) {
+    cmds.push({ key: 'returnPendingPick', command: 'returnPendingPick', label: '返回未拣货' })
   }
   if (['picked', 'reviewing'].includes(status) && canPack.value) {
     cmds.push({ key: 'pack', command: 'pack', label: '复核打包' })
@@ -1099,6 +1105,15 @@ ${rows.map((r) => `<tr>
   }
   win.document.write(html)
   win.document.close()
+}
+
+async function returnToPendingPick(row: any) {
+  if (!canPick.value) return
+  await withAction(async () => {
+    await erpConfirm('返回后将回补原拣货库位库存、清空拣货信息，需要重新分配并拣货。请确认货物已放回原库位。', '返回未拣货')
+    await outboundApi.returnToPendingPick(row.id)
+    await reloadAll()
+  }, `${row.outboundNo} 已返回待拣货`)
 }
 
 async function doCancel(row: any) {

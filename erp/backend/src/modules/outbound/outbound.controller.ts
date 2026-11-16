@@ -253,6 +253,12 @@ export class OutboundController {
     return this.service.pick(id, body, userId)
   }
 
+  @RequirePerms('outbound.pick')
+  @Post(':id/return-pending-pick')
+  returnToPendingPick(@Param('id', ParseIntPipe) id: number, @CurrentUser('userId') userId: number) {
+    return this.service.returnToPendingPick(id, userId)
+  }
+
   @RequirePerms('outbound.pack')
   @Post(':id/start-review')
   startReview(@Param('id', ParseIntPipe) id: number, @CurrentUser('userId') userId: number) {
