@@ -585,7 +585,7 @@ export class OutboundService {
     const row = await db.outboundOrder.findUnique({
       where: { id: BigInt(id) },
       include: {
-        items: { include: { pickAllocations: { orderBy: { id: 'asc' } } } },
+        items: { include: { pickAllocations: { where: { status: { not: 'cancelled' } }, orderBy: { id: 'asc' } } } },
         attachments: { orderBy: { id: 'asc' } },
       },
     })
@@ -2057,6 +2057,45 @@ th{background:#f5f5f5}
     if (!order) throw new NotFoundException('出库单不存在')
     await this.cancel(Number(order.id), { customerId: customer!.id, pendingOnly: true })
     return this.getByOutboundNoForOms(outboundNo)
+  }
+
+  async returnToPendingPick(id: number, operatorId: number) {
+    const outboundNo = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM outbound_order WHERE id = ${BigInt(id)} FOR UPDATE`
+      const order = await tx.outboundOrder.findUnique({
+        where: { id: BigInt(id) }, include: { pickAllocations: true },
+      })
+      if (!order) throw new NotFoundException('出库单不存在')
+      if (order.status !== 'picked') throw new BadRequestException('仅已拣货的出库单可以返回未拣货')
+      const transitioned = await tx.outboundOrder.updateMany({
+        where: { id: order.id, status: 'picked' },
+        data: { status: 'pending_pick', pickerId: null, pickSource: null, pickedAt: null, pickingStartedAt: null },
+      })
+      if (transitioned.count !== 1) throw new ConflictException('出库单状态已变化，请刷新后重试')
+      for (const allocation of order.pickAllocations.filter(row => row.status === 'picked')) {
+        await this.inventoryMutation.restoreLocationQty(tx, {
+          productId: allocation.productId, sku: allocation.sku,
+          warehouseCode: allocation.warehouseCode, locationId: allocation.locationId,
+          locationCode: allocation.locationCode, inventoryLocationId: allocation.inventoryLocationId,
+          qty: allocation.qty,
+        })
+      }
+      await tx.outboundPickAllocation.updateMany({
+        where: { outboundId: order.id, status: 'picked' },
+        data: { status: 'cancelled', cancelledAt: new Date() },
+      })
+      await tx.outboundOrderItem.updateMany({
+        where: { outboundId: order.id }, data: { pickedQty: 0, locationCode: null },
+      })
+      await tx.operationLog.create({ data: {
+        operatorId: BigInt(operatorId), module: 'outbound', action: 'return_pending_pick',
+        targetType: 'outbound_order', targetId: order.outboundNo,
+        detail: { fromStatus: 'picked', toStatus: 'pending_pick', pickerId: order.pickerId?.toString() || null },
+      } })
+      return order.outboundNo
+    })
+    await this.pushOutboundStatusToOms(outboundNo)
+    return this.detail(id)
   }
 
   async cancel(id: number, restriction?: { customerId: bigint; pendingOnly: true }) {
