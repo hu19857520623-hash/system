@@ -80,6 +80,14 @@ describe('ERP路由与现有岗位菜单范围一致', () => {
     h.app.applyAuthUser({ id: 7, username: 'custom', realName: '验收', roleCode: 'viewer', permissions: ['cost.view'] })
     await h.router.push('/finance-books/purchase'); expect(h.router.currentRoute.value.name).toBe('FinanceBooks')
   })
+  it('旧充值链接转入账本充值明细并保留查询和锚点，仅充值查看权限也可访问', async () => {
+    const h=harness(account('viewer',['budget_credit.view']))
+    await h.router.push('/customer-recharge?customerId=256#history')
+    expect(h.router.currentRoute.value.name).toBe('FinanceBooks')
+    expect(h.router.currentRoute.value.params.tab).toBe('recharge')
+    expect(h.router.currentRoute.value.query.customerId).toBe('256')
+    expect(h.router.currentRoute.value.hash).toBe('#history')
+  })
   it('管理员可进入调试页，普通账号个人设置与不存在页面有自己的返回入口', async () => {
     const h = harness(account('admin')); await h.router.push('/flow-debug'); expect(h.router.currentRoute.value.name).toBe('FlowDebug')
     account('viewer', ['products.view']); await h.router.push('/settings/profile'); expect(h.router.currentRoute.value.name).toBe('ProfileSettings')

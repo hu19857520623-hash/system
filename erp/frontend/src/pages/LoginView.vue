@@ -68,7 +68,7 @@ async function handleSubmit() {
         <div class="brand-copy">
           <h2>从选品到结算<br />一条链路管全局</h2>
           <p class="brand-desc">
-            产品开发、采购入库、货盘定价、库存同步与客户结算，统一在一个工作台完成。
+            产品开发、采购入库、货盘定价、库存同步与仓库作业费用明细，统一在一个工作台完成。
           </p>
         </div>
 

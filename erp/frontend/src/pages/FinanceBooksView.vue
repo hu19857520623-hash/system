@@ -9,6 +9,7 @@ defineOptions({ name: 'FinanceBooksView' })
 const CostLedgerView = defineAsyncComponent(() => import('@/pages/CostLedgerView.vue'))
 const SupplierSeaFreightBillView = defineAsyncComponent(() => import('@/pages/SupplierSeaFreightBillView.vue'))
 const OperatingLedgerView = defineAsyncComponent(() => import('@/pages/OperatingLedgerView.vue'))
+const CustomerRechargeView = defineAsyncComponent(() => import('@/pages/CustomerRechargeView.vue'))
 const ProfitAnalysisView = defineAsyncComponent(() => import('@/pages/ProfitAnalysisView.vue'))
 
 const route = useRoute()
@@ -20,6 +21,7 @@ const tabs = [
   { key: 'purchase', label: '采购货款', perm: 'cost.view' as const, view: CostLedgerView },
   { key: 'operating', label: '经营收支', perm: 'operating_ledger.view' as const, view: OperatingLedgerView },
   { key: 'analysis', label: '利润/采购分析', perm: ['profit_analysis.view', 'reports.view'] as const, view: ProfitAnalysisView },
+  { key: 'recharge', label: '客户充值明细', perm: 'budget_credit.view' as const, view: CustomerRechargeView },
 ]
 
 function canSeeTab(perm: string | readonly string[]) {
@@ -69,7 +71,7 @@ async function switchTab(key: string | number) {
       <div class="page-head">
         <div>
           <h2>账本分析</h2>
-          <p>采购货款、海运账单、经营收支与利润分析放在同一入口，按权限显示页签</p>
+          <p>采购货款、海运账单、经营收支、利润分析与客户充值明细放在同一入口，按权限显示页签</p>
         </div>
       </div>
       <el-tabs :model-value="activeTab" :before-leave="switchTab" :aria-busy="switching">

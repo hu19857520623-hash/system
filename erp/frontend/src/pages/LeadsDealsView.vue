@@ -746,11 +746,11 @@ onMounted(async () => {
         <el-button @click="omsSuccessVisible = false">完成</el-button>
         <el-button type="primary" @click="omsSuccessVisible = false; router.push('/customers')">去客户列表</el-button>
         <el-button
-          v-if="omsSuccess?.customerId"
+          v-if="omsSuccess?.customerId && app.hasPerm('budget_credit.view')"
           type="success"
-          @click="router.push({ path: '/customer-recharge', query: { customerId: String(omsSuccess.customerId) } })"
+          @click="router.push({ path: '/finance-books/recharge', query: { customerId: String(omsSuccess.customerId) } })"
         >
-          去充值
+          查看充值明细
         </el-button>
       </template>
     </el-result>

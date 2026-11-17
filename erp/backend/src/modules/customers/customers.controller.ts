@@ -1,3 +1,4 @@
+import { RechargeRecordQueryDto } from './dto/recharge-record-query.dto'
 import { Body, Controller, Get, Param, ParseIntPipe, Post, Put, Query } from '@nestjs/common'
 import { CustomersService } from './customers.service'
 import { PaginationDto } from '../../common/dto/pagination.dto'
@@ -22,6 +23,10 @@ export class CustomersController {
   list(@Query() q: PaginationDto & Record<string, string>) {
     return this.service.list(q)
   }
+
+  @RequirePerms('budget_credit.view')
+  @Get('recharges')
+  rechargeRecords(@Query() q:RechargeRecordQueryDto){return this.service.rechargeRecords(q)}
 
   /** OMS server：使用共享数据库执行与 ERP 开户相同的原子开通流程 */
   @OmsBridge()

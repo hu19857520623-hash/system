@@ -1,3 +1,4 @@
+import { cancelErpNegativePurchase, submitErpNegativePurchase, fetchErpNegativePurchases } from './erpClient.js'
 import { receiveInboundStatus } from './inbound-webhook.util.js'
 import { canReadData } from '../src/data/readAccess.js'
 import { readCatalogPurchaseHistory } from './catalog-purchase-history.util.js'
@@ -1028,6 +1029,26 @@ app.get('/api/erp/catalog/:sku', async (req, res) => {
 })
 
 /** P0：货盘申购 → ERP 扣余额 / 记持有库存 */
+app.get('/api/erp/catalog/negative-purchases/history', async (req, res) => {
+  const auth = (req as AuthenticatedRequest).auth
+  if (!auth?.customerCode) return res.status(403).json({ error: '请使用绑定客户的账号查看负申购' })
+  try { res.json(await fetchErpNegativePurchases(auth.customerCode)) } catch (e) { sendErpError(res, e) }
+})
+app.post('/api/erp/catalog/negative-purchases/:id/cancel', async (req, res) => {
+  const auth = (req as AuthenticatedRequest).auth
+  if (!auth?.customerCode || !auth.permissions.includes('catalog:write')) return res.status(403).json({ error: '请使用有申购权限的客户账号撤销退回' })
+  const id = Number(req.params.id)
+  if (!Number.isSafeInteger(id) || id <= 0) return res.status(400).json({ error: '请选择有效的负申购申请' })
+  try { res.json(await cancelErpNegativePurchase(id, auth.customerCode)) } catch (e) { sendErpError(res, e) }
+})
+app.post('/api/erp/catalog/negative-purchases', async (req, res) => {
+  const auth = (req as AuthenticatedRequest).auth
+  if (!auth?.customerCode || !auth.permissions.includes('catalog:write')) return res.status(403).json({ error: '请使用有申购权限的客户账号申请退回' })
+  try {
+    res.json(await submitErpNegativePurchase({ requestId: req.body?.requestId, orderNo: req.body?.orderNo, quantity: req.body?.quantity, reason: req.body?.reason, customerCode: auth.customerCode }))
+  } catch (e) { sendErpError(res, e) }
+})
+
 app.post('/api/erp/purchase', async (req, res) => {
   try {
     const body = req.body as {

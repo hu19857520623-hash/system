@@ -635,3 +635,12 @@ export function uploadErpProductDraftImage(fileName: string, contentBase64: stri
     contentBase64,
   })
 }
+
+export interface NegativePurchase {
+  id: number; requestId: string; orderNo: string; sku: string; quantity: number; unitPrice: number; amount: number
+  reason: string; status: 'pending' | 'approved' | 'rejected' | 'cancelled'; createdAt: string; referenceNo?: string
+}
+export const getNegativePurchases = () => apiGet<NegativePurchase[]>('/erp/catalog/negative-purchases/history')
+export const submitNegativePurchase = (data: { requestId: string; orderNo: string; quantity: number; reason: string }) => apiPost<NegativePurchase>('/erp/catalog/negative-purchases', data)
+
+export const cancelNegativePurchase = (id: number) => apiPost<NegativePurchase>(`/erp/catalog/negative-purchases/${id}/cancel`, {})

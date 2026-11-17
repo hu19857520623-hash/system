@@ -126,7 +126,7 @@ onMounted(load)
       <div class="page-head">
         <div>
           <h2>入库计费规则</h2>
-          <p>清点、测量、贴标、上架提交后按规则写入客户结算，费用单号挂入库单。</p>
+          <p>清点、测量、贴标、上架提交后按规则写入仓库作业费用明细，费用单号挂入库单。</p>
         </div>
         <el-button v-if="canManage" type="primary" @click="openCreate">新建规则</el-button>
       </div>

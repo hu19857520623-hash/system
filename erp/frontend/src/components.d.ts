@@ -11,8 +11,13 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
+    CatalogNegativeReviewDialog: typeof import('./components/CatalogNegativeReviewDialog.vue')['default']
+    CatalogPriceBatchDialog: typeof import('./components/CatalogPriceBatchDialog.vue')['default']
+    CatalogPricesDialog: typeof import('./components/CatalogPricesDialog.vue')['default']
+    CatalogPurchaseHistoryDialog: typeof import('./components/CatalogPurchaseHistoryDialog.vue')['default']
     CatalogRefundHistoryDialog: typeof import('./components/CatalogRefundHistoryDialog.vue')['default']
     CatalogVisibilityDialog: typeof import('./components/CatalogVisibilityDialog.vue')['default']
+    CustomerCatalogTierDialog: typeof import('./components/CustomerCatalogTierDialog.vue')['default']
     DashboardTrendChart: typeof import('./components/ui/DashboardTrendChart.vue')['default']
     DealServiceSelect: typeof import('./components/DealServiceSelect.vue')['default']
     DetailSheet: typeof import('./components/ui/DetailSheet.vue')['default']

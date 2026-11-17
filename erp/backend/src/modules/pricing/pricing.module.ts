@@ -1,3 +1,4 @@
+import { CatalogNegativeService } from './catalog-negative.service'
 import { Module } from '@nestjs/common'
 import { PricingService } from './pricing.service'
 import { PricingController } from './pricing.controller'
@@ -9,7 +10,7 @@ import { CosObjectUrlService } from '../../common/cos-object-url.service'
 @Module({
   imports: [OperationLogModule, BillingModule],
   controllers: [PricingController],
-  providers: [PricingService, OmsPurchaseService, CosObjectUrlService],
+  providers: [CatalogNegativeService, PricingService, OmsPurchaseService, CosObjectUrlService],
   exports: [PricingService, OmsPurchaseService],
 })
 export class PricingModule {}

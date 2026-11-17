@@ -1,5 +1,5 @@
 export const OPERATION_MODULE_LABELS: Record<string, string> = {
-  billing: '客户结算',
+  billing: '仓库作业费用明细',
   purchase: '采购',
   product_audit: '产品审核',
   logistics_receipt: '物流收货',

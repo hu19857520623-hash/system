@@ -869,3 +869,14 @@ export function uploadErpOmsProductImage(body: { fileName: string; contentBase64
     body: JSON.stringify(body),
   })
 }
+
+export function submitErpNegativePurchase(data: unknown) {
+  return erpRequest('/pricing/oms/negative-purchases', { method: 'POST', body: JSON.stringify(data) })
+}
+export function fetchErpNegativePurchases(customerCode: string) {
+  return erpRequest(`/pricing/oms/negative-purchases?customerCode=${encodeURIComponent(customerCode)}`)
+}
+
+export function cancelErpNegativePurchase(id: number, customerCode: string) {
+  return erpRequest(`/pricing/oms/negative-purchases/${id}/cancel`, { method: 'POST', body: JSON.stringify({ customerCode }) })
+}

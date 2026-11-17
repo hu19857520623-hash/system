@@ -468,7 +468,7 @@ export class BillingService {
 
   /** 旧的无来源账单不能判断费用是否已经扣款，请走有原始费用关联的入口。 */
   generate(_data: CreateBillingOrderDto) {
-    throw new BadRequestException('请先在客户结算页录入原始费用，再通过“生成账单”核对并汇总；不能创建缺少费用关联的账单')
+    throw new BadRequestException('请先在仓库作业费用明细页录入原始费用，再通过“生成账单”核对并汇总；不能创建缺少费用关联的账单')
   }
 
   async previewGenerate(data: GenerateBillingDto) {

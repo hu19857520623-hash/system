@@ -104,7 +104,7 @@ async function loadAll() {
     const rate = num(profitSummary.profitRate)
 
     summary.value = [
-      { label: '营业收入', value: fmtMoney(sales), change: '客户结算入账', tone: 'success' },
+      { label: '营业收入', value: fmtMoney(sales), change: '仓库作业费用明细入账', tone: 'success' },
       { label: '采购成本', value: fmtMoney(cost - freight), change: '采购货款', tone: '' },
       { label: '物流费用', value: fmtMoney(freight), change: '运费/海运', tone: '' },
       { label: '毛利润', value: fmtMoney(gross), change: '营收 − 成本', tone: 'success' },

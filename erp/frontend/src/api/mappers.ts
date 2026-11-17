@@ -484,6 +484,7 @@ export function mapCustomer(row: any) {
   return {
     id: row.id,
     code: row.customerCode,
+    catalogPriceTier: row.catalogPriceTier ?? 'A',
     company: row.customerName || row.companyName || '',
     companyName: row.companyName || '',
     email: row.contactEmail || '',

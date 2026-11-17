@@ -1,3 +1,5 @@
+import { readCatalogPurchases } from './catalog-purchases.util'
+import type { CatalogPurchaseQueryDto } from './dto/catalog-purchase-query.dto'
 import { userFacingError } from '@erp/shared/user-facing-error'
 import { createHash } from 'crypto'
 import { Prisma } from '@prisma/client'
@@ -1032,55 +1034,8 @@ export class InventoryService {
     return rows.map((r) => r.id)
   }
 
-  /** 货盘选品购买明细（oms_catalog_order） */
-  async catalogPurchases(q: PaginationDto & { sku?: string; customerCode?: string }) {
-    const { page, pageSize } = getPagination(q, 20)
-    const and: Record<string, unknown>[] = []
-    const sku = q.sku?.trim()
-    const customerCode = q.customerCode?.trim()
-    if (sku) and.push({ sku: { in: catalogSkuLookupKeys(sku) } })
-    if (customerCode) and.push({ customerCode })
-
-    const where = and.length ? { AND: and } : {}
-    const [orders, total] = await Promise.all([
-      this.prisma.omsCatalogOrder.findMany({
-        where,
-        skip: (page - 1) * pageSize,
-        take: pageSize,
-        orderBy: { createdAt: 'desc' },
-      }),
-      this.prisma.omsCatalogOrder.count({ where }),
-    ])
-
-    const customerIds = [...new Set(orders.map((o) => o.customerId))]
-    const customers = customerIds.length
-      ? await this.prisma.customer.findMany({
-          where: { id: { in: customerIds } },
-          select: { id: true, customerCode: true, customerName: true },
-        })
-      : []
-    const customerMap = new Map(customers.map((c) => [Number(c.id), c]))
-
-    const items = orders.map((o) => {
-      const customer = customerMap.get(Number(o.customerId))
-      return {
-        id: Number(o.id),
-        orderNo: o.orderNo,
-        sku: o.sku,
-        customerCode: o.customerCode || customer?.customerCode || '',
-        customerName: customer?.customerName || '',
-        quantity: o.quantity,
-        unitPrice: o.unitPrice != null ? Number(o.unitPrice) : null,
-        totalAmount: o.totalAmount != null ? Number(o.totalAmount) : null,
-        balanceBefore: o.balanceBefore != null ? Number(o.balanceBefore) : null,
-        balanceAfter: o.balanceAfter != null ? Number(o.balanceAfter) : null,
-        status: o.status,
-        createdAt: o.createdAt,
-      }
-    })
-
-    return { items, total, page, pageSize }
-  }
+  /** OMS货盘采购记录：独立于当前持有量，保留历史成交与已审核退回。 */
+  catalogPurchases(q: CatalogPurchaseQueryDto) { return readCatalogPurchases(this.prisma,q) }
 
   /**
    * ERP 收回客户货盘持有：客户申购后虽可发货，控制权仍在 ERP。

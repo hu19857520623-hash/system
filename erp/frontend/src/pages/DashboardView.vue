@@ -45,7 +45,7 @@ const quickEntries = ref([
   { id: 'inbound', icon: 'inbound', label: '入库单管理' },
   { id: 'inbound_putaway', icon: 'inbound_putaway', label: '入库上架' },
   { id: 'outbound', icon: 'outbound', label: '出库作业' },
-  { id: 'billing', icon: 'billing', label: '客户结算' },
+  { id: 'billing', icon: 'billing', label: '仓库作业费用明细' },
 ])
 
 const publishDialogVisible = ref(false)

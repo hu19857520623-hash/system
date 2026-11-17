@@ -206,6 +206,7 @@ export function requiredWritePermission(method: string, apiPath: string): string
   if (/^\/erp\/customers\/[^/]+\/recharge\/?$/.test(p)) return 'billing:recharge'
   if (p === '/billing' || p.startsWith('/billing/pre-deduct')) return '__readonly_billing__'
   if (p.startsWith('/billing')) return '__unknown_write__'
+  if (p.startsWith('/erp/catalog/negative-purchases')) return 'catalog:write'
   if (p.startsWith('/erp/purchase')) return 'catalog:write'
   if (/^\/erp\/customers\/[^/]+\/inventory-sync$/.test(p)) return 'inventory:read'
   if (p.startsWith('/inventory-products') || p.startsWith('/inventory-state/products')) return 'product:write'

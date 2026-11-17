@@ -646,7 +646,7 @@ function exportCharges(rows = selectedRows.value) {
 
   a.href = url
 
-  a.download = `客户结算费用_${new Date().toISOString().slice(0, 10)}.csv`
+  a.download = `仓库作业费用明细_${new Date().toISOString().slice(0, 10)}.csv`
 
   a.click()
 
@@ -702,7 +702,7 @@ onMounted(async () => {
 
         <div class="page-header">
 
-          <span class="page-title">客户结算</span>
+          <span class="page-title">仓库作业费用明细</span>
 
           <div class="header-actions">
 

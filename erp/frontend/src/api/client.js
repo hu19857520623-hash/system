@@ -492,6 +492,15 @@ export const logisticsReceiptApi = {
 // ── 定价 ──
 
 export const pricingApi = {
+  batchPriceItems: (params) => api.get('/pricing/prices/batch-items', params),
+  previewBatchPrices: (rows) => api.post('/pricing/prices/batch-preview', { rows }),
+  saveBatchPrices: (data) => api.post('/pricing/prices/batch', data),
+  batchPriceReceipt: (id) => api.get(`/pricing/prices/batches/${encodeURIComponent(id)}`),
+  cancelBatchPrices: (id) => api.post(`/pricing/prices/batches/${encodeURIComponent(id)}/cancel`, {}),
+  setPrices: (id, data) => api.post(`/pricing/${id}/prices`, data),
+  setCustomerTier: (id, data) => api.post(`/pricing/customer-tier/${id}`, data),
+  negativePurchases: () => api.get('/pricing/negative-purchases/pending'),
+  decideNegative: (id, decision) => api.post(`/pricing/negative-purchases/${id}/decision`, { decision }),
   setVisibleStock: (id, data) => api.post(`/pricing/${id}/visible-stock`, data),
   list: (params) => api.get('/pricing', params),
   detail: (id) => api.get(`/pricing/${id}`),
@@ -531,6 +540,7 @@ export const operationLogApi = {
 // ── 客户 ──
 
 export const customerApi = {
+  rechargeRecords: (params) => api.get('/customers/recharges', params),
   list: (params) => api.get('/customers', params),
   detail: (id) => api.get(`/customers/${id}`),
   create: (data) => api.post('/customers', data),

@@ -155,8 +155,7 @@ const NAV: NavGroup[] = [
     label: '财务',
     items: [
       { id: 'customers', name: '客户列表' },
-      { id: 'billing', name: '客户结算', badgeKey: 'billing' },
-      { id: 'budget_credit', name: '客户充值' },
+      { id: 'billing', name: '仓库作业费用明细', badgeKey: 'billing' },
       { id: 'finance_books', name: '账本分析' },
     ],
   },
@@ -210,7 +209,7 @@ const NAV_ROUTE_MAP: Record<string, string> = {
   reports: '/finance-books/analysis',
   store_monitor: '/store-monitor',
   profit_analysis: '/finance-books/analysis',
-  budget_credit: '/customer-recharge',
+  budget_credit: '/finance-books/recharge',
   async_io: '/async-io',
   permissions: '/permissions',
   user_management: '/permissions',
@@ -436,6 +435,7 @@ export const useAppStore = defineStore('app', {
         cost: 'cost.view',
         operating_ledger: 'operating_ledger.view',
         finance_books: [
+          'budget_credit.view',
           'cost.view',
           'operating_ledger.view',
           'receivable_payable.view',

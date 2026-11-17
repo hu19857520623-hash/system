@@ -1,3 +1,4 @@
+import { CatalogNegativeService } from './catalog-negative.service'
 import { ConflictException, Body, Controller, Get, Param, ParseIntPipe, Post, Put, Query } from '@nestjs/common'
 import { PricingService } from './pricing.service'
 import { OmsPurchaseService } from './oms-purchase.service'
@@ -13,7 +14,28 @@ export class PricingController {
   constructor(
     private readonly service: PricingService,
     private readonly omsPurchase: OmsPurchaseService,
+    private readonly negative: CatalogNegativeService,
   ) {}
+
+  @OmsBridge()
+  @Post('oms/negative-purchases')
+  submitNegative(@Body() body: any) { return this.negative.submit(body) }
+
+  @OmsBridge()
+  @Get('oms/negative-purchases')
+  ownNegatives(@Query('customerCode') code: string) { return this.negative.list(code) }
+
+  @OmsBridge()
+  @Post('oms/negative-purchases/:id/cancel')
+  cancelNegative(@Param('id', ParseIntPipe) id: number, @Body() body: any) { return this.negative.cancel(id, body?.customerCode) }
+
+  @RequirePerms('inventory_query.reclaim_refund')
+  @Get('negative-purchases/pending')
+  negativeList(@CurrentUser('userId') actor: number) { return this.negative.list(undefined, actor) }
+
+  @RequirePerms('inventory_query.reclaim_refund')
+  @Post('negative-purchases/:id/decision')
+  negativeDecision(@Param('id', ParseIntPipe) id: number, @Body() body: any, @CurrentUser('userId') actor: number) { return this.negative.decide(id, body, actor) }
 
   /** OMS 客户下单回调（幂等：同一 orderNo 重复提交返回原结果） */
   @OmsBridge()
@@ -40,6 +62,26 @@ export class PricingController {
   list(@Query() q: PaginationDto & { status?: string }) {
     return this.service.list(q)
   }
+
+  @RequirePerms('pricing.set')
+  @Get('prices/batch-items')
+  batchPriceItems(@Query('keyword') keyword?: string) { return this.service.listBatchPrices(keyword) }
+
+  @RequirePerms('pricing.set')
+  @Post('prices/batch-preview')
+  batchPricePreview(@Body() body: any) { return this.service.previewBatchPrices(body) }
+
+  @RequirePerms('pricing.set')
+  @Post('prices/batch')
+  batchPriceSubmit(@Body() body: any, @CurrentUser('userId') actor: number) { return this.service.saveBatchPrices(body,actor) }
+
+  @RequirePerms('pricing.set')
+  @Get('prices/batches/:requestId')
+  batchPriceReceipt(@Param('requestId') id: string, @CurrentUser('userId') actor: number) { return this.service.batchPricesReceipt(id,actor) }
+
+  @RequirePerms('pricing.set')
+  @Post('prices/batches/:requestId/cancel')
+  batchPriceCancel(@Param('requestId') id: string, @CurrentUser('userId') actor: number) { return this.service.batchPricesReceipt(id,actor,true) }
 
   @RequirePerms('pricing.view')
   @Get(':id')
