@@ -8,7 +8,6 @@ import {
   buildOmsWarehouseInventoryRow,
   finalizeInventoryRow,
   finalizeInventoryRows,
-  inventoryDataSourceLabel,
   resolveCustomerIdentity,
 } from '../../common/inventory-row-mapper.util'
 import { expandWarehouseSearchTerms } from '../../common/warehouse-display.util'
