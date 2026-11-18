@@ -14,9 +14,9 @@ describe('parseOperatingLedgerImportCsv', () => {
 
   it('reports invalid rows without accepting them', () => {
     const result = parseOperatingLedgerImportCsv(
-      '收支类型,类别,金额,发生日期\n未知,,0,2026/08/21',
+      '收支类型 *,类别＊,金额 *,发生日期 *\n\n未知,,0,2026/08/21',
     )
     expect(result.rows).toEqual([])
-    expect(result.errors[0]).toMatchObject({ line: 2 })
+    expect(result.errors.map(({ line, field }) => [line, field])).toEqual([[3, '收支类型'], [3, '类别'], [3, '金额'], [3, '发生日期']])
   })
 })

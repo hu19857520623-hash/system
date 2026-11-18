@@ -1,5 +1,9 @@
 import { PurchaseService } from './purchase.service'
 
+jest.mock('../../common/daily-business-code.util', () => ({
+  nextDailyBusinessCode: jest.fn().mockResolvedValue('PD202611180001'),
+}))
+
 function setup(status = 'pending_actual_qty') {
   const row: any = { id: 9n, poNo: 'PO-AUDIT', prePoId: 8n, status, warehouseCode: 'LW-TEST', items: [{ id: 11n, sku: 'AUDIT', plannedQty: 2, quantity: 0, unitPrice: 10 }] }
   const prePo: any = { id: 8n, convertedPoId: 9n, status: 'confirmed' }

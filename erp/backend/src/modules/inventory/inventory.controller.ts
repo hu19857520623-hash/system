@@ -1,3 +1,4 @@
+import { CatalogPurchaseQueryDto } from './dto/catalog-purchase-query.dto'
 import { CatalogReclaimDto, CatalogReclaimPreviewDto, CatalogReclaimHistoryQueryDto } from './dto/catalog-reclaim.dto'
 import { Body, Controller, Get, Param, ParseIntPipe, Patch, Post, Query } from '@nestjs/common'
 import { InventoryService } from './inventory.service'
@@ -50,6 +51,7 @@ export class InventoryController {
       category?: string
       brand?: string
       supplierKeyword?: string
+      dataSource?: string
       statusFilter?: string
       stockFilter?: string
       costMin?: string
@@ -168,10 +170,10 @@ export class InventoryController {
     return this.service.reclaimCatalogHolding(body, userId)
   }
 
-  @RequireAnyPerm('inventory_query.view', 'inventory_query.detail', 'logistics_wh.view')
+  @RequireAnyPerm('pricing.view', 'inventory_query.view', 'inventory_query.detail', 'logistics_wh.view')
   @Get('catalog-purchases')
   catalogPurchases(
-    @Query() q: PaginationDto & { sku?: string; customerCode?: string },
+    @Query() q: CatalogPurchaseQueryDto,
   ) {
     return this.service.catalogPurchases(q)
   }

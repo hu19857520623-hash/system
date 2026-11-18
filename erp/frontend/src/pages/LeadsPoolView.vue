@@ -9,7 +9,7 @@ import { fmtTime, mapLead, formatLeadContact } from '@/api/mappers.ts'
 import { useListLoader, withAction } from '@/composables/useListLoader.ts'
 import { useServerPagination } from '@/composables/useTablePagination.ts'
 import { useAsyncIo } from '@/composables/useAsyncIo'
-import { downloadLeadsImportTemplate } from '@/constants/importTemplates.ts'
+import { downloadLeadsImportTemplate, LEADS_IMPORT_FIELDS, requiredImportFields } from '@/constants/importTemplates.ts'
 import ListPagination from '@/components/ListPagination.vue'
 import DetailSheet from '@/components/ui/DetailSheet.vue'
 import { useAppStore } from '@/stores/app'
@@ -667,6 +667,7 @@ onMounted(async () => {
             <el-button type="primary" size="small" @click="openNewLead">新建线索</el-button>
             <el-button size="small" link type="primary" @click="downloadLeadsImportTemplate">下载模板</el-button>
             <el-button size="small" @click="importLeads">导入</el-button>
+            <span class="erp-import-fields">{{ requiredImportFields(LEADS_IMPORT_FIELDS) }}</span>
             <el-button v-if="app.hasPerm('leads_pool.export')" size="small" :loading="exporting" @click="exportLeads">
               {{ selectedLeads.length ? `导出所选（${selectedLeads.length}）` : '按筛选导出' }}
             </el-button>

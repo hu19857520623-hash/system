@@ -92,6 +92,15 @@ model Supplier {
   @@map("supplier")
 }
 
+model DailyBusinessCode {
+  prefix        String @db.VarChar(3)
+  businessDate  String @map("business_date") @db.Char(8)
+  currentSerial Int    @map("current_serial") @db.UnsignedInt
+
+  @@id([prefix, businessDate])
+  @@map("daily_business_code")
+}
+
 // ───────────── 商品主数据 ─────────────
 
 model Product {

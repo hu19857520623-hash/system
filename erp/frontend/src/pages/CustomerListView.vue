@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import CustomerCatalogTierDialog from '@/components/CustomerCatalogTierDialog.vue'
+
 import { userFacingError } from '@erp/shared/user-facing-error'
 
 import { displaySku, displaySkuText } from '@erp/shared/sku-display'
@@ -21,6 +23,7 @@ import {
 const app = useAppStore()
 const router = useRouter()
 const route = useRoute()
+const catalogTierVisible = ref(false), catalogTierCustomerId = ref<number | null>(null)
 
 type StatusFilter = 'all' | 'active' | 'disabled'
 
@@ -377,7 +380,7 @@ async function openDetail(row: any) {
 }
 
 function goRecharge(row: any) {
-  router.push({ path: '/customer-recharge', query: { customerId: String(row.id) } })
+  router.push({ path: '/finance-books/recharge', query: { customerId: String(row.id) } })
 }
 
 async function submitCreate() {
@@ -466,6 +469,7 @@ onMounted(() => {
 </script>
 
 <template>
+  <CustomerCatalogTierDialog v-if="app.hasPerm('pricing.set')" v-model="catalogTierVisible" :customer-id="catalogTierCustomerId" @updated="reloadAll" />
   <section class="customer-page">
     <header class="customer-hero">
       <div>
@@ -555,6 +559,7 @@ onMounted(() => {
             <div class="cell-stack">
               <span>{{ row.omsTypeLabel }}</span>
               <span class="sub mono">{{ row.omsWarehouse }}</span>
+              <span v-if="!row.readOnly" class="sub">货盘 {{ row.catalogPriceTier }} 档价格</span>
             </div>
           </template>
         </el-table-column>
@@ -584,6 +589,7 @@ onMounted(() => {
         <el-table-column label="操作" width="248" fixed="right" align="right" class-name="ops-col">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="openDetail(row)">详情</el-button>
+            <el-button v-if="app.hasPerm('pricing.set') && !row.readOnly && row.id > 0" link type="primary" size="small" @click="catalogTierCustomerId=row.id;catalogTierVisible=true">价格档位</el-button>
             <el-button v-if="canEdit && !row.readOnly" link type="primary" size="small" @click="openEdit(row)">编辑</el-button>
             <el-button
               v-if="canResetPortalPassword && !row.readOnly && row.omsType"
@@ -594,7 +600,7 @@ onMounted(() => {
             >
               {{ row.portalReady ? '重置密码' : '设置密码' }}
             </el-button>
-            <el-button v-if="app.hasPerm('budget_credit.create') && !row.readOnly" link type="primary" size="small" @click="goRecharge(row)">充值</el-button>
+            <el-button v-if="app.hasPerm('budget_credit.view') && !row.readOnly" link type="primary" size="small" @click="goRecharge(row)">充值记录</el-button>
           </template>
         </el-table-column>
       </el-table>

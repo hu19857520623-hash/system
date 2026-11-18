@@ -25,6 +25,8 @@ import {
 } from '@/features/inbound/calculations'
 import {
   downloadInboundSkuTemplate,
+  INBOUND_SKU_IMPORT_FIELDS,
+  requiredImportFields,
   resolveInboundSkuColumns,
   validateInboundSkuImportRow,
 } from '@/constants/importTemplates.ts'
@@ -1078,12 +1080,13 @@ async function handleSkuImportFile(e: Event) {
   }
   const text = normalizeImportFileText(await frame.step(()=>file.text()))
   if(!frame.active())return
-  const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/).filter((l) => l.trim())
+  const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/)
+    .map((line, index) => ({ line, lineNo: index + 1 })).filter(({ line }) => line.trim())
   if (lines.length < 2) {
     ElMessage.warning('文件为空或仅有表头')
     return
   }
-  const header = parseCsvLine(lines[0]).map((h) => h.trim())
+  const header = parseCsvLine(lines[0]!.line).map((h) => h.trim())
   const {
     skuIdx, qtyIdx, cartonCountIdx, qtyPerCartonIdx,
     lengthIdx, widthIdx, heightIdx, weightIdx, remarkIdx,
@@ -1095,11 +1098,10 @@ async function handleSkuImportFile(e: Event) {
   let added = 0
   let updated = 0
   const failures: ImportRowFailure[] = []
-  for (let i = 1; i < lines.length; i++) {
-    const cols = parseCsvLine(lines[i])
-    const sku = cols[skuIdx]?.trim()
-    if (!sku) continue
-    const lineNo = i + 1
+  for (const { line, lineNo } of lines.slice(1)) {
+    const cols = parseCsvLine(line)
+    if (!cols.some(cell => cell.trim())) continue
+    const sku = cols[skuIdx]?.trim() || ''
     const cartonCount = cartonCountIdx >= 0 ? Number(cols[cartonCountIdx]) || 0 : 0
     const qtyPerCarton = qtyPerCartonIdx >= 0 ? Number(cols[qtyPerCartonIdx]) || 0 : 0
     const qty = qtyIdx >= 0 ? Number(cols[qtyIdx]) || 0 : 0
@@ -1110,7 +1112,7 @@ async function handleSkuImportFile(e: Event) {
       heightCm: heightIdx >= 0 ? Number(cols[heightIdx]) || 0 : 0,
       weightKg: weightIdx >= 0 ? Number(cols[weightIdx]) || 0 : 0,
     }
-    const rowErr = validateInboundSkuImportRow({
+    const rowErrors = validateInboundSkuImportRow({
       sku,
       cartonCount,
       qtyPerCarton,
@@ -1120,9 +1122,9 @@ async function handleSkuImportFile(e: Event) {
       heightCm: dims.heightCm,
       weightKg: dims.weightKg,
       remark,
-    })
-    if (rowErr) {
-      failures.push({ lineNo, sku, reason: rowErr })
+    }, lineNo)
+    if (rowErrors.length) {
+      failures.push(...rowErrors)
       continue
     }
     const built = buildLineFromSku(
@@ -1134,7 +1136,7 @@ async function handleSkuImportFile(e: Event) {
       dims,
     )
     if (!built) {
-      failures.push({ lineNo, sku, reason: '未匹配到可发 SKU' })
+      failures.push({ lineNo, sku, field: 'SKU', reason: '未匹配到可发 SKU' })
       continue
     }
     const existIdx = createForm.value.lines.findIndex((l) => l.sku === sku)
@@ -1145,6 +1147,7 @@ async function handleSkuImportFile(e: Event) {
   await reportPartialImportResult(ok, failures, undefined, {
     emptyMessage: '未解析到有效数据，请先下载最新模板',
     successMessage: (n) => `已读取 ${n} 行明细，请核对后提交`,
+    partialMessage: (n, failed) => `已读取 ${n} 行明细，${failed} 行未通过校验；尚未提交`,
     moduleLabel: '明细导入',
     csvFilename: '入库明细导入失败明细',
   })
@@ -2030,6 +2033,7 @@ onScopeDispose(()=>window.removeEventListener('storage',onShipmentStorage))
             </div>
           </div>
           <input ref="skuFileInputRef" type="file" accept=".csv,.xls,.txt" style="display:none" @change="handleSkuImportFile" />
+          <p class="erp-import-fields">{{ requiredImportFields(INBOUND_SKU_IMPORT_FIELDS) }}。数量请填写「入库箱数＋每箱数量」，或仅填写旧模板的「预期入库数量」。</p>
           <input ref="attachmentInputRef" type="file" style="display:none" @change="handleAttachmentFile" />
           <p v-if="createForm.logisticsWhCode" class="sku-hint">
             仅展示当前中转仓<strong>已收货</strong>且可用库存 &gt; 0 的 SKU；无选项时请先到「物流中转仓」登记 PO 收货。
@@ -2039,7 +2043,7 @@ onScopeDispose(()=>window.removeEventListener('storage',onShipmentStorage))
             · 表格列较多时可<strong>横向滚动</strong>查看尺寸与海运费分摊
           </p>
           <div v-if="createForm.lines.length" class="lines-table-wrap">
-          <el-table v-loading="skuLoading" :data="createForm.lines" border size="small" class="lines-table">
+          <el-table v-loading="skuLoading" :data="createForm.lines" border size="small" class="lines-table erp-import-table">
             <el-table-column label="SKU" min-width="200" fixed="left">
               <template #default="{ row }">
                 <el-select
@@ -2067,7 +2071,7 @@ onScopeDispose(()=>window.removeEventListener('storage',onShipmentStorage))
                 </el-select>
               </template>
             </el-table-column>
-            <el-table-column prop="productName" label="商品名" min-width="140" show-overflow-tooltip />
+            <el-table-column prop="productName" label="商品名" min-width="220" />
             <el-table-column label="入库箱数" width="118" align="center">
               <template #default="{ row }">
                 <el-input-number

@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { useInventoryChangeAttempt } from '@/utils/inventoryChangeAttempt'
+import { ImportValidationError } from '@/utils/importFailureDetail'
+import { showImportFailuresDialog } from '@/utils/importResultFeedback'
 import { useInventoryAdjustAttempt } from '@/utils/inventoryAdjustAttempt'
 import { getAccessToken } from '@/auth/tokenStore'
 import { userFacingError } from '@erp/shared/user-facing-error'
@@ -15,6 +17,8 @@ import { useAppStore } from '@/stores/app'
 import ListPagination from '@/components/ListPagination.vue'
 import {
   downloadInventoryAdjustTemplate,
+  INVENTORY_ADJUST_IMPORT_FIELDS,
+  requiredImportFields,
   parseInventoryAdjustCsvClient,
   type InventoryAdjustImportRow,
 } from '@/constants/importTemplates.ts'
@@ -283,14 +287,29 @@ watch(adjustmentScope, () => { adjustDialogVisible.value = false })
 const originalChange = useInventoryChangeAttempt({ actor: () => String(app.authenticatedUser?.id || ''), scope: () => adjustmentScope.value, allowed: () => canAdjust.value, storage: localStorage, closeRequest: attempt => inventoryApi.closeLocationChangeBatch({ ...attempt.payload, clientRequestId: attempt.clientRequestId }), request: async attempt => {
   const payload = { ...attempt.payload, clientRequestId: attempt.clientRequestId }
   if (attempt.kind === 'single') return inventoryApi.changeLocationStock(payload)
+  const scope = adjustmentScope.value
   const result = await inventoryApi.batchChangeLocationStock(payload)
-  if (result.fail > 0) throw new Error(`本批成功 ${result.ok} 行，尚有 ${result.fail} 行失败：${result.results?.find((row: any) => !row.ok)?.error || '请核对条件后继续原批次'}。已成功行重试不会重复执行`)
+  if (result.fail > 0) {
+    const summary = `成功导入 ${result.ok} 条，失败 ${result.fail} 条。已成功行重试不会重复执行。`
+    if (scope === adjustmentScope.value && canAdjust.value) {
+      const failures = (result.results || []).filter((row: any) => !row.ok).map((row: any) => {
+        const lineNo = attempt.sourceLineNos?.[row.line - 2]
+        return { lineNo: lineNo ?? 0, field: row.field || '整行', sku: row.sku, reason: lineNo ? row.error : `批次第 ${row.line - 1} 条：${row.error}` }
+      })
+      void showImportFailuresDialog(summary, failures, '库存变更失败明细', () => scope === adjustmentScope.value && canAdjust.value)
+    }
+    throw new Error(summary)
+  }
   return result
 } })
 const { pending: pendingChange, busy: changing, blocked: changeBlocked, feedback: changeFeedback, endChanged: endChangedInventory } = originalChange
 async function continueChange() {
   const scope = adjustmentScope.value
-  if (await originalChange.resume() && scope === adjustmentScope.value) { changeDialogVisible.value = false; batchPreviewRows.value = []; await load() }
+  const batchCount = pendingChange.value?.kind === 'batch' ? pendingChange.value.payload.rows.length : 0
+  if (await originalChange.resume() && scope === adjustmentScope.value) {
+    if (batchCount) ElMessage.success(`成功导入 ${batchCount} 条`)
+    changeDialogVisible.value = false; batchPreviewRows.value = []; await load()
+  }
 }
 async function closeOriginalBatch() {
   const original = pendingChange.value, scope = adjustmentScope.value
@@ -300,7 +319,9 @@ async function closeOriginalBatch() {
   if (scope !== adjustmentScope.value || pendingChange.value !== original || !canAdjust.value) return
   const receipt = await originalChange.closeBatch()
   if (!receipt || typeof receipt !== 'object' || scope !== adjustmentScope.value) return
-  batchPreviewRows.value = receipt.unappliedIndices.map((index: number) => JSON.parse(JSON.stringify(original.payload.rows[index])))
+  batchPreviewRows.value = receipt.unappliedIndices.map((index: number) => ({
+    ...JSON.parse(JSON.stringify(original.payload.rows[index])), sourceLineNo: original.sourceLineNos?.[index] ?? undefined,
+  }))
   changeTab.value = 'batch'
   changeDialogVisible.value = batchPreviewRows.value.length > 0
   ElMessage.success(`原批次已结束，保留 ${receipt.appliedIndices.length} 行已成功记录；${batchPreviewRows.value.length} 行可修正后新建批次`)
@@ -403,10 +424,11 @@ async function handleBatchImportFile(e: Event) {
     const text = normalizeImportFileText(await file.text())
     batchPreviewRows.value = parseInventoryAdjustCsvClient(text, changeForm.value.warehouseCode || JHB_WAREHOUSE_CODE)
     changeTab.value = 'batch'
-    ElMessage.success(`已解析 ${batchPreviewRows.value.length} 行，请确认后提交`)
+    ElMessage.info(`已读取 ${batchPreviewRows.value.length} 条，尚未保存，请确认后提交`)
   } catch (err: any) {
     batchPreviewRows.value = []
-    ElMessage.error(userFacingError(displaySkuText(err?.message || '解析失败')))
+    if (err instanceof ImportValidationError) await showImportFailuresDialog('校验未通过，未提交库存变更', err.failures, '库存变更失败明细')
+    else ElMessage.error(userFacingError(displaySkuText(err?.message || '解析失败')))
   }
 }
 
@@ -427,10 +449,19 @@ async function submitBatchChange() {
   if (pendingChange.value || changing.value || changeBlocked.value || pendingAdjustment.value || adjusting.value || adjustmentBlocked.value) return
   if (!batchPreviewRows.value.length) return ElMessage.warning('请先上传 XLS 或 CSV 模板')
   const scope = adjustmentScope.value
+  const quantityFailures = batchPreviewRows.value.flatMap(row => Number.isInteger(row.qty) && row.qty >= 0 ? [] : [{
+    lineNo: row.sourceLineNo ?? 0, field: '数量', sku: row.sku, reason: '须为非负整数；零库存请填写 0',
+  }])
+  if (quantityFailures.length) return showImportFailuresDialog('校验未通过，未提交库存变更', quantityFailures, '库存变更失败明细', () => scope === adjustmentScope.value)
   batchSubmitting.value = true
   try {
-    const confirmed = await originalChange.start({ kind: 'batch', payload: { rows: JSON.parse(JSON.stringify(batchPreviewRows.value)), defaultWarehouse: changeForm.value.warehouseCode || JHB_WAREHOUSE_CODE } })
-    if (confirmed && scope === adjustmentScope.value) { changeDialogVisible.value = false; batchPreviewRows.value = []; await load() }
+    const sourceLineNos = batchPreviewRows.value.map(row => row.sourceLineNo ?? null)
+    const rows = batchPreviewRows.value.map(({ sourceLineNo: _, ...row }) => row)
+    const confirmed = await originalChange.start({ kind: 'batch', sourceLineNos, payload: { rows, defaultWarehouse: changeForm.value.warehouseCode || JHB_WAREHOUSE_CODE } })
+    if (confirmed && scope === adjustmentScope.value) {
+      ElMessage.success(`成功导入 ${rows.length} 条`)
+      changeDialogVisible.value = false; batchPreviewRows.value = []; await load()
+    }
   } finally { batchSubmitting.value = false }
 }
 
@@ -772,7 +803,9 @@ watch([page, pageSize], () => load())
             <el-button size="small" @click="triggerBatchImport">上传模板</el-button>
             <span v-if="batchPreviewRows.length" class="batch-count">已解析 {{ batchPreviewRows.length }} 行</span>
           </div>
-          <el-table v-if="batchPreviewRows.length" :data="batchPreviewRows" border size="small" max-height="280" class="batch-preview">
+          <p class="erp-import-fields">{{ requiredImportFields(INVENTORY_ADJUST_IMPORT_FIELDS) }}。零库存请填写 0，不要留空。</p>
+          <el-table v-if="batchPreviewRows.length" :data="batchPreviewRows" border size="small" max-height="280" class="batch-preview erp-import-table">
+            <el-table-column prop="sourceLineNo" label="文件行号" width="105" align="center" />
             <el-table-column label="客户代码" min-width="100"><template #default="{ row, $index }"><el-input v-model="row.customerCode" :aria-label="`第${$index + 1}行客户代码`" :disabled="!!pendingChange || changing || !!pendingAdjustment || adjusting || !canAdjust" /></template></el-table-column>
             <el-table-column label="SKU" min-width="120"><template #default="{ row, $index }"><el-input v-model="row.sku" :aria-label="`第${$index + 1}行SKU`" :disabled="!!pendingChange || changing || !!pendingAdjustment || adjusting || !canAdjust" /></template></el-table-column>
             <el-table-column label="仓库" min-width="130"><template #default="{ row, $index }"><el-input v-model="row.warehouseCode" :aria-label="`第${$index + 1}行仓库`" :disabled="!!pendingChange || changing || !!pendingAdjustment || adjusting || !canAdjust" /></template></el-table-column>

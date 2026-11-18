@@ -1,4 +1,5 @@
 import { parseLeadsImportCsv } from './leads-import.util'
+import type { ImportRowFailure } from '../../common/import-row-result.util'
 
 describe('parseLeadsImportCsv', () => {
   it('parses columns aligned with manual lead creation form', () => {
@@ -30,9 +31,12 @@ describe('parseLeadsImportCsv', () => {
     expect(() => parseLeadsImportCsv('联系人,电话\n张三,138')).toThrow('客户名称')
   })
 
-  it('skips rows without contact name', () => {
-    const csv = '客户名称,联系人\n仅公司,\n有联系,王五'
-    expect(parseLeadsImportCsv(csv)).toHaveLength(1)
+  it('reports nonempty rows missing required fields at their original row numbers', () => {
+    const failures: ImportRowFailure[] = []
+    const csv = '客户名称 *,联系人＊,备注\n\n,,待补\n仅公司,\n有联系,王五'
+    expect(parseLeadsImportCsv(csv, failures)).toHaveLength(1)
+    expect(failures.map(({ lineNo, field }) => [lineNo, field])).toEqual([[3, '客户名称'], [3, '联系方式'], [4, '联系方式']])
+    expect(() => parseLeadsImportCsv('客户名称\n公司')).toThrow('联系方式')
   })
 
   it('accepts the legacy 联系人 header as 联系方式', () => {

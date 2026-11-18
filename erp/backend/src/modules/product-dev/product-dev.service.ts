@@ -1,6 +1,6 @@
 import { assertGlobalSkuAvailable } from '../../common/global-sku.util'
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common'
-import { randomUUID } from 'crypto'
+import { nextDailyBusinessCode } from '../../common/daily-business-code.util'
 import type { Response } from 'express'
 import * as path from 'path'
 import { PrismaService } from '../../common/prisma/prisma.service'
@@ -191,16 +191,16 @@ export class ProductDevService {
     if (data.status != null && data.status !== 'draft') throw new BadRequestException('新建选品只能保存为草稿，请通过提交审核继续处理')
     const sku = data.sku ? await this.validateSku(data.sku) : undefined
     const fields = this.mapDevFields(data)
-    const row = await this.prisma.productDev.create({
+    const row = await this.prisma.$transaction(async (tx) => tx.productDev.create({
       data: {
-        applyNo: `PD-${Date.now().toString(36).toUpperCase()}-${randomUUID().slice(0, 8).toUpperCase()}`,
+        applyNo: await nextDailyBusinessCode(tx, 'PD'),
         sku,
         ...fields,
         productName: this.str(data.productName)!,
         status: fields.status || 'draft',
         applicantId: applicantId ? BigInt(applicantId) : undefined,
       },
-    })
+    }))
     await this.opLog.log({
       operatorId: applicantId,
       module: 'product_audit',

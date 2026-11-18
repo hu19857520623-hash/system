@@ -1,4 +1,9 @@
 import { PurchaseService } from './purchase.service'
+import { nextDailyBusinessCode } from '../../common/daily-business-code.util'
+
+jest.mock('../../common/daily-business-code.util', () => ({
+  nextDailyBusinessCode: jest.fn(async (_tx, prefix) => `${prefix}202611180001`),
+}))
 
 function setup() {
   const tx: any = {
@@ -27,6 +32,8 @@ describe('创建采购单进入预采购分配', () => {
     const {service,tx}=setup();tx.supplier.findFirst.mockResolvedValue(null);tx.supplier.create.mockResolvedValue({id:5n});tx.operationLog.create.mockRejectedValueOnce(new Error('创建日志写入失败'))
     await expect(service.create({supplierName:'新供应商',warehouseCode:'LW-SZ',items:[{sku:'NEW',productName:'新品',quantity:2,unitPrice:3}]},3)).rejects.toThrow('创建日志写入失败')
     expect(tx.supplier.create).toHaveBeenCalledTimes(1);expect(tx.prePurchaseOrder.create).toHaveBeenCalledWith(expect.objectContaining({data:expect.objectContaining({supplierId:5n})}))
+    expect(nextDailyBusinessCode).toHaveBeenCalledWith(tx, 'SUP')
+    expect(tx.supplier.create).toHaveBeenCalledWith({ data: expect.objectContaining({ supplierCode: 'SUP202611180001' }) })
     expect((service as any).opLog.log).not.toHaveBeenCalled()
   })
   it('按明细生成待分配预采购，不创建待审核采购单', async () => {
@@ -43,12 +50,14 @@ describe('创建采购单进入预采购分配', () => {
     }, 3)
     expect(result).toMatchObject({ status: 'pending_assign', count: 2 })
     expect(tx.prePurchaseOrder.create).toHaveBeenCalledTimes(2)
+    expect(nextDailyBusinessCode).toHaveBeenCalledWith(tx, 'PD')
     expect(tx.prePurchaseOrder.create.mock.calls[0][0].data).toMatchObject({
       status: 'pending_assign',
       sku: 'FIT-001',
       supplierId: 4n,
       warehouseCode: 'LW-SZ',
       plannedQty: 10,
+      applyNo: 'PD202611180001',
     })
     expect(tx.prePurchaseOrder.create.mock.calls[0][0].data.convertedPoId).toBeUndefined()
     expect(tx.purchaseOrder).toBeUndefined()

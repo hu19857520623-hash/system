@@ -28,7 +28,7 @@ export function usePrePurchaseInfo(reload: () => Promise<void>) {
     try {
       const result = await purchaseApi.exportPrePoInfo(ids)
       downloadRequiredFieldsExcel(`预采购单信息_${new Date().toLocaleDateString('sv-SE')}.xls`, result.headers, result.rows)
-      ElMessage.success(`已导出选中的 ${result.total} 张预采购单，红色单元格为必填项`)
+      ElMessage.success(`已导出选中的 ${result.total} 张预采购单，带 * 的字段为必填项`)
     } catch (error) { ElMessage.error(`导出信息失败。${userFacingError(error)}`) }
     finally { busy.value = false }
   }
@@ -53,7 +53,7 @@ export function usePrePurchaseInfo(reload: () => Promise<void>) {
         ElMessage.error(`校验未通过：${result.failed} 行、${result.failures.length} 处错误，整批未更新`)
         return
       }
-      ElMessage.success(`导入信息完成：已更新 ${result.updated} 张预采购单`)
+      ElMessage.success(`成功导入 ${result.updated} 条预采购单信息`)
       await reload()
     } catch (error) {
       const status = Number((error as { status?: unknown })?.status)

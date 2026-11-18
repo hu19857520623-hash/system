@@ -9,7 +9,7 @@ describe('异步任务中文结果及可恢复入口', () => {
     expect(asyncJobState('SyntheticUnknownStatus').label).toBe('状态待核对')
     expect(asyncModuleLabel('unknown-module')).toBe('历史任务')
     expect(asyncJobError('SQLSTATE EACCES secret-path')).not.toContain('secret-path')
-    expect(formatImportFailureLine({ lineNo: 3, reason: 'PrismaClient EACCES secret-path' })).toBe('第 3 行：该行导入失败，请核对文件内容后重试')
+    expect(formatImportFailureLine({ lineNo: 3, reason: 'PrismaClient EACCES secret-path' })).toBe('第 3 行，字段 整行：该行导入失败，请核对文件内容后重试')
   })
   it('部分导入要求仅修正失败行，旧导出不猜测筛选范围', () => {
     expect(asyncJobNextStep({ jobType: 'import', status: 'partial' })).toContain('成功行无需重复导入')

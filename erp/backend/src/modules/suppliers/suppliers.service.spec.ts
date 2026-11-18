@@ -1,8 +1,14 @@
 import { SuppliersService } from './suppliers.service'
+import { nextDailyBusinessCode } from '../../common/daily-business-code.util'
+
+jest.mock('../../common/daily-business-code.util', () => ({
+  nextDailyBusinessCode: jest.fn().mockResolvedValue('SUP202611180001'),
+}))
 
 function setup() {
   const suppliers: any[] = []
   const prisma: any = {
+    $transaction: jest.fn(async callback => callback(prisma)),
     supplier: {
       findFirst: jest.fn(async ({ where }) => suppliers.find((row) => row.supplierName === where.supplierName) || null),
       findUnique: jest.fn(async ({ where }) => suppliers.find((row) => row.supplierCode === where.supplierCode) || null),
@@ -17,6 +23,13 @@ function setup() {
 }
 
 describe('供应商导入', () => {
+  it('未手填编码时在事务内获得 SUP 日流水', async () => {
+    const { service, prisma } = setup()
+    const result = await service.create({ supplierName: '测试供应商', contactName: '测试联系人', contactPhone: '12345' })
+    expect(result.supplierCode).toBe('SUP202611180001')
+    expect(nextDailyBusinessCode).toHaveBeenCalledWith(prisma, 'SUP')
+  })
+
   it('写入公司名称、地址和供应商代码', async () => {
     const { service, prisma } = setup()
     const result = await service.importFromCsv([

@@ -1,4 +1,9 @@
 import { ProductDevService } from './product-dev.service'
+import { nextDailyBusinessCode } from '../../common/daily-business-code.util'
+
+jest.mock('../../common/daily-business-code.util', () => ({
+  nextDailyBusinessCode: jest.fn().mockResolvedValue('PD202611180001'),
+}))
 
 function setup(status = 'draft') {
   const row = { id: 17n, applyNo: 'PD-AUDIT', productName: '虚构商品', sku: 'AUDIT-A', status, takealotUrl: 'https://example.com/audit', takealotPriceImageUrl: '/audit.png', estimatedCost: 0, marketPrice: 10 }
@@ -12,6 +17,14 @@ function setup(status = 'draft') {
 }
 
 describe('选品状态及采购衔接', () => {
+  it('草稿在事务内取号，日志使用同一编号', async () => {
+    const { service, row, productDev, log } = setup()
+    productDev.create.mockImplementation(async ({ data }) => ({ ...row, ...data }))
+    await expect(service.create({ productName: '新品', applyNo: 'IGNORED' })).resolves.toMatchObject({ applyNo: 'PD202611180001' })
+    expect(nextDailyBusinessCode).toHaveBeenCalledWith(expect.objectContaining({ productDev }), 'PD')
+    expect(log.log).toHaveBeenCalledWith(expect.objectContaining({ targetId: 'PD202611180001' }))
+  })
+
   for (const status of ['approved', 'rejected', 'submitted']) it(`新建不能直接指定 ${status}`, async () => {
     const { service, productDev } = setup()
     await expect(service.create({ productName: '虚构商品', status })).rejects.toThrow('新建选品只能保存为草稿')

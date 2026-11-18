@@ -69,7 +69,7 @@ describe('采购单批量导入', () => {
     expect(result.imported).toBe(1)
     expect(result.failed).toBe(2)
     expect(result.failures.map((failure) => failure.reason).join('\n')).toContain('不是已启用的物流中转仓')
-    expect(result.failures.map((failure) => failure.reason).join('\n')).toContain('目标中转仓不能为空')
+    expect(result.failures).toContainEqual(expect.objectContaining({ field: '目标中转仓', reason: '不能为空' }))
   })
 
   it('空文件不写入', async () => {

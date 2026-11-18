@@ -61,7 +61,7 @@ describe('预采购勾选导出和错误明细交互', () => {
     expect(reload).toHaveBeenCalledOnce()
     expect(state.failures.value).toEqual([])
     expect(state.failureVisible.value).toBe(false)
-    expect(ElMessage.success).toHaveBeenCalledWith(expect.stringContaining('3 张'))
+    expect(ElMessage.success).toHaveBeenCalledWith('成功导入 3 条预采购单信息')
   })
 
   it('取消选择文件不提交请求，并恢复按钮', async () => {

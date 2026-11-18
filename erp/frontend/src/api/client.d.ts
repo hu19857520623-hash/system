@@ -78,6 +78,7 @@ export interface CustomerUpdateRequest {
 }
 
 export interface CustomerWire {
+  catalogPriceTier?: 'A' | 'B' | 'C' | 'D'
   id: number
   customerCode: string
   customerName: string
@@ -125,6 +126,7 @@ export interface OutboundApi extends ApiGroup {
 }
 
 export interface CustomerApi {
+  rechargeRecords(params?: Record<string, unknown>): Promise<any>
   list(params?: Record<string, unknown>): Promise<CustomerListResponse>
   detail(id: number): Promise<CustomerWire>
   create(data: CustomerCreateRequest): Promise<CustomerWire>

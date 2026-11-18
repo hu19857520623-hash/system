@@ -3,7 +3,7 @@ import { inventoryContentMismatch, inventoryPendingNotice, inventoryRequestFinis
 import { onScopeDispose, ref, shallowRef, watch } from 'vue'
 import { userFacingError } from '@erp/shared/user-facing-error'
 
-export type InventoryChange = { clientRequestId: string; kind: 'single' | 'batch'; payload: Record<string, any>; contentChanged?: boolean }
+export type InventoryChange = { clientRequestId: string; kind: 'single' | 'batch'; payload: Record<string, any>; contentChanged?: boolean; sourceLineNos?: (number | null)[] }
 export function useInventoryChangeAttempt(options: {
   claimLock?: InventoryClaimLock
   actor: () => string; scope: () => string | null; allowed: () => boolean

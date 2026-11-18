@@ -1,5 +1,5 @@
-import { parseCsv } from '../../common/csv.util'
-import { MAX_IMPORT_FAILURE_DETAILS, type ImportRowFailure } from '../../common/import-row-result.util'
+import { normalizeImportHeader, parseNumberedImportCsv } from '../../common/csv.util'
+import type { ImportRowFailure } from '../../common/import-row-result.util'
 
 export const SUPPLIER_IMPORT_MAX_ROWS = 500
 
@@ -28,19 +28,19 @@ function colIdx(header: string[], names: string[]) {
   return header.findIndex((item) => wanted.includes(item.trim().toLowerCase()))
 }
 
-function optional(value: string, max: number, label: string, reasons: string[]) {
+function optional(value: string, max: number, label: string, fail: (field: string, reason: string) => void) {
   if (!value) return undefined
   if (value.length > max) {
-    reasons.push(`${label}不能超过 ${max} 字`)
+    fail(label, `不能超过 ${max} 字`)
     return undefined
   }
   return value
 }
 
 export function parseSupplierImportCsv(content: string): { rows: ParsedSupplierImportRow[]; failures: ImportRowFailure[]; failureCount: number } {
-  const table = parseCsv(content)
+  const table = parseNumberedImportCsv(content)
   if (table.length < 2) return { rows: [], failures: [], failureCount: 0 }
-  const header = table[0].map((item) => item.trim())
+  const header = table[0].cells.map(normalizeImportHeader)
   const codeIdx = colIdx(header, ['供应商代码', '供应商编码', '编码', 'supplierCode', 'code'])
   const nameIdx = colIdx(header, ['供应商名称', '名称', 'supplierName', 'name'])
   const companyIdx = colIdx(header, ['公司名称', '公司', 'companyName'])
@@ -62,13 +62,7 @@ export function parseSupplierImportCsv(content: string): { rows: ParsedSupplierI
   let failureCount = 0
   const seenCodes = new Set<string>()
   const seenNames = new Set<string>()
-  const recordFail = (lineNo: number, reason: string) => {
-    failureCount++
-    if (failures.length < MAX_IMPORT_FAILURE_DETAILS) failures.push({ lineNo, reason })
-  }
-
-  for (let i = 1; i < table.length; i++) {
-    const cols = table[i]
+  for (const { cells: cols, lineNo } of table.slice(1)) {
     const supplierCode = cell(cols, codeIdx)
     const supplierName = cell(cols, nameIdx)
     const companyName = cell(cols, companyIdx)
@@ -81,36 +75,36 @@ export function parseSupplierImportCsv(content: string): { rows: ParsedSupplierI
     const paymentTerms = cell(cols, termsIdx)
     const leadRaw = cell(cols, leadIdx)
     const remark = cell(cols, remarkIdx)
-    const lineNo = i + 1
     if (![supplierCode, supplierName, companyName, contactName, contactPhone, email, address, city, country, paymentTerms, leadRaw, remark].some(Boolean)) continue
 
-    const reasons: string[] = []
-    if (!supplierName) reasons.push('供应商名称不能为空')
-    else if (supplierName.length > 200) reasons.push('供应商名称不能超过 200 字')
-    if (supplierCode && !/^[A-Za-z0-9][A-Za-z0-9_-]{0,29}$/.test(supplierCode)) reasons.push('供应商代码仅支持字母、数字、下划线和短横线，最长 30 位')
-    if (!contactName) reasons.push('联系人不能为空')
-    else if (contactName.length > 50) reasons.push('联系人不能超过 50 字')
-    if (!contactPhone) reasons.push('电话不能为空')
-    else if (contactPhone.length > 30) reasons.push('电话不能超过 30 字')
-    const company = optional(companyName, 200, '公司名称', reasons)
-    const mail = optional(email, 100, '邮箱', reasons)
-    if (mail && !mail.includes('@')) reasons.push('邮箱格式无效')
-    const addr = optional(address, 500, '地址', reasons)
-    const cityValue = optional(city, 50, '城市', reasons)
-    const countryValue = optional(country, 50, '国家', reasons)
-    const terms = optional(paymentTerms, 100, '结算方式', reasons)
-    const note = optional(remark, 2000, '备注', reasons)
+    const before = failures.length
+    const fail = (field: string, reason: string) => { failures.push({ lineNo, field, reason }) }
+    if (!supplierName) fail('供应商名称', '不能为空')
+    else if (supplierName.length > 200) fail('供应商名称', '不能超过 200 字')
+    if (supplierCode && !/^[A-Za-z0-9][A-Za-z0-9_-]{0,29}$/.test(supplierCode)) fail('供应商代码', '仅支持字母、数字、下划线和短横线，最长 30 位')
+    if (!contactName) fail('联系人', '不能为空')
+    else if (contactName.length > 50) fail('联系人', '不能超过 50 字')
+    if (!contactPhone) fail('电话', '不能为空')
+    else if (contactPhone.length > 30) fail('电话', '不能超过 30 字')
+    const company = optional(companyName, 200, '公司名称', fail)
+    const mail = optional(email, 100, '邮箱', fail)
+    if (mail && !mail.includes('@')) fail('邮箱', '格式无效')
+    const addr = optional(address, 500, '地址', fail)
+    const cityValue = optional(city, 50, '城市', fail)
+    const countryValue = optional(country, 50, '国家', fail)
+    const terms = optional(paymentTerms, 100, '结算方式', fail)
+    const note = optional(remark, 2000, '备注', fail)
     let leadTimeDays: number | undefined
     if (leadRaw) {
-      if (!/^\d+$/.test(leadRaw) || Number(leadRaw) > 9999) reasons.push('账期天数须为 0 至 9999 的整数')
+      if (!/^\d+$/.test(leadRaw) || Number(leadRaw) > 9999) fail('账期天数', '须为 0 至 9999 的整数')
       else leadTimeDays = Number(leadRaw)
     }
     const nameKey = supplierName.toLowerCase()
     const codeKey = supplierCode.toLowerCase()
-    if (supplierName && seenNames.has(nameKey)) reasons.push('文件中供应商名称重复')
-    if (supplierCode && seenCodes.has(codeKey)) reasons.push('文件中供应商代码重复')
-    if (reasons.length) {
-      recordFail(lineNo, reasons.join('；'))
+    if (supplierName && seenNames.has(nameKey)) fail('供应商名称', '文件中重复')
+    if (supplierCode && seenCodes.has(codeKey)) fail('供应商代码', '文件中重复')
+    if (failures.length > before) {
+      failureCount++
       continue
     }
     seenNames.add(nameKey)

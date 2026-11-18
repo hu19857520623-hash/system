@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common'
+import { normalizeImportHeader } from '../../common/csv.util'
 
 export const PRE_PURCHASE_INFO_MAX_ROWS = 500
 
@@ -78,9 +79,10 @@ export class PrePurchaseInfoValidationException extends BadRequestException {
 }
 
 // Parse the whole document so quoted notes containing newlines survive export/import.
-function parseInfoCsv(content: string): string[][] {
-  const rows: string[][] = []
+function parseInfoCsv(content: string): Array<{ cells: string[]; lineNo: number }> {
+  const rows: Array<{ cells: string[]; lineNo: number }> = []
   let row: string[] = [], cell = '', quoted = false
+  let physicalLine = 1, rowStart = 1
   const text = content.replace(/^\uFEFF/, '')
   for (let i = 0; i < text.length; i++) {
     const char = text[i]
@@ -91,22 +93,26 @@ function parseInfoCsv(content: string): string[][] {
     } else if (!quoted && (char === ',' || char === '\n' || char === '\r')) {
       row.push(cell); cell = ''
       if (char !== ',') {
-        rows.push(row)
+        rows.push({ cells: row, lineNo: rowStart })
         row = []
         if (char === '\r' && text[i + 1] === '\n') i++
+        rowStart = ++physicalLine
       }
-    } else cell += char
+    } else {
+      cell += char
+      if (char === '\n' || (char === '\r' && text[i + 1] !== '\n')) physicalLine++
+    }
   }
   if (quoted) throw new BadRequestException('CSV 引号未闭合，请检查文件')
   row.push(cell)
-  if (row.some(value => value.trim())) rows.push(row)
+  if (row.some(value => value.trim())) rows.push({ cells: row, lineNo: rowStart })
   return rows
 }
 
 export function exportPrePurchaseInfo(items: Record<string, any>[]) {
   const statuses: Record<string, string> = { assigned: '进行中', returned: '退回待修改', confirmed: '已生成采购单', cancelled: '已取消' }
   return {
-    headers: PRE_PURCHASE_INFO_COLUMNS.map(column => column.label + (column.required ? '（必填）' : column.readonly ? '（只读）' : '')),
+    headers: PRE_PURCHASE_INFO_COLUMNS.map(column => column.label + (column.readonly ? '（只读）' : '') + (column.required ? ' *' : '')),
     rows: items.map(item => PRE_PURCHASE_INFO_COLUMNS.map(column => {
       const value = item[column.key]
       if (value == null || (column.key === 'supplierName' && value === '—')) return ''
@@ -121,10 +127,11 @@ export function exportPrePurchaseInfo(items: Record<string, any>[]) {
 
 export function parsePrePurchaseInfo(content: string) {
   if (typeof content !== 'string' || !content.trim()) throw new BadRequestException('请选择包含预采购单资料的 CSV 文件')
-  const [headers, ...allRows] = parseInfoCsv(content)
+  const [header, ...allRows] = parseInfoCsv(content)
+  const headers = header?.cells
   if (!headers || !allRows.length) throw new BadRequestException('文件中没有可导入的预采购单')
   const columns = headers.map(label => {
-    const normalized = label.trim().replace(/（(?:必填|只读)）$/, '')
+    const normalized = normalizeImportHeader(label).replace(/（(?:必填|只读)）$/, '')
     return PRE_PURCHASE_INFO_COLUMNS.find(column => column.label === normalized || column.key === normalized)
   })
   if (columns.some(column => !column)) throw new BadRequestException('存在无法识别的表头，请保留导出文件的原表头')
@@ -134,8 +141,7 @@ export function parsePrePurchaseInfo(content: string) {
   if (orderIndex < 0) throw new BadRequestException('文件必须包含「预采购单号」列，用于匹配更新已有单据')
   const missing = PRE_PURCHASE_INFO_COLUMNS.filter(column => column.required && !keys.includes(column.key))
   if (missing.length) throw new BadRequestException(`缺少必填列：${missing.map(column => column.label).join('、')}。请使用最新导出文件`)
-  const rows = allRows.map((cells, index) => ({ cells, lineNo: index + 2 }))
-    .filter(({ cells }) => cells.some(value => value.trim()) && cells[orderIndex] !== PRE_PURCHASE_INFO_HINT_MARKER)
+  const rows = allRows.filter(({ cells }) => cells.some(value => value.trim()) && cells[orderIndex] !== PRE_PURCHASE_INFO_HINT_MARKER)
   if (!rows.length) throw new BadRequestException('文件中没有可导入的预采购单')
   if (rows.length > PRE_PURCHASE_INFO_MAX_ROWS) throw new BadRequestException(`每次最多导入 ${PRE_PURCHASE_INFO_MAX_ROWS} 张预采购单，请拆分文件`)
   const seen = new Set<string>()

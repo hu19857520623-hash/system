@@ -15,7 +15,7 @@ import { useAppStore } from '@/stores/app'
 import ListPagination from '@/components/ListPagination.vue'
 import DetailSheet from '@/components/ui/DetailSheet.vue'
 import { useAsyncIo } from '@/composables/useAsyncIo'
-import { downloadProductImportTemplate } from '@/constants/importTemplates.ts'
+import { downloadProductImportTemplate, PRODUCT_IMPORT_FIELDS, requiredImportFields } from '@/constants/importTemplates.ts'
 import { printProductSkuLabels } from '@/features/labels/productLabelPrint.ts'
 import { getAccessToken } from '@/auth/tokenStore'
 
@@ -631,6 +631,7 @@ async function printSkuLabels(items: Array<{ sku?: string; name?: string; barcod
             <template v-if="app.hasPerm('products.edit')">
               <el-button size="small" link type="primary" @click="downloadProductImportTemplate">下载模板</el-button>
               <el-button size="small" :loading="importBusy" @click="importProducts">批量导入</el-button>
+              <span class="erp-import-fields">{{ requiredImportFields(PRODUCT_IMPORT_FIELDS) }}</span>
             </template>
             <el-button size="small" @click="selectAll">全选</el-button>
             <el-button size="small" :disabled="!selectedRows.length" @click="clearSelection">取消选择</el-button>

@@ -37,9 +37,17 @@ export function importCounts(job: ImportJobResult | null | undefined) {
   return { imported, failed }
 }
 
+export function retainedImportDetailNotice(job: ImportJobResult | null | undefined, failures: ImportRowFailure[]) {
+  const missingRows = importCounts(job).failed - new Set(failures.map(failure => failure.lineNo)).size
+  try {
+    const total = Number(JSON.parse(job?.resultDetail || '{}').failureDetailCount)
+    if (total > failures.length) return `历史任务保留了 ${failures.length}/${total} 处错误；完整明细请使用导入完成时下载的 CSV。`
+  } catch { return '' }
+  return missingRows > 0 ? `历史任务有 ${missingRows} 个失败行未保留明细。` : ''
+}
+
 function failureListVNode(failures: ImportRowFailure[]) {
-  const lines = failures.slice(0, 50).map(formatImportFailureLine)
-  const more = failures.length > 50 ? `\n…另有 ${failures.length - 50} 条未展示` : ''
+  const lines = failures.map(formatImportFailureLine)
   return h(
     'pre',
     {
@@ -50,12 +58,12 @@ function failureListVNode(failures: ImportRowFailure[]) {
         overflow: 'auto',
         fontSize: '12px',
         lineHeight: '1.5',
-        whiteSpace: 'pre-wrap',
+        whiteSpace: 'pre',
         background: 'var(--el-fill-color-light)',
         borderRadius: '8px',
       },
     },
-    lines.join('\n') + more,
+    lines.join('\n'),
   )
 }
 
@@ -64,7 +72,7 @@ export async function showImportResultFeedback(job: ImportJobResult | null | und
   if (!job) return
   const { imported, failed } = importCounts(job)
   const failures = parseImportFailures(job)
-  const summary = `导入完成：成功 ${imported} 条${failed ? `，失败 ${failed} 条` : ''}`
+  const summary = `成功导入 ${imported} 条${failed ? `，失败 ${failed} 条` : ''}`
 
   if (failed > 0 && imported === 0) {
     ElMessage.error(summary)
@@ -123,6 +131,7 @@ export type PartialImportResultOptions = {
   successMessage?: (acceptedCount: number) => string
   moduleLabel?: string
   csvFilename?: string
+  partialMessage?: (acceptedCount: number, failedCount: number) => string
 }
 
 /** 与 OMS reportLineImportResult 对齐：部分成功写入 + 统一失败弹窗 */
@@ -132,9 +141,9 @@ export async function reportPartialImportResult(
   onAccepted?: () => void | Promise<void>,
   options?: PartialImportResultOptions,
 ): Promise<boolean> {
-  const fail = failures.length
+  const fail = new Set(failures.map(failure => failure.lineNo)).size
   const label = options?.moduleLabel ?? '导入'
-  const successMsg = options?.successMessage ?? ((n: number) => `${label}完成：已处理 ${n} 条`)
+  const successMsg = options?.successMessage ?? ((n: number) => `成功导入 ${n} 条`)
 
   if (acceptedCount === 0 && fail === 0) {
     ElMessage.warning(options?.emptyMessage ?? '未解析到有效数据，请使用最新模板')
@@ -151,9 +160,10 @@ export async function reportPartialImportResult(
 
   if (acceptedCount > 0) {
     await onAccepted?.()
-    toastImportOutcome(acceptedCount, fail, label)
+    if (options?.partialMessage) ElMessage.warning(options.partialMessage(acceptedCount, fail))
+    else toastImportOutcome(acceptedCount, fail, label)
     await showImportFailuresDialog(
-      `部分行未导入：成功 ${acceptedCount} 条，失败 ${fail} 条`,
+      options?.partialMessage?.(acceptedCount, fail) ?? `成功导入 ${acceptedCount} 条，失败 ${fail} 条`,
       failures,
       options?.csvFilename,
     )

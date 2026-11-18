@@ -1,3 +1,4 @@
+import { cancelErpNegativePurchase, submitErpNegativePurchase, fetchErpNegativePurchases } from './erpClient.js'
 import { receiveInboundStatus } from './inbound-webhook.util.js'
 import { canReadData } from '../src/data/readAccess.js'
 import { readCatalogPurchaseHistory } from './catalog-purchase-history.util.js'
@@ -97,7 +98,6 @@ import {
   fetchErpInventoryView,
   fetchErpLogisticsByCustomer,
   fetchErpOutboundByNo,
-  uploadErpPodReceipt,
   fetchErpOutboundsByCustomer,
   fetchErpSkuOutbounds,
   fetchErpReturnByNo,
@@ -1028,6 +1028,26 @@ app.get('/api/erp/catalog/:sku', async (req, res) => {
 })
 
 /** P0：货盘申购 → ERP 扣余额 / 记持有库存 */
+app.get('/api/erp/catalog/negative-purchases/history', async (req, res) => {
+  const auth = (req as AuthenticatedRequest).auth
+  if (!auth?.customerCode) return res.status(403).json({ error: '请使用绑定客户的账号查看负申购' })
+  try { res.json(await fetchErpNegativePurchases(auth.customerCode)) } catch (e) { sendErpError(res, e) }
+})
+app.post('/api/erp/catalog/negative-purchases/:id/cancel', async (req, res) => {
+  const auth = (req as AuthenticatedRequest).auth
+  if (!auth?.customerCode || !auth.permissions.includes('catalog:write')) return res.status(403).json({ error: '请使用有申购权限的客户账号撤销退回' })
+  const id = Number(req.params.id)
+  if (!Number.isSafeInteger(id) || id <= 0) return res.status(400).json({ error: '请选择有效的负申购申请' })
+  try { res.json(await cancelErpNegativePurchase(id, auth.customerCode)) } catch (e) { sendErpError(res, e) }
+})
+app.post('/api/erp/catalog/negative-purchases', async (req, res) => {
+  const auth = (req as AuthenticatedRequest).auth
+  if (!auth?.customerCode || !auth.permissions.includes('catalog:write')) return res.status(403).json({ error: '请使用有申购权限的客户账号申请退回' })
+  try {
+    res.json(await submitErpNegativePurchase({ requestId: req.body?.requestId, orderNo: req.body?.orderNo, quantity: req.body?.quantity, reason: req.body?.reason, customerCode: auth.customerCode }))
+  } catch (e) { sendErpError(res, e) }
+})
+
 app.post('/api/erp/purchase', async (req, res) => {
   try {
     const body = req.body as {
@@ -2379,37 +2399,9 @@ app.get('/api/erp/outbound/:outboundNo', async (req, res) => {
   }
 })
 
-/** OMS 客户回传 POD 签收单至 ERP */
-app.post('/api/erp/outbound/:outboundNo/pod', async (req, res) => {
-  try {
-    const body = req.body as {
-      customerCode?: string
-      customerId?: string
-      fileName?: string
-      contentBase64?: string
-      url?: string
-    }
-    let customerCode = authenticatedCustomerCode(req, body.customerCode)
-    if (!customerCode && body.customerId) {
-      const account = await prisma.customerAccount.findUnique({ where: { id: String(body.customerId) } })
-      customerCode = account?.code?.trim() || ''
-    }
-    if (!customerCode) return res.status(400).json({ error: '缺少客户代码' })
-    let contentBase64 = body.contentBase64 || ''
-    if (!contentBase64 && body.url?.startsWith('data:')) {
-      contentBase64 = body.url.split(',')[1] || ''
-    }
-    if (!body.fileName?.trim() || !contentBase64) {
-      return res.status(400).json({ error: '缺少 POD 文件' })
-    }
-    res.json(await uploadErpPodReceipt(req.params.outboundNo, {
-      customerCode,
-      fileName: body.fileName.trim(),
-      contentBase64,
-    }))
-  } catch (e) {
-    sendErpError(res, e)
-  }
+/** 签收单由 ERP 回传，OMS 仅提供查看和下载。 */
+app.post('/api/erp/outbound/:outboundNo/pod', (_req, res) => {
+  res.status(405).json({ error: '签收单由 ERP 回传，请在 OMS 查看或下载' })
 })
 
 app.get('/api/erp/outbound/:outboundNo/pod', async (req, res) => {
@@ -2995,17 +2987,12 @@ app.put('/api/logistics', async (req, res) => {
             status: String(r.status),
             destination: String(r.destination),
             updatedAt: String(r.updatedAt),
-            podStatus: String(r.podStatus),
-            podCode: (r.podCode as string | null | undefined) ?? null,
-            podFileName: (r.podFileName as string | null | undefined) ?? null,
-            podFileUrl: (r.podFileUrl as string | null | undefined) ?? null,
-            podUploadedAt: (r.podUploadedAt as string | null | undefined) ?? null,
             exceptionCode: (r.exceptionCode as string | null | undefined) ?? null,
             exceptionReason: (r.exceptionReason as string | null | undefined) ?? null,
         }
         await tx.logisticsRecord.upsert({
           where: { id },
-          create: { id, ...data },
+          create: { id, ...data, podStatus: 'not_required' },
           update: data,
         })
       }

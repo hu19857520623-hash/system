@@ -1077,6 +1077,15 @@ html.dark .el-tag.el-tag--info { --el-tag-text-color: #cbd5e1 !important; }
   .row-detail-grid { grid-template-columns: 1fr; }
   .kpi-row, .list-kpi-row { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+.erp-import-fields {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--el-text-color-regular);
+}
+.erp-import-table .el-table__header .cell { white-space: nowrap; }
+.erp-import-table .el-table__body .cell { white-space: nowrap; overflow-x: auto; text-overflow: clip; }
+.erp-import-error-list { max-height: 240px; overflow: auto; white-space: pre; color: var(--el-color-danger); }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     scroll-behavior: auto !important;

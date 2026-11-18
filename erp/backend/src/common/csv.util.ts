@@ -8,6 +8,16 @@ export function toCsv(headers: string[], rows: unknown[][]) {
   return bom + [headers.join(','), ...rows.map((r) => r.map(escapeCsv).join(','))].join('\n')
 }
 
+export function normalizeImportHeader(label: string) {
+  return label.trim().replace(/\s*[*＊]$/, '').trim()
+}
+
+export function parseNumberedImportCsv(text: string) {
+  return parseCsv(text, { preserveBlankLines: true })
+    .map((cells, index) => ({ cells, lineNo: index + 1 }))
+    .filter(({ cells }) => cells.length > 1 || cells[0]?.trim())
+}
+
 export function parseCsv(text: string, options?: { preserveBlankLines?: boolean }): string[][] {
   const physicalLines = text.replace(/^\uFEFF/, '').split(/\r?\n/)
   const lines = options?.preserveBlankLines ? physicalLines : physicalLines.filter(line => line.trim())

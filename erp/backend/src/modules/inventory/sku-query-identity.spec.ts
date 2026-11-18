@@ -1,4 +1,5 @@
 import { InventoryService } from './inventory.service'
+import { ERP_MASTER_PRODUCT_WHERE } from '../../common/product-source.util'
 
 describe('SKU query customer and supplier identities', () => {
   const omsProduct = { id: 8, internalSku: 'TKL0001-CLIENT', name: '客户商品', customerCode: 'TKL0001', customerName: '客户甲', productStatus: 'available' }
@@ -8,6 +9,8 @@ describe('SKU query customer and supplier identities', () => {
     const prisma = {
       product: { count: jest.fn().mockResolvedValue(products.length), findMany: jest.fn().mockResolvedValueOnce(products).mockResolvedValue([]) },
       supplier: { findMany: jest.fn().mockResolvedValue([{ id: 2n, supplierCode: 'SUP-02', supplierName: '真实供应商' }]) },
+      customer: { findMany: jest.fn().mockResolvedValue([{ customerCode: 'TKL0001', customerName: '客户甲' }]) },
+      sysUser: { findMany: jest.fn().mockResolvedValue([{ id: 3n, username: 'developer', realName: '开发员' }]) },
       productPricing: { findMany: jest.fn().mockResolvedValue([]) },
       $queryRaw: jest.fn().mockResolvedValue([]),
       $queryRawUnsafe: jest.fn().mockResolvedValue([omsProduct]),
@@ -20,7 +23,7 @@ describe('SKU query customer and supplier identities', () => {
   it('keeps OMS customers separate from suppliers and does not invent a pending sync', async () => {
     const { service } = fixture()
     const result = await service.querySkuCatalog({})
-    expect(result.items[0]).toMatchObject({ dataSource: 'oms', customerName: '客户甲', supplierName: '', syncStatus: null,
+    expect(result.items[0]).toMatchObject({ dataSource: 'oms', customerCode: 'TKL0001', customerName: '客户甲', supplierName: '', syncStatus: null,
       salesStatus: null, orderableOnOms: null, visibleOnOms: null, operationStatus: 'available', operationStatusLabel: '可用' })
   })
 
@@ -31,10 +34,33 @@ describe('SKU query customer and supplier identities', () => {
   })
 
   it('does not label historical OMS warehouse records as ERP pending sync', async () => {
-    const { service } = fixture([{ ...erpProduct, remark: 'OMS客户:TKL0001', syncStatus: 'pending' }])
+    const { service, prisma } = fixture([{ ...erpProduct, sku: 'TKL0001-LEGACY', remark: 'OMS 预约入库自动建档', syncStatus: 'pending' }])
+    prisma.$queryRaw.mockResolvedValue([{ id: 1n }])
     const result = await service.querySkuCatalog({})
-    expect(result.items[0]).toMatchObject({ dataSource: 'oms', supplierName: '', syncStatus: null,
+    expect(result.items[0]).toMatchObject({ dataSource: 'oms', customerCode: 'TKL0001', customerName: '客户甲', supplierName: '', syncStatus: null,
       salesStatus: null, orderableOnOms: null, visibleOnOms: null, operationStatusLabel: '可用' })
+  })
+
+  it('does not use a developer login as a customer code and limits ERP-only counts to ERP', async () => {
+    const { service, prisma } = fixture([{ ...erpProduct, developerId: 3n }])
+    const result = await service.querySkuCatalog({ dataSource: 'erp' })
+    expect(result).toMatchObject({ total: 1, items: [{ customerCode: '', developerName: '开发员', dataSource: 'erp' }] })
+    expect(prisma.product.count).toHaveBeenCalledWith({ where: { AND: [{ OR: [ERP_MASTER_PRODUCT_WHERE] }] } })
+    expect(prisma.$queryRaw).not.toHaveBeenCalled()
+    expect(prisma.$queryRawUnsafe).not.toHaveBeenCalled()
+  })
+
+  it('returns OMS products from page one and searches both system and customer SKUs', async () => {
+    const { service, prisma } = fixture([erpProduct])
+    prisma.product.findMany.mockReset().mockResolvedValue([])
+    prisma.$queryRawUnsafe.mockResolvedValue([{ ...omsProduct, customerSku: 'Client SKU' }])
+    const result = await service.querySkuCatalog({ dataSource: 'oms', skuCodes: 'Client Other' })
+    expect(result).toMatchObject({ total: 1, items: [{ dataSource: 'oms', customerSku: 'Client SKU' }] })
+    expect(prisma.product.count).not.toHaveBeenCalled()
+    expect(prisma.$queryRawUnsafe).toHaveBeenCalledWith(
+      expect.stringContaining('(p.internalSku LIKE ? OR p.customerSku LIKE ?) OR (p.internalSku LIKE ? OR p.customerSku LIKE ?)'),
+      '%Client%', '%Client%', '%Other%', '%Other%',
+    )
   })
 
   it('does not use supplier searches to return matching OMS customers', async () => {

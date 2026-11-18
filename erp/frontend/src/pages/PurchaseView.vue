@@ -19,7 +19,7 @@ import {
   PIPELINE_PURCHASE_ORDERS,
 } from '@/constants/productPipeline.ts'
 import { productDevImageSrc } from '@/utils/productDevImage.ts'
-import { downloadPurchaseOrderImportTemplate } from '@/constants/importTemplates.ts'
+import { downloadPurchaseOrderImportTemplate, PURCHASE_ORDER_IMPORT_FIELDS, requiredImportFields } from '@/constants/importTemplates.ts'
 import { normalizeImportFileText } from '@/utils/csv'
 import { showImportResultFeedback } from '@/utils/importResultFeedback.ts'
 import { usePrePurchaseInfo } from '@/features/purchase/usePrePurchaseInfo'
@@ -1522,6 +1522,7 @@ async function markPoUnpaid(po?: { id: number }) {
               <el-button type="primary" size="small" @click="openCreatePo">+ 创建采购单</el-button>
               <el-button size="small" link type="primary" @click="downloadPurchaseOrderImportTemplate">下载模板</el-button>
               <el-button size="small" @click="importPurchaseOrders">批量导入</el-button>
+              <span class="erp-import-fields">{{ requiredImportFields(PURCHASE_ORDER_IMPORT_FIELDS) }}</span>
             </template>
             <el-button v-if="mainTab === 'pre_assign'" size="small" :loading="assignLoading" @click="loadPrePoPendingAssign">刷新列表</el-button>
             <template v-if="mainTab === 'pre_po'">
@@ -1570,7 +1571,7 @@ async function markPoUnpaid(po?: { id: number }) {
         <div class="callout info">
           <div class="callout-title">我的预采购单</div>
           <div class="callout-body">{{ PIPELINE_PRE_PO }}</div>
-          <div class="callout-body">先勾选要处理的预采购单，再导出信息（最多 500 单，可跨页勾选）。导出文件中红色单元格为必填项，请保留原单号，选填项空白保留原值。上传后会审核必填、数字、日期、链接、供应商和仓库等资料，有错误会列出行号、字段和原因，整批不更新。</div>
+          <div class="callout-body">先勾选要处理的预采购单，再导出信息（最多 500 单，可跨页勾选）。必填：预采购单号 *（只读）、SKU *、商品名称 *、规格 *、供应商 *、计划数量 *、单价 *、商品长 * / 宽 * / 高 *、包装长 * / 宽 * / 高 *。选填项空白保留原值。上传后会审核必填、数字、日期、链接、供应商和仓库等资料，有错误会列出行号、字段和原因，整批不更新。</div>
         </div>
         <div v-if="prePoSelected.length" style="margin:12px 0">
           已勾选 {{ prePoSelected.length }} 张预采购单
@@ -2143,14 +2144,14 @@ async function markPoUnpaid(po?: { id: number }) {
     </template>
   </el-dialog>
 
-  <el-dialog v-model="prePoImportFailureVisible" title="预采购单信息校验未通过" width="1000px" top="8vh">
+  <el-dialog v-model="prePoImportFailureVisible" title="预采购单信息校验未通过" width="min(1100px, 96vw)" top="8vh">
     <el-alert :title="`发现 ${prePoImportFailedRows} 行、${prePoImportFailures.length} 处错误，整批未更新。请按下表修改原文件后重新上传。`" type="error" :closable="false" show-icon style="margin-bottom:16px" />
-    <el-table :data="prePoImportFailures" border stripe max-height="420">
-      <el-table-column prop="lineNo" label="文件行号" width="85" />
-      <el-table-column prop="prePoNo" label="预采购单号" width="180" show-overflow-tooltip />
-      <el-table-column prop="field" label="错误字段" width="135" />
-      <el-table-column prop="value" label="填写值" width="150" show-overflow-tooltip />
-      <el-table-column prop="reason" label="错误原因 / 修改要求" min-width="250" />
+    <el-table :data="prePoImportFailures" border stripe max-height="420" class="erp-import-table">
+      <el-table-column prop="lineNo" label="文件行号" width="105" align="center" />
+      <el-table-column prop="prePoNo" label="预采购单号" min-width="230" />
+      <el-table-column prop="field" label="错误字段" min-width="145" />
+      <el-table-column prop="value" label="填写值" min-width="200" />
+      <el-table-column prop="reason" label="错误原因 / 修改要求" min-width="300" />
     </el-table>
     <template #footer>
       <el-button @click="downloadPrePoImportFailures">下载错误明细</el-button>

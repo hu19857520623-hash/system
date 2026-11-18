@@ -16,19 +16,6 @@ function persist(next: LogisticsRecord[]) {
   void apiPut('/logistics', next).catch(err => notifyPersistFailed('物流配置', err))
 }
 
-async function persistOrThrow(next: LogisticsRecord[]) {
-  const before = records
-  records = next
-  emit()
-  try {
-    await apiPut('/logistics', next)
-  } catch (error) {
-    records = before
-    emit()
-    throw error
-  }
-}
-
 function subscribe(listener: () => void) {
   listeners.add(listener)
   return () => listeners.delete(listener)
@@ -56,59 +43,6 @@ function mergeLogisticsRecord(prev: LogisticsRecord | undefined, incoming: Parti
     podFileUrl: incoming.podFileUrl ?? prev.podFileUrl,
     podUploadedAt: incoming.podUploadedAt ?? prev.podUploadedAt,
     podCode: incoming.podCode !== undefined ? incoming.podCode : prev.podCode,
-  }
-}
-
-export async function uploadPodReceipt(
-  recordId: string,
-  fileName: string,
-  fileUrl: string,
-  customerCode?: string,
-): Promise<{ ok: true } | { ok: false; error: string }> {
-  const now = new Date()
-  const uploadedAt = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
-  const target = records.find(r => r.id === recordId)
-  if (!target) return { ok: false, error: '物流记录不存在' }
-
-  const updated: LogisticsRecord = {
-    ...target,
-    podStatus: 'uploaded',
-    podFileName: fileName,
-    podFileUrl: fileUrl,
-    podUploadedAt: uploadedAt,
-    status: ['exception', 'delivery_failed', 'partial_delivered'].includes(target.status)
-      ? target.status
-      : 'delivered',
-    updatedAt: uploadedAt,
-  }
-
-  if (customerCode && customerCode !== '—') {
-    try {
-      const { uploadPodToErp } = await import('../api/erp')
-      const base64 = fileUrl.includes(',') ? fileUrl.split(',')[1] : ''
-      if (base64) {
-        await uploadPodToErp(target.outboundNo, {
-          customerCode,
-          fileName,
-          contentBase64: base64,
-        })
-      }
-    } catch (err) {
-      return {
-        ok: false,
-        error: err instanceof Error ? err.message : 'POD 已保存本地，但同步 ERP 失败',
-      }
-    }
-  }
-
-  try {
-    await persistOrThrow(records.map(r => r.id === recordId ? updated : r))
-    return { ok: true }
-  } catch (error) {
-    return {
-      ok: false,
-      error: `POD 已同步 ERP，但本地保存失败，请刷新后重试：${error instanceof Error ? error.message : String(error)}`,
-    }
   }
 }
 

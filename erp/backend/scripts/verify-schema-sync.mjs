@@ -69,6 +69,7 @@ const checks = [
   { table: 'wcs_weigh_photo', columns: ['express_no', 'file_path', 'is_ok'] },
   { table: 'wcs_device_config', columns: ['enabled', 'device_key', 'chute_message', 'require_member_id'] },
   { table: 'supplier_freight_bill', columns: ['container_no', 'sku_details'] },
+  { table: 'daily_business_code', columns: ['prefix', 'business_date', 'current_serial'] },
 ]
 
 const prisma = new PrismaClient()

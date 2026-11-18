@@ -1,410 +1,103 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { computed, onActivated, onDeactivated, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { customerApi } from '@/api/client.js'
-import { mapCustomer, fmtTime } from '@/api/mappers.ts'
-import { useListLoader } from '@/composables/useListLoader.ts'
-import { useTablePagination } from '@/composables/useTablePagination.ts'
-import { useRowActions } from '@/composables/useRowActions'
+import { fmtTime } from '@/api/mappers'
 import { useAppStore } from '@/stores/app'
+import { getAccessToken } from '@/auth/tokenStore'
+import { downloadCsv } from '@/utils/csv'
 import { userFacingError } from '@erp/shared/user-facing-error'
-import { newRechargeNo, readRecharge, runRecharge, endChangedRecharge, type RechargeAttempt } from '@erp/shared/recharge-workflow'
 import ListPagination from '@/components/ListPagination.vue'
-import DetailSheet from '@/components/ui/DetailSheet.vue'
-
-const { exportTask, toast } = useRowActions()
-const app = useAppStore()
-
-const keyword = ref('')
-
-function toCustomerRow(row: any) {
-  const m = mapCustomer(row)
-  const totalRecharge = m.totalRecharge ?? num(row.totalRecharge)
-  return {
-    id: m.code,
-    name: m.company,
-    contact: m.contact,
-    phone: m.phone,
-    balance: m.balance,
-    totalRecharge,
-    totalConsumed: Math.max(0, totalRecharge - m.balance),
-    status: m.status,
-    lastRechargeAt: m.lastRechargeAt || fmtTime(row.lastRechargeAt).split(' ')[0] || '—',
-    _id: row.id ?? m.id,
-    rechargeable: row.readOnly !== true && row.dataSource !== 'oms' && Number(row.id) > 0,
-    _raw: row,
+defineOptions({name:'CustomerRechargeView'})
+withDefaults(defineProps<{embedded?:boolean}>(),{embedded:false})
+const app=useAppStore(),route=useRoute(),router=useRouter()
+const keyword=ref(''),customer=ref(''),rechargeNo=ref(''),method=ref(''),status=ref(''),dates=ref<[string,string]|null>(null)
+const minAmount=ref<number|undefined>(),maxAmount=ref<number|undefined>(),scopeCustomerId=ref<number|undefined>()
+const rows=ref<any[]>([]),total=ref(0),page=ref(1),pageSize=ref(20),loading=ref(false),error=ref(''),routeError=ref('')
+const summary=ref({amount:0,confirmedAmount:0}),methods=ref<string[]>([]),applied=ref<Record<string,unknown>>({})
+const statuses:Record<string,string>={confirmed:'已确认',pending:'待确认',cancelled:'已取消',failed:'失败'}
+const methodLabels:Record<string,string>={bank:'银行转账',cash:'现金',alipay:'支付宝',wechat:'微信',card:'银行卡',other:'其他'}
+const allowed=computed(()=>app.hasPerm('budget_credit.view'))
+const money=(v:number)=>`¥${Number(v).toFixed(2)}`
+let sequence=0,active=true,firstActivation=true
+function query(){return {keyword:keyword.value.trim()||undefined,customerKeyword:customer.value.trim()||undefined,rechargeNo:rechargeNo.value.trim()||undefined,paymentMethod:method.value||undefined,status:status.value||undefined,startDate:dates.value?.[0],endDate:dates.value?.[1],minAmount:minAmount.value??undefined,maxAmount:maxAmount.value??undefined,customerId:scopeCustomerId.value}}
+function clearResults(){rows.value=[];total.value=0;summary.value={amount:0,confirmedAmount:0}}
+async function load(){
+  if(!active||!allowed.value||routeError.value)return
+  const current=++sequence,owner=app.authenticatedUser?.id,token=getAccessToken()
+  const currentScope=()=>active&&current===sequence&&owner===app.authenticatedUser?.id&&token===getAccessToken()&&allowed.value
+  loading.value=true;error.value=''
+  try{
+    const result=await customerApi.rechargeRecords({...applied.value,page:page.value,pageSize:pageSize.value})
+    if(!currentScope())return
+    if(!Array.isArray(result.items)||!Number.isSafeInteger(result.total)||result.total<0||!result.summary)throw Error('充值明细返回不完整，请重新查询')
+    rows.value=result.items;total.value=result.total;summary.value=result.summary;methods.value=result.paymentMethods||[]
+  }catch(e){if(currentScope()){clearResults();error.value=userFacingError(e)}}finally{if(currentScope())loading.value=false}
+}
+function search(){applied.value=query();page.value=1;void load()}
+function initialScope(){
+  routeError.value='';scopeCustomerId.value=undefined
+  const raw=route.query.customerId
+  if(raw!=null&&raw!==''){
+    const id=Number(raw)
+    if(Array.isArray(raw)||!Number.isSafeInteger(id)||id<=0){routeError.value='客户筛选参数无效，请点击重置查看全部充值记录';clearResults();return}
+    scopeCustomerId.value=id
   }
+  search()
 }
-
-function num(v: any) {
-  const n = Number(v)
-  return Number.isFinite(n) ? n : 0
+function reset(){
+  keyword.value='';customer.value='';rechargeNo.value='';method.value='';status.value='';dates.value=null;minAmount.value=undefined;maxAmount.value=undefined;scopeCustomerId.value=undefined;routeError.value=''
+  if(route.query.customerId!=null){void router.replace({path:route.path,query:{...route.query,customerId:undefined},hash:route.hash})}
+  search()
 }
-
-const genRechargeNo = newRechargeNo
-const rechargeBusy = ref(false), rechargePending = ref<RechargeAttempt | null>(null), rechargeError = ref(''), rechargeStorageError = ref('')
-const rechargeLocked = computed(() => rechargeBusy.value || !!rechargePending.value || !!rechargeStorageError.value)
-const rechargeScope = () => { if (!app.authenticatedUser?.id) throw new Error('请重新登录后核对充值');return `erp:${app.authenticatedUser.id}` }
-function readOriginalRecharge() {
-  try { rechargePending.value = readRecharge(localStorage, rechargeScope());rechargeStorageError.value = '' }
-  catch (error) { rechargeStorageError.value = userFacingError(error) }
+function changePage(v:number){page.value=v;void load()}
+function changeSize(v:number){pageSize.value=v;page.value=1;void load()}
+function exportPage(){
+  if(loading.value||error.value||!app.hasPerm('budget_credit.export')||!rows.value.length)return
+  const day=new Date().toLocaleDateString('sv-SE',{timeZone:'Asia/Shanghai'})
+  downloadCsv(`客户充值明细_${day}_第${page.value}页.csv`,['充值时间','充值单号','客户代码','客户名称','充值金额(RMB)','支付方式','状态','操作人','备注'],rows.value.map(r=>[fmtTime(r.createdAt),r.rechargeNo,r.customerCode,r.customerName,Number(r.amount).toFixed(2),methodLabels[r.paymentMethod]||r.paymentMethod,statuses[r.status]||r.status,r.operatorName,r.remark]))
 }
-
-const { loading, items: customers, load } = useListLoader(async () => {
-  const params: any = { pageSize: 100 }
-  if (keyword.value.trim()) params.keyword = keyword.value.trim()
-  const res = await customerApi.list(params)
-  return { items: (res.items || []).map(toCustomerRow), total: res.total }
-})
-
-const { page, pageSize, total, pagedItems } = useTablePagination(customers)
-
-const dialogVisible = ref(false)
-const rechargeForm = ref({
-  customerId: null as number | null,
-  customerCode: '',
-  customerName: '',
-  rechargeNo: '',
-  amount: 1000,
-  remark: '',
-})
-
-const detailVisible = ref(false)
-const detailCustomer = ref<any>(null)
-const detailHistory = ref<any[]>([])
-const detailLoading = ref(false), detailError = ref('')
-let detailReadSequence = 0
-
-function resetRechargeForm(row?: any) {
-  rechargeForm.value = {
-    customerId: row?._id ?? null,
-    customerCode: row?.id ?? '',
-    customerName: row?.name ?? '',
-    rechargeNo: genRechargeNo(),
-    amount: 1000,
-    remark: '',
-  }
-}
-
-function openRecharge(row?: any) {
-  readOriginalRecharge()
-  if (rechargePending.value) {
-    const original = rechargePending.value
-    rechargeForm.value = { customerId: original.customerId!, customerCode: original.customerCode, customerName: original.customerName || '', rechargeNo: original.rechargeNo, amount: original.amount, remark: original.remark || '' }
-  } else resetRechargeForm(row)
-  dialogVisible.value = true
-}
-
-function syncFromCustomer(row: { _id: number; id: string; name: string }) {
-  if (!(Number(row._id) > 0)) {
-    rechargeForm.value.customerId = null
-    rechargeForm.value.customerCode = row.id
-    rechargeForm.value.customerName = row.name
-    toast('该客户为 OMS 门户客户，尚无 ERP 客户档案，请先在「客户列表」建立 ERP 档案后充值', 'warning')
-    return
-  }
-  rechargeForm.value.customerId = row._id
-  rechargeForm.value.customerCode = row.id
-  rechargeForm.value.customerName = row.name
-}
-
-async function onCodeBlur() {
-  if (rechargeLocked.value) return
-  const code = rechargeForm.value.customerCode.trim()
-  if (!code) {
-    rechargeForm.value.customerId = null
-    return
-  }
-  const local = customers.value.find((c) => c.id.toLowerCase() === code.toLowerCase())
-  if (local) {
-    syncFromCustomer(local)
-    return
-  }
-  try {
-    const res = await customerApi.list({ keyword: code, pageSize: 20 })
-    const items = (res.items || []).map(toCustomerRow)
-    const exact = items.find((c: any) => c.id.toLowerCase() === code.toLowerCase())
-    if (rechargeLocked.value || rechargeForm.value.customerCode.trim() !== code) return
-    if (exact && Number(exact._id) > 0) syncFromCustomer(exact)
-    else if (exact) {
-      rechargeForm.value.customerId = null
-      toast('该客户为 OMS 门户客户，尚无 ERP 客户档案，请先在「客户列表」建立 ERP 档案后充值', 'warning')
-    }
-    else {
-      rechargeForm.value.customerId = null
-      toast('未找到该客户 ID', 'warning')
-    }
-  } catch {
-    rechargeForm.value.customerId = null
-  }
-}
-
-async function queryCustomerSuggestions(queryString: string, cb: (rows: any[]) => void) {
-  const q = queryString.trim()
-  if (!q) {
-    cb(customers.value.slice(0, 20).map((c) => ({ value: c.name, ...c })))
-    return
-  }
-  try {
-    const res = await customerApi.list({ keyword: q, pageSize: 20 })
-    const items = (res.items || []).map(toCustomerRow)
-    cb(items.map((c: any) => ({ value: c.name, ...c })))
-  } catch {
-    cb([])
-  }
-}
-
-function onNameSelect(item: any) {
-  syncFromCustomer(item)
-}
-
-function onNameBlur() {
-  if (rechargeLocked.value) return
-  const name = rechargeForm.value.customerName.trim()
-  if (!name) {
-    rechargeForm.value.customerId = null
-    return
-  }
-  const local = customers.value.find((c) => c.name === name)
-  if (local) {
-    syncFromCustomer(local)
-    return
-  }
-  customerApi.list({ keyword: name, pageSize: 20 }).then((res) => {
-    const items = (res.items || []).map(toCustomerRow)
-    const exact = items.find((c: any) => c.name === name)
-    if (!rechargeLocked.value && rechargeForm.value.customerName.trim() === name && exact) syncFromCustomer(exact)
-  }).catch(() => {})
-}
-
-function endChangedRechargeRequest() {
-  const attempt = rechargePending.value
-  if (!attempt?.contentChanged || rechargeBusy.value) return
-  try { endChangedRecharge(localStorage, rechargeScope(), attempt) }
-  catch (error) { rechargeError.value = userFacingError(error); return }
-  readOriginalRecharge()
-  rechargeForm.value.rechargeNo = genRechargeNo()
-  rechargeError.value = '已结束这次未能入账的充值。请先核对充值记录和余额；若没有入账，可以重新填写。'
-}
-async function submitRecharge(retry = false) {
-  if (rechargeBusy.value || rechargeStorageError.value || rechargePending.value?.contentChanged) return
-  if (!app.hasPerm('budget_credit.create')) { rechargeError.value = '当前岗位无充值权限';return }
-  if (rechargePending.value && !retry) { rechargeError.value = '请先重试原充值';return }
-  const form = rechargeForm.value
-  if (!form.customerId || !form.customerCode || !form.rechargeNo.trim()) { rechargeError.value = '请选择有效客户并填写充值单号';return }
-  if (!(Number(form.customerId) > 0)) { rechargeError.value = '该客户为 OMS 门户客户，尚无 ERP 客户档案，不能在 ERP 侧充值。请先在「客户列表」建立 ERP 档案后再充值；门户资金回填需先建档。本次未新增充值。';return }
-  if (!/^[A-Za-z0-9_-]{1,30}$/.test(form.rechargeNo.trim())) { rechargeError.value = '充值单号须为1至30位字母、数字、下划线或短横线';return }
-  const attempt: RechargeAttempt = rechargePending.value || { customerId: form.customerId, customerCode: form.customerCode, customerName: form.customerName, rechargeNo: form.rechargeNo.trim(), amount: form.amount, remark: form.remark }
-  const operatorId = String(app.authenticatedUser?.id), scope = rechargeScope()
-  rechargeBusy.value = true;rechargeError.value = ''
-  try {
-    const response = await runRecharge(localStorage, scope, attempt, async original => {
-      if (String(app.authenticatedUser?.id) !== operatorId) throw new Error('登录身份已变化，请使用原账号核对')
-      const result = await customerApi.recharge(original.customerId!, { amount: original.amount, rechargeNo: original.rechargeNo, remark: original.remark })
-      if (String(app.authenticatedUser?.id) !== operatorId) throw new Error('登录身份已变化，请使用原账号核对')
-      return result
-    })
-    rechargeError.value = response.message
-    if (response.completed) { dialogVisible.value = false;toast(response.message, 'success') }
-    await load()
-  } catch (error) { rechargeError.value = userFacingError(error) }
-  finally { readOriginalRecharge();rechargeBusy.value = false }
-}
-
-async function showDetail(row: any) {
-  const sequence = ++detailReadSequence
-  detailCustomer.value = row;detailVisible.value = true;detailLoading.value = true;detailError.value = '';detailHistory.value = []
-  try {
-    const result = await customerApi.rechargeHistory(row._id)
-    if (sequence === detailReadSequence) detailHistory.value = result
-  } catch (error) { if (sequence === detailReadSequence) detailError.value = `充值明细未能读取，请重试后核对。${userFacingError(error)}` }
-  finally { if (sequence === detailReadSequence) detailLoading.value = false }
-}
-
-function search() {
-  load()
-}
-
-function resetSearch() {
-  keyword.value = ''
-  load()
-}
-
-onMounted(() => { readOriginalRecharge();void load() })
+onMounted(initialScope)
+onActivated(()=>{active=true;if(firstActivation){firstActivation=false;return}void load()})
+onDeactivated(()=>{active=false;++sequence;loading.value=false})
+watch(()=>route.query.customerId,initialScope)
+watch(()=>[app.authenticatedUser?.id,allowed.value],()=>{++sequence;clearResults();error.value='';loading.value=false;if(allowed.value)void load()},{flush:'sync'})
 </script>
-
 <template>
-  <el-card v-loading="loading">
-    <template #header>
-      <div class="page-header">
-        <span class="page-title">客户充值</span>
-        <div class="header-actions">
-          <el-button type="primary" size="small" v-if="app.hasPerm('budget_credit.create')" @click="openRecharge()">充值</el-button>
-          <el-button v-if="app.hasPerm('budget_credit.export')" size="small" @click="exportTask('客户充值', { keyword: keyword.trim() || undefined })">导出</el-button>
-        </div>
-      </div>
-    </template>
-
-    <el-alert v-if="rechargePending" :title="rechargePending.contentChanged ? `原充值内容不同：${rechargePending.customerCode} · ${rechargePending.rechargeNo}。请先核对充值记录，不要重试原充值。` : `原充值待核对：${rechargePending.customerCode} · ${rechargePending.rechargeNo}。请打开充值，重试原单。`" type="warning" :closable="false">
-      <el-button v-if="rechargePending.contentChanged" :disabled="rechargeBusy" @click="endChangedRechargeRequest">已核对记录，结束本次</el-button>
-      <el-button v-else :disabled="rechargeBusy" @click="openRecharge()">打开充值核对原单</el-button>
-    </el-alert>
-    <el-alert v-if="rechargeStorageError" :title="rechargeStorageError" type="error" :closable="false" />
-    <div class="filter-bar">
-      <el-input
-        v-model="keyword"
-        placeholder="模糊搜索：客户 ID / 名称 / 联系人 / 电话"
-        clearable
-        style="width:320px"
-        size="small"
-        @keyup.enter="search"
-      />
-      <el-button size="small" @click="search">查询</el-button>
-      <el-button size="small" @click="resetSearch">重置</el-button>
-    </div>
-
-    <el-table :data="pagedItems" stripe border size="small">
-      <el-table-column prop="id" label="客户ID" width="100">
-        <template #default="{ row }"><span class="mono">{{ row.id }}</span></template>
-      </el-table-column>
-      <el-table-column prop="name" label="客户名称" min-width="180" />
-      <el-table-column prop="contact" label="联系人" width="90" />
-      <el-table-column prop="balance" label="余额 (RMB)" width="120" align="right">
-        <template #default="{ row }">
-          <span :class="{ low: row.balance < 5000 }">¥ {{ row.balance.toLocaleString() }}</span>
-        </template>
-      </el-table-column>
-      <el-table-column prop="totalRecharge" label="累计充值" width="110" align="right">
-        <template #default="{ row }">¥ {{ row.totalRecharge.toLocaleString() }}</template>
-      </el-table-column>
-      <el-table-column prop="totalConsumed" label="累计消费" width="110" align="right">
-        <template #default="{ row }">¥ {{ row.totalConsumed.toLocaleString() }}</template>
-      </el-table-column>
-      <el-table-column prop="status" label="状态" width="80">
-        <template #default="{ row }">
-          <el-tag :type="row.status === '正常' ? 'success' : 'info'" size="small">{{ row.status }}</el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column prop="lastRechargeAt" label="最近充值" width="100" />
-      <el-table-column label="操作" width="180" fixed="right">
-        <template #default="{ row }">
-          <template v-if="row.rechargeable">
-            <el-button v-if="app.hasPerm('budget_credit.create')" link type="primary" size="small" @click="openRecharge(row)">充值</el-button>
-            <el-button link type="primary" size="small" @click="showDetail(row)">明细</el-button>
-          </template>
-          <el-tooltip v-else content="该客户为 OMS 门户客户，尚无 ERP 客户档案，ERP 侧不能充值或查看充值明细。请先在「客户列表」建立 ERP 档案后再充值。" placement="top">
-            <el-tag type="info" effect="plain" size="small">门户客户 · 请先建立 ERP 档案</el-tag>
-          </el-tooltip>
-        </template>
-      </el-table-column>
-    </el-table>
-    <el-empty v-if="!loading && !customers.length" description="暂无客户，请调整搜索条件" />
-    <ListPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
-  </el-card>
-
-  <el-dialog v-model="dialogVisible" title="客户充值" width="520px">
-    <el-alert v-if="rechargeStorageError" :title="rechargeStorageError" type="error" :closable="false" />
-    <el-alert v-if="rechargeError" :title="rechargeError" type="warning" :closable="false" />
-    <el-alert v-if="rechargePending" :title="rechargePending.contentChanged ? '原充值内容不同。客户、金额与单号已保留，请核对记录后结束本次，勿另建单。' : '原充值待核对。客户、金额与单号已保留，请重试原充值，勿另建单。'" type="warning" :closable="false" />
-    <el-form label-width="90px" size="small" :disabled="rechargeLocked">
-      <el-form-item label="客户 ID" required>
-        <el-input
-          v-model="rechargeForm.customerCode"
-          placeholder="输入客户 ID，如 CUS-001"
-          @blur="onCodeBlur"
-          @input="rechargeForm.customerId = null"
-        />
-      </el-form-item>
-      <el-form-item label="客户名称" required>
-        <el-autocomplete
-          v-model="rechargeForm.customerName"
-          :fetch-suggestions="queryCustomerSuggestions"
-          placeholder="输入名称模糊搜索"
-          style="width:100%"
-          :trigger-on-focus="true"
-          @select="onNameSelect"
-          @blur="onNameBlur"
-          @input="rechargeForm.customerId = null"
-        />
-      </el-form-item>
-      <el-form-item label="充值单号" required>
-        <el-input v-model="rechargeForm.rechargeNo" placeholder="每笔充值唯一单号">
-          <template #append>
-            <el-button @click="rechargeForm.rechargeNo = genRechargeNo()">生成</el-button>
-          </template>
-        </el-input>
-      </el-form-item>
-      <el-form-item label="充值金额" required>
-        <el-input-number v-model="rechargeForm.amount" :min="0.01" :precision="2" :step="1000" style="width:100%" />
-      </el-form-item>
-      <el-form-item label="备注">
-        <el-input v-model="rechargeForm.remark" type="textarea" placeholder="备注信息" />
-      </el-form-item>
+  <el-card :class="{'is-embedded':embedded}" :shadow="embedded?'never':undefined">
+    <template v-if="!embedded" #header><span class="page-title">客户充值明细</span></template>
+    <el-form inline :disabled="loading" class="recharge-filters" @submit.prevent="search">
+      <el-form-item label="关键词"><el-input v-model="keyword" clearable maxlength="100" placeholder="客户代码 / 名称 / 充值单号 / 备注" style="width:300px" /></el-form-item>
+      <el-form-item label="客户"><el-input v-model="customer" clearable maxlength="100" placeholder="客户代码 / 名称" /></el-form-item>
+      <el-form-item label="充值单号"><el-input v-model="rechargeNo" clearable maxlength="50" placeholder="完整或部分充值单号" /></el-form-item>
+      <el-form-item label="支付方式"><el-select v-model="method" clearable placeholder="全部支付方式" style="width:155px"><el-option v-for="m in methods" :key="m" :value="m" :label="methodLabels[m]||m" /></el-select></el-form-item>
+      <el-form-item label="状态"><el-select v-model="status" clearable placeholder="全部状态" style="width:125px"><el-option v-for="(label,key) in statuses" :key="key" :value="key" :label="label" /></el-select></el-form-item>
+      <el-form-item label="充值日期"><el-date-picker v-model="dates" type="daterange" value-format="YYYY-MM-DD" start-placeholder="开始日期" end-placeholder="结束日期" style="width:250px" /></el-form-item>
+      <el-form-item label="金额范围"><el-input-number v-model="minAmount" :min="0" :max="999999999999.99" :precision="2" :controls="false" placeholder="最低金额" style="width:140px" /><span style="margin:0 8px">至</span><el-input-number v-model="maxAmount" :min="0" :max="999999999999.99" :precision="2" :controls="false" placeholder="最高金额" style="width:140px" /></el-form-item>
+      <el-form-item><el-button type="primary" native-type="submit">查询</el-button><el-button @click="reset">重置</el-button><el-button @click="load">刷新</el-button><el-button v-if="app.hasPerm('budget_credit.export')" :disabled="!rows.length||!!error" @click="exportPage">导出本页明细</el-button></el-form-item>
     </el-form>
-    <template #footer>
-      <el-button @click="dialogVisible = false">取消</el-button>
-      <el-button v-if="rechargePending && !rechargePending.contentChanged" type="primary" :loading="rechargeBusy" :disabled="!!rechargeStorageError || !app.hasPerm('budget_credit.create')" @click="submitRecharge(true)">重试原充值</el-button>
-      <el-button v-else-if="rechargePending?.contentChanged" :disabled="rechargeBusy" @click="endChangedRechargeRequest">已核对记录，结束本次</el-button>
-      <el-button v-else type="primary" :loading="rechargeBusy" :disabled="!!rechargeStorageError || !app.hasPerm('budget_credit.create')" @click="submitRecharge()">确认充值</el-button>
+    <el-alert v-if="scopeCustomerId" type="info" :closable="false" title="当前按指定客户筛选，点击重置可查看全部客户的逐笔充值记录。" />
+    <el-alert v-if="error||routeError" :title="error||routeError" type="error" :closable="false" />
+    <el-button v-if="error" :loading="loading" @click="load">重新查询充值明细</el-button>
+    <template v-if="!error&&!routeError">
+      <div class="recharge-summary"><span>充值记录 <strong>{{ total }}</strong> 笔</span><span>筛选金额合计 <strong>{{ money(summary.amount) }}</strong></span><span>已确认入账金额 <strong>{{ money(summary.confirmedAmount) }}</strong></span></div>
+      <el-table v-loading="loading" :data="rows" row-key="id" border stripe empty-text="暂无符合条件的充值记录">
+        <el-table-column label="充值时间" width="160"><template #default="{row}">{{ fmtTime(row.createdAt) }}</template></el-table-column>
+        <el-table-column prop="rechargeNo" label="充值单号" min-width="190" show-overflow-tooltip />
+        <el-table-column prop="customerCode" label="客户代码" width="115" />
+        <el-table-column prop="customerName" label="客户名称" min-width="170" show-overflow-tooltip />
+        <el-table-column label="充值金额(RMB)" width="145" align="right"><template #default="{row}">{{ money(row.amount) }}</template></el-table-column>
+        <el-table-column label="支付方式" width="120"><template #default="{row}">{{ methodLabels[row.paymentMethod]||row.paymentMethod }}</template></el-table-column>
+        <el-table-column label="状态" width="100"><template #default="{row}"><el-tag :type="row.status==='confirmed'?'success':'info'">{{ statuses[row.status]||row.status }}</el-tag></template></el-table-column>
+        <el-table-column prop="operatorName" label="操作人" min-width="130" />
+        <el-table-column prop="remark" label="备注" min-width="230" show-overflow-tooltip />
+      </el-table>
+      <ListPagination :page="page" :page-size="pageSize" :total="total" @update:page="changePage" @update:page-size="changeSize" />
     </template>
-  </el-dialog>
-
-  <el-dialog
-    v-model="detailVisible"
-    :title="`充值明细 · ${detailCustomer?.name || ''}`"
-    width="640px"
-    class="erp-detail"
-  >
-    <DetailSheet
-      v-if="detailCustomer"
-      :kicker="String(detailCustomer.id)"
-      :title="detailCustomer.name"
-    >
-      <template #metrics>
-        <div class="erp-detail__metric is-accent">
-          <label>当前余额</label>
-          <strong>¥ {{ detailCustomer.balance.toLocaleString() }}</strong>
-        </div>
-        <div class="erp-detail__metric">
-          <label>累计充值</label>
-          <strong>¥ {{ detailCustomer.totalRecharge.toLocaleString() }}</strong>
-        </div>
-        <div class="erp-detail__metric">
-          <label>充值笔数</label>
-          <strong>{{ detailHistory.length }}</strong>
-        </div>
-      </template>
-    </DetailSheet>
-    <el-alert v-if="detailError" :title="detailError" type="error" :closable="false" />
-    <el-button v-if="detailError" :loading="detailLoading" @click="showDetail(detailCustomer)">重新读取充值明细</el-button>
-    <el-table v-loading="detailLoading" :data="detailHistory" border size="small" max-height="360">
-      <el-table-column prop="rechargeNo" label="充值单号" width="160">
-        <template #default="{ row }"><span class="mono">{{ row.rechargeNo }}</span></template>
-      </el-table-column>
-      <el-table-column prop="amount" label="金额" width="100" align="right">
-        <template #default="{ row }">¥ {{ Number(row.amount).toLocaleString() }}</template>
-      </el-table-column>
-      <el-table-column prop="status" label="状态" width="80">
-        <template #default="{ row }">
-          <el-tag :type="row.status === 'confirmed' ? 'success' : 'info'" size="small">
-            {{ row.status === 'confirmed' ? '已确认' : row.status === 'pending' ? '待确认' : row.status === 'cancelled' ? '已取消' : '待核对' }}
-          </el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column prop="remark" label="备注" min-width="120" show-overflow-tooltip />
-      <el-table-column label="时间" width="150">
-        <template #default="{ row }">{{ fmtTime(row.createdAt) }}</template>
-      </el-table-column>
-    </el-table>
-    <el-empty v-if="!detailLoading && !detailError && !detailHistory.length" description="暂无充值记录" :image-size="64" />
-  </el-dialog>
+  </el-card>
 </template>
-
 <style scoped>
-.page-header { display:flex; align-items:center; justify-content:space-between; }
-.page-title { font-weight:600; font-size:15px; }
-.header-actions { display:flex; gap:8px; align-items:center; }
-.filter-bar { display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap; align-items:center; }
-.mono { font-family:var(--font-mono,Consolas,monospace); font-size:12px; }
-.low { color:#f07178; font-weight:600; }
-.detail-summary { display:flex; flex-wrap:wrap; gap:16px; margin-bottom:12px; font-size:13px; color:#555; }
+.recharge-filters { margin-bottom:8px; }
+.recharge-summary { display:flex;gap:28px;flex-wrap:wrap;padding:12px 0 18px;color:var(--text-muted); }
+.recharge-summary strong { color:var(--text);margin-left:6px; }
 </style>

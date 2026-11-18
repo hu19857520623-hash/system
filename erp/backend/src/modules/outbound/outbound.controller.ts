@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, Header, Param, ParseIntPipe, Post, Query, Res } from '@nestjs/common'
+import { BadRequestException, ForbiddenException, Body, Controller, Get, Header, Param, ParseIntPipe, Post, Query, Res } from '@nestjs/common'
 import type { Response } from 'express'
 import { OutboundService, OutboundListQuery } from './outbound.service'
 import { CurrentUser } from '../../common/decorators/current-user.decorator'
@@ -63,11 +63,11 @@ export class OutboundController {
     return this.service.cancelFromOms(outboundNo, body.customerCode!)
   }
 
-  /** OMS 客户回传 POD 签收单文件 */
+  /** 签收单仅由 ERP 上传并回传 OMS。 */
   @OmsBridge()
   @Post('oms/by-no/:outboundNo/pod')
-  omsUploadPod(@Param('outboundNo') outboundNo: string, @Body() body: any) {
-    return this.service.uploadPodFromOms(outboundNo, body)
+  omsUploadPod() {
+    throw new ForbiddenException('签收单由 ERP 回传，OMS 仅可查看或下载')
   }
 
   /** OMS 下载 POD 签收单 */

@@ -1,5 +1,5 @@
-import { parseCsv } from '../../common/csv.util'
-import { MAX_IMPORT_FAILURE_DETAILS, type ImportRowFailure } from '../../common/import-row-result.util'
+import { normalizeImportHeader, parseNumberedImportCsv } from '../../common/csv.util'
+import type { ImportRowFailure } from '../../common/import-row-result.util'
 
 /** 与前端「创建采购单」表单字段一致。相同表头信息的行合并为一张采购单。 */
 export const PURCHASE_IMPORT_HEADERS = [
@@ -144,9 +144,9 @@ export function buildPurchaseImportPoNo(seq: number, now = Date.now()) {
 }
 
 export function parsePurchaseImportCsv(content: string): PurchaseImportParseResult {
-  const rows = parseCsv(content)
+  const rows = parseNumberedImportCsv(content)
   if (rows.length < 2) return { lines: [], failures: [], failureCount: 0 }
-  const header = rows[0].map((item) => item.trim())
+  const header = rows[0].cells.map(normalizeImportHeader)
   const supplierIdx = colIdx(header, ['供应商', 'supplier', 'supplierName'])
   const warehouseIdx = colIdx(header, ['目标中转仓', '中转仓', '仓库', 'warehouse', 'warehouseCode'])
   const arrivalIdx = colIdx(header, ['预计到货', '到货日期', 'expectedArrival'])
@@ -167,15 +167,7 @@ export function parsePurchaseImportCsv(content: string): PurchaseImportParseResu
   const lines: ParsedPurchaseImportLine[] = []
   const failures: ImportRowFailure[] = []
   let failureCount = 0
-  const recordFail = (lineNo: number, reason: string, sku?: string, row?: string) => {
-    failureCount++
-    if (failures.length < MAX_IMPORT_FAILURE_DETAILS) {
-      failures.push({ lineNo, reason, ...(sku ? { sku } : {}), ...(row ? { row } : {}) })
-    }
-  }
-
-  for (let i = 1; i < rows.length; i++) {
-    const cols = rows[i]
+  for (const { cells: cols, lineNo } of rows.slice(1)) {
     const supplierName = cell(cols, supplierIdx)
     const warehouseKey = cell(cols, warehouseIdx)
     const arrivalRaw = cell(cols, arrivalIdx)
@@ -186,33 +178,35 @@ export function parsePurchaseImportCsv(content: string): PurchaseImportParseResu
     const quantityRaw = cell(cols, qtyIdx)
     const priceRaw = cell(cols, priceIdx)
     const lineRemark = cell(cols, lineRemarkIdx)
-    const lineNo = i + 1
     if (!supplierName && !warehouseKey && !arrivalRaw && !freightRaw && !orderRemark && !sku && !productName && !quantityRaw && !priceRaw && !lineRemark) {
       continue
     }
 
-    const reasons: string[] = []
-    if (!supplierName) reasons.push('供应商不能为空')
-    else if (supplierName.length > 200) reasons.push('供应商不能超过 200 字')
-    if (!warehouseKey) reasons.push('目标中转仓不能为空')
-    else if (warehouseKey.length > 100) reasons.push('目标中转仓不能超过 100 字')
-    if (!sku) reasons.push('SKU 不能为空')
-    else if (sku.length > 30) reasons.push('SKU 不能超过 30 字')
-    if (productName.length > 300) reasons.push('商品名称不能超过 300 字')
-    if (orderRemark.length > 2000) reasons.push('备注不能超过 2000 字')
-    if (lineRemark.length > 500) reasons.push('行备注不能超过 500 字')
+    const before = failures.length
+    const fail = (field: string, reason: string) => {
+      failures.push({ lineNo, field, reason, ...(sku ? { sku } : {}), row: cols.join(',').slice(0, 500) })
+    }
+    if (!supplierName) fail('供应商', '不能为空')
+    else if (supplierName.length > 200) fail('供应商', '不能超过 200 字')
+    if (!warehouseKey) fail('目标中转仓', '不能为空')
+    else if (warehouseKey.length > 100) fail('目标中转仓', '不能超过 100 字')
+    if (!sku) fail('SKU', '不能为空')
+    else if (sku.length > 30) fail('SKU', '不能超过 30 字')
+    if (productName.length > 300) fail('商品名称', '不能超过 300 字')
+    if (orderRemark.length > 2000) fail('备注', '不能超过 2000 字')
+    if (lineRemark.length > 500) fail('行备注', '不能超过 500 字')
 
     const arrival = parseExpectedArrival(arrivalRaw)
-    if (!arrival.ok) reasons.push('预计到货无效，请按年-月-日填写，例如 2026-11-11')
+    if (!arrival.ok) fail('预计到货', '无效，请按年-月-日填写，例如 2026-11-11')
     const freight = parseMoney(freightRaw, true)
-    if (!freight.ok) reasons.push('国内运费须为不小于 0 的金额')
+    if (!freight.ok) fail('国内运费', '须为不小于 0 的金额')
     const quantity = parseQuantity(quantityRaw)
-    if (quantity == null) reasons.push('采购数量须为 1 至 2147483647 的整数')
+    if (quantity == null) fail('采购数量', '须为 1 至 2147483647 的整数')
     const unitPrice = parseMoney(priceRaw, false)
-    if (!unitPrice.ok || unitPrice.value == null) reasons.push('单价须为大于 0 的金额')
+    if (!unitPrice.ok || unitPrice.value == null) fail('单价', '须为大于 0 的金额')
 
-    if (reasons.length || quantity == null || !arrival.ok || !freight.ok || !unitPrice.ok || unitPrice.value == null) {
-      recordFail(lineNo, reasons.join('；'), sku || undefined, cols.map((c) => c ?? '').join(',').slice(0, 500))
+    if (failures.length > before || quantity == null || !arrival.ok || !freight.ok || !unitPrice.ok || unitPrice.value == null) {
+      failureCount++
       continue
     }
 

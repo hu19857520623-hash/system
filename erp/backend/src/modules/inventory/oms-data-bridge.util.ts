@@ -313,7 +313,7 @@ function mapOmsProductRow(r: Record<string, unknown>) {
     dimLabel: hasDimensions ? `${l} x ${w} x ${h}` : '',
     weightLabel: wt != null ? wt.toFixed(3) : '',
     dataSource: 'oms' as const,
-    dataSourceLabel: inventoryDataSourceLabel('oms', r.inCatalog ? 'catalog' : 'own'),
+    dataSourceLabel: 'OMS·商品档案',
     sortKey: 0,
   })
 }
@@ -554,12 +554,15 @@ export async function fetchOmsProductRows(prisma: PrismaService, filters: Merged
 
   const title = (filters.title || '').trim()
   if (title) {
-    conditions.push('(p.name LIKE ? OR p.internalSku LIKE ? OR p.spec LIKE ?)')
-    params.push(likeParam(title), likeParam(title), likeParam(title))
+    conditions.push('(p.name LIKE ? OR p.internalSku LIKE ? OR p.customerSku LIKE ? OR p.spec LIKE ?)')
+    params.push(likeParam(title), likeParam(title), likeParam(title), likeParam(title))
   }
 
   const tokens = skuTokens(filters.skuCodes)
-  pushSkuFilter(conditions, params, 'p.internalSku', tokens, false)
+  if (tokens.length) {
+    conditions.push(`(${tokens.map(() => '(p.internalSku LIKE ? OR p.customerSku LIKE ?)').join(' OR ')})`)
+    for (const token of tokens) params.push(likeParam(token), likeParam(token))
+  }
   if (filters.barcode?.trim()) {
     conditions.push('p.outerBoxBarcode LIKE ?')
     params.push(likeParam(filters.barcode.trim()))

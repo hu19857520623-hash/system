@@ -1,4 +1,4 @@
-import { parseCsv } from '../../common/csv.util'
+import { normalizeImportHeader, parseNumberedImportCsv } from '../../common/csv.util'
 
 export interface InventoryAdjustImportRow {
   customerCode: string
@@ -8,6 +8,7 @@ export interface InventoryAdjustImportRow {
   toLocationCode: string
   qty: number
   remark?: string
+  sourceLineNo?: number
 }
 
 function colIdx(header: string[], aliases: string[]) {
@@ -19,10 +20,10 @@ function colIdx(header: string[], aliases: string[]) {
 }
 
 export function parseInventoryAdjustCsv(content: string, defaultWarehouse = 'WMS-JHB-01'): InventoryAdjustImportRow[] {
-  const table = parseCsv(content)
+  const table = parseNumberedImportCsv(content)
   if (table.length < 2) throw new Error('文件为空或仅有表头')
 
-  const header = table[0].map((h) => h.trim())
+  const header = table[0].cells.map(normalizeImportHeader)
   const customerIdx = colIdx(header, ['客户代码', '客户编码', 'customerCode', 'customer'])
   const skuIdx = colIdx(header, ['SKU', 'sku', '系统SKU', '客户SKU'])
   const whIdx = colIdx(header, ['仓库', '仓库代码', 'warehouseCode', 'warehouse'])
@@ -37,22 +38,22 @@ export function parseInventoryAdjustCsv(content: string, defaultWarehouse = 'WMS
   if (qtyIdx < 0) throw new Error('CSV 需包含「数量」列')
 
   const rows: InventoryAdjustImportRow[] = []
-  for (let i = 1; i < table.length; i++) {
-    const cols = table[i]
+  const failures: string[] = []
+  for (const { cells: cols, lineNo } of table.slice(1)) {
     const customerCode = cols[customerIdx]?.trim()
     const sku = cols[skuIdx]?.trim()
     const toLocationCode = cols[toLocIdx]?.trim()
     const qtyRaw = cols[qtyIdx]?.trim()
-    if (!customerCode && !sku && !toLocationCode && !qtyRaw) continue
-
-    if (!customerCode) throw new Error(`第 ${i + 1} 行：客户代码不能为空`)
-    if (!sku) throw new Error(`第 ${i + 1} 行：SKU 不能为空`)
-    if (!toLocationCode) throw new Error(`第 ${i + 1} 行：目标库位不能为空`)
-
+    if (!cols.some(cell => cell.trim())) continue
+    const fail = (field: string, reason: string) => { failures.push(`第 ${lineNo} 行，字段 ${field}：${reason}`) }
+    if (!customerCode) fail('客户代码', '不能为空')
+    if (!sku) fail('SKU', '不能为空')
+    if (!toLocationCode) fail('目标库位', '不能为空')
     const qty = Number(qtyRaw)
-    if (!Number.isFinite(qty) || qty < 0 || !Number.isInteger(qty)) {
-      throw new Error(`第 ${i + 1} 行：数量须为非负整数`)
-    }
+    const validQty = Number.isInteger(qty) && qty >= 0
+    if (!qtyRaw) fail('数量', '不能为空；零库存请填写 0')
+    else if (!validQty) fail('数量', '须为非负整数')
+    if (!customerCode || !sku || !toLocationCode || !qtyRaw || !validQty) continue
 
     rows.push({
       customerCode,
@@ -61,10 +62,12 @@ export function parseInventoryAdjustCsv(content: string, defaultWarehouse = 'WMS
       fromLocationCode: fromLocIdx >= 0 ? cols[fromLocIdx]?.trim() || undefined : undefined,
       toLocationCode,
       qty,
+      sourceLineNo: lineNo,
       remark: remarkIdx >= 0 ? cols[remarkIdx]?.trim() || undefined : undefined,
     })
   }
 
+  if (failures.length) throw new Error(failures.join('\n'))
   if (!rows.length) throw new Error('未解析到有效数据行')
   return rows
 }

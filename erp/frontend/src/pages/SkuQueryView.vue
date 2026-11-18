@@ -55,6 +55,7 @@ const editForm = ref({
 })
 
 const filters = ref({
+  dataSource: 'all',
   supplierKeyword: '',
   title: '',
   skuCodes: '',
@@ -81,8 +82,9 @@ function buildParams() {
     page: page.value,
     pageSize: pageSize.value,
     statusFilter: filters.value.statusFilter,
+    dataSource: filters.value.dataSource,
   }
-  if (filters.value.supplierKeyword.trim()) p.supplierKeyword = filters.value.supplierKeyword.trim()
+  if (filters.value.dataSource !== 'oms' && filters.value.supplierKeyword.trim()) p.supplierKeyword = filters.value.supplierKeyword.trim()
   if (filters.value.title.trim()) p.title = filters.value.title.trim()
   if (filters.value.skuCodes.trim()) p.skuCodes = filters.value.skuCodes.trim()
   if (filters.value.barcode.trim()) p.barcode = filters.value.barcode.trim()
@@ -138,6 +140,7 @@ function search() {
 
 function resetFilters() {
   filters.value = {
+    dataSource: 'all',
     supplierKeyword: '',
     title: '',
     skuCodes: '',
@@ -255,11 +258,10 @@ function exportRows(list: any[]) {
     ElMessage.warning('没有可导出的数据')
     return
   }
-  const headers = ['SKU', 'SPU', '商品名', '规格', '条码', '品类', '品牌', '状态', '重量kg', '长宽高cm', '申报成本', '销售状态', '客户商品状态', '添加时间', '更新时间']
+  const headers = ['SKU', 'SPU', '商品名', '规格', '条码', '品类', '品牌', '状态', '重量kg', '长宽高cm', '申报成本', '客户商品状态', '添加时间', '更新时间']
   const lines = list.map((r) => [
     r.sku, r.spu, r.productName, r.spec, r.barcode, r.category, r.brand,
     r.statusLabel, r.weightLabel, r.dimLabel, r.costRmb ?? '',
-    r.dataSource === 'oms' ? '' : r.salesStatus,
     r.dataSource === 'oms' ? r.operationStatusLabel : '',
     fmtDate(r.createdAt), fmtDate(r.updatedAt),
   ])
@@ -310,16 +312,24 @@ onMounted(() => {
     <div class="filter-panel">
       <div class="filter-grid">
         <div class="filter-item">
+          <label>来源</label>
+          <el-select v-model="filters.dataSource" size="small" style="width:100%" aria-label="来源" @change="search">
+            <el-option label="全部来源" value="all" />
+            <el-option label="ERP 货盘 / 主数据" value="erp" />
+            <el-option label="OMS 客户商品 / 仓内档案" value="oms" />
+          </el-select>
+        </div>
+        <div class="filter-item">
           <label>供应商</label>
-          <el-input v-model="filters.supplierKeyword" placeholder="供应商代码/名称" clearable size="small" />
+          <el-input v-model="filters.supplierKeyword" :disabled="filters.dataSource === 'oms'" placeholder="供应商代码/名称（仅 ERP）" clearable size="small" />
         </div>
         <div class="filter-item">
           <label>产品标题</label>
           <el-input v-model="filters.title" placeholder="支持模糊查询" clearable size="small" />
         </div>
         <div class="filter-item">
-          <label>自定义编码</label>
-          <el-input v-model="filters.skuCodes" placeholder="SKU，中间以空格隔开" clearable size="small" />
+          <label>SKU 编码</label>
+          <el-input v-model="filters.skuCodes" placeholder="系统 SKU / 客户 SKU，空格分隔" clearable size="small" />
         </div>
 
         <div class="filter-item">
@@ -386,7 +396,7 @@ onMounted(() => {
     <!-- 工具栏 + 表格 -->
     <div class="table-panel">
       <div class="table-toolbar">
-        <span class="toolbar-hint">ERP 海外仓 + OMS 客户库存</span>
+        <span class="toolbar-hint">ERP 商品主数据与 OMS 商品档案</span>
         <div class="toolbar-actions">
           <el-button size="small" @click="goLocations">维护库位</el-button>
           <el-button size="small" @click="handlePrint">打印</el-button>
@@ -480,32 +490,12 @@ onMounted(() => {
           </template>
         </el-table-column>
 
-        <el-table-column label="产品仓库属性" min-width="160">
-          <template #default="{ row }">
-            <div class="attr-list">
-              <div v-if="row.barcode"><span class="lbl">条码:</span> {{ row.barcode }}</div>
-              <div v-if="row.brand"><span class="lbl">品牌:</span> {{ row.brand }}</div>
-              <div v-if="row.supplierName"><span class="lbl">供应商:</span> {{ row.supplierName }}</div>
-              <div v-if="row.customerName"><span class="lbl">客户:</span> {{ row.customerName }}</div>
-              <div v-if="row.dataSource === 'oms'"><span class="lbl">来源:</span> OMS 客户商品</div>
-              <div v-else><span class="lbl">同步:</span> {{ row.syncStatus === 'synced' ? '已同步' : '待同步' }}</div>
-            </div>
-          </template>
-        </el-table-column>
-
         <el-table-column prop="category" label="分类" width="80">
           <template #default="{ row }">{{ row.category || '—' }}</template>
         </el-table-column>
 
         <el-table-column label="产品单位" width="72" align="center">
           <template #default>件</template>
-        </el-table-column>
-
-        <el-table-column label="销售状态" width="88" align="center">
-          <template #default="{ row }">
-            <span v-if="row.dataSource === 'oms'" class="sales-muted">—</span>
-            <span v-else :class="row.orderableOnOms ? 'sales-ok' : 'sales-muted'">{{ row.salesStatus }}</span>
-          </template>
         </el-table-column>
 
         <el-table-column label="客户商品状态" width="110" align="center">
@@ -566,9 +556,6 @@ onMounted(() => {
           <dt>申报成本</dt><dd>{{ detailRow.costRmb != null ? detailRow.costRmb : '—' }}</dd>
           <template v-if="detailRow.dataSource === 'oms'">
             <dt>客户商品状态</dt><dd>{{ detailRow.operationStatusLabel || '未知' }}</dd>
-          </template>
-          <template v-else>
-            <dt>销售状态</dt><dd>{{ detailRow.salesStatus }}</dd>
           </template>
           <dt>添加时间</dt><dd>{{ fmtTime(detailRow.createdAt) }}</dd>
           <dt>更新时间</dt><dd>{{ fmtTime(detailRow.updatedAt) }}</dd>
@@ -790,15 +777,6 @@ onMounted(() => {
   color: #409eff;
   font-weight: 500;
 }
-
-.attr-list {
-  font-size: 11px;
-  line-height: 1.55;
-  color: #606266;
-}
-
-.sales-ok { color: #303133; font-size: 12px; }
-.sales-muted { color: #909399; font-size: 12px; }
 
 .more-btn {
   padding: 4px 8px;

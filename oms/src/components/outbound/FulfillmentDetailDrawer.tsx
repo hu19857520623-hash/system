@@ -22,11 +22,10 @@ interface Props {
   row: FulfillmentRow | null
   open: boolean
   onClose: () => void
-  onUploadPod?: (record: LogisticsRecord) => void
   onViewPod?: (record: LogisticsRecord) => void
 }
 
-export default function FulfillmentDetailDrawer({ row, open, onClose, onUploadPod, onViewPod }: Props) {
+export default function FulfillmentDetailDrawer({ row, open, onClose, onViewPod }: Props) {
   const [tab, setTab] = useState('summary')
   const [exceptionReason, setExceptionReason] = useState('')
   const [feedback, setFeedback] = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
@@ -140,10 +139,9 @@ export default function FulfillmentDetailDrawer({ row, open, onClose, onUploadPo
                     value={
                       <div className="flex items-center gap-2">
                         <PodStatusBadge status={row.logistics.podStatus} />
-                        {onUploadPod && onViewPod && (
+                        {onViewPod && (
                           <PodRowActions
                             record={row.logistics}
-                            onUpload={onUploadPod}
                             onView={onViewPod}
                           />
                         )}

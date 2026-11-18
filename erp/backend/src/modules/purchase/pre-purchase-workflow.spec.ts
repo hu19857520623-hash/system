@@ -1,5 +1,9 @@
 import { PrePurchaseService } from './pre-purchase.service'
 
+jest.mock('../../common/daily-business-code.util', () => ({
+  nextDailyBusinessCode: jest.fn(async (_tx, prefix) => `${prefix}202611180001`),
+}))
+
 function setup() {
   const row: any = { id: 8n, devId: 12n, sku: 'AUDIT-PD', prePoNo: 'PRE-AUDIT-PD', status: 'assigned', purchaserId: 1n, supplierId: 2n, plannedQty: 2, unitPrice: 10, spec: '虚构规格', productName: '虚构商品', productVolumeCbm: 0.001, packageVolumeCbm: 0.002 }
   let po: any = null

@@ -1,4 +1,5 @@
 import { downloadImportTemplate, findCsvColumn, parseCsvLine } from '@/utils/csv'
+import { ImportValidationError, type ImportRowFailure } from '@/utils/importFailureDetail'
 
 export interface ImportFieldDef {
   key: string
@@ -7,11 +8,15 @@ export interface ImportFieldDef {
   hint?: string
 }
 
+export function requiredImportFields(fields: ImportFieldDef[]) {
+  return `必填：${fields.filter(field => field.required).map(field => `${field.label} *`).join('、')}`
+}
+
 /** 入库 SKU 明细 — 与 CreateInboundView 手动行字段一致 */
 export const INBOUND_SKU_IMPORT_FIELDS: ImportFieldDef[] = [
   { key: 'sku', label: 'SKU', required: true, hint: '须在始发物流仓可发列表中' },
-  { key: 'cartonCount', label: '入库箱数', required: true, hint: '正整数' },
-  { key: 'qtyPerCarton', label: '每箱数量', required: true, hint: '正整数；合计 = 箱数 × 每箱数量' },
+  { key: 'cartonCount', label: '入库箱数', required: false, hint: '与每箱数量一起填，或仅填预期入库数量' },
+  { key: 'qtyPerCarton', label: '每箱数量', required: false, hint: '与入库箱数一起填，均为正整数' },
   { key: 'qty', label: '预期入库数量', required: false, hint: '兼容旧模板；未填箱数/每箱时使用，视为 1 箱' },
   { key: 'length', label: '长(cm)', required: true },
   { key: 'width', label: '宽(cm)', required: true },
@@ -59,19 +64,31 @@ export interface InboundSkuImportRow {
 }
 
 /** 校验单行导入数据是否与手动创建必填项一致 */
-export function validateInboundSkuImportRow(row: InboundSkuImportRow): string | null {
-  if (!row.sku.trim()) return 'SKU 不能为空'
+export function validateInboundSkuImportRow(row: InboundSkuImportRow, lineNo: number): ImportRowFailure[] {
+  const failures: ImportRowFailure[] = []
+  const fail = (field: string, reason: string) => { failures.push({ lineNo, field, reason, sku: row.sku }) }
+  if (!row.sku.trim()) fail('SKU', '不能为空')
   const hasPack = row.cartonCount > 0 && row.qtyPerCarton > 0
   const hasLegacyQty = row.qty > 0
   if (!hasPack && !hasLegacyQty) {
-    return `${row.sku}：请填写入库箱数与每箱数量，或填写预期入库数量（兼容旧模板）`
+    fail('入库数量', '请同时填写入库箱数与每箱数量，或填写预期入库数量（兼容旧模板）')
   }
   if (hasPack && (!Number.isInteger(row.cartonCount) || !Number.isInteger(row.qtyPerCarton))) {
-    return `${row.sku}：入库箱数与每箱数量须为正整数`
+    if (!Number.isInteger(row.cartonCount)) fail('入库箱数', '须为正整数')
+    if (!Number.isInteger(row.qtyPerCarton)) fail('每箱数量', '须为正整数')
   }
-  if (!row.lengthCm || !row.widthCm || !row.heightCm) return `${row.sku}：长、宽、高（cm）均为必填`
-  if (!row.weightKg) return `${row.sku}：重量（kg）为必填`
-  return null
+  for (const [field, value, min, max, scale] of [
+    ['长(cm)', row.lengthCm, 0.01, 999999.99, 2],
+    ['宽(cm)', row.widthCm, 0.01, 999999.99, 2],
+    ['高(cm)', row.heightCm, 0.01, 999999.99, 2],
+    ['重量(kg)', row.weightKg, 0.001, 9999999.999, 3],
+  ] as const) {
+    if (!value) fail(field, '不能为空，且必须大于 0')
+    else if (!Number.isFinite(value) || value < min || value > max || (String(value).split('.')[1]?.length || 0) > scale) {
+      fail(field, `须介于 ${min} 和 ${max}，最多 ${scale} 位小数`)
+    }
+  }
+  return failures
 }
 
 /** 线索 — 与 LeadsPoolView 新建线索表单字段一致 */
@@ -135,7 +152,7 @@ export const INVENTORY_ADJUST_IMPORT_FIELDS: ImportFieldDef[] = [
   { key: 'warehouseCode', label: '仓库', required: false, hint: '留空默认 JHB（WMS-JHB-01）' },
   { key: 'fromLocationCode', label: '原库位', required: false, hint: '移库时填写；仅改数量可留空' },
   { key: 'toLocationCode', label: '目标库位', required: true },
-  { key: 'qty', label: '数量', required: true, hint: '目标库位的绝对库存数量（非负整数）' },
+  { key: 'qty', label: '数量', required: true, hint: '非负整数，零库存必须明确填写 0，不能留空' },
   { key: 'remark', label: '备注', required: false },
 ]
 
@@ -171,6 +188,7 @@ export interface InventoryAdjustImportRow {
   toLocationCode: string
   qty: number
   remark?: string
+  sourceLineNo?: number
 }
 
 /** 采购订单 — 与 PurchaseView 创建采购单字段一致。每条明细生成一张待分配预采购单。 */
@@ -222,9 +240,10 @@ export function downloadSupplierImportTemplate() {
 }
 
 export function parseInventoryAdjustCsvClient(content: string, defaultWarehouse = 'WMS-JHB-01'): InventoryAdjustImportRow[] {
-  const lines = content.replace(/^\uFEFF/, '').split(/\r?\n/).filter((l) => l.trim())
+  const lines = content.replace(/^\uFEFF/, '').split(/\r?\n/)
+    .map((text, index) => ({ text, lineNo: index + 1 })).filter(({ text }) => text.trim())
   if (lines.length < 2) throw new Error('文件为空或仅有表头')
-  const header = parseCsvLine(lines[0]).map((h) => h.trim())
+  const header = parseCsvLine(lines[0]!.text).map((h) => h.trim())
   const {
     customerIdx, skuIdx, whIdx, fromLocIdx, toLocIdx, qtyIdx, remarkIdx,
   } = resolveInventoryAdjustColumns(header)
@@ -234,20 +253,23 @@ export function parseInventoryAdjustCsvClient(content: string, defaultWarehouse 
   if (qtyIdx < 0) throw new Error('CSV 需包含「数量」列')
 
   const rows: InventoryAdjustImportRow[] = []
-  for (let i = 1; i < lines.length; i++) {
-    const cols = parseCsvLine(lines[i])
+  const failures: ImportRowFailure[] = []
+  for (const { text, lineNo } of lines.slice(1)) {
+    const cols = parseCsvLine(text)
     const customerCode = cols[customerIdx]?.trim()
     const sku = cols[skuIdx]?.trim()
     const toLocationCode = cols[toLocIdx]?.trim()
     const qtyRaw = cols[qtyIdx]?.trim()
-    if (!customerCode && !sku && !toLocationCode && !qtyRaw) continue
-    if (!customerCode) throw new Error(`第 ${i + 1} 行：客户代码不能为空`)
-    if (!sku) throw new Error(`第 ${i + 1} 行：SKU 不能为空`)
-    if (!toLocationCode) throw new Error(`第 ${i + 1} 行：目标库位不能为空`)
+    if (!cols.some(cell => cell.trim())) continue
+    const fail = (field: string, reason: string) => { failures.push({ lineNo, field, reason, sku }) }
+    if (!customerCode) fail('客户代码', '不能为空')
+    if (!sku) fail('SKU', '不能为空')
+    if (!toLocationCode) fail('目标库位', '不能为空')
     const qty = Number(qtyRaw)
-    if (!Number.isFinite(qty) || qty < 0 || !Number.isInteger(qty)) {
-      throw new Error(`第 ${i + 1} 行：数量须为非负整数`)
-    }
+    const validQty = Number.isInteger(qty) && qty >= 0
+    if (!qtyRaw) fail('数量', '不能为空；零库存请填写 0')
+    else if (!validQty) fail('数量', '须为非负整数')
+    if (!customerCode || !sku || !toLocationCode || !qtyRaw || !validQty) continue
     rows.push({
       customerCode,
       sku,
@@ -255,9 +277,11 @@ export function parseInventoryAdjustCsvClient(content: string, defaultWarehouse 
       fromLocationCode: fromLocIdx >= 0 ? cols[fromLocIdx]?.trim() || undefined : undefined,
       toLocationCode,
       qty,
+      sourceLineNo: lineNo,
       remark: remarkIdx >= 0 ? cols[remarkIdx]?.trim() || undefined : undefined,
     })
   }
+  if (failures.length) throw new ImportValidationError(failures)
   if (!rows.length) throw new Error('未解析到有效数据行')
   return rows
 }

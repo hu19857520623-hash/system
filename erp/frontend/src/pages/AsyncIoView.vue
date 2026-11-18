@@ -7,8 +7,8 @@ import { fmtTime } from '@/api/mappers.ts'
 import { useAsyncIo } from '@/composables/useAsyncIo'
 import { useAppStore } from '@/stores/app'
 import { internalRedirect } from '@/auth/internalRedirect'
-import { downloadLeadsImportTemplate, downloadProductImportTemplate, downloadPurchaseOrderImportTemplate } from '@/constants/importTemplates.ts'
-import { parseImportFailures } from '@/utils/importResultFeedback.ts'
+import { downloadLeadsImportTemplate, downloadProductImportTemplate, downloadPurchaseOrderImportTemplate, LEADS_IMPORT_FIELDS, PRODUCT_IMPORT_FIELDS, PURCHASE_ORDER_IMPORT_FIELDS, requiredImportFields } from '@/constants/importTemplates.ts'
+import { parseImportFailures, retainedImportDetailNotice } from '@/utils/importResultFeedback.ts'
 import { downloadImportFailuresCsv, formatImportFailureLine } from '@/utils/importFailureDetail.ts'
 import { asyncJobState, asyncJobNextStep, asyncJobError, asyncFilterSummary, asyncModuleLabel } from '@/utils/asyncIoFeedback'
 import { userFacingError } from '@erp/shared/user-facing-error'
@@ -25,9 +25,9 @@ let listVersion = 0, detailVersion = 0
 const returnTo = computed(() => internalRedirect(route.query.returnTo))
 const failures = computed(() => parseImportFailures(detail.value))
 const importModules = [
-  { module: '线索', label: '线索', perm: 'leads_pool.create', template: downloadLeadsImportTemplate },
-  { module: '商品主数据', label: '商品', perm: 'products.import', template: downloadProductImportTemplate },
-  { module: '采购订单', label: '采购单', perm: 'purchase.create', template: downloadPurchaseOrderImportTemplate },
+  { module: '线索', label: '线索', perm: 'leads_pool.create', template: downloadLeadsImportTemplate, fields: LEADS_IMPORT_FIELDS },
+  { module: '商品主数据', label: '商品', perm: 'products.import', template: downloadProductImportTemplate, fields: PRODUCT_IMPORT_FIELDS },
+  { module: '采购订单', label: '采购单', perm: 'purchase.create', template: downloadPurchaseOrderImportTemplate, fields: PURCHASE_ORDER_IMPORT_FIELDS },
 ]
 const allowedImports = computed(() => importModules.filter(m => app.hasPerm('async_io.import') && app.hasPerm(m.perm)))
 
@@ -102,6 +102,7 @@ void load()
       <template v-for="m in allowedImports" :key="m.module">
         <el-button type="primary" size="small" :disabled="importBusy" @click="upload(m.module)">上传模板导入{{ m.label }}</el-button>
         <el-button link size="small" type="primary" @click="m.template">下载{{ m.label }}导入模板</el-button>
+        <span class="erp-import-fields">{{ requiredImportFields(m.fields) }}</span>
       </template>
       <span v-if="!allowedImports.length">当前账号没有导入权限，可查看有权限的历史任务。</span>
     </div>
@@ -138,6 +139,7 @@ void load()
           </el-descriptions>
           <el-alert :title="asyncJobNextStep(detail)" type="info" :closable="false" />
           <pre v-if="failures.length" class="failure-list">{{ failures.map(formatImportFailureLine).join('\n') }}</pre>
+          <p v-if="retainedImportDetailNotice(detail, failures)">{{ retainedImportDetailNotice(detail, failures) }}</p>
         </template>
       </div>
       <template #footer>
@@ -157,5 +159,5 @@ void load()
 .task-header { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; }
 .task-actions { display:flex; align-items:center; gap:8px; margin:12px 0; flex-wrap:wrap; }
 .task-detail { min-height:80px; }
-.failure-list { white-space:pre-wrap; max-height:240px; overflow:auto; }
+.failure-list { white-space:pre; max-height:240px; overflow:auto; }
 </style>

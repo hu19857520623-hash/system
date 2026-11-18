@@ -182,11 +182,7 @@ function exportCsv() {
 }
 
 function downloadTemplate() {
-  const content = [
-    '流水号,收支类型,类别,金额,币种,支付方式,收付款账户,往来方,关联单号,发生日期,备注',
-    ',支出,办公费,120.50,CNY,银行转账,招商银行基本户,办公用品公司,FP-001,2026-08-21,购买办公用品',
-    ',收入,服务收入,5000.00,CNY,银行转账,招商银行基本户,客户公司,HT-001,2026-08-21,服务费到账',
-  ].join('\n')
+  const content = '流水号,收支类型 *,类别 *,金额 *,币种,支付方式,收付款账户,往来方,关联单号,发生日期 *,备注'
   const blob = new Blob([`\ufeff${content}`], { type: 'text/csv;charset=utf-8' })
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
@@ -203,8 +199,9 @@ async function importCsv() {
   try {
     const result = await operatingLedgerApi.importCsv({ fileName: file.name, content: await file.text() })
     const imported = Number(result.imported || 0)
-    const failures: ImportRowFailure[] = (result.errors || []).map((error: { line?: number; message?: string }) => ({
+    const failures: ImportRowFailure[] = (result.errors || []).map((error: { line?: number; field?: string; message?: string }) => ({
       lineNo: Number(error.line) || 0,
+      field: error.field,
       reason: String(error.message || '导入失败'),
     }))
     await reportPartialImportResult(imported, failures, undefined, {
@@ -245,6 +242,7 @@ onMounted(load)
       <el-button v-if="canManage" type="primary" size="small" @click="openCreate">新增收支</el-button>
     </div>
 
+    <p v-if="canManage" class="erp-import-fields">导入必填：收支类型 *（收入或支出）、类别 *、金额 *（大于 0）、发生日期 *（YYYY-MM-DD）。币种留空默认 CNY。</p>
     <div class="filters">
       <el-date-picker v-model="filters.dateRange" type="daterange" value-format="YYYY-MM-DD" range-separator="至" start-placeholder="开始日期" end-placeholder="结束日期" style="width:260px" />
       <el-select v-model="filters.direction" clearable placeholder="全部类型" style="width:120px">

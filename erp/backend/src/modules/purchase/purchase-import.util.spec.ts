@@ -49,11 +49,10 @@ describe('parsePurchaseImportCsv', () => {
     const parsed = parsePurchaseImportCsv(csv)
     expect(parsed.lines).toHaveLength(1)
     expect(parsed.lines[0].sku).toBe('FIT-003')
-    expect(parsed.failures.map((failure) => failure.lineNo)).toEqual([3, 4])
-    expect(parsed.failures[0].reason).toContain('供应商不能为空')
-    expect(parsed.failures[1].reason).toContain('预计到货')
-    expect(parsed.failures[1].reason).toContain('采购数量')
-    expect(parsed.failures[1].reason).toContain('单价')
+    expect(parsed.failureCount).toBe(2)
+    expect(parsed.failures.map(({ lineNo, field }) => [lineNo, field])).toEqual([
+      [3, '供应商'], [4, '预计到货'], [4, '采购数量'], [4, '单价'],
+    ])
   })
 })
 

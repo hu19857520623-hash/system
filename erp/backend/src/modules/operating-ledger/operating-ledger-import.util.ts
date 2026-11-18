@@ -1,4 +1,4 @@
-import { parseCsv } from '../../common/csv.util'
+import { normalizeImportHeader, parseNumberedImportCsv } from '../../common/csv.util'
 
 export type OperatingLedgerImportRow = {
   line: number
@@ -15,7 +15,7 @@ export type OperatingLedgerImportRow = {
   remark?: string
 }
 
-export type OperatingLedgerImportError = { line: number; message: string }
+export type OperatingLedgerImportError = { line: number; field?: string; message: string }
 
 const HEADER_ALIASES: Record<string, string> = {
   流水号: 'entryNo', entryno: 'entryNo', entry_no: 'entryNo',
@@ -32,37 +32,34 @@ const HEADER_ALIASES: Record<string, string> = {
 }
 
 export function parseOperatingLedgerImportCsv(content: string) {
-  const table = parseCsv(content)
+  const table = parseNumberedImportCsv(content)
   if (!table.length) return { rows: [] as OperatingLedgerImportRow[], errors: [{ line: 1, message: '文件为空' }] }
-  const headers = table[0].map((header) => HEADER_ALIASES[header.trim().toLowerCase()] || HEADER_ALIASES[header.trim()] || '')
+  const headers = table[0].cells.map(header => HEADER_ALIASES[normalizeImportHeader(header).toLowerCase()] || '')
   const required = ['direction', 'category', 'amount', 'occurredOn']
   const missing = required.filter((field) => !headers.includes(field))
   if (missing.length) {
     return {
       rows: [] as OperatingLedgerImportRow[],
-      errors: [{ line: 1, message: `缺少必填列：${missing.map(fieldLabel).join('、')}` }],
+      errors: missing.map(field => ({ line: table[0].lineNo, field: fieldLabel(field), message: '缺少必填列' })),
     }
   }
 
   const rows: OperatingLedgerImportRow[] = []
   const errors: OperatingLedgerImportError[] = []
-  for (let index = 1; index < table.length; index++) {
-    const line = index + 1
+  for (const { cells, lineNo: line } of table.slice(1)) {
     const raw: Record<string, string> = {}
     headers.forEach((field, column) => {
-      if (field) raw[field] = String(table[index][column] || '').trim()
+      if (field) raw[field] = String(cells[column] || '').trim()
     })
     const direction = normalizeDirection(raw.direction)
     const amount = Number(raw.amount)
-    const rowErrors: string[] = []
-    if (!direction) rowErrors.push('收支类型必须是收入或支出')
-    if (!raw.category) rowErrors.push('类别不能为空')
-    if (!Number.isFinite(amount) || amount <= 0) rowErrors.push('金额必须大于 0')
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(raw.occurredOn || '')) rowErrors.push('发生日期无效，请按年-月-日填写，例如 2026-11-11')
-    if (rowErrors.length) {
-      errors.push({ line, message: rowErrors.join('；') })
-      continue
-    }
+    const before = errors.length
+    const fail = (field: string, message: string) => { errors.push({ line, field, message }) }
+    if (!direction) fail('收支类型', '必须是收入或支出')
+    if (!raw.category) fail('类别', '不能为空')
+    if (!Number.isFinite(amount) || amount <= 0) fail('金额', '必须大于 0')
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(raw.occurredOn || '')) fail('发生日期', '无效，请按年-月-日填写，例如 2026-11-11')
+    if (errors.length > before) continue
     rows.push({
       line,
       entryNo: raw.entryNo || undefined,

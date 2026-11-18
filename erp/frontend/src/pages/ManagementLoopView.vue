@@ -11,6 +11,8 @@ import { createStocktakeAction } from '@/features/management/stocktakeAction'
 import { createCapacityRefresh } from '@/features/management/capacityRefresh'
 import { stocktakeImportRows, readStocktakeFile } from '@/features/management/stocktakeImport'
 import { downloadCsv } from '@/utils/csv.ts'
+import { ImportValidationError } from '@/utils/importFailureDetail'
+import { showImportFailuresDialog } from '@/utils/importResultFeedback'
 
 const route = useRoute()
 const router = useRouter()
@@ -183,6 +185,7 @@ const importBusy = ref(false)
 const stocktakeBusy = computed(() => actionBusy.value || importBusy.value)
 const stocktakeFileInput = ref<HTMLInputElement | null>(null)
 const importFeedback = ref('')
+const stocktakeImportLines = new Map<number, number>()
 function downloadStocktakeTemplate() {
   downloadCsv(`${currentPlan.value.stocktakeNo}-实盘导入.csv`, ['库位', 'SKU', '实盘数量'],
     currentPlan.value.lines.filter(canCount).map((line: any) => [line.locationCode, line.sku, '']))
@@ -195,12 +198,22 @@ async function importStocktake(event: Event) {
   importBusy.value = true
   importFeedback.value = ''
   try {
-    const grid = await readStocktakeFile(file)
+    const sourceLineNos: number[] = []
+    const grid = await readStocktakeFile(file, sourceLineNos)
     if (!viewAlive || owner !== app.authenticatedUser?.id || planId !== currentPlan.value?.id) return
-    const rows = stocktakeImportRows(grid, currentPlan.value.lines, canCount)
-    for (const row of rows) currentPlan.value.lines.find((line: any) => line.id === row.id).inputQty = row.qty
-    importFeedback.value = `已导入 ${rows.length} 条实盘数量，请核对表格后点击“提交已填数量”。空白行未导入。`
-  } catch (error) { ElMessage.error(userFacingError(error)) }
+    const rows = stocktakeImportRows(grid, currentPlan.value.lines, canCount, sourceLineNos)
+    stocktakeImportLines.clear()
+    for (const row of rows) {
+      currentPlan.value.lines.find((line: any) => line.id === row.id).inputQty = row.qty
+      stocktakeImportLines.set(row.id, row.sourceLineNo)
+    }
+    importFeedback.value = `已读取 ${rows.length} 条实盘数量，尚未保存；请核对后提交。实盘数量留空的行已跳过。`
+  } catch (error) {
+    const active = () => viewAlive && owner === app.authenticatedUser?.id && planId === currentPlan.value?.id
+    if (!active()) return
+    if (error instanceof ImportValidationError) await showImportFailuresDialog('校验未通过，未填入本次盘点数量', error.failures, '实盘数量导入失败明细', active)
+    else ElMessage.error(userFacingError(error))
+  }
   finally { importBusy.value = false }
 }
 async function submitImportedCounts() {
@@ -219,10 +232,17 @@ async function submitImportedCounts() {
       if (!viewAlive || owner !== app.authenticatedUser?.id || planId !== currentPlan.value?.id) break
       await stocktakeOperation.start('count', { lineId: row.id, qty: row.qty, expectedStage: row.stage }, planId)
       const latest = currentPlan.value.lines.find((line: any) => line.id === row.id)
-      if (pendingStocktake.value || !latest || latest.status === row.stage) break
+      if (pendingStocktake.value || !latest || latest.status === row.stage) {
+        const lineNo = stocktakeImportLines.get(row.id)
+        if (lineNo && viewAlive && owner === app.authenticatedUser?.id && planId === currentPlan.value?.id) {
+          await showImportFailuresDialog('本次批量提交已停止，后续行未提交', [{ lineNo, field: '实盘数量', reason: stocktakeFeedback.value || '提交尚未确认，请刷新后核对' }], '实盘数量提交明细', () => viewAlive && owner === app.authenticatedUser?.id)
+        }
+        break
+      }
       done++
     }
-    importFeedback.value = `已成功提交 ${done}/${rows.length} 条。` + (done < rows.length ? '提交已停止，请核对提示和最新结果后重新导入剩余数量。' : '请按状态继续复盘或审批。')
+    if (!viewAlive || owner !== app.authenticatedUser?.id || planId !== currentPlan.value?.id) return
+    importFeedback.value = done < rows.length ? `已确认提交 ${done}/${rows.length} 条。请先核对本次结果，再处理剩余数量。` : `成功导入 ${done} 条。请按状态继续复盘或审批。`
   } finally { importBusy.value = false }
 }
 const stocktakeOptionsError = ref(''), optionsLoading = ref(false)
@@ -265,6 +285,7 @@ let planVersion = 0
 async function openPlan(id: number) {
   if (stocktakeBusy.value) return
   importFeedback.value = ''
+  stocktakeImportLines.clear()
   const version = ++planVersion
   openingPlan.value = true; planError.value = ''
   stocktakeOperation.clearFeedback()
@@ -547,12 +568,12 @@ watch(warehouseCode, loadCurrent)
         <el-button :disabled="stocktakeBusy || !!pendingStocktake || openingPlan" @click="stocktakeFileInput?.click()">导入实盘数量</el-button>
         <el-button type="primary" :loading="importBusy" :disabled="stocktakeBusy || !!pendingStocktake || openingPlan" @click="submitImportedCounts">提交已填数量</el-button>
         <input ref="stocktakeFileInput" type="file" accept=".xlsx,.csv" hidden @change="importStocktake" />
-        <span class="hint">支持 Excel / CSV，按库位和 SKU 匹配；空白数量跳过，0 表示实盘为零。</span>
+        <span class="erp-import-fields">支持 XLSX / CSV。保留库位、SKU、实盘数量三列；填写数量的行须提供库位和 SKU。数量留空跳过，0 表示实盘为零。</span>
       </div>
       <el-alert v-if="importFeedback" :title="importFeedback" type="info" :closable="false" />
-      <el-table :data="currentPlan?.lines || []" height="min(48vh, 520px)" stripe>
+      <el-table :data="currentPlan?.lines || []" height="min(48vh, 520px)" stripe class="erp-import-table">
         <el-table-column prop="locationCode" label="库位" width="150" />
-        <el-table-column prop="sku" label="SKU" min-width="160" />
+        <el-table-column prop="sku" label="SKU" min-width="230" />
         <el-table-column label="账面数量" width="100"><template #default="s">{{ currentPlan.bookQtyHidden ? '***' : s.row.bookQty }}</template></el-table-column>
         <el-table-column prop="firstQty" label="初盘" width="80" />
         <el-table-column prop="secondQty" label="复盘" width="80" />

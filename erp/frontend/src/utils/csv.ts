@@ -31,10 +31,14 @@ function escapeHtml(value: unknown) {
 
 /** Export every selected record, with required columns colored in Excel. No hint or sample rows. */
 export function downloadRequiredFieldsExcel(filename: string, headers: string[], rows: unknown[][]) {
-  const cellStyle = (header: string) => `border:1px solid #94a3b8;padding:8px 12px;white-space:pre-wrap;mso-number-format:'\\@';background-color:${header.endsWith('（必填）') ? '#ffc7ce' : '#ffffff'};color:${header.endsWith('（必填）') ? '#9c0006' : '#0f172a'}`
+  const cellStyle = (header: string) => {
+    const required = /(?:[*＊]|（必填）)$/.test(header)
+    return `border:1px solid #94a3b8;padding:8px 12px;white-space:nowrap;text-align:left;vertical-align:middle;mso-number-format:'\\@';background-color:${required ? '#ffc7ce' : '#ffffff'};color:${required ? '#9c0006' : '#0f172a'}`
+  }
+  const widths = headers.map((header, index) => `<col width="${importColumnPixels(header, rows.map(row => row[index]))}" />`).join('')
   const heading = headers.map(header => `<th style="${cellStyle(header)}">${escapeHtml(header)}</th>`).join('')
   const body = rows.map(row => `<tr>${headers.map((header, index) => `<td style="${cellStyle(header)}">${escapeHtml(row[index])}</td>`).join('')}</tr>`).join('')
-  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8" /></head><body><table style="border-collapse:collapse"><thead><tr>${heading}</tr></thead><tbody>${body}</tbody></table></body></html>`
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8" /></head><body><table style="border-collapse:collapse"><colgroup>${widths}</colgroup><thead><tr>${heading}</tr></thead><tbody>${body}</tbody></table></body></html>`
   const blob = new Blob(['\uFEFF', html], { type: 'application/vnd.ms-excel;charset=utf-8' })
   const url = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
@@ -44,35 +48,32 @@ export function downloadRequiredFieldsExcel(filename: string, headers: string[],
   URL.revokeObjectURL(url)
 }
 
-function templateColumnWidth(column: ImportTemplateColumn, rows: unknown[][], index: number) {
-  const contentLength = Math.max(
-    column.label.length,
-    ...rows.map((row) => String(row[index] ?? '').length),
-  )
-  return Math.min(34, Math.max(14, contentLength + 6))
+export function normalizeImportHeader(label: string) {
+  return label.trim().replace(/\s*[*＊]$/, '').trim()
 }
 
-/** 下载 Excel 可直接打开的导入模板：第一行是字段，有说明时第二行是填写说明，其后是示例。 */
+function importColumnPixels(header: string, values: unknown[]) {
+  const displayWidth = (value: unknown) => String(value ?? '').split(/\r?\n/).reduce((max, line) =>
+    Math.max(max, [...line].reduce((size, char) => size + (char.charCodeAt(0) > 255 ? 2 : 1), 0)), 0)
+  const width = values.reduce<number>((max, value) => Math.max(max, displayWidth(value)), displayWidth(header))
+  return Math.max(128, Math.min(560, (width + 5) * 9))
+}
+
+/** 下载 Excel 可直接打开的空白导入模板。 */
 export function downloadImportTemplate(
   filename: string,
   columns: ImportTemplateColumn[],
   sampleRows: unknown[][],
 ) {
-  const exampleRows = sampleRows.slice(0, 1)
+  const labels = columns.map(column => column.required ? `${column.label} *` : column.label)
   const colGroup = columns
     .map((column, index) => {
-      const width = templateColumnWidth(column, exampleRows, index) * 9
+      const width = importColumnPixels(labels[index]!, [...sampleRows.map(row => row[index]), column.hint])
       return `<col width="${width}" style="width:${width}px" />`
     })
     .join('')
   const header = columns
-    .map((column) => `<th class="${column.required ? 'required' : 'optional'}">${escapeHtml(column.label)}</th>`)
-    .join('')
-  const hintRow = columns.some((column) => column.hint)
-    ? `<tr class="hint">${columns.map((column) => `<td>${escapeHtml(column.hint || '')}</td>`).join('')}</tr>`
-    : ''
-  const examples = exampleRows
-    .map((row) => `<tr class="example">${columns.map((_, index) => `<td>${escapeHtml(row[index])}</td>`).join('')}</tr>`)
+    .map((column, index) => `<th class="${column.required ? 'required' : 'optional'}" title="${escapeHtml(column.hint || '')}">${escapeHtml(labels[index])}</th>`)
     .join('')
   const inputRows = Array.from(
     { length: 10 },
@@ -98,17 +99,10 @@ export function downloadImportTemplate(
     th.required { background: #fee2e2; color: #991b1b; }
     th.optional { background: #e2e8f0; }
     tr:nth-child(even) td { background: #f8fafc; }
-    tr.hint td {
-      background: #fff7ed;
-      color: #9a3412;
-      font-size: 12px;
-      white-space: normal;
-      height: auto;
-    }
   </style>
 </head>
 <body>
-  <table>${colGroup}<thead><tr>${header}</tr>${hintRow}</thead><tbody>${examples}${inputRows}</tbody></table>
+  <table>${colGroup}<thead><tr>${header}</tr></thead><tbody>${inputRows}</tbody></table>
 </body>
 </html>`
   const blob = new Blob(['\uFEFF', html], { type: 'application/vnd.ms-excel;charset=utf-8' })
@@ -126,8 +120,8 @@ export function normalizeImportFileText(text: string) {
   if (!/<table[\s>]/i.test(normalized)) return text
 
   const doc = new DOMParser().parseFromString(normalized, 'text/html')
-  const rows = [...doc.querySelectorAll('table tr:not(.example):not(.hint)')].map((row) =>
-    [...row.querySelectorAll('th,td')].map((cell) => cell.textContent?.trim() ?? ''),
+  const rows = [...doc.querySelectorAll('table tr')].map((row) =>
+    row.matches('.example,.hint') ? [] : [...row.querySelectorAll('th,td')].map((cell) => cell.textContent?.trim() ?? ''),
   )
   if (!rows.length) return text
   return `\uFEFF${rows.map((row) => row.map(escapeCsv).join(',')).join('\n')}`
@@ -154,7 +148,7 @@ export function parseCsvLine(line: string): string[] {
 export function findCsvColumn(header: string[], aliases: string[]) {
   const lower = aliases.map((a) => a.toLowerCase())
   return header.findIndex((h) => {
-    const t = h.trim()
+    const t = normalizeImportHeader(h)
     return lower.includes(t.toLowerCase()) || aliases.includes(t)
   })
 }

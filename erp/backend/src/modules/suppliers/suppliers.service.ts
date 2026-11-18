@@ -1,7 +1,8 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
+import { nextDailyBusinessCode } from '../../common/daily-business-code.util'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
-import { MAX_IMPORT_FAILURE_DETAILS, type ImportRowFailure, type ImportRowResult } from '../../common/import-row-result.util'
+import type { ImportRowFailure, ImportRowResult } from '../../common/import-row-result.util'
 import { SUPPLIER_IMPORT_MAX_ROWS, parseSupplierImportCsv } from './supplier-import.util'
 
 type SupplierWrite = {
@@ -49,15 +50,19 @@ export class SuppliersService {
   }
 
   async create(data: SupplierWrite) {
-    const payload = await this.normalize(data)
-    if (!payload.supplierCode) throw new BadRequestException('请填写供应商代码')
+    const payload = this.normalize(data)
     await this.assertAvailable(payload.supplierName, payload.supplierCode)
-    return this.prisma.supplier.create({ data: { ...payload, supplierCode: payload.supplierCode } })
+    if (payload.supplierCode) {
+      return this.prisma.supplier.create({ data: { ...payload, supplierCode: payload.supplierCode } })
+    }
+    return this.prisma.$transaction(async (tx) => tx.supplier.create({
+      data: { ...payload, supplierCode: await nextDailyBusinessCode(tx, 'SUP') },
+    }))
   }
 
   async update(id: number, data: SupplierWrite) {
     await this.detail(id)
-    const payload = await this.normalize(data, { existing: true })
+    const payload = this.normalize(data)
     await this.assertAvailable(payload.supplierName, payload.supplierCode, id)
     return this.prisma.supplier.update({ where: { id: BigInt(id) }, data: payload })
   }
@@ -82,15 +87,13 @@ export class SuppliersService {
         imported++
       } catch (error: any) {
         failed++
-        if (failures.length < MAX_IMPORT_FAILURE_DETAILS) {
-          failures.push({ lineNo: row.lineNo, reason: error?.message || '写入失败' })
-        }
+        failures.push({ lineNo: row.lineNo, field: '整行', reason: error?.message || '写入失败' })
       }
     }
-    return { imported, failed, failures }
+    return { imported, failed, failures: failures.sort((left, right) => left.lineNo - right.lineNo) }
   }
 
-  private async normalize(data: SupplierWrite, options?: { existing?: boolean }) {
+  private normalize(data: SupplierWrite) {
     const supplierName = String(data.supplierName || '').trim()
     const contactName = String(data.contactName || '').trim()
     const contactPhone = String(data.contactPhone || '').trim()
@@ -115,7 +118,7 @@ export class SuppliersService {
     }
     const email = this.optionalText(data.email, 100, '邮箱')
     if (email && !email.includes('@')) throw new BadRequestException('邮箱格式无效')
-    const record = {
+    return {
       supplierCode: supplierCode || undefined,
       supplierName,
       companyName: this.optionalText(data.companyName, 200, '公司名称'),
@@ -129,8 +132,6 @@ export class SuppliersService {
       leadTimeDays,
       remark: this.optionalText(data.remark, 2000, '备注'),
     }
-    if (!options?.existing && !record.supplierCode) record.supplierCode = await this.nextSupplierCode()
-    return record
   }
 
   private optionalText(value: unknown, max: number, label: string) {
@@ -138,15 +139,6 @@ export class SuppliersService {
     if (!text) return null
     if (text.length > max) throw new BadRequestException(`${label}不能超过 ${max} 字`)
     return text
-  }
-
-  private async nextSupplierCode() {
-    for (let attempt = 0; attempt < 5; attempt++) {
-      const supplierCode = `SUP-${Date.now().toString(36)}${attempt}`.toUpperCase().slice(0, 30)
-      const existing = await this.prisma.supplier.findUnique({ where: { supplierCode } })
-      if (!existing) return supplierCode
-    }
-    throw new BadRequestException('供应商代码生成失败，请手工填写供应商代码')
   }
 
   private async assertAvailable(supplierName: string, supplierCode?: string | null, exceptId?: number) {

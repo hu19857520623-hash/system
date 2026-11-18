@@ -1,3 +1,4 @@
+import { listCatalogBatchItems, previewCatalogPriceBatch, submitCatalogPriceBatch, catalogPriceBatchReceipt } from './catalog-price-batch.util'
 import { createHash } from 'node:crypto'
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common'
 import { PrismaService } from '../../common/prisma/prisma.service'
@@ -105,6 +106,9 @@ export class PricingService {
       pricingLogic: row.pricingLogic || '',
       targetProfitRate: num(row.targetProfitRate),
       finalPrice: num(row.finalPrice),
+      priceB: row.priceB == null ? null : Number(row.priceB),
+      priceC: row.priceC == null ? null : Number(row.priceC),
+      priceD: row.priceD == null ? null : Number(row.priceD),
       overseasDeliveryFee: num(row.overseasDeliveryFee),
       platformCommission: num(row.platformCommissionRate),
       platformDeliveryFee: num(row.platformDeliveryFee),
@@ -641,6 +645,11 @@ export class PricingService {
     if (!item) throw new NotFoundException(`SKU ${sku} 未在 OMS 货盘展示`)
     return item
   }
+
+  listBatchPrices(keyword?: string) { return listCatalogBatchItems(this.prisma,keyword) }
+  previewBatchPrices(body: any) { return previewCatalogPriceBatch(this.prisma,body) }
+  saveBatchPrices(body: any, actor: number) { return submitCatalogPriceBatch(this.prisma,body,actor) }
+  batchPricesReceipt(id: string, actor: number, cancel = false) { return catalogPriceBatchReceipt(this.prisma,id,actor,cancel) }
 
   /** 四档货盘价格维护（金额与审计同事务提交） */
   setCatalogPrices(id: number, body: any, actor: number) {

@@ -22,7 +22,7 @@ const warehouse = { ...finance, roleCode: 'warehouse', permissions: ['inbound.vi
 const cleanups: (() => void)[] = []
 beforeEach(() => { vi.stubGlobal('localStorage', new MemoryStorage()); vi.stubGlobal('sessionStorage', new MemoryStorage()); setActivePinia(createPinia()); vi.clearAllMocks(); setAccessToken('current-session') })
 afterEach(() => { for (const stop of cleanups.splice(0)) stop(); vi.useRealTimers(); vi.unstubAllGlobals() })
-async function fixture(path = '/customer-recharge?customer=TKL9001#details') {
+async function fixture(path = '/finance-books/recharge?customer=TKL9001#details') {
   const app = useAppStore(); app.applyAuthUser(finance); app.authReady = true
   vi.mocked(authApi.profile).mockResolvedValue(finance)
   const loaded: string[] = []
@@ -50,7 +50,7 @@ describe('挂载会话当前权限与恢复路径', () => {
     expect(authApi.profile).toHaveBeenCalledTimes(1); expect(replace).toHaveBeenCalledTimes(1)
     expect(app.hasPerm('budget_credit.export')).toBe(false)
     expect(app.visibleNav.flatMap(g => g.items).some(i => i.id === 'budget_credit')).toBe(false)
-    expect(router.currentRoute.value.query.redirect).toBe('/customer-recharge?customer=TKL9001#details')
+    expect(router.currentRoute.value.query.redirect).toBe('/finance-books/recharge?customer=TKL9001#details')
     expect(access.notice.value).toContain('权限已更新')
   })
   it('跳转前核对最新岗位，不先加载已撤权组件；新授权也不被旧缓存拦住', async () => {
@@ -67,15 +67,15 @@ describe('挂载会话当前权限与恢复路径', () => {
     const { router, access } = await fixture()
     notifyPermissionFailure('/async-io/8/restart', 403, true)
     await access.refreshCurrent()
-    expect(router.currentRoute.value.name).toBe('CustomerRecharge')
-    expect(router.currentRoute.value.fullPath).toBe('/customer-recharge?customer=TKL9001#details')
+    expect(router.currentRoute.value.name).toBe('FinanceBooks')
+    expect(router.currentRoute.value.fullPath).toBe('/finance-books/recharge?customer=TKL9001#details')
     expect(access.notice.value).toBe(''); expect(access.error.value).toBe('')
   })
   it('只撤销动作权限时保留仍有权访问的页面，按钮立即撤销并显示更新说明', async () => {
     const { router, access, app } = await fixture()
     vi.mocked(authApi.profile).mockResolvedValue({ ...finance, permissions: ['budget_credit.view'] })
     await access.refreshCurrent()
-    expect(router.currentRoute.value.name).toBe('CustomerRecharge')
+    expect(router.currentRoute.value.name).toBe('FinanceBooks')
     expect(app.canViewScreen('budget_credit')).toBe(true); expect(app.hasPerm('budget_credit.export')).toBe(false)
     expect(access.notice.value).toContain('权限已更新')
   })
@@ -96,7 +96,7 @@ describe('挂载会话当前权限与恢复路径', () => {
     vi.mocked(authApi.profile).mockRejectedValueOnce(new Error('Failed to fetch'))
     expect(await access.refreshCurrent()).toBe('failed')
     expect(access.error.value).toContain('网络连接失败'); expect(getAccessToken()).toBe('current-session')
-    expect(app.isAuthenticated).toBe(true); expect(router.currentRoute.value.name).toBe('CustomerRecharge')
+    expect(app.isAuthenticated).toBe(true); expect(router.currentRoute.value.name).toBe('FinanceBooks')
     vi.mocked(authApi.profile).mockResolvedValue(finance)
     expect(await access.refreshCurrent()).toBe('ready'); expect(access.error.value).toBe('')
   })

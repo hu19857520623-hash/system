@@ -6,6 +6,7 @@ import { createPinia } from 'pinia'
 import FinanceBooksView from './FinanceBooksView.vue'
 import { useAppStore } from '../stores/app'
 
+vi.mock('./CustomerRechargeView.vue', () => ({ __esModule: true, default: { name: 'CustomerRechargeView', render: () => h('div', '客户充值明细内容') } }))
 vi.mock('./CostLedgerView.vue', () => ({ __esModule: true, default: { name: 'CostLedgerView', render: () => h('div', '采购货款内容') } }))
 vi.mock('./SupplierSeaFreightBillView.vue', () => ({ __esModule: true, default: { name: 'SupplierSeaFreightBillView', render: () => h('div', '海运账单内容') } }))
 vi.mock('./OperatingLedgerView.vue', () => ({ __esModule: true, default: { name: 'OperatingLedgerView', render: () => h('div', '经营收支内容') } }))
@@ -33,9 +34,9 @@ afterEach(() => { cleanups.splice(0).forEach(fn => fn()) })
 async function settle() { for (let i = 0; i < 15; i++) { await Promise.resolve(); await nextTick() } }
 const user = { id: 1, username: 'finance', realName: '财务', roleCode: 'finance', permissions: ['receivable_payable.view', 'cost.view', 'operating_ledger.view', 'profit_analysis.view'] }
 
-async function mount(path = '/finance-books') {
+async function mount(path = '/finance-books', permissions = user.permissions) {
   const pinia = createPinia(), app = useAppStore(pinia)
-  app.applyAuthUser({ ...user })
+  app.applyAuthUser({ ...user, permissions })
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/finance-books/:tab?', component: FinanceBooksView }] })
   await router.push(path)
   const root = node(), view = renderer.createApp({ render: () => h(RouterView) })
@@ -47,6 +48,21 @@ async function mount(path = '/finance-books') {
 }
 
 describe('账本分析页签与路由同步', () => {
+  it('仅有充值查看权限也能进入账本并显示充值明细，侧栏不再有独立充值入口', async () => {
+    const page=await mount('/finance-books/recharge',['budget_credit.view'])
+    expect(page.app.canViewScreen('finance_books')).toBe(true)
+    expect(find(page.root,'tabs')!.props.active).toBe('recharge')
+    expect(text(page.root)).toContain('客户充值明细内容')
+    expect(text(page.root)).not.toContain('采购货款内容')
+    const ids=page.app.visibleNav.flatMap(group=>group.items.map(item=>item.id))
+    expect(ids).toContain('finance_books');expect(ids).not.toContain('budget_credit')
+  })
+  it('无充值查看权限不能切入或加载充值明细', async () => {
+    const page=await mount('/finance-books/purchase',['cost.view'])
+    expect(await page.navigate('recharge')).toBe(false)
+    expect(text(page.root)).not.toContain('客户充值明细内容')
+    expect(page.router.currentRoute.value.path).toBe('/finance-books/purchase')
+  })
   it('从无页签参数入口连续点击四个入口，导航期间刷新权限也不会取消切换', async () => {
     const page = await mount()
     const replace = vi.spyOn(page.router, 'replace')

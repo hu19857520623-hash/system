@@ -8,7 +8,6 @@ import { parseLeadsImportCsv } from './leads-import.util'
 import {
   type ImportRowFailure,
   type ImportRowResult,
-  MAX_IMPORT_FAILURE_DETAILS,
 } from '../../common/import-row-result.util'
 import {
   canonicalizeFollowSales,
@@ -976,13 +975,18 @@ export class LeadsService {
   }
 
   async importFromCsv(content: string, defaultAssigneeId?: number) {
+    const failures: ImportRowFailure[] = []
     let parsed: ReturnType<typeof parseLeadsImportCsv>
     try {
-      parsed = parseLeadsImportCsv(content)
+      parsed = parseLeadsImportCsv(content, failures)
     } catch (e: any) {
       throw new NotFoundException(e.message || '导入文件格式错误')
     }
-    if (!parsed.length) throw new NotFoundException('文件为空或没有有效数据行')
+    const invalidRows = new Set(failures.map(failure => failure.lineNo)).size
+    if (!parsed.length) {
+      if (invalidRows) return { imported: 0, failed: invalidRows, failures } satisfies ImportRowResult
+      throw new NotFoundException('文件为空或没有有效数据行')
+    }
 
     const salesUsers = await this.prisma.sysUser.findMany({
       where: { status: 1, roleCode: { in: [...LEAD_ASSIGNEE_ROLE_CODES] } },
@@ -1010,13 +1014,10 @@ export class LeadsService {
     for (const row of existingContacts) rememberQrLead(qrCompanies, qrHashes, row)
 
     let ok = 0
-    let fail = 0
-    const failures: ImportRowFailure[] = []
-    const recordFail = (lineNo: number, reason: string, sku?: string, row?: string) => {
+    let fail = invalidRows
+    const recordFail = (lineNo: number, reason: string, field: string, row?: string) => {
       fail++
-      if (failures.length < MAX_IMPORT_FAILURE_DETAILS) {
-        failures.push({ lineNo, reason, ...(sku?.trim() ? { sku: sku.trim() } : {}), ...(row ? { row } : {}) })
-      }
+      failures.push({ lineNo, field, reason, ...(row ? { row } : {}) })
     }
     const rowText = (row: object) =>
       Object.values(row as Record<string, unknown>).filter((value) => value != null && String(value).trim() !== '').join(', ').slice(0, 500)
@@ -1025,20 +1026,20 @@ export class LeadsService {
       try {
         const importedType = row.contactType || inferLeadContactType(row)
         if (findIndexedLeadContactConflict(contactIndex, row.contactName, row.contactPhone, importedType)) {
-          recordFail(row.lineNo, '联系方式与客户名称组合已存在', undefined, rowText(row))
+          recordFail(row.lineNo, '联系方式与客户名称组合已存在', '联系方式', rowText(row))
           continue
         }
         let assigneeId: bigint | undefined
         if (row.assigneeKey) {
           assigneeId = assigneeByKey.get(row.assigneeKey.toLowerCase())
           if (!assigneeId) {
-            recordFail(row.lineNo, `归属运营「${row.assigneeKey}」未找到`, undefined, rowText(row))
+            recordFail(row.lineNo, `归属运营「${row.assigneeKey}」未找到`, '归属运营', rowText(row))
             continue
           }
         } else if (defaultAssigneeId) {
           assigneeId = BigInt(defaultAssigneeId)
         } else {
-          recordFail(row.lineNo, '未填写归属运营且无法使用当前用户作为默认归属', undefined, rowText(row))
+          recordFail(row.lineNo, '未填写归属运营且无法使用当前用户作为默认归属', '归属运营', rowText(row))
           continue
         }
         await this.create(
@@ -1064,10 +1065,10 @@ export class LeadsService {
         )
         ok++
       } catch (e: any) {
-        recordFail(row.lineNo, e?.message || '写入失败', undefined, rowText(row))
+        recordFail(row.lineNo, e?.message || '写入失败', '整行', rowText(row))
       }
     }
-    return { imported: ok, failed: fail, failures } satisfies ImportRowResult
+    return { imported: ok, failed: fail, failures: failures.sort((left, right) => left.lineNo - right.lineNo) } satisfies ImportRowResult
   }
 
   private storeQrImage(file: { fileName?: string; contentBase64?: string }) {

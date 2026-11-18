@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
 import { Prisma } from '@prisma/client'
 import { randomUUID } from 'crypto'
+import { nextDailyBusinessCode } from '../../common/daily-business-code.util'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
 import { OperationLogService } from '../operation-log/operation-log.service'
@@ -61,7 +62,7 @@ export class PrePurchaseService {
       return existing.id
     }
 
-    const supplierCode = `SUP-${Date.now()}-${Math.floor(Math.random() * 1000)}`.slice(0, 30)
+    const supplierCode = await nextDailyBusinessCode(db, 'SUP')
     const created = await db.supplier.create({ data: { supplierCode, supplierName: suppliedName, paymentTerms: '现结', ...profile } })
     return created.id
   }
@@ -651,7 +652,7 @@ export class PrePurchaseService {
       if (!dev) {
         dev = await tx.productDev.create({
           data: {
-            applyNo: `PD-${current.poNo}`.slice(0, 30),
+            applyNo: await nextDailyBusinessCode(tx, 'PD'),
             sku,
             productName,
             status: 'approved',

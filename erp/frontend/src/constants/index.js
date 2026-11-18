@@ -23,7 +23,7 @@ export const ROUTE_MAP = {
   billing: '/billing',
   reports: '/finance-books/analysis',
   profit_analysis: '/finance-books/analysis',
-  customer_recharge: '/customer-recharge',
+  customer_recharge: '/finance-books/recharge',
   customers: '/customers',
   supplier_sea_freight_bill: '/finance-books/freight',
   finance_books: '/finance-books',

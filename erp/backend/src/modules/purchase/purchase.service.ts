@@ -1,4 +1,5 @@
 import { assertGlobalSkuAvailable } from '../../common/global-sku.util'
+import { nextDailyBusinessCode } from '../../common/daily-business-code.util'
 import { randomUUID } from 'crypto'
 import { Prisma } from '@prisma/client'
 import { CATALOG_PO_EXCLUDED_STATUSES } from '../pricing/catalog-pipeline-qty.util'
@@ -13,7 +14,7 @@ import { computePoFinanceApprovalCosts } from '../../common/po-finance-cost.util
 import { catalogSkuLookupKeys, toCatalogInternalSku } from '../../common/catalog-customer.util'
 import { resolveProductPhysicalWeightKg } from '../../common/product-physical-weight.util'
 import { logisticsReceiptProgress } from '../logistics-receipt/logistics-receipt-progress.util'
-import { MAX_IMPORT_FAILURE_DETAILS, type ImportRowFailure, type ImportRowResult } from '../../common/import-row-result.util'
+import type { ImportRowFailure, ImportRowResult } from '../../common/import-row-result.util'
 import {
   PURCHASE_IMPORT_MAX_ROWS,
   buildPurchaseImportPoNo,
@@ -558,12 +559,12 @@ export class PurchaseService {
   }
 
   /** Direct purchase orders also accept a manually entered supplier name. */
-  private async resolveSupplierForCreate(data: any, database: Prisma.TransactionClient = this.prisma): Promise<bigint> {
+  private async resolveSupplierForCreate(data: any, database: Prisma.TransactionClient): Promise<bigint> {
     const supplierName = data.supplierName == null ? '' : String(data.supplierName).trim()
     if (supplierName) {
       const existing = await database.supplier.findFirst({ where: { supplierName }, orderBy: { id: 'asc' } })
       if (existing) return existing.id
-      const supplierCode = `SUP-${Date.now()}-${Math.floor(Math.random() * 1000)}`.slice(0, 30)
+      const supplierCode = await nextDailyBusinessCode(database, 'SUP')
       const created = await database.supplier.create({ data: { supplierCode, supplierName, paymentTerms: '现结' } })
       return created.id
     }
@@ -626,7 +627,7 @@ export class PurchaseService {
   }
 
   /** 直接创建或尚未关联预采购的审核通过：按明细生成待分配预采购，不进入打款。 */
-  private async createAssignmentPreOrders(db: any, input: {
+  private async createAssignmentPreOrders(db: Prisma.TransactionClient, input: {
     supplierId: bigint
     warehouseCode?: string | null
     expectedArrival?: Date | string | null
@@ -645,10 +646,9 @@ export class PurchaseService {
       if (!line.productName) throw new BadRequestException('请填写商品名称')
       let dev = await db.productDev.findFirst({ where: { sku: line.sku } })
       if (!dev) {
-        const stamp = `${Date.now().toString(36)}${randomUUID().replace(/-/g, '').slice(0, 6)}`.toUpperCase()
         dev = await db.productDev.create({
           data: {
-            applyNo: `PD-${stamp}${index}`.slice(0, 30),
+            applyNo: await nextDailyBusinessCode(db, 'PD'),
             sku: line.sku,
             productName: line.productName,
             status: 'approved',
@@ -714,11 +714,9 @@ export class PurchaseService {
     let ok = 0
     let fail = parsed.failureCount
     const failures: ImportRowFailure[] = [...parsed.failures]
-    const recordFail = (lineNo: number, reason: string, sku?: string) => {
+    const recordFail = (lineNo: number, reason: string, sku?: string, field = '整行') => {
       fail++
-      if (failures.length < MAX_IMPORT_FAILURE_DETAILS) {
-        failures.push({ lineNo, reason, ...(sku ? { sku } : {}) })
-      }
+      failures.push({ lineNo, field, reason, ...(sku ? { sku } : {}) })
     }
 
     let orderSeq = 0
@@ -728,7 +726,7 @@ export class PurchaseService {
         const reason = warehouse.ambiguous
           ? `目标中转仓「${group.warehouseKey}」对应多个仓库，请改填仓库代码`
           : `目标中转仓「${group.warehouseKey}」不是已启用的物流中转仓`
-        for (const line of group.lines) recordFail(line.lineNo, reason, line.sku)
+        for (const line of group.lines) recordFail(line.lineNo, reason, line.sku, '目标中转仓')
         continue
       }
       orderSeq++
@@ -759,7 +757,7 @@ export class PurchaseService {
       }
     }
 
-    return { imported: ok, failed: fail, failures }
+    return { imported: ok, failed: fail, failures: failures.sort((left, right) => left.lineNo - right.lineNo) }
   }
 
   async approve(id: number, auditorId?: number, remark?: string, warehouseCode?: string) {

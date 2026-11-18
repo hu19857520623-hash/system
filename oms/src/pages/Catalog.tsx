@@ -1,3 +1,4 @@
+import NegativePurchasePanel from '../components/catalog/NegativePurchasePanel'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { userFacingError } from '../utils/userFacingError'
 import { ClipboardList, ImageOff, RefreshCw, ShoppingCart, Trash2 } from 'lucide-react'
@@ -519,6 +520,7 @@ export default function Catalog() {
         }
       >
         <div className="space-y-4 p-4">
+          {ordersOpen && customerId && <NegativePurchasePanel key={customerCode} customerCode={customerCode} purchases={allPurchases.filter(p => p.customerId === customerId)} writable={can('catalog:write')} />}
           <SearchInput
             placeholder="搜索订单号、SKU 或商品名..."
             value={orderSearch}

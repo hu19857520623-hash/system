@@ -92,7 +92,7 @@ export class OperatingLedgerService {
     for (const row of parsed.rows) {
       const entryNo = row.entryNo || this.entryNo(row.line)
       if (seenEntryNos.has(entryNo) || existingSet.has(entryNo)) {
-        errors.push({ line: row.line, message: `流水号重复：${entryNo}` })
+        errors.push({ line: row.line, field: '流水号', message: `重复：${entryNo}` })
         continue
       }
       try {
@@ -116,7 +116,7 @@ export class OperatingLedgerService {
       }
     }
     if (accepted.length) await this.prisma.operatingLedger.createMany({ data: accepted })
-    return { imported: accepted.length, failed: errors.length, errors }
+    return { imported: accepted.length, failed: new Set(errors.map(error => error.line)).size, errors: errors.sort((left, right) => left.line - right.line) }
   }
 
   async update(id: number, data: UpdateOperatingLedgerDto) {

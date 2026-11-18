@@ -13,8 +13,8 @@ function failures(content: string) {
 describe('预采购信息文件必填和字段审核', () => {
   it('导出三张单及必填、只读标记，第二行直接是第一张单，无填写说明', () => {
     const exported = exportPrePurchaseInfo([1, 2, 3].map(index => validInfoRow(index)))
-    expect(exported.headers).toContain('预采购单号（必填）')
-    expect(exported.headers).toContain('供应商（必填）')
+    expect(exported.headers).toContain('预采购单号（只读） *')
+    expect(exported.headers).toContain('供应商 *')
     expect(exported.headers).toContain('状态（只读）')
     expect(exported.rows).toHaveLength(3)
     expect(exported.rows[0][0]).toBe('PRE-1')
@@ -101,7 +101,7 @@ describe('预采购信息文件必填和字段审核', () => {
 
   it('无供应商不导出占位符，日期采用日期值', () => {
     const result = exportPrePurchaseInfo([{ ...validInfoRow(), supplierName: '—', expectedArrival: new Date('2026-10-27T00:00:00Z') }])
-    expect(result.rows[0][result.headers.indexOf('供应商（必填）')]).toBe('')
+    expect(result.rows[0][result.headers.indexOf('供应商 *')]).toBe('')
     expect(result.rows[0][result.headers.indexOf('预计到货')]).toBe('2026-10-27')
   })
 })

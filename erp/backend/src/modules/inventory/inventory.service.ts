@@ -1,3 +1,5 @@
+import { readCatalogPurchases } from './catalog-purchases.util'
+import type { CatalogPurchaseQueryDto } from './dto/catalog-purchase-query.dto'
 import { userFacingError } from '@erp/shared/user-facing-error'
 import { createHash } from 'crypto'
 import { Prisma } from '@prisma/client'
@@ -463,6 +465,7 @@ export class InventoryService {
       category?: string
       brand?: string
       supplierKeyword?: string
+      dataSource?: string
       statusFilter?: string
       stockFilter?: string
       costMin?: string
@@ -475,6 +478,8 @@ export class InventoryService {
   ) {
     const { page, pageSize } = getPagination(q, 20)
     const statusFilter = (q.statusFilter || q.stockFilter || 'all').trim()
+    const includeErp = q.dataSource !== 'oms'
+    const includeOms = q.dataSource !== 'erp' && !q.supplierKeyword?.trim()
     const title = (q.title || q.keyword || '').trim()
     const and: any[] = []
 
@@ -537,7 +542,7 @@ export class InventoryService {
       and.push({ updatedAt })
     }
 
-    if (q.supplierKeyword?.trim()) {
+    if (includeErp && q.supplierKeyword?.trim()) {
       const suppliers = await this.prisma.supplier.findMany({
         where: {
           OR: [
@@ -555,14 +560,17 @@ export class InventoryService {
 
     // 旧仓内档案若没有对应的 OMS 商品，仍需留在 SKU 查询供仓库追溯。
     // 有 OMS 商品的档案则由 oms_product 展示，避免同一 SKU 出现两行。
-    const orphanRows = await this.prisma.$queryRaw<{ id: bigint }[]>`
+    const orphanRows = includeOms ? await this.prisma.$queryRaw<{ id: bigint }[]>`
       SELECT p.id FROM product p
       WHERE (p.remark LIKE '%OMS客户:%' OR p.remark LIKE '%OMS 预约入库自动建档%')
         AND NOT EXISTS (SELECT 1 FROM oms_product o WHERE o.internalSku = p.sku)
-    `
-    const where = {
+    ` : []
+    const productSources: Prisma.ProductWhereInput[] = []
+    if (includeErp) productSources.push(ERP_MASTER_PRODUCT_WHERE)
+    if (orphanRows.length) productSources.push({ id: { in: orphanRows.map((row) => row.id) } })
+    const where: Prisma.ProductWhereInput = {
       AND: [
-        { OR: [ERP_MASTER_PRODUCT_WHERE, { id: { in: orphanRows.map((row) => row.id) } }] },
+        { OR: productSources },
         ...and,
       ],
     }
@@ -582,8 +590,8 @@ export class InventoryService {
     }
 
     const [erpTotal, allOmsItems] = await Promise.all([
-      this.prisma.product.count({ where }),
-      q.supplierKeyword?.trim() ? Promise.resolve([]) : fetchOmsProductRows(this.prisma, omsFilters),
+      productSources.length ? this.prisma.product.count({ where }) : 0,
+      includeOms ? fetchOmsProductRows(this.prisma, omsFilters) : [],
     ])
 
     // ERP 与 OMS 是两个独立数据源。分页顺序固定为 ERP 主数据在前、OMS
@@ -622,6 +630,17 @@ export class InventoryService {
     const supMap = new Map(suppliers.map((s) => [Number(s.id), s] as [number, typeof s]))
     const devMap = new Map(developers.map((d) => [Number(d.id), d] as [number, typeof d]))
     const pricingMap = new Map(pricingRows.map((p) => [p.sku, p] as [string, typeof p]))
+    const orphanIds = new Set(orphanRows.map((row) => row.id))
+    const customerCodes = [...new Set(products.filter((product) => orphanIds.has(product.id)).map((product) =>
+      parseOmsCustomerCodeFromRemark(product.remark) || deriveCustomerCodeFromInternalSku(product.sku),
+    ).filter(Boolean))]
+    const customers = customerCodes.length
+      ? await this.prisma.customer.findMany({
+          where: { customerCode: { in: customerCodes } },
+          select: { customerCode: true, customerName: true },
+        })
+      : []
+    const customerNameByCode = new Map(customers.map((customer) => [customer.customerCode.toUpperCase(), customer.customerName]))
 
     const statusLabel = (s: string) => {
       if (s === 'active') return '正式产品'
@@ -633,6 +652,7 @@ export class InventoryService {
     const erpItems = products.map((p) => {
       const supplier = p.supplierId ? supMap.get(Number(p.supplierId)) : undefined
       const developer = p.developerId ? devMap.get(Number(p.developerId)) : undefined
+      const isOms = orphanIds.has(p.id)
       const pricing = pricingMap.get(p.sku)
       const dims = {
         lengthCm: numDim(p.lengthCm),
@@ -649,9 +669,8 @@ export class InventoryService {
       const wt = numDim(p.weightKg)
       const customer = resolveCustomerIdentity({
         sku: p.sku,
-        productRemark: p.remark,
-        fallbackSupplierCode: supplier?.supplierCode,
-        fallbackSupplierName: supplier?.supplierName,
+        productRemark: isOms ? p.remark : null,
+        customerNameByCode: isOms ? customerNameByCode : undefined,
       })
 
       let salesStatus = '未上架'
@@ -673,13 +692,13 @@ export class InventoryService {
         costRmb: p.costRmb != null ? Number(p.costRmb) : null,
         status: p.status,
         statusLabel: statusLabel(p.status),
-        syncStatus: /OMS客户:|OMS 预约入库自动建档/.test(p.remark || '') ? null : p.syncStatus || 'pending',
+        syncStatus: isOms ? null : p.syncStatus || 'pending',
         receiptFlag: hasMeasuredDims ? '已测量' : hasCustomerDims ? '客户申报' : '新产品',
         hasDimensions: billing.source !== 'none',
-        customerCode: customer.customerCode || developer?.username || '',
+        customerCode: customer.customerCode,
         customerSku: customer.customerSku,
         customerName: customer.customerName,
-        supplierName: /OMS客户:|OMS 预约入库自动建档/.test(p.remark || '') ? '' : supplier?.supplierName || '',
+        supplierName: isOms ? '' : supplier?.supplierName || '',
         developerName: developer?.realName || '',
         salesStatus,
         orderableOnOms: Boolean(pricing?.orderableOnOms),
@@ -695,8 +714,8 @@ export class InventoryService {
         billingDimSource: billing.source,
         dimLabel: formatDimLabel(billing.lengthCm, billing.widthCm, billing.heightCm),
         weightLabel: wt != null ? wt.toFixed(3) : '',
-        dataSource: /OMS客户:|OMS 预约入库自动建档/.test(p.remark || '') ? 'oms' : 'erp',
-        dataSourceLabel: /OMS客户:|OMS 预约入库自动建档/.test(p.remark || '')
+        dataSource: isOms ? 'oms' : 'erp',
+        dataSourceLabel: isOms
           ? 'OMS·仓内档案'
           : 'ERP·货盘/主数据',
         editable: true,
@@ -1032,55 +1051,8 @@ export class InventoryService {
     return rows.map((r) => r.id)
   }
 
-  /** 货盘选品购买明细（oms_catalog_order） */
-  async catalogPurchases(q: PaginationDto & { sku?: string; customerCode?: string }) {
-    const { page, pageSize } = getPagination(q, 20)
-    const and: Record<string, unknown>[] = []
-    const sku = q.sku?.trim()
-    const customerCode = q.customerCode?.trim()
-    if (sku) and.push({ sku: { in: catalogSkuLookupKeys(sku) } })
-    if (customerCode) and.push({ customerCode })
-
-    const where = and.length ? { AND: and } : {}
-    const [orders, total] = await Promise.all([
-      this.prisma.omsCatalogOrder.findMany({
-        where,
-        skip: (page - 1) * pageSize,
-        take: pageSize,
-        orderBy: { createdAt: 'desc' },
-      }),
-      this.prisma.omsCatalogOrder.count({ where }),
-    ])
-
-    const customerIds = [...new Set(orders.map((o) => o.customerId))]
-    const customers = customerIds.length
-      ? await this.prisma.customer.findMany({
-          where: { id: { in: customerIds } },
-          select: { id: true, customerCode: true, customerName: true },
-        })
-      : []
-    const customerMap = new Map(customers.map((c) => [Number(c.id), c]))
-
-    const items = orders.map((o) => {
-      const customer = customerMap.get(Number(o.customerId))
-      return {
-        id: Number(o.id),
-        orderNo: o.orderNo,
-        sku: o.sku,
-        customerCode: o.customerCode || customer?.customerCode || '',
-        customerName: customer?.customerName || '',
-        quantity: o.quantity,
-        unitPrice: o.unitPrice != null ? Number(o.unitPrice) : null,
-        totalAmount: o.totalAmount != null ? Number(o.totalAmount) : null,
-        balanceBefore: o.balanceBefore != null ? Number(o.balanceBefore) : null,
-        balanceAfter: o.balanceAfter != null ? Number(o.balanceAfter) : null,
-        status: o.status,
-        createdAt: o.createdAt,
-      }
-    })
-
-    return { items, total, page, pageSize }
-  }
+  /** OMS货盘采购记录：独立于当前持有量，保留历史成交与已审核退回。 */
+  catalogPurchases(q: CatalogPurchaseQueryDto) { return readCatalogPurchases(this.prisma,q) }
 
   /**
    * ERP 收回客户货盘持有：客户申购后虽可发货，控制权仍在 ERP。
@@ -1416,9 +1388,18 @@ export class InventoryService {
     input: { clientRequestId?: string; rows?: InventoryAdjustImportRow[]; content?: string; defaultWarehouse?: string },
     operatorId?: number,
   ) {
-    const rows = input.rows?.length
-      ? input.rows
-      : parseInventoryAdjustCsv(String(input.content || ''), input.defaultWarehouse || 'WMS-JHB-01')
+    let rows: InventoryAdjustImportRow[]
+    let sourceLineNos: (number | undefined)[] = []
+    try {
+      if (input.rows?.length) rows = input.rows
+      else {
+        const parsed = parseInventoryAdjustCsv(String(input.content || ''), input.defaultWarehouse || 'WMS-JHB-01')
+        sourceLineNos = parsed.map(row => row.sourceLineNo)
+        rows = parsed.map(({ sourceLineNo: _, ...row }) => row)
+      }
+    } catch (error) {
+      throw new BadRequestException(error instanceof Error ? error.message : '导入文件格式错误')
+    }
 
     if (input.clientRequestId) {
       if (!operatorId || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(input.clientRequestId)) throw new BadRequestException('批量库存变更原请求标识无效')
@@ -1436,12 +1417,18 @@ export class InventoryService {
       })
     }
 
-    const results: Array<{ line: number; ok: boolean; sku?: string; error?: string }> = []
+    const results: Array<{ line: number; ok: boolean; sku?: string; field?: string; error?: string }> = []
     let ok = 0
     let fail = 0
 
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i]
+      const line = sourceLineNos[i] ?? i + 2
+      if (row.qty == null || (typeof row.qty === 'string' && !String(row.qty).trim())) {
+        results.push({ line, ok: false, sku: row.sku, field: '数量', error: '不能为空；零库存请填写 0' })
+        fail++
+        continue
+      }
       try {
         let clientRequestId: string | undefined
         if (input.clientRequestId) {
@@ -1450,11 +1437,11 @@ export class InventoryService {
           clientRequestId = `${h.slice(0,8)}-${h.slice(8,12)}-4${h.slice(13,16)}-8${h.slice(17,20)}-${h.slice(20,32)}`
         }
         await this.applyLocationChange({ ...row, clientRequestId, batchRequestId: input.clientRequestId }, operatorId)
-        results.push({ line: i + 2, ok: true, sku: row.sku })
+        results.push({ line, ok: true, sku: row.sku })
         ok++
       } catch (err) {
         const message = userFacingError(err, undefined, '本行库存变更未确认完成，请核对原批次后继续')
-        results.push({ line: i + 2, ok: false, sku: row.sku, error: message })
+        results.push({ line, ok: false, sku: row.sku, error: message })
         fail++
       }
     }

@@ -25,14 +25,14 @@ import {
   type FulfillmentFilters,
 } from '../data/fulfillmentUtils'
 import FulfillmentDetailDrawer from '../components/outbound/FulfillmentDetailDrawer'
-import { PodStatusBadge, PodUploadModal, PodViewModal, PodRowActions, TableActionLink, actionLinkClass } from '../components/outbound/PodReceiptModals'
+import { PodStatusBadge, PodViewModal, PodRowActions, TableActionLink, actionLinkClass } from '../components/outbound/PodReceiptModals'
 import { useRole } from '../auth/RoleContext'
 import { useDataScope } from '../auth/useDataScope'
 import { getCustomerCode, getCustomerIdForRole } from '../data/dataScope'
 import { pageNotice } from '../utils/pageConfirm'
 
 const POD_TABS = [
-  { id: 'pod_pending', label: '待回传签收单' },
+  { id: 'pod_pending', label: '待 ERP 回传签收单' },
 ] as const
 
 const SOURCE_TABS: { id: string; label: string; source?: ShipmentSource }[] = [
@@ -83,7 +83,6 @@ export default function OutboundRecords() {
     orderNoMode: urlOrderNoMode,
   }))
   const [detailRow, setDetailRow] = useState<FulfillmentRow | null>(null)
-  const [uploadTarget, setUploadTarget] = useState<LogisticsRecord | null>(null)
   const [viewTarget, setViewTarget] = useState<LogisticsRecord | null>(null)
   const [syncing, setSyncing] = useState(false)
 
@@ -159,7 +158,7 @@ export default function OutboundRecords() {
       <div className="mb-4 flex items-start gap-3 rounded-xl bg-blue-50 px-4 py-3.5 ring-1 ring-blue-100">
         <FileCheck className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />
         <p className="text-xs text-blue-900">
-          货送抵 Takealot 等平台仓后，可在列表行点击<strong className="font-semibold">「回传签收单」</strong>上传 POD（PDF/图片）。
+          签收单由 ERP 回传，回传后可在列表中查看或下载。
         </p>
       </div>
 
@@ -316,7 +315,6 @@ export default function OutboundRecords() {
                     )}
                     <PodRowActions
                       record={r.logistics}
-                      onUpload={setUploadTarget}
                       onView={setViewTarget}
                     />
                   </div>
@@ -333,15 +331,9 @@ export default function OutboundRecords() {
         row={detailRow}
         open={!!detailRow}
         onClose={() => setDetailRow(null)}
-        onUploadPod={setUploadTarget}
         onViewPod={setViewTarget}
       />
 
-      <PodUploadModal
-        record={uploadTarget}
-        customerCode={dataScope.activeCustomerCode !== '全平台' ? dataScope.activeCustomerCode : undefined}
-        onClose={() => setUploadTarget(null)}
-      />
       <PodViewModal record={viewTarget} onClose={() => setViewTarget(null)} />
     </div>
   )

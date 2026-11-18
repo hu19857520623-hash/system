@@ -36,6 +36,6 @@ export function asyncFilterSummary(params: Record<string, unknown> | null) {
   return Object.entries(params).map(([name, value]) => `${ASYNC_FILTER_LABELS[name] || '筛选项'}：${VALUES[String(value)] || String(value)}`).join('；') || '全部数据（受当前账号权限范围限制）'
 }
 export function asyncModuleLabel(module: string) {
-  const labels: Record<string, string> = { inventory: '库存', logistics_inventory: '中转仓库存', cost: '采购货款', customers: '客户充值', leads_deals: '成交客户', leads_report: '获客报表', sync: '同步日志', freight: '海运账单', billing: '客户结算', leads: '线索', products: '商品主数据', 'purchase-orders': '采购订单' }
+  const labels: Record<string, string> = { inventory: '库存', logistics_inventory: '中转仓库存', cost: '采购货款', customers: '客户充值明细', leads_deals: '成交客户', leads_report: '获客报表', sync: '同步日志', freight: '海运账单', billing: '仓库作业费用明细', '客户结算': '仓库作业费用明细', '客户充值': '客户充值明细', leads: '线索', products: '商品主数据', 'purchase-orders': '采购订单' }
   return labels[module] || (/[\u3400-\u9fff]/.test(module) ? module : '历史任务')
 }

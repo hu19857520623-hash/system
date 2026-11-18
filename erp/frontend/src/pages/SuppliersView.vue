@@ -8,7 +8,7 @@ import { useListLoader, withAction } from '@/composables/useListLoader.ts'
 import { pickFile } from '@/composables/useAsyncIo'
 import { useTablePagination } from '@/composables/useTablePagination.ts'
 import ListPagination from '@/components/ListPagination.vue'
-import { downloadSupplierImportTemplate } from '@/constants/importTemplates'
+import { downloadSupplierImportTemplate, SUPPLIER_IMPORT_FIELDS, requiredImportFields } from '@/constants/importTemplates'
 import { showImportResultFeedback } from '@/utils/importResultFeedback.ts'
 import { normalizeImportFileText } from '@/utils/csv'
 import { userFacingError } from '@erp/shared/user-facing-error'
@@ -162,6 +162,7 @@ async function importSuppliers() {
             <el-input v-model="searchQ" placeholder="搜索名称 / 公司 / 编码 / 地址" clearable style="width: 240px" size="small" />
             <el-button size="small" @click="downloadSupplierImportTemplate">下载模板</el-button>
             <el-button size="small" @click="importSuppliers">批量导入</el-button>
+            <span class="erp-import-fields">{{ requiredImportFields(SUPPLIER_IMPORT_FIELDS) }}</span>
             <el-button type="primary" size="small" @click="openAdd">添加供应商</el-button>
           </div>
         </div>

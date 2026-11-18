@@ -26,13 +26,13 @@ describe('供应商导入解析', () => {
       ', ,公司,地址,联系人,13800001111,,,,,,',
     ].join('\n'))
     expect(parsed.rows).toHaveLength(0)
-    expect(parsed.failures[0].reason).toContain('供应商名称不能为空')
+    expect(parsed.failures[0]).toMatchObject({ field: '供应商名称', reason: '不能为空' })
   })
 
   it('同一文件里的供应商代码不能重复', () => {
     const row = 'SUP-001,供应商甲,公司甲,地址,联系人,13800001111,,,,,,'
     const parsed = parseSupplierImportCsv([header, row, 'SUP-001,供应商乙,公司乙,地址,联系人,13800002222,,,,,,'].join('\n'))
     expect(parsed.rows).toHaveLength(1)
-    expect(parsed.failures[0].reason).toContain('供应商代码重复')
+    expect(parsed.failures[0]).toMatchObject({ field: '供应商代码', reason: '文件中重复' })
   })
 })

@@ -1,3 +1,5 @@
+import { readRechargeRecords } from './recharge-records.util'
+import type { RechargeRecordQueryDto } from './dto/recharge-record-query.dto'
 import { creditCustomer } from './customer-recharge.util'
 import { setCustomerCredit } from './customer-credit.util'
 import { userFacingError } from '@erp/shared/user-facing-error'
@@ -468,6 +470,8 @@ export class CustomersService {
     }
   }
 
+  rechargeRecords(q:RechargeRecordQueryDto){ return readRechargeRecords(this.prisma,q) }
+
   async rechargeHistory(id: number) {
     await this.detail(id)
     const rows = await this.prisma.customerRecharge.findMany({
@@ -548,6 +552,7 @@ export class CustomersService {
   }
 
   private toPublicCustomer(row: {
+    catalogPriceTier?: string
     id: bigint
     customerCode: string
     customerName: string
@@ -563,6 +568,7 @@ export class CustomersService {
     return {
       id: Number(row.id),
       customerCode: row.customerCode,
+      catalogPriceTier: row.catalogPriceTier ?? 'A',
       customerName: readableDisplayText(row.customerName, row.customerCode),
       companyName: readableDisplayText(row.companyName, row.customerCode),
       contactEmail: row.contactEmail,

@@ -1,5 +1,9 @@
 import { PrePurchaseService } from './pre-purchase.service'
 
+jest.mock('../../common/daily-business-code.util', () => ({
+  nextDailyBusinessCode: jest.fn().mockResolvedValue('PD202611180001'),
+}))
+
 function setup() {
   const po: any = {
     id: 9n, poNo: 'PO-DIRECT-MULTI', status: 'rejected', prePoId: null, purchaserId: 1n, supplierId: 2n,
@@ -156,6 +160,7 @@ describe('历史直采驳回单多明细修改重提', () => {
       ...header, sku: 'SKU-A', productName: '商品A', plannedQty: 4, unitPrice: 11,
     }, { userId: 1, roleCode: 'purchaser' })
     expect(tx.prePurchaseOrder.create).toHaveBeenCalledTimes(1)
+    expect(tx.prePurchaseOrder.create).toHaveBeenCalledWith({ data: expect.objectContaining({ applyNo: 'PD202611180001' }) })
     expect(result).toMatchObject({ id: 31n, status: 'pending_assign', convertedPoId: 9n })
     expect(po.items[0]).toMatchObject({ sku: 'SKU-A', quantity: 4, plannedQty: 4 })
   })

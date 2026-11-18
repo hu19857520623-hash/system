@@ -1,4 +1,4 @@
-import { parseCsv } from '../../common/csv.util'
+import { normalizeImportHeader, parseCsv } from '../../common/csv.util'
 
 /** 与前端 ProductsView 创建商品表单列名一致 */
 export const PRODUCT_IMPORT_HEADERS = [
@@ -66,7 +66,7 @@ export function parseProductsImportCsv(content: string): ParsedProductImportRow[
   const rows = parseCsv(content, { preserveBlankLines: true })
   const headerIndex = rows.findIndex(row => row.some(cell => cell.trim()))
   if (headerIndex < 0 || rows.length <= headerIndex + 1) return []
-  const header = rows[headerIndex].map((h) => h.trim())
+  const header = rows[headerIndex].map(normalizeImportHeader)
   const skuIdx = colIdx(header, ['SKU', 'sku'])
   const spuIdx = colIdx(header, ['SPU', 'spu'])
   const nameIdx = colIdx(header, ['商品名称', 'productName', 'product_name', '名称'])

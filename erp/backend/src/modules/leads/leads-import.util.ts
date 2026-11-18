@@ -1,4 +1,5 @@
-import { parseCsv } from '../../common/csv.util'
+import { normalizeImportHeader, parseCsv } from '../../common/csv.util'
+import type { ImportRowFailure } from '../../common/import-row-result.util'
 
 /** 与前端 LeadsPoolView 新建线索表单列名一致 */
 export const LEADS_IMPORT_HEADERS = [
@@ -34,10 +35,11 @@ export interface ParsedLeadImportRow {
   remark?: string
 }
 
-export function parseLeadsImportCsv(content: string): ParsedLeadImportRow[] {
-  const rows = parseCsv(content)
-  if (rows.length < 2) return []
-  const header = rows[0].map((h) => h.trim())
+export function parseLeadsImportCsv(content: string, failures: ImportRowFailure[] = []): ParsedLeadImportRow[] {
+  const rows = parseCsv(content, { preserveBlankLines: true })
+  const headerIndex = rows.findIndex(row => row.some(cell => cell.trim()))
+  if (headerIndex < 0) return []
+  const header = rows[headerIndex].map(normalizeImportHeader)
   const leadNoIdx = colIdx(header, ['线索编号', 'leadNo', 'lead_no'])
   const nameIdx = colIdx(header, ['客户名称', '公司名称', 'company', 'companyName'])
   const contactIdx = colIdx(header, ['联系方式', '联系人', 'contact', 'contactName'])
@@ -48,14 +50,17 @@ export function parseLeadsImportCsv(content: string): ParsedLeadImportRow[] {
   const remarkIdx = colIdx(header, ['备注', 'remark'])
   const typeIdx = colIdx(header, ['联系方式类型', 'contactType', 'contact_type'])
   if (nameIdx < 0) throw new Error('CSV 需包含「客户名称」列')
+  if (contactIdx < 0) throw new Error('CSV 需包含「联系方式」列')
 
   const parsed: ParsedLeadImportRow[] = []
-  for (let i = 1; i < rows.length; i++) {
+  for (let i = headerIndex + 1; i < rows.length; i++) {
     const cols = rows[i]
+    if (!cols.some(cell => cell.trim())) continue
     const companyName = cols[nameIdx]?.trim()
-    if (!companyName) continue
-    const contactName = contactIdx >= 0 ? cols[contactIdx]?.trim() : ''
-    if (!contactName) continue
+    const contactName = cols[contactIdx]?.trim()
+    if (!companyName) failures.push({ lineNo: i + 1, field: '客户名称', reason: '不能为空' })
+    if (!contactName) failures.push({ lineNo: i + 1, field: '联系方式', reason: '不能为空' })
+    if (!companyName || !contactName) continue
     parsed.push({
       lineNo: i + 1,
       leadNo: leadNoIdx >= 0 ? cols[leadNoIdx]?.trim() || undefined : undefined,

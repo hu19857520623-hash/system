@@ -10,8 +10,8 @@ const FILTERS: Record<string, string[]> = {
 }
 const ALIASES: Record<string, string> = {
   '库存': 'inventory', '中转仓库存': 'logistics_inventory', '成本台账': 'cost', '采购货款': 'cost',
-  '客户充值': 'customers', '成交客户': 'leads_deals', '获客报表': 'leads_report',
-  '同步日志': 'sync', '海运账单': 'freight', '客户结算': 'billing',
+  '客户充值': 'customers', '客户充值明细': 'customers', '成交客户': 'leads_deals', '获客报表': 'leads_report',
+  '同步日志': 'sync', '海运账单': 'freight', '客户结算': 'billing', '仓库作业费用明细': 'billing',
 }
 export function exportScope(module: string, input: unknown = {}) {
   const key = ALIASES[module] || module

@@ -50,9 +50,9 @@ export const routes: RouteRecordRaw[] = [
       { path: 'flow-debug', name: 'FlowDebug', component: () => import('@/pages/FlowDebugView.vue'), meta: { title: '流程字段与接口调试', section: '同步' } },
       { path: 'operation-logs', name: 'OperationLog', component: () => import('@/pages/OperationLogView.vue'), meta: { title: '操作日志', section: '同步' } },
       // 财务
-      { path: 'billing', name: 'Billing', component: () => import('@/pages/BillingView.vue'), meta: { title: '客户结算', section: '财务' } },
+      { path: 'billing', name: 'Billing', component: () => import('@/pages/BillingView.vue'), meta: { title: '仓库作业费用明细', section: '财务' } },
       { path: 'customers', name: 'Customers', component: () => import('@/pages/CustomerListView.vue'), meta: { title: '客户列表', section: '财务' } },
-      { path: 'customer-recharge', name: 'CustomerRecharge', component: () => import('@/pages/CustomerRechargeView.vue'), meta: { title: '客户充值', section: '财务' } },
+      { path: 'customer-recharge', redirect: to => ({ path: '/finance-books/recharge', query: { ...to.query }, hash: to.hash }) },
       { path: 'supplier-freight', redirect: '/finance-books/freight' },
       { path: 'finance-books/:tab?', name: 'FinanceBooks', component: () => import('@/pages/FinanceBooksView.vue'), meta: { title: '账本分析', section: '财务' } },
       // 运营

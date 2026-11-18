@@ -714,16 +714,6 @@ export function fetchErpOutboundByNo(outboundNo: string) {
   return erpRequest<ErpOutboundOrder>(`/outbound/oms/by-no/${encodeURIComponent(outboundNo)}`)
 }
 
-export function uploadErpPodReceipt(
-  outboundNo: string,
-  body: { customerCode: string; fileName: string; contentBase64: string },
-) {
-  return erpRequest<ErpOutboundOrder>(`/outbound/oms/by-no/${encodeURIComponent(outboundNo)}/pod`, {
-    method: 'POST',
-    body: JSON.stringify(body),
-  })
-}
-
 export async function downloadErpOutboundPod(outboundNo: string, customerCode: string) {
   const code = String(customerCode || '').trim()
   if (!code) throw new ErpApiError(400, '缺少客户代码')
@@ -868,4 +858,15 @@ export function uploadErpOmsProductImage(body: { fileName: string; contentBase64
     method: 'POST',
     body: JSON.stringify(body),
   })
+}
+
+export function submitErpNegativePurchase(data: unknown) {
+  return erpRequest('/pricing/oms/negative-purchases', { method: 'POST', body: JSON.stringify(data) })
+}
+export function fetchErpNegativePurchases(customerCode: string) {
+  return erpRequest(`/pricing/oms/negative-purchases?customerCode=${encodeURIComponent(customerCode)}`)
+}
+
+export function cancelErpNegativePurchase(id: number, customerCode: string) {
+  return erpRequest(`/pricing/oms/negative-purchases/${id}/cancel`, { method: 'POST', body: JSON.stringify({ customerCode }) })
 }

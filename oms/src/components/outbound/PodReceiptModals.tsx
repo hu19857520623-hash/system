@@ -1,11 +1,9 @@
 
 import { userFacingError } from '../../utils/userFacingError'
 import { useEffect, useRef, useState } from 'react'
-import { Upload, X, FileCheck, Eye, Download } from 'lucide-react'
+import { X, FileCheck, Eye, Download } from 'lucide-react'
 import { Button, MonoCode } from '../ui'
 import type { LogisticsRecord } from '../../data/mockData'
-import { uploadPodReceipt } from '../../data/logisticsStore'
-import { readFileAsDataUrl } from '../../data/fileUtils'
 import { getOutboundPodFileUrl } from '../../api/erp'
 import { fetchWithAuth } from '../../api/client'
 import { pageNotice } from '../../utils/pageConfirm'
@@ -59,89 +57,8 @@ export function PodStatusBadge({ status }: { status: LogisticsRecord['podStatus'
   if (status === 'not_required') return <span className="text-xs text-text-muted">—</span>
   return (
     <span className={`rounded-md px-2 py-0.5 text-[11px] font-semibold ${podBadgeClass(status)}`}>
-      {status === 'uploaded' ? '已回传' : '待回传'}
+      {status === 'uploaded' ? '已回传' : '待 ERP 回传'}
     </span>
-  )
-}
-
-export function PodUploadModal({
-  record,
-  customerCode,
-  onClose,
-}: {
-  record: LogisticsRecord | null
-  customerCode?: string
-  onClose: () => void
-}) {
-  const [selectedFile, setSelectedFile] = useState<File | null>(null)
-  const [uploading, setUploading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const fileInputRef = useRef<HTMLInputElement>(null)
-
-  if (!record) return null
-
-  const handleUpload = async () => {
-    if (!selectedFile) return
-    setUploading(true)
-    setError(null)
-    try {
-      const url = await readFileAsDataUrl(selectedFile)
-      const result = await uploadPodReceipt(record.id, selectedFile.name, url, customerCode)
-      if (!result.ok) {
-        setError(userFacingError(result.error))
-        return
-      }
-      onClose()
-    } finally {
-      setUploading(false)
-    }
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/20 p-4 backdrop-blur-sm" onClick={onClose}>
-      <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl ring-1 ring-border-light" onClick={e => e.stopPropagation()}>
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <h3 className="text-base font-semibold text-text-primary">回传签收单</h3>
-            <p className="mt-1 text-xs text-text-muted">
-              出库单 <MonoCode>{record.outboundNo}</MonoCode> · {record.destination}
-            </p>
-          </div>
-          <button type="button" onClick={onClose} className="rounded p-1 text-text-muted hover:bg-surface-muted">
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-        <div className="mt-4 space-y-3">
-          <p className="text-xs text-text-secondary">请上传平台仓签收回执，支持 PDF、JPG、PNG，单文件不超过 10MB。</p>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".pdf,.jpg,.jpeg,.png"
-            className="hidden"
-            onChange={e => setSelectedFile(e.target.files?.[0] ?? null)}
-          />
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            className="flex w-full flex-col items-center justify-center rounded-xl border-2 border-dashed border-border bg-surface-muted/30 px-4 py-8 text-center hover:border-primary-400"
-          >
-            <Upload className="h-6 w-6 text-text-muted" />
-            <p className="mt-2 text-sm font-medium text-text-primary">
-              {selectedFile ? selectedFile.name : '点击选择签收单文件'}
-            </p>
-          </button>
-        </div>
-        {error && (
-          <p className="mt-3 text-xs text-red-600">{error}</p>
-        )}
-        <div className="mt-6 flex justify-end gap-2">
-          <Button variant="secondary" onClick={onClose}>取消</Button>
-          <Button disabled={!selectedFile || uploading} onClick={() => void handleUpload()}>
-            {uploading ? '回传中…' : '确认回传'}
-          </Button>
-        </div>
-      </div>
-    </div>
   )
 }
 
@@ -269,21 +186,12 @@ export function PodViewModal({
 
 export function PodRowActions({
   record,
-  onUpload,
   onView,
 }: {
   record?: LogisticsRecord
-  onUpload: (r: LogisticsRecord) => void
   onView: (r: LogisticsRecord) => void
 }) {
   if (!record || record.podStatus === 'not_required') return null
-  if (record.podStatus === 'pending') {
-    return (
-      <TableActionLink icon={<Upload className="h-3 w-3 shrink-0" />} onClick={() => onUpload(record)}>
-        回传
-      </TableActionLink>
-    )
-  }
   if (record.podStatus === 'uploaded') {
     return (
       <>

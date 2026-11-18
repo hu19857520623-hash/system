@@ -104,7 +104,7 @@ onMounted(reload)
         <div>
           <span class="page-title">Takealot 目的仓配置</span>
           <p class="page-desc">
-            用于客户结算「送达地点」筛选、出库 fbaWarehouse 匹配与 OMS 预约发货目的仓下拉；与 ERP 海外仓主数据（WMS 编码）独立维护。
+            用于仓库作业费用明细「送达地点」筛选、出库 fbaWarehouse 匹配与 OMS 预约发货目的仓下拉；与 ERP 海外仓主数据（WMS 编码）独立维护。
           </p>
         </div>
         <el-button v-if="canManage()" type="primary" size="small" @click="openCreate">新增</el-button>

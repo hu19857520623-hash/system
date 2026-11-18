@@ -1,4 +1,9 @@
 <script setup lang="ts">
+import CatalogPurchaseHistoryDialog from '@/components/CatalogPurchaseHistoryDialog.vue'
+import CatalogPriceBatchDialog from '@/components/CatalogPriceBatchDialog.vue'
+import CatalogPricesDialog from '@/components/CatalogPricesDialog.vue'
+import CatalogNegativeReviewDialog from '@/components/CatalogNegativeReviewDialog.vue'
+
 import { useCatalogAttempt, catalogActionLabel, type CatalogAction } from '@/features/pricing/catalogAttempt'
 import { useRepriceAttempt } from '@/features/pricing/repriceAttempt'
 import { readReclaimAttempt, runReclaimAttempt, reclaimRequestId, endChangedReclaimAttempt, type ReclaimAttempt } from '@/utils/catalogReclaimWorkflow'
@@ -28,6 +33,8 @@ import { PIPELINE_PRICING_ALERT } from '@/constants/productPipeline.ts'
 
 const app = useAppStore()
 const route = useRoute()
+const batchPricesVisible = ref(false)
+const tierPricesVisible = ref(false), tierPricesId = ref<number | null>(null), negativeReviewVisible = ref(false)
 
 const section = ref<'pool' | 'holdings'>('pool')
 const tab = ref('all')
@@ -123,6 +130,7 @@ const pricingStatusMap: Record<string, { label: string; type: string }> = {
 }
 
 const canSetPrice = computed(() => app.hasPerm('pricing.set'))
+const canReadPurchases = computed(() => ['pricing.view','inventory_query.view','inventory_query.detail','logistics_wh.view'].some(p => app.hasPerm(p)))
 const canSyncOms = computed(() => app.hasPerm('pricing.sync_oms'))
 const canReclaim = computed(() => ['admin', 'finance'].includes(app.authenticatedUser?.roleCode || '') && app.hasPerm('inventory_query.reclaim_refund'))
 const refundHistoryVisible = ref(false)
@@ -154,11 +162,8 @@ const holdingsPageSize = ref(20)
 const holdingsCustomerCode = ref('')
 const holdingsProductCode = ref('')
 const catalogPurchaseVisible = ref(false)
-const catalogPurchaseLoading = ref(false)
-const catalogPurchaseError = ref('')
 const catalogPurchaseSku = ref('')
 const catalogPurchaseCustomer = ref('')
-const catalogPurchaseRows = ref<any[]>([])
 const reclaimDialogVisible = ref(false)
 const reclaimSubmitting = ref(false)
 const reclaimPending = ref<ReclaimAttempt | null>(null), reclaimStorageError = ref(''), reclaimError = ref(''), reclaimQuoteError = ref(''), reclaimReading = ref(false)
@@ -223,26 +228,10 @@ function isReclaimableRow(row: HoldingRow) {
     && Number(row.availableQty ?? row.sellableQty ?? 0) > 0)
 }
 
-async function openCatalogPurchases(row: HoldingRow) {
-  catalogPurchaseSku.value = row.sku
-  catalogPurchaseCustomer.value = row.customerCode || ''
-  catalogPurchaseVisible.value = true
-  catalogPurchaseLoading.value = true
-  catalogPurchaseError.value = ''
-  catalogPurchaseRows.value = []
-  try {
-    const res = await inventoryApi.catalogPurchases({
-      sku: row.sku,
-      customerCode: row.customerCode || undefined,
-      page: 1,
-      pageSize: 100,
-    })
-    catalogPurchaseRows.value = res.items || []
-  } catch (e: any) {
-    catalogPurchaseError.value = userFacingError(displaySkuText(e?.message || '加载购买明细失败'))
-  } finally {
-    catalogPurchaseLoading.value = false
-  }
+function openCatalogPurchases(row?: {sku?:string;customerCode?:string}) {
+  catalogPurchaseSku.value=row?.sku||''
+  catalogPurchaseCustomer.value=row?.customerCode||''
+  catalogPurchaseVisible.value=true
 }
 
 function openReclaim(row: HoldingRow) {
@@ -636,12 +625,15 @@ async function submitReprice() {
       <div class="page-header">
         <div class="page-header-left">
           <span class="page-title">货盘库存</span>
+          <el-button v-if="canReadPurchases" size="small" @click="openCatalogPurchases()">OMS货盘采购记录</el-button>
+          <el-button v-if="app.hasPerm('inventory_query.reclaim_refund')" size="small" @click="negativeReviewVisible=true">负申购审核</el-button>
           <el-radio-group v-model="section" size="small" class="section-switch">
             <el-radio-button value="pool">货盘池</el-radio-button>
             <el-radio-button value="holdings">货盘持有</el-radio-button>
           </el-radio-group>
         </div>
         <div v-if="section === 'pool'" class="header-actions">
+          <el-button v-if="canSetPrice" size="small" :disabled="catalogWriteLocked" @click="batchPricesVisible=true">四档价格批量上传 / 修改</el-button>
           <el-tag size="small" type="info">当前角色：{{ app.currentRole }}</el-tag>
           <el-badge :value="myTodoCount" :hidden="myTodoCount === 0" type="danger">
             <el-button size="small" :type="tab === 'todo' ? 'primary' : 'default'" @click="tab = 'todo'">我的待办</el-button>
@@ -761,6 +753,7 @@ async function submitReprice() {
       </el-table-column>
       <el-table-column label="操作" width="290" fixed="right">
         <template #default="{ row }">
+          <el-button v-if="canSetPrice && ['priced','synced'].includes(row.pricingStatus)" link type="primary" size="small" :disabled="catalogWriteLocked" @click="tierPricesId=row.id;tierPricesVisible=true">四档价格</el-button>
           <el-button link type="primary" size="small" @click="openPricing(row.id)">{{ needMyAction(row) ? '去处理' : '查看详情' }}</el-button>
           <el-button v-if="canSetPrice && ['priced','synced'].includes(row.pricingStatus)" link type="primary" size="small" :disabled="catalogWriteLocked" @click="openVisibility(row as PriceItem)">调整额度</el-button>
           <el-button v-if="row.pricingStatus === 'priced' && canSyncOms" link type="success" size="small" :disabled="catalogWriteLocked" @click="syncRow(row.id)">同步OMS</el-button>
@@ -1076,36 +1069,12 @@ async function submitReprice() {
     </template>
   </el-dialog>
 
-  <el-dialog
-    v-model="catalogPurchaseVisible"
-    :title="`货盘购买明细 · ${catalogPurchaseSku}${catalogPurchaseCustomer ? ' · ' + catalogPurchaseCustomer : ''}`"
-    width="820px"
-    destroy-on-close
-  >
-    <el-alert v-if="catalogPurchaseError" :title="catalogPurchaseError" type="error" :closable="false" />
-    <el-button v-if="catalogPurchaseError" :loading="catalogPurchaseLoading" @click="openCatalogPurchases({ sku: catalogPurchaseSku, customerCode: catalogPurchaseCustomer } as HoldingRow)">重新读取购买明细</el-button>
-    <el-table v-loading="catalogPurchaseLoading" :data="catalogPurchaseRows" border size="small" max-height="420">
-      <el-table-column prop="orderNo" label="订单号" width="140">
-        <template #default="{ row }"><span class="mono">{{ row.orderNo }}</span></template>
-      </el-table-column>
-      <el-table-column prop="customerCode" label="客户代码" width="100" />
-      <el-table-column prop="customerName" label="客户名称" min-width="120" show-overflow-tooltip />
-      <el-table-column prop="quantity" label="购买数量" width="80" align="right" />
-      <el-table-column label="单价" width="72" align="right">
-        <template #default="{ row }">{{ row.unitPrice != null ? row.unitPrice : '—' }}</template>
-      </el-table-column>
-      <el-table-column label="合计" width="80" align="right">
-        <template #default="{ row }">{{ row.totalAmount != null ? row.totalAmount : '—' }}</template>
-      </el-table-column>
-      <el-table-column label="购买时间" width="150">
-        <template #default="{ row }">{{ fmtTime(row.createdAt) }}</template>
-      </el-table-column>
-    </el-table>
-    <el-empty v-if="!catalogPurchaseError && !catalogPurchaseLoading && !catalogPurchaseRows.length" description="暂无购买记录" :image-size="64" />
-    <template #footer><el-button @click="catalogPurchaseVisible = false">返回货盘持有</el-button></template>
-  </el-dialog>
+  <CatalogPurchaseHistoryDialog v-if="canReadPurchases" v-model="catalogPurchaseVisible" :initial-sku="catalogPurchaseSku" :initial-customer-code="catalogPurchaseCustomer" />
 
   <CatalogRefundHistoryDialog v-if="canReclaim" v-model="refundHistoryVisible" @refreshed="loadHoldings" />
+  <CatalogPriceBatchDialog v-if="canSetPrice" v-model="batchPricesVisible" @updated="load" />
+  <CatalogPricesDialog v-if="canSetPrice" v-model="tierPricesVisible" :pricing-id="tierPricesId" @updated="load" />
+  <CatalogNegativeReviewDialog v-if="app.hasPerm('inventory_query.reclaim_refund')" v-model="negativeReviewVisible" @updated="load" />
   <CatalogVisibilityDialog v-if="canSetPrice" v-model="visibilityVisible" :pricing-id="visibilityId" @pending-change="hasPendingVisibility=$event" @updated="load" />
   <el-dialog v-model="reclaimDialogVisible" title="收回持有并按原购买单退款" width="680px" destroy-on-close>
     <p class="reclaim-tip">
