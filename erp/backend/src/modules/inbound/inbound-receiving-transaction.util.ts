@@ -176,7 +176,7 @@ export async function runInboundReceiving(prisma: PrismaService, id: number, kin
           await tx.operationLog.create({ data: { operatorId: BigInt(operatorId), module: 'product', action: 'dimension_measure', targetType: 'product', targetId: item.sku, detail: { inboundNo: order.inboundNo, lengthCm: line.lengthCm, widthCm: line.widthCm, heightCm: line.heightCm } } })
         }
       }
-      const abnormal = resolved.some(({ line, item }) => line.qcStatus === 'fail' || (line.actualQty !== item.expectedQty && !body.acceptDiff))
+      const abnormal = resolved.some(({ line, item }) => line.qcStatus === 'fail' || line.actualQty !== item.expectedQty)
       const nextStatus = abnormal ? 'exception' : 'pending_putaway'
       await tx.inboundOrder.update({ where: { id: order.id }, data: { status: nextStatus, qcAt: new Date(), qcBy: BigInt(operatorId) } }); order.status = nextStatus
       response = { id, inboundNo: order.inboundNo, status: nextStatus, measuredCount: kind === 'qc-measure-submit' ? resolved.filter(({ line }) => line.actualQty > 0).length : 0,

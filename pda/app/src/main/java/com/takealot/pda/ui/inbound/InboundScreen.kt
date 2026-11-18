@@ -96,7 +96,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 
 enum class InboundMode(val key: String, val title: String, val scanLabel: String) {
-    Arrival("arrival", "到仓扫描", "扫入库单号"),
+    Arrival("arrival", "电商入库", "扫入库单号"),
     Receive("receive", "确认箱数", "扫外箱箱唛"),
     Qc("qc", "清点数量", "扫 SKU / 已绑 990"),
     Catalog("catalog", "货盘入库", "扫入库单号绑定，再扫 SKU"),
@@ -1399,9 +1399,8 @@ fun InboundScreen(modeKey: String, onBack: () -> Unit, vm: InboundViewModel = vi
                     Text("此异常单需由具备「异常放行」权限的主管处理", color = PdaWarn, fontSize = 13.sp)
                 }
             }
-            if (vm.mode == InboundMode.Qc || vm.mode == InboundMode.Catalog) BigButton("提交清点 → 上架", onClick = { vm.submitQc() }, enabled = !vm.busy && vm.pendingScanCount == 0 && order.statusKey in setOf("arrived", "receiving") && order.itemList.isNotEmpty() && vm.countingCartonBlock == null && PdaApp.instance.session.hasPerm("inbound.qc"), color = PdaInbound)
             if ((vm.mode == InboundMode.Qc || vm.mode == InboundMode.Catalog) && order.itemList.any { (it.actualQty ?: 0) != it.expectedQty }) {
-                Text("数量尚未一致；提交清点时将弹出收货差异核对窗口", color = PdaWarn, fontSize = 13.sp)
+                Text("数量存在差异，提交后须由主管审核放行才能上架", color = PdaWarn, fontSize = 13.sp)
             }
             if (vm.mode == InboundMode.Putaway) PutawayEditor(vm)
             Text("SKU 明细", color = PdaInbound, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
@@ -1467,6 +1466,10 @@ fun InboundScreen(modeKey: String, onBack: () -> Unit, vm: InboundViewModel = vi
                     }
                 }
             }
+            if (vm.mode == InboundMode.Qc || vm.mode == InboundMode.Catalog) BigButton("提交清点 → 上架", onClick = { vm.submitQc() }, enabled = !vm.busy && vm.pendingScanCount == 0 && order.statusKey in setOf("arrived", "receiving") && order.itemList.isNotEmpty() && vm.countingCartonBlock == null && PdaApp.instance.session.hasPerm("inbound.qc"), color = PdaInbound)
+            if (vm.mode == InboundMode.Putaway) {
+                BigButton("确认上架", onClick = { vm.submitPutaway() }, enabled = !vm.busy && vm.pendingScanCount == 0 && vm.selectedItem != null, color = PdaOk)
+            }
         }
     }
     }
@@ -1499,7 +1502,7 @@ fun InboundScreen(modeKey: String, onBack: () -> Unit, vm: InboundViewModel = vi
 @Composable
 private fun QcDifferenceDialog(vm: InboundViewModel) {
     val differences = vm.order?.itemList.orEmpty().filter { (it.actualQty ?: 0) != it.expectedQty }
-    val canAccept = PdaApp.instance.session.hasPerm("inbound.confirm_diff")
+    val canAccept = false
     val canSubmit = !vm.busy && vm.qcDifferenceReason.trim().length >= 2
     Dialog(
         onDismissRequest = { if (!vm.busy) vm.showQcDifference = false },
@@ -1647,7 +1650,6 @@ private fun PutawayEditor(vm: InboundViewModel) {
             )
             BigButton("保存尺寸", onClick = { vm.saveMeasure() }, enabled = !vm.busy)
         }
-        BigButton("确认上架", onClick = { vm.submitPutaway() }, enabled = !vm.busy && vm.pendingScanCount == 0 && item != null, color = PdaOk)
     }
 }
 

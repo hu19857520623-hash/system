@@ -64,6 +64,16 @@ describe('仓库收箱、清点和测量的一致性', () => {
     expect(f.state().order).toMatchObject({ receivedCartonCount: null, items: [{ actualQty: 15 }, { actualQty: 2 }] })
   })
 
+  it.each([1, 3])('实收%s与应收不一致时，即使acceptDiff也必须进入异常审核', async actualQty => {
+    const f = fixture()
+    await runInboundReceiving(f.prisma, 1, 'carton-count', f.count(), 1)
+    const input = f.qc()
+    input.items[0].actualQty = actualQty
+    await expect(runInboundReceiving(f.prisma, 1, 'qc-submit', { ...input, acceptDiff: true } as any, 1))
+      .resolves.toMatchObject({ status: 'exception' })
+    expect(f.state().order.status).toBe('exception')
+  })
+
   it('普通客户单不能用货盘标记绕过收箱', async () => {
     const f = fixture()
     f.state().order.sourceWarehouseCode = 'CN01'
