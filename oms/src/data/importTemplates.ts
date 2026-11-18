@@ -10,9 +10,10 @@ import type {
   StoreAccount,
 } from './mockData'
 import { findProductByCode, firstTakealotStore } from './platformBindingUtils'
+import { bindingStockSource } from './bindingStockSource'
 import type { ReturnLineItem } from './returnStore'
 import { RETURN_PROCESS_OPTIONS, RETURN_WAREHOUSE_OPTIONS } from './returnStore'
-import { getCustomerSkuDisplay, validateCustomerSku } from './skuCode'
+import { getCustomerSkuDisplay, productVisibleToCustomer, validateCustomerSku } from './skuCode'
 import type { CsvColumn } from './csvImportExport'
 import { columnHeader, downloadCsv, downloadTemplate, sourceLineNoFromRecord } from './csvImportExport'
 import type { ImportRowFailure } from '../utils/importFailureDetail'
@@ -288,13 +289,17 @@ export function exportInboundOrders(orders: InboundOrder[]) {
 
 export const PLATFORM_BINDING_COLUMNS: CsvColumn[] = [
   { key: 'platformBarcode', header: '990条码', required: true, hint: 'Takealot 990 条码' },
+  { key: 'internalSku', header: '客户自定义SKU', aliases: ['仓库商品编码'], required: true, hint: '当前客户的商品 SKU' },
+]
+
+export const PLATFORM_BINDING_IMPORT_COLUMNS: CsvColumn[] = [
+  ...PLATFORM_BINDING_COLUMNS,
   { key: 'platformTitle', header: '商品名称', required: false },
-  { key: 'stockSource', header: '库存来源', required: true, hint: '自有库存 / 货盘库存' },
-  { key: 'internalSku', header: '仓库商品编码', required: true, hint: '内部 SKU' },
+  { key: 'stockSource', header: '库存来源', required: false },
   { key: 'warehouseName', header: '仓库商品名称', required: false, hint: '默认取商品名' },
   { key: 'shortName', header: '仓库商品简称', required: false },
   { key: 'packType', header: '仓库商品包装', required: false, hint: '自带包装 / 仓库包装' },
-  { key: 'lineQty', header: '仓库商品数量', required: true, hint: '组合品对应数量，默认 1' },
+  { key: 'lineQty', header: '仓库商品数量', required: false },
 ]
 
 function parseStockSource(value: string): StockSource | null {
@@ -304,9 +309,7 @@ function parseStockSource(value: string): StockSource | null {
 }
 
 export function downloadPlatformBindingTemplate() {
-  downloadTemplate('OMS-990绑定导入模板.xls', PLATFORM_BINDING_COLUMNS, [
-    ['9901234567890', 'Wireless Mouse', '自有库存', 'HX6', 'Ergonomic Mouse', '', '自带包装', '1'],
-  ])
+  downloadTemplate('OMS-990绑定导入模板.xls', PLATFORM_BINDING_COLUMNS)
 }
 
 export interface ParsedPlatformBinding {
@@ -322,6 +325,8 @@ export interface ParsedPlatformBinding {
 export function parsePlatformBindings(
   records: Record<string, string>[],
   stores: StoreAccount[],
+  products: Pick<Product, 'internalSku' | 'customerSku' | 'customerId' | 'inCatalog' | 'name'>[],
+  customerId: string,
 ): ParseResult<ParsedPlatformBinding> {
   const groups = new Map<string, ParsedPlatformBinding>()
   const errors: string[] = []
@@ -336,8 +341,8 @@ export function parsePlatformBindings(
       return
     }
     const store = firstTakealotStore(stores)
-    const stockSource = parseStockSource(row.stockSource)
-    if (!stockSource) {
+    const legacyStockSource = parseStockSource(row.stockSource)
+    if (row.stockSource && !legacyStockSource) {
       pushParseFailure(failures, errors, lineNo, '库存来源须为「自有库存」或「货盘库存」', internalSku)
       return
     }
@@ -347,15 +352,23 @@ export function parsePlatformBindings(
       return
     }
 
-    const key = `${store?.id || ''}|${barcode}|${stockSource}`
-    const prod = findProductByCode(row.internalSku)
+    const code = internalSku?.toLowerCase()
+    const matches = products.filter(product => code && productVisibleToCustomer(product, customerId)
+      && [product.customerSku, product.internalSku, getCustomerSkuDisplay(product)].some(value => value?.trim().toLowerCase() === code))
+    if (matches.length !== 1) {
+      pushParseFailure(failures, errors, lineNo, matches.length ? '客户自定义 SKU 匹配到多个商品，请核对编码' : '当前客户下找不到该 SKU，请核对编码', internalSku)
+      return
+    }
+    const [prod] = matches
     const line = {
-      internalSku: row.internalSku,
-      warehouseName: row.warehouseName || prod?.name || row.internalSku,
+      internalSku: prod.internalSku,
+      warehouseName: row.warehouseName || prod.name,
       shortName: row.shortName || undefined,
       packType: row.packType || '自带包装',
       qty: lineQty,
     }
+    const stockSource = bindingStockSource([line], [prod], legacyStockSource ?? 'owned')
+    const key = `${store?.id || ''}|${barcode}|${stockSource}`
 
     if (!groups.has(key)) {
       groups.set(key, {
@@ -384,8 +397,8 @@ export const PRODUCT_COLUMNS: CsvColumn[] = [
   { key: 'customCode', header: '自定义编号', required: false },
   { key: 'declaredValue', header: '申报价值', required: true, hint: '人民币，数字' },
   { key: 'declaredNameCn', header: '中文申报品名', required: true, hint: '报关中文品名' },
-  { key: 'declaredNameEnDecl', header: '英文申报品名', required: true, hint: '报关英文品名' },
-  { key: 'unit', header: '产品单位', required: true, hint: 'PCS / SET / BOX' },
+  { key: 'declaredNameEnDecl', header: '英文申报品名', required: false, hint: '留空使用产品名称EN' },
+  { key: 'unit', header: '产品单位', required: false, hint: '留空默认为个（PCS），也可填 SET / BOX' },
   { key: 'weightKg', header: '产品重量KG', required: true, hint: '0.001-9999.999' },
   { key: 'lengthCm', header: '长CM', required: true, hint: '外包装长度' },
   { key: 'widthCm', header: '宽CM', required: true, hint: '外包装宽度' },

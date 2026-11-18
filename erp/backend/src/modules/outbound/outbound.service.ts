@@ -58,6 +58,7 @@ import {
   parseOmsOutboundPreDeduct,
   parseOmsOutboundMeasure,
   parseOmsOutboundActualFees,
+  resetOutboundRemarkForReissue,
   upsertOutboundMeasureInRemark,
   upsertOutboundActualFeesInRemark,
   parseStockSourceFromRemark,
@@ -604,14 +605,18 @@ export class OutboundService {
     return { ...item, items }
   }
 
-  private async allocateOutboundNo(customerCode?: string, customerId?: number | string | bigint | null) {
+  private async allocateOutboundNo(
+    customerCode?: string,
+    customerId?: number | string | bigint | null,
+    db: Prisma.TransactionClient = this.prisma,
+  ) {
     let code = String(customerCode || '').trim()
     if (!code && customerId) {
-      const customer = await this.prisma.customer.findUnique({ where: { id: BigInt(customerId) } })
+      const customer = await db.customer.findUnique({ where: { id: BigInt(customerId) } })
       code = customer?.customerCode || ''
     }
     const prefix = outboundNoPrefix(code)
-    const rows = await this.prisma.outboundOrder.findMany({
+    const rows = await db.outboundOrder.findMany({
       where: { outboundNo: { startsWith: prefix } },
       select: { outboundNo: true },
     })
@@ -2034,6 +2039,129 @@ export class OutboundService {
     })
     await this.pushOutboundStatusToOms(outboundNo)
     return this.detail(id)
+  }
+
+  async reissue(id: number, operatorId: number) {
+    const result = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM outbound_order WHERE id = ${BigInt(id)} FOR UPDATE`
+      const source = await tx.outboundOrder.findUnique({
+        where: { id: BigInt(id) },
+        include: { items: { orderBy: { productId: 'asc' } }, attachments: true },
+      })
+      if (!source) throw new NotFoundException('出库单不存在')
+      if (source.status !== 'cancelled') throw new BadRequestException('仅已作废的出库单可以重新出库')
+
+      const previous = await tx.operationLog.findFirst({
+        where: { module: 'outbound', action: 'reissue', targetType: 'outbound_order', targetId: source.outboundNo },
+      })
+      const detail = previous?.detail as { outboundNo?: string } | null | undefined
+      if (detail?.outboundNo) return { outboundNo: detail.outboundNo, alreadyReissued: true }
+
+      if (!source.items.length) throw new BadRequestException('原出库单缺少商品明细')
+      const stockSource = parseStockSourceFromRemark(source.remark)
+      const preDeduct = parseOmsOutboundPreDeduct(source.remark)
+      const total = Math.max(0, Number(preDeduct?.preDeductTotal) || 0)
+      const { customerId, warehouseCode } = source
+      if (customerId) await tx.$queryRaw`SELECT id FROM customer WHERE id = ${customerId} FOR UPDATE`
+      const customer = customerId ? await tx.customer.findUnique({ where: { id: customerId } }) : null
+      if ((customerId && customer?.status !== 1) || (!customerId && (stockSource || total > 0))) {
+        throw new BadRequestException('原出库单客户不存在或已停用')
+      }
+      const warehouse = await tx.warehouse.findUnique({ where: { warehouseCode } })
+      if (!warehouse || warehouse.status !== 1) throw new BadRequestException('原出库仓库不存在或已停用')
+
+      for (const item of source.items) {
+        if (item.qty <= 0) throw new BadRequestException(`${item.sku} 的原出库数量无效`)
+        const reserved = await tx.inventory.updateMany({
+          where: { productId: item.productId, warehouseCode, availableQty: { gte: item.qty } },
+          data: { availableQty: { decrement: item.qty }, lockedQty: { increment: item.qty } },
+        })
+        if (reserved.count !== 1) throw new BadRequestException(`${item.sku} 可用库存不足，需要 ${item.qty}`)
+        if (stockSource === 'catalog' && customerId) {
+          const holdings = await tx.customerSkuInventory.findMany({
+            where: { customerId, sku: { in: catalogSkuLookupKeys(item.sku) }, quantity: { gt: 0 } },
+          })
+          if (holdings.length > 1) throw new BadRequestException(`${item.sku} 有多份持有编码，请先核对`)
+          const holding = holdings[0]
+          if (!holding || holding.quantity < item.qty) {
+            throw new BadRequestException(`${item.sku} 客户持有库存不足，需要 ${item.qty}`)
+          }
+          const consumed = await tx.customerSkuInventory.updateMany({
+            where: { id: holding.id, quantity: { gte: item.qty } },
+            data: { quantity: { decrement: item.qty } },
+          })
+          if (consumed.count !== 1) throw new BadRequestException(`${item.sku} 客户持有库存已变化，请重试`)
+        }
+      }
+      if (total > 0 && customerId) {
+        const debited = await tx.customer.updateMany({
+          where: { id: customerId, status: 1, balance: { gte: total } },
+          data: { balance: { decrement: total } },
+        })
+        if (debited.count !== 1) throw new BadRequestException(`客户余额不足，需预扣 ¥${total.toFixed(2)}`)
+      }
+
+      const outboundNo = await this.allocateOutboundNo(customer?.customerCode, null, tx)
+      const remark = resetOutboundRemarkForReissue(source.remark, preDeduct)
+      await tx.outboundOrder.create({
+        data: {
+          outboundNo, customerId, warehouseCode, remark,
+          status: 'pending_pick',
+          createdBy: BigInt(operatorId),
+          destType: source.destType,
+          fbaNo: source.fbaNo,
+          fbaWarehouse: source.fbaWarehouse,
+          sellerStoreName: source.sellerStoreName,
+          takealotSellerId: source.takealotSellerId,
+          takealotBookingRef: source.takealotBookingRef,
+          shipmentDueDate: source.shipmentDueDate,
+          logisticsProduct: source.logisticsProduct,
+          carrier: source.carrier,
+          cargoType: source.cargoType,
+          batchNo: source.batchNo,
+          platform: source.platform,
+          appointmentStatus: source.appointmentDate ? 'scheduled' : source.appointmentStatus === 'pending' ? 'pending' : null,
+          appointmentDate: source.appointmentDate,
+          needsRelabel: source.needsRelabel,
+          recipientJson: source.recipientJson,
+          attachmentName: source.attachmentName,
+          attachmentPath: source.attachmentPath,
+          items: {
+            create: source.items.map(({ productId, sku, productName, qty, needsRelabel }) => ({
+              productId, sku, productName, qty, needsRelabel,
+            })),
+          },
+          attachments: {
+            create: source.attachments.filter(({ fileType }) => fileType !== 'pod').map(({
+              fileType, fileName, filePath, sku, platformBarcode, unitIndex,
+              sourcePage, sourceRow, sourceColumn, labelRole, contentHash,
+            }) => ({
+              fileType, fileName, filePath, sku, platformBarcode, unitIndex,
+              sourcePage, sourceRow, sourceColumn, labelRole, contentHash,
+            })),
+          },
+        },
+      })
+      if (preDeduct?.lines.length && customerId) {
+        await this.billing.recordOutboundCharges({
+          customerId: Number(customerId), outboundNo, warehouseCode, source: 'erp', lines: preDeduct.lines,
+        }, tx)
+      }
+      await tx.operationLog.create({
+        data: {
+          operatorId: BigInt(operatorId), module: 'outbound', action: 'reissue',
+          targetType: 'outbound_order', targetId: source.outboundNo, detail: { outboundNo },
+        },
+      })
+      return { outboundNo, alreadyReissued: false }
+    }, { timeout: 20000 }).catch(error => {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && ['P2002', 'P2034'].includes(error.code)) {
+        throw new ConflictException('重新出库时发生并发变更，请重试')
+      }
+      throw error
+    })
+    if (!result.alreadyReissued) await this.pushOutboundStatusToOms(result.outboundNo)
+    return result
   }
 
   async cancel(id: number, restriction?: { customerId: bigint; pendingOnly: true }) {

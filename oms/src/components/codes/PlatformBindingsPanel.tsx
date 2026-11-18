@@ -41,6 +41,7 @@ import { useRole } from '../../auth/RoleContext'
 import { importCsvFile } from '../../data/csvImportExport'
 import {
   PLATFORM_BINDING_COLUMNS,
+  PLATFORM_BINDING_IMPORT_COLUMNS,
   downloadPlatformBindingTemplate,
   parsePlatformBindings,
 } from '../../data/importTemplates'
@@ -259,8 +260,8 @@ export default function PlatformBindingsPanel() {
     }
     try {
       const result = await importCsvFile(
-        PLATFORM_BINDING_COLUMNS,
-        records => parsePlatformBindings(records, stores),
+        PLATFORM_BINDING_IMPORT_COLUMNS,
+        records => parsePlatformBindings(records, stores, products, bindingCustomerId),
       )
       await reportLineImportResult(
         result,
@@ -283,7 +284,7 @@ export default function PlatformBindingsPanel() {
             hasInventory: false,
             updatedAt: '2026-07-08',
           }))
-          await persistList([...imported, ...list])
+          if (!await persistList([...imported, ...list])) throw new Error('990 绑定未保存')
         },
         {
           successMessage: n => `已导入 ${n} 条 990 绑定`,
@@ -329,6 +330,7 @@ export default function PlatformBindingsPanel() {
       </div>
 
       <ImportTemplateLegend columns={PLATFORM_BINDING_COLUMNS} />
+      <p className="mb-3 text-xs text-text-muted">只需填写 990 条码和客户自定义 SKU，无需填写仓库商品数量。</p>
 
       <div className="mb-4 flex flex-wrap gap-2">
         {canWrite && (

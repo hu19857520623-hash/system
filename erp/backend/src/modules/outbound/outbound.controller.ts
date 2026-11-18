@@ -319,4 +319,10 @@ export class OutboundController {
   cancel(@Param('id', ParseIntPipe) id: number) {
     return this.service.cancel(id)
   }
+
+  @RequirePerms('outbound.create')
+  @Post(':id/reissue')
+  reissue(@Param('id', ParseIntPipe) id: number, @CurrentUser('userId') userId: number) {
+    return this.service.reissue(id, userId)
+  }
 }

@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react'
 import { Button, Card } from '../ui'
+import { ImportTemplateLegend } from '../ui/ImportTemplateLegend'
 import { useRole } from '../../auth/RoleContext'
 import { currentProductWriteScope } from '../../auth/productAccess'
 import { apiGet, apiPost, authSessionScope } from '../../api/client'
@@ -76,6 +77,8 @@ export default function ProductImportPanel({ open, onOpen, onClose }: { open: bo
   if (!open) return pending || storageBlocked ? <Card className="mb-4"><p>有原商品导入批次待核对，请勿重复导入。</p><Button size="sm" onClick={onOpen}>核对原导入批次</Button></Card> : null
   return <Card className="mb-4 space-y-3">
     <h2 className="font-semibold">导入商品草稿</h2>
+    <ImportTemplateLegend columns={PRODUCT_COLUMNS} />
+    <p className="text-sm">英文申报品名留空时使用产品名称 EN；产品单位留空时默认为个（PCS）。</p>
     <p className="text-sm">单次最多{PRODUCT_IMPORT_LIMIT}条商品；超出请拆分文件。有效行保存为草稿，失败行保留原文件行号。</p>
     {attempt && <p className="text-sm">本批共{attempt.rowCount}行，可导入{attempt.products.length}行，失败{new Set(failures.map(row => row.lineNo)).size}行。批次：{attempt.requestId}</p>}
     {message && <p role="status" className="text-sm">{message}</p>}

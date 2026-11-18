@@ -320,6 +320,9 @@ function handleRowCommand(command: string, row: any) {
     case 'cancel':
       doCancel(row)
       break
+    case 'reissue':
+      void doReissue(row)
+      break
     case 'downloadCpt':
       void downloadAttachment(row)
       break
@@ -457,6 +460,7 @@ function rowCommands(row: any): RowAction[] {
 
   if (status === 'cancelled') {
     appendDetailCommand(cmds)
+    if (canCreate.value) cmds.push({ key: 'reissue', command: 'reissue', label: '重新出库' })
     if (rowHasArchivableLabels(row)) {
       cmds.push({ key: 'labels', command: 'labels', label: '下载标签' })
     }
@@ -1113,6 +1117,28 @@ async function doCancel(row: any) {
     await outboundApi.cancel(row.id)
     await reloadAll()
   }, `${row.outboundNo} 已取消，锁定库存已释放`)
+}
+
+async function doReissue(row: any) {
+  if (!canCreate.value) return
+  const confirmed = await erpConfirm(
+    `将根据 ${row.outboundNo} 生成新的待拣货单，重新锁定库存，并按原单重新预扣适用费用。是否继续？`,
+    '重新出库',
+    { confirmButtonText: '重新出库' },
+  ).then(() => true, () => false)
+  if (!confirmed) return
+
+  await withAction(async () => {
+    const result = await outboundApi.reissue(row.id)
+    clearFilterValues()
+    filterStatus.value = result.alreadyReissued ? 'all' : 'pending_pick'
+    searchQ.value = result.outboundNo
+    selectedRows.value = []
+    await reloadAll()
+    ElMessage.success(result.alreadyReissued
+      ? `该单已重新出库，新单号 ${result.outboundNo}`
+      : `已生成待拣货单 ${result.outboundNo}`)
+  })
 }
 
 function statusLabel(status: string) {

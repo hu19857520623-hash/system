@@ -4,6 +4,7 @@ import { failuresFromLegacyErrors, formatImportFailureLine } from '../utils/impo
 export interface CsvColumn {
   key: string
   header: string
+  aliases?: string[]
   required?: boolean
   /** 字段填写说明（用于导入界面的字段提示） */
   hint?: string
@@ -187,6 +188,10 @@ function normalizeHeader(value: string): string {
   return value.replace(/\*$/, '').replace(/\s+/g, '').trim().toLowerCase()
 }
 
+function importHeaderKeys(column: CsvColumn): string[] {
+  return [column.header, ...(column.aliases ?? [])].map(normalizeHeader)
+}
+
 function isHintRow(row: string[]): boolean {
   return row.some(v => {
     const s = String(v).trim()
@@ -238,8 +243,7 @@ export function mapCsvRows(
 
   const missing = columns.filter(c => {
     if (!c.required) return false
-    return !headerMap.has(normalizeHeader(columnHeader(c)))
-      && !headerMap.has(normalizeHeader(c.header))
+    return !importHeaderKeys(c).some(header => headerMap.has(header))
   })
   if (missing.length > 0) {
     const reason = `缺少必填列：${missing.map(c => columnHeader(c)).join('、')}`
@@ -260,8 +264,7 @@ export function mapCsvRows(
 
     const record: Record<string, string> = {}
     for (const col of columns) {
-      const idx = headerMap.get(normalizeHeader(columnHeader(col)))
-        ?? headerMap.get(normalizeHeader(col.header))
+      const idx = importHeaderKeys(col).map(header => headerMap.get(header)).find(index => index !== undefined)
       record[col.key] = idx === undefined ? '' : String(row[idx] ?? '').trim()
     }
 
@@ -309,7 +312,7 @@ export async function readImportFileText(
     return rows.some(row => {
       const headers = new Set(row.map(normalizeHeader))
       return columns.filter(col => col.required).every(col =>
-        headers.has(normalizeHeader(columnHeader(col))) || headers.has(normalizeHeader(col.header)))
+        importHeaderKeys(col).some(header => headers.has(header)))
     })
   })
   if (!selected) throw new Error(columns ? 'Excel 工作簿中找不到导入模板的必填列' : 'Excel 工作簿没有数据')
@@ -317,7 +320,7 @@ export async function readImportFileText(
     ? selected.rows.findIndex(row => {
       const headers = new Set(row.map(normalizeHeader))
       return columns.filter(col => col.required).every(col =>
-        headers.has(normalizeHeader(columnHeader(col))) || headers.has(normalizeHeader(col.header)))
+        importHeaderKeys(col).some(header => headers.has(header)))
     })
     : 0
   return { text: rowsToCsv(selected.rows.slice(headerIndex)), lineOffset: headerIndex }

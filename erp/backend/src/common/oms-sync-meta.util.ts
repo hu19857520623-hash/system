@@ -214,6 +214,17 @@ function tagFromJson(prefix: string, payload: unknown): string {
   return `[${prefix}:${JSON.stringify(payload)}]`
 }
 
+export function resetOutboundRemarkForReissue(
+  remark: string | null,
+  preDeduct: OmsOutboundPreDeduct | null,
+): string | null {
+  if (!remark) return remark
+  const base = removeTaggedBlock(removeTaggedBlock(remark, 'oms_measure'), 'oms_actual_fees')
+  if (!preDeduct) return base || null
+  const freshPreDeduct = { ...preDeduct, deductedAt: new Date().toISOString() }
+  return `${removeTaggedBlock(base, 'oms_pre_deduct')} ${tagFromJson('oms_pre_deduct', freshPreDeduct)}`.trim()
+}
+
 export function upsertOutboundMeasureInRemark(remark: string | null | undefined, measure: OmsOutboundMeasure): string {
   const base = removeTaggedBlock(remark, 'oms_measure')
   return `${base} ${tagFromJson('oms_measure', measure)}`.trim()
