@@ -36,7 +36,7 @@ export async function readCatalogPurchases(prisma: any,q: CatalogPurchaseQueryDt
     const where=and.length?{AND:and}:{}
     const [orders,total,sums]=await Promise.all([
       db.omsCatalogOrder.findMany({where,skip:(page-1)*pageSize,take:pageSize,orderBy:[{createdAt:'desc'},{id:'desc'}]}),
-      db.omsCatalogOrder.count({where}),db.omsCatalogOrder.aggregate({where,_sum:{quantity:true,totalAmount:true}}),
+      db.omsCatalogOrder.count({where}),db.omsCatalogOrder.aggregate({where,_sum:{quantity:true}}),
     ])
     const ids=[...new Set(orders.map((o:any)=>o.customerId))]
     const customers=ids.length?await db.customer.findMany({where:{id:{in:ids}}}):[]
@@ -56,15 +56,15 @@ export async function readCatalogPurchases(prisma: any,q: CatalogPurchaseQueryDt
       return {
         id:Number(o.id),orderNo:o.orderNo,sku:o.sku,productName:product?.productName||'',
         customerCode:o.customerCode||customer?.customerCode||'',customerName:customer?.customerName||'',
-        quantity:o.quantity,unitPrice:o.unitPrice==null?null:Number(o.unitPrice),totalAmount:o.totalAmount==null?null:Number(o.totalAmount),
+        quantity:o.quantity,unitPrice:o.unitPrice==null?null:Number(o.unitPrice),
         priceTier:o.priceTier||'A',balanceBefore:o.balanceBefore==null?null:Number(o.balanceBefore),balanceAfter:o.balanceAfter==null?null:Number(o.balanceAfter),
         status:o.status,createdAt:o.createdAt,refundVerified:verified,refundedQuantity:verified?returned:null,refundAmount:verified?amount:null,
         netQuantity:verified?o.quantity-returned:null,
-        netAmount:verified&&o.totalAmount!=null?(Math.round(Number(o.totalAmount)*100)-Math.round(amount*100))/100:null,
+        netAmount:verified&&amount>0&&o.totalAmount!=null?(Math.round(Number(o.totalAmount)*100)-Math.round(amount*100))/100:null,
         refunds:lines,
       }
 
     })
-    return {items,total,page,pageSize,summary:{quantity:Number(sums._sum.quantity??0),totalAmount:Number(sums._sum.totalAmount??0)},warnings}
+    return {items,total,page,pageSize,summary:{quantity:Number(sums._sum.quantity??0)},warnings}
   },{isolationLevel:Prisma.TransactionIsolationLevel.RepeatableRead,timeout:30000})
 }

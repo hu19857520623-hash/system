@@ -10,7 +10,7 @@ const props=defineProps<{modelValue:boolean;initialSku?:string;initialCustomerCo
 const emit=defineEmits<{'update:modelValue':[value:boolean]}>()
 const app=useAppStore(),visible=computed({get:()=>props.modelValue,set:v=>emit('update:modelValue',v)})
 const allowed=computed(()=>['pricing.view','inventory_query.view','inventory_query.detail','logistics_wh.view'].some(p=>app.hasPerm(p)))
-const rows=ref<any[]>([]),total=ref(0),page=ref(1),pageSize=ref(20),summary=ref({quantity:0,totalAmount:0}),warnings=ref<string[]>([])
+const rows=ref<any[]>([]),total=ref(0),page=ref(1),pageSize=ref(20),summary=ref({quantity:0}),warnings=ref<string[]>([])
 const customer=ref(''),product=ref(''),orderNo=ref(''),status=ref(''),dates=ref<[string,string]|null>(null),loading=ref(false),error=ref('')
 const applied=ref<Record<string,unknown>>({}),detail=ref<any>(null),detailVisible=ref(false)
 const labels:Record<string,string>={confirmed:'已入账',pending:'待入账',cancelled:'已取消',failed:'失败'}
@@ -25,8 +25,8 @@ async function load(){
     const result=await inventoryApi.catalogPurchases({...applied.value,page:page.value,pageSize:pageSize.value})
     if(!active())return
     if(!Array.isArray(result.items)||!Number.isSafeInteger(result.total)||result.total<0||!result.summary)throw Error('采购记录返回不完整，请重新读取')
-    rows.value=result.items;total.value=result.total;summary.value=result.summary;warnings.value=result.warnings||[]
-  }catch(e){if(active()){rows.value=[];total.value=0;summary.value={quantity:0,totalAmount:0};warnings.value=[];error.value=userFacingError(e)}}
+    rows.value=result.items;total.value=result.total;summary.value={quantity:result.summary.quantity};warnings.value=result.warnings||[]
+  }catch(e){if(active()){rows.value=[];total.value=0;summary.value={quantity:0};warnings.value=[];error.value=userFacingError(e)}}
   finally{if(active())loading.value=false}
 }
 function search(){
@@ -37,7 +37,7 @@ function changePage(value:number){page.value=value;void load()}
 function changeSize(value:number){pageSize.value=value;page.value=1;void load()}
 function showDetail(row:any){detail.value=row;detailVisible.value=true}
 watch(()=>[props.modelValue,props.initialSku,props.initialCustomerCode],()=>{
-  ++sequence;rows.value=[];total.value=0;summary.value={quantity:0,totalAmount:0};warnings.value=[];error.value='';loading.value=false;detailVisible.value=false;detail.value=null
+  ++sequence;rows.value=[];total.value=0;summary.value={quantity:0};warnings.value=[];error.value='';loading.value=false;detailVisible.value=false;detail.value=null
   if(!props.modelValue || !allowed.value)return
   customer.value=props.initialCustomerCode||'';product.value=props.initialSku||'';orderNo.value='';status.value='';dates.value=null;page.value=1
   applied.value={sku:props.initialSku||undefined,customerCode:props.initialCustomerCode||undefined};void load()
@@ -59,7 +59,7 @@ watch(()=>[app.authenticatedUser?.id,allowed.value],()=>{++sequence;rows.value=[
     <el-button v-if="error" :loading="loading" @click="load">重新读取采购记录</el-button>
     <el-alert v-for="warning in warnings" :key="warning" :title="warning" type="warning" :closable="false" />
     <template v-if="!error">
-      <p>筛选原始采购：{{ total }} 笔 · {{ summary.quantity }} 件 · {{ money(summary.totalAmount) }}（汇总为原采购金额，未扣除退回）</p>
+      <p>筛选结果共 {{ total }} 笔 · 原采购数量 {{ summary.quantity }} 件</p>
       <el-table :data="rows" v-loading="loading" border stripe max-height="460" row-key="id" empty-text="暂无符合条件的OMS货盘采购记录">
         <el-table-column label="采购时间" width="155"><template #default="{row}">{{ fmtTime(row.createdAt) }}</template></el-table-column>
         <el-table-column prop="orderNo" label="OMS采购单号" min-width="180" show-overflow-tooltip />
@@ -70,7 +70,6 @@ watch(()=>[app.authenticatedUser?.id,allowed.value],()=>{++sequence;rows.value=[
         <el-table-column prop="priceTier" label="成交档位" width="85" />
         <el-table-column prop="quantity" label="原采购数量" width="105" align="right" />
         <el-table-column label="原成交单价" width="110" align="right"><template #default="{row}">{{ money(row.unitPrice) }}</template></el-table-column>
-        <el-table-column label="原采购金额" width="115" align="right"><template #default="{row}">{{ money(row.totalAmount) }}</template></el-table-column>
         <el-table-column label="已退回数量" width="105" align="right"><template #default="{row}">{{ row.refundedQuantity??'待核对' }}</template></el-table-column>
         <el-table-column label="净采购数量" width="105" align="right"><template #default="{row}">{{ row.netQuantity??'待核对' }}</template></el-table-column>
         <el-table-column label="采购状态" width="90"><template #default="{row}">{{ labels[row.status]||row.status }}</template></el-table-column>
@@ -91,11 +90,10 @@ watch(()=>[app.authenticatedUser?.id,allowed.value],()=>{++sequence;rows.value=[
         <el-descriptions-item label="成交档位">{{ detail.priceTier }}档</el-descriptions-item>
         <el-descriptions-item label="原采购数量">{{ detail.quantity }}</el-descriptions-item>
         <el-descriptions-item label="原成交单价">{{ money(detail.unitPrice) }}</el-descriptions-item>
-        <el-descriptions-item label="原采购金额">{{ money(detail.totalAmount) }}</el-descriptions-item>
         <el-descriptions-item label="已退回金额">{{ money(detail.refundAmount) }}</el-descriptions-item>
         <el-descriptions-item label="已退回数量">{{ detail.refundedQuantity??'待核对' }}</el-descriptions-item>
         <el-descriptions-item label="净采购数量">{{ detail.netQuantity??'待核对' }}</el-descriptions-item>
-        <el-descriptions-item label="净采购金额">{{ money(detail.netAmount) }}</el-descriptions-item>
+        <el-descriptions-item v-if="detail.refundAmount > 0" label="净采购金额">{{ money(detail.netAmount) }}</el-descriptions-item>
         <el-descriptions-item label="采购状态">{{ labels[detail.status]||detail.status }}</el-descriptions-item>
         <el-descriptions-item label="采购前余额（当时）">{{ money(detail.balanceBefore) }}</el-descriptions-item>
         <el-descriptions-item label="采购后余额（当时）">{{ money(detail.balanceAfter) }}</el-descriptions-item>
