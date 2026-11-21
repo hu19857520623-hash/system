@@ -393,6 +393,7 @@ export const inventoryApi = {
   logs: (sku, params) => api.get(`/inventory/logs/${encodeURIComponent(sku)}`, params),
   outboundLogs: (sku, params) => api.get(`/inventory/logs/${encodeURIComponent(sku)}/outbound`, params),
   catalogPurchases: (params) => api.get('/inventory/catalog-purchases', params),
+  catalogHoldings: (params) => api.get('/inventory/catalog-holdings', params),
   previewCatalogReclaim: (data) => api.post('/inventory/catalog-reclaim/preview', data),
   catalogReclaimHistory: (params) => api.get('/inventory/catalog-reclaims', params),
   retryCatalogReclaimSync: (id) => api.post(`/inventory/catalog-reclaims/${id}/retry-sync`),

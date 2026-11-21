@@ -28,7 +28,7 @@ export type MergedInventoryFilters = {
   qtyMax?: number | null
   lowStockOnly?: boolean
   onlyAvailable?: boolean
-  dataSource?: 'all' | 'erp' | 'oms' | 'catalog_holdings'
+  dataSource?: 'all' | 'erp' | 'oms'
 }
 
 const SOURCE_SORT: Record<string, number> = { erp: 0, oms: 1, catalog: 2 }
@@ -318,13 +318,19 @@ function mapOmsProductRow(r: Record<string, unknown>) {
 }
 
 export async function fetchOmsInventoryRows(prisma: PrismaService, filters: MergedInventoryFilters, strict = false) {
-  const conditions: string[] = ['1=1']
+  const conditions = [
+    "i.stockSource <> 'catalog'",
+    "i.id NOT LIKE 'csi-%'",
+    "i.sku NOT LIKE 'TKL-%'",
+    "COALESCE(c.code, i.customerId, '') <> 'TKL'",
+  ]
   const params: unknown[] = []
 
   const customerCode = filters.customerCode?.trim()
   if (customerCode) {
-    conditions.push('(c.code LIKE ? OR c.name LIKE ?)')
-    params.push(likeParam(customerCode), likeParam(customerCode))
+    conditions.push(`(c.code LIKE ? OR c.name LIKE ? OR
+      (COALESCE(c.code, '') = '' AND i.sku REGEXP '^TKL[0-9]+-' AND SUBSTRING_INDEX(i.sku, '-', 1) LIKE ?))`)
+    params.push(likeParam(customerCode), likeParam(customerCode), likeParam(customerCode))
   }
 
   const code = (filters.productCode || '').trim()
@@ -376,7 +382,7 @@ export async function fetchOmsInventoryRows(prisma: PrismaService, filters: Merg
            p.customerSku AS customerSku
     FROM oms_inventoryitem i
     LEFT JOIN oms_customeraccount c ON c.id = i.customerId
-    LEFT JOIN oms_product p ON p.internalSku = i.sku AND (p.customerId = i.customerId OR p.customerId IS NULL)
+    LEFT JOIN oms_product p ON p.internalSku = i.sku AND p.customerId <=> i.customerId
     WHERE ${conditions.join(' AND ')}
     ORDER BY i.sku ASC
   `
@@ -430,7 +436,7 @@ async function resolveErpCustomersByKeyword(prisma: PrismaService, keyword: stri
   return erpCustomers
 }
 
-/** 货盘客户持有量：不受海外仓仓库筛选影响，始终并入库存查询 */
+/** 货盘客户持有量，仅用于运营侧的货盘持有查询。 */
 export async function fetchCatalogInventoryRows(prisma: PrismaService, filters: MergedInventoryFilters, strict = false) {
   const and: Record<string, unknown>[] = []
   const customerCode = filters.customerCode?.trim()
@@ -542,7 +548,16 @@ export async function attachCatalogPurchaseStats<T extends { sku: string; custom
 }
 
 function buildOmsProductQuery(filters: MergedSkuFilters) {
-  const conditions: string[] = ['1=1']
+  const conditions = [
+    "p.internalSku NOT LIKE 'TKL-%'",
+    "COALESCE(c.code, p.customerId, '') <> 'TKL'",
+    `NOT (p.inCatalog = 1 AND (p.customerId IS NULL OR p.customerId = '' OR EXISTS (
+      SELECT 1 FROM product master
+      WHERE master.sku = p.internalSku
+        AND COALESCE(master.remark, '') NOT LIKE '%OMS客户:%'
+        AND COALESCE(master.remark, '') NOT LIKE '%OMS 预约入库自动建档%'
+    )))`,
+  ]
   const params: unknown[] = []
 
   const customerCode = filters.customerCode?.trim()

@@ -60,6 +60,7 @@ export function resolveCustomerIdentity(input: {
   fallbackSupplierCode?: string | null
   fallbackSupplierName?: string | null
   customerNameByCode?: ReadonlyMap<string, string>
+  defaultCustomerCode?: string
 }): ResolvedCustomerIdentity {
   const sku = String(input.sku || '').trim()
   if (isCatalogInternalSku(sku)) {
@@ -77,16 +78,14 @@ export function resolveCustomerIdentity(input: {
   const fromRemark = parseOmsCustomerCodeFromRemark(input.productRemark)
   const fromRow = String(input.customerCode || '').trim()
   const skuCandidate = deriveCustomerCodeFromInternalSku(sku)
-  const fromSku =
-    skuCandidate && input.customerNameByCode?.has(skuCandidate.toUpperCase())
-      ? skuCandidate
-      : ''
-  const customerCode =
-    fromRemark || fromRow || fromSku
+  const fromSku = /^TKL[0-9]+$/.test(skuCandidate) || input.customerNameByCode?.has(skuCandidate)
+    ? skuCandidate
+    : ''
+  const customerCode = fromRemark || fromRow || fromSku || input.defaultCustomerCode || ''
 
   let customerSku = String(input.customerSku || meta.customerSku || '').trim()
   if (!customerSku) customerSku = deriveCustomerSkuFromInternalSku(sku, customerCode)
-  if (!customerSku && !customerCode) customerSku = sku
+  if (!customerSku && (!customerCode || customerCode === CATALOG_CUSTOMER_CODE)) customerSku = sku
   if (!customerSku && fromRemark && sku.toUpperCase().startsWith(`${fromRemark.toUpperCase()}-`)) {
     customerSku = sku.slice(fromRemark.length + 1)
   }
@@ -95,7 +94,7 @@ export function resolveCustomerIdentity(input: {
     customerCode && input.customerNameByCode?.get(customerCode.toUpperCase())
   const customerName = readableDisplayText(
     mappedName || input.customerName,
-    customerCode,
+    customerCode === CATALOG_CUSTOMER_CODE ? '平台货盘' : customerCode,
   )
 
   return { customerCode, customerSku, customerName }
@@ -194,6 +193,7 @@ export type ErpWarehouseRowInput = {
   fallbackSupplierCode?: string | null
   fallbackSupplierName?: string | null
   customerNameByCode?: ReadonlyMap<string, string>
+  defaultCustomerCode?: string
   finalPrice?: number | null
   lastInboundDate?: string
   referenceNo?: string
@@ -210,6 +210,7 @@ export function buildErpWarehouseInventoryRow(input: ErpWarehouseRowInput) {
     fallbackSupplierCode: input.fallbackSupplierCode,
     fallbackSupplierName: input.fallbackSupplierName,
     customerNameByCode: input.customerNameByCode,
+    defaultCustomerCode: input.defaultCustomerCode,
   })
   const warehouse = resolveJhbWarehouseFields(input.rawWarehouseCode, input.warehouseName)
   const qty = buildInventoryQuantityFields({

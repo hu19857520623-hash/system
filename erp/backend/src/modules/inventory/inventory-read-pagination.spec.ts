@@ -32,17 +32,48 @@ function serviceWith(rows: any[]) {
 describe('inventory reads past 5000 rows', () => {
   it('returns the holding after row 5000 and the complete total', async () => {
     const { service, prisma } = serviceWith(holdings(5001))
-    const result = await service.query({ dataSource: 'catalog_holdings', page: 251, pageSize: 20 } as any)
+    const result = await service.queryCatalogHoldings({ page: 251, pageSize: 20 })
     expect(result.total).toBe(5001)
     expect(result.items.map((row: any) => row.sku)).toEqual(['H-05000'])
     expect(prisma.customerSkuInventory.findMany.mock.calls[0][0]).not.toHaveProperty('take')
   })
 
-  it('exports every holding instead of stopping at 5000', async () => {
-    const { service } = serviceWith(holdings(5001))
-    const result = await service.query({ dataSource: 'catalog_holdings' } as any, true)
-    expect(result.total).toBe(5001)
-    expect(result.items).toHaveLength(5001)
+  it('rejects purchaser holdings in inventory queries and inventory exports', async () => {
+    const { service, prisma } = serviceWith(holdings(1))
+    await expect(service.query({ dataSource: 'catalog_holdings' })).rejects.toThrow('货盘持有')
+    await expect(service.query({ dataSource: 'catalog_holdings' }, true)).rejects.toThrow('货盘持有')
+    expect(prisma.customerSkuInventory.findMany).not.toHaveBeenCalled()
+  })
+
+  it('keeps platform stock and original OMS stock in the two owner views', async () => {
+    const catalog = { id: 1n, sku: 'TK-LEGACY', remark: null }
+    const customer = { id: 2n, sku: 'TKL0007-OWN', remark: null }
+    const warehouse = { warehouseCode: 'WMS-JHB-01' }
+    const stock = [catalog, customer].map((product) => ({
+      ...warehouse, id: product.id, productId: product.id, sku: product.sku, availableQty: 3, lockedQty: 0, totalQty: 3,
+    }))
+    const { service, prisma } = serviceWith(holdings(1))
+    const client = Object.assign(prisma, {
+      product: { findMany: jest.fn().mockResolvedValue([catalog, customer]) },
+      productPricing: { findMany: jest.fn().mockResolvedValue([]) },
+      inventory: { findMany: jest.fn().mockResolvedValue(stock) },
+      $queryRawUnsafe: jest.fn().mockResolvedValue([
+        { id: 'owned', sku: customer.sku, customerCode: 'TKL0007', stockSource: 'own', warehouse: 'jhb1' },
+        { id: 'borrowed', sku: 'TKL-TK-LEGACY', customerCode: 'TKL0007', stockSource: 'catalog', warehouse: 'jhb1' },
+      ]),
+    })
+    prisma.warehouse.findMany.mockResolvedValue([warehouse])
+    jest.spyOn(service as any, 'loadPipelineQtyMap').mockResolvedValue(new Map())
+
+    const catalogResult = await service.query({ dataSource: 'erp', includeSourceCounts: 'true' })
+    const customerResult = await service.query({ dataSource: 'oms', customerKeyword: 'TKL0007' })
+    expect(catalogResult).toMatchObject({
+      items: [{ sku: catalog.sku, customerCode: 'TKL', customerSku: 'TK-LEGACY' }],
+      sourceCounts: { all: 2, erp: 1, oms: 1 },
+    })
+    expect(customerResult.items).toMatchObject([{ sku: customer.sku, customerCode: 'TKL0007', customerSku: 'OWN', dataSource: 'erp' }])
+    expect(client.$queryRawUnsafe.mock.calls[0][0]).toContain("i.stockSource <> 'catalog'")
+    expect(prisma.customerSkuInventory.findMany).not.toHaveBeenCalled()
   })
 
   it('reads every OMS inventory row and reports a Chinese failure', async () => {

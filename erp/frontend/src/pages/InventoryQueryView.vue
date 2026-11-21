@@ -7,6 +7,7 @@ import { getAccessToken } from '@/auth/tokenStore'
 import { userFacingError } from '@erp/shared/user-facing-error'
 
 import { displaySku, displaySkuText } from '@erp/shared/sku-display'
+import { isCatalogPoolCustomerCode } from '@/constants/catalog.ts'
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -60,8 +61,8 @@ const sourceCounts = ref({ all: 0, erp: 0, oms: 0 })
 
 const sourceTabs = computed(() => [
   { value: 'all' as const, label: '全部', count: sourceCounts.value.all },
-  { value: 'erp' as const, label: 'ERP 海外仓', count: sourceCounts.value.erp },
-  { value: 'oms' as const, label: 'OMS 客户', count: sourceCounts.value.oms },
+  { value: 'erp' as const, label: '货盘', count: sourceCounts.value.erp },
+  { value: 'oms' as const, label: 'OMS', count: sourceCounts.value.oms },
 ])
 
 // dialogs
@@ -120,10 +121,7 @@ function isJhbWarehouse(wh: { code?: string; name?: string }) {
 function buildParams() {
   const p: Record<string, unknown> = { page: page.value, pageSize: pageSize.value }
   const customerKw = filters.value.customerCode.trim()
-  if (customerKw) {
-    p.customerKeyword = customerKw
-    p.supplierKeyword = customerKw
-  }
+  if (customerKw) p.customerKeyword = customerKw
   if (filters.value.skuCodes.trim()) p.skuCodes = filters.value.skuCodes.trim()
   if (filters.value.productCode.trim()) {
     p.productCode = filters.value.productCode.trim()
@@ -136,6 +134,7 @@ function buildParams() {
   if (filters.value.qtyMax !== '') p.qtyMax = filters.value.qtyMax
   if (filters.value.lowStockOnly === 'yes') p.lowStockOnly = 'yes'
   if (sourceFilter.value !== 'all') p.dataSource = sourceFilter.value
+  p.includeSourceCounts = 'true'
   if (filters.value.warehouses.length) {
     p.warehouseCodes = filters.value.warehouses.join(',')
   } else {
@@ -215,8 +214,8 @@ function exportRows(list = rows.value) {
   }
   const headers = ['SKU', '商品名', '来源', '品类', '客户代码', '客户名称', '总库存', '锁定']
   const lines = list.map((r) => [
-    r.sku, r.productName, r.dataSourceLabel || r.dataSource, r.category, r.customerCode,
-    r.customerName || r.supplierName, r.availableQty ?? 0, r.lockedQty ?? 0,
+    r.sku, r.productName, isCatalogPoolCustomerCode(r.customerCode) ? '货盘' : 'OMS', r.category, r.customerCode,
+    r.customerName, r.availableQty ?? 0, r.lockedQty ?? 0,
   ])
   const bom = '\uFEFF'
   const content = bom + [headers.join(','), ...lines.map((l) => l.map(escapeCsv).join(','))].join('\n')
@@ -482,7 +481,7 @@ async function searchSkuOptions(keyword: string) {
 function goSkuQuery(row: any) {
   router.push({
     path: '/inventory/sku-query',
-    query: { q: row.sku, dataSource: row.dataSource === 'oms' ? 'oms' : 'erp' },
+    query: { q: row.sku, dataSource: isCatalogPoolCustomerCode(row.customerCode) ? 'erp' : 'oms' },
   })
 }
 
@@ -539,7 +538,7 @@ watch([page, pageSize], () => load())
       <div class="filter-grid">
         <div class="filter-item">
           <label>客户 / 供应商</label>
-          <el-input v-model="filters.customerCode" placeholder="OMS 客户代码或 ERP 供应商" clearable size="small" @keyup.enter="search" />
+          <el-input v-model="filters.customerCode" placeholder="客户代码或名称" clearable size="small" @keyup.enter="search" />
         </div>
         <div class="filter-item">
           <label>产品代码</label>
@@ -631,7 +630,7 @@ watch([page, pageSize], () => load())
         <el-table-column label="来源" min-width="112" align="center" show-overflow-tooltip>
           <template #default="{ row }">
             <el-tag size="small" :type="row.dataSource === 'erp' ? 'primary' : 'warning'" class="source-tag">
-              {{ row.dataSourceLabel || row.dataSource || '—' }}
+              {{ isCatalogPoolCustomerCode(row.customerCode) ? '货盘' : 'OMS' }}
             </el-tag>
           </template>
         </el-table-column>
@@ -639,8 +638,8 @@ watch([page, pageSize], () => load())
         <el-table-column label="客户" min-width="136" show-overflow-tooltip>
           <template #default="{ row }">
             <div v-if="row.customerCode" class="mono">{{ row.customerCode }}</div>
-            <div v-if="row.customerName || row.supplierName" class="cust-name">{{ row.customerName || row.supplierName }}</div>
-            <span v-if="!row.customerCode && !row.customerName && !row.supplierName">—</span>
+            <div v-if="row.customerName && row.customerName !== row.customerCode" class="cust-name">{{ row.customerName }}</div>
+            <span v-if="!row.customerCode && !row.customerName">—</span>
           </template>
         </el-table-column>
 

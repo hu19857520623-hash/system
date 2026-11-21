@@ -191,15 +191,11 @@ async function loadHoldings() {
     const p: Record<string, unknown> = {
       page: holdingsPage.value,
       pageSize: holdingsPageSize.value,
-      dataSource: 'catalog_holdings',
     }
     const customerKw = holdingsCustomerCode.value.trim()
-    if (customerKw) {
-      p.customerKeyword = customerKw
-      p.supplierKeyword = customerKw
-    }
+    if (customerKw) p.customerKeyword = customerKw
     if (holdingsProductCode.value.trim()) p.productCode = holdingsProductCode.value.trim()
-    const res = await inventoryApi.query(p)
+    const res = await inventoryApi.catalogHoldings(p)
     holdingRows.value = res.items || []
     holdingsTotal.value = res.total ?? 0
   } catch (e: any) {

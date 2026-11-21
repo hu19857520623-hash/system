@@ -34,6 +34,7 @@ export class InventoryController {
       keyword?: string
       customerKeyword?: string
       dataSource?: string
+      includeSourceCounts?: string
     },
   ) {
     return this.service.query(q)
@@ -169,6 +170,12 @@ export class InventoryController {
     @CurrentUser('userId') userId: number,
   ) {
     return this.service.reclaimCatalogHolding(body, userId)
+  }
+
+  @RequirePerms('pricing.view')
+  @Get('catalog-holdings')
+  catalogHoldings(@Query() q: PaginationDto & { customerKeyword?: string; productCode?: string }) {
+    return this.service.queryCatalogHoldings(q)
   }
 
   @RequireAnyPerm('pricing.view', 'inventory_query.view', 'inventory_query.detail', 'logistics_wh.view')

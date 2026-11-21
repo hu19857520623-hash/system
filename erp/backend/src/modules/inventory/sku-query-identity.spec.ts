@@ -44,10 +44,18 @@ describe('SKU query customer and supplier identities', () => {
   it('does not use a developer login as a customer code and limits ERP-only counts to ERP', async () => {
     const { service, prisma } = fixture([{ ...erpProduct, developerId: 3n }])
     const result = await service.querySkuCatalog({ dataSource: 'erp' })
-    expect(result).toMatchObject({ total: 1, items: [{ customerCode: '', developerName: '开发员', dataSource: 'erp' }] })
+    expect(result).toMatchObject({ total: 1, items: [{ customerCode: 'TKL', customerSku: 'ERP-SKU', developerName: '开发员', dataSource: 'erp' }] })
     expect(prisma.product.count).toHaveBeenCalledWith({ where: { AND: [{ OR: [ERP_MASTER_PRODUCT_WHERE] }] } })
     expect(prisma.$queryRaw).not.toHaveBeenCalled()
     expect(prisma.$queryRawUnsafe).not.toHaveBeenCalled()
+  })
+
+  it('recovers a legacy OMS customer code from the internal SKU and excludes catalog mirrors in the query', async () => {
+    const { service, prisma } = fixture()
+    prisma.$queryRawUnsafe.mockResolvedValue([{ ...omsProduct, customerCode: null, customerName: null }])
+    const result = await service.querySkuCatalog({ dataSource: 'oms' })
+    expect(result.items).toMatchObject([{ customerCode: 'TKL0001', customerSku: 'CLIENT', dataSource: 'oms' }])
+    expect(prisma.$queryRawUnsafe).toHaveBeenCalledWith(expect.stringContaining("p.internalSku NOT LIKE 'TKL-%'"))
   })
 
   it('returns OMS products from page one and searches both system and customer SKUs', async () => {

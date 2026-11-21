@@ -8,7 +8,7 @@ import { previewCatalogReclaim, reclaimCatalog } from './catalog-reclaim.util'
 import { catalogReclaimHistory, catalogReclaimSyncReceipt } from './catalog-reclaim-history.util'
 import type { CatalogReclaimHistoryQueryDto } from './dto/catalog-reclaim.dto'
 import type { CatalogReclaimDto } from './dto/catalog-reclaim.dto'
-import { BadRequestException, ConflictException, Injectable, NotFoundException, ServiceUnavailableException } from '@nestjs/common'
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
 import { buildInboundPipelineQtyMap, INBOUND_PIPELINE_STATUSES } from '../../common/inbound-pipeline.util'
@@ -74,9 +74,11 @@ export class InventoryService {
       lowStockOnly?: string
       customerKeyword?: string
       dataSource?: string
+      includeSourceCounts?: string
     },
     exportAll = false,
   ) {
+    if (q.dataSource === 'catalog_holdings') throw new BadRequestException('请在货盘库存的「货盘持有」中查询申购记录')
     const { page, pageSize } = getPagination(q, 20)
     const whList = (q.warehouseCodes || q.warehouseCode || '')
       .split(/[,，]/)
@@ -122,33 +124,8 @@ export class InventoryService {
       }
     }
 
-    if (q.customerKeyword?.trim()) {
-      const keyword = q.customerKeyword.trim()
-      const customers = await this.prisma.customer.findMany({
-        where: { OR: [{ customerCode: { contains: keyword } }, { customerName: { contains: keyword } }] },
-        select: { customerCode: true },
-      })
-      const customerCodes = new Set(customers.map((row) => row.customerCode.toUpperCase()))
-      try {
-        const omsCustomers = await this.prisma.$queryRawUnsafe<{ code: string }[]>(
-          'SELECT code FROM oms_customeraccount WHERE code LIKE ? OR name LIKE ?',
-          `%${keyword}%`, `%${keyword}%`,
-        )
-        for (const row of omsCustomers) customerCodes.add(String(row.code).toUpperCase())
-      } catch {
-        if (exportAll) throw new ServiceUnavailableException('无法读取 OMS 客户，请稍后重试')
-        // 列表仍可使用已读到的 ERP 客户；导出必须说明 OMS 客户没有读全。
-      }
-      const ownedProducts = productIdFilter.length && customerCodes.size
-        ? await this.prisma.product.findMany({
-            where: { id: { in: productIdFilter } },
-            select: { id: true, sku: true, remark: true },
-          })
-        : []
-      productIdFilter = ownedProducts.filter((row) => customerCodes.has((
-        parseOmsCustomerCodeFromRemark(row.remark) || deriveCustomerCodeFromInternalSku(row.sku) || ''
-      ).toUpperCase())).map((row) => row.id)
-    } else if (q.supplierKeyword?.trim()) {
+    const customerKeyword = q.customerKeyword?.trim().toUpperCase()
+    if (!customerKeyword && q.supplierKeyword?.trim()) {
       const suppliers = await this.prisma.supplier.findMany({
         where: {
           OR: [
@@ -172,7 +149,6 @@ export class InventoryService {
 
     if (productIdFilter.length) {
     const productAnd: any[] = [{ id: { in: productIdFilter } }]
-    if (q.dataSource === 'erp') productAnd.push(ERP_MASTER_PRODUCT_WHERE)
     const skuTokens = (q.skuCodes || '').split(/[\s,，]+/).map((s) => s.trim()).filter(Boolean)
     if (skuTokens.length) {
       productAnd.push({
@@ -273,7 +249,7 @@ export class InventoryService {
       }
     }
 
-    const customerCodesToResolve = new Set<string>()
+    const customerCodesToResolve = new Set([CATALOG_CUSTOMER_CODE])
     for (const r of rows) {
       const prod = prodMap.get(Number(r.productId))
       if (!prod) continue
@@ -281,8 +257,6 @@ export class InventoryService {
       if (fromRemark) customerCodesToResolve.add(fromRemark)
       const fromSku = deriveCustomerCodeFromInternalSku(r.sku)
       if (fromSku) customerCodesToResolve.add(fromSku)
-      const supplier = prod.supplierId ? supMap.get(Number(prod.supplierId)) : undefined
-      if (supplier?.supplierCode) customerCodesToResolve.add(String(supplier.supplierCode))
     }
     const erpCustomers = customerCodesToResolve.size
       ? await this.prisma.customer.findMany({
@@ -322,6 +296,7 @@ export class InventoryService {
         fallbackSupplierCode: supplier?.supplierCode,
         fallbackSupplierName: supplier?.supplierName,
         customerNameByCode,
+        defaultCustomerCode: CATALOG_CUSTOMER_CODE,
         finalPrice: pricing?.finalPrice != null ? Number(pricing.finalPrice) : null,
         lastInboundDate: inbound?.lastPutawayAt
           ? inbound.lastPutawayAt.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })
@@ -331,7 +306,9 @@ export class InventoryService {
         putawayQty: inbound?.totalPutawayQty ?? 0,
         sortKey: Number(r.id),
       })
-    })
+    }).filter((row) => !customerKeyword || [row.customerCode, row.customerName].some(
+      (value) => value.toUpperCase().includes(customerKeyword),
+    ))
     }
     }
 
@@ -352,46 +329,12 @@ export class InventoryService {
       qtyMax: q.qtyMax != null && q.qtyMax !== '' ? Number(q.qtyMax) : null,
       lowStockOnly: q.lowStockOnly === 'yes',
       onlyAvailable: q.onlyAvailable === 'true' || q.onlyAvailable === '1',
-      dataSource: (['erp', 'oms', 'catalog_holdings'].includes(String(q.dataSource || ''))
-        ? q.dataSource
-        : 'all') as MergedInventoryFilters['dataSource'],
+      dataSource: q.dataSource === 'erp' || q.dataSource === 'oms' ? q.dataSource : 'all',
     }
 
-    if (mergedFilters.dataSource === 'catalog_holdings') {
-      const catalogHoldings = await fetchCatalogInventoryRows(this.prisma, mergedFilters, exportAll)
-      const { items, total } = mergePaginate(
-        [catalogHoldings],
-        exportAll ? 1 : page,
-        exportAll ? Math.max(catalogHoldings.length, 1) : pageSize,
-      )
-      const summary = {
-        available: catalogHoldings.reduce(
-          (sum, r) => sum + Number((r as { sellableQty?: number; availableQty?: number }).sellableQty ?? (r as { availableQty?: number }).availableQty ?? 0),
-          0,
-        ),
-        total: catalogHoldings.reduce(
-          (sum, r) => sum + Number((r as { totalQty?: number }).totalQty ?? 0),
-          0,
-        ),
-        locked: catalogHoldings.reduce(
-          (sum, r) => sum + Number((r as { lockedQty?: number; pendingOutboundQty?: number }).lockedQty ?? (r as { pendingOutboundQty?: number }).pendingOutboundQty ?? 0),
-          0,
-        ),
-      }
-      return {
-        items,
-        total,
-        page,
-        pageSize,
-        summary,
-        sourceCounts: { holdings: catalogHoldings.length },
-      }
-    }
-
-    const omsCandidates =
-      mergedFilters.dataSource === 'all' || mergedFilters.dataSource === 'oms'
-        ? await fetchOmsInventoryRows(this.prisma, mergedFilters)
-        : []
+    const omsCandidates = q.dataSource !== 'erp' || q.includeSourceCounts === 'true'
+      ? await fetchOmsInventoryRows(this.prisma, mergedFilters)
+      : []
 
     // Resolve existence independently of quantity filters and the selected source tab.
     // A filtered-out ERP row must not be replaced with its stale OMS mirror.
@@ -411,20 +354,23 @@ export class InventoryService {
     const omsItems = omsInventoryWithoutErpDuplicates(omsCandidates, authoritativeStock.map((row) => ({
       sku: row.sku,
       warehouseCode: row.warehouseCode,
-      customerCode: parseOmsCustomerCodeFromRemark(stockProductById.get(String(row.productId))?.remark)
-        || deriveCustomerCodeFromInternalSku(row.sku),
+      customerCode: resolveCustomerIdentity({
+        sku: row.sku,
+        productRemark: stockProductById.get(String(row.productId))?.remark,
+        defaultCustomerCode: CATALOG_CUSTOMER_CODE,
+      }).customerCode,
     })))
 
-    const erpFiltered =
-      mergedFilters.dataSource === 'all' || mergedFilters.dataSource === 'erp' ? erpItems : []
-
-    const mergedCount = erpFiltered.length + omsItems.length
+    const catalogItems = erpItems.filter((row) => row.customerCode === CATALOG_CUSTOMER_CODE)
+    const customerItems = [...erpItems.filter((row) => row.customerCode !== CATALOG_CUSTOMER_CODE), ...omsItems]
+    const allMerged = mergedFilters.dataSource === 'erp' ? catalogItems
+      : mergedFilters.dataSource === 'oms' ? customerItems
+        : [...catalogItems, ...customerItems]
     const { items, total } = mergePaginate(
-      [erpFiltered, omsItems],
+      [allMerged],
       exportAll ? 1 : page,
-      exportAll ? Math.max(mergedCount, 1) : pageSize,
+      exportAll ? Math.max(allMerged.length, 1) : pageSize,
     )
-    const allMerged = [...erpFiltered, ...omsItems]
     const summary = {
       available: allMerged.reduce(
         (sum, r) => sum + Number((r as { sellableQty?: number; availableQty?: number }).sellableQty ?? (r as { availableQty?: number }).availableQty ?? 0),
@@ -447,11 +393,20 @@ export class InventoryService {
       pageSize,
       summary,
       sourceCounts: {
-        all: erpItems.length + omsItems.length,
-        erp: erpItems.length,
-        oms: omsItems.length,
+        all: catalogItems.length + customerItems.length,
+        erp: catalogItems.length,
+        oms: customerItems.length,
       },
     }
+  }
+
+  async queryCatalogHoldings(q: PaginationDto & { customerKeyword?: string; productCode?: string }) {
+    const { page, pageSize } = getPagination(q, 20)
+    const holdings = await fetchCatalogInventoryRows(this.prisma, {
+      customerCode: q.customerKeyword,
+      productCode: q.productCode,
+    })
+    return { ...mergePaginate([holdings], page, pageSize), page, pageSize }
   }
 
   /**
@@ -568,7 +523,14 @@ export class InventoryService {
     const orphanRows = includeOms || needOmsCounts ? await this.prisma.$queryRaw<{ id: bigint }[]>`
       SELECT p.id FROM product p
       WHERE (p.remark LIKE '%OMS客户:%' OR p.remark LIKE '%OMS 预约入库自动建档%')
-        AND NOT EXISTS (SELECT 1 FROM oms_product o WHERE o.internalSku = p.sku)
+        AND p.sku NOT LIKE 'TKL-%'
+        AND NOT EXISTS (
+          SELECT 1 FROM oms_product o
+          LEFT JOIN oms_customeraccount c ON c.id = o.customerId
+          WHERE o.internalSku = p.sku
+            AND COALESCE(c.code, o.customerId, '') <> 'TKL'
+            AND NOT (o.inCatalog = 1 AND (o.customerId IS NULL OR o.customerId = ''))
+        )
     ` : []
     const orphanWhere = { id: { in: orphanRows.map((row) => row.id) } }
     const productSources: Prisma.ProductWhereInput[] = []
@@ -681,6 +643,7 @@ export class InventoryService {
       const wt = numDim(p.weightKg)
       const customer = resolveCustomerIdentity({
         sku: p.sku,
+        customerCode: isOms ? undefined : CATALOG_CUSTOMER_CODE,
         productRemark: isOms ? p.remark : null,
         customerNameByCode: isOms ? customerNameByCode : undefined,
       })
