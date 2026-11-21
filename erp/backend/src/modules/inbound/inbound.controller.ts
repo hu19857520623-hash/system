@@ -1,5 +1,6 @@
-import { Body, Controller, Delete, Get, Header, Param, ParseIntPipe, Post, Put, Query, Res } from '@nestjs/common'
+import { Body, Controller, Delete, Get, Header, Headers, Ip, Param, ParseIntPipe, Post, Put, Query, Res } from '@nestjs/common'
 import type { Response } from 'express'
+import { auditClientIp } from '../../common/audit-client-ip.util'
 import { InboundService } from './inbound.service'
 import { PaginationDto } from '../../common/dto/pagination.dto'
 import { CurrentUser } from '../../common/decorators/current-user.decorator'
@@ -362,8 +363,9 @@ export class InboundController {
 
   @RequirePerms('inbound.putaway')
   @Post(':id/putaway')
-  putaway(@Param('id', ParseIntPipe) id: number, @Body() body: PutawayInboundDto, @CurrentUser('userId') userId: number) {
-    return this.service.putaway(id, body, userId)
+  putaway(@Param('id', ParseIntPipe) id: number, @Body() body: PutawayInboundDto, @CurrentUser('userId') userId: number,
+    @Headers('x-erp-client-ip') forwardedIp?: string, @Ip() peerIp?: string) {
+    return this.service.putaway(id, body, userId, auditClientIp(forwardedIp, peerIp))
   }
 
   /** @deprecated 旧的一键确认仅说明实际清点、测量与库位上架的正确入口。 */

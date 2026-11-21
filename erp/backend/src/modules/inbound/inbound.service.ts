@@ -977,8 +977,8 @@ export class InboundService {
     return this.receivingWithFees(id, 'measure', payload, operatorId)
   }
 
-  async putaway(id: number, payload: PutawayInboundDto, operatorId?: number) {
-    const result = await runInboundPutaway(this.prisma, this.inventoryMutation, id, payload, operatorId)
+  async putaway(id: number, payload: PutawayInboundDto, operatorId?: number, ipAddress?: string) {
+    const result = await runInboundPutaway(this.prisma, this.inventoryMutation, id, payload, operatorId, ipAddress)
     try {
       if (result.allDone) {
         const skus: string[] = result.items.map(item => item.sku)

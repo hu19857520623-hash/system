@@ -392,6 +392,7 @@ export const inventoryApi = {
   adjustLocation: (id, data) => api.patch(`/inventory/by-location/${id}`, data),
   logs: (sku, params) => api.get(`/inventory/logs/${encodeURIComponent(sku)}`, params),
   outboundLogs: (sku, params) => api.get(`/inventory/logs/${encodeURIComponent(sku)}/outbound`, params),
+  stockMovements: (sku, params) => api.get(`/inventory/logs/${encodeURIComponent(sku)}/movements`, params),
   catalogPurchases: (params) => api.get('/inventory/catalog-purchases', params),
   catalogHoldings: (params) => api.get('/inventory/catalog-holdings', params),
   previewCatalogReclaim: (data) => api.post('/inventory/catalog-reclaim/preview', data),

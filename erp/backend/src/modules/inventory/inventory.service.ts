@@ -1,4 +1,5 @@
 import { readCatalogPurchases } from './catalog-purchases.util'
+import { readStockMovements } from './stock-movements.util'
 import type { CatalogPurchaseQueryDto } from './dto/catalog-purchase-query.dto'
 import { userFacingError } from '@erp/shared/user-facing-error'
 import { createHash } from 'crypto'
@@ -1078,6 +1079,10 @@ export class InventoryService {
     const where: any = { sku }
     if (warehouseCode) where.warehouseCode = warehouseCode
     return this.prisma.inventoryLog.findMany({ where, orderBy: { id: 'desc' }, take: 100 })
+  }
+
+  stockMovements(sku: string, query: PaginationDto & { warehouseCode?: string }) {
+    return readStockMovements(this.prisma, sku, query)
   }
 
   /** SKU 出库流水：发运扣减记录 + 关联出库单信息 */

@@ -1882,7 +1882,7 @@ export class OutboundService {
     return detail
   }
 
-  async ship(id: number, operatorId?: number, payload?: { trackingNo?: string; carrier?: string; logisticsProduct?: string; clientRequestId?: string }) {
+  async ship(id: number, operatorId?: number, payload?: { trackingNo?: string; carrier?: string; logisticsProduct?: string; clientRequestId?: string }, ipAddress?: string) {
     if (!Number.isSafeInteger(operatorId) || !operatorId || operatorId <= 0) throw new BadRequestException('请重新登录后核对发运操作')
     const clientRequestId = String(payload?.clientRequestId || '')
     if (!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(clientRequestId)) throw new BadRequestException('请重新打开发运窗口，使用原操作标识提交')
@@ -1908,9 +1908,10 @@ export class OutboundService {
       for (const productId of [...new Set(order.items.map(item => item.productId))].sort((a, b) => a < b ? -1 : 1)) {
         await tx.$queryRaw`SELECT id FROM inventory WHERE product_id = ${productId} AND warehouse_code = ${order.warehouseCode} FOR UPDATE`
       }
+      const inventoryLogIds: string[] = []
       for (const item of order.items) {
         const pickQty = item.pickedQty || item.qty
-        await this.inventoryMutation.shipDeductWarehouse(tx, {
+        const log = await this.inventoryMutation.shipDeductWarehouse(tx, {
           productId: item.productId,
           sku: item.sku,
           warehouseCode: order.warehouseCode,
@@ -1919,6 +1920,7 @@ export class OutboundService {
           operatorId,
           remark: item.locationCode ? `库位 ${item.locationCode}` : undefined,
         })
+        if (log?.id != null) inventoryLogIds.push(String(log.id))
 
         // 新拣货流程已在确认拣货时扣减库位库存；这里只为历史订单保留兼容逻辑。
         if (!order.pickAllocations.length && item.locationCode) {
@@ -1964,7 +1966,7 @@ export class OutboundService {
       if (transitioned.count !== 1) {
         throw new BadRequestException('出库单状态已变化，发运操作已回滚，请刷新后重试')
       }
-      await tx.operationLog.create({ data: { operatorId: BigInt(operatorId), module: 'outbound', action: 'ship', targetType: 'outbound_order', targetId: order.outboundNo, detail: { clientRequestId, requestFingerprint, request } } })
+      await tx.operationLog.create({ data: { operatorId: BigInt(operatorId), module: 'outbound', action: 'ship', targetType: 'outbound_order', targetId: order.outboundNo, ipAddress, detail: { clientRequestId, requestFingerprint, request, inventoryLogIds } } })
       return { duplicate: false }
     }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted, timeout: 30000 })
     return this.syncShipment(id, result.duplicate)

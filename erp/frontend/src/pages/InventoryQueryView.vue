@@ -8,7 +8,7 @@ import { userFacingError } from '@erp/shared/user-facing-error'
 
 import { displaySku, displaySkuText } from '@erp/shared/sku-display'
 import { isCatalogPoolCustomerCode } from '@/constants/catalog.ts'
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onScopeDispose, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { TableInstance } from 'element-plus'
@@ -25,6 +25,7 @@ import {
 } from '@/constants/importTemplates.ts'
 import { normalizeImportFileText } from '@/utils/csv'
 import { printProductSkuLabels } from '@/features/labels/productLabelPrint'
+import { createReturnReadGate } from '@/utils/returnReadGate'
 
 const app = useAppStore()
 const router = useRouter()
@@ -71,11 +72,18 @@ const locDialogSku = ref('')
 const locDialogWarehouse = ref('')
 const locDialogCustomerCode = ref('')
 const skuLocations = ref<any[]>([])
-const outboundLogVisible = ref(false)
-const outboundLogLoading = ref(false)
-const outboundLogSku = ref('')
-const outboundLogWarehouse = ref('')
-const outboundLogRows = ref<any[]>([])
+const movementVisible = ref(false)
+const movementLoading = ref(false)
+const movementSku = ref('')
+const movementWarehouse = ref('')
+const movementRows = ref<any[]>([])
+const movementTotal = ref(0)
+const movementPage = ref(1)
+const movementPageSize = ref(20)
+const movementError = ref('')
+const movementTime = new Intl.DateTimeFormat('zh-CN', {
+  year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+})
 const adjustDialogVisible = ref(false)
 const adjustForm = ref({
   id: 0, sku: '', productName: '', warehouseCode: '', locationCode: '', qty: 0,
@@ -212,10 +220,10 @@ function exportRows(list = rows.value) {
     ElMessage.warning('没有可导出的数据')
     return
   }
-  const headers = ['SKU', '商品名', '来源', '品类', '客户代码', '客户名称', '总库存', '锁定']
+  const headers = ['SKU', '商品名', '来源', '品类', '客户代码', '客户名称', '总库存', '锁定', '在途']
   const lines = list.map((r) => [
     r.sku, r.productName, isCatalogPoolCustomerCode(r.customerCode) ? '货盘' : 'OMS', r.category, r.customerCode,
-    r.customerName, r.availableQty ?? 0, r.lockedQty ?? 0,
+    r.customerName, r.availableQty ?? 0, r.lockedQty ?? 0, r.inTransitQty ?? 0,
   ])
   const bom = '\uFEFF'
   const content = bom + [headers.join(','), ...lines.map((l) => l.map(escapeCsv).join(','))].join('\n')
@@ -248,18 +256,32 @@ async function showSkuLocations(row: any) {
   locDialogVisible.value = true
 }
 
-async function openOutboundLogs(row: any) {
-  outboundLogSku.value = row.sku
-  outboundLogWarehouse.value = row.warehouseCode
-  outboundLogVisible.value = true
-  outboundLogLoading.value = true
-  outboundLogRows.value = []
+function openStockMovements(sku: string, warehouseCode: string) {
+  movementSku.value = sku
+  movementWarehouse.value = warehouseCode
+  movementVisible.value = true
+  movementTotal.value = 0
+  if (movementPage.value === 1) void loadStockMovements()
+  else movementPage.value = 1
+}
+
+async function loadStockMovements() {
+  const active = movementGate.begin(() => movementVisible.value)
+  movementError.value = ''
+  movementRows.value = []
+  if (!active()) return
+  movementLoading.value = true
   try {
-    outboundLogRows.value = await inventoryApi.outboundLogs(row.sku, { warehouseCode: row.warehouseCode })
-  } catch (e: any) {
-    ElMessage.error(userFacingError(displaySkuText(e?.message || '加载失败')))
+    const result = await inventoryApi.stockMovements(movementSku.value, {
+      warehouseCode: movementWarehouse.value, page: movementPage.value, pageSize: movementPageSize.value,
+    })
+    if (!active()) return
+    movementRows.value = result.items || []
+    movementTotal.value = result.total ?? 0
+  } catch (error) {
+    if (active()) movementError.value = userFacingError(error)
   } finally {
-    outboundLogLoading.value = false
+    if (active()) movementLoading.value = false
   }
 }
 
@@ -276,6 +298,11 @@ async function loadLocationOptions(warehouseCode: string) {
 }
 
 const adjustmentScope = computed(() => app.authenticatedUser && getAccessToken() ? JSON.stringify([getAccessToken(), app.authenticatedUser.id, app.authenticatedUser.roleCode, [...app.currentPermSet].sort()]) : null)
+const movementGate = createReturnReadGate(() => adjustmentScope.value)
+watch([movementPage, movementPageSize], () => { if (movementVisible.value) void loadStockMovements() })
+watch(adjustmentScope, () => { movementVisible.value = false; movementRows.value = []; movementGate.invalidate() })
+watch(movementVisible, (visible) => { if (!visible) { movementGate.invalidate(); movementLoading.value = false } })
+onScopeDispose(() => movementGate.invalidate())
 const originalAdjustment = useInventoryAdjustAttempt({ actor: () => String(app.authenticatedUser?.id || ''), scope: () => adjustmentScope.value, allowed: () => canAdjust.value, storage: localStorage, request: payload => inventoryApi.adjustLocation(payload.id, payload) })
 const { pending: pendingAdjustment, busy: adjusting, blocked: adjustmentBlocked, feedback: adjustmentFeedback, endChanged: endChangedAdjustment } = originalAdjustment
 async function continueAdjustment() {
@@ -650,6 +677,9 @@ watch([page, pageSize], () => load())
           <el-table-column label="锁定" min-width="64" align="right">
             <template #default="{ row }"><span class="qty-num">{{ row.lockedQty ?? row.pendingOutboundQty ?? 0 }}</span></template>
           </el-table-column>
+          <el-table-column label="在途" min-width="64" align="right">
+            <template #default="{ row }"><span class="qty-num">{{ row.inTransitQty ?? 0 }}</span></template>
+          </el-table-column>
         </el-table-column>
 
         <el-table-column label="操作" width="88" fixed="right" align="center">
@@ -659,7 +689,7 @@ watch([page, pageSize], () => load())
               <template #dropdown>
                 <el-dropdown-menu>
                   <el-dropdown-item v-if="row.dataSource === 'erp'" @click="showSkuLocations(row)">库位明细</el-dropdown-item>
-                  <el-dropdown-item v-if="row.dataSource === 'erp'" @click="openOutboundLogs(row)">出库记录</el-dropdown-item>
+                  <el-dropdown-item v-if="row.dataSource === 'erp'" @click="openStockMovements(row.sku, row.warehouseCode)">出入库记录</el-dropdown-item>
                   <el-dropdown-item v-if="canAdjust && row.dataSource === 'erp'" @click="openAdjustFromRow(row)">调整库存</el-dropdown-item>
                   <el-dropdown-item @click="reprintLabel(row)">重打商品标签</el-dropdown-item>
                   <el-dropdown-item @click="goSkuQuery(row)">SKU 主数据</el-dropdown-item>
@@ -701,20 +731,46 @@ watch([page, pageSize], () => load())
       <el-empty v-if="!skuLocations.length" description="暂无库位明细" :image-size="64" />
     </el-dialog>
 
-    <!-- 出库记录 -->
-    <el-dialog v-model="outboundLogVisible" :title="`出库记录 · ${displaySku(outboundLogSku)}`" width="920px" destroy-on-close>
-      <el-table v-loading="outboundLogLoading" :data="outboundLogRows" border size="small" max-height="400">
-        <el-table-column prop="outboundNo" label="出库单" width="130" />
-        <el-table-column prop="qty" label="数量" width="72" align="right" />
-        <el-table-column prop="customerName" label="客户" min-width="100" />
-        <el-table-column prop="locationCode" label="库位" width="100" />
-        <el-table-column prop="inboundLots" label="扣减批次" min-width="160">
-          <template #default="{ row }"><span class="mono">{{ row.inboundLots || '—' }}</span></template>
+    <el-dialog v-model="movementVisible" :title="`出入库记录 · ${displaySku(movementSku)}`" width="min(1180px, 96vw)" destroy-on-close>
+      <el-alert v-if="movementError" :title="movementError" type="error" :closable="false" show-icon>
+        <el-button size="small" @click="loadStockMovements">重试</el-button>
+      </el-alert>
+      <el-table v-else v-loading="movementLoading" :data="movementRows" row-key="id" empty-text="暂无出入库记录" border size="small" max-height="440">
+        <el-table-column label="类型" width="68">
+          <template #default="{ row }"><el-tag :type="row.direction === 'inbound' ? 'success' : 'warning'" size="small">{{ row.direction === 'inbound' ? '入库' : '出库' }}</el-tag></template>
         </el-table-column>
-        <el-table-column label="批次成本" width="92" align="right">
-          <template #default="{ row }">{{ row.unitCostRmb != null ? `¥${Number(row.unitCostRmb).toFixed(2)}` : '—' }}</template>
+        <el-table-column prop="referenceNo" label="出入库单号" min-width="150" show-overflow-tooltip />
+        <el-table-column label="变动数量" width="84" align="right">
+          <template #default="{ row }">{{ row.changeQty > 0 ? '+' : '' }}{{ row.changeQty }}</template>
+        </el-table-column>
+        <el-table-column label="库存变化" width="96" align="right">
+          <template #default="{ row }">{{ row.beforeQty }} → {{ row.afterQty }}</template>
+        </el-table-column>
+        <el-table-column label="操作人员" min-width="114" show-overflow-tooltip>
+          <template #default="{ row }">
+            <div>{{ row.direction === 'outbound' ? '发运' : '上架' }} {{ row.operatorName || '—' }}</div>
+            <div v-if="row.pickerName" class="cust-name">拣货 {{ row.pickerName }}</div>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作 IP" min-width="132" show-overflow-tooltip>
+          <template #default="{ row }"><span class="mono">{{ row.ipAddress || '未记录' }}</span></template>
+        </el-table-column>
+        <el-table-column label="操作时间" width="156">
+          <template #default="{ row }">{{ row.createdAt ? movementTime.format(new Date(row.createdAt)) : '—' }}</template>
+        </el-table-column>
+        <el-table-column label="客户" min-width="106" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.customerName || '—' }}</template>
+        </el-table-column>
+        <el-table-column label="库位" min-width="92" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.locationCode || '—' }}</template>
+        </el-table-column>
+        <el-table-column label="扣减批次及单位成本" min-width="160" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span class="mono">{{ row.inboundLots.map((lot: { batch: string; qty: number; unitCostRmb: number | null }) => `${lot.batch}×${lot.qty}${lot.unitCostRmb == null ? '' : `（¥${lot.unitCostRmb.toFixed(2)}）`}`).join('；') || '—' }}</span>
+          </template>
         </el-table-column>
       </el-table>
+      <ListPagination v-if="!movementError" v-model:page="movementPage" v-model:page-size="movementPageSize" :total="movementTotal" />
     </el-dialog>
 
     <!-- 调整库位库存 -->

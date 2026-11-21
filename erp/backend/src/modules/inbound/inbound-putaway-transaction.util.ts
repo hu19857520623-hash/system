@@ -33,7 +33,7 @@ export function normalizePutawayInput(id: number, payload: PutawayInboundDto) {
 }
 
 /** Parent/product/inventory locks protect the receipt limit and absolute inventory helpers. */
-export async function runInboundPutaway(prisma: PrismaService, inventory: InventoryMutationService, id: number, payload: PutawayInboundDto, operatorId?: number) {
+export async function runInboundPutaway(prisma: PrismaService, inventory: InventoryMutationService, id: number, payload: PutawayInboundDto, operatorId?: number, ipAddress?: string) {
   if (!Number.isSafeInteger(operatorId) || !operatorId || operatorId <= 0) throw new ForbiddenException('请重新登录后上架')
   const request = normalizePutawayInput(id, payload), fingerprint = createHash('sha256').update(JSON.stringify(request)).digest('hex')
   return prisma.$transaction(async tx => {
@@ -89,13 +89,15 @@ export async function runInboundPutaway(prisma: PrismaService, inventory: Invent
       if ((current?.totalQty || 0) + addition > 2147483647 || (current?.availableQty || 0) + addition > 2147483647) throw new BadRequestException('上架后的仓库数量超出支持范围，请联系主管核对')
     }
     let processedQty = 0
+    const inventoryLogIds: string[] = []
     for (const { group, item, total } of resolved) {
       for (const line of group.lines) {
         const location = locationByCode.get(line.locationCode)!
         await tx.inboundPutawayItem.create({ data: { inboundId: order.id, inboundItemId: item.id, locationId: location.id, locationCode: location.locationCode, qty: line.qty, operatorId: BigInt(operatorId) } })
-        await inventory.addLocationStock(tx, { productId: item.productId, sku: item.sku, warehouseCode: order.warehouseCode, locationId: location.id, locationCode: location.locationCode, qty: line.qty, inboundNo: order.inboundNo, batchNo: order.inboundNo,
+        const log = await inventory.addLocationStock(tx, { productId: item.productId, sku: item.sku, warehouseCode: order.warehouseCode, locationId: location.id, locationCode: location.locationCode, qty: line.qty, inboundNo: order.inboundNo, batchNo: order.inboundNo,
           costRmb: item.costRmb != null ? Number(item.costRmb) : undefined, seaFreightPerUnit: item.seaFreightPerUnit != null ? Number(item.seaFreightPerUnit) : undefined, domesticFeePerUnit: item.domesticFeePerUnit != null ? Number(item.domesticFeePerUnit) : undefined },
         { changeType: 'putaway', operatorId, referenceNo: order.inboundNo, remark: location.locationCode })
+        if (log?.id != null) inventoryLogIds.push(String(log.id))
       }
       item.putawayQty = (item.putawayQty || 0) + total; processedQty += total
       await tx.inboundOrderItem.update({ where: { id: item.id }, data: { putawayQty: item.putawayQty } })
@@ -108,7 +110,7 @@ export async function runInboundPutaway(prisma: PrismaService, inventory: Invent
     const response = { id, inboundNo: order.inboundNo, warehouseCode: order.warehouseCode, omsCustomerCode: order.omsCustomerCode, allDone, status: allDone ? 'completed' : 'pending_putaway', processedQty, remainingQty,
       items: order.items.map(item => ({ id: Number(item.id), sku: item.sku, actualQty: item.actualQty, putawayQty: item.putawayQty })),
       message: allDone ? `本单已全部上架完成，共确认本次 ${processedQty} 件` : `本次已上架 ${processedQty} 件，剩余 ${remainingQty} 件，请继续上架` }
-    await tx.operationLog.create({ data: { operatorId: BigInt(operatorId), module: 'inbound', action: 'putaway', targetType: 'inbound_order', targetId: order.inboundNo, detail: JSON.parse(JSON.stringify({ clientRequestId: payload.clientRequestId, requestFingerprint: fingerprint, request, response })) } })
+    await tx.operationLog.create({ data: { operatorId: BigInt(operatorId), module: 'inbound', action: 'putaway', targetType: 'inbound_order', targetId: order.inboundNo, ipAddress, detail: JSON.parse(JSON.stringify({ clientRequestId: payload.clientRequestId, requestFingerprint: fingerprint, request, response, inventoryLogIds })) } })
     return { ...response, duplicate: false }
   }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted, timeout: 20000 })
 }

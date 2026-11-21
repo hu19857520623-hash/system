@@ -63,7 +63,7 @@ export class InventoryMutationService {
       throw new BadRequestException('仓库库存不存在')
     }
 
-    await tx.inventoryLog.create({
+    return tx.inventoryLog.create({
       data: {
         productId,
         sku,
@@ -152,7 +152,7 @@ export class InventoryMutationService {
       })
     }
 
-    await this.applyWarehouseQtyDelta(tx, {
+    const log = await this.applyWarehouseQtyDelta(tx, {
       productId: params.productId,
       sku: params.sku,
       warehouseCode: params.warehouseCode,
@@ -163,6 +163,7 @@ export class InventoryMutationService {
       remark: meta.remark ?? params.locationCode,
     })
     await this.refreshAvgCost(tx, params.productId, params.warehouseCode)
+    return log
   }
 
   /** FIFO 扣减库位库存，返回各批次扣减明细 */
@@ -279,7 +280,7 @@ export class InventoryMutationService {
       },
     })
 
-    await tx.inventoryLog.create({
+    return tx.inventoryLog.create({
       data: {
         productId: params.productId,
         sku: params.sku,

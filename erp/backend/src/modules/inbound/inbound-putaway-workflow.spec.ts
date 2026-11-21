@@ -36,7 +36,7 @@ function fixture() {
           create: async ({ data }: any) => { const row = { id: BigInt(draft.lots.length + 1), ...data }; draft.lots.push(row); return row },
           update: async ({ where, data }: any) => Object.assign(draft.lots.find((row: any) => row.id === where.id), data),
         },
-        inventoryLog: { create: async ({ data }: any) => { draft.inventoryLogs.push(data); return data } },
+        inventoryLog: { create: async ({ data }: any) => { const row = { id: BigInt(draft.inventoryLogs.length + 1), ...data }; draft.inventoryLogs.push(row); return row } },
         productPricing: { findFirst: async () => null },
         operationLog: { findFirst: async ({ where }: any) => draft.operations.find((row: any) => row.operatorId === where.operatorId && row.detail.clientRequestId === where.detail.equals),
           create: async ({ data }: any) => { if (fail) throw new Error('末尾日志失败'); draft.operations.push(data); return data } },
@@ -57,10 +57,11 @@ describe('实际库位上架与库存原子提交', () => {
   })
   it('部分上架保留剩余量，仓级、库位、批次成本与流水一致', async () => {
     const f = fixture()
-    expect(await putaway.runInboundPutaway(f.prisma, f.inventory, 1, f.payload(), 1)).toMatchObject({ allDone: false, processedQty: 1, remainingQty: 3, status: 'pending_putaway' })
+    expect(await putaway.runInboundPutaway(f.prisma, f.inventory, 1, f.payload(), 1, '192.0.2.10')).toMatchObject({ allDone: false, processedQty: 1, remainingQty: 3, status: 'pending_putaway' })
     expect(f.state().stock[0]).toMatchObject({ totalQty: 1, availableQty: 1, lockedQty: 0, avgCostRmb: 13 })
     expect(f.state().lots[0]).toMatchObject({ qty: 1, batchNo: 'RV-TEST', unitCostRmb: 13 })
     expect(f.state().inventoryLogs[0]).toMatchObject({ beforeQty: 0, afterQty: 1, changeQty: 1 })
+    expect(f.state().operations[0]).toMatchObject({ ipAddress: '192.0.2.10', detail: { inventoryLogIds: ['1'] } })
   })
   it('最后一次上架后完结；原请求在完结后重放不再加库存', async () => {
     const f = fixture(), input = f.payload([{ inboundItemId: 1, lines: [{ locationCode: 'A-01', qty: 2 }] }, { inboundItemId: 2, lines: [{ locationCode: 'A-02', qty: 2 }] }])

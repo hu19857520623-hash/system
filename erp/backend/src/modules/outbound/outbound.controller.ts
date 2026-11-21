@@ -1,5 +1,6 @@
-import { BadRequestException, ForbiddenException, Body, Controller, Get, Header, Param, ParseIntPipe, Post, Query, Res } from '@nestjs/common'
+import { BadRequestException, ForbiddenException, Body, Controller, Get, Header, Headers, Ip, Param, ParseIntPipe, Post, Query, Res } from '@nestjs/common'
 import type { Response } from 'express'
+import { auditClientIp } from '../../common/audit-client-ip.util'
 import { OutboundService, OutboundListQuery } from './outbound.service'
 import { CurrentUser } from '../../common/decorators/current-user.decorator'
 import { RequireAnyPerm, RequirePerms } from '../../common/decorators/require-perms.decorator'
@@ -297,8 +298,9 @@ export class OutboundController {
 
   @RequirePerms('outbound.ship')
   @Post(':id/ship')
-  ship(@Param('id', ParseIntPipe) id: number, @Body() body: ShipOutboundDto, @CurrentUser('userId') userId: number) {
-    return this.service.ship(id, userId, body)
+  ship(@Param('id', ParseIntPipe) id: number, @Body() body: ShipOutboundDto, @CurrentUser('userId') userId: number,
+    @Headers('x-erp-client-ip') forwardedIp?: string, @Ip() peerIp?: string) {
+    return this.service.ship(id, userId, body, auditClientIp(forwardedIp, peerIp))
   }
 
   @RequirePerms('outbound.ship')

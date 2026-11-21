@@ -200,6 +200,12 @@ export class InventoryController {
     return this.service.retryCatalogReclaimSync(id, userId)
   }
 
+  @RequireAnyPerm('inventory_query.view', 'inventory_query.detail')
+  @Get('logs/:sku/movements')
+  stockMovements(@Param('sku') sku: string, @Query() query: PaginationDto & { warehouseCode?: string }) {
+    return this.service.stockMovements(sku, query)
+  }
+
   @RequireAnyPerm('inventory_query.view', 'inventory_query.detail', 'logistics_wh.view')
   @Get('logs/:sku/outbound')
   outboundLogs(@Param('sku') sku: string, @Query('warehouseCode') warehouseCode?: string) {

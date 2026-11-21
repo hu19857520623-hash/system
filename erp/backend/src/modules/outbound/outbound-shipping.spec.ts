@@ -36,7 +36,7 @@ function fixture() {
     queue = result.then(() => undefined, () => undefined);return result
   }
   const billing: any = { createCharge: jest.fn(), pushCustomerBillingToOms: jest.fn().mockResolvedValue(true) }
-  const inventory: any = { shipDeductWarehouse: jest.fn(async (tx: any) => { if (fail === 'stock') throw new Error('库存失败');tx._state.inventory.totalQty--;tx._state.inventory.lockedQty--;tx._state.stockLogs.push({ qty: -1 }) }) }
+  const inventory: any = { shipDeductWarehouse: jest.fn(async (tx: any) => { if (fail === 'stock') throw new Error('库存失败');tx._state.inventory.totalQty--;tx._state.inventory.lockedQty--;const log = { id: 1n, qty: -1 };tx._state.stockLogs.push(log);return log }) }
   const service = new OutboundService(prisma, billing, new OutboundBillingService(prisma, billing), inventory, {} as any, {} as any)
   jest.spyOn(service, 'detail').mockImplementation(async () => ({ ...state.order, id: 1 }) as any)
   const fees = jest.spyOn(service as any, 'pushOutboundFeesToOms').mockResolvedValue(true), status = jest.spyOn(service as any, 'pushOutboundStatusToOms').mockResolvedValue(true)
@@ -46,10 +46,11 @@ function fixture() {
 
 describe('发运库存、费用与原请求恢复', () => {
   it('预扣10、实算15，只补扣5；费用更新与库存和两份凭据一起保存', async () => {
-    const f = fixture();expect(await f.service.ship(1, 1, f.input)).toMatchObject({ status: 'shipped', feePending: false, syncPending: false })
+    const f = fixture();expect(await f.service.ship(1, 1, f.input, '192.0.2.20')).toMatchObject({ status: 'shipped', feePending: false, syncPending: false })
     expect(f.state().customer.balance).toBe('15.00');expect(f.state().charges.map((c: any) => c.amount)).toEqual(['5', '10'])
     expect(f.state().inventory).toEqual({ totalQty: 4, lockedQty: 0 });expect(f.state().stockLogs).toHaveLength(1)
     expect(f.state().operations.map((o: any) => o.action)).toEqual(['outbound_payment', 'ship'])
+    expect(f.state().operations[1]).toMatchObject({ ipAddress: '192.0.2.20', detail: { inventoryLogIds: ['1'] } })
   })
   it.each(['outbound_payment', 'ship', 'stock'])('%s失败时费用、余额、发运状态及库存全部回滚', async action => {
     const f = fixture(), before = structuredClone(f.state());f.fail(action)
