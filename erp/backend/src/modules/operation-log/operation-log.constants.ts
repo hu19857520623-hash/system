@@ -32,6 +32,8 @@ export const OPERATION_ACTION_LABELS: Record<string, string> = {
   replan: '复制原明细重新盘点',
   refresh_alerts: '刷新容量预警',
   update: '修改',
+  sku_catalog_update: '修改 SKU 数据',
+  dimension_measure: '入库实测尺寸',
   delete: '删除',
   submit: '提交审核',
   approve: '审核通过',

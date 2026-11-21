@@ -1,12 +1,13 @@
 import { CatalogPurchaseQueryDto } from './dto/catalog-purchase-query.dto'
 import { CatalogReclaimDto, CatalogReclaimPreviewDto, CatalogReclaimHistoryQueryDto } from './dto/catalog-reclaim.dto'
-import { Body, Controller, Get, Param, ParseIntPipe, Patch, Post, Query } from '@nestjs/common'
+import { Body, Controller, Get, Headers, Ip, Param, ParseIntPipe, Patch, Post, Query } from '@nestjs/common'
 import { InventoryService } from './inventory.service'
 import { PaginationDto } from '../../common/dto/pagination.dto'
 import { RequireAnyPerm, RequirePerms } from '../../common/decorators/require-perms.decorator'
 import { CurrentUser } from '../../common/decorators/current-user.decorator'
 import { Roles } from '../../common/decorators/roles.decorator'
 import { LogisticsTransferDto } from './dto/logistics-transfer.dto'
+import { auditClientIp } from '../../common/audit-client-ip.util'
 
 @Controller('inventory')
 export class InventoryController {
@@ -79,8 +80,16 @@ export class InventoryController {
     @Param('id', ParseIntPipe) id: number,
     @Body() body: Record<string, unknown>,
     @CurrentUser('userId') userId: number,
+    @Headers('x-erp-client-ip') forwardedIp?: string,
+    @Ip() peerIp?: string,
   ) {
-    return this.service.updateSkuCatalogItem(id, body, userId)
+    return this.service.updateSkuCatalogItem(id, body, userId, auditClientIp(forwardedIp, peerIp))
+  }
+
+  @RequireAnyPerm('inventory_query.view', 'inventory_query.detail')
+  @Get('sku-query/:sku/history')
+  skuHistory(@Param('sku') sku: string, @Query() query: PaginationDto) {
+    return this.service.skuHistory(sku, query)
   }
 
   @RequireAnyPerm('inventory_query.view', 'inventory_query.detail', 'outbound.view', 'outbound.create')

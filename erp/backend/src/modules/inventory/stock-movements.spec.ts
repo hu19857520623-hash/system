@@ -10,6 +10,7 @@ it('uses actual movement quantities and links each partial operation to its own 
       { ...inbound, id: 22n, beforeQty: 13, afterQty: 16 },
       { ...inbound, id: 21n },
       { ...inbound, id: 20n },
+      { ...inbound, id: 19n, changeType: 'adjust', referenceNo: null, remark: '盘点后补录', changeQty: -2 },
     ]) },
     outboundOrder: { findMany: jest.fn().mockResolvedValue([{ outboundNo: 'OUT-01', pickerId: 7n, customerId: 1n, items: [{ pickAllocations: [{ inboundNo: 'IN-01', locationCode: 'A-02', qty: 3, unitCostRmb: '4.50' }] }] }]) },
     inboundOrder: { findMany: jest.fn().mockResolvedValue([{ inboundNo: 'IN-01', omsCustomerCode: 'C01' }]) },
@@ -25,15 +26,16 @@ it('uses actual movement quantities and links each partial operation to its own 
     customer: { findMany: jest.fn().mockResolvedValue([{ id: 1n, customerCode: 'C01', customerName: '客户甲' }]) },
   }
 
-  const result = await readStockMovements(prisma as never, 'SKU01', { warehouseCode: 'WMS-TEST', page: 2, pageSize: 4 })
+  const result = await readStockMovements(prisma as never, 'SKU01', { warehouseCode: 'WMS-TEST', page: 2, pageSize: 5 })
 
   expect(prisma.inventoryLog.findMany).toHaveBeenCalledWith(expect.objectContaining({
-    skip: 4, take: 4, where: { sku: 'SKU01', warehouseCode: 'WMS-TEST', changeType: { in: ['outbound', 'putaway'] } },
+    skip: 5, take: 5, where: { sku: 'SKU01', warehouseCode: 'WMS-TEST' },
   }))
   expect(result).toMatchObject({ total: 8, items: [
     { direction: 'outbound', changeQty: -3, operatorName: '发运员', pickerName: 'picker', createdAt, ipAddress: '2001:db8::23', inboundLots: [{ batch: 'IN-01', qty: 3, unitCostRmb: 4.5 }] },
     { direction: 'inbound', changeQty: 3, operatorName: '上架员', customerName: '客户甲', locationCode: 'A-02', ipAddress: '192.0.2.22' },
     { direction: 'inbound', ipAddress: '192.0.2.21' },
     { direction: 'inbound', ipAddress: null },
+    { direction: null, changeTypeLabel: '库存调整', changeQty: -2, remark: '盘点后补录', locationCode: '', ipAddress: null },
   ] })
 })

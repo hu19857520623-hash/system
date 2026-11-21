@@ -67,7 +67,7 @@ export class OperationLogService {
     targetId?: string
     dateFrom?: string
     dateTo?: string
-  }) {
+  }, { includeIpAddress = false } = {}) {
     const { page, pageSize } = getPagination(q)
     const where: any = {}
     if (q.module) where.module = q.module
@@ -110,6 +110,7 @@ export class OperationLogService {
       targetType: row.targetType,
       targetId: row.targetId,
       detail: row.detail,
+      ...(includeIpAddress ? { ipAddress: row.ipAddress } : {}),
       createdAt: row.createdAt,
     }))
 

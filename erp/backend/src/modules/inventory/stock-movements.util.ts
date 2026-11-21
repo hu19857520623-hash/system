@@ -2,6 +2,20 @@ import type { PrismaService } from '../../common/prisma/prisma.service'
 import { getPagination, type PaginationDto } from '../../common/dto/pagination.dto'
 import { expandWarehouseSearchTerms, JHB_WAREHOUSE_CODE } from '../../common/warehouse-display.util'
 
+const movementLabels: Record<string, string> = {
+  outbound: '出库',
+  putaway: '入库上架',
+  putaway_undo: '撤回上架',
+  adjust: '库存调整',
+  move: '移库',
+  stocktake: '盘点',
+  logistics_receive: '中转收货',
+  logistics_transfer: '仓库转移',
+  inbound_allocate: '入库调拨扣减',
+  inbound_release: '入库调拨退回',
+  return_restock: '退件上架',
+}
+
 export async function readStockMovements(
   prisma: PrismaService,
   sku: string,
@@ -14,7 +28,6 @@ export async function readStockMovements(
   const where = {
     sku,
     ...(warehouseCode && warehouseCode !== 'all' ? { warehouseCode } : {}),
-    changeType: { in: ['outbound', 'putaway'] },
   }
   const [rows, total] = await Promise.all([
     prisma.inventoryLog.findMany({ where, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], skip: (page - 1) * pageSize, take: pageSize }),
@@ -75,13 +88,16 @@ export async function readStockMovements(
   const items = rows.map(row => {
     const referenceNo = row.referenceNo || ''
     const isOutbound = row.changeType === 'outbound'
+    const isPutaway = row.changeType === 'putaway'
     const outbound = isOutbound ? outboundByNo.get(referenceNo) : undefined
-    const inbound = isOutbound ? undefined : inboundByNo.get(referenceNo)
+    const inbound = isPutaway ? inboundByNo.get(referenceNo) : undefined
     const inboundCustomerCode = inbound?.omsCustomerCode || ''
     const allocations = outbound?.items.flatMap(item => item.pickAllocations) || []
     return {
       id: String(row.id),
-      direction: isOutbound ? 'outbound' : 'inbound',
+      direction: isOutbound ? 'outbound' : isPutaway ? 'inbound' : null,
+      changeType: row.changeType,
+      changeTypeLabel: movementLabels[row.changeType] || row.changeType,
       referenceNo,
       warehouseCode: row.warehouseCode,
       changeQty: row.changeQty,
@@ -94,7 +110,8 @@ export async function readStockMovements(
       locationCode: isOutbound
         ? [...new Set(allocations.map(lot => lot.locationCode).filter(Boolean))].join('、')
           || row.remark?.match(/^库位\s+(\S+)/)?.[1] || outbound?.items[0]?.locationCode || ''
-        : row.remark || '',
+        : isPutaway ? row.remark || '' : '',
+      remark: isOutbound || isPutaway ? '' : row.remark || '',
       inboundLots: allocations.map(lot => ({
         batch: lot.inboundNo || lot.batchNo || '期初',
         qty: lot.qty,

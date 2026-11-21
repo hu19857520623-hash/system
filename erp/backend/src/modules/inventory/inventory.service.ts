@@ -772,7 +772,11 @@ export class InventoryService {
     }
   }
 
-  async updateSkuCatalogItem(id: number, body: Record<string, unknown>, operatorId?: number) {
+  skuHistory(sku: string, { page, pageSize }: PaginationDto) {
+    return this.opLog.list({ page, pageSize, module: 'product', targetType: 'product', targetId: sku }, { includeIpAddress: true })
+  }
+
+  async updateSkuCatalogItem(id: number, body: Record<string, unknown>, operatorId?: number, ipAddress?: string) {
     return this.prisma.$transaction(async tx => {
       await tx.$queryRaw`SELECT id FROM product WHERE id = ${BigInt(id)} FOR UPDATE`
 
@@ -841,14 +845,24 @@ export class InventoryService {
         data,
       })
 
-      await new OperationLogService(tx as PrismaService).log({
-        operatorId,
-        module: 'product',
-        action: 'sku_catalog_update',
-        targetType: 'product',
-        targetId: updated.sku,
-        detail: { hasInventory, editMode: hasInventory ? 'measured_only' : 'full', changes: data },
-      })
+      const changes: Record<string, { from: string | null; to: string | null }> = {}
+      for (const key of Object.keys(data) as Array<keyof typeof product>) {
+        if (key === 'measuredAt') continue
+        const from = product[key]?.toString() ?? null
+        const to = updated[key]?.toString() ?? null
+        if (from !== to) changes[key] = { from, to }
+      }
+      if (Object.keys(changes).length) {
+        await this.opLog.log({
+          operatorId,
+          ipAddress,
+          module: 'product',
+          action: 'sku_catalog_update',
+          targetType: 'product',
+          targetId: updated.sku,
+          detail: { hasInventory, editMode: hasInventory ? 'measured_only' : 'full', changes },
+        }, tx)
+      }
 
       const invFlags = await this.loadSkuInventoryFlags([updated.sku], tx)
       const billing = resolveBillingDimensions({

@@ -384,6 +384,7 @@ export const inventoryApi = {
   query: (params) => api.get('/inventory', params),
   skuQuery: (params) => api.get('/inventory/sku-query', params),
   updateSkuCatalog: (id, data) => api.patch(`/inventory/sku-query/${id}`, data),
+  skuHistory: (sku, params) => api.get(`/inventory/sku-query/${encodeURIComponent(sku)}/history`, params),
   byLocation: (params) => api.get('/inventory/by-location', params),
   addLocationStock: (data) => api.post('/inventory/by-location', data),
   changeLocationStock: (data) => api.post('/inventory/location-change', data),

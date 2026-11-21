@@ -569,7 +569,7 @@ export class ProductsService {
     }
   }
 
-  async update(id: number, data: any, operatorId?: number) {
+  async update(id: number, data: any, operatorId?: number, ipAddress?: string) {
     assertProductMeasureInput(data)
     const before = await this.detail(id)
     const beforeSku = data.customerSku !== undefined ? await this.prisma.product.findUnique({ where: { id: BigInt(id) }, select: { customerSku: true } }) : null
@@ -625,6 +625,7 @@ export class ProductsService {
     }
     await this.opLog.log({
       operatorId,
+      ipAddress,
       module: 'product',
       action: 'update',
       targetType: 'product',

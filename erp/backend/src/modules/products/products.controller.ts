@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, GoneException, Header, Param, ParseIntPipe, Post, Put, Query, Res } from '@nestjs/common'
+import { Body, Controller, Delete, Get, GoneException, Header, Headers, Ip, Param, ParseIntPipe, Post, Put, Query, Res } from '@nestjs/common'
 import type { Response } from 'express'
 import { ProductsService } from './products.service'
 import { PaginationDto } from '../../common/dto/pagination.dto'
@@ -6,6 +6,7 @@ import { RequireAnyPerm, RequirePerms } from '../../common/decorators/require-pe
 import { Public } from '../../common/decorators/public.decorator'
 import { OmsBridge } from '../../common/decorators/oms-bridge.decorator'
 import { CurrentUser } from '../../common/decorators/current-user.decorator'
+import { auditClientIp } from '../../common/audit-client-ip.util'
 
 @Controller('products')
 export class ProductsController {
@@ -84,8 +85,9 @@ export class ProductsController {
 
   @RequirePerms('products.edit')
   @Put(':id')
-  update(@Param('id', ParseIntPipe) id: number, @Body() body: any, @CurrentUser('userId') userId: number) {
-    return this.service.update(id, body, userId)
+  update(@Param('id', ParseIntPipe) id: number, @Body() body: any, @CurrentUser('userId') userId: number,
+    @Headers('x-erp-client-ip') forwardedIp?: string, @Ip() peerIp?: string) {
+    return this.service.update(id, body, userId, auditClientIp(forwardedIp, peerIp))
   }
 
   @RequirePerms('products.edit')

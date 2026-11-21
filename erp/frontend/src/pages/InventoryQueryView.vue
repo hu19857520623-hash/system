@@ -689,7 +689,7 @@ watch([page, pageSize], () => load())
               <template #dropdown>
                 <el-dropdown-menu>
                   <el-dropdown-item v-if="row.dataSource === 'erp'" @click="showSkuLocations(row)">库位明细</el-dropdown-item>
-                  <el-dropdown-item v-if="row.dataSource === 'erp'" @click="openStockMovements(row.sku, row.warehouseCode)">出入库记录</el-dropdown-item>
+                  <el-dropdown-item @click="openStockMovements(row.sku, row.warehouseCode)">库存变动日志</el-dropdown-item>
                   <el-dropdown-item v-if="canAdjust && row.dataSource === 'erp'" @click="openAdjustFromRow(row)">调整库存</el-dropdown-item>
                   <el-dropdown-item @click="reprintLabel(row)">重打商品标签</el-dropdown-item>
                   <el-dropdown-item @click="goSkuQuery(row)">SKU 主数据</el-dropdown-item>
@@ -731,24 +731,24 @@ watch([page, pageSize], () => load())
       <el-empty v-if="!skuLocations.length" description="暂无库位明细" :image-size="64" />
     </el-dialog>
 
-    <el-dialog v-model="movementVisible" :title="`出入库记录 · ${displaySku(movementSku)}`" width="min(1180px, 96vw)" destroy-on-close>
+    <el-dialog v-model="movementVisible" :title="`库存变动日志 · ${displaySku(movementSku)}`" width="min(1180px, 96vw)" destroy-on-close>
       <el-alert v-if="movementError" :title="movementError" type="error" :closable="false" show-icon>
         <el-button size="small" @click="loadStockMovements">重试</el-button>
       </el-alert>
-      <el-table v-else v-loading="movementLoading" :data="movementRows" row-key="id" empty-text="暂无出入库记录" border size="small" max-height="440">
-        <el-table-column label="类型" width="68">
-          <template #default="{ row }"><el-tag :type="row.direction === 'inbound' ? 'success' : 'warning'" size="small">{{ row.direction === 'inbound' ? '入库' : '出库' }}</el-tag></template>
+      <el-table v-else v-loading="movementLoading" :data="movementRows" row-key="id" empty-text="暂无库存变动日志" border size="small" max-height="440">
+        <el-table-column label="类型" min-width="112">
+          <template #default="{ row }"><el-tag :type="row.direction === 'inbound' ? 'success' : row.direction === 'outbound' ? 'warning' : 'info'" size="small">{{ row.changeTypeLabel }}</el-tag></template>
         </el-table-column>
-        <el-table-column prop="referenceNo" label="出入库单号" min-width="150" show-overflow-tooltip />
-        <el-table-column label="变动数量" width="84" align="right">
-          <template #default="{ row }">{{ row.changeQty > 0 ? '+' : '' }}{{ row.changeQty }}</template>
+        <el-table-column prop="referenceNo" label="关联单号" min-width="150" show-overflow-tooltip />
+        <el-table-column label="变动数量" width="98" align="right">
+          <template #default="{ row }">{{ row.changeType === 'move' ? `移库 ${row.changeQty} 件` : `${row.changeQty > 0 ? '+' : ''}${row.changeQty}` }}</template>
         </el-table-column>
         <el-table-column label="库存变化" width="96" align="right">
           <template #default="{ row }">{{ row.beforeQty }} → {{ row.afterQty }}</template>
         </el-table-column>
         <el-table-column label="操作人员" min-width="114" show-overflow-tooltip>
           <template #default="{ row }">
-            <div>{{ row.direction === 'outbound' ? '发运' : '上架' }} {{ row.operatorName || '—' }}</div>
+            <div>{{ row.operatorName || '—' }}</div>
             <div v-if="row.pickerName" class="cust-name">拣货 {{ row.pickerName }}</div>
           </template>
         </el-table-column>
@@ -769,6 +769,7 @@ watch([page, pageSize], () => load())
             <span class="mono">{{ row.inboundLots.map((lot: { batch: string; qty: number; unitCostRmb: number | null }) => `${lot.batch}×${lot.qty}${lot.unitCostRmb == null ? '' : `（¥${lot.unitCostRmb.toFixed(2)}）`}`).join('；') || '—' }}</span>
           </template>
         </el-table-column>
+        <el-table-column prop="remark" label="备注" min-width="140" show-overflow-tooltip />
       </el-table>
       <ListPagination v-if="!movementError" v-model:page="movementPage" v-model:page-size="movementPageSize" :total="movementTotal" />
     </el-dialog>

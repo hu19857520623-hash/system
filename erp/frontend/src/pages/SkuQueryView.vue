@@ -2,7 +2,7 @@
 import { userFacingError } from '@erp/shared/user-facing-error'
 
 import { displaySku, displaySkuText } from '@erp/shared/sku-display'
-import { ref, onMounted, onScopeDispose, watch } from 'vue'
+import { computed, ref, onMounted, onScopeDispose, watch } from 'vue'
 import { getAccessToken } from '@/auth/tokenStore'
 import { createReturnReadGate } from '@/utils/returnReadGate'
 import { useRouter, useRoute } from 'vue-router'
@@ -26,6 +26,8 @@ function queryScope() {
   return token && user ? JSON.stringify([token, user.id, user.roleCode, [...app.currentPermSet].sort()]) : null
 }
 const listGate = createReturnReadGate(queryScope)
+const historyGate = createReturnReadGate(queryScope)
+const canReadHistory = computed(() => app.hasPerm('inventory_query.view') || app.hasPerm('inventory_query.detail'))
 let lastQuery: Record<string, unknown> | null = null
 const rows = ref<any[]>([])
 const listTotal = ref(0)
@@ -42,6 +44,23 @@ const pageSize = ref(20)
 const selectedRows = ref<any[]>([])
 const detailVisible = ref(false)
 const detailRow = ref<any>(null)
+const historyRow = ref<{ sku: string; customerSku?: string } | null>(null)
+const historyVisible = ref(false)
+const historyEntries = ref<any[]>([])
+const historyError = ref('')
+const historyLoading = ref(false)
+const historyTotal = ref(0)
+const historyPage = ref(1)
+const historyPageSize = ref(20)
+const historyTime = new Intl.DateTimeFormat('zh-CN', {
+  year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+})
+const historyFieldLabels: Record<string, string> = {
+  productName: '商品名', customerSku: '客户 SKU', spec: '规格', barcode: '条码', brand: '品牌', category: '品类', spu: 'SPU',
+  weightKg: '重量 (kg)', costRmb: '申报成本', lengthCm: '申报长 (cm)', widthCm: '申报宽 (cm)', heightCm: '申报高 (cm)',
+  measuredLengthCm: '实测长 (cm)', measuredWidthCm: '实测宽 (cm)', measuredHeightCm: '实测高 (cm)',
+  marketPrice: '市场价', seaFreightPerUnit: '单件海运费', domesticFeePerUnit: '单件国内费用', remark: '备注', status: '状态',
+}
 const editVisible = ref(false)
 const editRow = ref<any>(null)
 const editSaving = ref(false)
@@ -182,6 +201,45 @@ function openDetail(row: any) {
   detailVisible.value = true
 }
 
+function openHistory(sku: string, customerSku?: string) {
+  historyRow.value = { sku, customerSku }
+  historyVisible.value = true
+  historyTotal.value = 0
+  if (historyPage.value === 1) void loadHistory()
+  else historyPage.value = 1
+}
+
+async function loadHistory() {
+  if (!historyRow.value || !canReadHistory.value) return
+  const active = historyGate.begin(() => historyVisible.value)
+  if (!active()) return
+  historyEntries.value = []
+  historyError.value = ''
+  historyLoading.value = true
+  try {
+    const result = await inventoryApi.skuHistory(historyRow.value.sku, { page: historyPage.value, pageSize: historyPageSize.value })
+    if (!active()) return
+    historyEntries.value = result.items || []
+    historyTotal.value = result.total ?? 0
+  } catch (error) {
+    if (active()) historyError.value = userFacingError(error)
+  } finally {
+    if (active()) historyLoading.value = false
+  }
+}
+
+function describeChanges(detail: { changes?: Record<string, unknown>; message?: string } | null) {
+  const show = (value: unknown) => value == null || value === '' ? '—' : String(value)
+  const changes = Object.entries(detail?.changes || {}).map(([field, value]) => {
+    const name = historyFieldLabels[field] || field
+    if (value && typeof value === 'object' && 'from' in value && 'to' in value) {
+      return `${name}：${show(value.from)} → ${show(value.to)}`
+    }
+    return `${name}：${show(value)}`
+  })
+  return changes.length ? changes : [detail?.message || '—']
+}
+
 function openEdit(row: any) {
   const id = row.erpProductId ?? (typeof row.id === 'number' ? row.id : null)
   if (!id) {
@@ -307,12 +365,25 @@ watch(queryScope, () => {
   listTotal.value = 0
   detailVisible.value = false
   detailRow.value = null
+  historyVisible.value = false
+  historyRow.value = null
+  historyEntries.value = []
+  historyGate.invalidate()
   editVisible.value = false
   editRow.value = null
   search()
 }, { flush: 'sync' })
-onScopeDispose(() => listGate.invalidate())
+onScopeDispose(() => {
+  listGate.invalidate()
+  historyGate.invalidate()
+})
 watch([page, pageSize], () => load())
+watch([historyPage, historyPageSize], () => { if (historyVisible.value) void loadHistory() })
+watch(historyVisible, (visible) => {
+  if (visible) return
+  historyGate.invalidate()
+  historyLoading.value = false
+})
 onMounted(() => {
   const q = String(route.query.q || route.query.sku || '').trim()
   if (q) filters.value.title = q
@@ -531,6 +602,7 @@ onMounted(() => {
               <template #dropdown>
                 <el-dropdown-menu>
                   <el-dropdown-item @click="openDetail(row)">查看详情</el-dropdown-item>
+                  <el-dropdown-item v-if="canReadHistory" @click="openHistory(row.sku, row.customerSku)">修改日志</el-dropdown-item>
                   <el-dropdown-item v-if="row.editable" @click="openEdit(row)">编辑信息</el-dropdown-item>
                   <el-dropdown-item @click="goInventory(row)">库存查询</el-dropdown-item>
                 </el-dropdown-menu>
@@ -573,6 +645,30 @@ onMounted(() => {
           <dt>更新时间</dt><dd>{{ fmtTime(detailRow.updatedAt) }}</dd>
         </dl>
       </template>
+    </el-dialog>
+
+    <el-dialog v-model="historyVisible" :title="`SKU 修改日志 · ${displaySku(historyRow)}`" width="min(880px, 96vw)" destroy-on-close>
+      <el-alert v-if="historyError" :title="historyError" type="error" :closable="false" show-icon>
+        <el-button size="small" @click="loadHistory">重试</el-button>
+      </el-alert>
+      <el-table v-else v-loading="historyLoading" :data="historyEntries" row-key="id" empty-text="暂无 SKU 修改日志" border size="small" max-height="440">
+        <el-table-column label="操作时间" width="166">
+          <template #default="{ row }">{{ row.createdAt ? historyTime.format(new Date(row.createdAt)) : '—' }}</template>
+        </el-table-column>
+        <el-table-column label="操作者" min-width="112" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.operatorName === '—' && row.operatorId ? `#${row.operatorId}` : row.operatorName }}</template>
+        </el-table-column>
+        <el-table-column label="操作 IP" min-width="132" show-overflow-tooltip>
+          <template #default="{ row }"><span class="mono">{{ row.ipAddress || '未记录' }}</span></template>
+        </el-table-column>
+        <el-table-column prop="actionLabel" label="操作" min-width="128" show-overflow-tooltip />
+        <el-table-column label="修改内容" min-width="218">
+          <template #default="{ row }">
+            <div v-for="(change, index) in describeChanges(row.detail)" :key="index">{{ change }}</div>
+          </template>
+        </el-table-column>
+      </el-table>
+      <ListPagination v-if="!historyError" v-model:page="historyPage" v-model:page-size="historyPageSize" :total="historyTotal" />
     </el-dialog>
 
     <el-dialog

@@ -1,5 +1,42 @@
 import { InventoryService } from './inventory.service'
 import { ERP_MASTER_PRODUCT_WHERE } from '../../common/product-source.util'
+import { OperationLogService } from '../operation-log/operation-log.service'
+
+it('stores ERP SKU changes with their operator and IP and reads the audit trail for that SKU', async () => {
+  const product = { id: 1n, sku: 'TK-001', productName: '旧商品名', brand: '原品牌' }
+  const createdAt = new Date('2026-11-21T08:00:05.000Z')
+  const client = {
+    product: {
+      findUnique: jest.fn().mockResolvedValue(product),
+      update: jest.fn().mockResolvedValue({ ...product, productName: '新商品名' }),
+    },
+    sysUser: { findUnique: jest.fn().mockResolvedValue({ realName: '审核员' }) },
+    operationLog: {
+      create: jest.fn(),
+      findMany: jest.fn(),
+      count: jest.fn().mockResolvedValue(1),
+    },
+    $queryRaw: jest.fn(),
+  }
+  const prisma = { ...client, $transaction: (run: (tx: typeof client) => unknown) => run(client) }
+  const service = new InventoryService(prisma as never, new OperationLogService(prisma as never), {} as never)
+  jest.spyOn(service as any, 'loadSkuInventoryFlags').mockResolvedValue(new Map())
+
+  await service.updateSkuCatalogItem(1, { productName: '新商品名', brand: '原品牌' }, 7, '192.0.2.17')
+  const saved = client.operationLog.create.mock.calls[0][0].data
+  expect(saved).toMatchObject({
+    operatorId: 7n, operatorName: '审核员', ipAddress: '192.0.2.17', targetId: product.sku,
+    detail: { changes: { productName: { from: '旧商品名', to: '新商品名' } } },
+  })
+  expect(saved.detail.changes).not.toHaveProperty('brand')
+  client.operationLog.findMany.mockResolvedValue([{ ...saved, id: 1n, createdAt }])
+  await expect(service.skuHistory(product.sku, { page: 1, pageSize: 20 })).resolves.toMatchObject({
+    items: [{ createdAt, ipAddress: '192.0.2.17', operatorName: '审核员' }],
+  })
+  expect(client.operationLog.findMany).toHaveBeenCalledWith(expect.objectContaining({
+    where: { module: 'product', targetType: 'product', targetId: product.sku },
+  }))
+})
 
 describe('SKU query customer and supplier identities', () => {
   const omsProduct = { id: 8, internalSku: 'TKL0001-CLIENT', name: '客户商品', customerCode: 'TKL0001', customerName: '客户甲', productStatus: 'available' }
