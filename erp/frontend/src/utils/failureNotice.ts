@@ -1,12 +1,17 @@
-type NoticeOptions = { message?: unknown; duration?: number; showClose?: boolean; customClass?: string }
+import type { MessageOptionsWithType, MessageParamsWithType } from 'element-plus'
+import { isVNode } from 'vue'
 
-/** 失败提示保留到用户关闭，避免几秒后丢失恢复说明。 */
-export function persistentFailureNotice(input: unknown): NoticeOptions & { duration: 0; showClose: true } {
-  const options: NoticeOptions = typeof input === 'string'
+export function failureNotice(input?: MessageParamsWithType): MessageOptionsWithType {
+  const options = !input || typeof input === 'string' || typeof input === 'function' || isVNode(input)
     ? { message: input }
-    : input && typeof input === 'object'
-      ? { ...(input as NoticeOptions) }
-      : { message: input == null ? '' : String(input) }
+    : input
   const customClass = ['erp-failure-notice', options.customClass].filter(Boolean).join(' ')
-  return { ...options, duration: 0, showClose: true, customClass }
+  const duration = options.duration
+  return {
+    ...options,
+    duration: duration && duration > 0 && Number.isFinite(duration) ? duration : 5000,
+    showClose: true,
+    grouping: options.grouping ?? true,
+    customClass,
+  }
 }

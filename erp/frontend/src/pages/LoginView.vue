@@ -17,6 +17,7 @@ const username = ref('')
 const password = ref('')
 const remember = ref(true)
 const loading = ref(false)
+let loginFailure: ReturnType<typeof ElMessage.error> | undefined
 
 onMounted(() => {
   const saved = localStorage.getItem('login_username')
@@ -24,6 +25,7 @@ onMounted(() => {
 })
 
 async function handleSubmit() {
+  if (loading.value) return
   const u = username.value.trim()
   const p = password.value
   if (!u) {
@@ -38,12 +40,13 @@ async function handleSubmit() {
   loading.value = true
   try {
     await app.login(u, p)
+    loginFailure?.close()
     if (remember.value) localStorage.setItem('login_username', u)
     else localStorage.removeItem('login_username')
     await router.replace(internalRedirect(route.query.redirect))
     ElMessage.success(`欢迎回来，${app.currentAccount.name}`)
   } catch (e: any) {
-    ElMessage.error(userFacingError(e.message || '登录失败，请检查账号密码'))
+    loginFailure = ElMessage.error(userFacingError(e.message || '登录失败，请检查账号密码'))
   } finally {
     loading.value = false
   }

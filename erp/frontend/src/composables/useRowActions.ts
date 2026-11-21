@@ -34,7 +34,8 @@ export function useRowActions() {
     })
   }
 
-  const toast = (msg: string, type: 'success' | 'info' | 'warning' | 'error' = 'success') => ElMessage({ message: type === 'error' ? userFacingError(msg) : msg, type })
+  const toast = (msg: string, type: 'success' | 'info' | 'warning' | 'error' = 'success') =>
+    ElMessage[type](type === 'error' ? userFacingError(msg) : msg)
 
   const exportTask = (what = '数据', params?: Record<string, unknown>) => exportModule(what, params)
 
