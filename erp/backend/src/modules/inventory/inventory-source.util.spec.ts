@@ -1,4 +1,4 @@
-import { omsInventoryWithoutErpDuplicates } from './inventory-source.util'
+import { matchesOmsInventoryQuantity, omsInventoryWithoutErpDuplicates } from './inventory-source.util'
 
 describe('inventory source reconciliation', () => {
   it('excludes customer catalog holdings even when their owner differs or no ERP row matches', () => {
@@ -26,5 +26,14 @@ describe('inventory source reconciliation', () => {
       { sku: 'TKL005-713105', warehouseCode: 'jhb1' },
     ]
     expect(omsInventoryWithoutErpDuplicates(rows, erp)).toEqual(rows)
+  })
+
+  it('excludes copied warehouse stock while preserving the customer’s separate inbound quantities', () => {
+    const catalog = { sku: 'FUR-LVR-SID-011', customerCode: 'TKL', warehouseCode: 'WMS-JHB-01' }
+    const mirror = { ...catalog, id: 'oms-erp-o-stale', customerCode: 'TKL0444', stockSource: 'owned', availableQty: 200, lockedQty: 2, totalQty: 202 }
+    expect(omsInventoryWithoutErpDuplicates([mirror], [catalog])).toEqual([])
+    const [pending] = omsInventoryWithoutErpDuplicates([{ ...mirror, inTransitQty: 40 }], [catalog])
+    expect(pending).toMatchObject({ availableQty: 0, lockedQty: 0, totalQty: 0, inTransitQty: 40 })
+    expect(matchesOmsInventoryQuantity(pending, { onlyAvailable: true })).toBe(false)
   })
 })

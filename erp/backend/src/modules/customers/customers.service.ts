@@ -12,6 +12,8 @@ import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
 import { notifyOms } from '../../common/oms-notify.util'
 import { readableDisplayText } from '../../common/display-text.util'
 import { buildInboundPipelineQtyMap, INBOUND_PIPELINE_STATUSES } from '../../common/inbound-pipeline.util'
+import { resolveCustomerIdentity } from '../../common/inventory-row-mapper.util'
+import { CATALOG_CUSTOMER_CODE } from '../../common/catalog-customer.util'
 import {
   buildOmsOnlyListItem,
   enrichErpWithOms,
@@ -179,6 +181,7 @@ export class CustomersService {
         where: {
           omsCustomerCode: customer.customerCode,
           warehouseCode,
+          OR: [{ stockSource: null }, { stockSource: { not: 'catalog' } }],
           status: { in: [...INBOUND_PIPELINE_STATUSES, 'completed', 'confirmed'] },
         },
         select: {
@@ -238,7 +241,14 @@ export class CustomersService {
     const ownedItems = products
       .filter(product => ownedProductIdSet.has(product.id.toString()) || ownedSkus.has(product.sku))
       .map((product) => {
-        const inventory = inventoryByProductId.get(Number(product.id))
+        const owner = resolveCustomerIdentity({
+          sku: product.sku,
+          productRemark: product.remark,
+          defaultCustomerCode: CATALOG_CUSTOMER_CODE,
+        }).customerCode
+        const inventory = owner.toUpperCase() === customer.customerCode.toUpperCase()
+          ? inventoryByProductId.get(Number(product.id))
+          : undefined
         return {
           id: Number(product.id),
           customerId: Number(customer.id),

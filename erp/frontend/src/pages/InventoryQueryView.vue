@@ -641,9 +641,10 @@ watch([page, pageSize], () => load())
           <template #default="{ $index }">{{ rowIndex($index) }}</template>
         </el-table-column>
 
-        <el-table-column label="客户 SKU" min-width="100" show-overflow-tooltip>
+        <el-table-column label="SKU" min-width="128" show-overflow-tooltip>
           <template #default="{ row }">
-            <span class="mono">{{ row.customerSku || '—' }}</span>
+            <span class="mono">{{ row.customerSku || row.sku || '—' }}</span>
+            <div v-if="!row.customerSku && row.sku" class="cust-name">系统 SKU</div>
           </template>
         </el-table-column>
 

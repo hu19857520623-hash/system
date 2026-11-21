@@ -2,15 +2,20 @@ export const INBOUND_TRANSIT_STATUSES = ['pending_receipt', 'pending_push', 'pus
 export const INBOUND_PIPELINE_STATUSES = [...INBOUND_TRANSIT_STATUSES, 'pending_putaway']
 
 /** 两端库存使用同一组已提交入库单及同一数量口径；草稿、作废和完成单不计入途存。 */
-export function buildInboundPipelineQtyMap(orders: Array<{
+type InboundPipelineOrder = {
   warehouseCode: string; status: string
   items: Array<{ sku: string; expectedQty: number; actualQty?: number | null; putawayQty?: number | null }>
-}>) {
+}
+
+export function buildInboundPipelineQtyMap<T extends InboundPipelineOrder>(
+  orders: T[],
+  keyOf: (order: T, sku: string) => string = (order, sku) => `${sku}::${order.warehouseCode}`,
+) {
   const result = new Map<string, { inTransit: number; pendingPutaway: number }>()
   for (const order of orders) {
     if (!INBOUND_PIPELINE_STATUSES.includes(order.status)) continue
     for (const item of order.items) {
-      const key = `${item.sku}::${order.warehouseCode}`
+      const key = keyOf(order, item.sku)
       const value = result.get(key) || { inTransit: 0, pendingPutaway: 0 }
       if (INBOUND_TRANSIT_STATUSES.includes(order.status)) {
         const remaining = Math.max(0, item.expectedQty - (item.actualQty ?? 0))

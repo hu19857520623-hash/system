@@ -84,29 +84,6 @@ function pushSkuFilter(
   for (const t of tokens) params.push(likeParam(t))
 }
 
-function pushQtyFilter(
-  conditions: string[],
-  params: unknown[],
-  column: string,
-  qtyType: string | undefined,
-  qtyMin: number | null,
-  qtyMax: number | null,
-  lowStockOnly?: boolean,
-) {
-  const field = qtyType === 'locked' ? 'locked' : qtyType === 'total' ? '(available + locked)' : 'available'
-  if (lowStockOnly || qtyMin != null || qtyMax != null) {
-    if (lowStockOnly) conditions.push(`${field} > 0`)
-    if (qtyMin != null && Number.isFinite(qtyMin)) {
-      conditions.push(`${field} >= ?`)
-      params.push(qtyMin)
-    }
-    if (qtyMax != null && Number.isFinite(qtyMax)) {
-      conditions.push(`${field} <= ?`)
-      params.push(qtyMax)
-    }
-  }
-}
-
 function mapOmsInventoryRow(r: Record<string, unknown>) {
   return buildOmsWarehouseInventoryRow({
     id: r.id,
@@ -363,16 +340,6 @@ export async function fetchOmsInventoryRows(prisma: PrismaService, filters: Merg
       params.push(likeParam(wh), wh)
     }
   }
-
-  pushQtyFilter(
-    conditions,
-    params,
-    'available',
-    filters.qtyType,
-    filters.qtyMin ?? null,
-    filters.qtyMax ?? null,
-    filters.lowStockOnly || filters.onlyAvailable,
-  )
 
   const sql = `
     SELECT i.id, i.sku, i.name, i.available, i.locked, i.inTransit, i.warehouse,

@@ -42,4 +42,18 @@ describe('客户库存同步的在途和待上架数量', () => {
     expect(result.total).toBe(1)
     expect(result.items[0]).toMatchObject({ sku: 'TKL9001-A', stockSource: 'owned', warehouseAvailable: 2, inTransitQty: 0, pendingShelvingQty: 0 })
   })
+
+  it('客户入库单引用货盘商品时，只同步客户在途，不复制货盘现货', async () => {
+    const { prisma, service } = fixture(['pending_receipt'], true)
+    prisma.inboundOrder.findMany.mockResolvedValue([{ warehouseCode: 'WMS-JHB-01', status: 'pending_receipt', items: [{ productId: 7n, sku: 'FUR-LVR-SID-011', expectedQty: 40 }] }])
+    prisma.product.findMany.mockResolvedValue([{ id: 7n, sku: 'FUR-LVR-SID-011', productName: '床头柜', remark: null }])
+    jest.mocked((service as any).listSkuInventory).mockResolvedValue([{ sku: 'FUR-LVR-SID-011', quantity: 4 }])
+
+    const result = await service.inventoryViewForOms('TKL9001')
+
+    expect(result.items).toMatchObject([
+      { stockSource: 'catalog', quantity: 4, warehouseAvailable: 2 },
+      { stockSource: 'owned', warehouseAvailable: 0, warehouseLocked: 0, warehouseTotal: 0, inTransitQty: 40 },
+    ])
+  })
 })

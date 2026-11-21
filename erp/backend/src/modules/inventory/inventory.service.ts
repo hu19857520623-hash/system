@@ -39,7 +39,7 @@ import {
 import { InventoryMutationService } from '../../common/inventory/inventory-mutation.service'
 import { ERP_MASTER_PRODUCT_WHERE, OMS_MANAGED_PRODUCT_WHERE } from '../../common/product-source.util'
 import type { InventoryTx } from '../../common/inventory/inventory-mutation.types'
-import { omsInventoryWithoutErpDuplicates } from './inventory-source.util'
+import { inventoryOwnerKey, matchesOmsInventoryQuantity, omsInventoryWithoutErpDuplicates } from './inventory-source.util'
 import { skuOperationStatusLabel } from './sku-operation-status.util'
 import {
   assertLogisticsWarehouse,
@@ -276,7 +276,10 @@ export class InventoryService {
       const wh = whMap.get(r.warehouseCode)
       const supplier = prod?.supplierId ? supMap.get(Number(prod.supplierId)) : undefined
       const pricing = priceMap.get(r.sku)
-      const pipeline = pipelineMap.get(metaKey) || { inTransit: 0, pendingPutaway: 0 }
+      const owner = resolveCustomerIdentity({
+        sku: r.sku, productRemark: prod?.remark, customerNameByCode, defaultCustomerCode: CATALOG_CUSTOMER_CODE,
+      }).customerCode
+      const pipeline = pipelineMap.get(inventoryOwnerKey(owner, r.sku, r.warehouseCode)) || { inTransit: 0, pendingPutaway: 0 }
       return buildErpWarehouseInventoryRow({
         id: Number(r.id),
         sku: r.sku,
@@ -360,7 +363,7 @@ export class InventoryService {
         productRemark: stockProductById.get(String(row.productId))?.remark,
         defaultCustomerCode: CATALOG_CUSTOMER_CODE,
       }).customerCode,
-    })))
+    }))).filter(row => matchesOmsInventoryQuantity(row, mergedFilters))
 
     const catalogItems = erpItems.filter((row) => row.customerCode === CATALOG_CUSTOMER_CODE)
     const customerItems = [...erpItems.filter((row) => row.customerCode !== CATALOG_CUSTOMER_CODE), ...omsItems]
@@ -1009,7 +1012,7 @@ export class InventoryService {
     }
   }
 
-  /** 在途 / 待上架数量（按 SKU+仓库） */
+  /** 在途 / 待上架数量按库存归属、SKU、仓库分别计算。 */
   private async loadPipelineQtyMap(warehouseCodes: string[]) {
     const where: any = {
       status: { in: INBOUND_PIPELINE_STATUSES },
@@ -1021,6 +1024,8 @@ export class InventoryService {
       select: {
         warehouseCode: true,
         status: true,
+        omsCustomerCode: true,
+        stockSource: true,
         items: {
           select: {
             sku: true,
@@ -1032,7 +1037,11 @@ export class InventoryService {
       },
     })
 
-    return buildInboundPipelineQtyMap(orders)
+    return buildInboundPipelineQtyMap(orders, (order, sku) => {
+      const owner = order.stockSource === 'catalog' ? CATALOG_CUSTOMER_CODE
+        : order.omsCustomerCode?.trim() || resolveCustomerIdentity({ sku, defaultCustomerCode: CATALOG_CUSTOMER_CODE }).customerCode
+      return inventoryOwnerKey(owner, sku, order.warehouseCode)
+    })
   }
 
   private async productIdsByKeyword(keyword: string): Promise<bigint[]> {

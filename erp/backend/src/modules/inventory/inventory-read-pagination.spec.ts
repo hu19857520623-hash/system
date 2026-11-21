@@ -1,5 +1,6 @@
 import { InventoryService } from './inventory.service'
 import { fetchOmsInventoryRows, fetchOmsProductRows } from './oms-data-bridge.util'
+import { inventoryOwnerKey } from './inventory-source.util'
 
 function holdings(count: number) {
   const stamp = new Date('2026-11-11T00:00:00Z')
@@ -84,6 +85,20 @@ describe('inventory reads past 5000 rows', () => {
     expect(prisma.$queryRawUnsafe.mock.calls[0][0]).not.toMatch(/LIMIT 5000/)
     prisma.$queryRawUnsafe.mockRejectedValue(Error('SQL connection lost') as never)
     await expect(fetchOmsInventoryRows(prisma as any, {})).rejects.toThrow('无法读取 OMS 库存，请稍后重试')
+  })
+
+  it('keeps customer inbound quantities separate from the catalog pool for the same SKU', async () => {
+    const sku = 'FUR-LVR-SID-011'
+    const warehouseCode = 'WMS-JHB-01'
+    const order = { warehouseCode, status: 'pending_receipt' }
+    const prisma = { inboundOrder: { findMany: jest.fn().mockResolvedValue([
+      { ...order, omsCustomerCode: 'TKL0444', stockSource: 'owned', items: [{ sku, expectedQty: 40 }] },
+      { ...order, omsCustomerCode: null, stockSource: 'catalog', items: [{ sku, expectedQty: 10 }] },
+    ]) } }
+    const service = new InventoryService(prisma as any, {} as any, {} as any)
+    const result = await (service as any).loadPipelineQtyMap([warehouseCode])
+    expect(result.get(inventoryOwnerKey('TKL', sku, warehouseCode))).toMatchObject({ inTransit: 10 })
+    expect(result.get(inventoryOwnerKey('TKL0444', sku, warehouseCode))).toMatchObject({ inTransit: 40 })
   })
 
   it('reads every OMS product and reports a Chinese failure', async () => {
