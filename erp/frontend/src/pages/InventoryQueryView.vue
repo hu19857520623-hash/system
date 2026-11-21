@@ -480,7 +480,10 @@ async function searchSkuOptions(keyword: string) {
 }
 
 function goSkuQuery(row: any) {
-  router.push({ path: '/inventory/sku-query', query: { q: row.sku } })
+  router.push({
+    path: '/inventory/sku-query',
+    query: { q: row.sku, dataSource: row.dataSource === 'oms' ? 'oms' : 'erp' },
+  })
 }
 
 onMounted(async () => {
@@ -610,19 +613,6 @@ watch([page, pageSize], () => load())
       >
         <el-table-column label="#" width="44" align="center" fixed="left">
           <template #default="{ $index }">{{ rowIndex($index) }}</template>
-        </el-table-column>
-
-        <el-table-column label="系统 SKU" min-width="128" fixed="left" class-name="sku-col" show-overflow-tooltip>
-          <template #default="{ row }">
-            <button
-              type="button"
-              class="sku-link"
-              :class="`sku-link--${row.dataSource || 'erp'}`"
-              @click="row.dataSource === 'erp' ? showSkuLocations(row) : goSkuQuery(row)"
-            >
-              {{ displaySku(row) }}
-            </button>
-          </template>
         </el-table-column>
 
         <el-table-column label="客户 SKU" min-width="100" show-overflow-tooltip>
@@ -926,12 +916,6 @@ watch([page, pageSize], () => load())
   padding-bottom: 6px;
 }
 
-.inv-table :deep(.sku-col .cell) {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 .source-tag {
   max-width: 100%;
   height: auto;
@@ -944,27 +928,6 @@ watch([page, pageSize], () => load())
   font-variant-numeric: tabular-nums;
   font-family: var(--font-mono, Consolas, monospace);
 }
-
-.sku-link {
-  background: none;
-  border: none;
-  padding: 0;
-  font-family: var(--font-mono, Consolas, monospace);
-  font-size: 12px;
-  cursor: pointer;
-  text-align: left;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  line-height: 1.45;
-  max-width: 100%;
-  display: inline-block;
-  vertical-align: top;
-}
-.sku-link--erp { color: var(--el-color-primary); font-weight: 600; }
-.sku-link--oms { color: #e6a23c; font-weight: 600; }
-.sku-link--catalog { color: var(--el-color-success); font-weight: 600; }
-.sku-link:hover { text-decoration: underline; }
 
 .title-cn { color: var(--el-text-color-primary); line-height: 1.4; }
 .title-en { font-size: 11px; color: var(--el-text-color-secondary); margin-top: 2px; }

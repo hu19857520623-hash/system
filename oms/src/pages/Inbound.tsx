@@ -30,7 +30,7 @@ import OutboundSkuPickerModal, { type OutboundSkuPickerConfirmRow, type Outbound
 import type { DeliveryMethod, FileAttachment, InboundStatus, InboundType } from '../data/mockData'
 import { CUSTOMER_INBOUND_TYPES, sanitizeCustomerInboundType } from '../data/mockData'
 import { useInboundOrders } from '../data/entityStore'
-import { buildInboundSkuSelection, validateInboundBoxLines, type InboundBoxLine } from '../data/inboundBoxLines'
+import { buildInboundSkuSelection, sortInboundBoxLines, validateInboundBoxLines, type InboundBoxLine } from '../data/inboundBoxLines'
 
 const INBOUND_WAREHOUSE_ID = 'jhb1'
 const EMPTY_SKU_SELECTION: OutboundSkuPickerLine[] = []
@@ -99,7 +99,7 @@ export default function Inbound() {
     setTrackingNo(editOrder.trackingNo || '')
     setReferenceNo(editOrder.referenceNo || '')
     setRemark(editOrder.remark || '')
-    setLines((editOrder.lineItems || []).map((line, index) => ({
+    const editLines = (editOrder.lineItems || []).map((line, index) => ({
       id: `${editOrder.id}-${index}`,
       sku: line.sku,
       name: line.name,
@@ -107,7 +107,8 @@ export default function Inbound() {
       boxNo: line.boxNo || index + 1,
       packType: line.packType || '自带包装',
       stockType: line.stockType || '以仓库为准',
-    })))
+    }))
+    setLines(sortInboundBoxLines(editLines))
     setAttachments(editOrder.attachments || [])
     setConfirmWarehouseData(false)
   }, [editOrder, role, sessionScope])
@@ -169,7 +170,7 @@ export default function Inbound() {
       await reportLineImportResult(result, () => {
         if (!currentView()) return
         assertWrite()
-        setLines(prev => [...prev, ...result.data.map(row => ({
+        const importedLines = result.data.map(row => ({
           id: row.id,
           sku: row.sku,
           name: row.name,
@@ -177,7 +178,8 @@ export default function Inbound() {
           boxNo: row.boxNo,
           packType: row.packType ?? '自带包装',
           stockType: row.stockType ?? '以仓库为准',
-        }))])
+        }))
+        setLines(prev => sortInboundBoxLines([...prev, ...importedLines]))
       }, { isCurrent: currentView })
     } catch (err) {
       if (currentView()) notifyIfUserError(err, '导入失败')
@@ -223,7 +225,8 @@ export default function Inbound() {
       setFeedback('请先添加入库货品')
       return
     }
-    const lineError = validateInboundBoxLines(lines)
+    const sortedLines = sortInboundBoxLines(lines)
+    const lineError = validateInboundBoxLines(sortedLines)
     if (lineError) {
       setFeedback(displaySkuText(lineError))
       return
@@ -261,7 +264,7 @@ export default function Inbound() {
       contactPhone: editOrder?.contactPhone,
       skuHint: lines.map(l => l.sku).slice(0, 3).join(', '),
       remark: remark.trim() || undefined,
-      lineItems: lines.map(l => ({
+      lineItems: sortedLines.map(l => ({
         sku: l.sku.trim(),
         name: l.name,
         qty: l.qty,
@@ -441,7 +444,7 @@ export default function Inbound() {
           }
         >
           <ImportTemplateLegend columns={INBOUND_LINE_COLUMNS} />
-          <p className="mb-3 text-xs text-text-muted">点击「增加」选择 SKU 并填写箱数与每箱数量；箱号自动连续生成，添加后可直接修改明细。</p>
+          <p className="mb-3 text-xs text-text-muted">新增货品自动生成箱号。箱号从 1 连续编号，同箱多个 SKU 可使用相同箱号。</p>
           {lines.length > 0 && <div className="mb-3 flex justify-end"><Button variant="secondary" size="sm" onClick={() => setLines([])}>清除货品</Button></div>}
 
           <Card className="overflow-hidden">
@@ -463,7 +466,7 @@ export default function Inbound() {
                 ) : lines.map(row => (
                   <tr key={row.id} className="table-row">
                     <td className="table-cell">
-                      <input aria-label={`箱号 ${row.boxNo} 的箱号`} type="number" min={1} step={1} value={row.boxNo || ''} onChange={e => updateLine(row.id, { boxNo: Number(e.target.value) })} className={formInput('min-w-[72px] w-20')} />
+                      <input aria-label={`箱号 ${row.boxNo} 的箱号`} type="number" min={1} step={1} value={row.boxNo || ''} onChange={e => updateLine(row.id, { boxNo: Number(e.target.value) })} onBlur={() => setLines(sortInboundBoxLines)} className={formInput('min-w-[72px] w-20')} />
                     </td>
                     <td className="table-cell">
                       <input aria-label={`箱号 ${row.boxNo} 的 SKU`} value={displaySku(row.sku, targetOrder?.customerId ?? getCustomerIdForRole(role))} onChange={e => {

@@ -57,3 +57,17 @@ test('真实 CSV 列映射后，两种入库导入都拒绝模板所不允许的
   assert.equal(orders.errors.length, 0)
   assert.match(parseInboundOrders(orders.records).errors.join(''), /数量必须为正整数/)
 })
+
+test('两种导入都按箱号排列，同时保留同箱的 SKU', () => {
+  const records = [
+    { ...valid, boxNo: '2', sku: 'LAST' },
+    { ...valid, boxNo: '1', sku: 'FIRST' },
+    { ...valid, boxNo: '1', sku: 'SAME-BOX' },
+  ]
+  for (const lines of [parseInboundLines(records).data, parseInboundOrders(records).data[0].lines]) {
+    assert.deepEqual(lines.map(line => [line.boxNo, line.sku]), [[1, 'FIRST'], [1, 'SAME-BOX'], [2, 'LAST']])
+  }
+  const skipped = parseInboundOrders([{ ...valid, boxNo: '3' }, { ...valid, boxNo: '1' }])
+  assert.equal(skipped.data.length, 0)
+  assert.match(skipped.errors.join(''), /缺少 2 号箱/)
+})

@@ -541,7 +541,7 @@ export async function attachCatalogPurchaseStats<T extends { sku: string; custom
   })
 }
 
-export async function fetchOmsProductRows(prisma: PrismaService, filters: MergedSkuFilters) {
+function buildOmsProductQuery(filters: MergedSkuFilters) {
   const conditions: string[] = ['1=1']
   const params: unknown[] = []
 
@@ -593,16 +593,31 @@ export async function fetchOmsProductRows(prisma: PrismaService, filters: Merged
     params.push(costMax)
   }
 
-  const sql = `
-    SELECT p.*, c.code AS customerCode, c.name AS customerName
+  const from = `
     FROM oms_product p
     LEFT JOIN oms_customeraccount c ON c.id = p.customerId
     WHERE ${conditions.join(' AND ')}
-    ORDER BY p.internalSku ASC
   `
+  return { from, params }
+}
+
+export async function fetchOmsProductRows(prisma: PrismaService, filters: MergedSkuFilters) {
+  const { from, params } = buildOmsProductQuery(filters)
+  const sql = `SELECT p.*, c.code AS customerCode, c.name AS customerName ${from} ORDER BY p.internalSku ASC`
   try {
     const rows = await prisma.$queryRawUnsafe<Record<string, unknown>[]>(sql, ...params)
     return rows.map(mapOmsProductRow)
+  } catch (err) {
+    if (err instanceof ServiceUnavailableException) throw err
+    throw new ServiceUnavailableException('无法读取 OMS 商品，请稍后重试')
+  }
+}
+
+export async function countOmsProductRows(prisma: PrismaService, filters: MergedSkuFilters) {
+  const { from, params } = buildOmsProductQuery(filters)
+  try {
+    const [row] = await prisma.$queryRawUnsafe<{ total: bigint }[]>(`SELECT COUNT(*) AS total ${from}`, ...params)
+    return Number(row?.total ?? 0)
   } catch (err) {
     if (err instanceof ServiceUnavailableException) throw err
     throw new ServiceUnavailableException('无法读取 OMS 商品，请稍后重试')

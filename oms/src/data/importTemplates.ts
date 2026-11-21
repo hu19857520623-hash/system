@@ -18,6 +18,7 @@ import type { CsvColumn } from './csvImportExport'
 import { columnHeader, downloadCsv, downloadTemplate, sourceLineNoFromRecord } from './csvImportExport'
 import type { ImportRowFailure } from '../utils/importFailureDetail'
 import { failuresFromLegacyErrors, formatImportFailureLine } from '../utils/importFailureDetail'
+import { sortInboundBoxLines, validateInboundBoxSequence } from './inboundBoxLines'
 
 export type ParseResult<T> = { data: T[]; errors: string[]; failures: ImportRowFailure[] }
 
@@ -100,7 +101,7 @@ export function parseOutboundLines(records: Record<string, string>[]): ParseResu
 export const INBOUND_LINE_COLUMNS: CsvColumn[] = [
   { key: 'sku', header: 'SKU', required: true, hint: '仓库 SKU' },
   { key: 'qty', header: '数量', required: true, hint: '大于 0 的整数' },
-  { key: 'boxNo', header: '箱号', required: false, hint: '默认按行序递增' },
+  { key: 'boxNo', header: '箱号', required: false, hint: '从 1 连续填写（1、2、3…），同箱多个 SKU 填相同箱号；留空按行编号' },
   { key: 'packType', header: '包装类型', required: false, hint: '自带包装 / 仓库包装' },
   { key: 'stockType', header: '箱库存类型', required: false, hint: '以仓库为准 / 以箱为准' },
 ]
@@ -109,6 +110,7 @@ export function downloadInboundLineTemplate() {
   downloadTemplate('OMS-入库明细导入模板.xls', INBOUND_LINE_COLUMNS, [
     ['HX6', '100', '1', '自带包装', '以仓库为准'],
     ['HX7', '50', '2', '自带包装', '以仓库为准'],
+    ['HX7', '50', '3', '自带包装', '以仓库为准'],
   ])
 }
 
@@ -135,7 +137,7 @@ export function parseInboundLines(records: Record<string, string>[]): ParseResul
   records.forEach((row, idx) => {
     const lineNo = sourceLineNoFromRecord(row, idx)
     const sku = row.sku?.trim()
-    const values = inboundImportLineValues(row, idx + 1)
+    const values = inboundImportLineValues(row, data.length + 1)
     if ('error' in values) {
       pushParseFailure(failures, errors, lineNo, values.error, sku)
       return
@@ -152,7 +154,7 @@ export function parseInboundLines(records: Record<string, string>[]): ParseResul
     })
   })
 
-  return finishParse(data, errors, failures)
+  return finishParse(sortInboundBoxLines(data), errors, failures)
 }
 
 // ─── 入库预约单批量导入（与 Inbound.tsx 表单头 + 明细一致） ───
@@ -167,7 +169,7 @@ export const INBOUND_ORDER_COLUMNS: CsvColumn[] = [
   { key: 'remark', header: '备注', required: false },
   { key: 'sku', header: 'SKU', required: true, hint: '仓库 SKU' },
   { key: 'qty', header: '数量', required: true, hint: '大于 0 的整数' },
-  { key: 'boxNo', header: '箱号', required: false, hint: '默认按行序递增' },
+  { key: 'boxNo', header: '箱号', required: false, hint: '每单从 1 连续填写（1、2、3…），同箱多个 SKU 填相同箱号；留空按单内行序编号' },
   { key: 'packType', header: '包装类型', required: false, hint: '自带包装 / 仓库包装' },
   { key: 'stockType', header: '箱库存类型', required: false, hint: '以仓库为准 / 以箱为准' },
 ]
@@ -184,6 +186,7 @@ export function downloadInboundOrderTemplate() {
   downloadTemplate('OMS-入库预约单导入模板.xls', INBOUND_ORDER_COLUMNS, [
     ['自发头程', '自送', '2026-08-10', 'TRK-001', 'REF-CUS-001', '', '首批到货', 'HX6', '100', '1', '自带包装', '以仓库为准'],
     ['自发头程', '自送', '2026-08-10', 'TRK-001', 'REF-CUS-001', '', '首批到货', 'HX7', '50', '2', '自带包装', '以仓库为准'],
+    ['自发头程', '自送', '2026-08-10', 'TRK-001', 'REF-CUS-001', '', '首批到货', 'HX7', '50', '3', '自带包装', '以仓库为准'],
   ])
 }
 
@@ -200,7 +203,7 @@ export interface ParsedInboundImport {
 }
 
 export function parseInboundOrders(records: Record<string, string>[]): ParseResult<ParsedInboundImport> {
-  const groups = new Map<string, ParsedInboundImport>()
+  const groups = new Map<string, ParsedInboundImport & { firstLineNo: number }>()
   const errors: string[] = []
   const failures: ImportRowFailure[] = []
 
@@ -234,6 +237,7 @@ export function parseInboundOrders(records: Record<string, string>[]): ParseResu
     if (!groups.has(headerKey)) {
       groups.set(headerKey, {
         headerKey,
+        firstLineNo: lineNo,
         inboundType: row.inboundType as InboundType,
         deliveryMethod,
         eta: row.eta || undefined,
@@ -256,7 +260,16 @@ export function parseInboundOrders(records: Record<string, string>[]): ParseResu
     })
   })
 
-  return finishParse([...groups.values()], errors, failures)
+  const data: ParsedInboundImport[] = []
+  for (const { firstLineNo, ...order } of groups.values()) {
+    const sequenceError = validateInboundBoxSequence(order.lines)
+    if (sequenceError) {
+      pushParseFailure(failures, errors, firstLineNo, sequenceError)
+      continue
+    }
+    data.push({ ...order, lines: sortInboundBoxLines(order.lines) })
+  }
+  return finishParse(data, errors, failures)
 }
 
 export function exportInboundOrders(orders: InboundOrder[]) {
@@ -265,7 +278,7 @@ export function exportInboundOrders(orders: InboundOrder[]) {
     const lines = order.lineItems?.length
       ? order.lineItems
       : [{ sku: order.skuHint ?? '', name: '', qty: order.totalQty, boxNo: 1, packType: '自带包装', stockType: '以仓库为准' }]
-    for (const line of lines) {
+    for (const line of sortInboundBoxLines(lines)) {
       rows.push([
         order.inboundType === '货盘入库' ? '自发头程' : order.inboundType,
         order.deliveryMethod === 'pickup' ? '揽收' : '自送',

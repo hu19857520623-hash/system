@@ -141,10 +141,7 @@ function receivingSheet(doc: InboundReceivingListDoc) {
     }).join('')
   }).join('')
 
-  const boxTotal = doc.skus.reduce((max, sku) => {
-    const local = sku.boxes.reduce((m, box) => Math.max(m, box.boxNo), 0)
-    return Math.max(max, local)
-  }, 0)
+  const boxTotal = new Set(doc.skus.flatMap(sku => sku.boxes.map(box => box.boxNo))).size
 
   return `<section class="sheet">
   <div class="head">

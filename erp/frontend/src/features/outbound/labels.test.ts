@@ -128,6 +128,28 @@ describe('outbound Takealot label UI model', () => {
     expect(summary.allPrintable).toBe(true)
   })
 
+  it('enables printing for TFS orders with stored SKU label crops', () => {
+    const summary = buildOutboundLabelSummary({
+      platform: 'TFS',
+      items: [
+        { sku: 'TFS-001', qty: 1, needsRelabel: true },
+        { sku: 'TFS-002', qty: 1, needsRelabel: true },
+        { sku: 'TFS-003', qty: 1, needsRelabel: true },
+      ],
+      attachments: [
+        { fileType: 'skuLabel', labelRole: 'sourceDocument' },
+        { fileType: 'skuLabel', labelRole: 'unitCrop', sku: 'TFS-001', unitIndex: 1 },
+        { fileType: 'skuLabel', labelRole: 'unitCrop', sku: 'TFS-002', unitIndex: 1 },
+        { fileType: 'skuLabel', labelRole: 'unitCrop', sku: 'TFS-003', unitIndex: 1 },
+      ],
+    })
+
+    expect(summary.isTakealot).toBe(true)
+    expect(summary.hasLabelMetadata).toBe(true)
+    expect(summary.allPrintable).toBe(true)
+    expect(summary.lines.map(line => line.unitIndices)).toEqual([[1], [1], [1]])
+  })
+
   it('creates independent loading keys for order, SKU and unit actions', () => {
     expect(outboundLabelActionKey(42, 'order')).toBe('42:order')
     expect(outboundLabelActionKey(42, 'sku', 'INT-001')).toBe('42:sku:INT-001')

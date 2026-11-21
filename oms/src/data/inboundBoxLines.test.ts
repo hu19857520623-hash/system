@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { buildInboundBoxLines, buildInboundSkuSelection, validateInboundBoxLines } from './inboundBoxLines.ts'
+import { buildInboundBoxLines, buildInboundSkuSelection, sortInboundBoxLines, validateInboundBoxLines } from './inboundBoxLines.ts'
 
 const input = { sku: ' SKU-1 ', name: '产品', boxCount: 3, qtyPerBox: 10, packType: '自带包装', stockType: '以仓库为准' }
 
@@ -50,6 +50,7 @@ test('rejects missing SKU and invalid box counts or per-box quantities', () => {
 test('validates edited rows and permits different SKUs in one box', () => {
   const lines = buildInboundBoxLines([], input)
   lines[1] = { ...lines[1], boxNo: 1, sku: 'SKU-2', qty: 8 }
+  lines[2].boxNo = 2
   assert.equal(validateInboundBoxLines(lines), undefined)
   lines[1].qty = 0
   assert.match(validateInboundBoxLines(lines)!, /第 2 行数量/)
@@ -59,6 +60,14 @@ test('validates edited rows and permits different SKUs in one box', () => {
   lines[1].boxNo = 1
   lines[1].sku = ''
   assert.match(validateInboundBoxLines(lines)!, /第 2 行.*SKU/)
+})
+
+test('sorts box numbers numerically while keeping the original SKU and quantity with each row', () => {
+  const rows = buildInboundBoxLines([], { ...input, boxCount: 10 })
+  rows[9] = { ...rows[9], sku: 'LAST', qty: 20 }
+  const reordered = sortInboundBoxLines([rows[9], ...rows.slice(0, 9)])
+  assert.deepEqual(reordered, rows)
+  assert.match(validateInboundBoxLines(rows.filter(row => row.boxNo !== 2))!, /缺少 2 号箱/)
 })
 
 test('rejects unsafe totals and excessively large additions', () => {

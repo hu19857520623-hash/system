@@ -74,6 +74,28 @@ describe('SKU query customer and supplier identities', () => {
     }))
   })
 
+  it.each([['all', 3], ['erp', 1], ['oms', 2]])(
+    'counts both origins before pagination when viewing %s', async (dataSource, total) => {
+      const { service, prisma } = fixture()
+      const orphan = { ...erpProduct, id: 9n, sku: 'TKL0001-LEGACY', remark: 'OMS 预约入库自动建档' }
+      prisma.$queryRaw.mockResolvedValue([{ id: orphan.id }])
+      prisma.product.count.mockResolvedValue(1)
+      prisma.product.findMany.mockReset().mockResolvedValueOnce([dataSource === 'oms' ? orphan : erpProduct]).mockResolvedValue([])
+      if (dataSource === 'erp') prisma.$queryRawUnsafe.mockResolvedValue([{ total: 1n }])
+
+      const result = await service.querySkuCatalog({ dataSource, includeSourceCounts: 'true', pageSize: 1 })
+
+      expect(result).toMatchObject({
+        total,
+        sourceCounts: { all: 3, erp: 1, oms: 2 },
+        items: [{ dataSource: dataSource === 'oms' ? 'oms' : 'erp' }],
+      })
+      expect(prisma.$queryRawUnsafe).toHaveBeenCalledWith(
+        expect.stringContaining(dataSource === 'erp' ? 'SELECT COUNT(*) AS total' : 'SELECT p.*'),
+      )
+    },
+  )
+
   it.each([['draft', '草稿'], ['reviewing', '审核中'], ['discarded', '废弃'], ['future_status', 'future_status']])(
     'preserves the customer product workflow %s even when inCatalog is set', async (productStatus, operationStatusLabel) => {
       const { service, prisma } = fixture()

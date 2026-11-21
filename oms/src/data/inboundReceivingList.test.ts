@@ -15,7 +15,7 @@ test('inbound receiving list prints only the merged-SKU sheet', () => {
       name: 'Test product',
       boxes: [
         { boxNo: 1, expectedQty: 10 },
-        { boxNo: 2, expectedQty: 10 },
+        { boxNo: 3, expectedQty: 10 },
       ],
     }],
   })
@@ -23,4 +23,5 @@ test('inbound receiving list prints only the merged-SKU sheet', () => {
   assert.match(html, /<h1 class="title">入库清单<\/h1>/)
   assert.doesNotMatch(html, /Packing List/)
   assert.equal((html.match(/<section class="sheet">/g) || []).length, 1)
+  assert.match(html, /总箱数: 2</)
 })

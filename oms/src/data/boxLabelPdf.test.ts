@@ -4,6 +4,27 @@ import { PDFDocument } from 'pdf-lib'
 import { buildBoxLabelsPdf } from './boxLabelPdf.ts'
 import { buildBoxLabelArticle, buildBoxLabelsHtml } from './boxLabelTemplate.ts'
 import { buildCartonCode } from './wmsDocNo.ts'
+import { buildBoxLabelData } from './inboundLabelPrint.ts'
+
+test('box labels preserve actual carton codes and SKU quantities for older orders with gaps', async () => {
+  const labels = buildBoxLabelData({
+    id: 'test', inboundNo: 'RV-TEST', warehouse: 'WMS-JHB-01', createdAt: '2026-11-20',
+    source: '客户自发', inboundType: '自发头程', deliveryMethod: 'self', stockSource: 'owned',
+    status: 'on_the_way', boxCount: 3, skuCount: 2, totalQty: 50, receivedQty: 0,
+    lineItems: [
+      { boxNo: 5, sku: 'B', name: 'Product B', qty: 20 },
+      { boxNo: 1, sku: 'A', name: 'Product A', qty: 10 },
+      { boxNo: 3, sku: 'B', name: 'Product B', qty: 20 },
+    ],
+  })
+  assert.deepEqual(labels.map(({ boxNo, boxIndex, boxTotal, lines }) => [boxNo, boxIndex, boxTotal, lines]), [
+    [1, 1, 3, [{ sku: 'A', qty: 10 }]],
+    [3, 2, 3, [{ sku: 'B', qty: 20 }]],
+    [5, 3, 3, [{ sku: 'B', qty: 20 }]],
+  ])
+  const pdf = await PDFDocument.load(await buildBoxLabelsPdf(labels))
+  assert.equal(pdf.getPageCount(), 3)
+})
 
 test('builds a 100mm square box-label PDF without country-of-origin text', async () => {
   const label = {

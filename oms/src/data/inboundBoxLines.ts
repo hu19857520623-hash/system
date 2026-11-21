@@ -12,6 +12,16 @@ function positiveInteger(value: number) {
   return Number.isSafeInteger(value) && value > 0
 }
 
+export function sortInboundBoxLines<T extends { boxNo: number }>(lines: readonly T[]): T[] {
+  return [...lines].sort((a, b) => a.boxNo - b.boxNo)
+}
+
+export function validateInboundBoxSequence(lines: readonly { boxNo: number }[]): string | undefined {
+  const boxNos = [...new Set(lines.map(line => line.boxNo))].sort((a, b) => a - b)
+  const missingIndex = boxNos.findIndex((boxNo, index) => boxNo !== index + 1)
+  if (missingIndex >= 0) return `箱号须从 1 连续编号，缺少 ${missingIndex + 1} 号箱。同箱多个 SKU 可使用相同箱号`
+}
+
 export function buildInboundBoxLines(
   existing: InboundBoxLine[],
   input: Omit<InboundBoxLine, 'id' | 'qty' | 'boxNo'> & { boxCount: number; qtyPerBox: number },
@@ -42,6 +52,7 @@ export function validateInboundBoxLines(lines: InboundBoxLine[]): string | undef
     if (!positiveInteger(line.qty)) return `第 ${index + 1} 行数量必须为正整数`
   }
   if (!Number.isSafeInteger(lines.reduce((total, line) => total + line.qty, 0))) return '货品总数量超出支持范围'
+  return validateInboundBoxSequence(lines)
 }
 
 export function buildInboundSkuSelection(

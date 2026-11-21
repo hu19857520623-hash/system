@@ -52,6 +52,7 @@ export class InventoryController {
       brand?: string
       supplierKeyword?: string
       dataSource?: string
+      includeSourceCounts?: string
       statusFilter?: string
       stockFilter?: string
       costMin?: string

@@ -45,26 +45,30 @@ function splitQty(qty: number, parts: number) {
 
 export function buildBoxLabelData(order: InboundOrder, customerCode?: string): BoxLabelData[] {
   const lines = orderLines(order)
-  const lineBoxNos = lines.map(l => Math.max(1, Number(l.boxNo) || 1))
-  const maxLineBox = lineBoxNos.length ? Math.max(...lineBoxNos) : 1
-  const boxTotal = Math.max(1, Number(order.boxCount) || 0, maxLineBox)
+  const byBox = new Map<number, typeof lines>()
+  for (const line of lines) {
+    const boxNo = Math.max(1, Number(line.boxNo) || 1)
+    if (!byBox.has(boxNo)) byBox.set(boxNo, [])
+    byBox.get(boxNo)!.push(line)
+  }
+  const shouldSplit = byBox.size === 1 && byBox.has(1) && order.boxCount > 1
+  const boxNos = shouldSplit
+    ? Array.from({ length: order.boxCount }, (_, index) => index + 1)
+    : [...byBox.keys()].sort((a, b) => a - b)
+  const boxTotal = boxNos.length
   const referenceNo = order.inboundNo.trim() || order.referenceNo?.trim() || ''
   const warehouseCode = order.warehouse?.trim() || '—'
-  const uniqueBoxes = new Set(lineBoxNos)
-  const shouldSplit = uniqueBoxes.size === 1 && boxTotal > 1
-
-  return Array.from({ length: boxTotal }, (_, i) => {
-    const boxNo = i + 1
+  return boxNos.map((boxNo, i) => {
     const boxLines = shouldSplit
       ? lines
           .map(line => ({ ...line, qty: splitQty(Math.max(0, Number(line.qty) || 0), boxTotal)[i] }))
           .filter(line => line.qty > 0)
-      : lines.filter(l => Math.max(1, Number(l.boxNo) || 1) === boxNo)
+      : byBox.get(boxNo)!
     return {
       referenceNo,
       boxNo,
       warehouseCode,
-      boxIndex: boxNo,
+      boxIndex: i + 1,
       boxTotal,
       lines: boxLines.length
         ? boxLines.map(line => ({

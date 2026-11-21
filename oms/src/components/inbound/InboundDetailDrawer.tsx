@@ -2,6 +2,7 @@ import { useAsyncViewScope } from '../../utils/useAsyncViewScope'
 import { useInboundConfirmation } from './useInboundConfirmation'
 import { userFacingError } from '../../utils/userFacingError'
 import { displaySku, displaySkuText } from '../../data/skuDisplay'
+import { sortInboundBoxLines } from '../../data/inboundBoxLines'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { X, Download, Printer } from 'lucide-react'
@@ -275,7 +276,7 @@ export default function InboundDetailDrawer({ order, onClose, onOrderChanged, mo
                     </tr>
                   </thead>
                   <tbody>
-                    {order.lineItems.map((line, index) => (
+                    {sortInboundBoxLines(order.lineItems).map((line, index) => (
                       <tr key={`${line.sku}-${line.boxNo}-${index}`} className="border-t border-border-light">
                         <td className="px-2 py-1.5 text-text-secondary">{line.boxNo}</td>
                         <td className="px-2 py-1.5"><MonoCode>{displaySku(line.sku, order.customerId)}</MonoCode></td>

@@ -317,6 +317,7 @@ export function buildOutboundLabelSummary(detailValue: unknown): OutboundLabelSu
   ].filter(Boolean).join(' ').toLowerCase()
   const hasExplicitPlatform = explicitPlatformText.length > 0
   const isTakealot = platformText.includes('takealot')
+    || String(detail.platform ?? '').trim().toLowerCase() === 'tfs'
     || (!hasExplicitPlatform && hasLabelMetadata)
 
   const totalExpectedQty = lines.reduce((sum, line) => sum + line.expectedQty, 0)

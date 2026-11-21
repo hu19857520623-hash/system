@@ -29,6 +29,14 @@ const listGate = createReturnReadGate(queryScope)
 let lastQuery: Record<string, unknown> | null = null
 const rows = ref<any[]>([])
 const listTotal = ref(0)
+const sourceLabels = { erp: '货盘', oms: 'OMS' } as const
+const sourceTabs = [
+  { value: 'all', label: '全部' },
+  { value: 'erp', label: 'ERP 海外仓' },
+  { value: 'oms', label: 'OMS 客户' },
+] as const
+type SkuSource = typeof sourceTabs[number]['value']
+const sourceCounts = ref<Record<SkuSource, number> | null>(null)
 const page = ref(1)
 const pageSize = ref(20)
 const selectedRows = ref<any[]>([])
@@ -55,7 +63,7 @@ const editForm = ref({
 })
 
 const filters = ref({
-  dataSource: 'all',
+  dataSource: 'erp' as SkuSource,
   supplierKeyword: '',
   title: '',
   skuCodes: '',
@@ -83,6 +91,7 @@ function buildParams() {
     pageSize: pageSize.value,
     statusFilter: filters.value.statusFilter,
     dataSource: filters.value.dataSource,
+    includeSourceCounts: 'true',
   }
   if (filters.value.dataSource !== 'oms' && filters.value.supplierKeyword.trim()) p.supplierKeyword = filters.value.supplierKeyword.trim()
   if (filters.value.title.trim()) p.title = filters.value.title.trim()
@@ -107,12 +116,12 @@ async function load(params = buildParams()) {
   lastQuery = params
   const active = listGate.begin(() => true)
   rows.value = []
-  listTotal.value = 0
   selectedRows.value = []
   tableRef.value?.clearSelection()
   loadError.value = ''
   if (!active()) {
     loading.value = false
+    sourceCounts.value = null
     loadError.value = '请重新登录后查询商品'
     return
   }
@@ -122,8 +131,12 @@ async function load(params = buildParams()) {
     if (!active()) return
     rows.value = res.items || []
     listTotal.value = res.total ?? 0
+    sourceCounts.value = res.sourceCounts ?? null
   } catch (error) {
-    if (active()) loadError.value = `商品查询失败。${userFacingError(error)} 可重试原查询或调整筛选后查询。`
+    if (active()) {
+      sourceCounts.value = null
+      loadError.value = `商品查询失败。${userFacingError(error)} 可重试原查询或调整筛选后查询。`
+    }
   } finally {
     if (active()) loading.value = false
   }
@@ -134,13 +147,13 @@ function retryList() {
 }
 
 function search() {
-  page.value = 1
-  load()
+  if (page.value === 1) void load()
+  else page.value = 1
 }
 
 function resetFilters() {
   filters.value = {
-    dataSource: 'all',
+    dataSource: 'erp',
     supplierKeyword: '',
     title: '',
     skuCodes: '',
@@ -153,8 +166,7 @@ function resetFilters() {
     createdRange: [],
     updatedRange: [],
   }
-  page.value = 1
-  load()
+  search()
 }
 
 function rowIndex(index: number) {
@@ -291,17 +303,21 @@ function handlePrint() {
 
 watch(queryScope, () => {
   listGate.invalidate()
+  sourceCounts.value = null
+  listTotal.value = 0
   detailVisible.value = false
   detailRow.value = null
   editVisible.value = false
   editRow.value = null
-  void load()
+  search()
 }, { flush: 'sync' })
 onScopeDispose(() => listGate.invalidate())
 watch([page, pageSize], () => load())
 onMounted(() => {
   const q = String(route.query.q || route.query.sku || '').trim()
   if (q) filters.value.title = q
+  const source = route.query.dataSource
+  if (source === 'erp' || source === 'oms') filters.value.dataSource = source
   load()
 })
 </script>
@@ -312,16 +328,8 @@ onMounted(() => {
     <div class="filter-panel">
       <div class="filter-grid">
         <div class="filter-item">
-          <label>来源</label>
-          <el-select v-model="filters.dataSource" size="small" style="width:100%" aria-label="来源" @change="search">
-            <el-option label="全部来源" value="all" />
-            <el-option label="ERP 货盘 / 主数据" value="erp" />
-            <el-option label="OMS 客户商品 / 仓内档案" value="oms" />
-          </el-select>
-        </div>
-        <div class="filter-item">
           <label>供应商</label>
-          <el-input v-model="filters.supplierKeyword" :disabled="filters.dataSource === 'oms'" placeholder="供应商代码/名称（仅 ERP）" clearable size="small" />
+          <el-input v-model="filters.supplierKeyword" :disabled="filters.dataSource === 'oms'" placeholder="供应商代码/名称（仅货盘）" clearable size="small" />
         </div>
         <div class="filter-item">
           <label>产品标题</label>
@@ -396,7 +404,11 @@ onMounted(() => {
     <!-- 工具栏 + 表格 -->
     <div class="table-panel">
       <div class="table-toolbar">
-        <span class="toolbar-hint">ERP 商品主数据与 OMS 商品档案</span>
+        <el-radio-group v-model="filters.dataSource" size="small" aria-label="来源" @change="search">
+          <el-radio-button v-for="tab in sourceTabs" :key="tab.value" :value="tab.value">
+            {{ tab.label }}<span v-if="sourceCounts" class="tab-count">({{ sourceCounts[tab.value] }})</span>
+          </el-radio-button>
+        </el-radio-group>
         <div class="toolbar-actions">
           <el-button size="small" @click="goLocations">维护库位</el-button>
           <el-button size="small" @click="handlePrint">打印</el-button>
@@ -455,7 +467,7 @@ onMounted(() => {
         <el-table-column label="来源" width="96" align="center">
           <template #default="{ row }">
             <el-tag size="small" :type="row.dataSource === 'erp' ? 'primary' : 'warning'">
-              {{ row.dataSourceLabel || row.dataSource || '—' }}
+              {{ row.dataSource === 'oms' ? sourceLabels.oms : sourceLabels.erp }}
             </el-tag>
           </template>
         </el-table-column>
@@ -703,10 +715,7 @@ onMounted(() => {
   gap: 8px;
 }
 
-.toolbar-hint {
-  font-size: 12px;
-  color: #909399;
-}
+.tab-count { margin-left: 2px; font-size: 11px; opacity: 0.85; }
 
 .toolbar-actions {
   display: flex;

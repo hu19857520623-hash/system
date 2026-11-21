@@ -14,6 +14,7 @@ import { PaginationDto, getPagination } from '../../common/dto/pagination.dto'
 import { buildInboundPipelineQtyMap, INBOUND_PIPELINE_STATUSES } from '../../common/inbound-pipeline.util'
 import { OperationLogService } from '../operation-log/operation-log.service'
 import {
+  countOmsProductRows,
   fetchCatalogInventoryRows,
   fetchOmsInventoryRows,
   fetchOmsProductRows,
@@ -466,6 +467,7 @@ export class InventoryService {
       brand?: string
       supplierKeyword?: string
       dataSource?: string
+      includeSourceCounts?: string
       statusFilter?: string
       stockFilter?: string
       costMin?: string
@@ -478,8 +480,10 @@ export class InventoryService {
   ) {
     const { page, pageSize } = getPagination(q, 20)
     const statusFilter = (q.statusFilter || q.stockFilter || 'all').trim()
+    const includeSourceCounts = q.includeSourceCounts === 'true'
     const includeErp = q.dataSource !== 'oms'
-    const includeOms = q.dataSource !== 'erp' && !q.supplierKeyword?.trim()
+    const supplierKeyword = q.supplierKeyword?.trim()
+    const includeOms = q.dataSource !== 'erp' && !supplierKeyword
     const title = (q.title || q.keyword || '').trim()
     const and: any[] = []
 
@@ -542,12 +546,12 @@ export class InventoryService {
       and.push({ updatedAt })
     }
 
-    if (includeErp && q.supplierKeyword?.trim()) {
+    if ((includeErp || includeSourceCounts) && supplierKeyword) {
       const suppliers = await this.prisma.supplier.findMany({
         where: {
           OR: [
-            { supplierName: { contains: q.supplierKeyword.trim() } },
-            { supplierCode: { contains: q.supplierKeyword.trim() } },
+            { supplierName: { contains: supplierKeyword } },
+            { supplierCode: { contains: supplierKeyword } },
           ],
         },
         select: { id: true },
@@ -560,14 +564,16 @@ export class InventoryService {
 
     // 旧仓内档案若没有对应的 OMS 商品，仍需留在 SKU 查询供仓库追溯。
     // 有 OMS 商品的档案则由 oms_product 展示，避免同一 SKU 出现两行。
-    const orphanRows = includeOms ? await this.prisma.$queryRaw<{ id: bigint }[]>`
+    const needOmsCounts = includeSourceCounts && !supplierKeyword
+    const orphanRows = includeOms || needOmsCounts ? await this.prisma.$queryRaw<{ id: bigint }[]>`
       SELECT p.id FROM product p
       WHERE (p.remark LIKE '%OMS客户:%' OR p.remark LIKE '%OMS 预约入库自动建档%')
         AND NOT EXISTS (SELECT 1 FROM oms_product o WHERE o.internalSku = p.sku)
     ` : []
+    const orphanWhere = { id: { in: orphanRows.map((row) => row.id) } }
     const productSources: Prisma.ProductWhereInput[] = []
     if (includeErp) productSources.push(ERP_MASTER_PRODUCT_WHERE)
-    if (orphanRows.length) productSources.push({ id: { in: orphanRows.map((row) => row.id) } })
+    if (includeOms && orphanRows.length) productSources.push(orphanWhere)
     const where: Prisma.ProductWhereInput = {
       AND: [
         { OR: productSources },
@@ -589,16 +595,22 @@ export class InventoryService {
       updatedTo: q.updatedTo?.trim(),
     }
 
-    const [erpTotal, allOmsItems] = await Promise.all([
-      productSources.length ? this.prisma.product.count({ where }) : 0,
+    const [selectedProductTotal, allOmsItems, erpSourceTotal, orphanTotal, omsProductCount] = await Promise.all([
+      !includeSourceCounts && productSources.length ? this.prisma.product.count({ where }) : 0,
       includeOms ? fetchOmsProductRows(this.prisma, omsFilters) : [],
+      includeSourceCounts ? this.prisma.product.count({ where: { AND: [ERP_MASTER_PRODUCT_WHERE, ...and] } }) : 0,
+      needOmsCounts && orphanRows.length ? this.prisma.product.count({ where: { AND: [orphanWhere, ...and] } }) : 0,
+      needOmsCounts && !includeOms ? countOmsProductRows(this.prisma, omsFilters) : 0,
     ])
+    const productTableTotal = includeSourceCounts
+      ? (includeErp ? erpSourceTotal : 0) + (includeOms ? orphanTotal : 0)
+      : selectedProductTotal
+    const omsSourceTotal = orphanTotal + allOmsItems.length + omsProductCount
 
-    // ERP 与 OMS 是两个独立数据源。分页顺序固定为 ERP 主数据在前、OMS
-    // 客户商品在后，避免先截断 5000 条再在内存分页造成总数和数据缺失。
+    // 先分页读取 product（含历史仓内档案），再补充 oms_product 中的客户商品。
     const pageStart = (page - 1) * pageSize
-    const erpSkip = Math.min(pageStart, erpTotal)
-    const erpTake = Math.max(0, Math.min(pageSize, erpTotal - erpSkip))
+    const erpSkip = Math.min(pageStart, productTableTotal)
+    const erpTake = Math.max(0, Math.min(pageSize, productTableTotal - erpSkip))
     const products = erpTake
       ? await this.prisma.product.findMany({
           where,
@@ -723,11 +735,11 @@ export class InventoryService {
       })
     })
 
-    const omsStart = Math.max(0, pageStart - erpTotal)
+    const omsStart = Math.max(0, pageStart - productTableTotal)
     const omsTake = Math.max(0, pageSize - erpItems.length)
     const omsItems = omsTake ? allOmsItems.slice(omsStart, omsStart + omsTake) : []
     const items = [...erpItems, ...omsItems]
-    const total = erpTotal + allOmsItems.length
+    const total = productTableTotal + allOmsItems.length
 
     // OMS 商品仍可能有仓内作业档案（实测尺寸/库存关联）；只用于补充
     // SKU 查询，不作为第二条 ERP 商品主数据展示。
@@ -790,7 +802,10 @@ export class InventoryService {
       }
     })
 
-    return { items: enriched, total, page, pageSize }
+    return {
+      items: enriched, total, page, pageSize,
+      ...(includeSourceCounts ? { sourceCounts: { all: erpSourceTotal + omsSourceTotal, erp: erpSourceTotal, oms: omsSourceTotal } } : {}),
+    }
   }
 
   async updateSkuCatalogItem(id: number, body: Record<string, unknown>, operatorId?: number) {
