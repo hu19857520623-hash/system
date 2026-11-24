@@ -134,14 +134,24 @@ export class InboundService {
       if (typeof q.warehouseCode !== 'string' || !q.warehouseCode.trim()) throw new BadRequestException('请提供有效的作业仓库')
       where.warehouseCode = q.warehouseCode.trim()
     }
-    if (q.source && !['all', 'erp_shipment', 'oms_customer'].includes(q.source)) {
+    if (q.source && !['all', 'pallet', 'erp_shipment', 'oms_customer'].includes(q.source)) {
       throw new BadRequestException('无效的入库单来源')
     }
+    const transferWarehouse = [{ sourceWarehouseCode: { not: null } }, { sourceWarehouseCode: { not: '' } }]
     if (q.source === 'erp_shipment') {
-      where.AND = [{ sourceWarehouseCode: { not: null } }, { sourceWarehouseCode: { not: '' } }]
+      where.AND = transferWarehouse
+    } else if (q.source === 'pallet') {
+      where.AND = [{ OR: [
+        { AND: transferWarehouse },
+        { omsCustomerCode: null },
+        { omsCustomerCode: '' },
+      ] }]
     } else if (q.source === 'oms_customer') {
       where.omsCustomerCode = { not: null }
-      where.AND = [{ OR: [{ sourceWarehouseCode: null }, { sourceWarehouseCode: '' }] }]
+      where.AND = [
+        { omsCustomerCode: { not: '' } },
+        { OR: [{ sourceWarehouseCode: null }, { sourceWarehouseCode: '' }] },
+      ]
     }
     if (q.status && q.status !== 'all') {
       if (q.status === 'pending_receipt') {
@@ -161,8 +171,8 @@ export class InboundService {
         { omsCustomerCode: { contains: kw } },
       ]
     }
-    // Warehouse work and ERP shipments never merge OMS-only reservations.
-    if (q.warehouseCode || q.source === 'erp_shipment') {
+    // Warehouse work and pallet orders read directly from ERP.
+    if (q.warehouseCode || q.source === 'erp_shipment' || q.source === 'pallet') {
       const [rows, total] = await Promise.all([
         this.prisma.inboundOrder.findMany({
           where,

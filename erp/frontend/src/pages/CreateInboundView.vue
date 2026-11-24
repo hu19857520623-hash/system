@@ -35,6 +35,7 @@ import { reportPartialImportResult, type ImportRowFailure } from '@/utils/import
 
 import { clearShipmentAttempt, readShipmentAttempt, saveShipmentAttempt, shipmentSubmitFailure, draftAlreadyShipped, attachmentUploadFailure, type ShipmentAttempt } from '@/utils/erpShipmentAttempt'
 import { inboundListStats } from '@/features/inbound/listStats'
+import { INBOUND_SOURCE_LABELS, inboundListSource, type InboundSourceFilter } from '@/features/inbound/listSources'
 import { assertShipmentMaintenanceReceipt, clearShipmentMaintenance, readShipmentMaintenance, saveShipmentMaintenance, shipmentMaintenanceFailure, type ShipmentMaintenanceAttempt } from '@/utils/shipmentMaintenanceAttempt'
 
 const app = useAppStore()
@@ -46,7 +47,7 @@ const { confirmAction, toast } = useRowActions()
 
 const tab = ref<'form' | 'drafts' | 'list'>('list')
 const inboundSearchQ = ref('')
-const inboundSource = ref('erp_shipment')
+const inboundSource = ref<InboundSourceFilter>('pallet')
 
 interface InboundLine {
   sku: string
@@ -318,7 +319,7 @@ onMounted(async () => {
 
 const filteredInbounds = computed(() => {
   const q = inboundSearchQ.value.trim().toLowerCase()
-  const rows = inbounds.value.filter((r: any) => inboundSource.value === 'all' || r._raw?.sourceKind === inboundSource.value)
+  const rows = inbounds.value.filter((r: any) => inboundSource.value === 'all' || inboundListSource(r._raw?.sourceKind) === inboundSource.value)
   if (!q) return rows
   return rows.filter((r: any) =>
     String(r.id).toLowerCase().includes(q)
@@ -535,7 +536,7 @@ function endMismatchedShipment() {
 
 function returnShipmentList() {
   if (formBusy.value) return
-  inboundSource.value = 'erp_shipment'
+  inboundSource.value = 'pallet'
   if (shipmentResult.value?.inboundNo) inboundSearchQ.value = shipmentResult.value.inboundNo
   tab.value = 'list'
 }
@@ -2301,15 +2302,13 @@ onScopeDispose(()=>window.removeEventListener('storage',onShipmentStorage))
         <div class="kpi"><strong>{{ listStats.cbm !== '—' ? `约 ${listStats.cbm}m³` : '—' }}</strong><span>在途总立方</span></div>
         <span class="spacer" />
         <el-select v-model="inboundSource" aria-label="入库单来源" style="width:180px">
-          <el-option label="ERP 中转仓发运" value="erp_shipment" />
-          <el-option label="OMS 客户预约" value="oms_customer" />
-          <el-option label="全部来源" value="all" />
+          <el-option v-for="(label, value) in INBOUND_SOURCE_LABELS" :key="value" :label="label" :value="value" />
         </el-select>
         <el-input v-model="inboundSearchQ" placeholder="入库单 / SKU" clearable style="width:160px;margin-left:8px" />
       </div>
       <el-table v-loading="loading" :data="inboundPagedItems" :empty-text="listReady ? '暂无入库单' : '尚未读取入库单，请重新读取'" stripe border size="small">
         <el-table-column label="来源" width="145">
-          <template #default="{ row }">{{ row._raw?.sourceKind === 'erp_shipment' ? 'ERP 中转仓发运' : row._raw?.sourceKind === 'oms_customer' ? 'OMS 客户预约' : 'ERP 历史入库' }}</template>
+          <template #default="{ row }">{{ INBOUND_SOURCE_LABELS[inboundListSource(row._raw?.sourceKind)] }}</template>
         </el-table-column>
         <el-table-column prop="id" label="入库单号" width="130">
           <template #default="{ row }"><span class="mono">{{ row.id }}</span></template>

@@ -9,6 +9,7 @@ import { mapInbound, fmtTime } from '@/api/mappers.ts'
 import { withAction } from '@/composables/useListLoader.ts'
 import { useAppStore } from '@/stores/app'
 import { INBOUND_STATUS } from '@/constants/index.js'
+import { INBOUND_SOURCE_LABELS, inboundListSource, type InboundSourceFilter } from '@/features/inbound/listSources'
 import ListPagination from '@/components/ListPagination.vue'
 import DetailSheet from '@/components/ui/DetailSheet.vue'
 import { inboundCustomerSku } from '@erp/shared/inbound-customer-sku'
@@ -92,6 +93,7 @@ function endWarehouseAttempt(attempt: WarehouseAttempt) {
 type StatusFilter = 'all' | 'in_transit' | 'arrived' | 'receiving' | 'putaway' | 'completed' | 'exception' | 'cancelled'
 
 const filter = ref<StatusFilter>('all')
+const source = ref<InboundSourceFilter>('all')
 const searchQ = ref('')
 const page = ref(1)
 const pageSize = ref(50)
@@ -182,8 +184,7 @@ const orderRows = computed(() =>
       sku: skuLabel,
       qty,
       customerCode: raw.omsCustomerCode || '',
-      dataSource: raw.dataSource || 'erp',
-      dataSourceLabel: raw.dataSourceLabel || 'ERP',
+      source: inboundListSource(raw.sourceKind),
       readOnly: Boolean(raw.readOnly),
       customerRemark: customerRemark || '—',
       poRemark: raw.poRemark || '',
@@ -212,7 +213,7 @@ async function refreshCounts() {
   ]
   try {
     const results = await Promise.all(
-      entries.map(([, status]) => inboundApi.list({ pageSize: 1, ...(keyword ? { keyword } : {}), ...(status ? { status } : {}) })),
+      entries.map(([, status]) => inboundApi.list({ pageSize: 1, source: source.value, ...(keyword ? { keyword } : {}), ...(status ? { status } : {}) })),
     )
     if (version !== countsReadVersion) return
     entries.forEach(([key], i) => {
@@ -228,7 +229,7 @@ async function load() {
   listReadError.value = ''
   loading.value = true
   try {
-    const params: Record<string, unknown> = { page: page.value, pageSize: pageSize.value }
+    const params: Record<string, unknown> = { page: page.value, pageSize: pageSize.value, source: source.value }
     if (filter.value !== 'all') {
       params.status = STATUS_FILTER_QUERY[filter.value]
     }
@@ -249,14 +250,11 @@ async function reloadAll() {
   await Promise.all([load(), refreshCounts()])
 }
 
-watch([filter, page, pageSize], () => load())
-watch(searchQ, () => {
+watch([filter, source, searchQ], () => {
   page.value = 1
-  void reloadAll()
-})
-watch(filter, () => {
-  page.value = 1
-})
+}, { flush: 'sync' })
+watch([filter, source, searchQ, page, pageSize], load)
+watch([source, searchQ], refreshCounts)
 
 const canReceive = computed(() => app.hasPerm('inbound.receive'))
 const canConfirmArrival = computed(() => app.hasPerm('inbound.arrival_scan'))
@@ -570,7 +568,7 @@ onMounted(async () => {
 
     <div class="callout info">
       <div class="callout-title">已到仓收货 · 清点 → 待上架</div>
-      <div class="callout-body">含 ERP 发运入库与已提交的 OMS 客户预约入库。未提交草稿不进入仓库作业列表；已提交但尚未同步至 ERP 的单据仅可查看，同步后可正常收货上架。</div>
+      <div class="callout-body">OMS 电商入库单同步到 ERP 后可收货上架，待同步的单据可查看。</div>
     </div>
 
     <el-alert v-if="warehouseStorageError" :title="warehouseStorageError" type="error" :closable="false"><el-button @click="readPendingOperations">重新读取核对信息</el-button></el-alert>
@@ -595,6 +593,9 @@ onMounted(async () => {
         </el-radio-button>
       </el-radio-group>
       <span class="spacer" />
+      <el-select v-model="source" aria-label="入库单来源" style="width:120px" size="small">
+        <el-option v-for="(label, value) in INBOUND_SOURCE_LABELS" :key="value" :label="label" :value="value" />
+      </el-select>
       <el-input v-model="searchQ" placeholder="入库单号 / 入仓号 / 跟踪号" clearable style="width:220px" size="small" />
     </div>
 
@@ -604,8 +605,8 @@ onMounted(async () => {
       </el-table-column>
       <el-table-column label="来源" width="96" align="center">
         <template #default="{ row }">
-          <el-tag size="small" :type="row.dataSource === 'erp' ? 'primary' : row.dataSource === 'erp_oms' ? 'success' : 'warning'">
-            {{ row.dataSourceLabel }}
+          <el-tag size="small" :type="row.readOnly ? 'warning' : row.source === 'pallet' ? 'primary' : 'success'">
+            {{ INBOUND_SOURCE_LABELS[row.source as InboundSourceFilter] }}
           </el-tag>
         </template>
       </el-table-column>

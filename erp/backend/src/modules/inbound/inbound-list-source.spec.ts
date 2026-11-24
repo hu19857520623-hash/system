@@ -51,10 +51,36 @@ describe('inbound list ERP authority', () => {
     const result = await service.list({ source: 'oms_customer', status: 'pending_putaway' } as any)
     expect(prisma.inboundOrder.findMany.mock.calls[0][0].where).toEqual({
       omsCustomerCode: { not: null },
-      AND: [{ OR: [{ sourceWarehouseCode: null }, { sourceWarehouseCode: '' }] }],
+      AND: [
+        { omsCustomerCode: { not: '' } },
+        { OR: [{ sourceWarehouseCode: null }, { sourceWarehouseCode: '' }] },
+      ],
       status: 'pending_putaway',
     })
     expect(result.items.every((row: any) => row.sourceKind === 'oms_customer')).toBe(true)
+    expect(result.total).toBe(2)
+  })
+
+  it('includes historical ERP orders and transfer shipments in the pallet filter', async () => {
+    const { service, prisma } = fixture([])
+    prisma.inboundOrder.findMany.mockReset().mockResolvedValue([
+      { id: 1, inboundNo: 'ERP-LEGACY', sourceWarehouseCode: null, omsCustomerCode: null, createdAt: new Date(), items: [] },
+      { id: 2, inboundNo: 'ERP-TRANSFER', sourceWarehouseCode: 'LOG-01', omsCustomerCode: 'TKL005', createdAt: new Date(), items: [] },
+    ] as any)
+    prisma.inboundOrder.count.mockResolvedValue(2)
+
+    const result = await service.list({ source: 'pallet', status: 'pending_receipt', keyword: 'ERP' } as any)
+    const { where } = prisma.inboundOrder.findMany.mock.calls[0][0]
+    expect(where.AND).toEqual([{ OR: [
+      { AND: [{ sourceWarehouseCode: { not: null } }, { sourceWarehouseCode: { not: '' } }] },
+      { omsCustomerCode: null },
+      { omsCustomerCode: '' },
+    ] }])
+    expect(where.OR).toContainEqual({ inboundNo: { contains: 'ERP' } })
+    expect(where.status.in).toContain('pending_receipt')
+    expect(prisma.inboundOrder.count).toHaveBeenCalledWith({ where })
+    expect(prisma.$queryRawUnsafe).not.toHaveBeenCalled()
+    expect(result.items.map(row => row.sourceKind)).toEqual(['erp_other', 'erp_shipment'])
     expect(result.total).toBe(2)
   })
 
