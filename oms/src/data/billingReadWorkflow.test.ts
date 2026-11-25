@@ -6,6 +6,10 @@ import type { FeeRecord } from './mockData'
 import { useBilling } from './billingStore'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { act, create, type ReactTestRenderer } from 'react-test-renderer'
+import { MemoryRouter } from 'react-router-dom'
+import { RoleProvider } from '../auth/RoleContext'
+import BillingPage from '../pages/Billing'
 const billingWarning = () => renderToStaticMarkup(createElement(() => createElement('p',null,useBilling().readWarning || '')))
 function environment(t: TestContext, admin=false) {
   const old=globalThis.fetch, values=new Map<string,string>(), s={getItem:(key:string)=>values.get(key)||null,setItem:(key:string,value:string)=>{values.set(key,value)},removeItem:(key:string)=>{values.delete(key)}}
@@ -92,6 +96,57 @@ test('同客户更换账号后读取失败，不把旧账务快照归到新账�
   globalThis.fetch = async () => Response.json(snapshot(42))
   await refreshBillingFromErp('TKL9001')
   assert.match(readStore(), /42/)
+})
+
+test('后台账务读取失败会禁用页面两个导出按钮，点击重新读取成功后恢复', async t => {
+  const { user } = environment(t)
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
+  const previousDocument = Object.getOwnPropertyDescriptor(globalThis, 'document')
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: Object.assign(new EventTarget(), { setTimeout, clearTimeout, setInterval, clearInterval }),
+  })
+  Object.defineProperty(globalThis, 'document', {
+    configurable: true,
+    value: Object.assign(new EventTarget(), { visibilityState: 'visible' }),
+  })
+  let renderer: ReactTestRenderer | undefined
+  let failRead = false
+  globalThis.fetch = async input => {
+    const url = String(input)
+    if (url.endsWith('/auth/me')) return Response.json({ user })
+    assert.ok(url.endsWith('/billing-snapshot'), url)
+    return Response.json(failRead ? null : snapshot())
+  }
+  const button = (label: string) => renderer!.root.findAllByType('button').find(node =>
+    node.children.some(child => typeof child === 'string' && child.includes(label)))!
+  const assertExport = (disabled: boolean) => {
+    assert.equal(button('导出流水').props.disabled, disabled)
+    assert.equal(button('导出已付费用及退款').props.disabled, disabled)
+  }
+  try {
+    await act(async () => {
+      renderer = create(createElement(MemoryRouter, {
+        future: { v7_startTransition: true, v7_relativeSplatPath: true },
+        children: createElement(RoleProvider, { children: createElement(BillingPage, { rechargeOnly: false }) }),
+      }))
+    })
+    assertExport(false)
+    failRead = true
+    await act(async () => { await assert.rejects(refreshBillingFromErp('TKL9001'), /不完整/) })
+    assertExport(true)
+    assert.match(JSON.stringify(renderer!.toJSON()), /导出暂不可用/)
+    failRead = false
+    await act(async () => { button('重新读取账务').props.onClick() })
+    assertExport(false)
+    assert.doesNotMatch(JSON.stringify(renderer!.toJSON()), /导出暂不可用/)
+  } finally {
+    await act(async () => { renderer?.unmount() })
+    if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow)
+    else Reflect.deleteProperty(globalThis, 'window')
+    if (previousDocument) Object.defineProperty(globalThis, 'document', previousDocument)
+    else Reflect.deleteProperty(globalThis, 'document')
+  }
 })
 test('并发读取旧响应晚到，不能把最新余额回退',async t=>{
   environment(t);const releases:((response:Response)=>void)[]=[];globalThis.fetch=async()=>new Promise(resolve=>{releases.push(resolve)})
