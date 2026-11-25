@@ -2,6 +2,11 @@ import assert from 'node:assert/strict'
 import test, { type TestContext } from 'node:test'
 import { getInventorySnapshot, getProductsSnapshot, hydrateInventory, refreshInventoryFromErp, updateLocalProducts, importProducts, lockStockForOutbound, rollbackStockForOutbound, permanentlyDeleteLocalProduct } from './inventoryStore'
 import type { Product } from './mockData'
+import { createElement } from 'react'
+import { act, create, type ReactTestRenderer } from 'react-test-renderer'
+import { MemoryRouter } from 'react-router-dom'
+import { RoleProvider } from '../auth/RoleContext'
+import InventoryPage from '../pages/Inventory'
 const row:any={id:'i1',customerId:'c1',sku:'TKL1-A',available:5,locked:2,inTransit:3,pendingShelving:1,stockSource:'owned'}
 function environment(t:TestContext){
   const fetch=globalThis.fetch,descriptors=['localStorage','sessionStorage'].map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)] as const)
@@ -18,6 +23,57 @@ test('failed atomic sync retains old stock and gives a Chinese retry message',as
   environment(t);hydrateInventory({inventory:[row],products:[],purchases:[]})
   globalThis.fetch=async()=>Response.json({error:'Storage unavailable'},{status:503})
   await assert.rejects(refreshInventoryFromErp('c1','TKL1'),/同步ERP未完成.*重试/);assert.equal(getInventorySnapshot()[0].available,5)
+})
+test('库存页面保留旧库存供查看，刷新失败时暂停导出，点击重试后恢复', async t => {
+  environment(t)
+  const user = { id: 'inventory-test', username: 'inventory-test', role: 'hybrid', customerId: 'c1', customerCode: 'TKL9001', permissions: ['inventory:read'], status: 'active' }
+  const session = JSON.stringify({ token: 'inventory-test', user })
+  const globals = {
+    localStorage: { getItem: (key: string) => key === 'oms-auth-session' ? session : null, removeItem() {}, setItem() {} },
+    window: Object.assign(new EventTarget(), { setTimeout, clearTimeout, setInterval, clearInterval }),
+    document: Object.assign(new EventTarget(), { visibilityState: 'visible' }),
+  }
+  for (const [key, value] of Object.entries(globals)) {
+    const previous = Object.getOwnPropertyDescriptor(globalThis, key)
+    Object.defineProperty(globalThis, key, { configurable: true, value })
+    if (key !== 'localStorage') t.after(() => {
+      if (previous) Object.defineProperty(globalThis, key, previous)
+      else Reflect.deleteProperty(globalThis, key)
+    })
+  }
+  hydrateInventory({ inventory: [{ ...row, name: '验收库存', warehouse: 'jhb1' }], products: [], purchases: [] })
+  const replies: Array<(response: Response) => void> = []
+  globalThis.fetch = async input => {
+    const path = String(input)
+    if (path.endsWith('/auth/me')) return Response.json({ user })
+    assert.equal(path, '/api/erp/customers/TKL9001/inventory-sync')
+    return new Promise(resolve => replies.push(resolve))
+  }
+  let renderer: ReactTestRenderer | undefined
+  const button = (label: string) => renderer!.root.findAllByType('button').find(node =>
+    node.children.some(child => typeof child === 'string' && child.trim() === label))!
+  try {
+    await act(async () => {
+      renderer = create(createElement(MemoryRouter, {
+        future: { v7_startTransition: true, v7_relativeSplatPath: true },
+        children: createElement(RoleProvider, { children: createElement(InventoryPage) }),
+      }))
+    })
+    assert.equal(button('导出').props.disabled, false)
+    await act(async () => { button('立即刷新').props.onClick() })
+    assert.equal(button('导出').props.disabled, true)
+    await act(async () => { replies[0](Response.json({ error: '测试服务暂不可用' }, { status: 503 })) })
+    assert.equal(button('导出').props.disabled, true)
+    assert.match(JSON.stringify(renderer!.toJSON()), /验收库存/)
+    assert.match(JSON.stringify(renderer!.toJSON()), /导出暂不可用/)
+    await act(async () => { button('立即刷新').props.onClick() })
+    await act(async () => { replies[1](Response.json({ total: 1, inventory: [{ ...row, name: '刷新后的库存', warehouse: 'jhb1', available: 7 }], products: [] })) })
+    assert.equal(button('导出').props.disabled, false)
+    assert.match(JSON.stringify(renderer!.toJSON()), /刷新后的库存/)
+    assert.doesNotMatch(JSON.stringify(renderer!.toJSON()), /导出暂不可用/)
+  } finally {
+    await act(async () => { renderer?.unmount() })
+  }
 })
 test('late sync cannot overwrite a freshly hydrated customer',async t=>{
   environment(t);let release!:(r:Response)=>void;globalThis.fetch=async()=>new Promise(r=>{release=r})
