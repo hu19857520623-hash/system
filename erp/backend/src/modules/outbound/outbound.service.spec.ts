@@ -6,7 +6,7 @@ const PDF_BASE64 = Buffer.from('%PDF-cropped-label').toString('base64')
 function buildService() {
   const prisma: any = {
     customer: { findUnique: jest.fn() },
-    outboundOrder: { findUnique: jest.fn(), update: jest.fn() },
+    outboundOrder: { findUnique: jest.fn(), findMany: jest.fn(), update: jest.fn() },
     outboundAttachment: {
       create: jest.fn(),
       findFirst: jest.fn(),
@@ -31,6 +31,24 @@ function buildService() {
   )
   return { service, prisma, files }
 }
+
+describe('OMS 出库明细 SKU 查询', () => {
+  it('同一出库单重复 SKU 的数量合并，其它 SKU 数量不计入', async () => {
+    const { service, prisma } = buildService()
+    prisma.customer.findUnique.mockResolvedValue({ id: 1n })
+    prisma.outboundOrder.findMany.mockResolvedValue([{
+      id: 9n, outboundNo: 'DO-9', status: 'shipped', attachments: [],
+      items: [
+        { sku: 'SKU-A', pickedQty: 2, qty: 3 },
+        { sku: 'SKU-A', pickedQty: 0, qty: 4 },
+        { sku: 'SKU-B', pickedQty: 0, qty: 20 },
+      ],
+    }])
+    await expect(service.listSkuOutboundsForOms('TKL9001', 'SKU-A')).resolves.toMatchObject({
+      items: [{ outboundNo: 'DO-9', sku: 'SKU-A', qty: 6 }], total: 1,
+    })
+  })
+})
 
 describe('OutboundService cropped label storage', () => {
   it('persists OMS attachment metadata and hides file paths in mapped responses', async () => {

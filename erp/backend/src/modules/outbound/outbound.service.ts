@@ -2658,13 +2658,16 @@ export class OutboundService {
 
     return {
       items: rows.map((o) => {
-        const line = o.items.find((i) => i.sku === skuCode)
+        const qty = o.items.reduce(
+          (sum, item) => item.sku === skuCode ? sum + (item.pickedQty || item.qty) : sum,
+          0,
+        )
         const omsStatus = toOmsOutboundStatus(o.status)
         return {
           outboundNo: o.outboundNo,
           outboundId: Number(o.id),
           sku: skuCode,
-          qty: line?.pickedQty || line?.qty || 0,
+          qty,
           status: o.status,
           omsStatus,
           statusLabel: OUTBOUND_STATUS_LABELS[o.status] || omsStatus,
