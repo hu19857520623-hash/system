@@ -1,6 +1,13 @@
 type StoragePort = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
 export type ShipmentMaintenanceAttempt = { kind: 'delete' | 'freight'; inboundId: number; inboundNo: string; clear?: boolean; payload?: any; snapshot: any }
 const key = (userId: number) => `erp:shipment-maintenance:${userId}`
+export function assertShipmentDetail(id: number, inboundNo: string, result: unknown) {
+  const order = result as { id?: unknown; inboundNo?: unknown } | null
+  if (!inboundNo || Number(order?.id) !== id || order?.inboundNo !== inboundNo) {
+    throw new Error('返回的入库单与待核对单据不一致，请返回列表重新读取')
+  }
+}
+
 export function assertShipmentMaintenanceReceipt(attempt: ShipmentMaintenanceAttempt, result: unknown) {
   const receipt = result as { id?: unknown; inboundNo?: unknown; ok?: unknown; committed?: unknown; requestId?: unknown } | null
   if (receipt?.id !== attempt.inboundId || receipt.inboundNo !== attempt.inboundNo ||

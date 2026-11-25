@@ -36,7 +36,7 @@ import { reportPartialImportResult, type ImportRowFailure } from '@/utils/import
 import { clearShipmentAttempt, readShipmentAttempt, saveShipmentAttempt, shipmentSubmitFailure, draftAlreadyShipped, attachmentUploadFailure, type ShipmentAttempt } from '@/utils/erpShipmentAttempt'
 import { inboundListStats } from '@/features/inbound/listStats'
 import { INBOUND_SOURCE_LABELS, inboundListSource, type InboundSourceFilter } from '@/features/inbound/listSources'
-import { assertShipmentMaintenanceReceipt, clearShipmentMaintenance, readShipmentMaintenance, saveShipmentMaintenance, shipmentMaintenanceFailure, type ShipmentMaintenanceAttempt } from '@/utils/shipmentMaintenanceAttempt'
+import { assertShipmentDetail, assertShipmentMaintenanceReceipt, clearShipmentMaintenance, readShipmentMaintenance, saveShipmentMaintenance, shipmentMaintenanceFailure, type ShipmentMaintenanceAttempt } from '@/utils/shipmentMaintenanceAttempt'
 
 const app = useAppStore()
 const route = useRoute()
@@ -975,7 +975,7 @@ async function refreshMutationDetail(target = detailOrder.value) {
   try {
     const result=await frame.step(()=>inboundApi.detail(id))
     if(!frame.active() || version!==detailReadVersion)return
-    if (inboundNumericId(result) !== id || result.inboundNo !== target.inboundNo) throw new Error('返回的入库单与待核对单据不一致')
+    assertShipmentDetail(id, target.inboundNo, result)
     detailOrder.value=result;detailMutationWarning.value='';maintenanceError.value=''
     if(maintenanceResult.value?.id === id && maintenanceResult.value.inboundNo === result.inboundNo) {
       maintenanceResult.value.refreshRequired=false
@@ -996,16 +996,17 @@ async function removeInbound(row?: any) {
   const source = row || detailOrder.value
   const id = inboundNumericId(source)
   if (!id) return
+  const inboundNo = source._raw?.inboundNo || source.inboundNo
   let snapshot: any
   maintenanceBusy.value = true
-  try { snapshot = await inboundApi.detail(id) }
+  try { snapshot = await frame.step(() => inboundApi.detail(id)); assertShipmentDetail(id, inboundNo, snapshot) }
   catch (error) { if(!frame.active())return;maintenanceError.value = `未能核对最新单据，本次尚未删除。${userFacingError(error)}`; return }
   finally {if(frame.active())maintenanceBusy.value = false}
   if(!frame.active())return
   if (!inboundCanDelete(snapshot)) { maintenanceError.value = '此单不是可删除的未收货 ERP 发运单，请查看最新仓库作业进度'; return }
   const ok = await confirmAction(`确认删除入库单 ${snapshot.inboundNo}？未开始收货的良品库存将返还原中转仓；海外仓作业中的该单也会删除。`, '删除入库单')
   if (!ok || !frame.active()) return
-  await startMaintenance({ kind: 'delete', inboundId: id, inboundNo: snapshot.inboundNo, snapshot })
+  await startMaintenance({ kind: 'delete', inboundId: id, inboundNo, snapshot })
 }
 
 function freightLabel(sku: string, field: 'lineFreight' | 'unitFreight') {

@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { assertShipmentMaintenanceReceipt, clearShipmentMaintenance, readShipmentMaintenance, saveShipmentMaintenance, shipmentMaintenanceFailure, type ShipmentMaintenanceAttempt } from './shipmentMaintenanceAttempt'
+import { assertShipmentDetail, assertShipmentMaintenanceReceipt, clearShipmentMaintenance, readShipmentMaintenance, saveShipmentMaintenance, shipmentMaintenanceFailure, type ShipmentMaintenanceAttempt } from './shipmentMaintenanceAttempt'
 function storage() { const data = new Map<string, string>(); return { getItem: (key: string) => data.get(key) ?? null, setItem: (key: string, value: string) => { data.set(key, value) }, removeItem: (key: string) => { data.delete(key) } } }
 const attempt = (): ShipmentMaintenanceAttempt => ({ kind: 'freight', inboundId: 1, inboundNo: 'RV-TEST', clear: false, payload: { clientRequestId: 'same-id', expectedVersion: 'old-version', totalAmount: 12 }, snapshot: { items: [] } })
 describe('发运维护未知结果核对', () => {
+  it('删除前核对详情必须同时匹配所选入库单的 ID 和单号', () => {
+    expect(() => assertShipmentDetail(1, 'RV-TEST', { id: '1', inboundNo: 'RV-TEST' })).not.toThrow()
+    for (const invalid of [null, { id: 2, inboundNo: 'RV-TEST' }, { id: 1, inboundNo: 'RV-OTHER' }]) {
+      expect(() => assertShipmentDetail(1, 'RV-TEST', invalid)).toThrow('返回列表重新读取')
+    }
+  })
   it('仅接受匹配原单和原操作的维护回执', () => {
     const original = attempt()
     const freight = { id: 1, inboundNo: 'RV-TEST', committed: true, requestId: 'same-id', refreshRequired: true }
