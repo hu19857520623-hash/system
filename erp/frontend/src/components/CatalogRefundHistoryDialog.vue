@@ -21,6 +21,9 @@ async function load() {
   if (!visible.value || !allowed.value) {rows.value=[];total.value=0;return}
   const current=++sequence,owner=app.authenticatedUser?.id
   loading.value=true;error.value=''
+  rows.value = []
+  detail.value = null
+  detailVisible.value = false
   try {
     const result=await inventoryApi.catalogReclaimHistory({page:page.value,pageSize:pageSize.value,customerCode:customerCode.value.trim()||undefined,sku:sku.value.trim()||undefined})
     if(current!==sequence || owner!==app.authenticatedUser?.id || !visible.value)return
@@ -31,9 +34,13 @@ async function load() {
 }
 function search() {if(page.value!==1)page.value=1;else void load()}
 function reset() {customerCode.value='';sku.value='';search()}
-function showDetail(row:Refund) {detail.value=row;detailVisible.value=true}
+function showDetail(row: Refund) {
+  if (loading.value || !visible.value || !allowed.value || !rows.value.includes(row)) return
+  detail.value = row
+  detailVisible.value = true
+}
 async function retrySync(row:Refund) {
-  if(!visible.value || busyId.value!==null || !allowed.value || !row.canRetrySync)return
+  if(!visible.value || loading.value || busyId.value!==null || !allowed.value || !row.canRetrySync || !rows.value.includes(row))return
   const owner=app.authenticatedUser?.id
   const request=++syncSequence
   const current=()=>request===syncSequence && owner===app.authenticatedUser?.id && visible.value && allowed.value
