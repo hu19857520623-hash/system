@@ -5,9 +5,11 @@ import type { OutboundOrder, Product } from './mockData'
 import { buildFulfillmentRows, defaultFulfillmentFilters, filterFulfillmentRows } from './fulfillmentUtils'
 import { createElement } from 'react'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { RoleProvider } from '../auth/RoleContext'
 import InventoryPage from '../pages/Inventory'
+import OutboundRecords from '../pages/OutboundRecords'
+import { hydrateOutbound } from './outboundStore'
 const row:any={id:'i1',customerId:'c1',sku:'TKL1-A',available:5,locked:2,inTransit:3,pendingShelving:1,stockSource:'owned'}
 function environment(t:TestContext){
   const fetch=globalThis.fetch,descriptors=['localStorage','sessionStorage'].map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)] as const)
@@ -55,6 +57,11 @@ test('库存页面可重试刷新和出库明细，旧请求不会覆盖当前 S
     })
   }
   hydrateInventory({ inventory: [{ ...row, name: '验收库存', warehouse: 'jhb1' }], products: [], purchases: [] })
+  hydrateOutbound(['A', 'B'].map(suffix => ({
+    id: `erp-${suffix}`, outboundNo: `ERP-${suffix}`, customerId: 'c1', status: 'shipped',
+    createdAt: '2026-11-25', lineItems: [{ sku: `TKL1-${suffix}`, qty: 1 }],
+  } as OutboundOrder)))
+  t.after(() => { hydrateOutbound([]) })
   const replies: Array<(response: Response) => void> = []
   const outboundReplies = new Map<string, (response: Response) => void>()
   globalThis.fetch = async input => {
@@ -72,7 +79,12 @@ test('库存页面可重试刷新和出库明细，旧请求不会覆盖当前 S
     await act(async () => {
       renderer = create(createElement(MemoryRouter, {
         future: { v7_startTransition: true, v7_relativeSplatPath: true },
-        children: createElement(RoleProvider, { children: createElement(InventoryPage) }),
+        children: createElement(RoleProvider, {
+          children: createElement(Routes, null,
+            createElement(Route, { path: '/', element: createElement(InventoryPage) }),
+            createElement(Route, { path: '/outbound/records', element: createElement(OutboundRecords) }),
+          ),
+        }),
       }))
     })
     assert.equal(button('导出').props.disabled, false)
@@ -115,6 +127,15 @@ test('库存页面可重试刷新和出库明细，旧请求不会覆盖当前 S
     assert.match(details, /最近 100 张匹配出库单/)
     assert.match(details, /\/outbound\/records\?sku=TKL1-B&skuMode=exact/)
     assert.doesNotMatch(details, /TEST-A|重新查询/)
+    const viewRecords = renderer!.root.findAllByType('a').find(node => node.props.href === '/outbound/records?sku=TKL1-B&skuMode=exact')
+    assert.ok(viewRecords)
+    await act(async () => {
+      viewRecords.props.onClick({ button: 0, preventDefault() {} })
+    })
+    const records = JSON.stringify(renderer!.toJSON())
+    assert.match(records, /订单与出库/)
+    assert.match(records, /ERP-B/)
+    assert.doesNotMatch(records, /ERP-A/)
   } finally {
     await act(async () => { renderer?.unmount() })
   }
