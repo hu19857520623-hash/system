@@ -163,6 +163,7 @@ const maintenanceBusy = ref(false)
 const maintenanceAttempt = ref<ShipmentMaintenanceAttempt | null>(null)
 const maintenanceStorageError = ref('')
 const maintenanceError = ref('')
+const deleteReadRetry = ref<{ id: number; inboundNo: string } | null>(null)
 const maintenanceResult = ref<any>(null)
 const shipmentAttempt = ref<ShipmentAttempt | null>(null)
 const shipmentAttemptError = ref('')
@@ -916,6 +917,7 @@ async function postMaintenance(attempt: ShipmentMaintenanceAttempt) {
   const frame=shipmentRequests.capture()
   if(!frame.active()){maintenanceError.value='请使用原账号恢复发运权限后核对原操作';return}
   maintenanceBusy.value = true
+  deleteReadRetry.value = null
   freightSubmitting.value = attempt.kind === 'freight'
   maintenanceError.value = ''
   maintenanceResult.value = null
@@ -997,10 +999,17 @@ async function removeInbound(row?: any) {
   const id = inboundNumericId(source)
   if (!id) return
   const inboundNo = source._raw?.inboundNo || source.inboundNo
+  deleteReadRetry.value = null
+  maintenanceError.value = ''
   let snapshot: any
   maintenanceBusy.value = true
   try { snapshot = await frame.step(() => inboundApi.detail(id)); assertShipmentDetail(id, inboundNo, snapshot) }
-  catch (error) { if(!frame.active())return;maintenanceError.value = `未能核对最新单据，本次尚未删除。${userFacingError(error)}`; return }
+  catch (error) {
+    if (!frame.active()) return
+    deleteReadRetry.value = { id, inboundNo }
+    maintenanceError.value = `未能核对最新单据，本次尚未删除。${userFacingError(error)}`
+    return
+  }
   finally {if(frame.active())maintenanceBusy.value = false}
   if(!frame.active())return
   if (!inboundCanDelete(snapshot)) { maintenanceError.value = '此单不是可删除的未收货 ERP 发运单，请查看最新仓库作业进度'; return }
@@ -1766,6 +1775,7 @@ async function downloadDraftFile(file: { id?: number; fileName: string }) {
 function resetShipmentSession(){
   shipmentBusy.value=false;maintenanceBusy.value=false;freightSubmitting.value=false
   shipmentResult.value=null;deletedShipment.value=null;maintenanceResult.value=null;shipmentError.value='';maintenanceError.value=''
+  deleteReadRetry.value = null
   detailVisible.value=false;freightVisible.value=false;detailOrder.value=null
   createForm.value=emptyForm();editingDraftId.value=null;warehouseSkus.value=[];drafts.value=[]
   ++stockLoadVersion;++draftLoadVersion;++detailReadVersion;detailLoading.value=false
@@ -1832,7 +1842,9 @@ onScopeDispose(()=>window.removeEventListener('storage',onShipmentStorage))
       <el-button v-if="maintenanceAttempt && !maintenanceError.includes('不要重试原操作')" :disabled="!canCreateInbound" :loading="maintenanceBusy" @click="retryMaintenance">核对并重试原操作</el-button>
       <el-button v-if="maintenanceAttempt && maintenanceError.includes('不要重试原操作')" :disabled="formBusy" @click="endMismatchedMaintenance">已核对记录，结束本次</el-button>
     </el-alert>
-    <el-alert v-if="maintenanceError" :title="maintenanceError" type="error" :closable="false" style="margin:12px 0" />
+    <el-alert v-if="maintenanceError" :title="maintenanceError" type="error" :closable="false" style="margin:12px 0">
+      <el-button v-if="deleteReadRetry" :disabled="!canBeginMaintenance()" @click="removeInbound(deleteReadRetry)">重新核对 {{ deleteReadRetry.inboundNo }}</el-button>
+    </el-alert>
     <el-alert v-if="maintenanceResult?.refreshRequired" :title="maintenanceResult.warning" type="warning" :closable="false"><el-button :loading="detailLoading" @click="refreshMutationDetail(maintenanceResult)">重新读取最新详情</el-button></el-alert>
     <el-alert v-if="maintenanceResult" type="success" :closable="false" style="margin:12px 0" :title="maintenanceResult.kind === 'delete' ? `已删除 ${maintenanceResult.inboundNo}，原中转仓良品库存已返还` : `海运费操作已完成：${maintenanceResult.inboundNo}`">
       <el-button v-if="maintenanceResult.kind === 'delete' && maintenanceResult.deletedOrder" :disabled="formBusy" @click="copyMaintenanceDeleted">按已删除单复制新建</el-button>
