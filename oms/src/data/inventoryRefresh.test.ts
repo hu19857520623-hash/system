@@ -5,7 +5,7 @@ import type { OutboundOrder, Product } from './mockData'
 import { buildFulfillmentRows, defaultFulfillmentFilters, filterFulfillmentRows } from './fulfillmentUtils'
 import { createElement } from 'react'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
 import { RoleProvider } from '../auth/RoleContext'
 import InventoryPage from '../pages/Inventory'
 import OutboundRecords from '../pages/OutboundRecords'
@@ -73,16 +73,22 @@ test('库存页面可重试刷新和出库明细，旧请求不会覆盖当前 S
     return new Promise(resolve => replies.push(resolve))
   }
   let renderer: ReactTestRenderer | undefined
+  const RecordsWithBack = () => {
+    const navigate = useNavigate()
+    return createElement('section', null, createElement(OutboundRecords),
+      createElement('button', { onClick: () => navigate(-1) }, '测试浏览器返回'))
+  }
   const button = (label: string) => renderer!.root.findAllByType('button').find(node =>
     node.children.some(child => typeof child === 'string' && child.trim() === label))!
   try {
     await act(async () => {
       renderer = create(createElement(MemoryRouter, {
         future: { v7_startTransition: true, v7_relativeSplatPath: true },
+        initialEntries: ['/?source=owned&qtyMin=1'],
         children: createElement(RoleProvider, {
           children: createElement(Routes, null,
             createElement(Route, { path: '/', element: createElement(InventoryPage) }),
-            createElement(Route, { path: '/outbound/records', element: createElement(OutboundRecords) }),
+            createElement(Route, { path: '/outbound/records', element: createElement(RecordsWithBack) }),
           ),
         }),
       }))
@@ -136,6 +142,9 @@ test('库存页面可重试刷新和出库明细，旧请求不会覆盖当前 S
     assert.match(records, /订单与出库/)
     assert.match(records, /ERP-B/)
     assert.doesNotMatch(records, /ERP-A/)
+    await act(async () => { button('测试浏览器返回').props.onClick() })
+    assert.match(JSON.stringify(renderer!.toJSON()), /库存查询/)
+    assert.ok(renderer!.root.findAllByType('input').some(input => input.props.value === '1'))
   } finally {
     await act(async () => { renderer?.unmount() })
   }

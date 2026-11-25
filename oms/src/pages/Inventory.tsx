@@ -2,7 +2,7 @@
 import { userFacingError } from '../utils/userFacingError'
 import { displaySku } from '../data/skuDisplay'
 import { useEffect, useRef, useState, useMemo } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { Download, RefreshCw, ListOrdered } from 'lucide-react'
 import {
   Button, PageHeader, Select, Badge, MonoCode, Card, StatCard, Table, TableFooter, FilterChip, Drawer,
@@ -12,7 +12,7 @@ import {
 } from '../components/ui/filters'
 import {
   getInventoryStatus, statusLabels, STOCK_SOURCE_LABELS,
-  type StockSource, warehouseFilterOptions, warehouseLabel,
+  warehouseFilterOptions, warehouseLabel,
 } from '../data/mockData'
 import { refreshInventoryFromErp, useInventoryItems } from '../data/inventoryStore'
 import { useOutboundOrders } from '../data/outboundStore'
@@ -49,6 +49,9 @@ const defaultFilters: InvFilters = {
   ean: '', warehouse: 'all', qtyType: 'available',
   qtyMin: '', qtyMax: '',
 }
+
+const inventoryFilterKeys = Object.keys(defaultFilters) as (keyof InvFilters)[]
+const inventoryTabs = ['all', 'catalogHoldings', 'low', 'out', 'locked', 'pendingShelving']
 
 function getMeasuredVolume(sku: string) {
   const prod = findProductByCode(sku)
@@ -101,11 +104,41 @@ export default function InventoryPage() {
   const allOutbound = useOutboundOrders()
   const scopedInventory = useMemo(() => dataScope.scope(allInventory), [dataScope, allInventory])
   const scopedOutbound = useMemo(() => dataScope.scopeOutbound(allOutbound), [dataScope, allOutbound])
-  const [poolTab, setPoolTab] = useState<'all' | StockSource>('all')
-  const [tab, setTab] = useState('all')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const source = searchParams.get('source')
+  const poolTab = source === 'owned' || source === 'catalog' ? source : 'all'
+  const requestedTab = searchParams.get('tab') ?? 'all'
+  const tab = inventoryTabs.includes(requestedTab) ? requestedTab : 'all'
+  const filterQuery = JSON.stringify(inventoryFilterKeys.map(key => searchParams.get(key)))
+  const applied = useMemo(() => {
+    const filters = { ...defaultFilters }
+    const values: (string | null)[] = JSON.parse(filterQuery)
+    inventoryFilterKeys.forEach((key, index) => {
+      const value = values[index]
+      if (value === null) return
+      if (key === 'skuMode' || key === 'customCodeMode' || key === 'productNameMode') {
+        if (value === 'exact' || value === 'fuzzy') filters[key] = value
+      } else filters[key] = value
+    })
+    return filters
+  }, [filterQuery])
   const [filtersOpen, setFiltersOpen] = useState(true)
-  const [draft, setDraft] = useState<InvFilters>(defaultFilters)
-  const [applied, setApplied] = useState<InvFilters>(defaultFilters)
+  const [draft, setDraft] = useState<InvFilters>(applied)
+  useEffect(() => { setDraft(applied) }, [applied])
+  const changeTab = (key: 'source' | 'tab', value: string) => {
+    const next = new URLSearchParams(searchParams)
+    if (value === 'all') next.delete(key)
+    else next.set(key, value)
+    setSearchParams(next, { replace: true })
+  }
+  const applyFilters = (filters: InvFilters) => {
+    const next = new URLSearchParams(searchParams)
+    for (const key of inventoryFilterKeys) {
+      if (filters[key] === defaultFilters[key]) next.delete(key)
+      else next.set(key, filters[key])
+    }
+    setSearchParams(next, { replace: true })
+  }
   const [refresh, setRefresh] = useState<{ scope: string; pending: boolean; error?: string }>()
   const refreshScope = drawerScope.current
   const syncing = refresh?.scope === refreshScope && refresh.pending
@@ -253,7 +286,7 @@ export default function InventoryPage() {
           { id: 'owned' as const, label: '自有库存', count: ownedItems.length },
           { id: 'catalog' as const, label: '货盘库存', count: catalogItems.length },
         ]).map(p => (
-          <FilterChip key={p.id} active={poolTab === p.id} onClick={() => setPoolTab(p.id)}>
+          <FilterChip key={p.id} active={poolTab === p.id} onClick={() => changeTab('source', p.id)}>
             {p.label} ({p.count})
           </FilterChip>
         ))}
@@ -302,8 +335,8 @@ export default function InventoryPage() {
                 </div>
               </div>
               <FilterActions
-                onQuery={() => setApplied({ ...draft })}
-                onReset={() => { setDraft(defaultFilters); setApplied(defaultFilters) }}
+                onQuery={() => applyFilters(draft)}
+                onReset={() => { setDraft(defaultFilters); applyFilters(defaultFilters) }}
               />
           </div>
         )}
@@ -311,7 +344,7 @@ export default function InventoryPage() {
 
       <div className="mb-4 flex flex-wrap gap-2">
         {tabs.map(t => (
-          <FilterChip key={t.id} active={tab === t.id} onClick={() => setTab(t.id)} alert={t.id === 'out' && t.count > 0}>
+          <FilterChip key={t.id} active={tab === t.id} onClick={() => changeTab('tab', t.id)} alert={t.id === 'out' && t.count > 0}>
             {t.label} ({t.count})
           </FilterChip>
         ))}
