@@ -11,6 +11,7 @@ interface BillingState {
   feeRecords: FeeRecord[]
   readWarning?: string
   snapshot?: ErpBillingSnapshot
+  readScope?: string
 }
 
 let state: BillingState = { creditBalance: 0, feeRecords: [] }
@@ -35,6 +36,7 @@ export function hydrateBilling(next: BillingState) {
     feeRecords: structuredClone(next.feeRecords),
     readWarning: next.readWarning,
     snapshot: next.snapshot,
+    readScope: next.readScope,
   }
   emit()
 }
@@ -88,7 +90,14 @@ async function readErpBillingSnapshot(code: string, scope: string, generation: n
     const replacement = newerBillingRead(code, scope, generation)
     if (replacement) return replacement
     if (applyToWallet && scope === authSessionScope() && generation === readGeneration) {
-      state = { ...state, readWarning: '最新账务读取失败，当前保留上次结果，请重新读取后核对' };emit()
+      const previous = state.readScope === scope ? state.snapshot : undefined
+      state = {
+        ...state,
+        snapshot: previous,
+        readScope: scope,
+        readWarning: previous ? '最新账务读取失败，当前保留上次结果，请重新读取后核对' : '最新账务读取失败，请重新读取后核对',
+      }
+      emit()
     }
     throw error
   }
@@ -99,7 +108,7 @@ async function readErpBillingSnapshot(code: string, scope: string, generation: n
     throw new Error('已有其它客户的账务读取请求，请核对当前客户后重新读取')
   }
   if (snapshot.customerCode !== code || !Array.isArray(snapshot.feeRecords) || !Array.isArray(snapshot.bills) || !Number.isFinite(snapshot.creditBalance) || !Number.isFinite(snapshot.monthlySpent) || !Number.isFinite(snapshot.pendingBill)) throw new Error('账务读取结果不完整，请重新读取后继续')
-  if (applyToWallet) hydrateBilling({ creditBalance: snapshot.creditBalance, feeRecords: snapshot.feeRecords, snapshot })
+  if (applyToWallet) hydrateBilling({ creditBalance: snapshot.creditBalance, feeRecords: snapshot.feeRecords, snapshot, readScope: scope })
   return snapshot
 }
 

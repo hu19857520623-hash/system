@@ -75,6 +75,24 @@ test('旧读取失败晚于新读取成功时不能重新显示过期失败提�
   await refreshBillingFromErp('TKL9001');reject(Error('NetworkError'));assert.equal((await old).creditBalance,20)
   assert.equal(getCreditBalance(),20);assert.equal(billingWarning(),'<p></p>')
 })
+
+test('同客户更换账号后读取失败，不把旧账务快照归到新账号', async t => {
+  const { s, user } = environment(t)
+  const readStore = () => renderToStaticMarkup(createElement(() => {
+    const billing = useBilling()
+    return createElement('p', null, billing.snapshot?.creditBalance, billing.readWarning)
+  }))
+  globalThis.fetch = async () => Response.json(snapshot(9876))
+  await refreshBillingFromErp('TKL9001')
+  assert.match(readStore(), /9876/)
+  s.setItem('oms-auth-session', JSON.stringify({ token: 'second-token', user: { ...user, id: 'u2' } }))
+  globalThis.fetch = async () => Response.json({ error: 'Service Unavailable' }, { status: 503 })
+  await assert.rejects(refreshBillingFromErp('TKL9001'))
+  assert.doesNotMatch(readStore(), /9876|保留上次结果/)
+  globalThis.fetch = async () => Response.json(snapshot(42))
+  await refreshBillingFromErp('TKL9001')
+  assert.match(readStore(), /42/)
+})
 test('并发读取旧响应晚到，不能把最新余额回退',async t=>{
   environment(t);const releases:((response:Response)=>void)[]=[];globalThis.fetch=async()=>new Promise(resolve=>{releases.push(resolve)})
   const old=refreshBillingFromErp('TKL9001'), latest=refreshBillingFromErp('TKL9001')
@@ -91,7 +109,10 @@ test('页面先返回时等待同客户较新的后台读取，不报失败也�
   for(const row of rows){assert.equal(row.status,'fulfilled');if(row.status==='fulfilled')assert.equal(row.value.creditBalance,20)}
 })
 test('较新账务读取失败时旧成功不得替代失败或启用过期导出',async t=>{
-  environment(t);const releases:((response:Response)=>void)[]=[];globalThis.fetch=async()=>new Promise(resolve=>{releases.push(resolve)})
+  environment(t)
+  globalThis.fetch=async()=>Response.json(snapshot(100))
+  await refreshBillingFromErp('TKL9001')
+  const releases:((response:Response)=>void)[]=[];globalThis.fetch=async()=>new Promise(resolve=>{releases.push(resolve)})
   const old=refreshBillingFromErp('TKL9001'),latest=refreshBillingFromErp('TKL9001'),outcomes=Promise.allSettled([old,latest])
   releases[1](Response.json({error:'最新账务暂不可用'},{status:503}));await assert.rejects(latest,/最新账务暂不可用/);releases[0](Response.json(snapshot(10)))
   const rows=await outcomes;for(const row of rows){assert.equal(row.status,'rejected');if(row.status==='rejected')assert.match(row.reason.message,/最新账务暂不可用/)}

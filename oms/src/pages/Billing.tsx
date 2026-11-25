@@ -266,13 +266,15 @@ export default function BillingPage({ rechargeOnly }: BillingPageProps) {
   const [rechargeStorageError, setRechargeStorageError] = useState('')
   const [rechargeDraft, setRechargeDraft] = useState<{ customerCode: string; amount: number; paymentMethodId: string; paymentMethodTitle?: string } | null>(null)
   const [rechargeMsg, setRechargeMsg] = useState<{ ok: boolean; text: string } | null>(null)
-  const [billingView, setBillingView] = useState<ErpBillingSnapshot | null>(null)
+  const [billingResult, setBillingResult] = useState<{ scope: string; snapshot: ErpBillingSnapshot } | null>(null)
   const [reading, setReading] = useState(false), [readError, setReadError] = useState('')
   const readSequence = useRef(0)
   const { can, role, authToken, userId, permissions } = useRole()
   const permissionScope = JSON.stringify([...permissions].sort())
   const dataScope = useDataScope()
   const globalBilling = useBilling()
+  const sessionScope = authSessionScope()
+  const billingView = billingResult?.scope === sessionScope ? billingResult.snapshot : null
   const allMethods = usePaymentMethods()
   const enabledMethods = allMethods.filter(m => m.enabled).sort((a, b) => a.sortOrder - b.sortOrder)
   const [payMethodId, setPayMethodId] = useState(enabledMethods[0]?.id ?? 'bank')
@@ -292,14 +294,19 @@ export default function BillingPage({ rechargeOnly }: BillingPageProps) {
     const sequence = ++readSequence.current
     const scope = authSessionScope()
     const current = () => sequence === readSequence.current && scope === authSessionScope()
-    if (!selectedCode || selectedCode === '—') { setBillingView(null);setReadError('');setReading(false);return }
+    if (!selectedCode || selectedCode === '—') { setBillingResult(null);setReadError('');setReading(false);return }
     setReading(true);setReadError('')
-    try { const result = await refreshBillingFromErp(selectedCode);if (current()) setBillingView(result) }
+    try { const snapshot = await refreshBillingFromErp(selectedCode);if (current()) setBillingResult({ scope, snapshot }) }
     catch (error) { if (current()) setReadError(`最新账务读取失败，请重新读取后继续。${userFacingError(error)}`) }
     finally { if (current()) setReading(false) }
   }
-  useEffect(() => { setBillingView(null);void readBilling();return () => { readSequence.current++ } }, [selectedCode, authToken, userId, role, permissionScope])
-  useEffect(() => { if (!dataScope.isAdmin && globalBilling.snapshot?.customerCode === selectedCode) setBillingView(globalBilling.snapshot) }, [globalBilling.snapshot, selectedCode, dataScope.isAdmin])
+  useEffect(() => { setBillingResult(null);void readBilling();return () => { readSequence.current++ } }, [selectedCode, authToken, userId, role, permissionScope, sessionScope])
+  useEffect(() => {
+    const { snapshot, readScope } = globalBilling
+    if (!dataScope.isAdmin && readScope === sessionScope && snapshot?.customerCode === selectedCode) {
+      setBillingResult({ scope: sessionScope, snapshot })
+    }
+  }, [globalBilling.snapshot, globalBilling.readScope, sessionScope, selectedCode, dataScope.isAdmin])
 
   const outboundGroups = useMemo(() => groupFeeRecordsByOutbound(feeRecords), [feeRecords])
   const outboundSummary = useMemo(() => summarizeOutboundFeeGroups(outboundGroups), [outboundGroups])
@@ -348,7 +355,7 @@ export default function BillingPage({ rechargeOnly }: BillingPageProps) {
   const billingReadControls = <div className="mb-4 space-y-2">
     {dataScope.isAdmin && <select className={formInput()} value={dataScope.customerFilter} onChange={e => dataScope.setCustomerFilter(e.target.value)}><option value="all">请选择客户读取账务</option>{dataScope.customerOptions.map(c => <option key={c.id} value={c.id}>{c.code} · {c.name}</option>)}</select>}
     {readError && <p className="rounded bg-red-50 p-3 text-sm text-red-800">{readError}{ready ? ' 当前保留上次读取结果，导出暂不可用。' : ''}</p>}
-    {!dataScope.isAdmin && globalBilling.readWarning && !readError && <p className="rounded bg-amber-50 p-3 text-sm text-amber-900">{globalBilling.readWarning}</p>}
+    {!dataScope.isAdmin && globalBilling.readScope === sessionScope && globalBilling.readWarning && !readError && <p className="rounded bg-amber-50 p-3 text-sm text-amber-900">{globalBilling.readWarning}</p>}
     {ready && billingView.reviewAmount > 0 && <p className="rounded bg-amber-50 p-3 text-sm text-amber-900">发运费用 {formatCurrency(billingView.reviewAmount)} 缺少完整支付依据，请财务核对；本页不将其自动计为未付或再次扣款。</p>}
     {!selectedCode && <p className="text-sm text-text-muted">请先选择客户，余额、费用和账单将使用同一客户范围。</p>}
     <Button size="sm" variant="secondary" disabled={!selectedCode || reading} onClick={() => void readBilling()}>{reading ? '正在读取账务…' : '重新读取账务'}</Button>
