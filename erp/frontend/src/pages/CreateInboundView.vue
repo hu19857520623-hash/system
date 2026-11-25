@@ -2452,10 +2452,10 @@ onScopeDispose(()=>window.removeEventListener('storage',onShipmentStorage))
       </template>
     </div>
     <el-alert v-if="detailMutationWarning" :title="detailMutationWarning" type="warning" :closable="false"><el-button :loading="detailLoading" @click="refreshMutationDetail()">重新读取最新详情</el-button></el-alert>
-    <el-alert v-if="maintenanceError" :title="maintenanceError" type="error" :closable="false">
+    <el-alert v-if="maintenanceError && (!deleteReadRetry || (deleteReadRetry.id === inboundNumericId(detailOrder) && deleteReadRetry.inboundNo === detailOrder?.inboundNo))" :title="maintenanceError" type="error" :closable="false">
       <el-button v-if="maintenanceAttempt && !maintenanceError.includes('不要重试原操作')" :disabled="!canCreateInbound" :loading="maintenanceBusy" @click="retryMaintenance">核对并重试原操作</el-button>
       <el-button v-if="maintenanceAttempt && maintenanceError.includes('不要重试原操作')" :disabled="formBusy" @click="endMismatchedMaintenance">已核对记录，结束本次</el-button>
-      <el-button v-if="deleteReadRetry && deleteReadRetry.id === inboundNumericId(detailOrder) && deleteReadRetry.inboundNo === detailOrder?.inboundNo" :disabled="maintenanceBlocked" @click="removeInbound(deleteReadRetry)">重新核对 {{ deleteReadRetry.inboundNo }}</el-button>
+      <el-button v-if="deleteReadRetry" :disabled="maintenanceBlocked" @click="removeInbound(deleteReadRetry)">重新核对 {{ deleteReadRetry.inboundNo }}</el-button>
       <el-button v-else :disabled="maintenanceBusy || !!maintenanceAttempt" @click="refreshMutationDetail()">重新读取最新详情</el-button>
     </el-alert>
     <template #footer>
