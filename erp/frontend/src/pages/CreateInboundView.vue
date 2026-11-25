@@ -897,10 +897,13 @@ function refreshMaintenanceAttempt() {
   catch (error) { maintenanceStorageError.value = userFacingError(error) }
 }
 
+const maintenanceBlocked = computed(() => !canCreateInbound.value || formBusy.value || !!maintenanceAttempt.value ||
+  !!maintenanceStorageError.value || !!shipmentAttempt.value || !!shipmentAttemptError.value)
+
 function canBeginMaintenance() {
   refreshMaintenanceAttempt()
   refreshShipmentAttempt()
-  return canCreateInbound.value && !formBusy.value && !maintenanceAttempt.value && !maintenanceStorageError.value && !shipmentAttempt.value && !shipmentAttemptError.value
+  return !maintenanceBlocked.value
 }
 
 async function startMaintenance(attempt: ShipmentMaintenanceAttempt) {
@@ -1843,7 +1846,7 @@ onScopeDispose(()=>window.removeEventListener('storage',onShipmentStorage))
       <el-button v-if="maintenanceAttempt && maintenanceError.includes('不要重试原操作')" :disabled="formBusy" @click="endMismatchedMaintenance">已核对记录，结束本次</el-button>
     </el-alert>
     <el-alert v-if="maintenanceError" :title="maintenanceError" type="error" :closable="false" style="margin:12px 0">
-      <el-button v-if="deleteReadRetry" :disabled="!canBeginMaintenance()" @click="removeInbound(deleteReadRetry)">重新核对 {{ deleteReadRetry.inboundNo }}</el-button>
+      <el-button v-if="deleteReadRetry" :disabled="maintenanceBlocked" @click="removeInbound(deleteReadRetry)">重新核对 {{ deleteReadRetry.inboundNo }}</el-button>
     </el-alert>
     <el-alert v-if="maintenanceResult?.refreshRequired" :title="maintenanceResult.warning" type="warning" :closable="false"><el-button :loading="detailLoading" @click="refreshMutationDetail(maintenanceResult)">重新读取最新详情</el-button></el-alert>
     <el-alert v-if="maintenanceResult" type="success" :closable="false" style="margin:12px 0" :title="maintenanceResult.kind === 'delete' ? `已删除 ${maintenanceResult.inboundNo}，原中转仓良品库存已返还` : `海运费操作已完成：${maintenanceResult.inboundNo}`">
@@ -2452,7 +2455,7 @@ onScopeDispose(()=>window.removeEventListener('storage',onShipmentStorage))
     <el-alert v-if="maintenanceError" :title="maintenanceError" type="error" :closable="false">
       <el-button v-if="maintenanceAttempt && !maintenanceError.includes('不要重试原操作')" :disabled="!canCreateInbound" :loading="maintenanceBusy" @click="retryMaintenance">核对并重试原操作</el-button>
       <el-button v-if="maintenanceAttempt && maintenanceError.includes('不要重试原操作')" :disabled="formBusy" @click="endMismatchedMaintenance">已核对记录，结束本次</el-button>
-      <el-button v-if="deleteReadRetry" :disabled="!canBeginMaintenance()" @click="removeInbound(deleteReadRetry)">重新核对 {{ deleteReadRetry.inboundNo }}</el-button>
+      <el-button v-if="deleteReadRetry" :disabled="maintenanceBlocked" @click="removeInbound(deleteReadRetry)">重新核对 {{ deleteReadRetry.inboundNo }}</el-button>
       <el-button v-else :disabled="maintenanceBusy || !!maintenanceAttempt" @click="refreshMutationDetail()">重新读取最新详情</el-button>
     </el-alert>
     <template #footer>
