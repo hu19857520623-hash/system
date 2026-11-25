@@ -63,9 +63,9 @@ export async function loadSkuOutboundLogs(
 
   try {
     const erp = await fetchSkuOutboundLogs(code, sku)
-    if (!Array.isArray(erp?.items) || erp.items.some(item =>
+    if (!Array.isArray(erp?.items) || erp.total !== erp.items.length || erp.items.some(item =>
       !item || typeof item.outboundNo !== 'string' || !item.outboundNo.trim()
-      || !Number.isFinite(item.qty) || !(item.omsStatus || item.status)
+      || item.sku !== sku.trim() || !Number.isFinite(item.qty) || !(item.omsStatus || item.status)
     )) {
       return { items: sortSkuOutboundLogs([...map.values()]), erpUnavailable: true }
     }
