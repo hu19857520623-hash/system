@@ -21,6 +21,8 @@ async function load() {
   if (!visible.value || !allowed.value) {rows.value=[];total.value=0;return}
   const current=++sequence,owner=app.authenticatedUser?.id
   loading.value=true;error.value=''
+  syncError.value = ''
+  syncSuccess.value = ''
   rows.value = []
   detail.value = null
   detailVisible.value = false
@@ -43,15 +45,20 @@ async function retrySync(row:Refund) {
   if(!visible.value || loading.value || busyId.value!==null || !allowed.value || !row.canRetrySync || !rows.value.includes(row))return
   const owner=app.authenticatedUser?.id
   const request=++syncSequence
+  const listRequest = sequence
   const current=()=>request===syncSequence && owner===app.authenticatedUser?.id && visible.value && allowed.value
   busyId.value=row.id;syncError.value='';syncSuccess.value=''
   try {
     const result=await inventoryApi.retryCatalogReclaimSync(row.id)
     if(!current())return
     if(result.referenceNo!==row.referenceNo || result.customerCode!==row.customerCode || result.quantity!==row.quantity || result.refundAmount!==row.amount || result.duplicate!==true)throw new Error('同步结果与原退款回执不一致，请核对该记录')
+    if (listRequest !== sequence) {
+      if (!result.syncPending) emit('refreshed')
+      return
+    }
     if(result.syncPending)syncError.value=`${row.referenceNo}：原退款已保存，OMS仍待同步，可重试核对同步；不会重复退款。`
     else {syncSuccess.value=`${row.referenceNo}：原退款已核对，同步完成，未重复退款。`;emit('refreshed')}
-  } catch(e) {if(current())syncError.value=`${row.referenceNo}：同步结果待核对，可重试同一记录；不会新增退款。${userFacingError(e)}`}
+  } catch(e) {if(current() && listRequest===sequence)syncError.value=`${row.referenceNo}：同步结果待核对，可重试同一记录；不会新增退款。${userFacingError(e)}`}
   finally {if(current())busyId.value=null}
 }
 watch(() => props.modelValue, value => {
