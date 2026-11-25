@@ -46,7 +46,7 @@ export async function loadSkuOutboundLogs(
   customerCode: string | null | undefined,
   sku: string,
   localOrders: OutboundOrder[],
-): Promise<{ items: SkuOutboundLogRow[]; erpUnavailable?: boolean; needCustomer?: boolean }> {
+): Promise<{ items: SkuOutboundLogRow[]; erpUnavailable?: boolean; needCustomer?: boolean; hasMore?: boolean }> {
   const map = new Map<string, SkuOutboundLogRow>()
 
   for (const row of findLocalSkuOutbounds(localOrders, sku)) {
@@ -84,11 +84,10 @@ export async function loadSkuOutboundLogs(
         appointmentDate: item.appointmentDate ?? undefined,
       })
     }
+    return { items: sortSkuOutboundLogs([...map.values()]), hasMore: erp.hasMore === true }
   } catch {
     return { items: sortSkuOutboundLogs([...map.values()]), erpUnavailable: true }
   }
-
-  return { items: sortSkuOutboundLogs([...map.values()]) }
 }
 
 function sortSkuOutboundLogs(rows: SkuOutboundLogRow[]) {

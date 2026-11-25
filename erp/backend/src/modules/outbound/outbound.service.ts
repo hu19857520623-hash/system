@@ -2639,6 +2639,7 @@ export class OutboundService {
 
   /** OMS：按 SKU 查客户出库单（含明细数量与状态） */
   async listSkuOutboundsForOms(customerCode: string, sku: string) {
+    const limit = 100
     const code = customerCode.trim()
     const skuCode = sku.trim()
     if (!code) throw new BadRequestException('缺少客户编码')
@@ -2653,11 +2654,11 @@ export class OutboundService {
       },
       include: { items: true, attachments: { orderBy: { id: 'asc' } } },
       orderBy: { id: 'desc' },
-      take: 100,
+      take: limit + 1,
     })
 
     return {
-      items: rows.map((o) => {
+      items: rows.slice(0, limit).map((o) => {
         const qty = o.items.reduce(
           (sum, item) => item.sku === skuCode ? sum + (item.pickedQty || item.qty) : sum,
           0,
@@ -2687,7 +2688,8 @@ export class OutboundService {
           deliveredAt: o.deliveredAt,
         }
       }),
-      total: rows.length,
+      total: Math.min(rows.length, limit),
+      ...(rows.length > limit ? { hasMore: true } : {}),
     }
   }
 

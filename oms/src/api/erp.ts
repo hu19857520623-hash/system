@@ -477,7 +477,7 @@ export type ErpSkuOutboundLog = {
 }
 
 export function fetchSkuOutboundLogs(customerCode: string, sku: string) {
-  return apiGet<{ items: ErpSkuOutboundLog[]; total: number }>(
+  return apiGet<{ items: ErpSkuOutboundLog[]; total: number; hasMore?: boolean }>(
     `/erp/outbound/by-customer/${encodeURIComponent(customerCode)}/sku/${encodeURIComponent(sku)}/outbounds`,
   )
 }

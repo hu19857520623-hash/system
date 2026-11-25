@@ -160,6 +160,8 @@ export default function InventoryPage() {
           ? 'ERP 出库单查询失败，当前仅显示 OMS 本地记录。'
           : 'ERP 出库单查询失败，请重新查询。')
         setOutboundDrawerFailed(true)
+      } else if (result.hasMore) {
+        setOutboundDrawerHint('ERP 明细仅显示最近 100 张匹配出库单。更多记录请前往出库记录，按 SKU 查询。')
       } else if (!result.items.length) {
         setOutboundDrawerHint('该 SKU 暂无出库记录。')
       }

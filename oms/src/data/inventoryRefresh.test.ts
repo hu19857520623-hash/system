@@ -76,9 +76,9 @@ test('库存页面可重试刷新和出库明细，旧请求不会覆盖当前 S
     assert.match(JSON.stringify(renderer!.toJSON()), /刷新后的库存/)
     assert.doesNotMatch(JSON.stringify(renderer!.toJSON()), /导出暂不可用/)
     const outboundButtons = renderer!.root.findAllByType('button').filter(node => node.children.includes('出库记录'))
-    const outbound = (outboundNo: string, sku: string, total = 1) => Response.json({
+    const outbound = (outboundNo: string, sku: string, total = 1, hasMore = false) => Response.json({
       items: [{ outboundNo, sku, qty: 1, omsStatus: 'shipped', createdAt: '2026-11-25' }],
-      total,
+      total, hasMore,
     })
     await act(async () => { outboundButtons[0].props.onClick(); outboundButtons[1].props.onClick() })
     await act(async () => { outboundReplies.get('TKL1-B')!(Response.json({ error: '查询暂不可用' }, { status: 503 })) })
@@ -95,10 +95,11 @@ test('库存页面可重试刷新和出库明细，旧请求不会覆盖当前 S
     assert.match(JSON.stringify(renderer!.toJSON()), /ERP 出库单查询失败/)
     assert.doesNotMatch(JSON.stringify(renderer!.toJSON()), /WRONG-SKU/)
     await act(async () => { button('重新查询').props.onClick() })
-    await act(async () => { outboundReplies.get('TKL1-B')!(outbound('TEST-B', 'TKL1-B')) })
+    await act(async () => { outboundReplies.get('TKL1-B')!(outbound('TEST-B', 'TKL1-B', 1, true)) })
     await act(async () => { outboundReplies.get('TKL1-A')!(outbound('TEST-A', 'TKL1-A')) })
     const details = JSON.stringify(renderer!.toJSON())
     assert.match(details, /TEST-B/)
+    assert.match(details, /最近 100 张匹配出库单/)
     assert.doesNotMatch(details, /TEST-A|重新查询/)
   } finally {
     await act(async () => { renderer?.unmount() })

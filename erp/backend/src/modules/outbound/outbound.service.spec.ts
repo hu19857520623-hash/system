@@ -33,6 +33,20 @@ function buildService() {
 }
 
 describe('OMS 出库明细 SKU 查询', () => {
+  it('超过 100 张时标记有更多记录，只返回最近 100 张', async () => {
+    const { service, prisma } = buildService()
+    prisma.customer.findUnique.mockResolvedValue({ id: 1n })
+    prisma.outboundOrder.findMany.mockResolvedValue(Array.from({ length: 101 }, (_, index) => ({
+      id: BigInt(101 - index), outboundNo: `DO-${101 - index}`, status: 'shipped', attachments: [],
+      items: [{ sku: 'SKU-A', pickedQty: 1, qty: 1 }],
+    })))
+    const result = await service.listSkuOutboundsForOms('TKL9001', 'SKU-A')
+    expect(prisma.outboundOrder.findMany).toHaveBeenCalledWith(expect.objectContaining({ take: 101, orderBy: { id: 'desc' } }))
+    expect(result).toMatchObject({ total: 100, hasMore: true })
+    expect(result.items).toHaveLength(100)
+    expect(result.items[99].outboundNo).toBe('DO-2')
+  })
+
   it('同一出库单重复 SKU 的数量合并，其它 SKU 数量不计入', async () => {
     const { service, prisma } = buildService()
     prisma.customer.findUnique.mockResolvedValue({ id: 1n })
