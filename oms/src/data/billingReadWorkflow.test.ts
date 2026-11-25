@@ -136,9 +136,18 @@ test('三笔重叠账务读取均跟随同范围的最终读取',async t=>{
   for(const row of await outcomes){assert.equal(row.status,'fulfilled');if(row.status==='fulfilled')assert.equal(row.value.creditBalance,30)}
   assert.equal(getCreditBalance(),30)
 })
-for(const data of [{...snapshot(),customerCode:'OTHER'},{...snapshot(),bills:null}])test('账务返回客户或范围错误时不应用不完整结果',async t=>{
-  environment(t);globalThis.fetch=async()=>Response.json(data)
-  await assert.rejects(refreshBillingFromErp('TKL9001'),/不完整/);assert.equal(getCreditBalance(),100)
+for (const data of [null, { ...snapshot(), customerCode: 'OTHER' }, { ...snapshot(), bills: null }]) test('账务返回客户或范围错误时保留同会话结果并标记读取失败', async t => {
+  environment(t)
+  globalThis.fetch = async () => Response.json(snapshot(100))
+  await refreshBillingFromErp('TKL9001')
+  globalThis.fetch = async () => Response.json(data)
+  await assert.rejects(refreshBillingFromErp('TKL9001'), /不完整/)
+  assert.equal(getCreditBalance(), 100)
+  assert.match(billingWarning(), /保留上次结果/)
+  globalThis.fetch = async () => Response.json(snapshot(101))
+  await refreshBillingFromErp('TKL9001')
+  assert.equal(getCreditBalance(), 101)
+  assert.equal(billingWarning(), '<p></p>')
 })
 test('旧本地预扣和退款入口不再调整财务或发送写请求',async t=>{
   environment(t);globalThis.fetch=async()=>{throw Error('不应发送请求')}

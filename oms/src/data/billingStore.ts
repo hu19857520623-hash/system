@@ -85,8 +85,13 @@ export async function refreshBillingFromErp(customerCode: string): Promise<ErpBi
 
 async function readErpBillingSnapshot(code: string, scope: string, generation: number, applyToWallet: boolean): Promise<ErpBillingSnapshot> {
   let snapshot: ErpBillingSnapshot
-  try { snapshot = await getErpBillingSnapshot(code) }
-  catch (error) {
+  try {
+    snapshot = await getErpBillingSnapshot(code)
+    if (!snapshot || snapshot.customerCode !== code || !Array.isArray(snapshot.feeRecords) || !Array.isArray(snapshot.bills)
+      || !Number.isFinite(snapshot.creditBalance) || !Number.isFinite(snapshot.monthlySpent) || !Number.isFinite(snapshot.pendingBill)) {
+      throw new Error('账务读取结果不完整，请重新读取后继续')
+    }
+  } catch (error) {
     const replacement = newerBillingRead(code, scope, generation)
     if (replacement) return replacement
     if (applyToWallet && scope === authSessionScope() && generation === readGeneration) {
@@ -107,7 +112,6 @@ async function readErpBillingSnapshot(code: string, scope: string, generation: n
     if (replacement) return replacement
     throw new Error('已有其它客户的账务读取请求，请核对当前客户后重新读取')
   }
-  if (snapshot.customerCode !== code || !Array.isArray(snapshot.feeRecords) || !Array.isArray(snapshot.bills) || !Number.isFinite(snapshot.creditBalance) || !Number.isFinite(snapshot.monthlySpent) || !Number.isFinite(snapshot.pendingBill)) throw new Error('账务读取结果不完整，请重新读取后继续')
   if (applyToWallet) hydrateBilling({ creditBalance: snapshot.creditBalance, feeRecords: snapshot.feeRecords, snapshot, readScope: scope })
   return snapshot
 }
