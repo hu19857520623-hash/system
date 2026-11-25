@@ -24,9 +24,9 @@ test('failed atomic sync retains old stock and gives a Chinese retry message',as
   globalThis.fetch=async()=>Response.json({error:'Storage unavailable'},{status:503})
   await assert.rejects(refreshInventoryFromErp('c1','TKL1'),/同步ERP未完成.*重试/);assert.equal(getInventorySnapshot()[0].available,5)
 })
-test('库存页面保留旧库存供查看，刷新失败时暂停导出，点击重试后恢复', async t => {
+test('库存页面可重试刷新和出库明细，旧请求不会覆盖当前 SKU', async t => {
   environment(t)
-  const user = { id: 'inventory-test', username: 'inventory-test', role: 'hybrid', customerId: 'c1', customerCode: 'TKL9001', permissions: ['inventory:read'], status: 'active' }
+  const user = { id: 'inventory-test', username: 'inventory-test', role: 'hybrid', customerId: 'c1', customerCode: 'TKL9001', permissions: ['inventory:read', 'outbound:read'], status: 'active' }
   const session = JSON.stringify({ token: 'inventory-test', user })
   const globals = {
     localStorage: { getItem: (key: string) => key === 'oms-auth-session' ? session : null, removeItem() {}, setItem() {} },
@@ -43,9 +43,12 @@ test('库存页面保留旧库存供查看，刷新失败时暂停导出，点�
   }
   hydrateInventory({ inventory: [{ ...row, name: '验收库存', warehouse: 'jhb1' }], products: [], purchases: [] })
   const replies: Array<(response: Response) => void> = []
+  const outboundReplies = new Map<string, (response: Response) => void>()
   globalThis.fetch = async input => {
     const path = String(input)
     if (path.endsWith('/auth/me')) return Response.json({ user })
+    const sku = /\/sku\/([^/]+)\/outbounds$/.exec(path)?.[1]
+    if (sku) return new Promise(resolve => outboundReplies.set(sku, resolve))
     assert.equal(path, '/api/erp/customers/TKL9001/inventory-sync')
     return new Promise(resolve => replies.push(resolve))
   }
@@ -67,10 +70,25 @@ test('库存页面保留旧库存供查看，刷新失败时暂停导出，点�
     assert.match(JSON.stringify(renderer!.toJSON()), /验收库存/)
     assert.match(JSON.stringify(renderer!.toJSON()), /导出暂不可用/)
     await act(async () => { button('立即刷新').props.onClick() })
-    await act(async () => { replies[1](Response.json({ total: 1, inventory: [{ ...row, name: '刷新后的库存', warehouse: 'jhb1', available: 7 }], products: [] })) })
+    const refreshedRow = { ...row, name: '刷新后的库存', warehouse: 'jhb1', available: 7 }
+    await act(async () => { replies[1](Response.json({ total: 2, inventory: [refreshedRow, { ...refreshedRow, id: 'i2', sku: 'TKL1-B' }], products: [] })) })
     assert.equal(button('导出').props.disabled, false)
     assert.match(JSON.stringify(renderer!.toJSON()), /刷新后的库存/)
     assert.doesNotMatch(JSON.stringify(renderer!.toJSON()), /导出暂不可用/)
+    const outboundButtons = renderer!.root.findAllByType('button').filter(node => node.children.includes('出库记录'))
+    const outbound = (outboundNo: string) => Response.json({
+      items: [{ outboundNo, qty: 1, omsStatus: 'shipped', createdAt: '2026-11-25' }],
+      total: 1,
+    })
+    await act(async () => { outboundButtons[0].props.onClick(); outboundButtons[1].props.onClick() })
+    await act(async () => { outboundReplies.get('TKL1-B')!(Response.json({ error: '查询暂不可用' }, { status: 503 })) })
+    assert.match(JSON.stringify(renderer!.toJSON()), /重新查询/)
+    await act(async () => { button('重新查询').props.onClick() })
+    await act(async () => { outboundReplies.get('TKL1-B')!(outbound('TEST-B')) })
+    await act(async () => { outboundReplies.get('TKL1-A')!(outbound('TEST-A')) })
+    const details = JSON.stringify(renderer!.toJSON())
+    assert.match(details, /TEST-B/)
+    assert.doesNotMatch(details, /TEST-A|重新查询/)
   } finally {
     await act(async () => { renderer?.unmount() })
   }
