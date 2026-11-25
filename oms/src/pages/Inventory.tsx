@@ -106,7 +106,10 @@ export default function InventoryPage() {
   const [filtersOpen, setFiltersOpen] = useState(true)
   const [draft, setDraft] = useState<InvFilters>(defaultFilters)
   const [applied, setApplied] = useState<InvFilters>(defaultFilters)
-  const [syncing, setSyncing] = useState(false)
+  const [refresh, setRefresh] = useState<{ scope: string; pending: boolean; error?: string }>()
+  const refreshScope = drawerScope.current
+  const syncing = refresh?.scope === refreshScope && refresh.pending
+  const refreshError = refresh?.scope === refreshScope ? refresh.error : undefined
   const [outboundDrawerOpen, setOutboundDrawerOpen] = useState(false)
   const [outboundDrawerSku, setOutboundDrawerSku] = useState('')
   const [outboundDrawerLoading, setOutboundDrawerLoading] = useState(false)
@@ -160,14 +163,16 @@ export default function InventoryPage() {
       notifyError('请先选择需要同步库存的客户')
       return
     }
-    setSyncing(true)
+    const request = { scope: refreshScope, pending: true }
+    const isCurrent = () => scope === authSessionScope() && request.scope === drawerScope.current
+    setRefresh(request)
     try {
       const n = await refreshInventoryFromErp(customerId, customerCode)
-      notifySuccess(`已从 ERP 同步 ${n} 条客户库存`)
+      if (isCurrent()) notifySuccess(`已从 ERP 同步 ${n} 条客户库存`)
+      setRefresh(current => current === request ? undefined : current)
     } catch (err) {
-      notifyError(userFacingError(err instanceof Error ? err.message : String(err)))
-    } finally {
-      setSyncing(false)
+      const error = userFacingError(err)
+      setRefresh(current => current === request ? { scope: request.scope, pending: false, error } : current)
     }
   }
 
@@ -211,7 +216,7 @@ export default function InventoryPage() {
         desc={dataScope.isAdmin ? '全平台库存总览，可按客户筛选' : '自有库存看可用量；货盘申购后持有量显示在「货盘持有」列，可出库发货'}
         action={
           <>
-            <Button variant="secondary" size="sm" onClick={() => exportInventoryCsv(filtered)}>
+            <Button variant="secondary" size="sm" disabled={syncing || !!refreshError} onClick={() => exportInventoryCsv(filtered)}>
               <Download className="h-3.5 w-3.5" /> 导出
             </Button>
             <Button variant="secondary" size="sm" disabled={syncing} onClick={() => void syncFromErp()}>
@@ -221,6 +226,7 @@ export default function InventoryPage() {
           </>
         }
       />
+      {refreshError && <p role="alert" className="mb-3 rounded bg-amber-50 p-3 text-sm text-amber-900">{refreshError} 请点击「立即刷新」重试，导出暂不可用。</p>}
 
       <div className="mb-3 flex flex-wrap gap-2">
         {([
