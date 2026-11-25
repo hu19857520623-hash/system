@@ -57,13 +57,19 @@ export async function loadSkuOutboundLogs(
   if (!code || code === '—' || code === '全平台') {
     return {
       items: sortSkuOutboundLogs([...map.values()]),
-      needCustomer: !code || code === '全平台',
+      needCustomer: true,
     }
   }
 
   try {
     const erp = await fetchSkuOutboundLogs(code, sku)
-    for (const item of erp.items ?? []) {
+    if (!Array.isArray(erp?.items) || erp.items.some(item =>
+      !item || typeof item.outboundNo !== 'string' || !item.outboundNo.trim()
+      || !Number.isFinite(item.qty) || !(item.omsStatus || item.status)
+    )) {
+      return { items: sortSkuOutboundLogs([...map.values()]), erpUnavailable: true }
+    }
+    for (const item of erp.items) {
       map.set(item.outboundNo, {
         outboundNo: item.outboundNo,
         qty: item.qty,

@@ -156,7 +156,9 @@ export default function InventoryPage() {
       if (result.needCustomer) {
         setOutboundDrawerHint('管理员请先选择客户，以查询 ERP 同步的出库单；当前仅显示 OMS 本地记录。')
       } else if (result.erpUnavailable) {
-        setOutboundDrawerHint('ERP 出库单查询失败，已显示 OMS 本地记录。')
+        setOutboundDrawerHint(result.items.length
+          ? 'ERP 出库单查询失败，当前仅显示 OMS 本地记录。'
+          : 'ERP 出库单查询失败，请重新查询。')
         setOutboundDrawerFailed(true)
       } else if (!result.items.length) {
         setOutboundDrawerHint('该 SKU 暂无出库记录。')
