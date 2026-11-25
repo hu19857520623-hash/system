@@ -115,7 +115,18 @@ export default function InventoryPage() {
   const [outboundDrawerLoading, setOutboundDrawerLoading] = useState(false)
   const [outboundDrawerRows, setOutboundDrawerRows] = useState<SkuOutboundLogRow[]>([])
   const [outboundDrawerHint, setOutboundDrawerHint] = useState('')
-  useEffect(() => { setOutboundDrawerOpen(false); setOutboundDrawerRows([]); setOutboundDrawerHint('') }, [scope, dataScope.bindingCustomerId])
+  const [outboundDrawerFailed, setOutboundDrawerFailed] = useState(false)
+  const outboundRead = useRef(0)
+  const closeOutboundDrawer = () => {
+    outboundRead.current++
+    setOutboundDrawerOpen(false)
+  }
+  useEffect(() => {
+    closeOutboundDrawer()
+    setOutboundDrawerRows([])
+    setOutboundDrawerHint('')
+    return () => { outboundRead.current++ }
+  }, [scope, dataScope.bindingCustomerId])
 
   const resolveCustomerCode = () => {
     if (dataScope.isAdmin) {
@@ -130,12 +141,14 @@ export default function InventoryPage() {
     if (!current || !canReadData(current.user, 'outboundOrders')) { notifyError('当前账号没有读取出库记录的权限，请联系管理员核对'); return }
     const owner = authSessionScope(current)
     const readScope = drawerScope.current
-    const isCurrent = () => owner === authSessionScope() && readScope === drawerScope.current
+    const request = ++outboundRead.current
+    const isCurrent = () => request === outboundRead.current && owner === authSessionScope() && readScope === drawerScope.current
     setOutboundDrawerSku(sku)
     setOutboundDrawerOpen(true)
     setOutboundDrawerLoading(true)
     setOutboundDrawerRows([])
     setOutboundDrawerHint('')
+    setOutboundDrawerFailed(false)
     try {
       const result = await loadSkuOutboundLogs(resolveCustomerCode(), sku, scopedOutbound)
       if (!isCurrent()) return
@@ -144,12 +157,14 @@ export default function InventoryPage() {
         setOutboundDrawerHint('管理员请先选择客户，以查询 ERP 同步的出库单；当前仅显示 OMS 本地记录。')
       } else if (result.erpUnavailable) {
         setOutboundDrawerHint('ERP 出库单查询失败，已显示 OMS 本地记录。')
+        setOutboundDrawerFailed(true)
       } else if (!result.items.length) {
         setOutboundDrawerHint('该 SKU 暂无出库记录。')
       }
     } catch (err) {
       if (!isCurrent()) return
       setOutboundDrawerHint(userFacingError(err instanceof Error ? err.message : '加载出库记录失败'))
+      setOutboundDrawerFailed(true)
     } finally {
       if (isCurrent()) setOutboundDrawerLoading(false)
     }
@@ -387,7 +402,7 @@ export default function InventoryPage() {
 
       {canReadOutbounds && <Drawer
         open={outboundDrawerOpen}
-        onClose={() => setOutboundDrawerOpen(false)}
+        onClose={closeOutboundDrawer}
         title={`出库记录 · ${displaySku(outboundDrawerSku)}`}
         subtitle="查看包含该 SKU 的出库单及出库数量"
       >
@@ -416,7 +431,7 @@ export default function InventoryPage() {
                       <Link
                         to={`/outbound/records?orderNo=${encodeURIComponent(row.outboundNo)}&orderNoMode=exact`}
                         className="font-medium text-primary-600 hover:underline"
-                        onClick={() => setOutboundDrawerOpen(false)}
+                        onClick={closeOutboundDrawer}
                       >
                         <MonoCode>{row.outboundNo}</MonoCode>
                       </Link>
@@ -436,8 +451,11 @@ export default function InventoryPage() {
         {outboundDrawerHint && outboundDrawerRows.length > 0 && (
           <p className="mt-4 text-xs text-amber-700">{outboundDrawerHint}</p>
         )}
-        <div className="mt-4 flex justify-end">
-          <Link to="/outbound/records" onClick={() => setOutboundDrawerOpen(false)}>
+        <div className="mt-4 flex justify-end gap-2">
+          {!outboundDrawerLoading && outboundDrawerFailed && (
+            <Button variant="secondary" size="sm" onClick={() => void openSkuOutboundLogs(outboundDrawerSku)}>重新查询</Button>
+          )}
+          <Link to="/outbound/records" onClick={closeOutboundDrawer}>
             <Button variant="secondary" size="sm">前往出库记录</Button>
           </Link>
         </div>
