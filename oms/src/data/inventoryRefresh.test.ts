@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import test, { type TestContext } from 'node:test'
 import { getInventorySnapshot, getProductsSnapshot, hydrateInventory, refreshInventoryFromErp, updateLocalProducts, importProducts, lockStockForOutbound, rollbackStockForOutbound, permanentlyDeleteLocalProduct } from './inventoryStore'
-import type { Product } from './mockData'
+import type { OutboundOrder, Product } from './mockData'
+import { buildFulfillmentRows, defaultFulfillmentFilters, filterFulfillmentRows } from './fulfillmentUtils'
 import { createElement } from 'react'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { MemoryRouter } from 'react-router-dom'
@@ -23,6 +24,18 @@ test('failed atomic sync retains old stock and gives a Chinese retry message',as
   environment(t);hydrateInventory({inventory:[row],products:[],purchases:[]})
   globalThis.fetch=async()=>Response.json({error:'Storage unavailable'},{status:503})
   await assert.rejects(refreshInventoryFromErp('c1','TKL1'),/同步ERP未完成.*重试/);assert.equal(getInventorySnapshot()[0].available,5)
+})
+test('出库记录按 URL 中的精确 SKU 或单号筛选独立 ERP 出库单', () => {
+  const outbound = (outboundNo: string, sku: string): OutboundOrder => ({
+    id: outboundNo, outboundNo, customerId: 'c1', status: 'shipped', refNo: `REF-${outboundNo}`,
+    createdAt: '2026-11-25', lineItems: [{ sku, qty: 1 }],
+  } as OutboundOrder)
+  const rows = buildFulfillmentRows([], [outbound('DO-1', 'A+1'), outbound('DO-10', 'A+10')])
+  const matching = (filters: Partial<typeof defaultFulfillmentFilters>) =>
+    filterFulfillmentRows(rows, 'all', { ...defaultFulfillmentFilters, ...filters }).map(row => row.outboundNo)
+  assert.deepEqual(matching({ sku: 'A+1', skuMode: 'exact' }), ['DO-1'])
+  assert.deepEqual(matching({ orderNo: 'DO-1', orderNoMode: 'exact' }), ['DO-1'])
+  assert.deepEqual(matching({ orderNo: 'REF-DO-10', orderNoMode: 'exact' }), ['DO-10'])
 })
 test('库存页面可重试刷新和出库明细，旧请求不会覆盖当前 SKU', async t => {
   environment(t)
