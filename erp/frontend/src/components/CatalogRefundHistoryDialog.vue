@@ -47,7 +47,23 @@ async function retrySync(row:Refund) {
   } catch(e) {if(current())syncError.value=`${row.referenceNo}：同步结果待核对，可重试同一记录；不会新增退款。${userFacingError(e)}`}
   finally {if(current())busyId.value=null}
 }
-watch(()=>props.modelValue,value=>{if(value)void load();else {++sequence;++syncSequence;loading.value=false;busyId.value=null;syncError.value='';syncSuccess.value='';detailVisible.value=false}},{flush:'sync'})
+watch(() => props.modelValue, value => {
+  if (value) {
+    void load()
+    return
+  }
+  ++sequence
+  ++syncSequence
+  rows.value = []
+  total.value = 0
+  loading.value = false
+  busyId.value = null
+  error.value = ''
+  syncError.value = ''
+  syncSuccess.value = ''
+  detail.value = null
+  detailVisible.value = false
+}, { flush: 'sync', immediate: true })
 watch([page,pageSize],()=>{void load()})
 watch([()=>app.authenticatedUser?.id,allowed],()=>{++sequence;++syncSequence;rows.value=[];total.value=0;loading.value=false;error.value='';syncError.value='';syncSuccess.value='';busyId.value=null;detail.value=null;detailVisible.value=false;visible.value=false},{flush:'sync'})
 </script>
