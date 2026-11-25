@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { inventoryApi } from '@/api/client.js'
 import { fmtTime } from '@/api/mappers'
 import { useAppStore } from '@/stores/app'
@@ -15,6 +15,8 @@ const allowed=computed(()=>['admin','finance'].includes(app.authenticatedUser?.r
 const rows=ref<Refund[]>([]),total=ref(0),page=ref(1),pageSize=ref(20),customerCode=ref(''),sku=ref('')
 const loading=ref(false),error=ref(''),syncError=ref(''),syncSuccess=ref(''),busyId=ref<number|null>(null),detail=ref<Refund|null>(null),detailVisible=ref(false)
 let sequence=0
+let syncSequence=0
+onBeforeUnmount(() => { ++sequence; ++syncSequence })
 async function load() {
   if (!visible.value || !allowed.value) {rows.value=[];total.value=0;return}
   const current=++sequence,owner=app.authenticatedUser?.id
@@ -31,21 +33,23 @@ function search() {if(page.value!==1)page.value=1;else void load()}
 function reset() {customerCode.value='';sku.value='';search()}
 function showDetail(row:Refund) {detail.value=row;detailVisible.value=true}
 async function retrySync(row:Refund) {
-  if(busyId.value!==null || !allowed.value || !row.canRetrySync)return
+  if(!visible.value || busyId.value!==null || !allowed.value || !row.canRetrySync)return
   const owner=app.authenticatedUser?.id
+  const request=++syncSequence
+  const current=()=>request===syncSequence && owner===app.authenticatedUser?.id && visible.value && allowed.value
   busyId.value=row.id;syncError.value='';syncSuccess.value=''
   try {
     const result=await inventoryApi.retryCatalogReclaimSync(row.id)
-    if(owner!==app.authenticatedUser?.id)return
+    if(!current())return
     if(result.referenceNo!==row.referenceNo || result.customerCode!==row.customerCode || result.quantity!==row.quantity || result.refundAmount!==row.amount || result.duplicate!==true)throw new Error('同步结果与原退款回执不一致，请核对该记录')
     if(result.syncPending)syncError.value=`${row.referenceNo}：原退款已保存，OMS仍待同步，可重试核对同步；不会重复退款。`
     else {syncSuccess.value=`${row.referenceNo}：原退款已核对，同步完成，未重复退款。`;emit('refreshed')}
-  } catch(e) {if(owner===app.authenticatedUser?.id)syncError.value=`${row.referenceNo}：同步结果待核对，可重试同一记录；不会新增退款。${userFacingError(e)}`}
-  finally {if(owner===app.authenticatedUser?.id)busyId.value=null}
+  } catch(e) {if(current())syncError.value=`${row.referenceNo}：同步结果待核对，可重试同一记录；不会新增退款。${userFacingError(e)}`}
+  finally {if(current())busyId.value=null}
 }
-watch(()=>props.modelValue,value=>{if(value)void load();else {++sequence;loading.value=false;detailVisible.value=false}})
+watch(()=>props.modelValue,value=>{if(value)void load();else {++sequence;++syncSequence;loading.value=false;busyId.value=null;syncError.value='';syncSuccess.value='';detailVisible.value=false}},{flush:'sync'})
 watch([page,pageSize],()=>{void load()})
-watch(()=>app.authenticatedUser?.id,()=>{++sequence;rows.value=[];total.value=0;error.value='';syncError.value='';syncSuccess.value='';busyId.value=null;detail.value=null;detailVisible.value=false;visible.value=false},{flush:'sync'})
+watch([()=>app.authenticatedUser?.id,allowed],()=>{++sequence;++syncSequence;rows.value=[];total.value=0;loading.value=false;error.value='';syncError.value='';syncSuccess.value='';busyId.value=null;detail.value=null;detailVisible.value=false;visible.value=false},{flush:'sync'})
 </script>
 
 <template>
