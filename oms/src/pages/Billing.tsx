@@ -1,4 +1,5 @@
 import type { RechargeAttempt } from '../data/rechargeWorkflow'
+import { authSessionScope } from '../api/client'
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { CreditCard, Download, Copy, Check, Pencil, Save, X, ChevronDown, ChevronUp } from 'lucide-react'
 import { Link } from 'react-router-dom'
@@ -268,7 +269,8 @@ export default function BillingPage({ rechargeOnly }: BillingPageProps) {
   const [billingView, setBillingView] = useState<ErpBillingSnapshot | null>(null)
   const [reading, setReading] = useState(false), [readError, setReadError] = useState('')
   const readSequence = useRef(0)
-  const { can, role } = useRole()
+  const { can, role, authToken, userId, permissions } = useRole()
+  const permissionScope = JSON.stringify([...permissions].sort())
   const dataScope = useDataScope()
   const globalBilling = useBilling()
   const allMethods = usePaymentMethods()
@@ -288,13 +290,15 @@ export default function BillingPage({ rechargeOnly }: BillingPageProps) {
   const monthlySpent = ready ? billingView.monthlySpent : 0
   const readBilling = async () => {
     const sequence = ++readSequence.current
+    const scope = authSessionScope()
+    const current = () => sequence === readSequence.current && scope === authSessionScope()
     if (!selectedCode || selectedCode === '—') { setBillingView(null);setReadError('');setReading(false);return }
     setReading(true);setReadError('')
-    try { const result = await refreshBillingFromErp(selectedCode);if (sequence === readSequence.current) setBillingView(result) }
-    catch (error) { if (sequence === readSequence.current) setReadError(`最新账务读取失败，请重新读取后继续。${userFacingError(error)}`) }
-    finally { if (sequence === readSequence.current) setReading(false) }
+    try { const result = await refreshBillingFromErp(selectedCode);if (current()) setBillingView(result) }
+    catch (error) { if (current()) setReadError(`最新账务读取失败，请重新读取后继续。${userFacingError(error)}`) }
+    finally { if (current()) setReading(false) }
   }
-  useEffect(() => { setBillingView(null);void readBilling();return () => { readSequence.current++ } }, [selectedCode])
+  useEffect(() => { setBillingView(null);void readBilling();return () => { readSequence.current++ } }, [selectedCode, authToken, userId, role, permissionScope])
   useEffect(() => { if (!dataScope.isAdmin && globalBilling.snapshot?.customerCode === selectedCode) setBillingView(globalBilling.snapshot) }, [globalBilling.snapshot, selectedCode, dataScope.isAdmin])
 
   const outboundGroups = useMemo(() => groupFeeRecordsByOutbound(feeRecords), [feeRecords])
