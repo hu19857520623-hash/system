@@ -150,9 +150,12 @@ export function applyFulfillmentFilters(rows: FulfillmentRow[], f: FulfillmentFi
     const dateKey = r.createdAt.slice(0, 10)
     if (f.dateFrom && dateKey < f.dateFrom) return false
     if (f.dateTo && dateKey > f.dateTo) return false
-    const noHaystack = `${r.outboundNo} ${r.refNo ?? ''} ${r.trackingNo ?? ''} ${r.order?.orderNo ?? ''}`
-    if (!matchText(noHaystack, f.orderNo, f.orderNoMode)) return false
-    if (f.sku && !r.order?.items.some(i => matchText(i.sku, f.sku, f.skuMode))) return false
+    const numbers = [r.outboundNo, r.refNo ?? '', r.trackingNo ?? '', r.order?.orderNo ?? '']
+    if (f.orderNoMode === 'exact'
+      ? !numbers.some(no => matchText(no, f.orderNo, f.orderNoMode))
+      : !matchText(numbers.join(' '), f.orderNo, f.orderNoMode)) return false
+    if (f.sku && !r.order?.items.some(i => matchText(i.sku, f.sku, f.skuMode))
+      && !r.outbound?.lineItems?.some(i => matchText(i.sku, f.sku, f.skuMode))) return false
     return true
   })
 }

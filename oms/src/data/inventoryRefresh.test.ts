@@ -100,6 +100,7 @@ test('库存页面可重试刷新和出库明细，旧请求不会覆盖当前 S
     const details = JSON.stringify(renderer!.toJSON())
     assert.match(details, /TEST-B/)
     assert.match(details, /最近 100 张匹配出库单/)
+    assert.match(details, /\/outbound\/records\?sku=TKL1-B&skuMode=exact/)
     assert.doesNotMatch(details, /TEST-A|重新查询/)
   } finally {
     await act(async () => { renderer?.unmount() })

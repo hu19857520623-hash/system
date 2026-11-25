@@ -70,17 +70,23 @@ export default function OutboundRecords() {
     : 'all'
   const urlOrderNo = searchParams.get('orderNo') ?? ''
   const urlOrderNoMode = (searchParams.get('orderNoMode') === 'exact' ? 'exact' : 'fuzzy') as SearchMode
+  const urlSku = searchParams.get('sku') ?? ''
+  const urlSkuMode = (searchParams.get('skuMode') === 'exact' ? 'exact' : 'fuzzy') as SearchMode
   const [tab, setTab] = useState(initialTab)
-  const [advancedOpen, setAdvancedOpen] = useState(false)
+  const [advancedOpen, setAdvancedOpen] = useState(!!(urlOrderNo || urlSku))
   const [draft, setDraft] = useState<FulfillmentFilters>(() => ({
     ...defaultFulfillmentFilters,
     orderNo: urlOrderNo,
     orderNoMode: urlOrderNoMode,
+    sku: urlSku,
+    skuMode: urlSkuMode,
   }))
   const [applied, setApplied] = useState<FulfillmentFilters>(() => ({
     ...defaultFulfillmentFilters,
     orderNo: urlOrderNo,
     orderNoMode: urlOrderNoMode,
+    sku: urlSku,
+    skuMode: urlSkuMode,
   }))
   const [detailRow, setDetailRow] = useState<FulfillmentRow | null>(null)
   const [viewTarget, setViewTarget] = useState<LogisticsRecord | null>(null)
@@ -104,11 +110,11 @@ export default function OutboundRecords() {
   }
 
   useEffect(() => {
-    if (!urlOrderNo) return
-    setDraft(prev => ({ ...prev, orderNo: urlOrderNo, orderNoMode: urlOrderNoMode }))
-    setApplied(prev => ({ ...prev, orderNo: urlOrderNo, orderNoMode: urlOrderNoMode }))
-    setAdvancedOpen(true)
-  }, [urlOrderNo, urlOrderNoMode])
+    const linked = { orderNo: urlOrderNo, orderNoMode: urlOrderNoMode, sku: urlSku, skuMode: urlSkuMode }
+    setDraft(prev => ({ ...prev, ...linked }))
+    setApplied(prev => ({ ...prev, ...linked }))
+    if (urlOrderNo || urlSku) setAdvancedOpen(true)
+  }, [urlOrderNo, urlOrderNoMode, urlSku, urlSkuMode])
 
   const scopedLogistics = useMemo(() => {
     const nos = new Set(scopedOutbound.map(o => o.outboundNo))

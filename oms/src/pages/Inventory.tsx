@@ -459,7 +459,7 @@ export default function InventoryPage() {
           {!outboundDrawerLoading && outboundDrawerFailed && (
             <Button variant="secondary" size="sm" onClick={() => void openSkuOutboundLogs(outboundDrawerSku)}>重新查询</Button>
           )}
-          <Link to="/outbound/records" onClick={closeOutboundDrawer}>
+          <Link to={`/outbound/records?sku=${encodeURIComponent(outboundDrawerSku)}&skuMode=exact`} onClick={closeOutboundDrawer}>
             <Button variant="secondary" size="sm">前往出库记录</Button>
           </Link>
         </div>
