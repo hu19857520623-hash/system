@@ -283,6 +283,8 @@ export default function BillingPage({ rechargeOnly }: BillingPageProps) {
     ? dataScope.customerOptions.find(c => c.id === dataScope.customerFilter)?.code || ''
     : getCustomerCode(getCustomerIdForRole(role) || undefined)
   const ready = !!billingView && billingView.customerCode === selectedCode
+  const backgroundReadWarning = !dataScope.isAdmin && globalBilling.readScope === sessionScope ? globalBilling.readWarning : undefined
+  const canExport = ready && !reading && !readError && !backgroundReadWarning
   const creditBalance = ready ? billingView.creditBalance : 0, feeRecords = ready ? billingView.feeRecords : [], erpBills = ready ? billingView.bills : []
   const month = ready ? billingView.billingMonth : new Date().toISOString().slice(0, 7)
   const monthlyPaidFees = feeRecords.filter(f => f.method === 'actual' && f.type !== 'recharge' && f.amount < 0 && f.date.slice(0, 7) === month)
@@ -355,7 +357,7 @@ export default function BillingPage({ rechargeOnly }: BillingPageProps) {
   const billingReadControls = <div className="mb-4 space-y-2">
     {dataScope.isAdmin && <select className={formInput()} value={dataScope.customerFilter} onChange={e => dataScope.setCustomerFilter(e.target.value)}><option value="all">请选择客户读取账务</option>{dataScope.customerOptions.map(c => <option key={c.id} value={c.id}>{c.code} · {c.name}</option>)}</select>}
     {readError && <p className="rounded bg-red-50 p-3 text-sm text-red-800">{readError}{ready ? ' 当前保留上次读取结果，导出暂不可用。' : ''}</p>}
-    {!dataScope.isAdmin && globalBilling.readScope === sessionScope && globalBilling.readWarning && !readError && <p className="rounded bg-amber-50 p-3 text-sm text-amber-900">{globalBilling.readWarning}</p>}
+    {backgroundReadWarning && !readError && <p className="rounded bg-amber-50 p-3 text-sm text-amber-900">{backgroundReadWarning}{ready ? ' 导出暂不可用。' : ''}</p>}
     {ready && billingView.reviewAmount > 0 && <p className="rounded bg-amber-50 p-3 text-sm text-amber-900">发运费用 {formatCurrency(billingView.reviewAmount)} 缺少完整支付依据，请财务核对；本页不将其自动计为未付或再次扣款。</p>}
     {!selectedCode && <p className="text-sm text-text-muted">请先选择客户，余额、费用和账单将使用同一客户范围。</p>}
     <Button size="sm" variant="secondary" disabled={!selectedCode || reading} onClick={() => void readBilling()}>{reading ? '正在读取账务…' : '重新读取账务'}</Button>
@@ -464,7 +466,7 @@ export default function BillingPage({ rechargeOnly }: BillingPageProps) {
         desc="出库提交时预扣试算费用；ERP 发运后按实测实算对账，差额自动补扣或退还"
         action={
           <>
-            <Button variant="secondary" size="sm" disabled={!ready || reading || !!readError} onClick={() => exportFeeRecordsCsv(filteredFees)}>
+            <Button variant="secondary" size="sm" disabled={!canExport} onClick={() => exportFeeRecordsCsv(filteredFees)}>
               <Download className="h-3.5 w-3.5" /> 导出流水（含对账阶段）
             </Button>
             {can('billing:recharge') && (
@@ -506,7 +508,7 @@ export default function BillingPage({ rechargeOnly }: BillingPageProps) {
         </div>
         <div className="flex items-center justify-between">
           <p className="text-sm text-text-secondary">已付 {formatCurrency(monthlyGrossPaid)} · 退款 {formatCurrency(monthlyRefunded)} · 净支出 <span className="font-bold text-text-primary">{formatCurrency(monthlySpent)}</span></p>
-          <Button variant="secondary" size="sm" disabled={!ready || reading || !!readError} onClick={() => exportFeeRecordsCsv([...monthlyPaidFees,...monthlyRefunds])}>
+          <Button variant="secondary" size="sm" disabled={!canExport} onClick={() => exportFeeRecordsCsv([...monthlyPaidFees,...monthlyRefunds])}>
               <Download className="h-3.5 w-3.5" /> 导出已付费用及退款
           </Button>
         </div>
